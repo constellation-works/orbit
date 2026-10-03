@@ -56,9 +56,6 @@ pub(super) struct StateInner {
     /// Test seam: paused just before a freshly-built runtime is published.
     #[cfg(test)]
     on_pre_publish: Mutex<Option<PrePublishHook>>,
-    /// Test seam for deterministic host-clock reads in global API fixtures.
-    #[cfg(test)]
-    clock_status_observer: Mutex<ClockStatusObserver>,
 }
 
 impl StateInner {
@@ -310,29 +307,6 @@ impl DashboardState {
         )
     }
 
-    /// Global mode with an explicitly-supplied entry set (no registry reload).
-    /// Used by handler tests; `default_workspace` (if any) is the workspace
-    /// selected when a request omits `?workspace=`. [`DashboardState::refresh`]
-    /// is a no-op here — the entries are fixed at construction. Production
-    /// serving uses [`DashboardState::from_registry`] instead.
-    #[cfg(test)]
-    pub(crate) fn global(
-        global_root: PathBuf,
-        entries: Vec<WsEntry>,
-        default_workspace: Option<String>,
-    ) -> Self {
-        Self::from_parts(
-            global_root,
-            SnapshotData {
-                entries,
-                default_workspace,
-            },
-            HashMap::new(),
-            None,
-            None,
-        )
-    }
-
     /// Registry-backed global mode: the servable workspace set is (re)loaded
     /// from `source` when [`DashboardState::refresh`] runs or when
     /// [`DashboardState::pin`] observes a registry or checkout fingerprint
@@ -387,18 +361,8 @@ impl DashboardState {
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
-                #[cfg(test)]
-                clock_status_observer: Mutex::new(Arc::new(clock_status)),
             }),
         }
-    }
-
-    /// The currently-servable workspace entries (a cheap clone of the live
-    /// snapshot). Test-only convenience: production reads go through
-    /// [`DashboardState::pin`] so metadata and runtime share one generation.
-    #[cfg(test)]
-    pub(crate) fn entries(&self) -> Vec<WsEntry> {
-        self.inner.snapshot().entries.clone()
     }
 
     /// Global orbit root (`~/.orbit`) this server was launched against. Empty
@@ -436,30 +400,9 @@ impl DashboardState {
         self.inner.operator.store(enabled, Ordering::Relaxed);
     }
 
-    /// Observe the native host clock. Production retains the direct native
-    /// call; unit tests may replace only this read boundary.
+    /// Observe the native host clock.
     pub(crate) fn clock_status(&self) -> Result<ClockStatus, OrbitError> {
-        #[cfg(test)]
-        {
-            let observer = self
-                .inner
-                .clock_status_observer
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
-            observer(&self.inner.global_root)
-        }
-        #[cfg(not(test))]
-        {
-            orbit_core::application::routines::clock_status(&self.inner.global_root)
-        }
-    }
-
-    /// Test-only convenience: the live default selection. Production reads the
-    /// pinned default via [`Pinned::default_workspace`].
-    #[cfg(test)]
-    pub(crate) fn default_workspace(&self) -> Option<String> {
-        self.inner.snapshot().default_workspace.clone()
+        orbit_core::application::routines::clock_status(&self.inner.global_root)
     }
 
     /// Resolve (and lazily build + cache) the runtime for workspace `id` against
@@ -635,47 +578,5 @@ impl DashboardState {
             .on_pre_publish
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(hook);
-    }
-
-    /// Replace host-clock observations before this state is cloned into a
-    /// router. Clock control still uses the native mutation functions.
-    #[cfg(test)]
-    pub(crate) fn with_clock_status_observer(self, observer: ClockStatusObserver) -> Self {
-        *self
-            .inner
-            .clock_status_observer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = observer;
-        self
-    }
-
-    /// Registry `load` attempts, including the eager `from_registry`
-    /// construction. Single/global modes that have no source report 0.
-    #[cfg(test)]
-    pub(crate) fn registry_load_count(&self) -> u64 {
-        self.inner
-            .source
-            .as_ref()
-            .map(|source| source.load_count.load(Ordering::Relaxed))
-            .unwrap_or(0)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_registry_post_read_hook(
-        &self,
-        hook: impl FnOnce() + Send + 'static,
-    ) -> Option<()> {
-        self.inner.source.as_ref()?.set_post_read_hook(hook);
-        Some(())
-    }
-
-    /// Acquire `refresh_lock` so a test can prove `pin` does not wait on it
-    /// when the registry and checkout fingerprints are unchanged.
-    #[cfg(test)]
-    pub(crate) fn lock_refresh(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.inner
-            .refresh_lock
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
     }
 }

@@ -72,12 +72,8 @@ pub(crate) async fn healthz(
     detailed_response(&state, log_path).await
 }
 
-/// Detailed health with an injectable log-sink path so tests stay hermetic
-/// (the handler resolves `ORBIT_LOG_PATH` / `~/.orbit/state/logs/`).
-pub(crate) async fn detailed_response(
-    state: &DashboardState,
-    log_path: Result<PathBuf, String>,
-) -> Response {
+/// Detailed health using the log-sink path resolved by the handler.
+async fn detailed_response(state: &DashboardState, log_path: Result<PathBuf, String>) -> Response {
     // Refresh and pin one snapshot so the probed runtimes and the reported
     // `workspaces_open` count come from a single coherent generation — an
     // evicted/removed workspace does not linger, and a concurrent rebind cannot

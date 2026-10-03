@@ -3,11 +3,6 @@
 //! Each handler delegates to the same `*_to_json` helpers used by the CLI's
 //! `--json` paths so the wire format stays in lockstep with the CLI.
 
-// Test-only allowlist (mirrors the original placement under orbit-cli): the many
-// `.expect` / `.unwrap` calls in the in-file integration tests and the included
-// `*_tests` modules are the documented exception for test harness code.
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-
 mod audit;
 mod auto_tasks;
 mod automation;

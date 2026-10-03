@@ -28,15 +28,8 @@ mod tests;
 
 pub use connect::{ConnectArgs, connect};
 
-#[cfg(test)]
-pub(crate) use assets::{DASHBOARD_CSP, DASHBOARD_FILES, serve_dashboard_file};
 pub(crate) use serve::{DEFAULT_DASHBOARD_PORT, default_workspace_selection, open_browser};
 pub use serve::{ServeArgs, serve, serve_from_env};
-#[cfg(test)]
-pub(crate) use serve::{
-    build_state, check_bindable_host, default_workspace_for_cwd, drain_with_grace_period,
-    health_router,
-};
 
 /// The dashboard stylesheet, served as one file from per-screen sources.
 /// Order is cascade order: at equal specificity a later file wins, so shared

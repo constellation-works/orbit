@@ -35,6 +35,14 @@ completion authority, which is governed separately from a normal launch.
 This is source-assisted discovery followed by behavioral HTTP assertions,
 not a source-text snapshot. No private router API is exposed for testing.
 
+The remaining `orbit-web` unit tests cover admitted security safeguards and
+deterministic shutdown/cache-publication races; routine API coverage lives in
+the HTTP integration suite. Dashboard JavaScript behavior belongs in a JS
+runner, rather than Rust tests that launch Node. The standalone loading and
+distributed browser scenarios remain part of the QA sweep, and the Operations
+browser scenario remains available with its shared fixtures under
+`crates/orbit-web/src/tests/`.
+
 ## Safe Mutable CLI Fixtures
 
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,

@@ -26,15 +26,15 @@ use crate::log_format::{
 };
 
 const LOG_DEFAULT_LIMIT: usize = 50;
-pub(super) const LOG_MAX_LIMIT: usize = 500;
+const LOG_MAX_LIMIT: usize = 500;
 
 /// Snapshot body for `GET /api/log`. `offset` is the byte cursor just past
 /// the records the snapshot scanned, so `/api/log/stream?from=` resumes with
 /// neither a gap nor a repeat, however many lines land in between.
 #[derive(Debug, Serialize)]
-pub(super) struct LogSnapshot {
-    pub events: Vec<RenderedLogEvent>,
-    pub offset: u64,
+struct LogSnapshot {
+    events: Vec<RenderedLogEvent>,
+    offset: u64,
 }
 
 const LOG_STREAM_CHANNEL_DEPTH: usize = 64;
@@ -49,19 +49,19 @@ const LOG_STREAM_IDLE_POLL_INTERVAL: StdDuration = StdDuration::from_secs(1);
 /// doubling toward [`LOG_STREAM_IDLE_POLL_INTERVAL`] while nothing new is
 /// read, and back to the floor as soon as data arrives.
 #[derive(Debug)]
-pub(super) struct PollBackoff {
+struct PollBackoff {
     delay: StdDuration,
 }
 
 impl PollBackoff {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         Self {
             delay: LOG_STREAM_POLL_INTERVAL,
         }
     }
 
     /// Delay before the next poll, given whether the last poll made progress.
-    pub(super) fn next_delay(&mut self, progressed: bool) -> StdDuration {
+    fn next_delay(&mut self, progressed: bool) -> StdDuration {
         if progressed {
             self.delay = LOG_STREAM_POLL_INTERVAL;
         } else {
@@ -73,7 +73,7 @@ impl PollBackoff {
 /// Maximum number of concurrent `/api/log/stream` clients. Each accepted
 /// stream pins one native polling thread, so this cap bounds thread/FD/CPU
 /// usage even if the dashboard is bound beyond loopback.
-pub(super) const LOG_STREAM_MAX_CONCURRENT: usize = 8;
+const LOG_STREAM_MAX_CONCURRENT: usize = 8;
 
 /// Connection gate for log SSE streams.
 ///
@@ -167,7 +167,7 @@ pub(super) async fn stream_log(Query(q): Query<LogQuery>, headers: HeaderMap) ->
     }
 }
 
-pub(super) fn log_stream_unavailable() -> Response {
+fn log_stream_unavailable() -> Response {
     let mut response = (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(serde_json::json!({
@@ -183,21 +183,9 @@ pub(super) fn log_stream_unavailable() -> Response {
     response
 }
 
-// Widened to pub(super) so tests under api/tests/ (per-module layout migration ORB-00224)
-// can exercise the snapshot/stream logic without per-handler tests/ subdirs.
-pub(super) fn read_log_snapshot_from_path(
+fn read_log_snapshot_from_path(
     path: &std::path::Path,
     query: &LogQuery,
-) -> Result<LogSnapshot, orbit_core::OrbitError> {
-    read_log_snapshot_then(path, query, || {})
-}
-
-/// [`read_log_snapshot_from_path`] running `after_scan` between the scan and
-/// building the response, so tests can append inside that window.
-pub(super) fn read_log_snapshot_then(
-    path: &std::path::Path,
-    query: &LogQuery,
-    after_scan: impl FnOnce(),
 ) -> Result<LogSnapshot, orbit_core::OrbitError> {
     let limit = match query.limit {
         Some(limit) if limit > LOG_MAX_LIMIT => {
@@ -211,7 +199,6 @@ pub(super) fn read_log_snapshot_then(
     let filters = log_filters(query)?;
     let tail = read_recent_rendered_tail(path, &filters, limit)
         .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
-    after_scan();
     // The cursor comes from the scanned extent itself, never a later `stat`:
     // a line appended after the scan lies beyond it and reaches the client
     // through `?from=<offset>` / `Last-Event-ID` instead of being skipped.
@@ -223,20 +210,19 @@ pub(super) fn read_log_snapshot_then(
 
 /// Prefer SSE `Last-Event-ID` over `?from=` so a browser auto-reconnect does
 /// not replay from the snapshot offset baked into the EventSource URL.
-pub(super) fn stream_resume_offset(from: Option<u64>, last_event_id: Option<&str>) -> Option<u64> {
+fn stream_resume_offset(from: Option<u64>, last_event_id: Option<&str>) -> Option<u64> {
     last_event_id
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .or(from)
 }
 
-pub(super) fn last_event_id_header(headers: &HeaderMap) -> Option<&str> {
+fn last_event_id_header(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("last-event-id")
         .and_then(|value| value.to_str().ok())
 }
 
-// Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).
-pub(super) fn log_filters(query: &LogQuery) -> Result<LogFilters, orbit_core::OrbitError> {
+fn log_filters(query: &LogQuery) -> Result<LogFilters, orbit_core::OrbitError> {
     LogFilters::from_query_parts(
         query.target.as_deref().and_then(non_empty_string),
         query.level.as_deref().and_then(non_empty_string),
@@ -248,7 +234,7 @@ pub(super) fn log_filters(query: &LogQuery) -> Result<LogFilters, orbit_core::Or
     )
 }
 
-pub(super) fn spawn_log_sse_frames(
+fn spawn_log_sse_frames(
     path: PathBuf,
     filters: LogFilters,
     permit: OwnedSemaphorePermit,
@@ -307,10 +293,10 @@ pub(super) fn spawn_log_sse_frames(
 }
 
 /// Most matching events one [`read_appended_log_events`] call renders.
-pub(super) const LOG_STREAM_BATCH_EVENTS: usize = 256;
+const LOG_STREAM_BATCH_EVENTS: usize = 256;
 /// Most bytes one [`read_appended_log_events`] call scans, so a filter that
 /// matches nothing still yields to the disconnect/shutdown check regularly.
-pub(super) const LOG_STREAM_BATCH_BYTES: u64 = 1 << 20;
+const LOG_STREAM_BATCH_BYTES: u64 = 1 << 20;
 /// Longest record the stream reassembles. A longer one — or an unterminated
 /// run of bytes that never gets its newline — is dropped through its next
 /// newline, so partial-line storage never exceeds this.
@@ -423,11 +409,7 @@ pub(super) fn read_appended_log_events(
     })
 }
 
-// Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).
-pub(super) fn format_sse_frame(
-    event: &RenderedLogEvent,
-    offset: u64,
-) -> Result<String, serde_json::Error> {
+fn format_sse_frame(event: &RenderedLogEvent, offset: u64) -> Result<String, serde_json::Error> {
     serde_json::to_string(event).map(|json| format!("id: {offset}\ndata: {json}\n\n"))
 }
 
