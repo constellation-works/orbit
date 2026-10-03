@@ -85,7 +85,6 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
 
 /// Describe guarded extensions without weakening ordinary creation requirements.
 pub(super) fn input_schema(schema: &orbit_types::tool::ToolSchema, create: bool) -> Value {
-    use crate::Tool;
     let mut value = Value::Object(orbit_common::protocol::tool_schema::tool_input_schema(
         schema,
     ));
@@ -99,10 +98,13 @@ pub(super) fn input_schema(schema: &orbit_types::tool::ToolSchema, create: bool)
         // parses and validates its existing field semantics at the host boundary.
         value["properties"]["crew"]["type"] = json!(["string", "null"]);
     } else {
-        if let Some(guarded) = super::super::desktop::DesktopTool::Write.input_schema() {
-            value["properties"]["verdict"] =
-                guarded["properties"]["operation"]["oneOf"][3]["properties"]["verdict"].clone();
-        }
+        let string = json!({"type":"string"});
+        let strings = json!({"type":"array","items":{"type":"string"}});
+        value["properties"]["verdict"] = json!({"type":"object","additionalProperties":false,"required":["decision","rationale","criteria","evidence"],"properties":{
+            "decision":{"enum":["accept","changes_requested"]},"rationale":string,"evidence":strings,
+            "expected_run_id":{"type":["string","null"]},"expected_head":{"type":["string","null"]},
+            "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","met","evidence"],"properties":{"criterion":string,"met":{"type":"boolean"},"evidence":strings}}}
+        }});
         value["allOf"] = json!([{
             "if":{"anyOf":[{"required":["request_id"]},{"required":["expected_revision"]},{"required":["verdict"]},{"required":["complete"]}]},
             "then":{"required":["workspace","request_id","expected_revision"],"oneOf":[

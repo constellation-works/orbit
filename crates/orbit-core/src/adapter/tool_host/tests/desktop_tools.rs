@@ -14,10 +14,10 @@ fn desktop_tools_require_explicit_destination_and_reject_undeclared_authority() 
     let (_root, runtime, repo) = test_runtime();
     assert!(
         runtime
-            .run_tool("orbit.desktop.read", json!({"scope":"tasks"}))
+            .run_tool("orbit.task.list", json!({"view":"bounded"}))
             .is_err()
     );
-    let result = runtime.run_tool("orbit.desktop.task.write", json!({"workspace":repo,"request_id":"spoof","operation":{"kind":"create","title":"No spoof","description":"","acceptance_criteria":["Proof"]},"actor":"human"}));
+    let result = runtime.run_tool("orbit.task.add", json!({"workspace":repo,"request_id":"spoof","title":"No spoof","description":"","acceptance_criteria":["Proof"],"actor":"human"}));
     assert!(result.is_err(), "actor cannot become a trusted grant");
 }
 
@@ -29,8 +29,8 @@ fn desktop_run_reads_preserve_operator_gate_at_mcp_entrypoint() {
     let _guard = unmanaged_tool_env_guard();
     let (_root, runtime, repo) = test_runtime();
     let denied = runtime.execute_tool_command_dispatch_with_session_context(
-        "orbit.desktop.read",
-        json!({"workspace":repo,"scope":"runs"}),
+        "orbit.workflow.run.list",
+        json!({"workspace":repo,"view":"bounded"}),
         None,
         None,
         ToolEntryPoint::Mcp,
@@ -42,8 +42,8 @@ fn desktop_run_reads_preserve_operator_gate_at_mcp_entrypoint() {
     );
     let read = run_tool_as_operator(
         &runtime,
-        "orbit.desktop.read",
-        json!({"workspace":repo,"scope":"runs"}),
+        "orbit.workflow.run.list",
+        json!({"workspace":repo,"view":"bounded"}),
     )
     .expect("operator observed read");
     assert_eq!(read["items"], json!([]));
@@ -57,12 +57,12 @@ fn desktop_create_and_comment_retry_through_tool_boundary_have_one_effect() {
     }
     let _guard = unmanaged_tool_env_guard();
     let (_root, runtime, repo) = test_runtime();
-    let request = json!({"workspace":repo,"model":"codex","request_id":"create-1","operation":{"kind":"create","title":"Capture","description":"Daily work","acceptance_criteria":["Observed proof"],"priority":"medium"}});
+    let request = json!({"workspace":repo,"model":"codex","request_id":"create-1","title":"Capture","description":"Daily work","acceptance_criteria":["Observed proof"],"priority":"medium"});
     let created = runtime
-        .run_tool("orbit.desktop.task.write", request.clone())
+        .run_tool("orbit.task.add", request.clone())
         .expect("create proposed task");
     let retried = runtime
-        .run_tool("orbit.desktop.task.write", request.clone())
+        .run_tool("orbit.task.add", request.clone())
         .expect("reconcile create reply");
     assert_eq!(
         created["snapshot"]["task"]["id"],
@@ -70,26 +70,26 @@ fn desktop_create_and_comment_retry_through_tool_boundary_have_one_effect() {
     );
     assert_eq!(created["snapshot"]["task"]["status"], "proposed");
     let mut changed = request;
-    changed["operation"]["title"] = json!("Changed request");
+    changed["title"] = json!("Changed request");
     let refused = runtime
-        .run_tool("orbit.desktop.task.write", changed)
+        .run_tool("orbit.task.add", changed)
         .expect("definite precommit refusal");
     assert_eq!(refused["mutation_applied"], false);
     assert!(refused["refusal"]["message"].is_string());
     let id = created["snapshot"]["task"]["id"].clone();
-    let comment = json!({"workspace":repo,"model":"codex","request_id":"comment-1","operation":{"kind":"comment","id":id,"expected_revision":retried["snapshot"]["revision"],"comment":"One durable comment"}});
+    let comment = json!({"workspace":repo,"model":"codex","request_id":"comment-1","id":id,"expected_revision":retried["snapshot"]["revision"],"comment":"One durable comment"});
     let first = runtime
-        .run_tool("orbit.desktop.task.write", comment.clone())
+        .run_tool("orbit.task.update", comment.clone())
         .expect("comment");
     let second = runtime
-        .run_tool("orbit.desktop.task.write", comment)
+        .run_tool("orbit.task.update", comment)
         .expect("same comment retry");
     assert_eq!(
         first["snapshot"]["comments_total"],
         second["snapshot"]["comments_total"]
     );
     assert_eq!(second["replayed"], true);
-    let conflict = runtime.run_tool("orbit.desktop.task.write", json!({"workspace":repo,"request_id":"stale-1","operation":{"kind":"edit","id":id,"expected_revision":created["snapshot"]["revision"],"fields":{"title":"stale"}}})).expect("structured stale response");
+    let conflict = runtime.run_tool("orbit.task.update", json!({"workspace":repo,"request_id":"stale-1","id":id,"expected_revision":created["snapshot"]["revision"],"title":"stale"})).expect("structured stale response");
     assert_eq!(conflict["conflict"]["code"], "revision_conflict");
     assert_eq!(conflict["snapshot"]["task"]["title"], "Capture");
     assert_eq!(
@@ -143,7 +143,7 @@ fn desktop_drain_requires_operator_and_validates_before_dispatch() {
         json!({"workspace":repo,"action":"stop"}),
     ] {
         let denied = runtime.execute_tool_command_dispatch_with_session_context(
-            "orbit.desktop.drain",
+            "orbit.workflow.auto",
             input,
             None,
             None,
@@ -156,8 +156,8 @@ fn desktop_drain_requires_operator_and_validates_before_dispatch() {
         );
     }
     let denied = runtime.execute_tool_command_dispatch_with_session_context(
-        "orbit.desktop.read",
-        json!({"workspace":repo,"scope":"drain"}),
+        "orbit.workflow.auto",
+        json!({"workspace":repo,"action":"status"}),
         None,
         None,
         ToolEntryPoint::Mcp,
@@ -174,20 +174,20 @@ fn desktop_drain_requires_operator_and_validates_before_dispatch() {
         let mut input = fields;
         input["workspace"] = json!(repo);
         input["action"] = json!("start");
-        assert!(run_tool_as_operator(&runtime, "orbit.desktop.drain", input).is_err());
+        assert!(run_tool_as_operator(&runtime, "orbit.workflow.auto", input).is_err());
     }
     assert!(
         run_tool_as_operator(
             &runtime,
-            "orbit.desktop.drain",
+            "orbit.workflow.auto",
             json!({"workspace":repo,"action":"stop","complete":true})
         )
         .is_err()
     );
     let runs = run_tool_as_operator(
         &runtime,
-        "orbit.desktop.read",
-        json!({"workspace":repo,"scope":"runs"}),
+        "orbit.workflow.run.list",
+        json!({"workspace":repo,"view":"bounded"}),
     )
     .expect("runs");
     assert_eq!(runs["total"], 0, "refused starts created no run");
@@ -202,8 +202,8 @@ fn desktop_drain_readiness_and_idle_stop_reuse_runtime_without_dispatch() {
     let (_root, runtime, repo) = test_runtime();
     let read = run_tool_as_operator(
         &runtime,
-        "orbit.desktop.read",
-        json!({"workspace":repo,"scope":"drain"}),
+        "orbit.workflow.auto",
+        json!({"workspace":repo,"action":"status"}),
     )
     .expect("readiness");
     assert_eq!(read["schema_version"], 1);
@@ -212,7 +212,7 @@ fn desktop_drain_readiness_and_idle_stop_reuse_runtime_without_dispatch() {
     assert_eq!(read["controls_authorized"], true);
     let stopped = run_tool_as_operator(
         &runtime,
-        "orbit.desktop.drain",
+        "orbit.workflow.auto",
         json!({"workspace":repo,"action":"stop"}),
     )
     .expect("idle stop");
@@ -220,8 +220,8 @@ fn desktop_drain_readiness_and_idle_stop_reuse_runtime_without_dispatch() {
     assert_eq!(stopped["coordinators"], json!([]));
     let runs = run_tool_as_operator(
         &runtime,
-        "orbit.desktop.read",
-        json!({"workspace":repo,"scope":"runs"}),
+        "orbit.workflow.run.list",
+        json!({"workspace":repo,"view":"bounded"}),
     )
     .expect("runs");
     assert_eq!(runs["total"], 0);
@@ -271,10 +271,26 @@ fn domain_automation_scopes_definitions_checks_conflicts_and_mints_without_dispa
         }
     }
     // Anonymous sessions cannot inspect operator run/schedule state or mutate it.
-    for scope in ["routines", "auto_tasks", "jobs"] {
+    for (scope, name, input) in [
+        (
+            "routines",
+            "orbit.routine.control",
+            json!({"workspace":repo,"action":"list"}),
+        ),
+        (
+            "auto_tasks",
+            "orbit.auto_task.list",
+            json!({"workspace":repo,"view":"bounded"}),
+        ),
+        (
+            "jobs",
+            "orbit.workflow.run.list",
+            json!({"workspace":repo,"view":"bounded","include_catalog":true}),
+        ),
+    ] {
         let denied = runtime.execute_tool_command_dispatch_with_session_context(
-            "orbit.desktop.read",
-            json!({"workspace":repo,"scope":scope}),
+            name,
+            input,
             None,
             None,
             ToolEntryPoint::Mcp,
@@ -388,7 +404,7 @@ fn desktop_drain_persists_bounded_window_and_explicit_completion_policy() {
         let jobs = runtime.paths().global_dir.join("resources/jobs");
         std::fs::create_dir_all(&jobs).unwrap();
         std::fs::write(jobs.join("workspace_auto_pipeline.yaml"),"schemaVersion: 2\nkind: Job\nmetadata:\n  name: workspace_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  max_active_runs: 1\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
-        let result=run_tool_as_operator(&runtime,"orbit.desktop.drain",json!({"workspace":repo,"action":"start","for_seconds":1800,"concurrency":2,"complete":complete})).expect("submit drain");
+        let result=run_tool_as_operator(&runtime,"orbit.workflow.auto",json!({"workspace":repo,"action":"start","for_seconds":1800,"concurrency":2,"complete":complete})).expect("submit drain");
         let run = runtime
             .get_job_run_backend(result["run_id"].as_str().unwrap())
             .unwrap()
@@ -409,9 +425,8 @@ fn desktop_drain_persists_bounded_window_and_explicit_completion_policy() {
 }
 
 #[test]
-fn domain_guarded_task_verbs_share_receipts_and_revision_guards_with_legacy_routes() {
-    if !isolated("domain_guarded_task_verbs_share_receipts_and_revision_guards_with_legacy_routes")
-    {
+fn domain_guarded_task_verbs_preserve_receipts_and_revision_guards() {
+    if !isolated("domain_guarded_task_verbs_preserve_receipts_and_revision_guards") {
         return;
     }
     let _guard = unmanaged_tool_env_guard();
@@ -427,9 +442,6 @@ fn domain_guarded_task_verbs_share_receipts_and_revision_guards_with_legacy_rout
     assert_eq!(created["snapshot"]["task"]["status"], "proposed");
     assert_eq!(created["snapshot"]["task"]["created_by"], "codex");
     let id = created["snapshot"]["task"]["id"].clone();
-    let legacy = runtime.run_tool("orbit.desktop.task.write", json!({"workspace":repo,"model":"codex","request_id":"domain-create","operation":{"kind":"create","title":"Domain capture","description":"Daily work","acceptance_criteria":["Observed proof"],"priority":"medium"}})).expect("reconcile via shipped compatibility route");
-    assert_eq!(legacy["snapshot"]["task"]["id"], id);
-    assert_eq!(legacy["replayed"], true);
     let snapshot = runtime
         .run_tool(
             "orbit.task.show",

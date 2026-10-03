@@ -468,6 +468,5 @@ pub fn check_exec_result(
     }
 }
 
-pub use builtin::orbit::desktop::DesktopTool;
 /// Inspect host-owned context for the existing sanctioned child pipeline path.
 pub use builtin::orbit::pipeline::invoke::has_pipeline_child_admission;

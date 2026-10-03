@@ -17,40 +17,39 @@ const tasks=[
 ];
 const description='## A calmer daily workflow\n\nUse **clear hierarchy** and readable details, aligned with the Orbit dashboard.\n\n- Keep host and workspace visible\n- Preserve `unsent drafts` during refresh\n- Make the next action easy to find\n\n### Validation\n\n| Surface | Evidence |\n| --- | --- |\n| Tasks | Filter, open, edit |\n| Auto-drain | Readiness and guarded controls |\n\n```rust\nlet safe = "content stays data";\n```\n\n[Project](https://github.com/constellation-works/orbit)\n\n<script>window.__unsafe=true</script>\n<img src=x onerror="window.__unsafe=true">\n[unsafe](javascript:alert(1))';
 function detail(id){const task=tasks.find(t=>t.id===id)||tasks[0];return {schema_version:1,workspace,observed_at:now,revision:'fixture-revision-1',task:{...task,description,acceptance_criteria:['Markdown renders safely','Keyboard and narrow layouts remain usable'],execution_summary:'### Validation\n\nUI fixture loaded; guarded operations tested separately.'},actions:{edit:{enabled:true},comment:{enabled:true},review:{enabled:true},complete:{enabled:true}},comments:[{by:'reviewer',at:now,body:'The task details should be **readable**, with technical evidence available on demand.'}],comments_total:1,history:[{event:'created',at:now,by:'operator'}],history_total:1,artifacts:[],artifacts_total:0};}
-function tools(name,args){
- if(name==='orbit_task_list')return tools('orbit_desktop_read',{...args,scope:'tasks'});
- if(name==='orbit_task_show')return tools('orbit_desktop_read',{...args,scope:'task'});
- if(name==='orbit_workflow_run_show')return tools('orbit_desktop_read',{...args,scope:'run'});
- if(name==='orbit_workflow_run_list')return args.include_catalog?{catalog:tools('orbit_desktop_read',{...args,scope:'jobs'}),runs:tools('orbit_desktop_read',{...args,scope:'runs'})}:tools('orbit_desktop_read',{...args,scope:'runs'});
- if(name==='orbit_workflow_auto')return tools(args.action==='status'?'orbit_desktop_read':'orbit_desktop_drain',{...args,scope:'drain'});
- if(name==='orbit_routine_control')return tools(args.action==='list'?'orbit_desktop_read':'orbit_desktop_automation',{...args,scope:'routines',kind:'routine'});
- if(name==='orbit_auto_task_list')return tools('orbit_desktop_read',{...args,scope:'auto_tasks'});
- if(name==='orbit_auto_task_toggle'||name==='orbit_auto_task_mint')return tools('orbit_desktop_automation',{...args,kind:'auto_task',action:name==='orbit_auto_task_toggle'?'toggle':'mint'});
- if(name==='orbit_pipeline_invoke')return tools('orbit_desktop_automation',{...args,name:args.job_name,kind:'job',action:'run'});
- if(name==='orbit_task_add'||name==='orbit_task_update')return tools('orbit_desktop_task_write',args);
-
- workspace=args.workspace||workspace;
- if(name==='orbit_workspace_list')return {workspaces:[{selector:'mac/orbit',machine_name:'Mac',name:'Orbit'},{selector:'linux/orbit',machine_name:'dk-server-1',name:'Orbit'},{selector:'offline/orbit',machine_name:'Offline host',name:'Orbit',reachability:'unreachable'}]};
- if(name==='orbit_desktop_read'){
+function read(args){
   if(definitions[args.scope])return {schema_version:1,workspace,scope:args.scope,controls_authorized:true,items:definitions[args.scope],total:definitions[args.scope].length,pagination:{next_offset:null},notes:[],observation:'Workspace definitions only. The host clock is independent; enabled does not guarantee a running scheduler.'};
   if(args.scope==='drain')return {schema_version:1,workspace,controls_authorized:true,capacity:{active_leaf_runs:live?2:0,max_active_leaf_runs:4,free_slots:live?2:4,drain_run_id:live,admissions_stopped:stopped,ends_at:live?new Date(Date.now()+3600000).toISOString():null},tasks:[{task_id:'ORB-201',eligible:true},{task_id:'ORB-202',eligible:true},{task_id:'ORB-203',eligible:false,reason:'context_lock_conflict',blocking_task_ids:['ORB-201']}]};
   if(args.scope==='task')return detail(args.id);
   if(args.scope==='run')return {schema_version:1,workspace,observed_at:now,run:{id:args.id,title:'Deliver eligible backlog',job_id:'workspace_auto',state:stopped?'success':'running',attempt:1,created_at:now,started_at:now,duration_ms:81234,steps:[{step_id:'admit',state:'success'},{step_id:'deliver',state:'running'}]},logs:{items:[],total:0}};
   const items=args.scope==='runs'?[{id:'jrun-fixture-1',job_id:'workspace_auto',state:'running',attempt:1,duration_ms:81234,created_at:now},{id:'jrun-fixture-2',job_id:'task_pr_pipeline',state:'success',attempt:1,duration_ms:382900,created_at:now}]:tasks.filter(t=>(!args.status||t.status===args.status)&&(!args.priority||t.priority===args.priority)&&(!args.search||(t.id+' '+t.title).toLowerCase().includes(args.search.toLowerCase())));
   return {schema_version:1,workspace,items,total:items.length,pagination:{next_offset:null,total:items.length}};
- }
- if(name==='orbit_desktop_automation'){
+}
+function automate(args){
   const receipt={schema_version:1,workspace,action:args.action,kind:args.kind,name:args.name};
   if(args.action==='toggle'){const item=Object.values(definitions).flat().find(d=>d.name===args.name);item.enabled=args.enabled;item.state=args.enabled?'enabled':'disabled';return {...receipt,enabled:args.enabled};}
   if(args.action==='mint')return {...receipt,task_id:'ORB-204'};
   return {...receipt,run_id:'jrun-fixture-2',state:'submitted'};
- }
- if(name==='orbit_desktop_drain'){
+}
+function drain(args){
   if(args.action==='start'){live='jrun-fixture-live';stopped=false;complete=args.complete;return {schema_version:1,workspace,action:'start',run_id:live,state:'submitted',completion:complete?'done':'review'};}
   stopped=true;return {schema_version:1,workspace,action:'stop',outcome:'stopped',coordinators:[{run_id:live,remaining_children:[{run_id:'child-1'},{run_id:'child-2'}]}]};
- }
+}
+function tools(name,args){
+ workspace=args.workspace||workspace;
+ if(name==='orbit_task_list')return read({...args,scope:'tasks'});
+ if(name==='orbit_task_show')return read({...args,scope:'task'});
+ if(name==='orbit_workflow_run_show')return read({...args,scope:'run'});
+ if(name==='orbit_workflow_run_list')return args.include_catalog?{catalog:read({...args,scope:'jobs'}),runs:read({...args,scope:'runs'})}:read({...args,scope:'runs'});
+ if(name==='orbit_workflow_auto')return (args.action==='status'?read:drain)({...args,scope:'drain'});
+ if(name==='orbit_routine_control')return (args.action==='list'?read:automate)({...args,scope:'routines',kind:'routine'});
+ if(name==='orbit_auto_task_list')return read({...args,scope:'auto_tasks'});
+ if(name==='orbit_auto_task_toggle'||name==='orbit_auto_task_mint')return automate({...args,kind:'auto_task',action:name==='orbit_auto_task_toggle'?'toggle':'mint'});
+ if(name==='orbit_pipeline_invoke')return automate({...args,name:args.job_name,kind:'job',action:'run'});
+ if(name==='orbit_task_add'||name==='orbit_task_update')return {mutation_applied:false,refusal:{message:'This preview does not persist task writes.'}};
+
+ if(name==='orbit_workspace_list')return {workspaces:[{selector:'mac/orbit',machine_name:'Mac',name:'Orbit'},{selector:'linux/orbit',machine_name:'dk-server-1',name:'Orbit'},{selector:'offline/orbit',machine_name:'Offline host',name:'Orbit',reachability:'unreachable'}]};
  if(name==='orbit_search')return {items:tasks.slice(0,2),total:2,truncated:false};
- if(name==='orbit_desktop_task_write')return {mutation_applied:false,refusal:{message:'This preview does not persist task writes.'}};
  throw new Error('Unsupported fixture tool '+name);
 }
 window.addEventListener('message',event=>{

@@ -35,23 +35,22 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
         again["snapshot"]["comments_total"],
         first["snapshot"]["comments_total"]
     );
-    // Cached tool lists and already-open clients keep their shipped aliases.
-    let legacy = client.call_tool_ok("orbit_desktop_task_write", json!({"workspace":selector,"model":"codex","request_id":"desktop-comment-proof","operation":{"kind":"comment","id":id,"expected_revision":replay["snapshot"]["revision"],"comment":"Recorded once"}}));
-    assert_eq!(legacy["replayed"], true);
-    assert_eq!(
-        legacy["snapshot"]["comments_total"],
-        again["snapshot"]["comments_total"]
-    );
-    let legacy_snapshot = client.call_tool_ok(
-        "orbit_desktop_task_snapshot",
-        json!({"workspace":selector,"id":id}),
-    );
-    assert_eq!(legacy_snapshot["revision"], again["snapshot"]["revision"]);
-    let legacy_read = client.call_tool_ok(
+    // Both cached advertised names and canonical retired names are unavailable.
+    for name in [
         "orbit_desktop_read",
-        json!({"workspace":selector,"scope":"tasks","limit":1}),
-    );
-    assert_eq!(legacy_read["items"][0]["id"], id);
+        "orbit_desktop_task_snapshot",
+        "orbit_desktop_task_write",
+        "orbit_desktop_drain",
+        "orbit_desktop_automation",
+        "orbit.desktop.read",
+        "orbit.desktop.task.snapshot",
+        "orbit.desktop.task.write",
+        "orbit.desktop.drain",
+        "orbit.desktop.automation",
+    ] {
+        let error = client.call_tool_err(name, json!({"workspace":selector}));
+        assert_eq!(error["code"], "tool_not_found", "{name}: {error}");
+    }
     let stale = client.call_tool_ok("orbit_task_update", json!({"workspace":selector,"request_id":"desktop-stale-proof","id":id,"expected_revision":replay["snapshot"]["revision"],"title":"Stale edit"}));
     assert_eq!(stale["conflict"]["code"], "revision_conflict");
     assert_eq!(stale["snapshot"]["task"]["title"], "Desktop capture");

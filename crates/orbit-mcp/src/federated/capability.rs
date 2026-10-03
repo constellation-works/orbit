@@ -42,10 +42,7 @@ impl McpToolClass {
 /// `tool_not_on_this_host`, which precedes `capability_refused`.
 pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
     match mcp_advertised_tool_name(tool_name).as_str() {
-        "orbit_desktop_read"
-        | "orbit_desktop_task_snapshot"
-        | "orbit_desktop_task_write"
-        | "orbit_task_add"
+        "orbit_task_add"
         | "orbit_task_update"
         | "orbit_task_list"
         | "orbit_task_show"
@@ -81,8 +78,6 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         "orbit_pipeline_invoke"
         | "orbit_workflow_auto"
         | "orbit_routine_control"
-        | "orbit_desktop_automation"
-        | "orbit_desktop_drain"
         | "orbit_agent_invoke"
         | "orbit_command_exec"
         // [ORB-13744] Delivery evidence is the run's own checkpoint, held

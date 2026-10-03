@@ -65,7 +65,7 @@ impl OrbitRuntime {
             || (name == "orbit.auto_task.mint" && input.get("acknowledge_unconditional").is_some())
         {
             self.authorize_tool_operation(
-                "orbit.desktop.automation",
+                "orbit.routine.control",
                 &tool_context.session_context,
                 capability_enforcement,
             )?;
@@ -79,21 +79,6 @@ impl OrbitRuntime {
                 capability_enforcement,
             )?;
         }
-        // A desktop run projection retains the canonical run reader's authority
-        // on every entry point, including an MCP session without process grants.
-        if name == "orbit.desktop.read"
-            && matches!(
-                input.get("scope").and_then(Value::as_str),
-                Some("runs" | "run" | "drain" | "routines" | "auto_tasks" | "jobs")
-            )
-        {
-            self.authorize_tool_operation(
-                "orbit.workflow.run.show",
-                &tool_context.session_context,
-                capability_enforcement,
-            )?;
-        }
-
         if !tool_context.allowed_tools.is_empty()
             && !tool_allowed(name, &tool_context.allowed_tools)
         {

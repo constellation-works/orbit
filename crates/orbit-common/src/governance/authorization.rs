@@ -388,18 +388,6 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "routine observation and controls require an operator session",
     },
     GovernedOperation {
-        id: "orbit.desktop.automation",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "automation controls change recurring execution or submit work; UI discovery grants no authority",
-    },
-    GovernedOperation {
-        id: "orbit.desktop.drain",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "auto-drain starts unattended work or stops workspace admissions; UI discovery grants no authority",
-    },
-    GovernedOperation {
         id: "orbit.workflow.ship",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

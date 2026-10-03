@@ -1,22 +1,11 @@
 use orbit_types::tool::McpToolScope;
 
 use super::{
-    agent, auto_task, command, desktop, drain, friction, pipeline, search, task, workflow,
-    workspace_claim,
+    agent, auto_task, command, drain, friction, pipeline, search, task, workflow, workspace_claim,
 };
 use crate::ToolRegistry;
 
 pub fn register(registry: &mut ToolRegistry) {
-    // Shipped canonical routes remain callable for existing clients, without advertisements.
-    for tool in [
-        desktop::DesktopTool::Read,
-        desktop::DesktopTool::Drain,
-        desktop::DesktopTool::Automation,
-        desktop::DesktopTool::Snapshot,
-        desktop::DesktopTool::Write,
-    ] {
-        registry.register(tool);
-    }
     registry.register_mcp(
         super::domain_control::WorkflowAutoTool,
         McpToolScope::WorkspaceRequired,

@@ -602,7 +602,7 @@ impl DestinationSession {
         let response = self.request_probe(
             "initialize",
             json!({
-                "_meta": {"orbit": {"worker_invocation": binding, "domain_contract":1}},
+                "_meta": {"orbit": {"worker_invocation": binding}},
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {

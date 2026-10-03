@@ -360,123 +360,77 @@ fn an_identity_mismatch_on_the_live_route_is_unreachable() {
 }
 
 #[test]
-fn old_desktop_clients_route_to_domain_peers_without_repeating_mutations() {
+fn retired_desktop_calls_and_alias_only_destinations_are_refused_without_dispatch() {
+    for (name, advertised, input) in [
+        (
+            "orbit.desktop.task.write",
+            "orbit_task_update",
+            json!({"workspace":"hm_owner/ws_orbit","request_id":"retired","operation":{"kind":"comment","id":"TST-1","expected_revision":"seen","comment":"once"}}),
+        ),
+        (
+            "orbit.desktop.read",
+            "orbit_task_list",
+            json!({"workspace":"hm_owner/ws_orbit","scope":"tasks"}),
+        ),
+        (
+            "orbit.task.update",
+            "orbit_desktop_task_write",
+            json!({"workspace":"hm_owner/ws_orbit","request_id":"current","id":"TST-1","expected_revision":"seen","comment":"once"}),
+        ),
+        (
+            "orbit.workflow.auto",
+            "orbit_desktop_read",
+            json!({"workspace":"hm_owner/ws_orbit","action":"status"}),
+        ),
+        (
+            "orbit.pipeline.invoke",
+            "orbit_desktop_automation",
+            json!({"workspace":"hm_owner/ws_orbit","job_name":"maintenance","default_input":true}),
+        ),
+    ] {
+        let probe = ScriptedProbe::new()
+            .answering(OWNER_MACHINE, owner_snapshot())
+            .advertising(OWNER_MACHINE, &[advertised]);
+        let log = probe.call_log();
+        let host = FederatedMcpHost::new(destinations(), Arc::new(probe));
+        assert!(
+            matches!(
+                host.call_tool(name, input, ToolSessionContext::default()),
+                Err(OrbitError::ToolNotOnThisHost(_))
+            ),
+            "{name}"
+        );
+        assert!(
+            log.calls().is_empty(),
+            "retired contracts must not be translated or delivered"
+        );
+    }
+}
+
+#[test]
+fn guarded_domain_write_keeps_unknown_outcome_without_resubmission() {
     let probe = ScriptedProbe::new()
         .answering(OWNER_MACHINE, owner_snapshot())
-        .advertising(
+        .advertising(OWNER_MACHINE, &["orbit_task_update"])
+        .on_call(
             OWNER_MACHINE,
-            &[
-                "orbit_task_update",
-                "orbit_task_show",
-                "orbit_task_list",
-                "orbit_workflow_auto",
-                "orbit_routine_control",
-                "orbit_pipeline_invoke",
-            ],
+            "orbit.task.update",
+            ScriptedToolResult::PostDispatchTimeout,
         );
     let log = probe.call_log();
     let host = FederatedMcpHost::new(destinations(), Arc::new(probe));
-    let payload = json!({"workspace":"hm_owner/ws_orbit","request_id":"same-receipt","operation":{"kind":"comment","id":"TST-1","expected_revision":"observed","comment":"one comment"}});
-    host.call_tool(
-        "orbit.desktop.task.write",
-        payload,
-        ToolSessionContext::default(),
-    )
-    .expect("known guarded compatibility");
+    let input = json!({"workspace":"hm_owner/ws_orbit","request_id":"lost-comment","id":"TST-1","expected_revision":"seen","comment":"once"});
+    assert!(matches!(
+        host.call_tool("orbit.task.update", input, ToolSessionContext::default()),
+        Err(OrbitError::OutcomeUnknown { .. })
+    ));
     let calls = log.calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].tool, "orbit.task.update");
     assert_eq!(
         calls[0].arguments,
-        json!({"workspace":"ws_orbit","request_id":"same-receipt","id":"TST-1","expected_revision":"observed","comment":"one comment"})
+        json!({"workspace":"ws_orbit","request_id":"lost-comment","id":"TST-1","expected_revision":"seen","comment":"once"})
     );
-    host.call_tool(
-        "orbit.desktop.read",
-        json!({"workspace":"hm_owner/ws_orbit","scope":"tasks","limit":25}),
-        ToolSessionContext::default(),
-    )
-    .expect("bounded domain read");
-    let calls = log.calls();
-    assert_eq!(calls[1].tool, "orbit.task.list");
-    assert_eq!(calls[1].arguments["view"], "bounded");
-}
-
-#[test]
-fn domain_clients_negotiate_legacy_peers_before_dispatch_and_keep_unknown_outcomes() {
-    let probe = ScriptedProbe::new()
-        .answering(OWNER_MACHINE, owner_snapshot())
-        .advertising(
-            OWNER_MACHINE,
-            &[
-                "orbit_desktop_read",
-                "orbit_desktop_task_write",
-                "orbit_desktop_drain",
-                "orbit_desktop_automation",
-            ],
-        )
-        .on_call(
-            OWNER_MACHINE,
-            "orbit.desktop.task.write",
-            ScriptedToolResult::PostDispatchTimeout,
-        );
-    let log = probe.call_log();
-    let host = FederatedMcpHost::new(destinations(), Arc::new(probe));
-    let error=host.call_tool("orbit.task.update",json!({"workspace":"hm_owner/ws_orbit","request_id":"lost-comment","id":"TST-1","expected_revision":"seen","comment":"once"}),ToolSessionContext::default()).expect_err("lost reply remains unknown");
-    assert!(
-        matches!(error, OrbitError::OutcomeUnknown { .. }),
-        "{error}"
-    );
-    let calls = log.calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].tool, "orbit.desktop.task.write");
-    assert_eq!(calls[0].arguments["request_id"], "lost-comment");
-    assert_eq!(calls[0].arguments["operation"]["kind"], "comment");
-    host.call_tool(
-        "orbit.workflow.auto",
-        json!({"workspace":"hm_owner/ws_orbit","action":"status"}),
-        ToolSessionContext::default(),
-    )
-    .expect("legacy drain observation");
-    let calls = log.calls();
-    assert_eq!(calls[1].tool, "orbit.desktop.read");
-    assert_eq!(calls[1].arguments["scope"], "drain");
-    host.call_tool(
-        "orbit.pipeline.invoke",
-        json!({"workspace":"hm_owner/ws_orbit","job_name":"maintenance","default_input":true}),
-        ToolSessionContext::default(),
-    )
-    .expect("legacy default input submission");
-    let calls = log.calls();
-    assert_eq!(calls[2].tool, "orbit.desktop.automation");
-    assert_eq!(calls[2].arguments["name"], "maintenance");
-    assert_eq!(calls[2].arguments["kind"], "job");
-}
-
-#[test]
-fn compatibility_never_discards_extra_write_fields_or_guesses_an_equivalent_tool() {
-    let probe = ScriptedProbe::new()
-        .answering(OWNER_MACHINE, owner_snapshot())
-        .advertising(OWNER_MACHINE, &["orbit_desktop_task_write"]);
-    let log = probe.call_log();
-    let host = FederatedMcpHost::new(destinations(), Arc::new(probe));
-    for input in [
-        json!({"workspace":"hm_owner/ws_orbit","request_id":"mixed","id":"TST-1","expected_revision":"seen","comment":"once","title":"also edit"}),
-        json!({"workspace":"hm_owner/ws_orbit","request_id":"spoof","id":"TST-1","expected_revision":"seen","title":"once","actor":"human"}),
-    ] {
-        assert!(
-            host.call_tool("orbit.task.update", input, ToolSessionContext::default())
-                .is_err()
-        );
-    }
-    assert!(matches!(
-        host.call_tool(
-            "orbit.routine.control",
-            json!({"workspace":"hm_owner/ws_orbit","action":"list"}),
-            ToolSessionContext::default()
-        ),
-        Err(OrbitError::ToolNotOnThisHost(_))
-    ));
-    assert!(log.calls().is_empty(), "preflight refusals send nothing");
 }
 
 #[test]
