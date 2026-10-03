@@ -148,7 +148,7 @@ To give a single agent Orbit's MCP tools and skills without installing the CLI o
 /plugin install orbit
 
 # Codex CLI
-codex plugin marketplace add constellation-works/orbit --ref main
+codex plugin marketplace add constellation-works/orbit --ref agent-main
 codex plugin add orbit@orbit
 
 # Cursor (local plugin from a checkout)
