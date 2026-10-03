@@ -95,11 +95,11 @@ where
             session_context: Some(session_context),
             brokered: None,
         },
-        || {
+        |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
-            Store::open(&audit_db)
+            Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
         },
         |input| {
             enforce_plugin_callback_allowlist_from_root(global_root, name)?;
@@ -165,11 +165,11 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             session_context: Some(session_context),
             brokered: None,
         },
-        || {
+        |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
                 &orbit_config::ConfigRoots::global_only(&global_root),
             )?;
-            Store::open(&audit_db)
+            Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
         },
         |input| {
             // The workspace path authorizes inside `execute_registered_tool`;
@@ -526,7 +526,7 @@ impl OrbitRuntime {
             execution_kind,
             plugin,
             audit,
-            || self.sqlite_store(),
+            |params, invocation| self.record_tool_dispatch_audit(params, invocation),
             |input| {
                 enforce_plugin_callback_allowlist(
                     &self.global_root(),
@@ -545,12 +545,12 @@ fn execute_tool_dispatch_with_audit_store<F, S>(
     execution_kind: ToolExecutionKind,
     plugin: Option<PluginProvenance>,
     audit: ToolDispatchAuditContext,
-    open_audit_store: S,
+    persist_audit: S,
     dispatch: F,
 ) -> Result<ToolDispatchOutcome, OrbitError>
 where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
-    S: FnOnce() -> Result<Store, OrbitError>,
+    S: FnOnce(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
 {
     let ToolDispatchAuditContext {
         agent_override,
@@ -704,8 +704,7 @@ where
         plugin_secret_updates: Some(&plugin_secret_updates),
         brokered_peer_pid,
     };
-    let audit_write = open_audit_store()
-        .and_then(|store| store.insert_audit_event_record_with_invocation(&params, invocation));
+    let audit_write = persist_audit(&params, invocation);
 
     // Claim the row for the runtime the moment it persists, so the CLI
     // `AuditGuard` suppresses its own duplicate emission. This is

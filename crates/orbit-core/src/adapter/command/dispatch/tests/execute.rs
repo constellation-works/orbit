@@ -84,6 +84,74 @@ fn runtime_dispatch_reuses_the_open_audit_store() {
     );
 }
 
+pub(super) fn write_free_runtime(runtime: &crate::OrbitRuntime) -> crate::OrbitRuntime {
+    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))
+    .expect("fixture config");
+    crate::OrbitRuntime::build_from_resolved_config_write_free(
+        &runtime.global_root(),
+        &runtime.shared_root(),
+        &runtime.local_root(),
+        runtime.workspace_runtime_binding().cloned(),
+        &config,
+        orbit_store::workflow::layout::LayoutUpgradeReport::default(),
+        crate::runtime::HostLifetime::ShortLived,
+    )
+    .expect("write-free runtime")
+}
+
+#[test]
+fn write_free_dispatch_persists_audit_without_widening_state_access() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &write_free_dispatch_persists_audit_without_widening_state_access,
+    )) {
+        return;
+    }
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    let reader = write_free_runtime(&runtime);
+    assert!(reader.is_write_free());
+    let store = reader.sqlite_store().expect("reader store");
+    assert!(store.is_read_only());
+    let migrations = store.applied_migrations().expect("migration ledger");
+
+    let outcome = reader
+        .execute_tool_command_dispatch(
+            "orbit.task.list",
+            json!({"limit": 1}),
+            None,
+            None,
+            ToolEntryPoint::Cli,
+        )
+        .expect("read-only dispatch");
+    assert!(outcome.audit_recorded);
+    assert!(
+        take_tool_audit_recorded(),
+        "suppress the duplicate CLI audit"
+    );
+    let rows = reader
+        .list_audit_events(None, Some("orbit.task.list".into()), None, None, 16)
+        .expect("audit rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, AuditEventStatus::Success);
+    assert_eq!(rows[0].subcommand.as_deref(), Some("run"));
+    assert_eq!(store.applied_migrations().expect("ledger"), migrations);
+    store
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "INSERT INTO schema_meta(key, value, updated_at)
+                     VALUES ('state-write-probe', 'probe', 'probe')",
+                    [],
+                )
+                .map(|_| ())
+                .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+        .expect_err("the runtime's original state handle must still reject writes");
+}
+
 #[test]
 fn dispatch_records_failure_audit_when_tool_handler_errors() {
     let _g = env_guard();

@@ -154,10 +154,12 @@ binary, and the apply path are otherwise unchanged.
   that carries it.
 - **The layout half is not write-gated.** See §4: an additive-newer layout
   permits ordinary operation, so the classification carries the whole weight.
-- **Audit rows are not written.** A read-only open still tries to record its
-  audit event; that write is refused, and the CLI reports it as a warning
-  without failing the command. Read-only commands therefore succeed but leave
-  no audit trail on a newer store.
+- **Audit appends require a writable, supported schema.** Tool dispatch from
+  a foreign-generation reader appends through a separate connection to the
+  existing database, without migration, when its schema exactly matches this
+  binary. The runtime's state handles remain read-only. A newer read-only store
+  or unwritable database still refuses the audit write; the CLI warns without
+  failing a read-only tool result.
 - **Task-registry compatibility is separate.** The global task registry keeps
   its own `PRAGMA user_version` reader floor (see
   [upgrades runbook](../../runbooks/upgrades.md)); this contract does not

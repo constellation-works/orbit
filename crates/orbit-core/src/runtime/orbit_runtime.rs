@@ -8,7 +8,9 @@ use std::sync::Mutex;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventRow};
+use orbit_store::contracts::{
+    AuditEventInsertParams, AuditInvocationFields, V2AuditEventFilter, V2AuditEventRow,
+};
 use orbit_store::{Store, workspace_id_for_orbit_dir};
 use orbit_types::record::{Audit, OrbitEvent};
 use orbit_types::workflow::ShipMode;
@@ -39,7 +41,8 @@ pub struct OrbitRuntime {
     pub(crate) context: OrbitContext,
     /// This process joined a live executable generation other than its own
     /// without recording itself, so it opened Orbit's state without write
-    /// access. Reads work; anything that would mutate state must be skipped.
+    /// access. Reads work; operational state mutations must be skipped. Tool
+    /// dispatch may append an audit row through a separate migration-free path.
     write_free: bool,
     workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
     /// A higher-level registry may mark this local checkout as a replica. Core
@@ -178,7 +181,8 @@ impl OrbitRuntime {
     /// Whether this runtime opened Orbit's state without write access because
     /// the process joined a live generation it may not record itself into.
     /// Reads work; operations that would repair or finalize stored state must
-    /// be skipped rather than attempted.
+    /// be skipped rather than attempted. Tool audit appends use a separate
+    /// connection without granting writes to these runtime state handles.
     pub fn is_write_free(&self) -> bool {
         self.write_free
     }
@@ -495,6 +499,28 @@ impl OrbitRuntime {
 
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
         Ok(self.context.stores().host.sqlite.clone())
+    }
+
+    /// Persist dispatch telemetry without widening a foreign-generation
+    /// reader's operational state access or running database migrations.
+    pub(crate) fn record_tool_dispatch_audit(
+        &self,
+        params: &AuditEventInsertParams,
+        invocation: AuditInvocationFields<'_>,
+    ) -> Result<(), OrbitError> {
+        if self.is_write_free() {
+            Store::append_audit_event_at_path(
+                &self.context.persistence().audit_db,
+                params,
+                invocation,
+            )
+        } else {
+            self.context
+                .stores()
+                .host
+                .sqlite
+                .insert_audit_event_record_with_invocation(params, invocation)
+        }
     }
 
     /// Probe the configured database path independently of cached runtime

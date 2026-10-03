@@ -51,7 +51,9 @@ pub(crate) enum StateAccess {
     /// persistence is best-effort, and it never initializes a task partition
     /// only to read it.
     ReadOnly,
-    /// A read-only join of a foreign generation: writes nothing at all.
+    /// A read-only join of a foreign generation: no operational state writes.
+    /// Tool dispatch may append audit telemetry through its separate,
+    /// migration-free connection without widening these state handles.
     WriteFree,
 }
 

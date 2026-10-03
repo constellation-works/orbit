@@ -7,6 +7,110 @@ use crate::AuditEventFilter;
 use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
 
 #[test]
+fn audit_append_uses_existing_schema_and_keeps_reader_read_only() {
+    let root = tempfile::tempdir().expect("fixture");
+    let path = root.path().join("orbit.db");
+    let writer = Store::open(&path).expect("initialize fixture");
+    let reader = Store::open_read_only(&path).expect("reader");
+    let migrations = reader.applied_migrations().expect("ledger");
+    Store::append_audit_event_at_path(
+        &path,
+        &sample_params(),
+        AuditInvocationFields {
+            trace_id: Some("trace-append"),
+            ..Default::default()
+        },
+    )
+    .expect("append audit");
+    let rows = reader
+        .list_audit_events(&AuditEventFilter::default())
+        .expect("rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].trace_id.as_deref(), Some("trace-append"));
+    assert_eq!(writer.applied_migrations().expect("ledger"), migrations);
+    reader
+        .insert_audit_event_record(&AuditEventInsertParams {
+            execution_id: "must-not-write".into(),
+            ..sample_params()
+        })
+        .expect_err("the reader's original handle must still reject inserts");
+}
+
+#[test]
+fn audit_append_never_creates_or_migrates_a_database() {
+    let root = tempfile::tempdir().expect("fixture");
+    let path = root.path().join("orbit.db");
+    assert!(
+        Store::append_audit_event_at_path(
+            &path,
+            &sample_params(),
+            AuditInvocationFields::default()
+        )
+        .is_err()
+    );
+    assert!(!path.exists(), "audit append must not create a store");
+    let store = Store::open(&path).expect("fixture store");
+    for version in [
+        1,
+        crate::driver::sqlite::migration::SUPPORTED_SCHEMA_VERSION + 1,
+    ] {
+        let conn = store.conn.lock().expect("writer");
+        conn.execute("DELETE FROM schema_meta WHERE key LIKE 'migration.v%'", [])
+            .expect("replace fixture ledger");
+        conn.execute(
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES (?1, 'fixture', 'fixture')",
+            [format!("migration.v{version:04}")],
+        )
+        .expect("fixture schema version");
+        drop(conn);
+        Store::append_audit_event_at_path(
+            &path,
+            &sample_params(),
+            AuditInvocationFields::default(),
+        )
+        .expect_err("an unsupported schema must not be written");
+        assert_eq!(store.schema_version().expect("version"), version);
+        assert!(
+            store
+                .list_audit_events(&AuditEventFilter::default())
+                .expect("rows")
+                .is_empty()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_append_refuses_read_only_files_and_symlinks() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let root = tempfile::tempdir().expect("fixture");
+    let path = root.path().join("orbit.db");
+    let store = Store::open(&path).expect("fixture store");
+    let link = root.path().join("link.db");
+    symlink(&path, &link).expect("fixture link");
+    Store::append_audit_event_at_path(&link, &sample_params(), AuditInvocationFields::default())
+        .expect_err("audit append must not follow symlinks");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
+        .expect("read-only fixture");
+    Store::append_audit_event_at_path(&path, &sample_params(), AuditInvocationFields::default())
+        .expect_err("audit append must honor read-only files even as root");
+    assert_eq!(
+        std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o400
+    );
+    assert!(
+        store
+            .list_audit_events(&AuditEventFilter::default())
+            .expect("rows")
+            .is_empty()
+    );
+}
+
+#[test]
 fn insert_then_read_round_trips_correlation_fields() {
     let store = Store::open_in_memory().expect("open store");
     let params = sample_params();
