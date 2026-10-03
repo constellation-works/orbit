@@ -81,6 +81,14 @@ pub(super) fn execute(
         OrbitBuiltinAction::AutoTaskUpdate => super::auto_task_tools::update(runtime, input),
         OrbitBuiltinAction::AutoTaskToggle => super::auto_task_tools::toggle(runtime, input),
         OrbitBuiltinAction::AutoTaskDelete => super::auto_task_tools::delete(runtime, input),
+        OrbitBuiltinAction::DesktopAutomation => super::desktop_automation_tools::control(
+            runtime,
+            input,
+            submission_trigger(session_context),
+        ),
+        OrbitBuiltinAction::DesktopDrain => {
+            super::desktop_drain_tools::control(runtime, input, submission_trigger(session_context))
+        }
         OrbitBuiltinAction::DesktopRead => {
             super::desktop_tools::read(runtime, session_context, input)
         }

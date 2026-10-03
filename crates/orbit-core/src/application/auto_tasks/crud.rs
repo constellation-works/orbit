@@ -236,6 +236,24 @@ impl OrbitRuntime {
         self.edit_auto_task(name, |definition| definition.enabled = enabled)
     }
 
+    /// Compare and change the enabled flag while holding the scheduler cursor lock.
+    pub fn auto_task_toggle_checked(
+        &self,
+        name: &str,
+        expected: bool,
+        enabled: bool,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.try_edit_auto_task(name, |definition| {
+            if definition.enabled != expected {
+                return Err(OrbitError::InvalidInput(
+                    "auto-task state changed; refresh before retrying".into(),
+                ));
+            }
+            definition.enabled = enabled;
+            Ok(())
+        })
+    }
+
     /// Mint one task from a definition on demand — the manual counterpart to a
     /// scheduler fire, so a new or edited definition can be exercised without
     /// waiting for its cron slot [ORB-10439].
@@ -420,10 +438,21 @@ impl OrbitRuntime {
         name: &str,
         edit: impl FnOnce(&mut AutoTaskDefinition),
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.try_edit_auto_task(name, |definition| {
+            edit(definition);
+            Ok(())
+        })
+    }
+
+    fn try_edit_auto_task(
+        &self,
+        name: &str,
+        edit: impl FnOnce(&mut AutoTaskDefinition) -> Result<(), OrbitError>,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
         let state_path = cursor_state_path(&self.paths().state_dir);
         with_exclusive_file_lock(&state_path, "auto-task cursor", || {
             let mut definition = self.require_validated_auto_task(name)?;
-            edit(&mut definition);
+            edit(&mut definition)?;
             definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
             definition.updated_at = chrono::Utc::now().to_rfc3339();
             self.validate_auto_task(&definition)?;

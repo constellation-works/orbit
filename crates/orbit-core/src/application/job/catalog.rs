@@ -50,6 +50,18 @@ pub struct JobCatalogEntry {
 }
 
 impl JobCatalogEntry {
+    /// Whether operator UI surfaces may submit this job without task input.
+    /// Delivery coordinators and leaves belong to Ship or a bounded drain.
+    pub fn supports_no_input_submission(&self) -> bool {
+        let name = &self.job_id;
+        self.kind() != JobKind::Subroutine
+            && self.state() != JobScheduleState::Disabled
+            && !self.spec.holds_task_delivery()
+            && !(name.starts_with("workspace_")
+                || name.starts_with("epic_")
+                || (name.starts_with("task_") && name != "task_pilot_pipeline"))
+    }
+
     pub fn kind(&self) -> JobKind {
         self.spec.kind
     }

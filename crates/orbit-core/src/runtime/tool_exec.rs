@@ -53,7 +53,7 @@ impl OrbitRuntime {
         if name == "orbit.desktop.read"
             && matches!(
                 input.get("scope").and_then(Value::as_str),
-                Some("runs" | "run")
+                Some("runs" | "run" | "drain" | "routines" | "auto_tasks" | "jobs")
             )
         {
             self.authorize_tool_operation(

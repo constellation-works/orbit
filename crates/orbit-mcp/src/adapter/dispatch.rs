@@ -280,7 +280,11 @@ impl OrbitToolServer {
         // never the destination's local path or a guessed workspace name.
         let desktop_selector = matches!(
             canonical.as_str(),
-            "orbit.desktop.read" | "orbit.desktop.task.snapshot" | "orbit.desktop.task.write"
+            "orbit.desktop.read"
+                | "orbit.desktop.task.snapshot"
+                | "orbit.desktop.task.write"
+                | "orbit.desktop.drain"
+                | "orbit.desktop.automation"
         )
         .then(|| {
             input

@@ -143,6 +143,8 @@ pub enum OrbitBuiltinAction {
     AgentInvoke,
     CommandExec,
     DesktopRead,
+    DesktopDrain,
+    DesktopAutomation,
     DesktopTaskSnapshot,
     DesktopTaskWrite,
     DrainClaimBind,
