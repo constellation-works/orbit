@@ -299,9 +299,10 @@ fn append_codex_side_write_roots(
 /// allowlists. Keep the grants path-shaped instead of re-allowing the whole
 /// home directory or workspace `.orbit` tree.
 ///
-/// Global runtime stores are always granted. The host cache and workspace
-/// stores are granted only when `grants_workspace_modify` is set, so a
-/// read-only activity profile never becomes a primary-workspace writer.
+/// Global runtime stores are granted when they resolve inside the global root.
+/// The host cache and workspace stores also require `grants_workspace_modify`,
+/// so a read-only activity profile never becomes a primary-workspace writer.
+/// Every store must stay inside its runtime root after symlink resolution.
 #[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
 pub(super) fn append_orbit_child_runtime_write_roots(
     runtime: &OrbitRuntime,
@@ -313,41 +314,74 @@ pub(super) fn append_orbit_child_runtime_write_roots(
         .global_dir
         .canonicalize()
         .unwrap_or_else(|_| runtime.paths().global_dir.clone());
-    let global = global_root.display().to_string();
-
     let workspace_orbit = runtime
         .paths()
         .orbit_dir
         .canonicalize()
         .unwrap_or_else(|_| runtime.paths().orbit_dir.clone());
-    let workspace = workspace_orbit.display().to_string();
-
-    for root in [
-        format!("{global}/state/logs/**"),
-        format!("{global}/state/audit/**"),
-        format!("{global}/orbit.db*"),
-        format!("{global}/tasks/**"),
+    for (relative, suffix) in [
+        ("state/logs", "/**"),
+        ("state/audit", "/**"),
+        ("orbit.db", "*"),
+        ("tasks", "/**"),
     ] {
-        append_unique_modify_root(resolved, root);
+        append_contained_runtime_modify_root(&global_root, relative, suffix, resolved);
     }
 
     if !grants_workspace_modify {
         return;
     }
 
-    for root in [
-        // Language-neutral host cache seam shared across worktrees. Not an
-        // activity-tool store and not a shared Cargo target directory.
-        // Implementer-only, as on Linux. [ORB-11259]
-        format!("{global}/cache/**"),
-        format!("{workspace}/tasks/**"),
-        format!("{workspace}/frictions/**"),
-        format!("{workspace}/state/audit/**"),
-        format!("{workspace}/state/logs/**"),
-        format!("{workspace}/state/semantic.db*"),
+    // Language-neutral host cache seam shared across worktrees. Not an
+    // activity-tool store and not a shared Cargo target directory.
+    // Implementer-only, as on Linux. [ORB-11259]
+    append_contained_runtime_modify_root(&global_root, "cache", "/**", resolved);
+    for (relative, suffix) in [
+        ("tasks", "/**"),
+        ("frictions", "/**"),
+        ("state/audit", "/**"),
+        ("state/logs", "/**"),
+        ("state/semantic.db", "*"),
     ] {
-        append_unique_modify_root(resolved, root);
+        append_contained_runtime_modify_root(&workspace_orbit, relative, suffix, resolved);
     }
+}
+
+/// Match the SBPL compiler's physical path identity before granting a store,
+/// including missing descendants of existing symlinked ancestors. Drop an
+/// unresolved link as well: it could acquire an outside target before the
+/// compiler resolves the rule. Safe stores need not exist yet.
+#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
+fn append_contained_runtime_modify_root(
+    root: &Path,
+    relative: &str,
+    suffix: &str,
+    resolved: &mut ResolvedFsProfile,
+) {
+    let physical = orbit_exec::physical_with_missing_tail(&root.join(relative));
+    let mut ancestor = physical.as_path();
+    let contained = physical.starts_with(root)
+        && loop {
+            match std::fs::symlink_metadata(ancestor) {
+                Ok(metadata) => break !metadata.is_symlink(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let Some(parent) = ancestor.parent() else {
+                        break false;
+                    };
+                    ancestor = parent;
+                }
+                Err(_) => break false,
+            }
+        };
+    if !contained {
+        tracing::warn!(
+            runtime_root = %root.display(),
+            store = relative,
+            "skipping sandbox grant for a runtime store whose physical containment cannot be established"
+        );
+        return;
+    }
+    append_unique_modify_root(resolved, format!("{}{suffix}", physical.display()));
 }
 
 /// Keep registered scheduler definitions behind the host-brokered auto-task

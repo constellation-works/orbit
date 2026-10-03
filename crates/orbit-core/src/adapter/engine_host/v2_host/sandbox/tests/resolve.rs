@@ -984,6 +984,85 @@ fn resolved_linux_sandbox_drops_a_redirected_global_runtime_store() {
     );
 }
 
+/// [ORB-13840] SBPL resolves runtime rules physically, so a redirected store
+/// must be dropped before compilation. Safe aliases and missing stores keep
+/// their grants. Linux exercises the same macOS grant builder; the macOS CI
+/// leg drives the executor resolver that production callers use.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn resolved_macos_sandbox_runtime_stores_stay_inside_their_root() {
+    use std::os::unix::fs::symlink;
+
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &resolved_macos_sandbox_runtime_stores_stay_inside_their_root,
+    )) {
+        return;
+    }
+
+    for topology in ["outside", "dangling-outside", "in-root", "missing"] {
+        let (root, runtime, repo_root) = runtime_with_workspace_layout();
+        let global = runtime.paths().global_dir.canonicalize().unwrap();
+        let cache = global.join("cache");
+        let target = match topology {
+            "outside" | "dangling-outside" => root.path().canonicalize().unwrap().join("outside"),
+            "in-root" => global.join("real-cache"),
+            _ => cache.clone(),
+        };
+        if topology != "missing" {
+            if topology != "dangling-outside" {
+                std::fs::create_dir_all(&target).expect("cache target");
+            }
+            symlink(&target, &cache).expect("redirect cache store");
+        }
+
+        #[cfg(target_os = "macos")]
+        let profile = {
+            seed_executor(
+                &runtime,
+                "claude",
+                Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
+            );
+            runtime
+                .resolve_executor_sandbox("claude", None, Some(&repo_root))
+                .expect("resolve macOS implementer sandbox")
+                .expect("sandbox descriptor")
+                .fs_profile
+        };
+        #[cfg(target_os = "linux")]
+        let profile = {
+            let mut profile = resolve_fs_profile_absolute(&runtime, None, Some(&repo_root))
+                .expect("resolve implementer profile");
+            append_orbit_child_runtime_write_roots(&runtime, true, &mut profile);
+            profile
+        };
+
+        let writes = profile
+            .modify
+            .iter()
+            .filter(|rule| !rule.starts_with('!'))
+            .collect::<Vec<_>>();
+        if matches!(topology, "outside" | "dangling-outside") {
+            for forbidden in [&cache, &target] {
+                assert!(
+                    writes
+                        .iter()
+                        .all(|rule| !rule.starts_with(forbidden.to_string_lossy().as_ref())),
+                    "ORB-13840: a redirected runtime store must not grant its link or target: {writes:?}"
+                );
+            }
+        } else {
+            assert!(
+                writes.contains(&&format!("{}/**", target.display())),
+                "safe and missing runtime stores must retain their physical grant ({topology}): {writes:?}"
+            );
+        }
+        assert!(
+            writes.contains(&&format!("{}/tasks/**", global.display())),
+            "rejecting a redirected cache must preserve other runtime-store grants: {writes:?}"
+        );
+    }
+}
+
 /// Sandbox preparation appends runtime write roots before the recovery
 /// authority deny that rejects a symlinked `<global>/state`. The later
 /// rejection is not a substitute for validating the store first: without it,

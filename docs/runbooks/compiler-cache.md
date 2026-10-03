@@ -54,7 +54,9 @@ protected-path denies are unchanged. Reviewer and other read-only profiles do
 not receive the cache grant. macOS already allows `$HOME/Library/Caches` and
 also grants `$HOME/.orbit/cache/**` to write-capable profiles so the same
 default directory works; macOS read-only profiles do not receive it either. The
-stable `/tmp` mounts are Linux Bubblewrap-only.
+stable `/tmp` mounts are Linux Bubblewrap-only. Both OS sandboxes skip the
+host-cache grant when a symlink redirects the cache outside the global Orbit
+root; an alias within that root remains supported.
 
 The provider **agent cwd stays on the real worktree**. Bubblewrap `--chdir` is
 not mapped onto `/tmp/orbit-workspace`. The rustc wrapper, and only the rustc
