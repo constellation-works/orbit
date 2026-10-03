@@ -9,6 +9,7 @@ paths:
   - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/**"
 related_features: [policy-sandbox, executors]
 related_artifacts: []
+last_validated: 2026-10-03
 ---
 
 # Linux sandbox onboarding and diagnostics

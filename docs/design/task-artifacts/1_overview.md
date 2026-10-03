@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Overview"
 owner: codex
 last_updated: 2026-05-17
-last_validated: 2026-09-10
+last_validated: 2026-10-03
 status: Draft
 feature: task-artifacts
 doc_role: overview
@@ -25,7 +25,7 @@ Orbit tasks sit between transient agent sessions and durable code history. A goo
 
 - Humans need a plain-English record of intent, acceptance criteria, and review context.
 - Agents need a stable, machine-readable handoff surface that survives session loss.
-- Automation needs structured fields for lifecycle, dependencies, locks, PR generation, semantic search, and audit.
+- Automation needs structured fields for lifecycle, dependencies, locks, PR generation, search, and audit.
 - Git history needs a compact identifier that can be cited in commits and traced later.
 
 The v2 artifact matches the work to its readers:
