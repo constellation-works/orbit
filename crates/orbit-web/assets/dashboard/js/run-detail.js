@@ -29,6 +29,7 @@ let activeRunDetail = null;
 let activeRunEvents = [];
 let activeRunEventsError = null;
 let activeRunLogs = [];
+let activeRunLogsError = null;
 let activeRunSubtab = "steps";
 let expandedStepIndices = new Set();
 
@@ -134,6 +135,7 @@ function retireRunDetailView() {
   activeRunEvents = [];
   activeRunEventsError = null;
   activeRunLogs = [];
+  activeRunLogsError = null;
   expandedStepIndices = new Set();
   if (typeof document !== "undefined" && document.getElementById("run-detail-meta")) {
     renderRunDetailEmpty(activeRunId ? "Loading run…" : "No run selected.");
@@ -161,7 +163,12 @@ export function setActiveRunEvents(v) {
 export function setActiveRunEventsError(v) { activeRunEventsError = v || null; }
 
 export function getActiveRunLogs() { return activeRunLogs; }
-export function setActiveRunLogs(v) { activeRunLogs = v || []; }
+export function setActiveRunLogs(v) {
+  activeRunLogs = v || [];
+  activeRunLogsError = null;
+}
+
+export function setActiveRunLogsError(v) { activeRunLogsError = v || null; }
 
 export function getActiveRunSubtab() { return activeRunSubtab; }
 export function setActiveRunSubtab(v) { activeRunSubtab = v || "steps"; }
@@ -353,9 +360,14 @@ function buildChildDispatches(run) {
 export function renderRunSteps() {
   const body = $("run-steps-body");
   if (!body) return;
+  const notices = activeRunLogsError ? [el("div", {
+    class: "action-error",
+    role: "alert",
+    text: `Unable to load agent logs: ${activeRunLogsError}. Use Refresh to retry.`,
+  })] : [];
   const steps = (activeRunDetail && activeRunDetail.steps) || [];
   if (steps.length === 0) {
-    syncNodes(body, [el("div", { class: "empty-state" }, [
+    syncNodes(body, [...notices, el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
       el("div", { class: "text", text: "No steps recorded for this run." }),
     ])]);
@@ -391,7 +403,7 @@ export function renderRunSteps() {
       frag.appendChild(buildStepDetail(step));
     }
   }
-  syncNodes(body, Array.from(frag.children));
+  syncNodes(body, [...notices, ...Array.from(frag.children)]);
 }
 
 export function renderRunKnowledge() {
@@ -720,7 +732,7 @@ export function renderRunEvents() {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "!" }),
       el("div", { class: "text", text: activeRunEventsError }),
-      el("div", { class: "text", text: "Try narrowing the kind filter to reduce the scan." }),
+      el("div", { class: "text", text: "Use Refresh to retry loading events." }),
     ])]);
     return;
   }

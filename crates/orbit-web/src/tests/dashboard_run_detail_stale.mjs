@@ -328,4 +328,25 @@ if (!get("run-detail-meta").textContent.includes("Run not found: run-gone")) {
   throw new Error(`a 404 still says the run is missing: ${get("run-detail-meta").textContent}`);
 }
 
+// Logs and events are independent reads. Their failed reads must be visible
+// beside a successfully loaded run, and a successful Refresh clears them.
+location.hash = "#runs/run-partial";
+take("run-partial", "detail", "one").gate.resolve(detail("run-partial", "partial-metadata"));
+take("run-partial", "events", "one").gate.resolve({ __reject: true, status: 503, message: "events database unavailable" });
+take("run-partial", "logs", "one").gate.resolve({ __reject: true, status: 503, message: "logs database unavailable" });
+await flush();
+const failedLogs = get("run-steps-body").textContent;
+if (!failedLogs.includes("logs database unavailable") || !failedLogs.includes("Refresh")) {
+  throw new Error(`a failed logs read needs a visible retry instruction: ${failedLogs}`);
+}
+const failedEvents = get("run-events-body").textContent;
+if (!failedEvents.includes("events database unavailable") || !failedEvents.includes("Refresh")) {
+  throw new Error(`a failed events read needs an available retry action: ${failedEvents}`);
+}
+get("refresh-btn").listeners.click();
+await fulfillRun("run-partial", "one", "recovered-partial");
+if (get("run-steps-body").textContent.includes("logs database unavailable") || get("run-events-body").textContent.includes("events database unavailable")) {
+  throw new Error("successful Refresh must clear both partial-read errors");
+}
+
 if (pending.length) throw new Error(`fetches still deferred: ${describePending()}`);
