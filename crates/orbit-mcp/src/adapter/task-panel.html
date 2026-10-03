@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Orbit task panel</title>
+<style>
+:root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+body { margin: 0; padding: 20px; max-width: 760px; }
+h1 { font-size: 20px; } label { display: block; margin: 12px 0 4px; }
+input { box-sizing: border-box; width: 100%; padding: 8px; }
+button { margin: 12px 8px 8px 0; padding: 8px 12px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+#state { min-height: 2em; } #identity { overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<h1>Orbit task panel</h1>
+<form id="selection">
+<label for="workspace">Workspace selector</label><input id="workspace" required autocomplete="off">
+<label for="task-key">Public task key</label><input id="task-key" required autocomplete="off">
+<button id="read" type="submit" disabled>Read task</button>
+</form>
+<p id="state" role="status" aria-live="polite">Connecting to host…</p>
+<p id="identity"></p>
+<h2 id="title"></h2><pre id="details"></pre>
+<button id="send" type="button" disabled>Send context to chat</button>
+<pre id="reference" tabindex="0" aria-label="Task reference"></pre>
+<script>/* ORBIT_PANEL_SCRIPT */</script>
+</body>
+</html>

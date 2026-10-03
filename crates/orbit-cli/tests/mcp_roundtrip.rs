@@ -5207,3 +5207,137 @@ mod upgrade;
 
 #[path = "mcp_roundtrip/plugins.rs"]
 mod plugins;
+
+/// Read-only presentation uses the production host's task filter and audit path.
+#[test]
+fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fallback() {
+    let workspace = McpWorkspace::init();
+    let task_id = author_task(&workspace, "<script>unsafe task title</script>");
+    let selector = workspace.work.to_str().expect("workspace path");
+    let mut client = workspace.serve();
+    let listed = client.request("tools/list", Value::Null);
+    let tools = listed["result"]["tools"].as_array().expect("tools");
+    for (name, entrypoint) in [("orbit_ui_open", "global"), ("orbit_ui_inspect", "thread")] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .expect("presentation tool");
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        assert_eq!(
+            tool["_meta"]["ui"]["resourceUri"],
+            "ui://orbit/task-panel/v1/index.html"
+        );
+        assert_eq!(
+            tool["_meta"]["openai/ui"]["entrypoints"][0]["type"],
+            entrypoint
+        );
+    }
+    let ordinary = tools
+        .iter()
+        .find(|tool| tool["name"] == "orbit_task_show")
+        .expect("data tool");
+    assert!(
+        ordinary.get("_meta").is_none(),
+        "ordinary reads remain widget-free"
+    );
+    let empty = client.call_tool_ok("orbit_ui_open", json!({}));
+    assert!(empty["task"].is_null());
+    let panel = client.call_tool_ok(
+        "orbit_ui_inspect",
+        json!({ "workspace": selector, "id": task_id }),
+    );
+    assert_eq!(panel["schema_version"], 1);
+    assert_eq!(panel["workspace"], selector);
+    assert_eq!(panel["task"]["id"], task_id);
+    assert_eq!(panel["task"]["title"], "<script>unsafe task title</script>");
+    assert!(panel["task"]["updated_at"].is_string());
+    let ordinary = client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
+    assert_eq!(ordinary["title"], panel["task"]["title"]);
+    for arguments in [
+        json!({"id":task_id}),
+        json!({"workspace":selector}),
+        json!({"workspace":"", "id":task_id}),
+        json!({"workspace":selector,"id":task_id,"actor":"human"}),
+        json!({"workspace":selector,"id":task_id,"status":"done"}),
+    ] {
+        assert_eq!(
+            client.call_tool_err("orbit_ui_inspect", arguments)["code"],
+            "invalid_input"
+        );
+    }
+    let wrong = client.call_tool_err(
+        "orbit_ui_inspect",
+        json!({"workspace":"missing-workspace", "id":task_id}),
+    );
+    assert!(wrong["code"].is_string());
+    let elsewhere = workspace.home.join("another-workspace");
+    std::fs::create_dir(&elsewhere).expect("second workspace");
+    orbit_ok(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&elsewhere),
+    );
+    orbit_ok(
+        McpWorkspace::orbit_command(&elsewhere, &workspace.home).args([
+            "workspace",
+            "init",
+            "--name",
+            "another-workspace",
+        ]),
+    );
+    client.call_tool_err(
+        "orbit_ui_inspect",
+        json!({"workspace":elsewhere, "id":task_id}),
+    );
+    client.call_tool_err(
+        "orbit_ui_inspect",
+        json!({"workspace":selector, "id":"TST-999999"}),
+    );
+    let denied_before = client.call_tool_err("orbit_workflow_ship", json!({"task_ids":[task_id]}));
+    client.call_tool_ok("orbit_ui_open", json!({"workspace":selector,"id":task_id}));
+    let denied_after = client.call_tool_err("orbit_workflow_ship", json!({"task_ids":[task_id]}));
+    assert_eq!(denied_before["code"], "capability_denied");
+    assert_eq!(denied_after["code"], denied_before["code"]);
+    let unchanged = client.call_tool_ok("orbit_task_show", json!({"id":task_id}));
+    assert_eq!(unchanged["updated_at"], ordinary["updated_at"]);
+    assert_eq!(unchanged["status"], ordinary["status"]);
+
+    let mut federated = federated_client(&workspace);
+    let discovered = federated.call_tool_ok("orbit_workspace_list", json!({}));
+    let descriptors = discovered["workspaces"]
+        .as_array()
+        .expect("federated workspaces");
+    let qualified = descriptors
+        .iter()
+        .find(|row| row["repo_root"] == selector)
+        .or_else(|| {
+            descriptors
+                .iter()
+                .find(|row| row["name"] == "mcp-roundtrip")
+        })
+        .expect("local descriptor")["selector"]
+        .clone();
+    assert!(
+        qualified.is_string(),
+        "copy a returned selector: {discovered}"
+    );
+    let panel = federated.call_tool_ok(
+        "orbit_ui_inspect",
+        json!({"workspace":qualified,"id":task_id}),
+    );
+    assert_eq!(panel["workspace"], qualified);
+    assert_eq!(panel["task"]["id"], task_id);
+    let bare = federated.call_tool_err(
+        "orbit_ui_inspect",
+        json!({"workspace":selector,"id":task_id}),
+    );
+    assert_eq!(bare["code"], "unknown_selector");
+    let static_resource = federated.request(
+        "resources/read",
+        json!({"uri":"ui://orbit/task-panel/v1/index.html"}),
+    );
+    assert_eq!(
+        static_resource["result"]["contents"][0]["mimeType"],
+        "text/html;profile=mcp-app"
+    );
+}
