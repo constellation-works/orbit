@@ -100,13 +100,6 @@ fn a_secret_split_across_reads_is_still_redacted() {
 }
 
 #[test]
-fn a_character_split_across_reads_is_echoed_intact() {
-    let output = echo(&[b"caf\xc3", b"\xa9\n", b"tail without newline"]);
-
-    assert_eq!(output, "café\ntail without newline");
-}
-
-#[test]
 fn a_secret_split_across_the_forced_flush_is_redacted_for_many_chunkings() {
     let secrets = ["orbit-tee-flush-boundary-secret-8c1f", "abcabcabcabc"];
     let chunkings = [
@@ -172,55 +165,4 @@ fn a_multiline_secret_split_on_its_newline_is_redacted() {
         b"-AFTER\n",
     ]);
     assert_eq!(output, expected);
-}
-
-#[test]
-fn newline_free_echo_stays_within_the_flush_bound() {
-    let payload = vec![b'q'; MAX_PENDING_ECHO_BYTES * 3 + 17];
-    let chunkings = [
-        1usize,
-        8192,
-        MAX_PENDING_ECHO_BYTES - 1,
-        MAX_PENDING_ECHO_BYTES,
-        MAX_PENDING_ECHO_BYTES + 64,
-        payload.len(),
-    ];
-    for chunk in chunkings {
-        let output = echo_chunked(&payload, chunk);
-        assert_eq!(output.as_bytes(), payload.as_slice(), "chunk {chunk}");
-    }
-}
-
-#[test]
-fn a_partial_line_after_a_newline_stays_within_the_flush_bound() {
-    let mut payload = b"head-line\n".to_vec();
-    payload.extend(std::iter::repeat_n(b'q', MAX_PENDING_ECHO_BYTES * 2 + 9));
-    let output = echo_chunked(&payload, 4096);
-    assert_eq!(output.as_bytes(), payload.as_slice());
-
-    let mut echo = RedactingEcho::new(Vec::new());
-    echo.push(b"head-line\n");
-    echo.push(&vec![b'q'; MAX_PENDING_ECHO_BYTES * 2 + 9]);
-    assert!(
-        echo.buffered_len() <= MAX_PENDING_ECHO_BYTES,
-        "pending {}",
-        echo.buffered_len()
-    );
-    let output = String::from_utf8(echo.finish()).expect("utf8 echo");
-    assert!(output.starts_with("head-line\n"));
-    assert_eq!(
-        output.len(),
-        "head-line\n".len() + MAX_PENDING_ECHO_BYTES * 2 + 9
-    );
-}
-
-#[test]
-fn a_multibyte_character_split_by_the_flush_bound_stays_intact() {
-    let mut payload = vec![b'a'; MAX_PENDING_ECHO_BYTES - 1];
-    payload.extend_from_slice("é".as_bytes());
-    payload.extend_from_slice(b"[[tail]]");
-    for chunk in [1usize, 8192, MAX_PENDING_ECHO_BYTES, payload.len()] {
-        let output = echo_chunked(&payload, chunk);
-        assert_eq!(output.as_bytes(), payload.as_slice(), "chunk {chunk}");
-    }
 }

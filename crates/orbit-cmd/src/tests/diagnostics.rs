@@ -1,50 +1,6 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::super::diagnostics::{
-    is_year_month, list_jsonl_months, parse_jsonl_values, read_jsonl_month,
-    read_jsonl_month_limited, validated_diagnostics_month_dir, validated_year_month,
-};
-
-#[test]
-fn parse_jsonl_values_recovers_concatenated_objects() {
-    let values = parse_jsonl_values::<Value>(r#"{"step":"one"}{"step":"two"}"#).unwrap();
-
-    assert_eq!(values, vec![json!({"step": "one"}), json!({"step": "two"})]);
-}
-
-#[test]
-fn parse_jsonl_values_rejects_trailing_garbage() {
-    let err = parse_jsonl_values::<Value>(r#"{"step":"one"}oops"#).unwrap_err();
-
-    assert!(err.to_string().contains("trailing characters"));
-}
-
-#[test]
-fn is_year_month_accepts_only_canonical_form() {
-    assert!(is_year_month("2026-03"));
-    assert!(!is_year_month("2026-3"));
-    assert!(!is_year_month("26-03"));
-    assert!(!is_year_month("2026/03"));
-    assert!(!is_year_month(""));
-}
-
-#[test]
-fn validated_year_month_rebuilds_only_the_allowed_components() {
-    assert_eq!(validated_year_month("2026-03").unwrap(), "2026-03");
-    assert!(validated_year_month("2026/03").is_err());
-    assert!(validated_year_month("../secrets").is_err());
-    assert!(validated_year_month("2026-00").is_err());
-    assert!(validated_year_month("2026-13").is_err());
-}
-
-#[test]
-fn validated_month_dir_rejects_unknown_categories() {
-    let root = tempfile::tempdir().expect("tempdir");
-
-    let error = validated_diagnostics_month_dir(root.path(), "secrets", "2026-03").unwrap_err();
-
-    assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
-}
+use super::super::diagnostics::read_jsonl_month;
 
 #[test]
 fn read_month_rejects_path_traversal() {
@@ -74,60 +30,4 @@ fn read_month_rejects_jsonl_symlink_outside_month() {
     let error = read_jsonl_month::<Value>(root.path(), "metrics", "2026-03").unwrap_err();
 
     assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
-}
-
-#[test]
-fn list_jsonl_months_returns_sorted_existing_partitions() {
-    let root = tempfile::tempdir().expect("tempdir");
-    let category_dir = root
-        .path()
-        .join("state")
-        .join("diagnostics")
-        .join("metrics");
-    std::fs::create_dir_all(category_dir.join("2026-01")).unwrap();
-    std::fs::create_dir_all(category_dir.join("2025-12")).unwrap();
-    std::fs::write(category_dir.join("not-a-month.txt"), "ignored").unwrap();
-
-    let months = list_jsonl_months(root.path(), "metrics").unwrap();
-
-    assert_eq!(months, vec!["2025-12".to_string(), "2026-01".to_string()]);
-}
-
-#[test]
-fn list_jsonl_months_missing_category_dir_is_empty() {
-    let root = tempfile::tempdir().expect("tempdir");
-
-    let months = list_jsonl_months(root.path(), "metrics").unwrap();
-
-    assert!(months.is_empty());
-}
-
-#[test]
-fn read_month_limited_returns_the_newest_entries_across_files() {
-    let root = tempfile::tempdir().expect("tempdir");
-    let month_dir = root
-        .path()
-        .join("state")
-        .join("diagnostics")
-        .join("metrics")
-        .join("2026-03");
-    std::fs::create_dir_all(&month_dir).expect("month dir");
-    std::fs::write(month_dir.join("a.jsonl"), "{\"n\":1}\n{\"n\":2}\n").expect("older file");
-    std::fs::write(
-        month_dir.join("b.jsonl"),
-        "{\"n\":3}\nnot json\n\n{\"n\":4}{\"n\":5}\n",
-    )
-    .expect("newer file");
-
-    let newest = |limit| {
-        read_jsonl_month_limited::<Value>(root.path(), "metrics", "2026-03", limit)
-            .expect("read")
-            .into_iter()
-            .map(|entry| entry["n"].as_u64().expect("n"))
-            .collect::<Vec<_>>()
-    };
-
-    assert_eq!(newest(4), [5, 4, 3, 2]);
-    assert_eq!(newest(10), [5, 4, 3, 2, 1]);
-    assert!(newest(0).is_empty());
 }

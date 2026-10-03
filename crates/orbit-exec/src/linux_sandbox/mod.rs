@@ -61,18 +61,14 @@ pub fn existing_glob_matches(rules: &[String]) -> Result<BTreeSet<PathBuf>, Orbi
 use crate::credential_paths::CredentialReadDeny;
 use argv::base_namespace_args;
 use credentials::{append_credential_masks, host_credential_denies, host_mounts};
-use mask::{MountEntry, append_mask_mounts};
 #[cfg(test)]
-use mask::{host_alias, parse_mountinfo, plan_alias};
+use mask::host_alias;
+use mask::{MountEntry, append_mask_mounts};
 use mounts::{
     append_cargo_download_cache_mounts, append_stable_toolchain_mounts, cargo_home_dir,
     cwd_is_writable_root, profile_grants_write, push_mount,
 };
 use probe::TRUSTED_BWRAP_PATH;
-#[cfg(test)]
-use probe::{BwrapProbeMemo, probe_bwrap_with};
-#[cfg(test)]
-use rules::walk_paths;
 use rules::{
     GlobMatches, canonical_existing, exact_or_subtree_root, expand_each_rule, expand_rules,
     is_exact_or_subtree, is_narrow_reallow, mount_paths_for_rule, overlaps_writable_root,

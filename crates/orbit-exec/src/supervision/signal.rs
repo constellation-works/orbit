@@ -61,12 +61,6 @@ impl SignalHandlerGuard {
         Ok(Self { start_gen, slot })
     }
 
-    /// Whether the handler will `killpg` this child's group on SIGINT/SIGTERM.
-    #[cfg(test)]
-    pub(super) fn registered(&self) -> bool {
-        self.slot.is_some()
-    }
-
     /// Stop fanning signals out to the child's group. Call as soon as the
     /// child is reaped: from then on its pid may be reused by an unrelated
     /// process group that the handler must not signal.

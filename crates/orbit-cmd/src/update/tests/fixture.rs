@@ -6,13 +6,10 @@
 //! testable at all — the flow runs the installed binary, so the installed
 //! binary has to be something a test can write and observe.
 
-use std::fmt::{self, Debug};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Barrier};
 
 use chrono::NaiveDate;
-use orbit_common::OrbitError;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME, TrustedReleaseKey,
 };
@@ -24,7 +21,7 @@ use rsa::signature::{SignatureEncoding, Signer};
 use tempfile::TempDir;
 
 use crate::update::channel::InstallChannel;
-use crate::update::source::{DirectoryReleaseSource, MIRROR_LATEST_FILE, ReleaseSource};
+use crate::update::source::{DirectoryReleaseSource, MIRROR_LATEST_FILE};
 use crate::update::{UpdateEnvironment, UpdateRequest, UpdateWorkspace};
 
 /// A throwaway keypair generated for these tests. It is not the release
@@ -92,14 +89,10 @@ pub enum FakeBinary {
     Healthy,
     /// Reports a version other than the one the release claims.
     VersionMismatch,
-    /// Fails `migrate --confirm`, as a binary that cannot migrate would.
-    MigrationFails,
     /// Inspection succeeds but the older candidate can only read the store.
     ReadOnlyStore,
     /// Candidate cannot coordinate with protected clients.
     NoAdmissionContract,
-    /// Fails `workspace sync` after migrating cleanly.
-    SyncFails,
 }
 
 /// A fake installation plus the release mirror it updates from.
@@ -202,22 +195,6 @@ impl Fixture {
         self.environment_with_workspace(Some(self.workspace.clone()))
     }
 
-    /// Build an environment whose caller is not inside an Orbit workspace.
-    pub fn environment_without_workspace(&self) -> UpdateEnvironment {
-        self.environment_with_workspace(None)
-    }
-
-    /// Build an environment with independently selected cwd and Orbit root.
-    pub fn environment_for_workspace(&self, cwd: PathBuf, root: PathBuf) -> UpdateEnvironment {
-        let mut environment = self.environment_without_workspace();
-        environment.workspace = Some(UpdateWorkspace {
-            cwd,
-            root_argument: Some(root.clone()),
-            root,
-        });
-        environment
-    }
-
     fn environment_with_workspace(&self, workspace_cwd: Option<PathBuf>) -> UpdateEnvironment {
         UpdateEnvironment {
             admission_roots: vec![self._root.path().join("global")],
@@ -255,26 +232,6 @@ impl Fixture {
             .collect()
     }
 
-    /// Expected invocation log entry for a convergence command.
-    pub fn invocation(&self, version: &str, command: &str) -> String {
-        format!(
-            "{version}: --root {} {command}",
-            self.workspace.join(".orbit").display()
-        )
-    }
-
-    /// Root selected for fixture convergence.
-    pub fn workspace_root(&self) -> PathBuf {
-        self.workspace.join(".orbit")
-    }
-
-    /// Path the outgoing executable is preserved at.
-    pub fn backup_path(&self) -> PathBuf {
-        let mut name = self.executable.as_os_str().to_os_string();
-        name.push(".previous");
-        PathBuf::from(name)
-    }
-
     /// Entries the flow left behind in the install directory.
     pub fn install_dir_entries(&self) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(self.executable.parent().expect("bin dir"))
@@ -292,58 +249,6 @@ pub fn request() -> UpdateRequest {
     UpdateRequest::default()
 }
 
-/// Parks `latest_version` on `paused` until `resume`, then returns a frozen
-/// version. Lets another update finish between snapshot and lock without
-/// timing sleeps.
-pub struct PausingLatestSource {
-    inner: Box<dyn ReleaseSource>,
-    latest: String,
-    paused: Arc<Barrier>,
-    resume: Arc<Barrier>,
-}
-
-impl PausingLatestSource {
-    pub fn wrap(
-        inner: Box<dyn ReleaseSource>,
-        latest: impl Into<String>,
-        paused: Arc<Barrier>,
-        resume: Arc<Barrier>,
-    ) -> Self {
-        Self {
-            inner,
-            latest: latest.into(),
-            paused,
-            resume,
-        }
-    }
-}
-
-impl Debug for PausingLatestSource {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PausingLatestSource")
-            .field("inner", &self.inner)
-            .field("latest", &self.latest)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ReleaseSource for PausingLatestSource {
-    fn describe(&self) -> String {
-        self.inner.describe()
-    }
-
-    fn latest_version(&self) -> Result<String, OrbitError> {
-        self.paused.wait();
-        self.resume.wait();
-        Ok(self.latest.clone())
-    }
-
-    fn fetch(&self, version: &str, asset: &str) -> Result<Vec<u8>, OrbitError> {
-        self.inner.fetch(version, asset)
-    }
-}
-
 fn sign(message: &[u8]) -> Vec<u8> {
     let key = RsaPrivateKey::from_pkcs8_pem(TEST_PRIVATE_KEY_PEM).expect("test private key");
     SigningKey::<Sha256>::new(key).sign(message).to_vec()
@@ -352,16 +257,6 @@ fn sign(message: &[u8]) -> Vec<u8> {
 /// A `sh` stand-in for the `orbit` binary: it answers `--version` and records
 /// every other invocation so a test can assert the convergence order.
 fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
-    let failure = match behavior {
-        FakeBinary::ReadOnlyStore | FakeBinary::NoAdmissionContract => "",
-        FakeBinary::MigrationFails => {
-            "if [ \"$1\" = migrate ]; then echo 'migration failed: pending layout v9' >&2; exit 1; fi\n"
-        }
-        FakeBinary::SyncFails => {
-            "if [ \"$1\" = workspace ]; then echo 'managed asset sync failed' >&2; exit 1; fi\n"
-        }
-        FakeBinary::Healthy | FakeBinary::VersionMismatch => "",
-    };
     let contract = if behavior == FakeBinary::NoAdmissionContract {
         "{}"
     } else {
@@ -380,7 +275,7 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
          if [ \"$1\" = --root ]; then shift 2; fi\n\
          echo \"{version}: $all_args\" >> '{log}'\n\
          if [ \"$1\" = clock ]; then echo '{CLOCK_REPAIR_REPORT}'; fi\n\
-         {failure}if [ \"$1\" = migrate ] && [ \"$2\" = --dry-run ]; then echo '{inspection}'; fi\n\
+         if [ \"$1\" = migrate ] && [ \"$2\" = --dry-run ]; then echo '{inspection}'; fi\n\
          exit 0\n",
         log = log.display()
     )

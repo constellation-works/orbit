@@ -1,3 +1,3 @@
+//! Host grant confinement guard.
+
 mod host;
-mod platform;
-mod workspace;

@@ -203,31 +203,6 @@ const XDG_TOOL_STATE: &[&str] = &["git"];
 /// cost more than compiling the whole ruleset.
 const CREDENTIAL_FILE_NAMES: &[&str] = &["credentials", "credentials.json", "credentials.toml"];
 
-/// Every environment variable that widens the host read set.
-///
-/// Lets a test pin exactly which names in a child environment turn into
-/// filesystem grants.
-#[cfg(test)]
-pub const HOST_READ_ENV_VARS: &[&str] = &[
-    "CARGO_HOME",
-    "GH_CONFIG_DIR",
-    "GIT_CONFIG_GLOBAL",
-    "GIT_CONFIG_SYSTEM",
-    "NODE_PATH",
-    "NPM_CONFIG_PREFIX",
-    "NVM_DIR",
-    "ORBIT_BIN",
-    "ORBIT_REGISTRY_ROOT",
-    "ORBIT_ROOT",
-    "PATH",
-    "RUSTUP_HOME",
-    "SSL_CERT_DIR",
-    "SSL_CERT_FILE",
-    "TMPDIR",
-    "VIRTUAL_ENV",
-    "XDG_CONFIG_HOME",
-];
-
 /// Compile the host half of the ruleset for a child running with
 /// `environment`.
 pub(super) fn host_read_grants(environment: &[(String, String)]) -> Vec<LandlockPathGrant> {

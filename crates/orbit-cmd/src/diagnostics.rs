@@ -77,9 +77,7 @@ impl DiagnosticsCommands for OrbitRuntime {
 }
 
 /// Ascending list of `YYYY-MM` subdirectories under `state/diagnostics/<category>/`.
-// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can cover
-// partition enumeration after the test-layout migration.
-pub(crate) fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitError> {
+fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitError> {
     let category_dir = validated_diagnostics_category_dir(root, category)?;
     if !category_dir.exists() {
         return Ok(Vec::new());
@@ -96,9 +94,7 @@ pub(crate) fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<Strin
 }
 
 /// `true` for a `YYYY-MM` directory name (e.g. `2026-03`).
-// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can pin the
-// canonical month-name form after the test-layout migration.
-pub(crate) fn is_year_month(name: &str) -> bool {
+fn is_year_month(name: &str) -> bool {
     let bytes = name.as_bytes();
     bytes.len() == 7
         && bytes[..4].iter().all(u8::is_ascii_digit)
@@ -137,9 +133,7 @@ fn validated_diagnostics_category_dir(root: &Path, category: &str) -> Result<Pat
 /// Resolve a diagnostics month after converting the accepted text into a
 /// canonical value. The original caller-provided string never reaches a path
 /// operation, so traversal and separator characters cannot affect the lookup.
-// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can reject
-// unknown categories after the test-layout migration.
-pub(crate) fn validated_diagnostics_month_dir(
+fn validated_diagnostics_month_dir(
     root: &Path,
     category: &str,
     year_month: &str,
@@ -165,9 +159,7 @@ fn validated_diagnostics_category_name(category: &str) -> Result<&'static str, O
     }
 }
 
-// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can pin the
-// rebuilt YYYY-MM components after the test-layout migration.
-pub(crate) fn validated_year_month(year_month: &str) -> Result<String, OrbitError> {
+fn validated_year_month(year_month: &str) -> Result<String, OrbitError> {
     if !is_year_month(year_month) {
         return Err(OrbitError::InvalidInput(format!(
             "diagnostics month must use YYYY-MM format: {year_month}"
@@ -278,9 +270,7 @@ pub(crate) fn read_jsonl_month<T: DeserializeOwned>(
     Ok(entries)
 }
 
-// pub(crate) so sibling `src/tests/diagnostics.rs` can pin its newest-first,
-// cross-file order.
-pub(crate) fn read_jsonl_month_limited<T: DeserializeOwned>(
+fn read_jsonl_month_limited<T: DeserializeOwned>(
     root: &Path,
     category: &str,
     year_month: &str,
@@ -332,11 +322,7 @@ pub(crate) fn read_jsonl_month_limited<T: DeserializeOwned>(
     Ok(entries)
 }
 
-// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can cover
-// concatenated-object recovery after the test-layout migration.
-pub(crate) fn parse_jsonl_values<T: DeserializeOwned>(
-    line: &str,
-) -> Result<Vec<T>, serde_json::Error> {
+fn parse_jsonl_values<T: DeserializeOwned>(line: &str) -> Result<Vec<T>, serde_json::Error> {
     match serde_json::from_str::<T>(line) {
         Ok(entry) => Ok(vec![entry]),
         Err(single_value_error) => {

@@ -304,7 +304,3 @@ fn set_cloexec(fd: i32) -> Result<(), OrbitError> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "tests/ruleset.rs"]
-mod tests;

@@ -33,6 +33,7 @@ pub(super) struct EnvOverrides<'a> {
 /// Provider used by profile tests that are not about the per-provider
 /// credential carve-out. Codex keeps every default credential deny, so a test
 /// asserting the shared clauses sees them unmodified.
+#[cfg(target_os = "macos")]
 pub(super) const NEUTRAL_PROVIDER: &str = "codex";
 
 pub(super) fn compile_with_env(
