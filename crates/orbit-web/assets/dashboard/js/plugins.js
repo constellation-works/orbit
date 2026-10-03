@@ -86,7 +86,10 @@ function bindLivePanelBodies(root) {
 function pluginCard(plugin) {
   const card = el('div', { class: `plugin-card plugin-${plugin.status}` });
   card.dataset.key = plugin.name;
-  card.dataset.hash = JSON.stringify([plugin.status, plugin.version, plugin.diagnostic, plugin.certified_orbit_version, plugin.host_enabled, plugin.workspace_toggle, plugin.disabled_by, plugin.capabilities, pendingChanges.has(plugin.name), changeErrors.get(plugin.name), (plugin.panels || []).map(panel => panel.id), (plugin.links || []).map(link => link.url)]);
+  // A card renders the listing's metadata, not just version and enablement.
+  // Pins, sandbox status, tool activation and manifest labels may change while
+  // the version stays the same; retaining that card would display stale state.
+  card.dataset.hash = JSON.stringify([plugin, pendingChanges.has(plugin.name), changeErrors.get(plugin.name)]);
   card.appendChild(el('div', { class: 'plugin-head' }, [
     el('span', { class: 'plugin-name', text: plugin.name }),
     el('span', { class: 'plugin-version', text: `v${plugin.version || '—'}` }),
