@@ -6,7 +6,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
   const feedback=text=>{el('automation-feedback').textContent=text;};
   const key=()=>`${current()}|${scope}`;
   const schedule=value=>value?.every_minutes?`Every ${value.every_minutes} minutes`:value?.deliveries_landed?'After verified deliveries':value?.state?'When state matches':value?.cron?`Cron · ${value.cron}`:'On demand';
-  function button(text,run){const b=ui.node('button',text);b.type='button';b.disabled=!fresh||busy||uncertain.has(key());b.addEventListener('click',run);return b;}
+  function button(text,run,focusKey){const b=ui.node('button',text);b.type='button';if(focusKey)b.dataset.automationAction=focusKey;b.disabled=!fresh||busy||uncertain.has(key());b.addEventListener('click',run);return b;}
   function reset(){
     revision++;fresh=false;items=[];selected=null;confirmation=null;offset=0;next=null;
     el('automation-list').replaceChildren();el('automation-detail').replaceChildren();
@@ -14,7 +14,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
     el('automation-previous').disabled=el('automation-next').disabled=true;
     feedback(uncertain.get(key())||'');
   }
-  function renderDetail(){
+  function renderDetail(focusAction){
     const target=el('automation-detail');target.replaceChildren();
     if(!selected)return;
     const item=items.find(i=>i.name===selected);if(!item){selected=null;return;}
@@ -36,25 +36,30 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
       const action=confirmation.action;
       const box=ui.node('div',null,'action-confirmation');
       box.append(ui.node('p',action==='mint'?'Mint one task now? This ignores the schedule, enabled flag and dedupe policy. The new task is not dispatched.':`Submit ${item.name} now using its default input? This starts or queues a workflow on the selected host.`));
-      box.append(button(action==='mint'?'Mint one task':'Submit job',()=>void act(action,item)),button('Cancel',()=>{confirmation=null;renderDetail();}));
+      box.append(button(action==='mint'?'Mint one task':'Submit job',()=>void act(action,item),`confirm-${action}`),button('Cancel',()=>{confirmation=null;renderDetail(action);}));
       actions.replaceChildren(box);
     }else for(const action of ['mint','run'])if(item[`${action}_available`]===true){
       actions.append(button(action==='mint'?'Mint task…':'Run job…',()=>{
-        confirmation={action,name:item.name,signature:JSON.stringify(item)};renderDetail();
-      }));
+        confirmation={action,name:item.name,signature:JSON.stringify(item)};renderDetail(`confirm-${action}`);
+      },action));
     }
     target.append(actions);
+    if(focusAction){
+      const focused=[...target.querySelectorAll('button')].find(button=>button.dataset.automationAction===focusAction&&!button.disabled);
+      focused?.focus();
+    }
   }
-  function render(data){
+  function render(data,focusName=document.activeElement?.dataset?.automationName){
     items=data.items;
     const list=el('automation-list');list.replaceChildren();
     for(const item of items){
-      const row=ui.node('button',null,'entity-row');row.type='button';
+      const row=ui.node('button',null,'entity-row');row.type='button';row.dataset.automationName=item.name;
       row.setAttribute('aria-expanded',String(selected===item.name));row.setAttribute('aria-controls','automation-detail');
       row.append(ui.node('div',item.name,'entity-title'));
       const meta=ui.node('div',null,'entity-meta');meta.append(ui.badge(item.state|| (item.enabled?'enabled':'disabled')),ui.node('span',scope==='jobs'?`${item.steps} steps · ${item.max_active_runs} parallel`:schedule(item.schedule)));
       row.append(meta);if(item.target)row.append(ui.node('span',item.target,'entity-time'));
-      row.addEventListener('click',()=>{selected=selected===item.name?null:item.name;confirmation=null;render(data);});list.append(row);
+      row.addEventListener('click',()=>{selected=selected===item.name?null:item.name;confirmation=null;render(data,item.name);});list.append(row);
+      if(focusName===item.name)row.focus();
     }
     if(!items.length)list.append(ui.node('p',`No ${scopes[scope][0].toLowerCase()} in this workspace.`,'empty-state'));
     next=Number.isInteger(data.pagination?.next_offset)?data.pagination.next_offset:null;
