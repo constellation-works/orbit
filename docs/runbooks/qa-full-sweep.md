@@ -157,9 +157,19 @@ pre-merge run for an earlier commit is stale by design.
 complete, exact assertion set for one candidate. An exit-zero command with
 empty or wrong structured output, missing assertions, duplicate mixed-candidate
 evidence, a declared capability gap, or any required FAIL, BLOCKED, or NOT_RUN
-makes the decision `INCOMPLETE`. `python3 scripts/test-qa-full-sweep.py
+makes the decision `INCOMPLETE`. Cargo test scenarios also require completed
+test-suite summaries with at least one passing test; a renamed filter that
+selects zero tests cannot earn the scenario's assertions. The report retains
+passing, failing, ignored, and suite counts for these checks.
+`python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.
+
+For a subcommand grammar audit, run
+`python3 scripts/test-qa-full-sweep.py --orbit-bin target/debug/orbit --list-cli-paths`.
+This traverses executable help in a disposable environment and returns command
+paths. Its output explicitly records `behavioral_coverage: false`: reaching help
+does not verify command execution, persistence, errors, or every argument.
 
 For a failure, search open and closed `ws_orbit` tasks using the scenario ID,
 exact error, and boundary. Reuse an open task only when its reproducer covers

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def run(argv, *, cwd, env, timeout=180):
+def run(argv, *, cwd, env, timeout=180, input_text=None):
     def tail(value):
         if isinstance(value, bytes):
             value = value.decode(errors="replace")
@@ -28,7 +28,8 @@ def run(argv, *, cwd, env, timeout=180):
     started = datetime.now(timezone.utc).isoformat()
     try:
         completed = subprocess.run(argv, cwd=cwd, env=env, text=True,
-                                   capture_output=True, timeout=timeout, check=False)
+                                   capture_output=True, timeout=timeout, check=False,
+                                   input=input_text)
     except subprocess.TimeoutExpired as error:
         return {
             "command": argv, "started_at": started, "exit_code": None,
@@ -86,6 +87,11 @@ def validate_inventory(repo: Path, inventory: dict):
     expected_cli = set(inventory["surface_contracts"]["cli_top_level"])
     expected_jobs = set(inventory["surface_contracts"]["job_assets"])
     errors = []
+    ids = [item["id"] for item in inventory["scenarios"]]
+    if len(ids) != len(set(ids)):
+        errors.append("scenario IDs must be unique")
+    if not any(item.get("required") for item in inventory["scenarios"]):
+        errors.append("inventory has no required scenarios")
     if actual["cli"] != expected_cli:
         errors.append(f"CLI drift added={sorted(actual['cli']-expected_cli)} removed={sorted(expected_cli-actual['cli'])}")
     if actual["job"] != expected_jobs:
@@ -126,6 +132,37 @@ def validate_inventory(repo: Path, inventory: dict):
         if not required_behaviors.issubset(set(scenario["behavior"])):
             errors.append(f"scenario {scenario['id']} lacks normal/failure coverage")
     return errors, {kind: sorted(entries) for kind, entries in actual.items()}
+
+
+def cli_help_children(help_text):
+    help_body = help_text.split("\nOptions:", 1)[0]
+    if not re.search(r"^Usage: .*<COMMAND>", help_body, re.MULTILINE):
+        return []
+    children = []
+    for line in help_body.splitlines():
+        match = re.fullmatch(r"  ([a-z][a-z0-9-]*)(?:\s{2,}.*)?", line)
+        if match and match.group(1) != "help":
+            children.append(match.group(1))
+    return children
+
+
+def cli_command_paths(orbit_bin, top_level, cwd, env):
+    """Probe executable help grammar; this is discovery, never behavioral coverage."""
+    pending = [(name,) for name in sorted(top_level) if name != "plugin-group"]
+    paths = []
+    while pending:
+        path = pending.pop(0)
+        evidence = run([orbit_bin, *path, "--help"], cwd=cwd, env=env, timeout=30)
+        if evidence["exit_code"] != 0:
+            raise ValueError(f"help discovery failed for {' '.join(path)}: {evidence['stderr']}")
+        paths.append(" ".join(path))
+        # Task and run use grouped templates (Tasks:, Health:, Workflows:),
+        # while clap's standard template uses Commands:. Stop before options
+        # and examples, and only recurse when Usage declares a command slot.
+        pending.extend((*path, child) for child in cli_help_children(evidence["stdout"]))
+        if len(paths) + len(pending) > 1000:
+            raise ValueError("CLI command discovery exceeded 1000 paths")
+    return sorted(paths)
 
 
 def candidate_source(repo: Path, excluded_paths=()):
@@ -178,6 +215,26 @@ def parse_json(evidence, description):
         return json.loads(evidence["stdout"])
     except json.JSONDecodeError as error:
         raise ValueError(f"{description} returned invalid JSON: {error}") from error
+
+
+def validate_cargo_test_evidence(command, evidence):
+    """Require completed, non-vacuous Rust tests, including command-kind suites."""
+    if len(command) < 2 or Path(command[0]).name != "cargo" or command[1] != "test":
+        return
+    summaries = re.findall(
+        r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;",
+        evidence.get("stdout", "") + "\n" + evidence.get("stderr", ""))
+    if not summaries:
+        raise ValueError("cargo test returned no completed test-suite summary")
+    passed = sum(int(row[1]) for row in summaries)
+    failed = sum(int(row[2]) for row in summaries)
+    evidence["test_counts"] = {"passed": passed, "failed": failed,
+                               "ignored": sum(int(row[3]) for row in summaries),
+                               "suites": len(summaries)}
+    if failed or any(row[0] != "ok" for row in summaries):
+        raise ValueError("cargo test reported failing tests")
+    if passed == 0:
+        raise ValueError("cargo test executed zero passing tests; check the selection")
 
 
 def scenario_decision(inventory, results, candidate_id):
@@ -242,17 +299,6 @@ def add_result(results, scenario, evidence):
     results.append(evidence)
 
 
-def owner_checkout(repo: Path):
-    # Git lists the main worktree first. Its workspace-local definition is not
-    # copied into managed linked worktrees, whose .orbit/auto_tasks may be empty.
-    listing = subprocess.check_output(
-        ["git", "worktree", "list", "--porcelain"], cwd=repo, text=True)
-    first = listing.splitlines()[0]
-    if not first.startswith("worktree "):
-        raise ValueError("cannot identify the Git owner checkout")
-    return Path(first.removeprefix("worktree ")).resolve()
-
-
 def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id: str):
     results = []
     root = temp / "home/.orbit"
@@ -306,7 +352,28 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
 
     destination = work / ".orbit/auto_tasks/qa-full-sweep.yaml"
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(owner_checkout(repo) / ".orbit/auto_tasks/qa-full-sweep.yaml", destination)
+    # Exercise auto-task registration without requiring the operator's ignored,
+    # workspace-local sign-off definition to exist on the testing machine.
+    destination.write_text("""schemaVersion: 1
+name: qa-full-sweep
+description: Disposable registration and manual mint fixture
+enabled: false
+schedule:
+  cron: 0 0 * * *
+template:
+  title: Perform complete pre-release Orbit QA sign-off
+  description: Verify disposable fixture registration and manual minting.
+  acceptance_criteria: [Fixture task persists]
+  task_type: chore
+  complexity: low
+  priority: low
+  status: backlog
+dedupe: skip_if_open
+created_by: human
+created_at: 2026-01-01T00:00:00Z
+updated_by: human
+updated_at: 2026-01-01T00:00:00Z
+""")
 
     def task_added(evidence):
         body = parse_json(evidence, "task add")
@@ -778,14 +845,12 @@ spec:
         {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"orbit_workspace_list","arguments":{}}},
         {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"orbit_task_show","arguments":{"id":task_id,"workspace":str(work),"model":"codex"}}},
         {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"orbit_task_show","arguments":{"id":task_id,"workspace":str(other),"model":"codex"}}}]
-    mcp = subprocess.run([orbit_bin, "mcp", "serve", "--workspace", str(work)], cwd=work, env=env,
-                         input="".join(json.dumps(item)+"\n" for item in requests), text=True,
-                         capture_output=True, timeout=30, check=False)
-    mcp_evidence = {"command":[orbit_bin,"mcp","serve"], "exit_code":mcp.returncode,
-                    "stdout":mcp.stdout,"stderr":mcp.stderr,"outcome":"FAIL"}
+    mcp_evidence = run([orbit_bin, "mcp", "serve", "--workspace", str(work)], cwd=work,
+                       env=env, input_text="".join(json.dumps(item)+"\n" for item in requests),
+                       timeout=30)
     failure = None
     try:
-        responses = {body["id"]: body for line in mcp.stdout.splitlines()
+        responses = {body["id"]: body for line in mcp_evidence["stdout"].splitlines()
                      if line.strip() and (body := json.loads(line)).get("id") is not None}
         tool_names = {tool["name"] for tool in responses[2]["result"]["tools"]}
         if "orbit_task_show" not in tool_names:
@@ -803,9 +868,19 @@ spec:
         ["initialize-negotiates-jsonrpc", "tools-list-is-structured", "workspace-list-returns-bound-checkout",
          "task-show-round-trips-over-mcp", "cross-workspace-mcp-read-refused"], candidate_id, failure))
 
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
+    web_assertions = ["healthz-is-ready", "workspace-api-identifies-bound-checkout",
+                      "task-api-reads-persisted-task"]
+    try:
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+    except OSError as error:
+        evidence = {"command": ["bind", "127.0.0.1"], "exit_code": None,
+                    "stdout": "", "stderr": str(error)}
+        add_result(results, "dashboard-api-boundary",
+                   finalize_result(evidence, web_assertions, candidate_id,
+                                   "loopback listener unavailable"))
+        return results
     web = subprocess.Popen([orbit_bin, "--root", str(root), "web", "serve", "--host", "127.0.0.1", "--port", str(port), "--no-open"],
                            cwd=work, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     web_evidence = {"command":["GET","/healthz","GET","/api/workspaces","GET","/api/tasks"],
@@ -838,7 +913,7 @@ spec:
             web_evidence["stdout"] = captured_stdout
             web_evidence["stderr"] = captured_stderr or web_evidence["stderr"]
     add_result(results, "dashboard-api-boundary", finalize_result(web_evidence,
-        ["healthz-is-ready", "workspace-api-identifies-bound-checkout", "task-api-reads-persisted-task"],
+        web_assertions,
         candidate_id, failure))
     return results
 
@@ -880,6 +955,26 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
 
 
 def self_test():
+    grouped = "Usage: orbit task <COMMAND>\n\nTasks:\n  add  Create task\nHealth:\n  recheck-blocked\n               Requeue\nOptions:\n  --json\nExamples:\n  orbit task add\n"
+    if cli_help_children(grouped) != ["add", "recheck-blocked"]:
+        raise AssertionError("grouped CLI help omitted commands or admitted examples")
+    if cli_help_children("Usage: orbit task show <ID>\nArguments:\n  id  Task ID\n"):
+        raise AssertionError("leaf CLI arguments were mistaken for commands")
+    command = ["cargo", "test", "--lib", "renamed_filter"]
+    for output in ("", "running 0 tests\n",
+                   "test result: ok. 0 passed; 0 failed; 2 ignored; 9 filtered out;",
+                   "test result: FAILED. 0 passed; 1 failed; 0 ignored;"):
+        try:
+            validate_cargo_test_evidence(command, {"stdout": output, "stderr": ""})
+        except ValueError:
+            continue
+        raise AssertionError(f"vacuous or failed cargo evidence passed: {output!r}")
+    completed_tests = {"stdout": "test result: ok. 0 passed; 0 failed; 0 ignored;\n"
+                                "test result: ok. 3 passed; 0 failed; 1 ignored;",
+                       "stderr": ""}
+    validate_cargo_test_evidence(command, completed_tests)
+    if completed_tests["test_counts"] != {"passed": 3, "failed": 0, "ignored": 1, "suites": 2}:
+        raise AssertionError("completed Rust test counts were not retained")
     inventory = {"scenarios": [{"id":"required", "required":True,
                                 "assertions":["exact-json", "persisted-effect"]}],
                  "required_capability_gaps": {}}
@@ -1064,11 +1159,23 @@ def main():
     parser.add_argument("--build-candidate", action="store_true")
     parser.add_argument("--platform-evidence", action="append", type=Path, default=[])
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--list-cli-paths", action="store_true",
+                        help="discover executable help paths without claiming behavioral coverage")
     args = parser.parse_args()
     repo = args.repo_root.resolve()
     inventory_path = repo / "scripts/qa-full-sweep-inventory.json"
     inventory = json.loads(inventory_path.read_text())
     errors, surfaces = validate_inventory(repo, inventory)
+    if args.list_cli_paths:
+        if not args.orbit_bin:
+            parser.error("--list-cli-paths requires --orbit-bin")
+        binary = str(Path(args.orbit_bin).resolve())
+        with tempfile.TemporaryDirectory(prefix="orbit-qa-cli-grammar-") as tmp:
+            temp = Path(tmp)
+            paths = cli_command_paths(binary, surfaces["cli"], temp, isolated_environment(temp))
+        print(json.dumps({"evidence_type": "help-grammar-discovery",
+                          "behavioral_coverage": False, "command_paths": paths}, indent=2))
+        return
     if args.self_test:
         self_test()
         print("qa-full-sweep self-tests: ok")
@@ -1171,6 +1278,10 @@ def main():
                                     "browser_version": browser_record["version"]}, indent=2) + "\n")
                 unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
                 failure = None if unchanged else "source candidate changed while the scenario ran"
+                try:
+                    validate_cargo_test_evidence(command, evidence)
+                except ValueError as error:
+                    failure = str(error) if failure is None else failure + "; " + str(error)
                 result = {"scenario":scenario["id"],
                           **finalize_result(evidence, scenario["assertions"], candidate_id, failure)}
                 if scenario["capability"] == "browser":
