@@ -39,6 +39,7 @@ const FIELD_SAVED_NOTICE_MS = 4000;
 // retried until the list refreshes or the row is reopened.
 let taskDetails = new Map();
 let taskDetailLoads = new Map();
+const reviewApprovalsInFlight = new Set();
 // ORB-12645: which comments the operator has opened, and which are showing
 // their Markdown source instead of the rendered body. Both are keyed
 // `<task id>#<index into task.comments>` so a refresh that rebuilds the detail
@@ -2506,12 +2507,23 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
 /// candidate and starts the owner's landing job; a plain status write would
 /// be refused while the claim protects the task.
 async function approveReviewTask(task, detail, btnNode, context) {
+  const revision = getWorkspaceRevision();
+  const admission = `${revision}:${task.id}`;
+  if (reviewApprovalsInFlight.has(admission)) return;
+  reviewApprovalsInFlight.add(admission);
+  btnNode.disabled = true;
   let claimed = null;
   try {
     claimed = await claimedReviewApproval(task.id);
   } catch (_) {
     claimed = null; // No readable claim state: the ordinary path reports the owner's answer.
+  } finally {
+    reviewApprovalsInFlight.delete(admission);
+    btnNode.disabled = false;
   }
+  // Admission is asynchronous; a task detail from an earlier workspace visit
+  // must not approve a same-named task through the new ambient workspace.
+  if (revision !== getWorkspaceRevision()) return;
   if (!claimed) return runAction(task, "approve", detail, null, btnNode, context);
   if (claimed.refusal) {
     const prior = detail.querySelector(".action-error");
