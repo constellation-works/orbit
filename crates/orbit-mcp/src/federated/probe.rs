@@ -825,14 +825,6 @@ impl DestinationSession {
                 )
             })
     }
-    #[cfg(test)]
-    pub(super) fn list_tools(&mut self) -> Result<Vec<String>, OrbitError> {
-        Ok(self
-            .list_tool_definitions()?
-            .iter()
-            .filter_map(|tool| tool["name"].as_str().map(ToOwned::to_owned))
-            .collect())
-    }
 
     /// Deliver one routed tool call.
     ///

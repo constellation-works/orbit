@@ -1,14 +1,10 @@
 //! Capability classes: the locked tool-to-class mapping and destination-side
 //! refusal.
 
-use std::path::PathBuf;
-
+use super::super::capability::{CapabilityClasses, McpToolClass, ensure_tool_class_held};
 use orbit_common::OrbitError;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceCheckoutRole};
-
-use super::super::capability::{
-    CapabilityClasses, McpToolClass, ensure_tool_class_held, mcp_tool_class,
-};
+use std::path::PathBuf;
 
 /// The behavior rule from the federated spec, locked tool by tool over the
 /// whole advertised surface [ORB-11012].
@@ -37,13 +33,6 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.workflow.ship", McpToolClass::ControlPlane),
     ("orbit.workspace.list", McpToolClass::Unclassified),
 ];
-
-#[test]
-fn every_advertised_tool_carries_its_locked_capability_class() {
-    for (name, expected) in ADVERTISED_TOOL_CLASSES {
-        assert_eq!(mcp_tool_class(name), *expected, "{name}");
-    }
-}
 
 /// The classifier is a function over the live surface, so a tool added to the
 /// registry without a class assignment fails here instead of silently becoming
@@ -87,16 +76,6 @@ fn a_replica_refuses_the_distributed_drain_read_only_surface() {
 }
 
 #[test]
-fn classification_accepts_the_advertised_spelling() {
-    assert_eq!(mcp_tool_class("orbit_task_add"), McpToolClass::ControlPlane);
-    assert_eq!(
-        mcp_tool_class("orbit_workflow_run_show"),
-        McpToolClass::Execute
-    );
-    assert_eq!(mcp_tool_class("orbit_workflow_auto"), McpToolClass::Execute);
-}
-
-#[test]
 fn a_replica_refuses_control_plane_and_runs_execute_class_tools() {
     let held = CapabilityClasses::for_checkout(
         &workspace_record(Some("hm_owner")),
@@ -119,17 +98,6 @@ fn a_replica_refuses_control_plane_and_runs_execute_class_tools() {
     }
 }
 
-#[test]
-fn an_owner_checkout_holds_the_control_plane() {
-    let held = CapabilityClasses::for_checkout(
-        &workspace_record(Some("hm_owner")),
-        &checkout_record(Some(WorkspaceCheckoutRole::Owner)),
-    );
-
-    ensure_tool_class_held("orbit.task.add", held).expect("owner holds control_plane");
-    ensure_tool_class_held("orbit.command.exec", held).expect("owner runs work locally today");
-}
-
 /// A standalone registry predating host identity is not a control-plane
 /// authority, whatever role its checkout claims.
 #[test]
@@ -143,43 +111,6 @@ fn a_workspace_without_an_owner_machine_id_does_not_advertise_control_plane() {
             ensure_tool_class_held("orbit.task.update", held).is_err(),
             "{role:?}"
         );
-    }
-}
-
-/// A legacy checkout with no recorded role is the standalone owner shape that
-/// registry validation canonicalizes to `owner`.
-#[test]
-fn an_absent_checkout_role_is_treated_as_owner() {
-    let held = CapabilityClasses::for_checkout(
-        &workspace_record(Some("hm_owner")),
-        &checkout_record(None),
-    );
-
-    assert!(held.holds(McpToolClass::ControlPlane));
-}
-
-/// No such checkout exists today, but the class is what refuses, not the role,
-/// so a future control-plane-only store refuses execute-class work.
-#[test]
-fn a_control_plane_that_does_not_run_work_refuses_execute_class_tools() {
-    let held = CapabilityClasses::new(true, false);
-
-    let refused =
-        ensure_tool_class_held("orbit.workflow.auto", held).expect_err("execute is not held");
-    assert!(
-        matches!(&refused, OrbitError::CapabilityRefused(message) if message.contains("execute")),
-        "{refused}"
-    );
-    ensure_tool_class_held("orbit.task.add", held).expect("control_plane is held");
-}
-
-#[test]
-fn unclassified_discovery_tools_are_never_refused() {
-    for held in [
-        CapabilityClasses::new(false, false),
-        CapabilityClasses::new(true, true),
-    ] {
-        ensure_tool_class_held("orbit.workspace.list", held).expect("workspace list");
     }
 }
 

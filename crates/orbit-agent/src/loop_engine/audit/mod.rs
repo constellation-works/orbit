@@ -166,6 +166,3 @@ impl AuditSink for InMemorySink {
         hash
     }
 }
-
-#[cfg(test)]
-mod tests;

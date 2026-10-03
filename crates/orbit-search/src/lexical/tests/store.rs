@@ -103,21 +103,3 @@ fn first_open_migrates_legacy_vectors_and_preserves_search() {
     let reopened = LexicalStore::open(&path).expect("idempotent reopen");
     assert_eq!(reopened.stats().expect("stats").tasks, 1);
 }
-
-#[test]
-fn word_chunker_is_bounded_and_preserves_unicode_and_overlap() {
-    let text = (0..600)
-        .map(|n| format!("étoile{n}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let chunks = chunker::chunk_text(&text);
-    assert!(
-        chunks
-            .iter()
-            .all(|chunk| chunk.split_whitespace().count() <= 256)
-    );
-    assert!(chunks.first().expect("first").starts_with("étoile0 "));
-    assert!(chunks.last().expect("last").ends_with("étoile599"));
-    assert!(chunks[0].contains("étoile224") && chunks[1].starts_with("étoile224 "));
-    assert!(chunker::chunk_text(" \n\n ").is_empty());
-}

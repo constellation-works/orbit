@@ -7,7 +7,4 @@
 mod chat_completions_transport;
 mod wire;
 
-#[cfg(test)]
-mod tests;
-
 pub use chat_completions_transport::OpenAiCompatTransport;

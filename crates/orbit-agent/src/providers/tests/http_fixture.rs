@@ -1,15 +1,14 @@
 //! Local HTTP fixture shared by the HTTP transport tests.
 //!
-//! Serves scripted responses over a real socket so transports exercise their
+//! Serves endless chunked responses over a real socket so transports exercise their
 //! actual `reqwest` read path, including chunked bodies that never end on
 //! their own.
 
+use crate::providers::http_body::MAX_RESPONSE_BODY_BYTES;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
-
-use crate::providers::http_body::MAX_RESPONSE_BODY_BYTES;
 
 const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -17,44 +16,22 @@ const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 /// reading far past the response cap instead of disconnecting.
 pub(crate) const ENDLESS_STREAM_CEILING: usize = 4 * MAX_RESPONSE_BODY_BYTES;
 
-pub(crate) enum FixtureBody {
-    /// Complete body sent with an accurate `Content-Length`.
-    Sized(Vec<u8>),
-    /// `Content-Length` advertising `declared` bytes; no body is sent.
-    DeclaredOnly(u64),
-    /// Chunked filler without `Content-Length`, streamed until the client
-    /// disconnects or [`ENDLESS_STREAM_CEILING`] is reached.
-    EndlessChunked,
-}
-
 pub(crate) struct FixtureResponse {
     pub status: u16,
-    pub body: FixtureBody,
 }
 
 impl FixtureResponse {
-    pub(crate) fn json(status: u16, body: &str) -> Self {
-        Self {
-            status,
-            body: FixtureBody::Sized(body.as_bytes().to_vec()),
-        }
-    }
-
     pub(crate) fn endless(status: u16) -> Self {
-        Self {
-            status,
-            body: FixtureBody::EndlessChunked,
-        }
+        Self { status }
     }
 }
 
 pub(crate) struct ServedRequest {
-    pub request_line: String,
     pub body_bytes_written: usize,
 }
 
-/// Serves one scripted response per incoming connection, in order. Joining
-/// the handle returns what each connection requested and received.
+/// Serves one endless response per incoming connection, in order. Joining
+/// the handle returns the body bytes written to each connection.
 pub(crate) fn serve(
     responses: Vec<FixtureResponse>,
 ) -> (String, thread::JoinHandle<Vec<ServedRequest>>) {
@@ -73,12 +50,9 @@ pub(crate) fn serve(
                 stream
                     .set_write_timeout(Some(Duration::from_secs(10)))
                     .expect("set write timeout");
-                let request_line = read_request(&mut stream);
+                read_request(&mut stream);
                 let body_bytes_written = write_response(&mut stream, response);
-                ServedRequest {
-                    request_line,
-                    body_bytes_written,
-                }
+                ServedRequest { body_bytes_written }
             })
             .collect()
     });
@@ -117,40 +91,21 @@ fn read_request(stream: &mut TcpStream) -> String {
 
 fn write_response(stream: &mut TcpStream, response: FixtureResponse) -> usize {
     let status_line = format!("HTTP/1.1 {} Fixture\r\n", response.status);
-    match response.body {
-        FixtureBody::Sized(body) => {
-            let head = format!(
-                "{status_line}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                body.len()
-            );
-            stream.write_all(head.as_bytes()).expect("write head");
-            stream.write_all(&body).expect("write body");
-            body.len()
+
+    let head = format!(
+        "{status_line}content-type: application/json\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes()).expect("write head");
+    let mut frame = format!("{STREAM_CHUNK_BYTES:x}\r\n").into_bytes();
+    frame.extend(std::iter::repeat_n(b'x', STREAM_CHUNK_BYTES));
+    frame.extend_from_slice(b"\r\n");
+    let mut written = 0;
+    while written < ENDLESS_STREAM_CEILING {
+        if stream.write_all(&frame).is_err() {
+            return written;
         }
-        FixtureBody::DeclaredOnly(declared) => {
-            let head = format!(
-                "{status_line}content-type: application/json\r\ncontent-length: {declared}\r\nconnection: close\r\n\r\n"
-            );
-            stream.write_all(head.as_bytes()).expect("write head");
-            0
-        }
-        FixtureBody::EndlessChunked => {
-            let head = format!(
-                "{status_line}content-type: application/json\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n"
-            );
-            stream.write_all(head.as_bytes()).expect("write head");
-            let mut frame = format!("{STREAM_CHUNK_BYTES:x}\r\n").into_bytes();
-            frame.extend(std::iter::repeat_n(b'x', STREAM_CHUNK_BYTES));
-            frame.extend_from_slice(b"\r\n");
-            let mut written = 0;
-            while written < ENDLESS_STREAM_CEILING {
-                if stream.write_all(&frame).is_err() {
-                    return written;
-                }
-                written += STREAM_CHUNK_BYTES;
-            }
-            let _ = stream.write_all(b"0\r\n\r\n");
-            written
-        }
+        written += STREAM_CHUNK_BYTES;
     }
+    let _ = stream.write_all(b"0\r\n\r\n");
+    written
 }

@@ -4,8 +4,6 @@ use orbit_common::governance::friction::{
     DEFAULT_FRICTION_TAGS, FRICTION_TITLE_MAX_CHARS, friction_tag_aliases_literal,
 };
 use orbit_common::protocol::tool_schema::tool_input_schema_for;
-#[cfg(test)]
-use orbit_common::protocol::tool_schema::tool_parameter_schema;
 use orbit_types::tool::{
     McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam, ToolSchema,
 };
@@ -191,11 +189,6 @@ fn require_property(schema: &mut JsonObject, property: &str) {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn build_input_schema(tool_name: &str, params: &[ToolParam]) -> JsonObject {
-    build_input_schema_with_friction_taxonomy(tool_name, params, None)
-}
-
 pub(crate) fn build_input_schema_with_friction_taxonomy(
     tool_name: &str,
     params: &[ToolParam],
@@ -303,9 +296,4 @@ fn decorate_friction_schema(
             friction_tag_aliases_literal()
         )),
     );
-}
-
-#[cfg(test)]
-pub(super) fn property_for(param_type: &str) -> JsonObject {
-    tool_parameter_schema(param_type)
 }

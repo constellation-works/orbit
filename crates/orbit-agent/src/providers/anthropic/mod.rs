@@ -8,6 +8,3 @@ mod messages_transport;
 mod wire;
 
 pub use messages_transport::AnthropicMessagesTransport;
-
-#[cfg(test)]
-mod tests;

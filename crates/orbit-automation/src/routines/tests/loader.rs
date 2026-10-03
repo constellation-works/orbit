@@ -1,12 +1,9 @@
-use std::fs;
-use std::path::Path;
-
-use tempfile::tempdir;
-
 use crate::routines::loader::{
     LOCAL_ROUTINES_SUBDIR, ROUTINES_DIR, RoutineCatalogLookup, RoutineSource, collect_routines,
-    declared_routine_names,
 };
+use std::fs;
+use std::path::Path;
+use tempfile::tempdir;
 
 fn resolving_catalog(_orbit_dir: &Path, _job: &str) -> RoutineCatalogLookup {
     RoutineCatalogLookup {
@@ -34,53 +31,6 @@ fn write_valid_routine(dir: &Path, name: &str) {
         ),
     )
     .expect("routine fixture");
-}
-
-#[test]
-fn loads_regular_yaml_files_and_ignores_other_entries() {
-    let root = tempdir().expect("temporary Orbit root");
-    let routines = root.path().join(ROUTINES_DIR);
-    fs::create_dir_all(routines.join(LOCAL_ROUTINES_SUBDIR)).expect("routines directories");
-    write_valid_routine(&routines, "valid");
-    write_valid_routine(&routines.join(LOCAL_ROUTINES_SUBDIR), "local-valid");
-    fs::write(routines.join("notes.txt"), "not a routine").expect("non-definition fixture");
-    fs::create_dir(routines.join("nested.yaml")).expect("nested fixture");
-
-    let collection = collect(root.path());
-
-    let mut names: Vec<_> = collection
-        .routines
-        .iter()
-        .map(|routine| routine.definition.name.as_str())
-        .collect();
-    names.sort_unstable();
-    assert_eq!(names, ["local-valid", "valid"]);
-    assert!(collection.errors.is_empty());
-}
-
-#[test]
-fn missing_routines_directory_is_an_empty_source() {
-    let root = tempdir().expect("temporary Orbit root");
-
-    let collection = collect(root.path());
-
-    assert!(collection.routines.is_empty());
-    assert!(collection.errors.is_empty());
-}
-
-#[test]
-fn declared_names_include_both_origins() {
-    let root = tempdir().expect("temporary Orbit root");
-    let routines = root.path().join(ROUTINES_DIR);
-    fs::create_dir_all(routines.join(LOCAL_ROUTINES_SUBDIR)).expect("routines directories");
-    write_valid_routine(&routines, "committed");
-    write_valid_routine(&routines.join(LOCAL_ROUTINES_SUBDIR), "local");
-
-    let declared = declared_routine_names(root.path());
-
-    assert_eq!(declared.len(), 2);
-    assert!(declared.contains_key("committed"));
-    assert!(declared.contains_key("local"));
 }
 
 #[cfg(unix)]

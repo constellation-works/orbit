@@ -130,37 +130,6 @@ pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
     exec_result.timed_out
 }
 
-/// Best-effort lookup of an embedded Orbit response envelope's `status` field
-/// in raw subprocess stdout, *without* validating exit-code alignment.
-///
-/// Used by the CLI dispatcher (T20260508-17) to demote `success` when a CLI
-/// like Claude exits 0 with a wrapping `result.subtype = "success"` but its
-/// embedded Orbit envelope reports `status = "failed"`. `parse_and_validate_response`
-/// returns `Err` in that case because exit alignment fails, which threw away
-/// the signal the dispatcher needs to classify the outcome.
-///
-/// Returns `None` when stdout cannot be parsed, carries no recognizable
-/// envelope, or discovery exhausts its work bound. Validating APIs fail that
-/// last case closed instead of treating it as absent.
-#[cfg(test)]
-pub fn peek_response_status(stdout: &str) -> Option<String> {
-    ParsedStdout::parse(stdout).peek_response_status()
-}
-
-/// Best-effort lookup of a terminal failure declaration in provider stdout.
-///
-/// Selects the same terminal envelope as [`peek_response_status`], so a nested
-/// failure cannot override a completed success. Unlike full response
-/// validation, this preserves a selected failed/timeout status when its error
-/// object is absent or malformed. The dispatcher uses that status to fail
-/// closed, while treating unavailable error details as a generic diagnostic.
-/// The returned error is present only when both its code and message are
-/// non-empty strings.
-#[cfg(test)]
-pub fn peek_declared_response_failure(stdout: &str) -> Option<DeclaredResponseFailure> {
-    ParsedStdout::parse(stdout).peek_declared_response_failure()
-}
-
 /// Content-blind check that a provider's stdout *terminated with* a well-formed
 /// Orbit response envelope.
 ///
@@ -409,18 +378,6 @@ fn exit_zero_terminal_failure(
     wrapper_signals(documents).terminal_ending_diagnostic()
 }
 
-// Best-effort trace extraction for the fallback path. Provider CLIs (e.g.
-// `claude -p --output-format json`) emit a wrapping JSON document whose
-// `usage` block carries token counts even when the embedded Orbit response
-// envelope is malformed or missing — losing that data on the synthesize path
-// is what made claude show as zero tokens on the scoreboard.
-// Visible through the `response` module to sibling-layout tests; this is a narrow
-// crate-internal seam for fallback trace behavior.
-#[cfg(test)]
-pub(in crate::types) fn synthesize_trace(exec_result: &ExecutionResult) -> InvocationTrace {
-    synthesize_trace_from_parsed(exec_result, &ParsedStdout::parse(&exec_result.stdout))
-}
-
 fn synthesize_trace_from_parsed(
     exec_result: &ExecutionResult,
     parsed: &ParsedStdout<'_>,
@@ -448,10 +405,10 @@ fn synthetic_error_message(exec_result: &ExecutionResult) -> String {
 
 /// Suffix JSON parses allowed while searching: the whole-string attempt plus
 /// each `{` candidate that is actually deserialized.
-pub(in crate::types) const ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS: u32 = 4_096;
+const ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS: u32 = 4_096;
 
 /// JSON nodes visited while searching for an envelope or declared failure.
-pub(in crate::types) const ENVELOPE_DISCOVERY_MAX_NODES: u32 = 65_536;
+const ENVELOPE_DISCOVERY_MAX_NODES: u32 = 65_536;
 
 const DISCOVERY_LIMIT_PREFIX: &str = "response envelope discovery exceeded a work limit";
 
@@ -475,34 +432,25 @@ const PREFERRED_OBJECT_KEYS: [&str; 9] = [
 
 /// Caps for one envelope or declared-failure search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::types) struct EnvelopeDiscoveryBudget {
-    pub max_parse_attempts: u32,
-    pub max_nodes: u32,
+struct EnvelopeDiscoveryBudget {
+    max_parse_attempts: u32,
+    max_nodes: u32,
 }
 
 impl EnvelopeDiscoveryBudget {
-    pub const fn production() -> Self {
+    const fn production() -> Self {
         Self {
             max_parse_attempts: ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS,
             max_nodes: ENVELOPE_DISCOVERY_MAX_NODES,
         }
     }
-
-    #[cfg(test)]
-    pub const fn new(max_parse_attempts: u32, max_nodes: u32) -> Self {
-        Self {
-            max_parse_attempts,
-            max_nodes,
-        }
-    }
 }
 
-/// Parse/traversal accounting for one search. Sibling tests use this to pin
-/// the documented work bound and the skip-already-visited preferred-key rule.
+/// Parse/traversal accounting for one bounded search.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(in crate::types) struct EnvelopeDiscoveryStats {
-    pub parse_attempts: u32,
-    pub nodes_visited: u32,
+struct EnvelopeDiscoveryStats {
+    parse_attempts: u32,
+    nodes_visited: u32,
 }
 
 struct Budget {
@@ -562,41 +510,6 @@ fn is_discovery_limit_error(err: &OrbitError) -> bool {
         OrbitError::AgentProtocolViolation(message) => message.starts_with(DISCOVERY_LIMIT_PREFIX),
         _ => false,
     }
-}
-
-/// Protocol-check search: JSON documents when the stream parses, otherwise a
-/// bounded suffix scan of mixed stdout. Visible to sibling tests.
-#[cfg(test)]
-pub(in crate::types) fn discover_agent_response_envelope_with_stats(
-    stdout: &str,
-    budget: EnvelopeDiscoveryBudget,
-) -> Result<(Option<AgentResponseEnvelope>, EnvelopeDiscoveryStats), OrbitError> {
-    let mut budget = Budget::new(budget);
-    let found = match parse_json_documents(stdout) {
-        Ok(documents) => {
-            discover_in_values(documents.iter().rev(), &mut budget, deserialize_envelope)?
-        }
-        Err(_) => discover_in_string(stdout, &mut budget, deserialize_envelope)?,
-    };
-    Ok((found, budget.stats))
-}
-
-/// Selected-response search with the same walk and bounds as envelope
-/// discovery, including the mixed-stdout suffix scan used inside string
-/// fields. Visible to sibling tests.
-#[cfg(test)]
-pub(in crate::types) fn discover_declared_response_failure_with_stats(
-    stdout: &str,
-    budget: EnvelopeDiscoveryBudget,
-) -> Result<(Option<DeclaredResponseFailure>, EnvelopeDiscoveryStats), OrbitError> {
-    let mut budget = Budget::new(budget);
-    let found = match parse_json_documents(stdout) {
-        Ok(documents) => {
-            discover_in_values(documents.iter().rev(), &mut budget, selected_response)?
-        }
-        Err(_) => discover_in_string(stdout, &mut budget, selected_response)?,
-    };
-    Ok((found.and_then(|selected| selected.failure), budget.stats))
 }
 
 fn discover_in_values<'a, T, I, F>(

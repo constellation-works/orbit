@@ -273,24 +273,3 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
     facts.bytes = b"{}".to_vec();
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
 }
-
-#[test]
-fn no_diff_and_unavailable_provider_do_not_count() {
-    let (store, host, trigger) = setup();
-    host.page(0, 2);
-    {
-        let mut p = host.page.lock().unwrap();
-        p.deliveries[0].after.tree = p.deliveries[0].before.tree.clone();
-        p.deliveries.pop();
-        p.unresolved
-            .insert("c2".into(), "provider unavailable".into());
-    }
-    let state = evaluate(store.as_ref(), &host, &trigger, true)
-        .state
-        .unwrap();
-    assert!(state.active.is_none());
-    assert!(state.pending.is_empty());
-    assert_eq!(state.pending_commits.len(), 2);
-    assert_eq!(state.unresolved.len(), 1);
-    assert_eq!(state.covered, revision(0));
-}

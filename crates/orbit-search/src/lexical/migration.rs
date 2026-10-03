@@ -182,9 +182,7 @@ pub(crate) fn table_exists(conn: &Connection, table: &str) -> Result<bool, Orbit
     .map_err(store_error)
 }
 
-// pub(crate) widened for tests/ layout under ORB-00230; test reaches via
-// sibling `tests/schema.rs` (see docs/design-patterns/test_layout.md).
-pub(crate) fn legacy_task_fts_table() -> &'static str {
+fn legacy_task_fts_table() -> &'static str {
     concat!("tasks", "_fts")
 }
 

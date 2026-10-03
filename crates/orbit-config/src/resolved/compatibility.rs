@@ -40,14 +40,6 @@ pub(super) fn reject_retired_backend_overrides(
         .map_err(|error| OrbitError::InvalidInput(format!("[runtime] {error}")))
 }
 
-#[cfg(test)]
-pub(crate) fn retired_backend_override_check(
-    document: &toml::Value,
-    env_value: Option<&str>,
-) -> Result<(), OrbitError> {
-    reject_retired_backend_overrides(document, env_value)
-}
-
 pub(super) fn reject_stale_agent_tables(
     raw: Option<&BTreeMap<String, toml::Value>>,
 ) -> Result<(), OrbitError> {
