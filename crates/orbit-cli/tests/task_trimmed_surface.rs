@@ -270,6 +270,89 @@ fn task_update_and_add_accept_valid_context_selectors() {
     assert_eq!(updated["context_files"], json!(["file:existing.rs"]));
 }
 
+/// [ORB-13753] Scope extensions must send the full union: a tool update with
+/// only additions previously dropped the task's original selectors.
+#[test]
+fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears() {
+    let workspace = TestWorkspace::new();
+    let routing = workspace.task_json(&["workspace", "show", "--format", "json"]);
+    let work = fs::canonicalize(&workspace.work).expect("canonical fixture work");
+    assert_eq!(routing["registered"], json!(true));
+    assert_eq!(
+        routing["checkout"]["repo_root"],
+        json!(work.to_string_lossy())
+    );
+    assert_eq!(
+        routing["checkout"]["orbit_dir"],
+        json!(work.join(".orbit").to_string_lossy())
+    );
+
+    for name in ["existing.rs", "replacement.rs", "[]"] {
+        fs::write(workspace.work.join(name), "pub fn fixture() {}\n").expect("fixture file");
+    }
+    fs::create_dir(workspace.work.join("existing_dir")).expect("fixture directory");
+    let id = workspace.add_task("Context replacement semantics");
+    let original = json!(["file:existing.rs", "dir:existing_dir"]);
+
+    for (field, replacement, empty) in [
+        ("context_files", json!(["file:replacement.rs"]), json!([])),
+        ("context_files", json!("file:replacement.rs"), json!(",")),
+        ("context", json!("file:replacement.rs"), json!(",")),
+    ] {
+        workspace.run(
+            &[
+                "task",
+                "update",
+                &id,
+                "--context",
+                "file:existing.rs,dir:existing_dir",
+            ],
+            "seed context",
+        );
+        let omitted =
+            json!({"id": id, "model": "codex", "comment": "Preserve context"}).to_string();
+        let updated =
+            workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &omitted]);
+        assert_eq!(updated["context_files"], original);
+        assert_eq!(
+            workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
+            original,
+            "omitting both context fields must preserve the durable list"
+        );
+
+        let invalid = json!({"id": id, "model": "codex", field: ""}).to_string();
+        let refused = workspace.run_raw(&["tool", "run", "orbit.task.update", "--input", &invalid]);
+        assert!(
+            !refused.status.success(),
+            "empty {field} string must be rejected"
+        );
+        assert_eq!(
+            workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
+            original,
+            "rejection must leave the durable context unchanged"
+        );
+
+        for (value, expected) in [
+            (replacement, json!(["file:replacement.rs"])),
+            (json!("[]"), json!(["file:[]"])),
+            (empty, json!([])),
+        ] {
+            let input = json!({"id": id, "model": "codex", field: value}).to_string();
+            let updated =
+                workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
+            assert_eq!(
+                updated["context_files"], expected,
+                "replacement via {field}"
+            );
+            assert_eq!(
+                workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
+                expected,
+                "supplied {field} must replace the whole durable list, including clearing"
+            );
+        }
+    }
+}
+
 /// The existence guard is an operator-surface default, not a wall: work that
 /// creates a file records its selector with the explicit escape.
 #[test]
