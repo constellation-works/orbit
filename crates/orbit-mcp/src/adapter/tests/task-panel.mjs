@@ -1312,6 +1312,24 @@ test('late drain read cannot enable controls for a different workspace and a rea
   f.click('drain-refresh');f.answer(f.last(),{message:'operator required'},true);await flush();
   assert.equal(f.get('drain-start').disabled,true);assert.equal(f.get('drain-stop').disabled,true);
 });
+test('a crew changed during create or edit remains an unsent draft after success',async()=>{
+ for(const mode of ['create','edit']){
+  const f=fixture();await f.init();
+  if(mode==='edit'){
+   f.click('refresh');f.answer(f.last(),f.list([{id:'ORB-1',title:'Task'}]));await flush();
+   f.get('list').children[0].handlers.click();f.answer(f.last(),f.detail());await flush();f.click('edit');
+  }else f.click('create');
+  f.get('draft-title').value='Submitted title';f.get('draft-description').value='Description';
+  f.get('draft-criteria').value='Works';f.get('draft-priority').value='medium';f.get('draft-crew').value='sol';
+  f.get('task-form').handlers.submit({preventDefault(){}});const write=f.last();
+  f.get('draft-crew').value='astra';
+  f.answer(write,{snapshot:f.detail('ORB-1','rev2').snapshot,replayed:false});await flush();
+  assert.equal(f.get('editor').hidden,false,`${mode}: a newer crew choice must not close the editor`);
+  f.click('cancel-edit');f.click(mode==='create'?'create':'edit');
+  assert.equal(f.get('draft-crew').value,'astra',`${mode}: closing and reopening retains the newer crew draft`);
+ }
+});
+
 test('task editor traps background interaction, Escape preserves draft and restores invoking control',async()=>{
   const f=fixture();await f.init();const invoker=new Node('button');f.document.activeElement=invoker;
   f.click('create');f.get('draft-title').value='Keep this';assert.equal(f.get('app-shell').inert,true);
