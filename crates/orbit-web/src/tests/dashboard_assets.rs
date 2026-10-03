@@ -3373,6 +3373,15 @@ fn dashboard_plugins_tab_renders_every_panel_mode_and_sanitises_markdown() {
 }
 
 #[test]
+fn dashboard_plugin_mutations_do_not_repaint_a_previous_workspace() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_purify_dom.mjs"),
+        include_str!("dashboard_plugins_scope.mjs")
+    ));
+}
+
+#[test]
 fn dashboard_loading_rejects_stale_responses_and_reports_panel_errors() {
     run_dashboard_javascript_test(&format!(
         "{}\n{}",
