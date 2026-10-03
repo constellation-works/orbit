@@ -2,7 +2,8 @@
 
 Agent provider abstraction for Orbit. Two transport families coexist:
 
-- **CLI transports** drive `claude`, `codex`, `gemini`, `grok`, `ollama`, and `mock`
+- **CLI transports** drive `claude`, `codex`, `copilot`, `cursor-agent`, `gemini`,
+  `agy`, `grok`, `ollama`, `opencode`, `pi`, and `mock-agent`
   as subprocesses via the existing `AgentRuntime` trait. An invocation
   builds an `AgentInvocationSpec` (program, args, stdin envelope) that the
   engine runs through `orbit-exec`. **This is the path Orbit executes
@@ -21,6 +22,25 @@ Agent provider abstraction for Orbit. Two transport families coexist:
 
 The two trait shapes diverge enough — one-shot command descriptor vs.
 iterative conversation driver — that they are kept as siblings.
+
+## Provider boundary tests
+
+`./scripts/build-budget.py -- cargo test -p orbit-agent --test provider_invocation`
+runs one integration binary on Unix. Recording shell executables exercise every
+CLI adapter's public `Agent` invocation, including the internal mock provider;
+`Provider::ALL` requires a fixture for each shipped provider. Local HTTP servers
+exercise all three HTTP transports, including Gemini cache creation, and the
+real `AgentLoop` deadline and tool-result pairing behavior.
+
+The CLI fixture launches descriptors with the shared
+`orbit_common::security::child_env` allowlist, checking prompt delivery, model
+and effort flags, admitted context, and exclusion of ambient credentials and
+privilege variables. This covers the adapter and shared environment contract;
+engine-specific sandbox selection and environment overrides remain engine
+responsibilities. Each case runs in an isolated child with a disposable home
+under `.orbit/tmp`, synthetic secrets, bounded process waits and socket I/O.
+The fixtures use `/bin/sh`, `/bin/cat` and `/usr/bin/env`; they call no installed
+provider and need no external network or provider credentials.
 
 ## HTTP loop primitives
 
