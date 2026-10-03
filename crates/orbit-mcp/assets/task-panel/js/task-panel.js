@@ -158,15 +158,15 @@
     if(data.schema_version!==1)throw new Error('Incompatible view schema');
     if(selected.kind==='task'&&(!data.task||typeof data.revision!=='string'||!data.actions))throw new Error('Task revision/actions unavailable');
     if(selected.kind==='run'&&!data.run)throw new Error('Run projection unavailable');
+    const entity=data.task||data.run||data.data;
+    if(!entity)throw new Error('Incompatible entity snapshot');
+    if(publicId(entity)!==selected.id)throw new Error('Entity identity mismatch');
+    if(data.workspace&&data.workspace!==workspace)throw new Error('Destination identity mismatch');
     snapshot=data;
     if(!el('evidence').value&&!el('rationale').value){
       reviewRevision=data.revision;
       reviewHead=data.reviewed_head;
     }
-    const entity=data.task||data.run||data.data;
-    if(!entity)throw new Error('Incompatible entity snapshot');
-    if(publicId(entity)!==selected.id)throw new Error('Entity identity mismatch');
-    if(data.workspace&&data.workspace!==workspace)throw new Error('Destination identity mismatch');
     fresh=true;
     el('projection-warning').hidden=!data.content_truncated&&!data.truncated_fields?.length;
     el('projection-warning').textContent=(data.content_truncated||data.truncated_fields?.length)?`Detail projection truncated: ${(data.truncated_fields||[]).join(', ')||'large task fields'}. Editing/review may be unavailable until the complete evidence can be read.`:'';
@@ -281,6 +281,7 @@
       if(g!==generation)return;
       failures++;
       el('connection').textContent='Disconnected / read refused';
+      selectedReadState('Selected entity unavailable. Use Refresh to retry.');
       stale(`Stale data · ${bound(e.message,1000)}`);
     }
     finally{
@@ -305,6 +306,23 @@
     el('reference').textContent='';
     el('copy').hidden=true;
   }
+  function selectedReadState(message){
+    if(!selected||snapshot)return;
+    el('panel').hidden=false;
+    el('title').textContent=selected.id;
+    el('identity').textContent=message;
+    el('identity').title=`${workspace} · ${selected.id}`;
+  }
+  function clearSelectedDetail(){
+    snapshot=null;
+    el('entity-status').replaceChildren();
+    el('details').replaceChildren();
+    el('detail-pagination').textContent='';
+    el('projection-warning').hidden=true;
+    el('projection-warning').textContent='';
+    for(const id of ['comment-form','review-form','edit','previous-comments','more-comments','previous-history','more-history','previous-artifacts','more-artifacts','previous-logs','more-logs'])el(id).hidden=true;
+    selectedReadState('Loading selected entity…');
+  }
   async function open(kind,id){
     saveDraft();
     saveAnnotations();
@@ -315,7 +333,7 @@
     el('main').hidden=false;
     for(const row of el('list').querySelectorAll('button'))row.setAttribute('aria-expanded',String(row.dataset.entityKey===id));
     restoreAnnotations();
-    snapshot=null;
+    clearSelectedDetail();
     commentsOffset=logsOffset=historyOffset=artifactsOffset=0;
     const g=++generation;
     stale('Reading selected entity…');
@@ -326,7 +344,10 @@
       state('');
     }
     catch(e){
-      if(g===generation)stale(bound(e.message,1000));
+      if(g===generation){
+        selectedReadState('Selected entity unavailable. Use Refresh to retry.');
+        stale(bound(e.message,1000));
+      }
     }
     schedule();
   }

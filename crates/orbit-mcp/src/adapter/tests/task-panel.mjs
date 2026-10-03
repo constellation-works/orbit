@@ -1254,6 +1254,31 @@ test('canonical run rows show observed state attempt and duration without treati
   assert.ok(!running.includes('Duration 0 ms'));
 });
 
+test('a different selected entity clears prior detail through a failed read and retry',async()=>{
+  const f=fixture();await f.init();f.click('runs');
+  f.answer(f.last(),f.list([{id:'jrun-one',title:'First run'},{id:'jrun-two',title:'Second run'}]));await flush();
+  f.get('list').children[0].handlers.click();
+  f.answer(f.last(),{schema_version:1,workspace:'host-a/ws_shared',run:{id:'jrun-one',title:'First run',state:'running',steps:[{step_id:'old-step'}]}});await flush();
+  assert.equal(f.get('title').textContent,'First run');
+  f.get('list').children[1].handlers.click();
+  assert.equal(f.get('title').textContent,'jrun-two');
+  assert.match(f.get('identity').textContent,/Loading/);
+  assert.ok(!f.get('details').textContent.includes('old-step'));
+  assert.equal(f.get('send').disabled,true);
+  f.answer(f.last(),{message:'Selected run read refused'},true);await flush();
+  assert.equal(f.get('title').textContent,'jrun-two');
+  assert.match(f.get('identity').textContent,/unavailable.*Refresh.*retry/);
+  assert.equal(f.get('entity-status').children.length,0);
+  assert.equal(f.get('details').children.length,0);
+  assert.equal(f.get('send').disabled,true);
+  f.click('refresh');
+  const requests=f.posted.filter(m=>m.method==='tools/call').slice(-2);
+  for(const request of requests)f.answer(request,request.params.name==='orbit_workflow_run_list'?f.list([{id:'jrun-one'},{id:'jrun-two'}]):{schema_version:1,workspace:'host-a/ws_shared',run:{id:'jrun-two',title:'Second run',state:'success'}});
+  await flush();
+  assert.equal(f.get('title').textContent,'Second run');
+  assert.equal(f.get('send').disabled,false);
+});
+
 test('switching views clears unrelated detail and stale rows while preserving comment drafts', async()=>{
   const f=fixture(); await f.init();
   f.click('refresh'); f.answer(f.last(),f.list([{id:'ORB-1',title:'One'}])); await flush();
