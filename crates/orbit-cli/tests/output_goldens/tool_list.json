@@ -1,1892 +1,1892 @@
 [
   {
-    "active": true,
-    "builtin": true,
+    "name": "github.auth.status",
     "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error — both are reported so a caller can record a capability-unavailable outcome instead of mistaking it for a clean result.",
     "enabled": true,
-    "name": "github.auth.status",
-    "parameters": [],
-    "status": "active"
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": []
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "github.pr.list",
     "description": "List pull requests with their current head SHAs. Defaults to open pull requests.",
     "enabled": true,
-    "name": "github.pr.list",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Pull-request state filter: open (default), closed, merged, or all",
         "name": "state",
+        "description": "Pull-request state filter: open (default), closed, merged, or all",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Restrict to pull requests targeting one base branch",
         "name": "base",
+        "description": "Restrict to pull requests targeting one base branch",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Maximum pull requests to return (default 30, capped at 100)",
         "name": "limit",
+        "description": "Maximum pull requests to return (default 30, capped at 100)",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Repository in owner/name format (uses current directory if omitted)",
         "name": "repo",
+        "description": "Repository in owner/name format (uses current directory if omitted)",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "github.run.list",
     "description": "List recent GitHub Actions workflow runs with each run's reported head SHA. Filter by branch, workflow, status/conclusion, and event.",
     "enabled": true,
-    "name": "github.run.list",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Restrict to runs for one branch",
         "name": "branch",
+        "description": "Restrict to runs for one branch",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Restrict to one workflow by name, file name, or ID",
         "name": "workflow",
+        "description": "Restrict to one workflow by name, file name, or ID",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Restrict to one run status or conclusion (queued, in_progress, completed, failure, success, cancelled, timed_out, action_required)",
         "name": "status",
+        "description": "Restrict to one run status or conclusion (queued, in_progress, completed, failure, success, cancelled, timed_out, action_required)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Restrict to one triggering event (push, pull_request, schedule)",
         "name": "event",
+        "description": "Restrict to one triggering event (push, pull_request, schedule)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Maximum runs to return (default 20, capped at 100)",
         "name": "limit",
+        "description": "Maximum runs to return (default 20, capped at 100)",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Repository in owner/name format (uses current directory if omitted)",
         "name": "repo",
+        "description": "Repository in owner/name format (uses current directory if omitted)",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "github.run.logs",
     "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output, or GitHub says the parent run is still in progress, the excerpt can be recovered from the log API of a verified completed job belonging to that run; failed scope is restricted to unsuccessful jobs. `source` and `source_jobs` identify the recovery. Other errors remain errors.",
     "enabled": true,
-    "name": "github.run.logs",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Numeric workflow-run ID",
         "name": "run",
+        "description": "Numeric workflow-run ID",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Numeric job ID to narrow the log to one job",
         "name": "job",
+        "description": "Numeric job ID to narrow the log to one job",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "\"failed\" (default) for failed-step logs, or \"all\" for the full run log — use \"all\" to evidence the checked-out commit, since the checkout step usually succeeds",
         "name": "scope",
+        "description": "\"failed\" (default) for failed-step logs, or \"all\" for the full run log — use \"all\" to evidence the checked-out commit, since the checkout step usually succeeds",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Maximum display excerpt bytes (default 16384, capped at 262144), plus an omission marker. The separate complete diagnostic_unit is capped at 262144 bytes.",
         "name": "max_bytes",
+        "description": "Maximum display excerpt bytes (default 16384, capped at 262144), plus an omission marker. The separate complete diagnostic_unit is capped at 262144 bytes.",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Repository in owner/name format (uses current directory if omitted)",
         "name": "repo",
+        "description": "Repository in owner/name format (uses current directory if omitted)",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "github.run.view",
     "description": "Inspect one GitHub Actions workflow run: its reported head SHA, event, branch, and every job with its URL, steps, and conclusions. Unsuccessful jobs and steps are also collected separately.",
     "enabled": true,
-    "name": "github.run.view",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Numeric workflow-run ID",
         "name": "run",
+        "description": "Numeric workflow-run ID",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Repository in owner/name format (uses current directory if omitted)",
         "name": "repo",
+        "description": "Repository in owner/name format (uses current directory if omitted)",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.agent.invoke",
     "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability — the same test for a session that arrived over SSH as for a local one. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
     "enabled": true,
-    "name": "orbit.agent.invoke",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change.",
         "name": "prompt",
+        "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
         "name": "cwd",
+        "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew.",
         "name": "crew",
+        "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Wall-clock bound for the invocation. Defaults to 1800 and may not exceed 7200.",
         "name": "timeout_seconds",
+        "description": "Wall-clock bound for the invocation. Defaults to 1800 and may not exceed 7200.",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Retry handle. A resubmission carrying a key a recent submission already used resolves that run instead of starting a second agent.",
         "name": "idempotency_key",
+        "description": "Retry handle. A resubmission carrying a key a recent submission already used resolves that run instead of starting a second agent.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`.",
         "name": "provider_sandbox",
+        "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.auto_task.add",
     "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     "enabled": true,
-    "name": "orbit.auto_task.add",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric). Required.",
         "name": "name",
+        "description": "Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric). Required.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Human description of the recurring chore.",
         "name": "description",
+        "description": "Human description of the recurring chore.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: integrated_qa_v1 or landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine). Required.",
         "name": "schedule",
+        "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: integrated_qa_v1 or landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine). Required.",
         "param_type": "object",
         "required": true
       },
       {
-        "description": "Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task. Provider-neutral — no turn knobs. Required.",
         "name": "template",
+        "description": "Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task. Provider-neutral — no turn knobs. Required.",
         "param_type": "object",
         "required": true
       },
       {
-        "description": "Dedupe policy: `skip_if_open` (default) or `always`.",
         "name": "dedupe",
+        "description": "Dedupe policy: `skip_if_open` (default) or `always`.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.auto_task.delete",
     "description": "Delete an auto-task definition with its scheduler cursor and delivery consumer state. Deleting a shipped default records an opt-out, so reseeding does not re-create it; `orbit auto-task restore` reinstates it.",
     "enabled": true,
-    "name": "orbit.auto_task.delete",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Definition name. Required.",
         "name": "name",
+        "description": "Definition name. Required.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Why the definition is deleted, kept in the audit record.",
         "name": "reason",
+        "description": "Why the definition is deleted, kept in the audit record.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Delete even while a task minted from the definition is open or a delivery action is executing. Defaults to false.",
         "name": "force",
+        "description": "Delete even while a task minted from the definition is open or a delivery action is executing. Defaults to false.",
         "param_type": "boolean",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.auto_task.list",
     "description": "List auto-task definitions in this workspace. Definitions seeded by a plugin that is switched off here are omitted unless include_inactive_plugins is true.",
     "enabled": true,
-    "name": "orbit.auto_task.list",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
         "name": "include_inactive_plugins",
+        "description": "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "name": "view",
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Bounded list offset",
         "name": "offset",
+        "description": "Bounded list offset",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Bounded page size",
         "name": "limit",
+        "description": "Bounded page size",
         "param_type": "integer",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.auto_task.mint",
     "description": "Mint one task now from an auto-task definition. Unconditional: the schedule, dedupe policy, and enabled flag are ignored, and the scheduler's own cursor is left untouched.",
     "enabled": true,
-    "name": "orbit.auto_task.mint",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Definition name. Required.",
         "name": "name",
+        "description": "Definition name. Required.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Explicit workspace for acknowledged mint",
         "name": "workspace",
+        "description": "Explicit workspace for acknowledged mint",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "True acknowledges unconditional creation; requires operator authority",
         "name": "acknowledge_unconditional",
+        "description": "True acknowledges unconditional creation; requires operator authority",
         "param_type": "boolean",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.auto_task.toggle",
     "description": "Enable or disable an auto-task definition without deleting it.",
     "enabled": true,
-    "name": "orbit.auto_task.toggle",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Definition name. Required.",
         "name": "name",
+        "description": "Definition name. Required.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Whether to enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete. Required.",
         "name": "enabled",
+        "description": "Whether to enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete. Required.",
         "param_type": "boolean",
         "required": true
       },
       {
-        "description": "Explicit workspace for checked toggle",
         "name": "workspace",
+        "description": "Explicit workspace for checked toggle",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Observed enabled state checked atomically; requires operator authority",
         "name": "expected_enabled",
+        "description": "Observed enabled state checked atomically; requires operator authority",
         "param_type": "boolean",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.auto_task.update",
     "description": "Update an existing auto-task definition (present fields only).",
     "enabled": true,
-    "name": "orbit.auto_task.update",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage.",
         "name": "waive_batch",
+        "description": "Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage.",
         "param_type": "object",
         "required": false
       },
       {
-        "description": "Definition name. Required.",
         "name": "name",
+        "description": "Definition name. Required.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "New description.",
         "name": "description",
+        "description": "New description.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: integrated_qa_v1 or landed_code_review_v1).",
         "name": "schedule",
+        "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: integrated_qa_v1 or landed_code_review_v1).",
         "param_type": "object",
         "required": false
       },
       {
-        "description": "Replacement task template object, including optional assessed `complexity` (low/medium/hard/xhard) and exact canonical `required_tools` copied to minted tasks.",
         "name": "template",
+        "description": "Replacement task template object, including optional assessed `complexity` (low/medium/hard/xhard) and exact canonical `required_tools` copied to minted tasks.",
         "param_type": "object",
         "required": false
       },
       {
-        "description": "New dedupe policy: `skip_if_open` or `always`.",
         "name": "dedupe",
+        "description": "New dedupe policy: `skip_if_open` or `always`.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.command.exec",
     "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status. Requires operator capability and the workspace claim; withheld from managed runs.",
     "enabled": true,
-    "name": "orbit.command.exec",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "The command as a JSON array of argv strings, program first (e.g. [\"git\", \"status\"]). Never a shell string: no shell interprets this input, so quoting and operator-precedence bugs cannot occur.",
         "name": "argv",
+        "description": "The command as a JSON array of argv strings, program first (e.g. [\"git\", \"status\"]). Never a shell string: no shell interprets this input, so quoting and operator-precedence bugs cannot occur.",
         "param_type": "string_list",
         "required": true
       },
       {
-        "description": "Absolute working directory the command runs in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
         "name": "working_directory",
+        "description": "Absolute working directory the command runs in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "name": "claim_token",
+        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.drain.claim.bind",
     "description": "Bind an executor's local leaf run to its execution claim on the owner, moving the claim from `claimed` to `running`. Idempotent: repeating the same run returns the recorded outcome, and a different run is refused, so one claim never has two leaves. The owner fences the claim against the session's own machine; a claim admitted to another machine, or already settled or revoked, is refused as stale.",
     "enabled": true,
-    "name": "orbit.drain.claim.bind",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "The claim `orbit.task.pull` admitted to this machine.",
         "name": "claim_id",
+        "description": "The claim `orbit.task.pull` admitted to this machine.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "The one local leaf run the executor created for this claim.",
         "name": "run_id",
+        "description": "The one local leaf run the executor created for this claim.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "The ship contract the claim was admitted under, from its receipt.",
         "name": "ship",
+        "description": "The ship contract the claim was admitted under, from its receipt.",
         "param_type": "object",
         "required": true
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.drain.claim.settle",
     "description": "Settle an execution claim on the owner. A typed handoff is accepted only after the owner reads the pull request from the provider and resolves its candidate and base in the owner's own checkout, and only with digest-pinned validation evidence; it moves the task to `review`, which awaits owner approval — it does not merge. A failure records its evidence and blocks the task. Either releases only this claim's reservation. Retries replay the recorded outcome.",
     "enabled": true,
-    "name": "orbit.drain.claim.settle",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "The claim being settled.",
         "name": "claim_id",
+        "description": "The claim being settled.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "The leaf run bound to this claim, when one was bound.",
         "name": "run_id",
+        "description": "The leaf run bound to this claim, when one was bound.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, or `{\"Fail\": <evidence>}`. Nothing else settles a claim.",
         "name": "settlement",
+        "description": "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, or `{\"Fail\": <evidence>}`. Nothing else settles a claim.",
         "param_type": "object",
         "required": true
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.drain.claims",
     "description": "List this workspace's execution claims for inspection and deliberate recovery: phase, age, reservation expiry, execution machine, bound run, last recorded event, unresolved merge intent, and landing invalidation. Age, an expired reservation, and an absent local run are diagnostics, not proof that a worker died — nothing here reclaims, rebinds, or repairs a claim.",
     "enabled": true,
-    "name": "orbit.drain.claims",
-    "parameters": [],
-    "status": "active"
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": []
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.drain.probe",
     "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and the review policy. Declaring `caller_version`, `caller_schema`, or `caller_review_policy` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
     "enabled": true,
-    "name": "orbit.drain.probe",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Optional. The calling binary's version. When supplied, the response reports whether it matches this owner instead of leaving the caller to compare.",
         "name": "caller_version",
+        "description": "Optional. The calling binary's version. When supplied, the response reports whether it matches this owner instead of leaving the caller to compare.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional. The caller's distributed-drain wire-protocol schema version. This is not the MCP protocol revision and not the orchestration schema version.",
         "name": "caller_schema",
+        "description": "Optional. The caller's distributed-drain wire-protocol schema version. This is not the MCP protocol revision and not the orchestration schema version.",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Optional. The executor's effective review policy. Only `none` is supported in v1; `before-pr` and `after-landing` are reported as refusals rather than silently downgraded.",
         "name": "caller_review_policy",
+        "description": "Optional. The executor's effective review policy. Only `none` is supported in v1; `before-pr` and `after-landing` are reported as refusals rather than silently downgraded.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.drain.receipt.lookup",
     "description": "Read-only reconciliation of one distributed-drain admission request, served by the workspace owner. Returns the original receipt and the current claim phase (`found`), a non-reusable tombstone (`expired`), or `not_found`. It creates no receipt, binds no run, and grants no execution authority: a receipt is historical evidence, and `not_found` is not proof that an earlier request cannot still arrive, so it never licenses a replacement request under a new ID.",
     "enabled": true,
-    "name": "orbit.drain.receipt.lookup",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "The durable request ID the original admission was made with. It is read verbatim; the stored receipt is never rewritten to match the caller's current binary.",
         "name": "request_id",
+        "description": "The durable request ID the original admission was made with. It is read verbatim; the stored receipt is never rewritten to match the caller's current binary.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Optional receipt namespace: the machine the original request was made from. Defaults to this session's own machine. Naming another machine is cross-attempt inspection and requires operator capability.",
         "name": "machine_id",
+        "description": "Optional receipt namespace: the machine the original request was made from. Defaults to this session's own machine. Naming another machine is cross-attempt inspection and requires operator capability.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional lookup protocol version; defaults to 1. Versioned independently of admission, so an upgraded client can reconcile an old request. An incompatible version is refused — reconcile through owner claim inspection instead of minting a replacement request.",
         "name": "lookup_schema",
+        "description": "Optional lookup protocol version; defaults to 1. Versioned independently of admission, so an upgraded client can reconcile an old request. An incompatible version is refused — reconcile through owner claim inspection instead of minting a replacement request.",
         "param_type": "integer",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.friction.add",
     "description": "Append a friction report",
     "enabled": true,
-    "name": "orbit.friction.add",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Markdown body describing what happened and why it caused friction",
         "name": "body",
+        "description": "Markdown body describing what happened and why it caused friction",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "One-line handle identifying the problem, at most 120 characters. This is what lists and searches show, so name the surface and the failure. Derived from the body's opening line when omitted",
         "name": "title",
+        "description": "One-line handle identifying the problem, at most 120 characters. This is what lists and searches show, so name the surface and the failure. Derived from the body's opening line when omitted",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance; defaults to other",
         "name": "tags",
+        "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance; defaults to other",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
         "name": "during_task",
+        "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, or `grok`)",
         "name": "model",
+        "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, or `grok`)",
         "param_type": "string",
         "required": true
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.friction.list",
     "description": "List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.",
     "enabled": true,
-    "name": "orbit.friction.list",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Optional model filter",
         "name": "model",
+        "description": "Optional model filter",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional status filter: open, triaged, or resolved",
         "name": "status",
+        "description": "Optional status filter: open, triaged, or resolved",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional tag filter",
         "name": "tag",
+        "description": "Optional tag filter",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional YYYY-MM month filter for reported records",
         "name": "month",
+        "description": "Optional YYYY-MM month filter for reported records",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional case-insensitive query over id, model, tags, status, task, and body",
         "name": "q",
+        "description": "Optional case-insensitive query over id, model, tags, status, task, and body",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional RFC3339 lower bound for created_at",
         "name": "from",
+        "description": "Optional RFC3339 lower bound for created_at",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional RFC3339 upper bound for created_at",
         "name": "to",
+        "description": "Optional RFC3339 upper bound for created_at",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional maximum number of records to return",
         "name": "limit",
+        "description": "Optional maximum number of records to return",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Optional number of records to skip",
         "name": "offset",
+        "description": "Optional number of records to skip",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array",
         "name": "response_mode",
+        "description": "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.friction.rehome",
     "description": "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
     "enabled": true,
-    "name": "orbit.friction.rehome",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Friction record ID, e.g. FYYYY-MM-NNN",
         "name": "id",
+        "description": "Friction record ID, e.g. FYYYY-MM-NNN",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Registered name or ID of the workspace that owns this friction",
         "name": "to_workspace",
+        "description": "Registered name or ID of the workspace that owns this friction",
         "param_type": "string",
         "required": true
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.friction.update",
     "description": "Update triage metadata for a friction record",
     "enabled": true,
-    "name": "orbit.friction.update",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Friction record ID, e.g. FYYYY-MM-NNN",
         "name": "id",
+        "description": "Friction record ID, e.g. FYYYY-MM-NNN",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Optional status: open, triaged, or resolved",
         "name": "status",
+        "description": "Optional status: open, triaged, or resolved",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance",
         "name": "tags",
+        "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Optional replacement markdown body",
         "name": "body",
+        "description": "Optional replacement markdown body",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it",
         "name": "rehome_to",
+        "description": "Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body",
         "name": "title",
+        "description": "Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.pipeline.invoke",
     "description": "Submit a durable pipeline run and return immediately with its run ID. Public submissions require an operator; managed runs may invoke only a host-authorized child pipeline admission.",
     "enabled": true,
-    "name": "orbit.pipeline.invoke",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Registered v2 job name to invoke.",
         "name": "job_name",
+        "description": "Registered v2 job name to invoke.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Required unless default_input:true: JSON object forwarded as the run input payload.",
         "name": "input",
+        "description": "Required unless default_input:true: JSON object forwarded as the run input payload.",
         "param_type": "object",
         "required": false
       },
       {
-        "description": "Optional queue priority (`low`, `medium`, `high`, or `critical`).",
         "name": "priority",
+        "description": "Optional queue priority (`low`, `medium`, `high`, or `critical`).",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Explicit workspace required for default-input catalog submission",
         "name": "workspace",
+        "description": "Explicit workspace required for default-input catalog submission",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.",
         "name": "default_input",
+        "description": "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "name": "agent",
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.pipeline.wait",
     "description": "Block until the supplied pipeline runs reach terminal state or timeout.",
     "enabled": true,
-    "name": "orbit.pipeline.wait",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "One or more run IDs to wait for as a string or array of strings.",
         "name": "run_ids",
+        "description": "One or more run IDs to wait for as a string or array of strings.",
         "param_type": "string_list",
         "required": true
       },
       {
-        "description": "Optional timeout in seconds (default 3600, max 7200).",
         "name": "timeout_seconds",
+        "description": "Optional timeout in seconds (default 3600, max 7200).",
         "param_type": "number",
         "required": false
       },
       {
-        "description": "Optional poll cadence in seconds (default 5, clamped to a 1-second floor).",
         "name": "poll_interval_seconds",
+        "description": "Optional poll cadence in seconds (default 5, clamped to a 1-second floor).",
         "param_type": "number",
         "required": false
       },
       {
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "name": "agent",
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.routine.control",
     "description": "List workspace routine status or toggle one definition using its observed enabled state and target. Requires trusted operator authority and explicit workspace. Never replay a toggle after a lost reply; observe authoritative state first.",
     "enabled": true,
-    "name": "orbit.routine.control",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Exact workspace selector from discovery",
         "name": "workspace",
+        "description": "Exact workspace selector from discovery",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "list or toggle",
         "name": "action",
+        "description": "list or toggle",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Required for toggle: exact routine name",
         "name": "name",
+        "description": "Required for toggle: exact routine name",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Required for toggle: observed enabled state",
         "name": "expected_enabled",
+        "description": "Required for toggle: observed enabled state",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Required for toggle: desired enabled state",
         "name": "enabled",
+        "description": "Required for toggle: desired enabled state",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Required for toggle: observed routine target",
         "name": "target",
+        "description": "Required for toggle: observed routine target",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "List offset; default 0",
         "name": "offset",
+        "description": "List offset; default 0",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "List size 1 through 50; default 25",
         "name": "limit",
+        "description": "List size 1 through 50; default 25",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Diagnostic model attribution; never grants authority",
         "name": "model",
+        "description": "Diagnostic model attribution; never grants authority",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.search",
     "description": "Search tasks and frictions using lexical matching.",
     "enabled": true,
-    "name": "orbit.search",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Free-text lexical query. Multiple words need not be adjacent.",
         "name": "query",
+        "description": "Free-text lexical query. Multiple words need not be adjacent.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Corpus kind: task, friction, or all. Default: all.",
         "name": "kind",
+        "description": "Corpus kind: task, friction, or all. Default: all.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Maximum number of results. Default: 10.",
         "name": "limit",
+        "description": "Maximum number of results. Default: 10.",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction.",
         "name": "tag",
+        "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved.",
         "name": "all",
+        "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved.",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind.",
         "name": "status",
+        "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Federated scope: registered workspace names, `ws_*` IDs, or absolute checkout paths to search together. Hits carry workspace attribution. Omit to search only the bound workspace.",
         "name": "workspaces",
+        "description": "Federated scope: registered workspace names, `ws_*` IDs, or absolute checkout paths to search together. Hits carry workspace attribution. Omit to search only the bound workspace.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run.",
         "name": "all_workspaces",
+        "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run.",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.task.add",
     "description": "Create an Orbit task and return the created task JSON",
     "enabled": true,
-    "name": "orbit.task.add",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Task title",
         "name": "title",
+        "description": "Task title",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Task description markdown",
         "name": "description",
+        "description": "Task description markdown",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Workspace selector: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path to a local checkout (a linked Git worktree resolves to its registered checkout). Falls back to the MCP session's `_meta.orbit.workspace` when omitted; never inferred from process cwd.",
         "name": "workspace",
+        "description": "Workspace selector: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path to a local checkout (a linked Git worktree resolves to its registered checkout). Falls back to the MCP session's `_meta.orbit.workspace` when omitted; never inferred from process cwd.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional acceptance criteria as a string or array of strings",
         "name": "acceptance_criteria",
+        "description": "Optional acceptance criteria as a string or array of strings",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Optional tags as a string or array of strings",
         "name": "tags",
+        "description": "Optional tags as a string or array of strings",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings",
         "name": "required_tools",
+        "description": "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
         "name": "context_files",
+        "description": "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
         "name": "allow_missing_context",
+        "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Optional priority level",
         "name": "priority",
+        "description": "Optional priority level",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
         "name": "complexity",
+        "description": "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional task type",
         "name": "type",
+        "description": "Optional task type",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional typed task relations as an array of {type, target} objects",
         "name": "relations",
+        "description": "Optional typed task relations as an array of {type, target} objects",
         "param_type": "array",
         "required": false
       },
       {
-        "description": "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default",
         "name": "crew",
+        "description": "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted",
         "name": "orchestrator",
+        "description": "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts.",
         "name": "fields",
+        "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
         "name": "field",
+        "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot.",
         "name": "request_id",
+        "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.task.artifact.get",
     "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit.task.show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
     "enabled": true,
-    "name": "orbit.task.artifact.get",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Globally unique task ID that owns the artifact.",
         "name": "id",
+        "description": "Globally unique task ID that owns the artifact.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
         "name": "path",
+        "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "name": "agent",
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed — a valid workspace that does not own the task returns not-found.",
         "name": "workspace",
+        "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed — a valid workspace that does not own the task returns not-found.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.task.artifact.put",
     "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context; malformed, stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage.",
     "enabled": true,
-    "name": "orbit.task.artifact.put",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "task ID",
         "name": "id",
+        "description": "task ID",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Source file to store as a task artifact. Resolved against the caller cwd, then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
         "name": "source_path",
+        "description": "Source file to store as a task artifact. Resolved against the caller cwd, then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name.",
         "name": "path",
+        "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.task.list",
     "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path.",
     "enabled": true,
-    "name": "orbit.task.list",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Optional task status filter. Pass a comma-separated string or an array of status names.",
         "name": "status",
+        "description": "Optional task status filter. Pass a comma-separated string or an array of status names.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Optional parent task ID to list subtasks for",
         "name": "parent_id",
+        "description": "Optional parent task ID to list subtasks for",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional task type filter",
         "name": "type",
+        "description": "Optional task type filter",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Filter by job run ID",
         "name": "job_run_id",
+        "description": "Filter by job run ID",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Filter by tag. Repeat or pass an array for AND semantics.",
         "name": "tag",
+        "description": "Filter by tag. Repeat or pass an array for AND semantics.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "When true, keep only tasks whose dependencies are satisfied",
         "name": "ready",
+        "description": "When true, keep only tasks whose dependencies are satisfied",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment.",
         "name": "path",
+        "description": "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1.",
         "name": "limit",
+        "description": "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1.",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit.task.show`.",
         "name": "fields",
+        "description": "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit.task.show`.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "name": "view",
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Bounded view list offset",
         "name": "offset",
+        "description": "Bounded view list offset",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Bounded view key/title substring",
         "name": "search",
+        "description": "Bounded view key/title substring",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Bounded view priority filter",
         "name": "priority",
+        "description": "Bounded view priority filter",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "name": "agent",
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.task.pull",
     "description": "Distributed-drain admission, served by the workspace owner. Selects the first ready, valid, conflict-free backlog task in the owner's order and, in one transaction, reserves its footprint, records an execution claim for the calling machine, moves it to `in-progress` and stores the request receipt. Answers `idle` (a receipt with no claim) when nothing is admissible. The calling machine is the session's, never a field of this input. A claim grants execution of that one attempt only; completion still needs owner approval.",
     "enabled": true,
-    "name": "orbit.task.pull",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Durable unique ID for one intended admission, persisted by the caller before sending. Reuse it unchanged after any uncertainty: a retry replays the stored receipt and never admits a second task.",
         "name": "request_id",
+        "description": "Durable unique ID for one intended admission, persisted by the caller before sending. Reuse it unchanged after any uncertainty: a retry replays the stored receipt and never admits a second task.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "The calling binary's version. It must equal the owner's.",
         "name": "caller_version",
+        "description": "The calling binary's version. It must equal the owner's.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "The caller's distributed-drain wire-protocol schema version.",
         "name": "caller_schema",
+        "description": "The caller's distributed-drain wire-protocol schema version.",
         "param_type": "integer",
         "required": true
       },
       {
-        "description": "The executor's effective review policy. Only `none` is admitted in v1.",
         "name": "caller_review_policy",
+        "description": "The executor's effective review policy. Only `none` is admitted in v1.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "The calling drain: `run_id`, `job_name`, and an optional diagnostic `machine_name`.",
         "name": "run_context",
+        "description": "The calling drain: `run_id`, `job_name`, and an optional diagnostic `machine_name`.",
         "param_type": "object",
         "required": true
       },
       {
-        "description": "The ship contract this owner resolves, exactly as `orbit.drain.probe` reported it. A new request carrying anything else is refused as `ship_contract_mismatch`, because the receipt freezes it.",
         "name": "ship",
+        "description": "The ship contract this owner resolves, exactly as `orbit.drain.probe` reported it. A new request carrying anything else is refused as `ship_contract_mismatch`, because the receipt freezes it.",
         "param_type": "object",
         "required": true
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.task.show",
     "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution.",
     "enabled": true,
-    "name": "orbit.task.show",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
         "name": "id",
+        "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections.",
         "name": "snapshot",
+        "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections.",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "name": "agent",
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution.",
         "name": "fields",
+        "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`.",
         "name": "field",
+        "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name.",
         "name": "workspace",
+        "description": "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "name": "view",
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Bounded detail page size",
         "name": "limit",
+        "description": "Bounded detail page size",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Comment offset",
         "name": "comments_offset",
+        "description": "Comment offset",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "History offset",
         "name": "history_offset",
+        "description": "History offset",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Artifact metadata offset",
         "name": "artifacts_offset",
+        "description": "Artifact metadata offset",
         "param_type": "integer",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.task.update",
     "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
     "enabled": true,
-    "name": "orbit.task.update",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "task ID",
         "name": "id",
+        "description": "task ID",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "New task title",
         "name": "title",
+        "description": "New task title",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "New task description (empty string clears)",
         "name": "description",
+        "description": "New task description (empty string clears)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "New acceptance criteria as an array of strings or a single string",
         "name": "acceptance_criteria",
+        "description": "New acceptance criteria as an array of strings or a single string",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Replacement dependency task IDs as a string or array of strings",
         "name": "dependencies",
+        "description": "Replacement dependency task IDs as a string or array of strings",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Replacement typed task relations as an array of {type, target} objects",
         "name": "relations",
+        "description": "Replacement typed task relations as an array of {type, target} objects",
         "param_type": "array",
         "required": false
       },
       {
-        "description": "Replacement task tags as a string or array of strings",
         "name": "tags",
+        "description": "Replacement task tags as a string or array of strings",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.",
         "name": "plan",
+        "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits.",
         "name": "status",
+        "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Annotation stored on this status transition's history entry; use `comment` for free-form discussion",
         "name": "note",
+        "description": "Annotation stored on this status transition's history entry; use `comment` for free-form discussion",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "New dispatch priority (low, medium, high, or critical)",
         "name": "priority",
+        "description": "New dispatch priority (low, medium, high, or critical)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
         "name": "complexity",
+        "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "New task type",
         "name": "type",
+        "description": "New task type",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "For bug tasks: originating task ID that introduced the defect (empty string clears)",
         "name": "source_task_id",
+        "description": "For bug tasks: originating task ID that introduced the defect (empty string clears)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Explicit planning attribution label (empty string clears)",
         "name": "planned_by",
+        "description": "Explicit planning attribution label (empty string clears)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Explicit implementation attribution label (empty string clears)",
         "name": "implemented_by",
+        "description": "Explicit implementation attribution label (empty string clears)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Replacement execution summary text",
         "name": "execution_summary",
+        "description": "Replacement execution summary text",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Task comment to append",
         "name": "comment",
+        "description": "Task comment to append",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "PR review status (e.g. approve, request-changes; empty string clears)",
         "name": "pr_status",
+        "description": "PR review status (e.g. approve, request-changes; empty string clears)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Job run ID to associate with the task (empty string clears)",
         "name": "job_run_id",
+        "description": "Job run ID to associate with the task (empty string clears)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Named crew to use when running this task (empty string draws a fresh one)",
         "name": "crew",
+        "description": "Named crew to use when running this task (empty string draws a fresh one)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Named crew responsible for orchestration attribution (empty string clears; mutable only before execution)",
         "name": "orchestrator",
+        "description": "Named crew responsible for orchestration attribution (empty string clears; mutable only before execution)",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Replacement task context selectors as a comma-separated string or array of strings. Omit both `context_files` and `context` to preserve the current list. A supplied value replaces the whole list; it does not append. An empty array `[]` clears the list, as does a comma-only string such as `\",\"`; an empty string is rejected. The string `\"[]\"` is treated as a selector, not an empty list. To extend scope, read the current list and send the full union of existing and new selectors. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
         "name": "context_files",
+        "description": "Replacement task context selectors as a comma-separated string or array of strings. Omit both `context_files` and `context` to preserve the current list. A supplied value replaces the whole list; it does not append. An empty array `[]` clears the list, as does a comma-only string such as `\",\"`; an empty string is rejected. The string `\"[]\"` is treated as a selector, not an empty list. To extend scope, read the current list and send the full union of existing and new selectors. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
         "name": "allow_missing_context",
+        "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default.",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Legacy string alias for `context_files`. Omit both fields to preserve the current list. A supplied value replaces the whole list; it does not append. A comma-only string such as `\",\"` clears the list; prefer `context_files: []` to clear explicitly. An empty string is rejected, and the string `\"[]\"` is treated as a selector, not an empty list. `context_files` takes precedence when both fields are supplied. To extend scope, read the current list and send the full union of existing and new selectors. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files that are only relevant background context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
         "name": "context",
+        "description": "Legacy string alias for `context_files`. Omit both fields to preserve the current list. A supplied value replaces the whole list; it does not append. A comma-only string such as `\",\"` clears the list; prefer `context_files: []` to clear explicitly. An empty string is rejected, and the string `\"[]\"` is treated as a selector, not an empty list. `context_files` takes precedence when both fields are supplied. To extend scope, read the current list and send the full union of existing and new selectors. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files that are only relevant background context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts.",
         "name": "fields",
+        "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
         "name": "field",
+        "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot.",
         "name": "request_id",
+        "description": "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately.",
         "name": "expected_revision",
+        "description": "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Evidence-bound review verdict: decision (accept or changes_requested), rationale, criteria [{criterion,met,evidence}], evidence, expected_run_id and expected_head. Review requires request_id and expected_revision.",
         "name": "verdict",
+        "description": "Evidence-bound review verdict: decision (accept or changes_requested), rationale, criteria [{criterion,met,evidence}], evidence, expected_run_id and expected_head. Review requires request_id and expected_revision.",
         "param_type": "object",
         "required": false
       },
       {
-        "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches.",
         "name": "complete",
+        "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches.",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.workflow.auto",
     "description": "Observe workspace auto-drain readiness, start a bounded window, or stop admissions while preserving admitted workers. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
     "enabled": true,
-    "name": "orbit.workflow.auto",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "status, start or stop",
         "name": "action",
+        "description": "status, start or stop",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Required for start: window length in seconds, 1 through 604800",
         "name": "for_seconds",
+        "description": "Required for start: window length in seconds, 1 through 604800",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Optional start worker limit, positive u32; omitted uses runtime default",
         "name": "concurrency",
+        "description": "Optional start worker limit, positive u32; omitted uses runtime default",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
         "name": "complete",
+        "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Workspace claim token when held by another operator",
         "name": "claim_token",
+        "description": "Workspace claim token when held by another operator",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Exact selector returned by workspace discovery. No implicit destination.",
         "name": "workspace",
+        "description": "Exact selector returned by workspace discovery. No implicit destination.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.workflow.run.delivery",
     "description": "Report what one task delivery run committed and landed for one task of this workspace, from the host's own commit and merge step records. Returns typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only; missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `run.show`.",
     "enabled": true,
-    "name": "orbit.workflow.run.delivery",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Job run ID that delivered the task.",
         "name": "run_id",
+        "description": "Job run ID that delivered the task.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Task the run was submitted with, in this workspace.",
         "name": "task_id",
+        "description": "Task the run was submitted with, in this workspace.",
         "param_type": "string",
         "required": true
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.workflow.run.list",
     "description": "List durable workflow runs newest-first with optional bounded filters.",
     "enabled": true,
-    "name": "orbit.workflow.run.list",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Maximum runs to return (default 25; values above 200 are rejected).",
         "name": "limit",
+        "description": "Maximum runs to return (default 25; values above 200 are rejected).",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Optional job ID filter.",
         "name": "job_id",
+        "description": "Optional job ID filter.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional concrete run-state filter, or `terminal`.",
         "name": "state",
+        "description": "Optional concrete run-state filter, or `terminal`.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional RFC 3339 lower bound for run creation time.",
         "name": "since",
+        "description": "Optional RFC 3339 lower bound for run creation time.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "name": "view",
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Bounded list offset",
         "name": "offset",
+        "description": "Bounded list offset",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Bounded run state filter",
         "name": "status",
+        "description": "Bounded run state filter",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs",
         "name": "include_catalog",
+        "description": "Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs",
         "param_type": "boolean",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.workflow.run.resume",
     "description": "Resume a terminal resumable workflow run as a new linked run.",
     "enabled": true,
-    "name": "orbit.workflow.run.resume",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Job run ID.",
         "name": "id",
+        "description": "Job run ID.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "name": "claim_token",
+        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.workflow.run.show",
     "description": "Fetch one durable workflow run by ID.",
     "enabled": true,
-    "name": "orbit.workflow.run.show",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Job run ID.",
         "name": "id",
+        "description": "Job run ID.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "name": "view",
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Bounded log record offset",
         "name": "log_offset",
+        "description": "Bounded log record offset",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Bounded detail page size",
         "name": "limit",
+        "description": "Bounded detail page size",
         "param_type": "integer",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.workflow.run.workers",
     "description": "Adjust how many tasks a running workspace drain keeps in flight, without replacing its run. The run ID, deadline, completion authorization, and already-dispatched children are preserved; a lower ceiling stops new admissions until enough children finish and cancels nothing.",
     "enabled": true,
-    "name": "orbit.workflow.run.workers",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Job run ID.",
         "name": "id",
+        "description": "Job run ID.",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "New ceiling on tasks in flight, from 1 to the ship job's own active-run limit.",
         "name": "concurrency",
+        "description": "New ceiling on tasks in flight, from 1 to the ship job's own active-run limit.",
         "param_type": "integer",
         "required": true
       },
       {
-        "description": "Optional note recorded with the change.",
         "name": "reason",
+        "description": "Optional note recorded with the change.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Apply only if the run's ceiling is still at this revision, so a concurrent adjustment is reported rather than overwritten.",
         "name": "if_revision",
+        "description": "Apply only if the run's ceiling is still at this revision, so a concurrent adjustment is reported rather than overwritten.",
         "param_type": "integer",
         "required": false
       },
       {
-        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "name": "claim_token",
+        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "orbit.workflow.ship",
     "description": "Submit explicit tasks to the review-only ship workflow and return its durable run ID. This MCP tool does not accept completion authorization; an authorized operator on the owning host can use `orbit run ship <task-id> --complete`.",
     "enabled": true,
-    "name": "orbit.workflow.ship",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Explicit task IDs to ship; at least one is required.",
         "name": "task_ids",
+        "description": "Explicit task IDs to ship; at least one is required.",
         "param_type": "string_list",
         "required": true
       },
       {
-        "description": "Optional ship mode (`pr` or `local`); defaults to workspace configuration.",
         "name": "mode",
+        "description": "Optional ship mode (`pr` or `local`); defaults to workspace configuration.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional base branch override.",
         "name": "base",
+        "description": "Optional base branch override.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
         "name": "allowed_crews",
+        "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "name": "claim_token",
+        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "param_type": "string",
         "required": false
       },
       {
-        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "param_type": "string",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   },
   {
-    "active": true,
-    "builtin": true,
+    "name": "proc.spawn",
     "description": "Spawn a process with timeout and capture output",
     "enabled": true,
-    "name": "proc.spawn",
+    "active": true,
+    "status": "active",
+    "builtin": true,
     "parameters": [
       {
-        "description": "Program to execute",
         "name": "program",
+        "description": "Program to execute",
         "param_type": "string",
         "required": true
       },
       {
-        "description": "Arguments to pass to the program",
         "name": "args",
+        "description": "Arguments to pass to the program",
         "param_type": "array",
         "required": false
       },
       {
-        "description": "Execution timeout in milliseconds (default 15000; larger values are clamped to 60000)",
         "name": "timeout_ms",
+        "description": "Execution timeout in milliseconds (default 15000; larger values are clamped to 60000)",
         "param_type": "u64",
         "required": false
       }
-    ],
-    "status": "active"
+    ]
   }
 ]

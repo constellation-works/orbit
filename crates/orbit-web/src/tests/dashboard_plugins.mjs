@@ -72,8 +72,8 @@ const plugins = [
 ];
 
 const panelOutputs = {
-  'graph/status': { indexed_files: 1284, last_run: '2026-09-20T02:00:00Z' },
-  'graph/files': [{ path: 'src/a.rs', score: 0.91 }, { path: 'src/b.rs', score: 0.4, note: 'new' }],
+  'graph/status': { last_run: '2026-09-20T02:00:00Z', indexed_files: 1284 },
+  'graph/files': [{ z: 'src/a.rs', a: 0.91 }, { b: 'new' }],
   'graph/notes': XSS_MARKDOWN,
   'graph/raw': { nested: { ok: true } },
 };
@@ -141,18 +141,19 @@ for (const panel of ['status', 'files', 'notes', 'raw']) {
 // kv: label/value rows from an object.
 const kvKeys = withClass('plugin-kv-key').map(node => node.textContent);
 const kvValues = withClass('plugin-kv-value').map(node => node.textContent);
-assert(kvKeys.includes('indexed_files') && kvValues.includes('1284'), `kv panel rendered ${kvKeys} / ${kvValues}`);
+assert(JSON.stringify(kvKeys) === JSON.stringify(['last_run', 'indexed_files']), `kv labels keep plugin key order: ${kvKeys}`);
+assert(kvValues.includes('1284'), `kv panel rendered its values: ${kvValues}`);
 
 // table: the union of the rows' keys becomes the columns.
 const tables = withClass('plugin-table');
 assert(tables.length === 1, `expected one table panel, got ${tables.length}`);
-const headers = descendants(tables[0]).filter(node => node.tagName === 'TH' || node.children.length === 0 && node.textContent === 'note');
+const headers = descendants(tables[0]).filter(node => node.tagName === 'TH');
 const tableText = tables[0].textContent;
-for (const column of ['path', 'score', 'note']) {
+for (const column of ['z', 'a', 'b']) {
   assert(tableText.includes(column), `table must carry the '${column}' column: ${tableText}`);
 }
+assert(JSON.stringify(headers.map(node => node.textContent)) === JSON.stringify(['z', 'a', 'b']), `table columns keep first-seen row key order: ${headers.map(node => node.textContent)}`);
 assert(tableText.includes('src/a.rs') && tableText.includes('0.91'), `table must carry its rows: ${tableText}`);
-assert(headers.length === 3, `headers are rendered as cells: ${headers.length}`);
 
 // json: the raw answer, pretty-printed.
 const json = withClass('plugin-json');

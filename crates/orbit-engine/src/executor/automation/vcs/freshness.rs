@@ -31,7 +31,8 @@ pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Size
     let context = load_handoff_context(host, input, "pr_prepare")?;
     match prepare_pr_handoff_inner(input, &context) {
         Ok(output) => Ok(output),
-        Err((phase, error)) => {
+        Err(failure) => {
+            let (phase, error) = *failure;
             record_failed_handoff(host, &context, input, phase, &error)?;
             Err(error)
         }
@@ -41,7 +42,7 @@ pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Size
 fn prepare_pr_handoff_inner(
     input: &Value,
     context: &HandoffContext,
-) -> Result<Value, (FailedHandoffPhase, OrbitError)> {
+) -> Result<Value, Box<(FailedHandoffPhase, OrbitError)>> {
     let head = git_output(
         &context.workspace_path,
         &["rev-parse", "--abbrev-ref", "HEAD"],
@@ -50,10 +51,10 @@ fn prepare_pr_handoff_inner(
     .trim()
     .to_string();
     if head == "HEAD" {
-        return Err((
+        return Err(Box::new((
             FailedHandoffPhase::Prepare,
             OrbitError::Execution("pr_prepare: workspace is in detached HEAD state".to_string()),
-        ));
+        )));
     }
     let head_sha = commit_sha(&context.workspace_path, &head).map_err(prepare_error)?;
     let base = input_string_field(input, "base").unwrap_or_else(|| "main".to_string());
@@ -65,12 +66,12 @@ fn prepare_pr_handoff_inner(
         branch_freshness_against_ref(&context.workspace_path, &head, &base_ref, &base_sha)
             .map_err(prepare_error)?;
     if freshness.commits_ahead == 0 {
-        return Err((
+        return Err(Box::new((
             FailedHandoffPhase::EmptyBranch,
             OrbitError::Execution(format!(
                 "pr_prepare: head '{head}' has 0 commits ahead of base '{base}' (base checkpoint '{base_sha}'); refusing an empty PR handoff"
             )),
-        ));
+        )));
     }
     let remote_sha = remote_branch_sha(&context.workspace_path, &head).map_err(prepare_error)?;
     let sync_required = freshness.commits_behind > 0;
@@ -89,8 +90,8 @@ fn prepare_pr_handoff_inner(
     }))
 }
 
-fn prepare_error(error: OrbitError) -> (FailedHandoffPhase, OrbitError) {
-    (FailedHandoffPhase::Prepare, error)
+fn prepare_error(error: OrbitError) -> Box<(FailedHandoffPhase, OrbitError)> {
+    Box::new((FailedHandoffPhase::Prepare, error))
 }
 
 pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>(
