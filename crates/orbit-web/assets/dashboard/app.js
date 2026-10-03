@@ -31,6 +31,7 @@ import {
   setActiveRunEventsError,
   getActiveRunLogs,
   setActiveRunLogs,
+  setActiveRunLogsError,
   getActiveRunSubtab,
   setActiveRunSubtab,
   getExpandedStepIndices,
@@ -1489,9 +1490,10 @@ function fetchAndRenderRunLogs() {
     if (!runDetailFetchCurrent("logs", token)) return;
     setActiveRunLogs(logs);
     renderRunSteps();
-  }).catch(() => {
+  }).catch((error) => {
     if (!runDetailFetchCurrent("logs", token)) return;
     setActiveRunLogs([]);
+    if (error.status !== 404) setActiveRunLogsError(error.message);
     renderRunSteps();
   });
 }
