@@ -22,9 +22,19 @@ at the production CLI boundary, using the checked-in
 [`v0.24.0` fixture](../../orbit-cli/tests/fixtures/automation-v0.24.0/README.md).
 No production API visibility or crate dependency is changed for testing.
 
+`review_validation.rs` drives the public review-coverage API with the
+validation records a reviewer files. A superseded attempt that no later required
+pass replaced must fail closed at both consumers. `validation_evidence` gives
+the gate's escalation reason, and `certificate_acceptable`/`exclusion` refuse
+to spend a certificate whose `validation_complete` flag those records do not
+support. The table covers missing, ambiguous (one-sided or cross-namespace
+identity), invalid (blank or mismatched identity) and non-passing replacements.
+Same-command reruns and shared check identities serve as the accepting controls.
+
 Focused commands:
 
 ```sh
 cargo test -p orbit-automation --test scheduling
+cargo test -p orbit-automation --test review_validation
 cargo test -p orbit-cli --test workspace_sync workspace_sync_upgrades_previous_release_automation_with_provenance_intact -- --exact
 ```
