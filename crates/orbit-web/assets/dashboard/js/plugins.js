@@ -8,7 +8,7 @@
 // the dashboard uses, so plugin-authored text cannot introduce script or
 // event handlers.
 
-import { el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, isHttpUrl, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, isHttpUrl, onWorkspaceChange, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 import { renderMarkdown } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -25,8 +25,10 @@ const panelCache = new Map();
 const panelBodies = new Map();
 const panelReads = new Map();
 let lastPlugins = [];
+let lastPluginsRevision = null;
 const pendingChanges = new Set();
 const changeErrors = new Map();
+onWorkspaceChange(() => changeErrors.clear());
 
 export async function fetchAndRenderPlugins() {
   if (isAggregateView()) {
@@ -40,6 +42,7 @@ export async function fetchAndRenderPlugins() {
     () => fetchJson('/api/plugins'),
     payload => {
       lastPlugins = Array.isArray(payload) ? payload : [];
+      lastPluginsRevision = getWorkspaceRevision();
       panelBodies.clear();
       render(lastPlugins);
       for (const plugin of lastPlugins) {
@@ -147,6 +150,7 @@ function pluginEnablement(plugin) {
 async function changePlugin(plugin, scope, action, section) {
   if (pendingChanges.has(plugin.name)) return;
   if (scope === 'host' && action === 'disable' && !window.confirm(`Disable ${plugin.name} on this host? It will be unavailable in every workspace on this host.`)) return;
+  const revision = getWorkspaceRevision();
   pendingChanges.add(plugin.name);
   changeErrors.delete(plugin.name);
   const buttons = Array.from(section.children).flatMap(row => Array.from(row.children)).filter(node => node.tagName === 'BUTTON');
@@ -155,11 +159,14 @@ async function changePlugin(plugin, scope, action, section) {
     await postJson(`/api/plugins/${encodeURIComponent(plugin.name)}/${action}`, { scope });
     await fetchAndRenderPlugins();
   } catch (error) {
-    changeErrors.set(plugin.name, error.message || String(error));
+    if (revision === getWorkspaceRevision()) changeErrors.set(plugin.name, error.message || String(error));
   } finally {
     pendingChanges.delete(plugin.name);
     for (const button of buttons) button.disabled = false;
-    render(lastPlugins);
+    // The mutation may settle after a scope change. Only repaint a listing
+    // read for this visit; an aggregate placeholder or a pending new workspace
+    // must not be replaced by the previous workspace's retained cards.
+    if (!isAggregateView() && lastPluginsRevision === getWorkspaceRevision()) render(lastPlugins);
   }
 }
 
