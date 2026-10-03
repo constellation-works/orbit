@@ -262,6 +262,82 @@ fn root_resolution_uses_nested_linked_worktree_from_root_and_subdirectory() {
     }
 }
 
+/// A source-inspection slot is a standalone repository, so it never shares the
+/// runtime's common Git directory. [ORB-13800] It is still this repository's
+/// pinned checkout, so registered tools run there; a repository merely planted
+/// in or beside the pool still falls back to the registered root.
+#[test]
+fn root_resolution_uses_owned_inspection_slot_and_rejects_planted_checkouts() {
+    let fixture = GitRuntimeFixture::new();
+    let repo_root = canonical(&fixture.repo_root);
+    let revision = git_stdout(&repo_root, &["rev-parse", "HEAD"]);
+    let pool = repo_root.join(".orbit/state/source-inspections-v1");
+
+    let slot = inspection_slot(&pool.join("0"), &repo_root.join(".git"), &revision);
+    let subdirectory = slot.join("subdirectory");
+    std::fs::create_dir(&subdirectory).expect("create slot subdirectory");
+    for cwd in [&slot, &subdirectory] {
+        assert_eq!(
+            resolved_root(&fixture.runtime, cwd),
+            Some(slot.clone()),
+            "an owned inspection slot must be the process root"
+        );
+    }
+
+    let foreign = inspection_slot(
+        &pool.join("1"),
+        &canonical(&fixture.unrelated).join(".git"),
+        &git_stdout(&fixture.unrelated, &["rev-parse", "HEAD"]),
+    );
+    let unowned = inspection_slot(&pool.join("2"), &repo_root.join(".git"), &revision);
+    std::fs::remove_file(pool.join("2/owner")).expect("drop owner marker");
+    let outside_pool = inspection_slot(
+        &repo_root.join(".orbit/state/elsewhere/0"),
+        &repo_root.join(".git"),
+        &revision,
+    );
+    for (cwd, case) in [
+        (&foreign, "a slot holding another repository's history"),
+        (&unowned, "a slot without its owner marker"),
+        (&outside_pool, "a checkout outside the inspection pool"),
+    ] {
+        assert_eq!(
+            resolved_root(&fixture.runtime, cwd),
+            Some(repo_root.clone()),
+            "{case} must not become the process root"
+        );
+    }
+}
+
+fn resolved_root(runtime: &OrbitRuntime, cwd: &Path) -> Option<PathBuf> {
+    let mut context = cwd_context(cwd, None, None);
+    populate_filesystem_policy_context(runtime, &mut context).expect("populate context");
+    context.workspace_root
+}
+
+/// The slot layout the CLI runner materializes: a standalone repository
+/// fetched at `revision` and detached, beside its owner marker.
+fn inspection_slot(slot: &Path, source_git_dir: &Path, revision: &str) -> PathBuf {
+    let checkout = slot.join("checkout");
+    std::fs::create_dir_all(&checkout).expect("create slot checkout");
+    std::fs::write(slot.join("owner"), "orbit-source-inspection-v1\n").expect("owner marker");
+    git(&checkout, &["init", "--quiet", "--template="]);
+    git(
+        &checkout,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            source_git_dir.to_str().expect("utf8 git dir"),
+            revision,
+        ],
+    );
+    git(&checkout, &["checkout", "--quiet", "--detach", revision]);
+    canonical(&checkout)
+}
+
 struct GitRuntimeFixture {
     _root: TempDir,
     runtime: OrbitRuntime,
@@ -403,4 +479,14 @@ fn git(current_dir: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn git_stdout(current_dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(current_dir)
+        .output()
+        .unwrap_or_else(|error| panic!("spawn git {}: {error}", args.join(" ")));
+    assert!(output.status.success(), "git {} failed", args.join(" "));
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }

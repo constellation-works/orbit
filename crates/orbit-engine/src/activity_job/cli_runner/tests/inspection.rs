@@ -11,7 +11,7 @@ use serde_json::json;
 use tempfile::{TempDir, tempdir};
 
 use super::super::super::audit_writer::V2AuditWriter;
-use super::super::inspection::SourceInspection;
+use super::super::inspection::{SourceInspection, is_source_inspection_checkout};
 use super::super::run_cli_backend;
 use super::test_support::{RecordingSink, TestHost, test_agent_loop_spec, write_executable};
 
@@ -83,6 +83,34 @@ fn snapshot_stays_pinned_and_live_leases_are_never_reclaimed() {
             .filter(|line| line.starts_with("worktree "))
             .collect::<Vec<_>>()
     );
+}
+
+/// Core binds a pilot's registered tools to the checkout this module leases
+/// only if it recognizes the slot [ORB-13800]: the recognizer and the real
+/// slot layout must agree, and a released slot is no longer a checkout.
+#[test]
+fn leased_slots_are_recognized_as_source_inspection_checkouts() {
+    let (repo, revision) = repository();
+    let common = git(
+        repo.path(),
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    );
+    let common = Path::new(&common);
+    let snapshot = inspect(repo.path(), &revision);
+    let root = snapshot.root().to_path_buf();
+    assert!(is_source_inspection_checkout(common, &root));
+    assert!(
+        !is_source_inspection_checkout(common, repo.path()),
+        "the primary is not an inspection slot"
+    );
+    let (other, _) = repository();
+    let other_common = other.path().join(".git");
+    assert!(
+        !is_source_inspection_checkout(&other_common, &root),
+        "a slot belongs only to the repository it was leased from"
+    );
+    drop(snapshot);
+    assert!(!is_source_inspection_checkout(common, &root));
 }
 
 /// The slot must not sit under authoritative Git metadata: host protection

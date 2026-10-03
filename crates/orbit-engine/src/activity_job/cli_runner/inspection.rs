@@ -208,6 +208,70 @@ impl Drop for SourceInspection {
     }
 }
 
+/// Whether `checkout` is a slot checkout materialized for the repository whose
+/// common Git directory is `common`.
+///
+/// A slot is a standalone repository, so it never shares `common` the way a
+/// linked worktree does. Registered tools a provider invokes from the slot
+/// recognize it here instead, so they run in the pinned checkout rather than
+/// in the primary [ORB-13800]. Recognition requires the slot path, its owner
+/// marker, a private `.git` directory and a detached HEAD whose commit exists
+/// in `common`; a repository planted anywhere else, or a foreign one in a
+/// slot, does not qualify.
+pub fn is_source_inspection_checkout(common: &Path, checkout: &Path) -> bool {
+    let Some(pool) = common
+        .parent()
+        .map(|repo_root| repo_root.join(".orbit/state").join(POOL_DIR))
+        .and_then(|pool| pool.canonicalize().ok())
+    else {
+        return false;
+    };
+    let Ok(checkout) = checkout.canonicalize() else {
+        return false;
+    };
+    if checkout.file_name() != Some("checkout".as_ref()) {
+        return false;
+    }
+    let Some(slot) = checkout
+        .parent()
+        .filter(|slot| slot.parent() == Some(pool.as_path()))
+    else {
+        return false;
+    };
+    let in_pool = slot
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.parse::<usize>().ok())
+        .is_some_and(|index| index < SLOT_COUNT);
+    let git_dir = checkout.join(".git");
+    let owned = in_pool
+        && fs::symlink_metadata(&git_dir).is_ok_and(|metadata| metadata.is_dir())
+        && fs::symlink_metadata(slot.join("owner")).is_ok_and(|metadata| metadata.is_file())
+        && fs::read_to_string(slot.join("owner")).is_ok_and(|owner| owner == OWNER);
+    if !owned {
+        return false;
+    }
+    // A slot is always checked out detached, so HEAD is the bare commit id.
+    let Ok(head) = fs::read_to_string(git_dir.join("HEAD")) else {
+        return false;
+    };
+    let head = head.trim();
+    if !matches!(head.len(), 40 | 64) || !head.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    let git_dir_arg = format!("--git-dir={}", common.display());
+    git(
+        common,
+        &[
+            &git_dir_arg,
+            "cat-file",
+            "-e",
+            &format!("{head}^{{commit}}"),
+        ],
+    )
+    .is_ok()
+}
+
 /// Create or adopt this repository's inspection pool and return its path.
 ///
 /// The pool is derived from the common Git directory so that every linked

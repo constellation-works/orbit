@@ -328,7 +328,19 @@ fn active_git_checkout_root(
     }
 
     let checkout_root = git_checkout_root(cwd)?;
-    same_git_common_dir(&checkout_root, canonical_repo_root).then_some(checkout_root)
+    let repo_common_dir = git_common_dir(canonical_repo_root)?;
+    // A linked worktree shares the runtime repository's common directory. A
+    // source-inspection slot is a standalone repository the CLI runner
+    // materialized for this repository, so it is recognized by its owned
+    // layout instead; without it, a pilot's subprocesses would run in the
+    // primary rather than at the pinned revision [ORB-13800].
+    let owned_checkout = git_common_dir(&checkout_root)
+        .is_some_and(|checkout_common_dir| checkout_common_dir == repo_common_dir)
+        || orbit_engine::activity_job::cli_runner::is_source_inspection_checkout(
+            &repo_common_dir,
+            &checkout_root,
+        );
+    owned_checkout.then_some(checkout_root)
 }
 
 fn git_checkout_root(path: &Path) -> Option<PathBuf> {
@@ -350,13 +362,6 @@ fn git_checkout_root(path: &Path) -> Option<PathBuf> {
     }
     let path = PathBuf::from(raw_path);
     Some(path.canonicalize().unwrap_or(path))
-}
-
-fn same_git_common_dir(left: &Path, right: &Path) -> bool {
-    match (git_common_dir(left), git_common_dir(right)) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    }
 }
 
 fn git_common_dir(path: &Path) -> Option<PathBuf> {
