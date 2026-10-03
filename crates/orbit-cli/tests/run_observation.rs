@@ -13,6 +13,10 @@
 //!
 //! An explicit run lookup also keeps a store failure distinct from a missing
 //! run, so an unreadable record is not reported as nonexistent.
+//!
+//! Cancelling a live run is driven end to end as well: the launching CLI's
+//! worker observer and the cancelling CLI race on the signalled worker's exit,
+//! and the run must still end `cancelled`.
 
 #[path = "support/fixture_crew.rs"]
 mod fixture_crew;
@@ -531,6 +535,177 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     assert_eq!(cancelled["signal_attempted"], false);
     assert_eq!(cancelled["provider_processes_stopped"], 0);
     assert_eq!(fixture.run_state(run_id), "success");
+}
+
+/// Cancelling a live run ends its worker by signal while the launching CLI is
+/// still observing that worker. The observer must treat the signalled exit as
+/// the cancellation's own outcome rather than a worker failure racing it to
+/// the terminal state, and the cancelled outcome must survive a repeat
+/// cancel.
+#[cfg(unix)]
+#[test]
+fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
+    use std::process::{Child, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// Kills and reaps the launcher on every exit path, panics included.
+    struct ReapOnDrop(Child);
+    impl Drop for ReapOnDrop {
+        fn drop(&mut self) {
+            if matches!(self.0.try_wait(), Ok(None)) {
+                let _ = self.0.kill();
+            }
+            let _ = self.0.wait();
+        }
+    }
+    /// The worker runs in its own session, outside the launcher's reach.
+    /// Kill its process group if the test fails before the cancellation is
+    /// shown to have stopped it.
+    struct KillWorkerGroup(Option<libc::pid_t>);
+    impl Drop for KillWorkerGroup {
+        fn drop(&mut self) {
+            if let Some(pid) = self.0 {
+                unsafe { libc::kill(-pid, libc::SIGKILL) };
+            }
+        }
+    }
+
+    let fixture = Fixture::init();
+    // Owner verification reads the worker's start time through `ps`. Link it
+    // in so the cancel can verify and signal its worker; PATH still holds no
+    // provider launcher.
+    let ps = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .chain([PathBuf::from("/bin"), PathBuf::from("/usr/bin")])
+        .map(|dir| dir.join("ps"))
+        .find(|candidate| candidate.is_file())
+        .expect("ps on the test host");
+    std::os::unix::fs::symlink(ps, fixture.home.join("empty-bin/ps")).unwrap();
+    let jobs = fixture.home.join(".orbit/resources/jobs");
+    fs::create_dir_all(&jobs).unwrap();
+    fs::write(jobs.join("cancel_fixture.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: cancel_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 60\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
+
+    // `--wait` keeps the launching CLI alive as the worker's observer.
+    let launcher_log = fixture.work.join("launcher.log");
+    let log = fs::File::create(&launcher_log).unwrap();
+    let mut launcher = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
+    test_env::clear_inherited_authority(|name| {
+        launcher.env_remove(name);
+    });
+    launcher
+        .args(["job", "run", "cancel_fixture", "--wait", "--json"])
+        .current_dir(&fixture.work)
+        .env("HOME", &fixture.home)
+        .env("USERPROFILE", &fixture.home)
+        .env("PATH", fixture.home.join("empty-bin"))
+        .stdin(Stdio::null())
+        .stdout(log.try_clone().unwrap())
+        .stderr(log);
+    let mut launcher = ReapOnDrop(launcher.spawn().unwrap());
+    let launcher_output = || fs::read_to_string(&launcher_log).unwrap_or_default();
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (run_id, worker_pid) = loop {
+        let owned: Option<(String, Option<i64>)> = fixture
+            .db()
+            .query_row(
+                "SELECT run_id, pid FROM job_runs WHERE job_id = 'cancel_fixture'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        if let Some((run_id, Some(pid))) = owned
+            && fixture.run_state(&run_id) == "running"
+        {
+            break (run_id, pid);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "worker never started: {}",
+            launcher_output()
+        );
+        assert!(
+            launcher.0.try_wait().unwrap().is_none(),
+            "launcher exited before cancellation: {}",
+            launcher_output()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_ne!(worker_pid, i64::from(std::process::id()));
+    assert_ne!(
+        worker_pid,
+        i64::from(launcher.0.id()),
+        "a worker owns the run"
+    );
+    let worker_pid = libc::pid_t::try_from(worker_pid).unwrap();
+    let mut worker = KillWorkerGroup(Some(worker_pid));
+
+    let cancelled = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
+    assert_eq!(cancelled["outcome"], "cancelled", "{cancelled}");
+    assert_eq!(cancelled["previous_state"], "running");
+    assert_eq!(cancelled["final_state"], "cancelled");
+    assert_eq!(cancelled["signal_attempted"], true, "{cancelled}");
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while launcher.0.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "launcher outlived its cancelled run: {}",
+            launcher_output()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    assert_eq!(
+        unsafe { libc::kill(worker_pid, 0) },
+        -1,
+        "the cancelled run's worker is gone"
+    );
+    worker.0 = None;
+
+    let shown = fixture.json(&["run", "show", &run_id, "--no-reconcile", "--json"]);
+    assert_eq!(shown["run"]["state"], "cancelled", "{shown}");
+    let step_errors: Vec<String> = {
+        let db = fixture.db();
+        let mut statement = db
+            .prepare("SELECT IFNULL(error_code, '-') FROM job_run_steps WHERE run_id = ?1")
+            .unwrap();
+        statement
+            .query_map([&run_id], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    for code in ["worker_terminated", "terminal_outcome_conflict"] {
+        assert!(
+            !step_errors.iter().any(|error| error == code),
+            "a cancelled worker's exit is not recorded as {code}: {step_errors:?}"
+        );
+    }
+
+    let audits: Vec<String> = fixture
+        .json(&["audit", "list", "--limit", "200", "--json"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["target_id"] == run_id.as_str())
+        .filter_map(|row| row["tool_name"].as_str().map(str::to_owned))
+        .collect();
+    for audit in [
+        "pipeline.run.cancel.requested",
+        "pipeline.run.cancel.worker_exit",
+        "pipeline.run.cancel.completed",
+    ] {
+        assert!(
+            audits.iter().any(|tool| tool == audit),
+            "cancellation audit trail lacks {audit}: {audits:?}"
+        );
+    }
+
+    let repeated = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
+    assert_eq!(repeated["outcome"], "already_terminal");
+    assert_eq!(repeated["final_state"], "cancelled");
+    assert_eq!(repeated["signal_attempted"], false);
+    assert_eq!(fixture.run_state(&run_id), "cancelled");
 }
 
 /// Worker-limit adjustment only writes a drain control record. The fixture's
