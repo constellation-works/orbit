@@ -116,7 +116,7 @@ pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
 /// directory, so a plain `.git` directory or no `.git` at all rules it out.
 /// Git's own overrides (`GIT_DIR` and friends) can relocate the answer, so
 /// with one set only git can say.
-pub(crate) fn may_be_linked_worktree(start: &Path) -> bool {
+fn may_be_linked_worktree(start: &Path) -> bool {
     const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
     if GIT_LOCATION_OVERRIDES
         .iter()

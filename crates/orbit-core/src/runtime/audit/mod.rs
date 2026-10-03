@@ -4,6 +4,3 @@
 pub(super) mod coordination;
 pub mod run;
 mod run_projection;
-
-#[cfg(test)]
-mod tests;

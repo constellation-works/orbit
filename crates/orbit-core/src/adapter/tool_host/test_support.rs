@@ -77,7 +77,7 @@ pub(super) fn create_task(
 /// so it cannot author the case read surfaces must tolerate: a stored crew this
 /// host has no entry for, because the task predates a config edit or was
 /// created on another machine (ORB-10968).
-pub(super) fn create_task_with_crew(
+fn create_task_with_crew(
     runtime: &OrbitRuntime,
     _workspace_path: &Path,
     title: &str,
@@ -146,23 +146,6 @@ pub(crate) fn invalid_input_message<T>(result: Result<T, OrbitError>) -> String 
     }
 }
 
-/// The ordinary CLI caller for tool-host tests that are not about attribution.
-pub(crate) fn default_identity() -> (Option<String>, Option<String>) {
-    (
-        Some("codex".to_string()),
-        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
-    )
-}
-
-pub(crate) fn call(runtime: &OrbitRuntime, tool: &str, input: Value) -> Result<Value, OrbitError> {
-    let (agent, model) = default_identity();
-    runtime.execute_tool_command(tool, input, agent, model)
-}
-
-pub(crate) fn call_err(runtime: &OrbitRuntime, tool: &str, input: Value) -> String {
-    invalid_input_message(call(runtime, tool, input))
-}
-
 /// Every variable an `orbit-engine` managed run exports that a tool-host test
 /// must state rather than inherit.
 const TOOL_ENV: [&str; 8] = [
@@ -200,25 +183,4 @@ pub(crate) fn managed_tool_env_guard(run_id: &str) -> orbit_common::test_env::Sc
         "ORBIT_RUN_ID" => (name, Some(run_id)),
         _ => (name, None),
     }))
-}
-
-/// Populate a managed activity envelope with an explicit worker identity and
-/// task-tool grant. The worker identity is trusted because it is supplied by
-/// the synthetic managed envelope, while the task payload remains untrusted.
-pub(crate) fn managed_tool_identity_env_guard(
-    run_id: &str,
-    agent: &str,
-    model: &str,
-) -> orbit_common::test_env::ScopedEnv {
-    let managed_env = TOOL_ENV.into_iter().map(|name| match name {
-        "ORBIT_MANAGED_RUN_CONTEXT" => (name, Some("1")),
-        "ORBIT_RUN_ID" => (name, Some(run_id)),
-        "ORBIT_AGENT_NAME" => (name, Some(agent)),
-        "ORBIT_AGENT_MODEL" => (name, Some(model)),
-        _ => (name, None),
-    });
-    orbit_common::test_env::scoped(managed_env.chain([
-        ("ORBIT_TASK_ACTOR_KIND", Some("agent")),
-        ("ORBIT_ACTIVITY_TOOLS", Some("orbit.task.*")),
-    ]))
 }

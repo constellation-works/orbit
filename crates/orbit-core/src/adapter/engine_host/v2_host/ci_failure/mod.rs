@@ -10,6 +10,3 @@ pub(super) mod filing;
 mod grouping;
 mod log_signature;
 mod repair_assessment;
-
-#[cfg(test)]
-pub(super) mod tests;

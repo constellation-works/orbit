@@ -70,7 +70,7 @@ pub(crate) enum SettleScope {
 /// the owner also confirms it holds no receipt for it. A delivery miss, a lost
 /// answer or a store failure says nothing about whether an earlier send of the
 /// same request committed, so the request stays pending and is retried.
-pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
+fn is_owner_refusal(error: &OrbitError) -> bool {
     match error {
         OrbitError::RemoteTool { code, .. } => matches!(
             code.as_str(),
@@ -718,17 +718,6 @@ impl PullDrain<'_> {
 /// Largest failure excerpt a settlement carries. The whole diagnostic stays in
 /// the executor's run record; the owner's reader needs enough to decide.
 const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
-
-/// The evidence a terminal leaf's failure settlement carries: its state and,
-/// when the run recorded one, the error of its most recent failed step.
-///
-/// The owner cannot see an executor's run, and this summary becomes the
-/// blocked task's `execution_summary`, so it names the host-local run and
-/// quotes the failure rather than only saying that a handoff is missing.
-#[cfg(test)]
-pub(crate) fn terminal_failure_summary(run: &orbit_types::workflow::JobRun) -> String {
-    terminal_failure_summary_with(run, None)
-}
 
 /// The failure settlement a terminal leaf implies, by how far its admission
 /// got: a leaf that never launched was cancelled while queued, and a launched

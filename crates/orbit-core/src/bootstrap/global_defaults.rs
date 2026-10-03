@@ -82,17 +82,6 @@ pub(crate) fn record_global_defaults_reconciled(global_root: &Path) -> Result<()
     })
 }
 
-/// Where a global root records its stamp: beside the resource catalogs it
-/// describes, and never in `state/`, which the layout reserves for workspace
-/// runtime state. Exposed so fixtures can model a root left by another release
-/// without duplicating the path.
-#[cfg(test)]
-pub(crate) fn stamp_path(global_root: &Path) -> PathBuf {
-    global_root
-        .join("resources")
-        .join(".orbit-global-defaults.json")
-}
-
 /// Resolve the defaults stamp beneath the canonical global root.
 ///
 /// The root can come from an explicit runtime override, but both the resources

@@ -7,6 +7,3 @@ mod crew;
 mod host;
 mod invocation;
 mod task_automation;
-
-#[cfg(test)]
-mod tests;

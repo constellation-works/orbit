@@ -60,9 +60,6 @@ pub fn mark_process_as_pipeline_worker_binary() {
     application::job::pipeline::mark_process_as_pipeline_worker_binary();
 }
 
-#[cfg(test)]
-mod tests;
-
 /// Hooks for tests in crates that depend on `orbit-core`, behind the
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]

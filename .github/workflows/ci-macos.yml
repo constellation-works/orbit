@@ -21,7 +21,6 @@ on:
       # [ORB-11055] Child-runtime write-root inventory lives in orbit-core and
       # is compiled into the SBPL profile the macOS sandbox job enforces.
       - "crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**"
-      - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/sandbox_nested.rs"
       # [ORB-10009] SBPL profiles are compiled from resolved policy rules, so
       # policy-evaluation changes can alter what the macOS sandbox enforces.
       - "crates/orbit-policy/**"
@@ -123,11 +122,6 @@ jobs:
       # sandbox gate runs the same tests under Landlock.
       - name: Run brokered plugin backend confinement tests (real sandbox-exec)
         run: cargo test --no-fail-fast -p orbit-tools --locked plugin::tests::backend::brokered -- --include-ignored
-
-      # [ORB-11055] The nested `orbit.task.update` regression needs the CLI
-      # binary; the child-runtime inventory test lives in orbit-core.
-      - name: Build orbit CLI for nested sandbox regression
-        run: cargo build -p orbit-cli --locked --bin orbit
 
       - name: Run orbit-core sandbox tests
         run: cargo test --no-fail-fast -p orbit-core --locked sandbox

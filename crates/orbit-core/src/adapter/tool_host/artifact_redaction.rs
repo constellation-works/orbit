@@ -44,7 +44,7 @@ pub(super) struct ArtifactRedactionReport {
 }
 
 impl ArtifactRedactionReport {
-    pub(super) fn redactions_applied(&self) -> bool {
+    fn redactions_applied(&self) -> bool {
         !self.fields.is_empty()
     }
 
@@ -632,7 +632,7 @@ pub(super) struct ArtifactTarget<'a> {
     task_id: Option<&'a str>,
 }
 
-pub(super) fn artifact_target<'a>(
+fn artifact_target<'a>(
     action: OrbitBuiltinAction,
     response: &'a Value,
     persisted_task_id: Option<&'a str>,

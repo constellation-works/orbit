@@ -33,14 +33,6 @@ pub(in crate::adapter::command) fn clear_identity_env() {
     }
 }
 
-pub(in crate::adapter::command) fn set_identity_env(agent: &str, model: &str) {
-    // SAFETY: callers hold `env_guard()` while changing process environment.
-    unsafe {
-        std::env::set_var("ORBIT_AGENT_NAME", agent);
-        std::env::set_var("ORBIT_AGENT_MODEL", model);
-    }
-}
-
 pub(in crate::adapter::command) fn fresh_runtime() -> OrbitRuntime {
     // Reset the dedup signal so cross-test thread-local leakage cannot mask
     // bugs in the per-call set/clear cycle.

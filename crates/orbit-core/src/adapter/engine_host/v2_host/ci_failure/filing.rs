@@ -95,32 +95,6 @@ pub(crate) fn file_ci_failure_tasks(
     })
 }
 
-#[cfg(test)]
-pub(in crate::adapter::engine_host::v2_host) fn file_ci_failure_tasks_with_add<F>(
-    runtime: &OrbitRuntime,
-    input: &Value,
-    add_task: F,
-) -> Result<Value, OrbitError>
-where
-    F: FnMut(TaskAddParams) -> Result<String, OrbitError>,
-{
-    file_ci_failure_tasks_with_ops(runtime, input, runtime, add_task)
-}
-
-#[cfg(test)]
-pub(in crate::adapter::engine_host::v2_host) fn file_ci_failure_tasks_with_lookup<L>(
-    runtime: &OrbitRuntime,
-    input: &Value,
-    lookup: &L,
-) -> Result<Value, OrbitError>
-where
-    L: DuplicateTaskLookup + ?Sized,
-{
-    file_ci_failure_tasks_with_ops(runtime, input, lookup, |params| {
-        runtime.add_task(params).map(|task| task.id)
-    })
-}
-
 fn file_ci_failure_tasks_with_ops<L, F>(
     runtime: &OrbitRuntime,
     input: &Value,

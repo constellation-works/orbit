@@ -88,7 +88,7 @@ pub(crate) struct NamespaceAnchor {
 #[cfg(target_os = "linux")]
 impl NamespaceAnchor {
     /// Anchor to the namespace `leader_pid` belongs to.
-    pub(crate) fn for_leader(leader_pid: u32) -> Result<Self, OrbitError> {
+    fn for_leader(leader_pid: u32) -> Result<Self, OrbitError> {
         let proc_root = Path::new(PROC_ROOT);
         let namespace = std::fs::read_link(proc_root.join(leader_pid.to_string()).join("ns/pid"))?;
         let leader_key = namespace_key(proc_root, leader_pid)?;

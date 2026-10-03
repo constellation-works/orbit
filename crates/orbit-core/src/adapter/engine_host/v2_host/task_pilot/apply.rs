@@ -15,8 +15,8 @@ use super::attachment_budget::{
     CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
 };
 use super::persist::{
-    ApplyTaskOutcome, apply_task, failed_partition, inject_concurrent_edit,
-    record_applied_assessment, stale_task, task_operation_id, task_outcome,
+    ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, stale_task,
+    task_operation_id, task_outcome,
 };
 use super::source::SourceSnapshot;
 use super::{
@@ -491,8 +491,6 @@ pub(in super::super) fn apply(
                 operation_id,
             };
 
-            inject_concurrent_edit(runtime, task_id)
-                .map_err(|error| action_failed(action, error.to_string()))?;
             match apply_task(runtime, snapshot, &validated, prepared_value, &policy) {
                 Ok(ApplyTaskOutcome::Applied(fingerprint)) => {
                     if let Some(fingerprint) = fingerprint {

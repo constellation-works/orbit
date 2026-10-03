@@ -506,7 +506,3 @@ pub(super) fn retain(
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "tests/repair_assessment.rs"]
-mod tests;

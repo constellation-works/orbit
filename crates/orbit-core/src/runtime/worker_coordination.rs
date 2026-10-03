@@ -160,9 +160,7 @@ impl OrbitRuntime {
 /// is parsed as sent first, so a projection that genuinely is an object never
 /// loses a field; only when that fails is the single-key transport envelope
 /// unwrapped.
-pub(crate) fn decode_owner_read<T: serde::de::DeserializeOwned>(
-    value: Value,
-) -> Result<T, OrbitError> {
+fn decode_owner_read<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, OrbitError> {
     let direct = match serde_json::from_value::<T>(value.clone()) {
         Ok(decoded) => return Ok(decoded),
         Err(error) => error,

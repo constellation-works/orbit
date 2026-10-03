@@ -95,9 +95,7 @@ impl HostSignalProbe for SystemdScheduledShutdownProbe {
 /// Interpret the fixed logind path's read result. Keeping this separate lets
 /// tests exercise file errors without granting the production probe an
 /// arbitrary path.
-pub(crate) fn scheduled_shutdown_from_read(
-    contents: io::Result<String>,
-) -> Option<ScheduledShutdown> {
+fn scheduled_shutdown_from_read(contents: io::Result<String>) -> Option<ScheduledShutdown> {
     let contents = match contents {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
@@ -154,7 +152,7 @@ impl HostSignalProbe for FixedHostSignals {
 /// deadline in microseconds since the epoch; `MODE` is the action. A
 /// `dry-*` mode (`shutdown -k`) only sends wall messages and is not a
 /// shutdown, so it holds nothing.
-pub(crate) fn parse_systemd_schedule(contents: &str, source: &str) -> Option<ScheduledShutdown> {
+fn parse_systemd_schedule(contents: &str, source: &str) -> Option<ScheduledShutdown> {
     let mut usec = None;
     let mut mode = None;
     for line in contents.lines() {

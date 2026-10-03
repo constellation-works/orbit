@@ -85,32 +85,25 @@ reads and host network access available, so it does not provide worktree-only re
 policy-gated network egress. Well-known credential locations are masked inside the
 sandbox. See [policy-sandbox](../design/policy-sandbox/) for the design.
 
-## Verify step-failure recovery through Bubblewrap
+## Verify the Bubblewrap boundary natively
 
-After changing recovery dispatch, managed-worktree policy, or the Linux spawn
-path, run the focused native regression from the candidate checkout:
+After changing managed-worktree policy or the Linux spawn path, run the live
+Bubblewrap suite from the candidate checkout on the owning Linux host:
 
 ```sh
-cargo test -p orbit-core --lib \
-  adapter::engine_host::v2_host::tests::recovery_execution_sandbox::step_failure_recovery_runs_a_real_linux_sandboxed_subprocess \
-  -- --ignored --exact --nocapture
+cargo test -p orbit-exec --test linux_sandbox -- --include-ignored --nocapture
 ```
 
-The test starts an isolated child after removing inherited Orbit run and
-registry authority. The child creates disposable global, repository, task, and
-managed-worktree state, then exercises both `implement_one` and `commit`
-failure shapes with a local fake provider. No provider account, network access,
-or production task is used. Each provider process must run through the trusted
-Bubblewrap path and leave durable invocation-start, process, exit,
-recovery-attempt, and single post-recovery-attempt evidence. The fixture also
-checks the assigned task/run/worktree identity, default dotenv write denial,
-Git metadata denial, and an unchanged primary checkout.
+These tests spawn real children through `spawn_under_linux_bwrap` and check
+credential masking, worktree writes, protected `.env` paths, Orbit store
+exceptions and Git metadata integrity. Tests that cannot create the namespace
+print `skipping real Bubblewrap test` and return early; the ignored ones fail
+instead. Record either outcome as **not run**, fix the namespace prerequisite,
+and rerun on the owning host. A capability denial is never a passing skip.
 
-This is a native-host check. If `/usr/bin/bwrap` cannot create the required
-namespace, the test fails with `native Linux recovery check NOT RUN` and prints
-the exact test binary plus the command above. Record that outcome as **not run**
-and have an operator rerun the printed command on the owning Linux host after
-fixing the namespace prerequisite. A capability denial is never a passing skip.
+Step-failure recovery dispatch through Bubblewrap with a provider process has
+no automated native check. Its persistent Git configuration guard runs in the
+ordinary `orbit-core` suite.
 
 A `bwrap: No permissions to create new namespace` failure inside an
 agent-executor or job-run worktree is nested-sandbox environment, not a missing
@@ -118,9 +111,9 @@ AppArmor profile. The outer containment blocks nested `unshare(CLONE_NEWUSER)`
 even when `/proc/sys/kernel/unprivileged_userns_clone` is `1` and `unshare -U`
 succeeds; that is distinct from the host UID-map error this runbook remediates.
 Do not disable `linux-bwrap` or try to make bwrap nest. Live bwrap spawn checks
-(`spawn_under_linux_bwrap`, the recovery regression above, and ignored
-live-spawn tests) belong on the owning Linux host: replay them there with
-`--run-ignored` or operator replay, and record a nested denial as **not run**.
+(`spawn_under_linux_bwrap` and the ignored live-spawn tests above) belong on
+the owning Linux host: replay them there with `--run-ignored` or operator
+replay, and record a nested denial as **not run**.
 
 ## If the probe still fails
 

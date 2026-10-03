@@ -300,7 +300,7 @@ fn covering_owner_from_comments(rejected_id: &str, comments: &[TaskComment]) -> 
 }
 
 // pub(super) widened for sibling-layout tests in admission/tests/duplicate_tasks.rs
-pub(super) fn covering_owner_from_message(rejected_id: &str, message: &str) -> Option<String> {
+fn covering_owner_from_message(rejected_id: &str, message: &str) -> Option<String> {
     let lowered = message.to_ascii_lowercase();
     let mut owner = None;
     for marker in COVERING_OWNER_MARKERS {
@@ -402,7 +402,7 @@ fn searchable_task_text(task: &Task, comments: &[TaskComment]) -> String {
 /// token boundaries (`time` cannot match `runtime`) while tolerating normal
 /// prose and Markdown punctuation differences.
 // pub(super) widened for sibling-layout tests in admission/tests/duplicate_tasks.rs
-pub(super) fn canonical_text(value: &str) -> String {
+fn canonical_text(value: &str) -> String {
     let mut out = String::with_capacity(value.len().saturating_add(2));
     out.push(' ');
     let mut separated = true;

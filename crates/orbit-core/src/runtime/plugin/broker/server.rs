@@ -23,9 +23,9 @@ use super::protocol::{
 };
 
 /// Requests a broker runs at once.
-pub(crate) const IN_FLIGHT: usize = 4;
+const IN_FLIGHT: usize = 4;
 /// Requests a broker holds while all workers are busy.
-pub(crate) const QUEUED: usize = 16;
+const QUEUED: usize = 16;
 /// Total time to receive a frame once a worker starts reading it; also the
 /// per-write timeout for responses.
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(10);

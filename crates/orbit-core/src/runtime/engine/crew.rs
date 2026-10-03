@@ -23,7 +23,7 @@ use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 /// name and the tier it came from; `None` only when no tier supplies a value.
 /// Pure and table-tested so the precedence cannot drift from the shared
 /// contract or from the `Provider::resolve` surface it mirrors.
-pub(crate) fn select_crew_name<'a>(
+fn select_crew_name<'a>(
     explicit: Option<&'a str>,
     task_config: Option<&'a str>,
     workspace_default: Option<&'a str>,
@@ -570,11 +570,7 @@ impl OrbitRuntime {
         resolved.is_none_or(|job| job_dispatches_agent(&job))
     }
 
-    pub(crate) fn record_run_crew_from_input(
-        &self,
-        run_id: &str,
-        input: &Value,
-    ) -> Result<Crew, OrbitError> {
+    fn record_run_crew_from_input(&self, run_id: &str, input: &Value) -> Result<Crew, OrbitError> {
         let crew = self.resolve_crew_for_run_input(input)?;
         tracing::info!(
             run_id,

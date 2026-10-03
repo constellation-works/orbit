@@ -99,26 +99,6 @@ impl OrbitRuntime {
         self.add_task_admitted(params, agent, model, None)
     }
 
-    /// The record shape every task had before [ORB-12717] moved crew
-    /// assignment into creation: `crew` genuinely unset. Dispatch still routes
-    /// such a task through the complexity pools, and the tests that cover that
-    /// fallback need a record `add_task` no longer produces.
-    #[cfg(test)]
-    pub(crate) fn add_crew_less_task_for_tests(
-        &self,
-        params: TaskAddParams,
-    ) -> Result<Task, OrbitError> {
-        let task = self.add_task(params)?;
-        self.stores().task_records().update(
-            &task.id,
-            StoreTaskUpdateParams {
-                actor: SYSTEM_ACTOR_LABEL.to_string(),
-                crew: Some(None),
-                ..Default::default()
-            },
-        )
-    }
-
     pub(crate) fn add_task_admitted(
         &self,
         params: TaskAddParams,

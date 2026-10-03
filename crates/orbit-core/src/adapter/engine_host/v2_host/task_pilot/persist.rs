@@ -9,8 +9,6 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-#[cfg(test)]
-use crate::application::task::TaskUpdateParams;
 
 use super::apply::{PreparedTaskSnapshot, ValidatedTask};
 
@@ -185,7 +183,6 @@ pub(super) fn apply_task(
                 .material
                 .map(|(_, revision)| (fingerprint, revision));
             snapshot.status = status;
-            inject_concurrent_retry_edit(runtime, &task.task_id)?;
             continue;
         }
         return outcome
@@ -390,66 +387,6 @@ pub(super) fn stale_task(task_id: &str, reason: &str, detail: &str) -> Value {
 
 pub(super) fn task_outcome(task_id: &str, outcome: &str, error: Option<String>) -> Value {
     json!({ "task_id": task_id, "outcome": outcome, "error": error })
-}
-
-#[cfg(test)]
-thread_local! {
-    static INJECT_CONCURRENT_EDIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static INJECT_RETRY_EDIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-pub(in super::super) fn inject_concurrent_edit_before_locked_apply() {
-    INJECT_CONCURRENT_EDIT.set(true);
-}
-
-#[cfg(test)]
-pub(in super::super) fn inject_concurrent_edit_before_status_retry() {
-    INJECT_RETRY_EDIT.set(true);
-}
-
-#[cfg(test)]
-fn inject_concurrent_retry_edit(runtime: &OrbitRuntime, task_id: &str) -> Result<(), OrbitError> {
-    if INJECT_RETRY_EDIT.replace(false) {
-        runtime.update_task(
-            task_id,
-            TaskUpdateParams {
-                title: Some("Changed between status reads".to_string()),
-                ..TaskUpdateParams::default()
-            },
-        )?;
-    }
-    Ok(())
-}
-
-#[cfg(not(test))]
-fn inject_concurrent_retry_edit(_runtime: &OrbitRuntime, _task_id: &str) -> Result<(), OrbitError> {
-    Ok(())
-}
-
-#[cfg(test)]
-pub(super) fn inject_concurrent_edit(
-    runtime: &OrbitRuntime,
-    task_id: &str,
-) -> Result<(), OrbitError> {
-    if INJECT_CONCURRENT_EDIT.replace(false) {
-        runtime.update_task(
-            task_id,
-            TaskUpdateParams {
-                tags: Some(vec!["concurrent-edit".to_string()]),
-                ..TaskUpdateParams::default()
-            },
-        )?;
-    }
-    Ok(())
-}
-
-#[cfg(not(test))]
-pub(super) fn inject_concurrent_edit(
-    _runtime: &OrbitRuntime,
-    _task_id: &str,
-) -> Result<(), OrbitError> {
-    Ok(())
 }
 
 pub(super) fn failed_partition(partition_index: u64, task_ids: &[String], error: String) -> Value {
