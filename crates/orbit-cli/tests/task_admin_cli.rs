@@ -684,6 +684,16 @@ fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest
     assert_eq!(filtered["totals"]["open_now"], 0);
     assert!(filtered["verdict"].as_str().unwrap().starts_with("no data"));
 
+    let before_invalid_flow = fixture.json(&["task", "show", id, "--json"]);
+    fixture
+        .command(&["task", "flow", "--window", "invalid-duration", "--json"])
+        .assert()
+        .failure();
+    assert_eq!(
+        fixture.json(&["task", "show", id, "--json"]),
+        before_invalid_flow
+    );
+
     let source = fixture.repo.join("report.txt");
     fs::write(&source, "fixture artifact\n").unwrap();
     let stored = fixture.json(&[
