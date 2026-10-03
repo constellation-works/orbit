@@ -1,6 +1,6 @@
 //! Explicit waiver history and removal from scheduling eligibility are atomic.
 
-use super::{decode, encode};
+use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::*;

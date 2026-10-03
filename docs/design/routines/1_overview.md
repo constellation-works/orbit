@@ -107,7 +107,7 @@ fragmentation this feature exists to end.
 | Registry-neutral loading, due computation, dispatch, and status | `crates/orbit-core/src/application/routines/` | [ORB-10021], [ORB-12236] |
 | Local identity/catalog composition, workspace discovery, and runtime construction | `crates/orbit-cmd/src/registry/routines.rs`, `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-registry/src/` | [ORB-10270], [ORB-10319] |
 | Host-local scheduler state (fires, pauses) | `crates/orbit-store/src/sqlite/routine_store/` | [ORB-10021] |
-| Sweep advisory lock (flock, host-global) | `crates/orbit-store/src/sqlite/routine_store/mod.rs` | [ORB-10021] |
+| Sweep advisory lock (flock, host-global) | `crates/orbit-store/src/driver/sqlite/routine_store/lock.rs` | [ORB-10021] |
 | `orbit sweep` CLI entrypoint | `crates/orbit-cli/src/command/sweep.rs` | [ORB-10021] |
 | `orbit routine` CLI (`list/show/pause/resume/init/clock`; `clock` slated to move to `orbit clock`) | `crates/orbit-cli/src/command/routine/` | [ORB-10021] |
 | launchd/systemd unit templates + installer | `crates/orbit-core/assets/clock/` + `crates/orbit-core/src/application/routines/clock/` | [ORB-10021] |

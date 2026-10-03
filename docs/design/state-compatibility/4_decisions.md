@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Why forward compatibility is declared by the writing binary rather than inferred from a version number, and why a forward-compatible open is enforced read-only by SQLite itself.
 tags: [state-compatibility, migrations, upgrades]
-paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/driver/sqlite/connection.rs", "crates/orbit-store/src/workflow/layout/mod.rs"]
+paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/driver/sqlite/connection.rs", "crates/orbit-store/src/workflow/layout/marker.rs"]
 related_features: [state-compatibility]
 related_artifacts: [ORB-12434]
 ---
@@ -21,7 +21,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 ## Compatibility is declared by the binary that migrates, never inferred from the version number
 
 **Recorded:** 2026-09 · [ORB-12434]
-**Code anchors:** `crates/orbit-store/src/contracts/compat.rs::evaluate_newer_state`, `crates/orbit-store/src/workflow/layout/mod.rs::write_compat_record`, `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::write_compat_record`
+**Code anchors:** `crates/orbit-store/src/contracts/compat.rs::evaluate_newer_state`, `crates/orbit-store/src/workflow/layout/marker.rs::write_compat_record`, `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::write_compat_record`
 
 ### Context
 

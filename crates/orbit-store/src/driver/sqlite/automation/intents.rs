@@ -1,6 +1,6 @@
 //! Indexed immutable delivery-owner intents; reachability is verified by Core.
 
-use super::{decode, encode};
+use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::Delivery;

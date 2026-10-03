@@ -1,7 +1,7 @@
 //! Audited configuration, action, and history recovery for a delivery consumer.
 //! The checkpoint and its immutable record commit together.
 
-use super::{decode, encode};
+use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
