@@ -46,12 +46,11 @@ fn provider_contract_hash_is_pinned() {
         Some(PINNED_CONTRACT_VERSION),
         "contract_version drifted; review and bump the pin",
     );
-    // Recompute the hash the contract's way: sha256 over the canonical JSON of
-    // the `cases` array (sorted keys, compact separators). serde_json::Value
-    // serializes object keys sorted (no preserve_order feature) with `,`/`:`
-    // compact separators — byte-equal to Python's
-    // json.dumps(cases, sort_keys=True, separators=(",",":")).
-    let canonical = serde_json::to_string(&contract["cases"]).expect("serialize cases");
+    // The shared contract hashes sorted keys, regardless of the JSON storage
+    // feature used by panel output. Keep the independently pinned digest.
+    let mut cases = contract["cases"].clone();
+    cases.sort_all_objects();
+    let canonical = serde_json::to_string(&cases).expect("serialize cases");
     let recomputed = sha256_hex(canonical.as_bytes());
     assert_eq!(
         Some(recomputed.as_str()),

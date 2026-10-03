@@ -275,7 +275,11 @@ pub fn evaluate(
         return diagnostic_with_batch(store, consumer, "would_fire", state, batch);
     }
 
-    let id = definition_epoch(&(consumer, epoch, &admitted, now))?;
+    let identity_members = admitted
+        .iter()
+        .map(StateMember::identity)
+        .collect::<Vec<_>>();
+    let id = definition_epoch(&(consumer, epoch, &identity_members, now))?;
     let attempt = MemberAttempt {
         consumer: consumer.into(),
         kind: trigger.kind,

@@ -1012,7 +1012,10 @@ state, diagnostics, tools, panels, links) and draws each panel with one generic 
 
 Mismatched output falls back to `json`; `group` is a presentation hint. The API preserves
 the JSON member order returned by the plugin, so `kv` labels and the `table` renderer's
-first-seen column order reflect the plugin's exec reply.
+first-seen column order reflect the plugin's exec reply. This presentation ordering does
+not change persisted identity contracts: JSON values used in preparation fingerprints,
+review digests and task-pilot replay identities are recursively key-sorted at the hashing boundary.
+Typed definition hashes retain their existing struct field order.
 
 - `GET /api/plugins/<ns>/panels/<id>` runs the panel source through the audited tool dispatch
   with no caller input, for any dashboard session. This is safe because a panel source must be

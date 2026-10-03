@@ -430,7 +430,9 @@ fn replay_returns_already_applied_without_a_second_mutation() {
     });
 
     let first = apply(&runtime, "apply_task_pilot_results", &input).expect("first apply");
-    let replay = apply(&runtime, "apply_task_pilot_results", &input).expect("replay apply");
+    let mut reordered = input.clone();
+    reordered.sort_all_objects();
+    let replay = apply(&runtime, "apply_task_pilot_results", &reordered).expect("replay apply");
     let changed = apply(
         &runtime,
         "apply_task_pilot_results",

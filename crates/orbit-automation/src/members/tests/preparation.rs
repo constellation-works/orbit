@@ -181,21 +181,15 @@ fn opted_in_fields_and_source_modes_are_material() {
 #[test]
 fn material_fingerprint_folds_in_non_default_policy() {
     use orbit_types::task::{TaskStatus, TaskType};
-    use serde_json::json;
     let task = fingerprint_task();
     let evidence = MaterialEvidence::default();
     let hash =
         |policy: &PreparationPolicy| preparation::fingerprint(&task, &evidence, policy).unwrap();
     let baseline = hash(&PreparationPolicy::default());
     // The deliberate `material_v2` default bytes.
-    let default_material = json!({
-        "contract": preparation::CONTRACT, "id": task.id, "eligible": true,
-        "title": "task", "description": "scope", "criteria": [], "plan": "",
-        "selectors": ["file:src/lib.rs"],
-    });
     assert_eq!(
         baseline,
-        crate::delivery::definition_epoch(&default_material).unwrap()
+        "885c83323abb7948f793b9508271231b4f7ed389fbc6ed3c18779dce53e1956b"
     );
 
     let spelled_out = PreparationPolicy {
@@ -282,17 +276,30 @@ fn legacy_fingerprint_keeps_the_material_v1_bytes() {
         &PreparationEligibility::default(),
     )
     .unwrap();
-    let material_v1 = json!({
-        "contract": "material_v1", "id": task.id, "title": task.title.trim(),
-        "description": task.description.trim(), "criteria": task.acceptance_criteria,
-        "plan": task.plan.trim(), "selectors": task.context_files, "tags": task.tags,
-        "tools": task.required_tools, "type": task.task_type, "complexity": task.complexity,
-        "crew": task.crew, "eligible": true, "relations": task.relations,
-        "dependencies": json!({}), "instructions": "instructions",
-        "source_revision": "source",
-    });
+    // Frozen from 7275eaf^, before preserve_order changed JSON storage.
     assert_eq!(
         legacy,
-        crate::delivery::definition_epoch(&material_v1).unwrap()
+        "6939e5c75678acd30b4683507cef52a78cc73eb3341648b3a604bfb59e5b890f"
+    );
+}
+
+#[test]
+fn material_evidence_sorts_nested_keys_but_keeps_array_order() {
+    let task = fingerprint_task();
+    let policy = freshness_policy(&[MaterialField::Dependencies], SourceSensitivity::Ignore);
+    let mut evidence = MaterialEvidence {
+        dependencies: serde_json::from_str(r#"[{"z":1,"a":{"z":2,"a":3}},4]"#).unwrap(),
+        ..Default::default()
+    };
+    let original = preparation::fingerprint(&task, &evidence, &policy).unwrap();
+    evidence.dependencies.sort_all_objects();
+    assert_eq!(
+        original,
+        preparation::fingerprint(&task, &evidence, &policy).unwrap()
+    );
+    evidence.dependencies.as_array_mut().unwrap().reverse();
+    assert_ne!(
+        original,
+        preparation::fingerprint(&task, &evidence, &policy).unwrap()
     );
 }
