@@ -121,16 +121,16 @@ pub(crate) fn to_domain(name: &str, mut input: Value) -> Result<Option<Translati
                     ],
                 )?;
                 remove(&mut operation, &["fields"]);
-                if let Some(object) = operation.as_object_mut() {
-                    if let Some(fields) = fields.as_object() {
-                        object.extend(fields.clone());
-                    }
+                if let Some(object) = operation.as_object_mut()
+                    && let Some(fields) = fields.as_object()
+                {
+                    object.extend(fields.clone());
                 }
             }
-            if let Some(object) = input.as_object_mut() {
-                if let Some(operation) = operation.as_object() {
-                    object.extend(operation.clone());
-                }
+            if let Some(object) = input.as_object_mut()
+                && let Some(operation) = operation.as_object()
+            {
+                object.extend(operation.clone());
             }
             Translation::new(name, input)
         }
