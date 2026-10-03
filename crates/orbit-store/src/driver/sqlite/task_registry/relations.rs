@@ -357,12 +357,9 @@ fn cycle_walk_seeds(
 }
 
 /// The subgraph walk from [`reachable_cycle_family_edges`], as SQL over
-/// `seed_count` bound seed ids.
-///
-/// Separate from its caller so `relation_subgraph_query_stays_indexed` can put
-/// it through `EXPLAIN QUERY PLAN`; both of its joins have to resolve as index
+/// `seed_count` bound seed ids. Both of its joins have to resolve as index
 /// searches.
-pub(super) fn reachable_cycle_family_sql(seed_count: usize) -> String {
+fn reachable_cycle_family_sql(seed_count: usize) -> String {
     let seed_rows = (1..=seed_count)
         .map(|index| format!("(?{index})"))
         .collect::<Vec<_>>()
@@ -381,7 +378,7 @@ pub(super) fn reachable_cycle_family_sql(seed_count: usize) -> String {
     // `SEARCH` against this registry's schema but as a full `SCAN` of
     // `task_bundle_relations` against a reduced one. A scan is exactly the
     // cost this query exists to avoid, so the order is not left to the
-    // planner. `relation_subgraph_query_stays_indexed` checks the result.
+    // planner.
     format!(
         "WITH RECURSIVE reachable(task_id) AS (
              VALUES {seed_rows}

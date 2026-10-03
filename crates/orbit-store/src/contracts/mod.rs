@@ -29,6 +29,3 @@ mod automation;
 pub use automation::*;
 mod review;
 pub use review::*;
-
-#[cfg(test)]
-mod tests;

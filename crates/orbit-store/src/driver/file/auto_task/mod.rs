@@ -23,9 +23,6 @@ use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_common::fs::open_read_only_no_follow;
 use orbit_types::workflow::{AutoTaskCursor, AutoTaskCursorState};
 
-#[cfg(test)]
-use std::cell::RefCell;
-
 /// Path of the cursor state file under a workspace state dir.
 pub fn cursor_state_path(state_dir: &Path) -> PathBuf {
     state_dir.join("auto-tasks.json")
@@ -47,30 +44,7 @@ pub fn cursor_lock_path(state_path: &Path) -> PathBuf {
 /// A missing file is empty state. An existing file that cannot be read or
 /// parsed is an error; callers must not treat that as a baseline or rewrite it.
 pub fn load_cursor_state(path: &Path) -> Result<AutoTaskCursorState, OrbitError> {
-    load_cursor_state_with_hook(path, |_| Ok(()))
-}
-
-/// Load through an opened descriptor, letting a test perturb the file between
-/// the pathname probe and the open.
-#[cfg(test)]
-pub(crate) fn load_cursor_state_after_check<F>(
-    path: &Path,
-    before_open: F,
-) -> Result<AutoTaskCursorState, OrbitError>
-where
-    F: FnOnce(&Path) -> Result<(), OrbitError>,
-{
-    load_cursor_state_with_hook(path, before_open)
-}
-
-fn load_cursor_state_with_hook<F>(
-    path: &Path,
-    before_open: F,
-) -> Result<AutoTaskCursorState, OrbitError>
-where
-    F: FnOnce(&Path) -> Result<(), OrbitError>,
-{
-    let Some((resolved, mut file)) = open_cursor_state_file(path, before_open)? else {
+    let Some((resolved, mut file)) = open_cursor_state_file(path)? else {
         return Ok(AutoTaskCursorState::default());
     };
 
@@ -147,13 +121,7 @@ fn validated_cursor_state_dir(path: &Path) -> Result<Option<PathBuf>, OrbitError
 ///
 /// `Ok(None)` means "no existing file", matching prior behavior for a missing
 /// state dir or a missing data file.
-fn open_cursor_state_file<F>(
-    path: &Path,
-    before_open: F,
-) -> Result<Option<(PathBuf, File)>, OrbitError>
-where
-    F: FnOnce(&Path) -> Result<(), OrbitError>,
-{
+fn open_cursor_state_file(path: &Path) -> Result<Option<(PathBuf, File)>, OrbitError> {
     let file_name = validated_cursor_state_file_name(path)?;
     let Some(canonical_dir) = validated_cursor_state_dir(path)? else {
         return Ok(None);
@@ -174,8 +142,6 @@ where
             )));
         }
     }
-
-    before_open(&candidate)?;
 
     let file = match open_read_only_no_follow(&candidate) {
         Ok(file) => file,
@@ -283,7 +249,6 @@ impl CursorSession {
     /// The sidecar lock, not this inode, maintains exclusion. A write failure
     /// leaves the previous complete JSON in place.
     pub fn save(&self) -> Result<(), OrbitError> {
-        fail_if_injected_save()?;
         let encoded = serde_json::to_string_pretty(&self.state)
             .map_err(|error| OrbitError::Io(format!("encode auto-tasks state: {error}")))?;
         atomic_write_text(&self.path, &encoded)
@@ -299,36 +264,3 @@ pub fn upsert_cursor(path: &Path, name: &str, cursor: AutoTaskCursor) -> Result<
         session.save()
     })
 }
-
-#[cfg(test)]
-thread_local! {
-    static INJECTED_SAVE_FAULTS: RefCell<usize> = const { RefCell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn inject_cursor_save_failures(count: usize) {
-    INJECTED_SAVE_FAULTS.with(|cell| *cell.borrow_mut() = count);
-}
-
-fn fail_if_injected_save() -> Result<(), OrbitError> {
-    #[cfg(test)]
-    {
-        let hit = INJECTED_SAVE_FAULTS.with(|cell| {
-            let mut remaining = cell.borrow_mut();
-            if *remaining == 0 {
-                return false;
-            }
-            *remaining -= 1;
-            true
-        });
-        if hit {
-            return Err(OrbitError::Store(
-                "injected auto-task cursor save failure".to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests;

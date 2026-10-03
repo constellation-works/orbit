@@ -21,24 +21,6 @@ pub(super) enum ArtifactPayloadCheck {
     Defer,
 }
 
-#[cfg(test)]
-thread_local! {
-    static ARTIFACT_PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-fn record_artifact_payload_read() {
-    #[cfg(test)]
-    ARTIFACT_PAYLOAD_READS.with(|count| count.set(count.get() + 1));
-}
-
-/// Number of artifact payload files opened by strict bundle verification on
-/// this thread since the previous take. Listing tests use this to prove the
-/// lightweight path does not touch blob bytes.
-#[cfg(test)]
-pub(crate) fn take_artifact_payload_reads() -> usize {
-    ARTIFACT_PAYLOAD_READS.with(|count| count.replace(0))
-}
-
 pub(super) fn read_artifact_manifest(
     bundle_dir: &Path,
     payloads: ArtifactPayloadCheck,
@@ -132,7 +114,6 @@ fn validate_artifact_manifest_files(
 ) -> Result<(), OrbitError> {
     for file in &manifest.files {
         let blob_path = artifact_dir.join(&file.blob);
-        record_artifact_payload_read();
         let bytes = fs::read(&blob_path).map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 OrbitError::Store(format!(

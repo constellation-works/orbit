@@ -353,11 +353,6 @@ impl Store {
         self.conn.clone()
     }
 
-    #[cfg(test)]
-    pub(crate) fn reader_pool_for_test(&self) -> Option<&ReadPool> {
-        self.readers.as_deref()
-    }
-
     /// Current schema version recorded in the migration ledger (0 when no
     /// versioned migration has run). Foundation for `orbit migrate` (P3.4).
     pub fn schema_version(&self) -> Result<u32, OrbitError> {

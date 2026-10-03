@@ -307,9 +307,6 @@ pub struct ScoreboardSummary {
 }
 
 /// Bundle of the optional inputs that have grown around the core task summary.
-/// New callers should populate this struct;
-/// the older `generate_summary*` thin wrappers stay for tests and any
-/// caller that hasn't been updated yet.
 #[derive(Debug, Clone)]
 pub struct ScoreboardInputs<'a> {
     /// Per-(role) tool-call totals — drives the legacy `tool_calls`/

@@ -141,7 +141,6 @@ pub(super) fn load_validated_publication(
     let envelope = read_envelope(tree_dir)?;
     assert_pairing(&request, &envelope, &fetched.branch)?;
     assert_envelope_parent_lineage(&envelope, fetched.git_parent.as_deref(), INSPECT_LABEL)?;
-    checkpoint(SnapshotCheckpoint::EnvelopeValidated);
     let tasks = read_validated_tasks(tree_dir, &envelope)?;
     let label = PublicationInspectLabel {
         published_at: envelope.published_at,
@@ -171,47 +170,11 @@ pub(super) fn load_validated_publication(
             })
             .collect(),
     };
-    checkpoint(SnapshotCheckpoint::BundlesValidated);
     Ok(ValidatedPublicationSnapshot {
         inspection,
         bundles: tasks,
         _tree: fetched.tree,
     })
-}
-
-/// Steps at which a test can park one publication read to interleave another.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SnapshotCheckpoint {
-    /// The envelope is paired and lineage-checked; bundles are not yet read.
-    EnvelopeValidated,
-    /// Every bundle is validated; restore stages from the snapshot next.
-    BundlesValidated,
-}
-
-#[cfg(test)]
-type CheckpointHook = Box<dyn Fn(SnapshotCheckpoint)>;
-
-#[cfg(test)]
-thread_local! {
-    static CHECKPOINT_HOOK: std::cell::RefCell<Option<CheckpointHook>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Install or clear the checkpoint hook for publication reads on this thread.
-#[cfg(test)]
-pub(super) fn set_snapshot_checkpoint_hook(hook: Option<CheckpointHook>) {
-    CHECKPOINT_HOOK.with(|cell| *cell.borrow_mut() = hook);
-}
-
-fn checkpoint(point: SnapshotCheckpoint) {
-    #[cfg(test)]
-    CHECKPOINT_HOOK.with(|cell| {
-        if let Some(hook) = cell.borrow().as_ref() {
-            hook(point);
-        }
-    });
-    #[cfg(not(test))]
-    let _ = point;
 }
 
 struct ValidatedRequest {

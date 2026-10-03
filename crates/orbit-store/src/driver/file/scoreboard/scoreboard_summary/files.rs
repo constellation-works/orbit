@@ -30,18 +30,7 @@ pub fn write_summary(
 }
 
 pub(super) fn read_model_scoreboard(scoreboard_dir: &Path) -> Result<FamilyScoreboard, OrbitError> {
-    read_model_scoreboard_after_check(scoreboard_dir, |_| Ok(()))
-}
-
-/// [`read_model_scoreboard`] with a hook between the pathname check and the
-/// descriptor open, so tests can swap the file in that window.
-pub(super) fn read_model_scoreboard_after_check(
-    scoreboard_dir: &Path,
-    before_open: impl FnOnce(&Path) -> Result<(), OrbitError>,
-) -> Result<FamilyScoreboard, OrbitError> {
-    let Some(raw) =
-        read_validated_scoreboard_file(scoreboard_dir, ScoreboardFile::Pr, before_open)?
-    else {
+    let Some(raw) = read_validated_scoreboard_file(scoreboard_dir, ScoreboardFile::Pr)? else {
         return Ok(FamilyScoreboard::new());
     };
     if raw.trim().is_empty() {
@@ -73,12 +62,11 @@ impl ScoreboardFile {
 fn read_validated_scoreboard_file(
     scoreboard_dir: &Path,
     file: ScoreboardFile,
-    before_open: impl FnOnce(&Path) -> Result<(), OrbitError>,
 ) -> Result<Option<String>, OrbitError> {
     let Some(path) = validated_scoreboard_file_path(scoreboard_dir, file)? else {
         return Ok(None);
     };
-    read_scoreboard_file(&path, before_open)
+    read_scoreboard_file(&path, |_| Ok(()))
 }
 
 /// Resolve a fixed scoreboard file beneath the selected scoreboard root.
@@ -156,18 +144,7 @@ fn validated_scoreboard_file_path(
 }
 
 pub(super) fn read_token_agents(scoreboard_dir: &Path) -> Result<Vec<TokenAgentEntry>, OrbitError> {
-    read_token_agents_after_check(scoreboard_dir, |_| Ok(()))
-}
-
-/// [`read_token_agents`] with a hook between the pathname check and the
-/// descriptor open, so tests can swap the file in that window.
-pub(super) fn read_token_agents_after_check(
-    scoreboard_dir: &Path,
-    before_open: impl FnOnce(&Path) -> Result<(), OrbitError>,
-) -> Result<Vec<TokenAgentEntry>, OrbitError> {
-    let Some(raw) =
-        read_validated_scoreboard_file(scoreboard_dir, ScoreboardFile::Tokens, before_open)?
-    else {
+    let Some(raw) = read_validated_scoreboard_file(scoreboard_dir, ScoreboardFile::Tokens)? else {
         return Ok(Vec::new());
     };
     if raw.trim().is_empty() {

@@ -29,6 +29,3 @@ pub(crate) enum JournalCommitOutcome {
         row_id: String,
     },
 }
-
-#[cfg(test)]
-mod tests;

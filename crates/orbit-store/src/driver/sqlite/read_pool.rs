@@ -90,11 +90,6 @@ impl ReadPool {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn idle_len(&self) -> usize {
-        self.idle.lock().map(|idle| idle.len()).unwrap_or(0)
-    }
-
     fn open_reader(&self) -> Result<Connection, OrbitError> {
         let conn = Connection::open(&self.path)
             .map_err(|e| OrbitError::Store(format!("open reader connection: {e}")))?;

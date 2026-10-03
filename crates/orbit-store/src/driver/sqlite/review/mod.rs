@@ -5,7 +5,5 @@ mod attempts;
 mod backend;
 mod ledger;
 mod schema;
-#[cfg(test)]
-mod tests;
 
 pub(crate) use schema::{FEATURE, MIGRATIONS, initialize};

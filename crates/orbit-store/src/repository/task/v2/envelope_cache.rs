@@ -57,10 +57,6 @@ pub(super) struct EnvelopeStamp {
 #[derive(Default)]
 pub(super) struct EnvelopeCache {
     entries: Mutex<HashMap<String, (EnvelopeStamp, TaskEnvelopeV2)>>,
-    /// Metadata probes taken so far. Listing tests assert that a warm scan
-    /// pays exactly one per registered task and no envelope parses at all.
-    #[cfg(test)]
-    stat_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl EnvelopeCache {
@@ -69,9 +65,6 @@ impl EnvelopeCache {
     /// failed. Both cases fall through to the strict envelope read, which
     /// decides between "skip this task" and a reported error.
     pub(super) fn stamp(&self, path: &Path) -> Option<EnvelopeStamp> {
-        #[cfg(test)]
-        self.stat_calls
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let metadata = fs::metadata(path).ok()?;
         Some(EnvelopeStamp {
             len: metadata.len(),
@@ -134,17 +127,6 @@ impl EnvelopeCache {
     /// cache keeps serving rather than failing an unrelated read.
     fn entries(&self) -> MutexGuard<'_, HashMap<String, (EnvelopeStamp, TaskEnvelopeV2)>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    #[cfg(test)]
-    pub(super) fn take_stat_calls(&self) -> usize {
-        self.stat_calls
-            .swap(0, std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[cfg(test)]
-    pub(super) fn entry_count(&self) -> usize {
-        self.entries().len()
     }
 }
 

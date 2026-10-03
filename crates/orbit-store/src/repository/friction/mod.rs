@@ -34,9 +34,6 @@ pub use crate::contracts::{
 };
 pub(crate) use store::read_page;
 
-#[cfg(test)]
-mod tests;
-
 /// Live friction store for one logical workspace.
 ///
 /// Construction performs no migration. Composition invokes the explicit

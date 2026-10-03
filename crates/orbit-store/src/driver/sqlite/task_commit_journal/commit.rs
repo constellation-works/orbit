@@ -17,37 +17,6 @@ impl Store {
     /// Any refusal (a reservation conflict, a duplicate coordination row)
     /// rolls the whole transaction back, leaving the journal `prepared` for
     /// the caller to compensate. A returned `Committed` is durable.
-    #[cfg(test)]
-    pub(crate) fn commit_task_commit_journal(
-        &self,
-        journal_id: &str,
-        reservation: Option<&TaskReservationReserveParams>,
-        rows: &[TaskCoordinationRow],
-    ) -> Result<JournalCommitOutcome, OrbitError> {
-        self.commit_task_commit_journal_with_rows(journal_id, reservation, rows, &mut |_| {
-            Ok(rows.to_vec())
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn commit_task_commit_journal_with_rows(
-        &self,
-        journal_id: &str,
-        reservation: Option<&TaskReservationReserveParams>,
-        identities: &[TaskCoordinationRow],
-        make_rows: &mut impl FnMut(
-            Option<&TaskReservationReserveResult>,
-        ) -> Result<Vec<TaskCoordinationRow>, OrbitError>,
-    ) -> Result<JournalCommitOutcome, OrbitError> {
-        self.commit_task_commit_journal_effects(
-            journal_id,
-            reservation,
-            identities,
-            make_rows,
-            &Default::default(),
-        )
-    }
-
     pub(crate) fn commit_task_commit_journal_effects(
         &self,
         journal_id: &str,

@@ -25,17 +25,6 @@ impl FrictionStore {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn import_report(
-        &self,
-    ) -> Result<crate::workflow::friction::FrictionImportReport, OrbitError> {
-        crate::workflow::friction::import_workspace_frictions(
-            &self.store,
-            &self.workspace_id,
-            &self.files_root,
-        )
-    }
-
     pub fn list(
         &self,
         filter: &FrictionListFilter,

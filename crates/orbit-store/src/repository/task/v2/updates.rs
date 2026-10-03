@@ -1,6 +1,6 @@
 use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
-use crate::driver::file::task_bundle::{BundleWriteFault, PendingWriteGuard, fail_if_injected};
+use crate::driver::file::task_bundle::PendingWriteGuard;
 
 impl TaskV2Store {
     pub(crate) fn apply_atomic_task_mutation(
@@ -66,8 +66,6 @@ impl TaskV2Store {
                 body: format!("{receipt}\n{}", fields.audit_note),
             };
             self.bundle_store.append_comment(id, &comment)?;
-            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
-
             bundle.envelope.context_files = fields.context_files.clone();
             bundle.envelope.status = fields.status;
             bundle.envelope.complexity = Some(fields.complexity);
@@ -259,7 +257,6 @@ impl TaskV2Store {
                 bundle.events.push(event);
             }
 
-            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
             if envelope_changed
                 || fields.description.is_some()
                 || fields.acceptance_criteria.is_some()
@@ -369,7 +366,6 @@ impl TaskV2Store {
                 bundle.events.push(event);
             }
 
-            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
             if !fields.append_history.is_empty()
                 || !fields.append_comments.is_empty()
                 || fields.status.is_some()

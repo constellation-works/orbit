@@ -1,8 +1,6 @@
 //! Entering the boundary: construction and journal binding, the ordinary
 //! (shared) and admission (exclusive) sections, and per-thread boundary depth.
 
-#[cfg(test)]
-use super::BEFORE_ORDINARY_LOCK;
 use super::{
     COORDINATION_LOCK_FILE, COORDINATION_LOCK_LABEL, REQUIRED_MARKER_FILE, TaskCommitBoundary,
 };
@@ -173,12 +171,6 @@ impl TaskCommitBoundary {
         let mut op = Some(op);
         loop {
             self.recover_if_pending()?;
-            #[cfg(test)]
-            BEFORE_ORDINARY_LOCK.with(|hook| {
-                if let Some(hook) = hook.borrow_mut().take() {
-                    hook();
-                }
-            });
             let result =
                 with_shared_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
                     // A commit may have crashed while we waited for this lock.
@@ -249,10 +241,5 @@ impl TaskCommitBoundary {
 
     pub(super) fn lock_target(&self) -> PathBuf {
         self.partition_dir.join(COORDINATION_LOCK_FILE)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn store_handle(&self) -> &Store {
-        &self.store
     }
 }

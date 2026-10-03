@@ -3,6 +3,3 @@
 mod hydrate;
 mod insert;
 mod query;
-
-#[cfg(test)]
-pub(crate) use insert::INVOCATION_INSERT_COLUMNS;

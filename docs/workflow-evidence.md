@@ -23,7 +23,7 @@ relative to `crates/orbit-engine/src/`.
 | `task_claimed_local_pipeline` | No graph, boundary or refusal evidence. | — |
 | `task_claimed_pr_pipeline` | Boundary: `distributed_drain.rs` claims this job as its leaf, but the leaf launch is refused there, so the graph never runs. Claimed-PR binding has no current test. | `crates/orbit-core/tests/distributed_drain.rs` |
 | `task_gate_pipeline` | Boundary: `backlog_admission_waits_for_every_dependency_to_be_done`; `backlog_admission_excludes_work_locked_by_an_active_task`; `a_held_workspace_claim_gates_dispatch_to_its_holder`. Reservation release and no-op reporting have no current test. | `crates/orbit-core/tests/dispatch_admission.rs` |
-| `task_landing_pipeline` | Boundary, store level: `one_open_attempt_per_handoff_survives_restart_and_reopens_only_deliberately`; `revoked_authority_stops_dispatch_and_completion_for_the_same_candidate`; `replaced_handoff_evidence_blocks_approval_and_landing`. These prove landing admission, not dispatch or execution of the landing graph. | `crates/orbit-store/src/repository/task/coordination/tests/landing.rs`; `crates/orbit-store/tests/allocation_admission.rs` |
+| `task_landing_pipeline` | Boundary, store level: `handoff_authorization_follows_the_owner_policy_at_admission` (a withdrawn owner policy fences landing); `replaced_handoff_evidence_blocks_approval_and_landing`. These prove landing admission, not dispatch or execution of the landing graph. One open attempt per handoff across a restart has no current test. | `crates/orbit-store/tests/allocation_admission.rs` |
 | `task_local_pipeline` | Boundary: `a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env` exercises the explicit environment exposed to a local shell step; it does not execute the shipped graph. | `crates/orbit-engine/tests/v2_local_shell.rs` |
 | `task_pilot_pipeline` | No graph or boundary evidence; apply replay and source invalidation have no current test. | — |
 | `task_pr_pipeline` | No graph or boundary evidence; recovery context preparation for the shipped definition has no current test. | — |
@@ -62,7 +62,7 @@ cargo test -p orbit-core --lib application::job::tests::agent_invoke
 cargo test -p orbit-core --lib adapter::engine_host::v2_host
 cargo test -p orbit-engine --lib activity_job::job_executor::tests
 cargo test -p orbit-engine --lib executor::automation
-cargo test -p orbit-store --lib repository::task::coordination::tests::landing
+cargo test -p orbit-store --test allocation_admission
 ```
 
 Only `agent_invoke_pipeline` and `worktree_gc_pipeline` have shipped-graph

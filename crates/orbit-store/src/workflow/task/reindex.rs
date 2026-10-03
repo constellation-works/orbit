@@ -89,11 +89,6 @@ pub fn reindex_workspace(
         snapshots.extend(readable);
     }
 
-    // Tests inject an update or delete in this window, matching a concurrent
-    // writer that ran after the first read and before publication.
-    #[cfg(test)]
-    run_after_snapshot_hook();
-
     // Publish in bounded batches. Each batch takes its bundle locks in task-id
     // order and retains them from the final envelope read through the index
     // commit. Writers and deleters take a bundle lock before the registry, so
@@ -112,8 +107,6 @@ pub fn reindex_workspace(
                 &mut removed_stale,
                 &mut failures,
             );
-            #[cfg(test)]
-            run_before_reindex_publication_hook(batch);
             let envelopes = readable
                 .iter()
                 .map(|(_, _, envelope)| envelope.clone())
@@ -321,65 +314,6 @@ fn inspect_candidate(
         }
         Ok(Some(recover_pending_bundle_at(dir)?.envelope))
     })
-}
-
-/// A one-shot publication callback and the task id whose batch triggers it.
-#[cfg(test)]
-type PublicationHook = (String, Box<dyn FnOnce() + 'static>);
-
-#[cfg(test)]
-thread_local! {
-    static AFTER_SNAPSHOT: std::cell::RefCell<Option<Box<dyn FnOnce() + 'static>>> =
-        std::cell::RefCell::new(None);
-    static BEFORE_PUBLICATION: std::cell::RefCell<Option<PublicationHook>> =
-        std::cell::RefCell::new(None);
-}
-
-/// Install a one-shot callback that runs after the binding pass and before
-/// the first publication batch re-reads its envelopes.
-#[cfg(test)]
-pub(crate) fn set_after_reindex_snapshot_hook(hook: impl FnOnce() + 'static) {
-    AFTER_SNAPSHOT.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
-}
-
-#[cfg(test)]
-pub(crate) fn clear_after_reindex_snapshot_hook() {
-    AFTER_SNAPSHOT.with(|cell| cell.borrow_mut().take());
-}
-
-/// Install a one-shot callback that runs after the final envelope reads of the
-/// publication batch containing `task_id`, while that batch's locks are held
-/// and before its index commit.
-#[cfg(test)]
-pub(crate) fn set_before_reindex_publication_hook(task_id: &str, hook: impl FnOnce() + 'static) {
-    BEFORE_PUBLICATION
-        .with(|cell| *cell.borrow_mut() = Some((task_id.to_string(), Box::new(hook))));
-}
-
-#[cfg(test)]
-pub(crate) fn clear_before_reindex_publication_hook() {
-    BEFORE_PUBLICATION.with(|cell| cell.borrow_mut().take());
-}
-
-#[cfg(test)]
-fn run_before_reindex_publication_hook(batch: &[(String, PathBuf)]) {
-    let hook = BEFORE_PUBLICATION.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        let due = slot
-            .as_ref()
-            .is_some_and(|(target, _)| batch.iter().any(|(task_id, _)| task_id == target));
-        if due { slot.take() } else { None }
-    });
-    if let Some((_, hook)) = hook {
-        hook();
-    }
-}
-
-#[cfg(test)]
-fn run_after_snapshot_hook() {
-    if let Some(hook) = AFTER_SNAPSHOT.with(|cell| cell.borrow_mut().take()) {
-        hook();
-    }
 }
 
 /// Candidate IDs include tombstones and malformed non-directory entries, so

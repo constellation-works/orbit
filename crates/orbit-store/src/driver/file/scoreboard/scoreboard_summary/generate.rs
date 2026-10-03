@@ -19,30 +19,6 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-#[cfg(test)]
-pub fn generate_summary(
-    scoreboard_dir: &Path,
-    tasks: &[Task],
-) -> Result<ScoreboardSummary, OrbitError> {
-    generate_summary_with_inputs(scoreboard_dir, tasks, &ScoreboardInputs::default())
-}
-
-#[cfg(test)]
-pub fn generate_summary_with_audit_tool_calls(
-    scoreboard_dir: &Path,
-    tasks: &[Task],
-    audit_tool_calls: &[crate::AuditToolCallCountsByRole],
-) -> Result<ScoreboardSummary, OrbitError> {
-    generate_summary_with_inputs(
-        scoreboard_dir,
-        tasks,
-        &ScoreboardInputs {
-            audit_tool_calls,
-            ..ScoreboardInputs::default()
-        },
-    )
-}
-
 pub fn generate_summary_with_inputs(
     scoreboard_dir: &Path,
     tasks: &[Task],

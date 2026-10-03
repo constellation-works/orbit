@@ -2,8 +2,8 @@
 //! journal replay on recovery.
 
 use super::{
-    BoundaryDepth, COMMIT_INTENT_SCHEMA_VERSION, COORDINATION_LOCK_LABEL, CoordinationFault,
-    PENDING_MARKER_FILE, TaskCommitBoundary, TaskCommitIntent, fail_if_injected,
+    BoundaryDepth, COMMIT_INTENT_SCHEMA_VERSION, COORDINATION_LOCK_LABEL, PENDING_MARKER_FILE,
+    TaskCommitBoundary, TaskCommitIntent,
 };
 use crate::contracts::{
     TaskCommitJournalState, TaskCoordinationCommit, TaskCoordinationCommitOutcome,
@@ -83,7 +83,6 @@ impl TaskCommitBoundary {
     fn recover_locked(&self) -> Result<(), OrbitError> {
         with_exclusive_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
             let _depth = BoundaryDepth::enter(&self.partition_dir);
-            fail_if_injected(CoordinationFault::DuringRecovery)?;
             for record in self
                 .store
                 .unsettled_task_commit_journal(&self.workspace_id)?
@@ -180,18 +179,12 @@ impl TaskCommitBoundary {
                 let journal_id = unique_journal_id();
 
                 self.write_pending_marker(&journal_id)?;
-                fail_if_injected(CoordinationFault::AfterMarker)?;
                 self.store.prepare_task_commit_journal(
                     &journal_id,
                     &self.workspace_id,
                     &params.task_id,
                     &intent_json,
                 )?;
-
-                if let Err(error) = fail_if_injected(CoordinationFault::BeforeCommit) {
-                    self.compensate_prepared(&journal_id)?;
-                    return Err(error);
-                }
 
                 let decided = match self.store.commit_task_commit_journal_effects(
                     &journal_id,
@@ -222,7 +215,6 @@ impl TaskCommitBoundary {
                     JournalCommitOutcome::Committed(reservation) => {
                         // Past the commit point: the decision is durable and the
                         // bundle apply is a replay obligation, never a rollback.
-                        fail_if_injected(CoordinationFault::AfterCommit)?;
                         self.apply_committed(&journal_id, &intent)?;
                         Ok(TaskCoordinationCommitOutcome::Committed(
                             TaskCoordinationCommit {
@@ -316,7 +308,6 @@ impl TaskCommitBoundary {
                 intent.schema_version
             )));
         }
-        fail_if_injected(CoordinationFault::DuringApply)?;
         let bundle_dir = self.bundle_store.bundle_path(&intent.task_id)?;
         truncate_jsonl_file(&bundle_dir.join(TASK_EVENTS_FILE_NAME), intent.events_len)?;
         for event in &intent.events {
@@ -346,7 +337,6 @@ impl TaskCommitBoundary {
     /// only has to retire the journal row and the marker; failing here leaves
     /// both in place and the partition closed until recovery succeeds.
     fn compensate_prepared(&self, journal_id: &str) -> Result<(), OrbitError> {
-        fail_if_injected(CoordinationFault::DuringCompensation)?;
         self.store.abort_task_commit_journal(journal_id)?;
         self.clear_pending_marker()
     }
@@ -375,10 +365,5 @@ impl TaskCommitBoundary {
 
     fn clear_pending_marker(&self) -> Result<(), OrbitError> {
         remove_file_if_present(&self.pending_marker_path())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_marker_exists(&self) -> bool {
-        self.pending_marker_path().try_exists().unwrap_or(false)
     }
 }

@@ -11,11 +11,11 @@ use crate::{Store, now_string};
 
 /// Every column the invocation-trace insert binds, in bind order.
 ///
-/// [ORB-10367] This list is the single source of truth for both the INSERT
-/// statement below and the migration regression test that asserts a migrated
-/// legacy database carries each column. Adding a column here without a
-/// matching schema migration fails that test instead of failing a live job
-/// run at the telemetry-persistence boundary.
+/// [ORB-10367] This list is the single source of truth for the INSERT
+/// statement below, so the column list and bind arity cannot drift. A column
+/// added here needs a matching schema migration; the migration ledger test
+/// `v1_upgrade_and_fresh_database_have_identical_columns` keeps an upgraded
+/// legacy database's columns identical to a fresh one's.
 pub(crate) const INVOCATION_INSERT_COLUMNS: &[&str] = &[
     "ts",
     "job_run_id",

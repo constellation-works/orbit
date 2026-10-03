@@ -1,30 +1,5 @@
 use super::*;
 
-#[cfg(test)]
-thread_local! {
-    static FAIL_AFTER_BLOBS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn fail_artifact_upsert_after_blobs(count: usize) {
-    FAIL_AFTER_BLOBS.with(|remaining| remaining.set(count));
-}
-
-fn after_artifact_blob_write() -> Result<(), OrbitError> {
-    #[cfg(test)]
-    {
-        let fail = FAIL_AFTER_BLOBS.with(|remaining| {
-            let count = remaining.get();
-            remaining.set(count.saturating_sub(1));
-            count == 1
-        });
-        if fail {
-            return Err(OrbitError::Store("injected artifact upsert failure".into()));
-        }
-    }
-    Ok(())
-}
-
 fn immutable_artifact_blob(path: &str, sha256: &str) -> String {
     // Keep new blobs in the already-durable files directory. The path digest
     // distinguishes equal contents at different logical artifact paths.
@@ -209,7 +184,6 @@ impl TaskV2Store {
                     }
                     Err(err) => return Err(OrbitError::Io(err.to_string())),
                 }
-                after_artifact_blob_write()?;
                 by_path.insert(
                     path.clone(),
                     ArtifactManifestFileV2 {

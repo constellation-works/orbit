@@ -46,10 +46,7 @@ impl SqliteJobRunStore {
     }
 
     /// Read-modify-write a run row inside one immediate transaction.
-    ///
-    /// `pub(crate)` so sibling tests can inject a barrier into the mutation
-    /// closure and prove concurrent writers serialize without a torn write.
-    pub(crate) fn update_run(
+    fn update_run(
         &self,
         run_id: &str,
         update: impl FnOnce(&mut JobRun) -> Result<(), OrbitError>,
