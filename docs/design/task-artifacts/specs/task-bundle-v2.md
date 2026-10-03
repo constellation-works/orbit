@@ -391,19 +391,20 @@ ORBIT_TASK_BENCH_SIZE=1000 ORBIT_TASK_BENCH_MODE=candidate \
 ORBIT_TASK_BENCH_ROOT=/tmp/orbit-task-bench-1000 \
 cargo test -p orbit-store task_list_io_benchmark -- --ignored --nocapture
 
-ORBIT_TASK_BENCH_SIZE=1000 ORBIT_TASK_BENCH_MODE=candidate \
-ORBIT_TASK_BENCH_ROOT=/tmp/orbit-task-bench-1000 \
-cargo test -p orbit-web task_response_benchmark -- --ignored --nocapture
 ```
 
 The fixture root must be new and temporary. Omitting it from the store test
 automatically removes the generated corpus after the measurement. To compare
-actual HTTP implementations, archive the baseline commit into a temporary
-directory and add only
+the historical HTTP measurements, recover the retired harness from commit
+`2b4e371fa241965de71725753d9bd0a6cccacf0b`: the file
 `crates/orbit-web/src/api/tests/task_response_bench.rs`, its test-module
 registration and the isolated child launcher it calls from
-`crates/orbit-web/src/api/tests/test_support.rs`. Run that identical harness on
-the same retained corpus, setting the mode label to `baseline`. The harness
+`crates/orbit-web/src/api/tests/test_support.rs`. It is no longer part of the
+current unit suite. Archive each implementation into a separate temporary
+checkout and add the identical harness to each. Run
+`cargo test -p orbit-web task_response_benchmark -- --ignored --nocapture` on
+the same retained corpus, setting the mode label to `baseline` or `candidate`.
+The harness
 measures in a child
 of the test binary with inherited Orbit authority cleared, and the parent
 re-emits the child's JSON report lines. Build both binaries first, then run

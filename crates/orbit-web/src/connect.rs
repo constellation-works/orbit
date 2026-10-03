@@ -144,7 +144,7 @@ pub fn connect(args: ConnectArgs, root_override: Option<&Path>) -> Result<(), Or
 /// still passing `--root` reaches the top-level flag instead. Failing with
 /// that redirection is the migration: silently ignoring it would drop the
 /// preselection without a word.
-pub(crate) fn reject_root_override(root_override: Option<&Path>) -> Result<(), OrbitError> {
+fn reject_root_override(root_override: Option<&Path>) -> Result<(), OrbitError> {
     match root_override {
         None => Ok(()),
         Some(_) => Err(OrbitError::InvalidInput(
@@ -154,14 +154,10 @@ pub(crate) fn reject_root_override(root_override: Option<&Path>) -> Result<(), O
     }
 }
 
-// Visibility note: the pure helpers below are `pub(crate)` so the sibling
-// `tests/connect.rs` module can exercise them directly (the crate's test-layout
-// convention). None are part of the crate's public API.
-
 /// Describe this dashboard tunnel to the shared mechanism: which forward to
 /// open, what to run remotely when nothing already answers, and how long to
 /// wait for each of those two cases.
-pub(crate) fn tunnel_spec(cfg: &ConnectArgs, local_port: u16) -> TunnelSpec {
+fn tunnel_spec(cfg: &ConnectArgs, local_port: u16) -> TunnelSpec {
     TunnelSpec {
         ssh_host: cfg.ssh_host.clone(),
         local_port,
@@ -177,7 +173,7 @@ pub(crate) fn tunnel_spec(cfg: &ConnectArgs, local_port: u16) -> TunnelSpec {
 /// Choose the local port to bind the tunnel to: an explicit `--port` is honored
 /// or fails with a clear error if busy, otherwise the conventional
 /// [`DEFAULT_DASHBOARD_PORT`] when free and an ephemeral port when it is not.
-pub(crate) fn select_local_port(preferred: Option<u16>) -> Result<u16, OrbitError> {
+fn select_local_port(preferred: Option<u16>) -> Result<u16, OrbitError> {
     ssh_tunnel::select_local_port(preferred, DEFAULT_DASHBOARD_PORT)
 }
 
@@ -193,7 +189,7 @@ pub(crate) fn select_local_port(preferred: Option<u16>) -> Result<u16, OrbitErro
 /// `--root` now selects which registry is served (as it does for every other
 /// command), so sending a workspace path there would serve an empty registry
 /// instead of preselecting that workspace.
-pub(crate) fn remote_serve_command(cfg: &ConnectArgs) -> String {
+fn remote_serve_command(cfg: &ConnectArgs) -> String {
     let mut cmd = "orbit web serve --no-open".to_string();
     if !cfg.no_operator {
         cmd.push_str(" --operator");
@@ -212,9 +208,7 @@ pub(crate) fn remote_serve_command(cfg: &ConnectArgs) -> String {
 /// Notice printed when this invocation attached to a pre-existing remote that
 /// is not an operator session. The remote was not started here, so it cannot
 /// be upgraded in place.
-pub(crate) fn attached_without_operator_notice(
-    controls_authorized: Option<bool>,
-) -> Option<&'static str> {
+fn attached_without_operator_notice(controls_authorized: Option<bool>) -> Option<&'static str> {
     match controls_authorized {
         Some(false) => Some(
             "This remote dashboard is already running without operator capability. \
@@ -227,7 +221,7 @@ pub(crate) fn attached_without_operator_notice(
 }
 
 /// `controls_authorized` from a `/api/routines` JSON body, if present.
-pub(crate) fn parse_controls_authorized(body: &str) -> Option<bool> {
+fn parse_controls_authorized(body: &str) -> Option<bool> {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()?
         .get("controls_authorized")?

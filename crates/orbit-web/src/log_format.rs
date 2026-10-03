@@ -151,7 +151,7 @@ pub(crate) fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, 
 
 /// Block size for reverse JSONL scans. Sparse filters may still walk every
 /// block to offset 0; a dense tail stops once `limit` matches are in hand.
-pub(crate) const TAIL_READ_BLOCK: usize = REVERSE_READ_BLOCK;
+const TAIL_READ_BLOCK: usize = REVERSE_READ_BLOCK;
 
 pub(crate) fn read_recent_matching_events(
     path: &Path,
@@ -171,9 +171,8 @@ pub(crate) fn read_recent_matching_events(
 
 /// Newest matching JSONL events from a seekable reader, scanning backwards.
 ///
-/// `block_size` is the read window so tests can force a line to span blocks
-/// without a huge fixture. Production callers use [`TAIL_READ_BLOCK`].
-pub(crate) fn read_recent_matching_events_from<R: Read + Seek>(
+/// `block_size` is the read window. Callers use [`TAIL_READ_BLOCK`].
+fn read_recent_matching_events_from<R: Read + Seek>(
     reader: R,
     filters: &Filters,
     limit: usize,
@@ -237,7 +236,7 @@ pub(crate) fn read_recent_rendered_tail(
 /// without a newline is served and the cursor moves past it (its newline later
 /// reads as an empty, skipped line), while a partial write leaves the cursor at
 /// its start so the stream reads it whole once it completes.
-pub(crate) fn read_rendered_tail_from<R: Read + Seek>(
+fn read_rendered_tail_from<R: Read + Seek>(
     reader: &mut R,
     len: u64,
     filters: &Filters,

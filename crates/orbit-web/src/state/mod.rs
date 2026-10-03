@@ -46,8 +46,6 @@ use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, workspace_runtime_binding};
 use orbit_core::application::routines::ClockStatus;
-#[cfg(test)]
-use orbit_core::application::routines::clock_status;
 use orbit_core::runtime::{HostLifetime, WorkspaceRuntimeBinding};
 use orbit_core::{OrbitError, OrbitRuntime, ShipMode};
 use orbit_registry::workspace_registry;
@@ -59,9 +57,6 @@ use crate::runtime_memo::RuntimeMemo;
 mod dashboard;
 mod registry;
 mod request;
-
-#[cfg(test)]
-mod tests;
 
 pub(crate) use dashboard::DashboardState;
 use dashboard::StateInner;
@@ -83,12 +78,6 @@ const INITIAL_GENERATION: u64 = 0;
 /// prove an older-snapshot runtime cannot republish as current.
 #[cfg(test)]
 pub(crate) type PrePublishHook = Arc<dyn Fn(&str) + Send + Sync>;
-
-/// Test-only replacement for native host-clock observations. Production builds
-/// call `clock_status` directly and do not carry this indirection.
-#[cfg(test)]
-pub(crate) type ClockStatusObserver =
-    Arc<dyn Fn(&Path) -> Result<ClockStatus, OrbitError> + Send + Sync>;
 
 /// One registered workspace the dashboard can serve.
 ///

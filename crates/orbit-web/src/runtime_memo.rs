@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -30,7 +29,6 @@ pub(crate) struct RuntimeMemo<K> {
     /// Names the computation in a panic report and trace events.
     label: &'static str,
     slots: Mutex<HashMap<(usize, K), Arc<Slot>>>,
-    computes: AtomicU64,
 }
 
 struct Slot {
@@ -52,7 +50,6 @@ impl<K: Eq + Hash> RuntimeMemo<K> {
         Self {
             label,
             slots: Mutex::new(HashMap::new()),
-            computes: AtomicU64::new(0),
         }
     }
 
@@ -82,7 +79,6 @@ impl<K: Eq + Hash> RuntimeMemo<K> {
         }
 
         tracing::debug!(memo = self.label, "cache miss");
-        self.computes.fetch_add(1, Ordering::Relaxed);
         let computed = match tokio::task::spawn_blocking(compute).await {
             Ok(Ok(value)) => Arc::new(value),
             Ok(Err(error)) => return Err(error),
@@ -100,13 +96,6 @@ impl<K: Eq + Hash> RuntimeMemo<K> {
             body: Arc::clone(&computed),
         });
         Ok(computed)
-    }
-
-    /// Compute attempts started since this memo was created, including failures.
-    /// Test seam for proving coalescing; production never reads it.
-    #[cfg(test)]
-    pub(crate) fn compute_count(&self) -> u64 {
-        self.computes.load(Ordering::Relaxed)
     }
 
     fn slot(&self, key: (usize, K)) -> Arc<Slot> {

@@ -1,9 +1,9 @@
 use super::*;
 
 /// Where a refresh reloads the servable workspace set from. Present only in the
-/// registry-backed mode built by [`crate::serve::build_state`]; [`DashboardState::single`]
-/// and [`DashboardState::global`] leave it `None`, making [`DashboardState::refresh`]
-/// a no-op (their entries are supplied directly and never re-read).
+/// registry-backed mode built by [`crate::serve::build_state`].
+/// [`DashboardState::single`] leaves it `None`, making
+/// [`DashboardState::refresh`] a no-op for its pre-built runtime.
 pub(crate) struct RegistrySource {
     /// Path to the served registry: `<--root>/workspaces.json` when an
     /// explicit root was given, `~/.orbit/workspaces.json` otherwise (or a
@@ -19,14 +19,6 @@ pub(crate) struct RegistrySource {
     /// every reload while allowing a repaired-and-broken-again checkout to be
     /// reported anew.
     reported_unavailable: Mutex<HashSet<UnavailableCheckout>>,
-    /// `load` attempts since construction. Test-only: production never
-    /// reads this; it exists so tests can prove the request-path freshness gate
-    /// skipped I/O.
-    #[cfg(test)]
-    pub(super) load_count: AtomicU64,
-    /// Runs after the registry read for deterministic rewrite interleavings.
-    #[cfg(test)]
-    post_read_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// A parsed registry view and the file identity observed before its read.
@@ -122,10 +114,6 @@ impl RegistrySource {
             workspace_selector,
             cwd,
             reported_unavailable: Mutex::new(HashSet::new()),
-            #[cfg(test)]
-            load_count: AtomicU64::new(0),
-            #[cfg(test)]
-            post_read_hook: Mutex::new(None),
         }
     }
 
@@ -143,19 +131,8 @@ impl RegistrySource {
     /// are likewise excluded after an operator-visible warning. The caller stamps
     /// the generation at publication.
     pub(super) fn load(&self) -> Result<LoadedRegistry, OrbitError> {
-        #[cfg(test)]
-        self.load_count.fetch_add(1, Ordering::Relaxed);
         let fingerprint = self.fingerprint();
         let mut registry = workspace_registry::load_registry_from(&self.registry_path)?;
-        #[cfg(test)]
-        if let Some(hook) = self
-            .post_read_hook
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
-            hook();
-        }
         workspace_registry::validate_workspaces(&mut registry);
         let mut unavailable = HashSet::new();
         let entries: Vec<WsEntry> = workspace_registry::local_workspaces(&registry)
@@ -198,14 +175,6 @@ impl RegistrySource {
             },
             fingerprint,
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn set_post_read_hook(&self, hook: impl FnOnce() + Send + 'static) {
-        *self
-            .post_read_hook
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
     }
 
     fn report_unavailable(&self, unavailable: HashSet<UnavailableCheckout>) {

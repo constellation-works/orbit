@@ -56,13 +56,6 @@ impl Default for DenialDiagnostics {
     }
 }
 
-impl DenialRow {
-    #[cfg(test)]
-    pub(super) fn target(&self) -> &str {
-        &self.target
-    }
-}
-
 /// Reads SQLite v2 audit rows and returns FsCallDenied / ToolDenied rows
 /// matching the supplied filters.
 pub(super) fn scan_v2_loop_denials(
