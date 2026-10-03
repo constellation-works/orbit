@@ -47,6 +47,7 @@ Tests that mutate Orbit state, spawn pipeline runs, or depend on the sandbox hav
 ## Review
 
 - CI runs the full `make ci` on GitHub-hosted runners. Fork PRs get no secrets.
+- Linux and macOS CI cancel superseded runs for the same PR within each workflow. Non-PR runs use separate concurrency groups, so pushes to `main` and `agent-main` can finish independently.
 - A maintainer reviews every PR on GitHub and squash-merges it into `agent-main`. Maintainers never run contributed branches through Orbit's own pipeline host.
 - Expect a first response within a week. If a PR stalls, a comment is welcome.
 
