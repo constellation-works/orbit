@@ -391,6 +391,344 @@
   },
   {
     "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Read a bounded desktop view in one explicit workspace. Task search matches public key/title only; history search uses orbit_search. Run reads require the same operator authority as workflow run observation. This never reconciles or starts execution.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "artifacts_offset": {
+          "description": "Artifact metadata page offset",
+          "type": "integer"
+        },
+        "comments_offset": {
+          "description": "Comment page offset",
+          "type": "integer"
+        },
+        "history_offset": {
+          "description": "Task history page offset",
+          "type": "integer"
+        },
+        "id": {
+          "description": "Public task key or run ID for detail scope",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Page size, 1 through 50; default 25",
+          "type": "integer"
+        },
+        "log_offset": {
+          "description": "Run log record offset",
+          "type": "integer"
+        },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
+        "offset": {
+          "description": "Zero-based list offset; default 0",
+          "type": "integer"
+        },
+        "priority": {
+          "description": "Task priority filter",
+          "type": "string"
+        },
+        "scope": {
+          "description": "tasks, task, runs or run",
+          "type": "string"
+        },
+        "search": {
+          "description": "Case-insensitive public task key/title substring",
+          "type": "string"
+        },
+        "status": {
+          "description": "Task status or run state filter",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Exact selector returned by workspace discovery. No implicit destination.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "workspace"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_desktop_read"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Read a versioned task snapshot with opaque revision and server-computed available actions. A snapshot grants no authority.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "description": "Public task key",
+          "type": "string"
+        },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Exact selector returned by workspace discovery. No implicit destination.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_desktop_task_snapshot"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false
+    },
+    "description": "Apply one revision-guarded, retry-safe proposed-task create, field edit, comment or evidence-bound review. Reuse request_id with identical payload to reconcile a lost response. Changes requested stays in review. Completion requires existing trusted operator authority; it never merges, publishes or dispatches work.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "operation": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "acceptance_criteria": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "crew": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "create"
+                },
+                "priority": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "title",
+                "description",
+                "acceptance_criteria"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "expected_revision": {
+                  "type": "string"
+                },
+                "fields": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "acceptance_criteria": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "crew": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "edit"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "expected_revision",
+                "fields"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "comment": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "comment"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "expected_revision",
+                "comment"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "complete": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "expected_revision": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "review"
+                },
+                "verdict": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "criteria": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "criterion": {
+                            "type": "string"
+                          },
+                          "evidence": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "met": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "criterion",
+                          "met",
+                          "evidence"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "decision": {
+                      "enum": [
+                        "accept",
+                        "changes_requested"
+                      ]
+                    },
+                    "evidence": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "expected_head": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "expected_run_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "rationale": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "decision",
+                    "rationale",
+                    "criteria",
+                    "evidence"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "expected_revision",
+                "verdict"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "request_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspace": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace",
+        "request_id",
+        "operation"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_desktop_task_write"
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false,
@@ -1590,7 +1928,7 @@
         ]
       },
       "ui": {
-        "resourceUri": "ui://orbit/task-panel/v1/index.html"
+        "resourceUri": "ui://orbit/control-center/v1/index.html"
       }
     },
     "annotations": {
@@ -1599,13 +1937,21 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Open a read-only task panel. Selected tasks are read through orbit_task_show with an explicit workspace filter; opening grants no authority.",
+    "description": "Open the Orbit control center or a selected task/run panel. The entrypoint only reads; authoring and review use separately guarded application tools. Opening grants no authority.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
         "id": {
-          "description": "Public task key returned by Orbit.",
+          "description": "Public task key or run ID returned by Orbit.",
           "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "default": "task",
+          "enum": [
+            "task",
+            "run"
+          ],
           "type": "string"
         },
         "workspace": {
@@ -1621,7 +1967,7 @@
       "type": "object"
     },
     "name": "orbit_ui_inspect",
-    "title": "Inspect Orbit task"
+    "title": "Inspect Orbit task or run"
   },
   {
     "_meta": {
@@ -1633,7 +1979,7 @@
         ]
       },
       "ui": {
-        "resourceUri": "ui://orbit/task-panel/v1/index.html"
+        "resourceUri": "ui://orbit/control-center/v1/index.html"
       }
     },
     "annotations": {
@@ -1642,21 +1988,30 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Open a read-only task panel. Selected tasks are read through orbit_task_show with an explicit workspace filter; opening grants no authority.",
+    "description": "Open the Orbit control center or a selected task/run panel. The entrypoint only reads; authoring and review use separately guarded application tools. Opening grants no authority.",
     "inputSchema": {
       "additionalProperties": false,
       "dependentRequired": {
         "id": [
           "workspace"
         ],
-        "workspace": [
+        "kind": [
+          "workspace",
           "id"
         ]
       },
       "properties": {
         "id": {
-          "description": "Public task key returned by Orbit.",
+          "description": "Public task key or run ID returned by Orbit.",
           "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "default": "task",
+          "enum": [
+            "task",
+            "run"
+          ],
           "type": "string"
         },
         "workspace": {
@@ -1668,7 +2023,7 @@
       "type": "object"
     },
     "name": "orbit_ui_open",
-    "title": "Open Orbit task panel"
+    "title": "Open Orbit control center"
   },
   {
     "annotations": {

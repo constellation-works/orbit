@@ -20,8 +20,9 @@ this probe.
 ## Application and resource contract
 
 The adapter embeds `crates/orbit-mcp/assets/task-panel/{index.html,css/task-panel.css,js/task-panel.js}`
-into one static resource. No frontend build or separate asset endpoint is
-needed. The bundle uses text sinks for task content, restricts external assets,
+into one static resource. The frontend uses plain JavaScript with JSDoc, matching
+the existing dashboard asset workflow without a TypeScript build dependency.
+No frontend build or separate asset endpoint is needed. The bundle uses text sinks for task content, restricts external assets,
 connections and frames, and never interpolates task text into executable HTML.
 Resource lookup accepts only the two exact versioned URIs. It does not resolve
 paths, query strings or arbitrary artifact contents.
@@ -47,6 +48,9 @@ unavailable rather than zero when no usable measurement exists.
 Proven precommit validation failures return `mutation_applied: false` with a
 `refusal` object, allowing the preserved draft to be corrected. Generic server
 errors do not prove that a write failed; retain the request for reconciliation.
+A confirmed commit whose refresh fails returns `accepted: true`, `task_id` and
+`refresh_error`; the panel keeps reporting success and reconciles the same request
+until a fresh snapshot is available.
 Stale task revisions return a typed `revision_conflict` with a fresh snapshot;
 they do not overwrite the task or report a completed write. Review records criterion outcomes, current evidence references, task revision
 and current run/PR-head binding where applicable. Changes requested stays in
@@ -54,6 +58,9 @@ review. Record-only acceptance also stays in review. Completion requires fresh
 eligible state and existing trusted operator authority. It never merges,
 publishes or dispatches. Missing/stale evidence or unavailable PR-head validation
 refuses the affected action; the UI preserves the draft for reconciliation.
+Existing gate certificates and open findings are projected from canonical review
+evidence when available. A manual desktop verdict is a separate recorded review;
+it does not rewrite a workflow certificate or bypass PR merge checks.
 
 The bridge negotiates MCP Apps `2026-01-26` and requires `serverTools`. The
 explicit **Send context to chat** action uses `updateModelContext` when supported;

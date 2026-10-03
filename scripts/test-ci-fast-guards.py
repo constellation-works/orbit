@@ -89,6 +89,12 @@ jobs:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["fmt", "--all", "--", "--check"]])
 
+    def test_fast_propagates_desktop_ui_failure(self):
+        self.prepare_ci()
+        self.write_executable(self.scripts / "check-desktop-ui.sh", "#!/bin/bash\nexit 17\n")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 17)
+
     def test_fast_invokes_web_blocking_handler_check(self):
         self.prepare_ci()
         self.write_executable(

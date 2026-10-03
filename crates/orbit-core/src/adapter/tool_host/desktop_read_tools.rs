@@ -149,9 +149,11 @@ fn task(
         ("artifacts", artifacts),
     ] {
         let total = value[format!("{field}_total")].as_u64().unwrap_or(0) as usize;
-        let returned = value[field].as_array().map_or(0, Vec::len);
+        // Oversized opaque metadata entries may be omitted by the snapshot.
+        // Advance across consumed storage rows, not just visible rows.
+        let consumed = total.saturating_sub(offset).min(limit);
         value[format!("{field}_pagination")] =
-            pagination(offset, limit, returned, total, usize::MAX);
+            pagination(offset, limit, consumed, total, usize::MAX);
     }
     Ok(value)
 }

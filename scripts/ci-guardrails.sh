@@ -75,7 +75,7 @@ fi
 "$repo_root/scripts/check-crate-agent-guides.sh"
 "$repo_root/scripts/check-embedded-asset-portability.py"
 # Execute the shipped MCP Apps script against its deterministic host/DOM fixture.
-node --test "$repo_root/crates/orbit-mcp/src/adapter/tests/task-panel.mjs"
+"$repo_root/scripts/check-desktop-ui.sh"
 "$repo_root/scripts/check-dashboard-vendor.py"
 "$repo_root/scripts/test-qa-full-sweep.py" --check
 "$repo_root/scripts/sync-plugin-skills.sh" --check

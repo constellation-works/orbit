@@ -4,6 +4,8 @@ use orbit_common::OrbitError;
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::{Value, json};
 
+type InputField = (&'static str, &'static str, bool, &'static str);
+
 pub enum DesktopTool {
     Read,
     Snapshot,
@@ -18,7 +20,7 @@ impl Tool for DesktopTool {
         }
     }
     fn schema(&self) -> ToolSchema {
-        let (name, description, fields): (&str, &str, &[(&str, &str, bool, &str)]) = match self {
+        let (name, description, fields): (&str, &str, &[InputField]) = match self {
             Self::Read => (
                 "orbit.desktop.read",
                 "Read a bounded desktop view in one explicit workspace. Task search matches public key/title only; history search uses orbit.search. Run reads require the same operator authority as workflow run observation. This never reconciles or starts execution.",

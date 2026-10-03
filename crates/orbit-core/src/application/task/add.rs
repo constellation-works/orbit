@@ -240,14 +240,27 @@ impl OrbitRuntime {
             // The create contract carries no history, so the provenance entry
             // is a second write inside the same mutation as the insert.
             let task = match &crew_assignment {
-                Some(assignment) if !replayed => self.stores().task_records().update(
-                    &task.id,
-                    StoreTaskUpdateParams {
-                        actor: SYSTEM_ACTOR_LABEL.to_string(),
-                        append_history: vec![crew_assigned_history(assignment)],
-                        ..Default::default()
-                    },
-                ).map_err(|error| if digest.is_some() { OrbitError::Execution(format!("desktop create was accepted; provenance refresh failed: {error}; reconcile by retrying the same request identity")) } else { error })?,
+                Some(assignment) if !replayed => self
+                    .stores()
+                    .task_records()
+                    .update(
+                        &task.id,
+                        StoreTaskUpdateParams {
+                            actor: SYSTEM_ACTOR_LABEL.to_string(),
+                            append_history: vec![crew_assigned_history(assignment)],
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|error| {
+                        if digest.is_some() {
+                            OrbitError::DesktopWriteAccepted {
+                                task_id: task.id.clone(),
+                                reason: format!("creation provenance refresh failed: {error}"),
+                            }
+                        } else {
+                            error
+                        }
+                    })?,
                 _ => task,
             };
             Ok((

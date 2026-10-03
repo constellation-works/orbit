@@ -75,6 +75,16 @@ fn clip(value: &mut String, max: usize, field: &str, truncated: &mut Vec<String>
         truncated.push(field.into());
     }
 }
+// An opaque reference must either retain its exact identity or be omitted.
+fn retain_reference(value: &str, max: usize, field: &str, truncated: &mut Vec<String>) -> bool {
+    if value.len() > max || redact_all(value) != value {
+        truncated.push(field.into());
+        false
+    } else {
+        true
+    }
+}
+
 fn truncate_task(task: &mut Task, truncated: &mut Vec<String>) {
     clip(&mut task.title, 512, "task.title", truncated);
     clip(&mut task.description, 32768, "task.description", truncated);
@@ -97,33 +107,77 @@ fn truncate_task(task: &mut Task, truncated: &mut Vec<String>) {
             truncated,
         );
     }
+    for (name, value, max) in [
+        ("task.crew", &mut task.crew, 128),
+        ("task.orchestrator", &mut task.orchestrator, 128),
+        ("task.pr_status", &mut task.pr_status, 128),
+        ("task.created_by", &mut task.created_by, 512),
+        ("task.planned_by", &mut task.planned_by, 512),
+        ("task.implemented_by", &mut task.implemented_by, 512),
+    ] {
+        if let Some(value) = value {
+            clip(value, max, name, truncated);
+        }
+    }
+    if task
+        .job_run_id
+        .as_ref()
+        .is_some_and(|id| !retain_reference(id, 512, "task.job_run_id", truncated))
+    {
+        task.job_run_id = None;
+    }
+    if let Some(location) = &mut task.job_run_machine {
+        if !retain_reference(
+            &location.machine_id,
+            512,
+            "task.job_run_machine.machine_id",
+            truncated,
+        ) {
+            task.job_run_machine = None;
+        } else if let Some(name) = &mut location.machine_name {
+            clip(name, 128, "task.job_run_machine.machine_name", truncated);
+        }
+    }
     for (name, values) in [
         ("task.context_files", &mut task.context_files),
-        ("task.tags", &mut task.tags),
         ("task.required_tools", &mut task.required_tools),
     ] {
         if values.len() > 100 {
             values.truncate(100);
             truncated.push(name.into());
         }
-        for (index, value) in values.iter_mut().enumerate() {
-            clip(value, 1024, &format!("{name}[{index}]"), truncated);
-        }
+        values.retain(|value| retain_reference(value, 1024, name, truncated));
+    }
+    if task.tags.len() > 100 {
+        task.tags.truncate(100);
+        truncated.push("task.tags".into());
+    }
+    for (index, value) in task.tags.iter_mut().enumerate() {
+        clip(value, 1024, &format!("task.tags[{index}]"), truncated);
     }
     if task.external_refs.len() > 100 {
         task.external_refs.truncate(100);
         truncated.push("task.external_refs".into());
     }
-    for reference in &mut task.external_refs {
-        clip(&mut reference.id, 1024, "task.external_refs.id", truncated);
-        if let Some(url) = &mut reference.url {
-            clip(url, 2048, "task.external_refs.url", truncated);
-        }
-    }
+    task.external_refs.retain(|reference| {
+        retain_reference(
+            &reference.system,
+            128,
+            "task.external_refs.system",
+            truncated,
+        ) && retain_reference(&reference.id, 1024, "task.external_refs.id", truncated)
+            && reference
+                .url
+                .as_ref()
+                .is_none_or(|url| retain_reference(url, 2048, "task.external_refs.url", truncated))
+    });
     if task.relations.len() > 100 {
         task.relations.truncate(100);
         truncated.push("task.relations".into());
     }
+    task.relations.retain(|relation| {
+        retain_reference(&relation.target, 512, "task.relations.target", truncated)
+    });
 }
 
 impl OrbitRuntime {
@@ -223,6 +277,12 @@ impl OrbitRuntime {
                     &format!("history[{index}].by"),
                     &mut truncated_fields,
                 );
+                clip(
+                    &mut history.event,
+                    128,
+                    &format!("history[{index}].event"),
+                    &mut truncated_fields,
+                );
                 history
             })
             .collect();
@@ -230,13 +290,37 @@ impl OrbitRuntime {
             .into_iter()
             .skip(artifacts_offset)
             .take(limit)
-            .map(|artifact| DesktopArtifactMetadata {
-                path: artifact.path,
-                media_type: artifact.media_type,
-                size_bytes: artifact.size_bytes,
-                sha256: artifact.sha256,
-                created_by: artifact.created_by,
-                created_at: artifact.created_at.to_rfc3339(),
+            .enumerate()
+            .filter_map(|(index, mut artifact)| {
+                let field = format!("artifacts[{}]", artifacts_offset.saturating_add(index));
+                if !retain_reference(
+                    &artifact.path,
+                    2048,
+                    &format!("{field}.path"),
+                    &mut truncated_fields,
+                ) {
+                    return None;
+                }
+                clip(
+                    &mut artifact.media_type,
+                    128,
+                    &format!("{field}.media_type"),
+                    &mut truncated_fields,
+                );
+                clip(
+                    &mut artifact.created_by,
+                    512,
+                    &format!("{field}.created_by"),
+                    &mut truncated_fields,
+                );
+                Some(DesktopArtifactMetadata {
+                    path: artifact.path,
+                    media_type: artifact.media_type,
+                    size_bytes: artifact.size_bytes,
+                    sha256: artifact.sha256,
+                    created_by: artifact.created_by,
+                    created_at: artifact.created_at.to_rfc3339(),
+                })
             })
             .collect();
         let writable = self.ensure_coordination_task_write_permitted();
@@ -305,7 +389,8 @@ impl OrbitRuntime {
             review: review_projection,
             review_reason,
         };
-        if snapshot.task.status == TaskStatus::Review
+        if !snapshot.content_truncated
+            && snapshot.task.status == TaskStatus::Review
             && snapshot
                 .task
                 .external_refs
@@ -323,6 +408,40 @@ impl OrbitRuntime {
                     };
                 }
             }
+        }
+        for (field, reason) in [
+            ("review_reason", &mut snapshot.review_reason),
+            ("reviewed_head_reason", &mut snapshot.reviewed_head_reason),
+            ("actions.edit.reason", &mut snapshot.actions.edit.reason),
+            (
+                "actions.comment.reason",
+                &mut snapshot.actions.comment.reason,
+            ),
+            ("actions.review.reason", &mut snapshot.actions.review.reason),
+            (
+                "actions.complete.reason",
+                &mut snapshot.actions.complete.reason,
+            ),
+        ] {
+            if let Some(value) = reason {
+                clip(value, 2048, field, &mut snapshot.truncated_fields);
+            }
+        }
+        if snapshot.reviewed_head.as_ref().is_some_and(|head| {
+            !retain_reference(head, 128, "reviewed_head", &mut snapshot.truncated_fields)
+        }) {
+            snapshot.reviewed_head = None;
+            let reason =
+                "PR head identity exceeds the desktop limit or contains redacted data".to_string();
+            snapshot.reviewed_head_reason = Some(reason.clone());
+            snapshot.actions.review = DesktopAction {
+                enabled: false,
+                reason: Some(reason.clone()),
+            };
+            snapshot.actions.complete = DesktopAction {
+                enabled: false,
+                reason: Some(reason),
+            };
         }
         if self.stores().tasks().desktop_task_revision(id)? != snapshot.revision {
             return Err(OrbitError::TaskRevisionConflict { task_id: id.into() });
@@ -621,7 +740,7 @@ impl OrbitRuntime {
             session,
         )
     }
-    fn desktop_write_result(
+    pub(super) fn desktop_write_result(
         &self,
         id: &str,
         replayed: bool,
@@ -638,7 +757,10 @@ impl OrbitRuntime {
                 replayed,
             })
         };
-        refresh().map_err(|error: OrbitError| OrbitError::Execution(format!("desktop write was accepted; refresh failed: {error}; reconcile by retrying the same request identity before submitting anything new")))
+        refresh().map_err(|error: OrbitError| OrbitError::DesktopWriteAccepted {
+            task_id: id.into(),
+            reason: error.to_string(),
+        })
     }
 
     fn desktop_validate_verdict(

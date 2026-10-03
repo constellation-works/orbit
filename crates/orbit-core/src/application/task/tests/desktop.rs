@@ -692,3 +692,140 @@ fn desktop_pr_head_is_observed_and_changed_head_refuses_verdict() {
     assert!(unavailable.reviewed_head_reason.is_some());
     assert!(!unavailable.actions.complete.enabled);
 }
+
+#[test]
+fn desktop_snapshot_bounds_legacy_labels_and_omits_oversized_identities() {
+    if !enter_isolated_child(
+        module_path!(),
+        "desktop_snapshot_bounds_legacy_labels_and_omits_oversized_identities",
+    ) {
+        return;
+    }
+    use crate::application::task::TaskRecordUpdateParams;
+    use orbit_types::task::{ExternalRef, TaskArtifact, TaskHistoryEntry};
+    let (_root, runtime) = test_runtime();
+    let session = session(false);
+    let task = runtime
+        .desktop_task_write(create("legacy-bounds"), None, None, &session)
+        .unwrap()
+        .snapshot
+        .task;
+    let credential = format!("ghp_{}", "a".repeat(36));
+    let attribution = format!("{credential} {}", "界".repeat(500));
+    let long_path = format!("a/{}/result.txt", vec!["x".repeat(200); 11].join("/"));
+    let mut visible = TaskArtifact::from_text("z-result.txt", "small body");
+    visible.media_type = "text/".to_string() + &"x".repeat(200);
+    visible.created_by = Some(attribution.clone());
+    runtime
+        .stores()
+        .task_records()
+        .update(
+            &task.id,
+            TaskRecordUpdateParams {
+                actor: "test".into(),
+                crew: Some(Some("c".repeat(1000))),
+                orchestrator: Some(Some("o".repeat(1000))),
+                created_by: Some(Some(attribution.clone())),
+                planned_by: Some(Some(attribution.clone())),
+                implemented_by: Some(Some(attribution)),
+                pr_status: Some(Some("p".repeat(1000))),
+                job_run_id: Some(Some("jrun-".to_string() + &"r".repeat(1000))),
+                external_refs: Some(vec![ExternalRef {
+                    system: "test".into(),
+                    id: "i".repeat(1500),
+                    url: None,
+                }]),
+                append_history: vec![TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "test".into(),
+                    event: "event".repeat(100),
+                    note: None,
+                    from_status: None,
+                    to_status: None,
+                }],
+                upsert_artifacts: vec![
+                    TaskArtifact::from_text(&long_path, "oversized logical address"),
+                    visible,
+                ],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let revision = runtime
+        .stores()
+        .tasks()
+        .desktop_task_revision(&task.id)
+        .unwrap();
+    let snapshot = runtime.desktop_task_snapshot(&task.id, &session).unwrap();
+    assert_eq!(snapshot.revision, revision);
+    assert!(snapshot.content_truncated);
+    assert!(!snapshot.actions.edit.enabled);
+    assert!(!snapshot.actions.review.enabled);
+    assert!(snapshot.task.crew.as_ref().unwrap().len() <= 128);
+    assert!(snapshot.task.orchestrator.as_ref().unwrap().len() <= 128);
+    assert!(snapshot.task.created_by.as_ref().unwrap().len() <= 512);
+    assert!(
+        !snapshot
+            .task
+            .created_by
+            .as_ref()
+            .unwrap()
+            .contains(&credential)
+    );
+    assert!(snapshot.task.job_run_id.is_none());
+    assert!(snapshot.task.external_refs.is_empty());
+    assert_eq!(snapshot.artifacts_total, 2);
+    assert_eq!(snapshot.artifacts.len(), 1);
+    assert_eq!(snapshot.artifacts[0].path, "z-result.txt");
+    assert!(snapshot.artifacts[0].media_type.len() <= 128);
+    assert!(snapshot.artifacts[0].created_by.len() <= 512);
+    assert!(!snapshot.artifacts[0].created_by.contains(&credential));
+    assert!(
+        snapshot
+            .history
+            .iter()
+            .all(|event| event.event.len() <= 128)
+    );
+    assert!(
+        snapshot
+            .truncated_fields
+            .iter()
+            .any(|field| field == "artifacts[0].path")
+    );
+    assert!(
+        snapshot
+            .truncated_fields
+            .iter()
+            .any(|field| field == "task.job_run_id")
+    );
+    let persisted = runtime.get_task(&task.id).unwrap();
+    assert_eq!(persisted.crew.unwrap().len(), 1000);
+    assert!(persisted.job_run_id.unwrap().len() > 512);
+    assert_eq!(
+        runtime.get_task_artifact_manifest(&task.id).unwrap()[0].path,
+        long_path
+    );
+}
+#[test]
+fn desktop_committed_write_with_missing_refresh_stays_accepted() {
+    if !enter_isolated_child(
+        module_path!(),
+        "desktop_committed_write_with_missing_refresh_stays_accepted",
+    ) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    let session = session(false);
+    let written = runtime
+        .desktop_task_write(create("accepted-before-refresh"), None, None, &session)
+        .unwrap();
+    let id = written.snapshot.task.id;
+    // Reproduce a competing deletion after receipt publication, before refreshing.
+    runtime.stores().tasks().delete_task(&id).unwrap();
+    let error = runtime
+        .desktop_write_result(&id, false, &session)
+        .unwrap_err();
+    assert!(
+        matches!(error, orbit_common::OrbitError::DesktopWriteAccepted { task_id, .. } if task_id == id)
+    );
+}

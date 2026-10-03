@@ -41,6 +41,10 @@ pub(super) fn write(
     let outcome = runtime.desktop_task_write(request, agent, model, session);
     let mut value = match outcome {
         Ok(result) => serde_json::to_value(result),
+        Err(OrbitError::DesktopWriteAccepted { task_id, reason }) => {
+            Ok(serde_json::json!({"accepted":true,"task_id":task_id,
+                "refresh_error":orbit_common::security::redaction::redact_all(&reason)}))
+        }
         Err(OrbitError::TaskRevisionConflict { task_id }) => {
             let snapshot = runtime.desktop_task_snapshot(&task_id, session)?;
             Ok(serde_json::json!({
@@ -50,10 +54,10 @@ pub(super) fn write(
         }
         Err(error @ (OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }
             | OrbitError::CapabilityDenied(_) | OrbitError::TaskStatusTransition(_))) => {
-            // Core maps every post-commit refresh failure to Execution. These
+            // Core maps post-commit refresh failures to DesktopWriteAccepted. These
             // variants therefore prove validation refused before a mutation.
             Ok(serde_json::json!({"mutation_applied":false,
-                "refusal":{"code":"desktop_validation_refused", "message":error.to_string()}}))
+                "refusal":{"code":"desktop_validation_refused", "message":orbit_common::security::redaction::redact_all(&error.to_string())}}))
         }
         Err(error) => return Err(error),
     }.map_err(|error: serde_json::Error| OrbitError::Execution(format!("serialize desktop response: {error}")))?;

@@ -355,3 +355,51 @@ fn legacy_task_list_text_and_relation_collections_are_explicitly_bounded() {
     assert_eq!(row["id"], task.id);
     assert_eq!(output["total"], 1);
 }
+
+#[test]
+fn omitted_artifact_addresses_do_not_strand_following_detail_pages() {
+    if !isolated("omitted_artifact_addresses_do_not_strand_following_detail_pages") {
+        return;
+    }
+    use crate::application::task::TaskRecordUpdateParams;
+    use orbit_types::task::TaskArtifact;
+    let _guard = unmanaged_tool_env_guard();
+    let (_root, runtime, repo) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo,
+        "Artifact pages",
+        "",
+        TaskStatus::Review,
+        &[],
+    );
+    let long_path = format!("a/{}/result.txt", vec!["x".repeat(200); 11].join("/"));
+    runtime
+        .stores()
+        .task_records()
+        .update(
+            &task.id,
+            TaskRecordUpdateParams {
+                actor: "test".into(),
+                upsert_artifacts: vec![
+                    TaskArtifact::from_text(long_path, "omitted metadata"),
+                    TaskArtifact::from_text("z-result.txt", "visible metadata"),
+                ],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let mut input = request("task");
+    input["id"] = json!(task.id);
+    input["limit"] = json!(1);
+    let first = read(&runtime, &ToolSessionContext::default(), input.clone()).unwrap();
+    assert_eq!(first["artifacts_total"], 2);
+    assert_eq!(first["artifacts"], json!([]));
+    assert_eq!(first["artifacts_pagination"]["next_offset"], 1);
+    assert_eq!(first["artifacts_pagination"]["truncated"], true);
+    input["artifacts_offset"] = json!(1);
+    let next = read(&runtime, &ToolSessionContext::default(), input).unwrap();
+    assert_eq!(next["artifacts_total"], 2);
+    assert_eq!(next["artifacts"][0]["path"], "z-result.txt");
+    assert!(next["artifacts_pagination"]["next_offset"].is_null());
+}

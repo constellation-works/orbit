@@ -1104,3 +1104,143 @@ test('a refusal without explicit no-mutation proof remains an ambiguous outcome 
   f.click('refresh');
   assert.deepEqual(f.last().params.arguments,original.params.arguments);
 });
+test('canonical run projection displays separate timestamps and step truncation alongside usage and logs',async()=>{
+  const f=fixture();
+  await f.init();
+  f.click('runs');
+  f.answer(f.last(),f.list([{
+    id:'jrun-real',run_id:'jrun-real',job_id:'ship',state:'failed',created_at:'2026-10-03T01:00:00Z',started_at:'2026-10-03T01:01:00Z'
+  }]));
+  await flush();
+  f.get('list').children[0].handlers.click();
+  f.answer(f.last(),{
+    schema_version:1,workspace:'host-a/ws_shared',observed_at:'2026-10-03T01:10:00Z',scope:'run',run:{
+      id:'jrun-real',run_id:'jrun-real',job_id:'ship',state:'failed',attempt:1,scheduled_at:'2026-10-03T00:59:00Z',created_at:'2026-10-03T01:00:00Z',started_at:'2026-10-03T01:01:00Z',finished_at:'2026-10-03T01:09:00Z',duration_ms:480000,steps:Array.from({
+        length:50
+      },(_,i)=>({
+        step_index:i,target_id:'ORB-1',target_type:'task',state:'failed',error_code:'fixture_failed',error_message:'<script>evil()</script>'
+      })),steps_total:70,steps_truncated:true,usage:{
+        state:'unavailable'
+      }
+    },usage:{
+      state:'unavailable'
+    },execution_progress:{
+      state:'observed',active_step:null,provider_processes:{
+        limit:50,truncated:false,items:[]
+      }
+    },logs:{
+      state:'observed',items:[{
+        event_id:'event',ts:'2026-10-03T01:09:00Z',step_id:'step',step_index:0,provider:'fixture',stdout:'<img onerror=evil()>',stderr:'fixture error',stdout_truncated:true,stderr_truncated:false,exit_code:1,timed_out:false,duration_ms:1
+      }],total:1,pagination:{
+        offset:0,limit:50,truncated:false,next_offset:null
+      },available_through:1,excerpt_max_bytes:4096
+    }
+  });
+  await flush();
+  const fields=f.get('details').children;
+  const timestamps=fields.find(n=>n.children[0].textContent==='Timestamps').children[1].textContent;
+  for(const value of ['2026-10-03T00:59:00Z','2026-10-03T01:00:00Z','2026-10-03T01:01:00Z','2026-10-03T01:09:00Z'])assert.ok(timestamps.includes(value));
+  const coverage=fields.find(n=>n.children[0].textContent==='Step coverage').children[1].textContent;
+  assert.ok(coverage.includes('50 steps shown of 70'));
+  assert.ok(coverage.includes('Truncated'));
+  assert.ok(fields.find(n=>n.children[0].textContent==='Cost / usage').children[1].textContent.includes('unavailable'));
+  assert.ok(fields.find(n=>n.children[0].textContent==='Log excerpts').children[1].textContent.includes('<img onerror=evil()>'));
+  assert.equal(f.get('more-logs').hidden,true);
+});
+test('accepted write with failed snapshot remains successful and reconciles the same identity without another effect',async()=>{
+  const f=fixture();
+  await f.init();
+  f.click('refresh');
+  f.answer(f.last(),f.list([{
+    id:'ORB-1',title:'Task'
+  }]));
+  await flush();
+  f.get('list').children[0].handlers.click();
+  f.answer(f.last(),f.detail());
+  await flush();
+  f.get('comment').value='One accepted comment';
+  f.get('comment-form').handlers.submit({
+    preventDefault(){
+    }
+  });
+  const original=f.last();
+  let effects=0;
+  const receipts=new Set();
+  const apply=request=>{
+    const key=request.params.arguments.request_id;
+    if(!receipts.has(key)){
+      receipts.add(key);
+      effects++;
+    }
+  };
+  apply(original);
+  f.answer(original,{
+    accepted:true,task_id:'ORB-1',workspace:'host-a/ws_shared',refresh_error:'Snapshot currently unreadable'
+  });
+  await flush();
+  assert.equal(effects,1);
+  assert.equal(f.get('comment').value,'One accepted comment');
+  assert.equal(f.get('comment-submit').disabled,true);
+  assert.equal(f.get('write-state').hidden,false);
+  assert.ok(f.get('write-state').textContent.includes('Write succeeded; refresh unavailable'));
+  assert.ok(!f.get('state').textContent.includes('outcome unknown'));
+  f.click('refresh');
+  const retry=f.last();
+  assert.deepEqual(retry.params.arguments,original.params.arguments);
+  apply(retry);
+  f.answer(retry,{
+    snapshot:f.detail('ORB-1','after-comment').snapshot,replayed:true
+  });
+  await flush();
+  assert.equal(effects,1);
+  assert.equal(f.get('comment').value,'');
+  assert.ok(f.get('write-state').textContent.includes('one accepted effect'));
+});
+test('a later generic reconcile error cannot turn a proven accepted write into an unknown outcome',async()=>{
+  const f=fixture();
+  await f.init();
+  f.click('create');
+  f.get('draft-title').value='Accepted proposal';
+  f.get('draft-criteria').value='Criterion';
+  f.get('task-form').handlers.submit({
+    preventDefault(){
+    }
+  });
+  const original=f.last();
+  f.answer(original,{
+    accepted:true,task_id:'ORB-new',workspace:'host-a/ws_shared',refresh_error:'Temporary read failure'
+  });
+  await flush();
+  f.click('refresh');
+  f.answer(f.last(),{
+    message:'Transport failure'
+  },true);
+  await flush();
+  assert.ok(f.get('write-state').textContent.includes('Write succeeded'));
+  assert.ok(f.get('state').textContent.includes('Write succeeded'));
+  assert.ok(!f.get('state').textContent.includes('outcome unknown'));
+  assert.equal(f.get('draft-title').value,'Accepted proposal');
+  assert.equal(f.get('save').disabled,true);
+  f.click('refresh');
+  assert.deepEqual(f.last().params.arguments,original.params.arguments);
+});
+test('canonical run rows show observed state attempt and duration without treating missing duration as zero',async()=>{
+  const f=fixture();
+  await f.init();
+  f.click('runs');
+  f.answer(f.last(),f.list([{
+    id:'jrun-failed',run_id:'jrun-failed',state:'failed',attempt:2,duration_ms:1250,created_at:'2026-10-03T01:00:00Z'
+  },{
+    id:'jrun-running',run_id:'jrun-running',state:'running',attempt:1,duration_ms:null,created_at:'2026-10-03T01:00:00Z'
+  }]));
+  await flush();
+  const failed=f.get('list').children[0].children[0].textContent;
+  assert.ok(failed.includes('failed'));
+  assert.ok(failed.includes('Attempt 2'));
+  assert.ok(failed.includes('Duration 1250 ms'));
+  assert.ok(failed.includes('Step unavailable'));
+  const running=f.get('list').children[1].children[0].textContent;
+  assert.ok(running.includes('running'));
+  assert.ok(running.includes('Duration unavailable'));
+  assert.ok(!running.includes('Duration 0 ms'));
+});

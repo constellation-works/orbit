@@ -9,7 +9,7 @@
   const el = id => document.getElementById(id);
   const pending = new Map(), drafts = new Map(), annotations = new Map(), destinations = new Set();
   let rpcId=0, generation=0, ready=false, disposed=false, capabilities={
-  }, workspace='', view='tasks', offset=0, selected=null, snapshot=null, fresh=false, poll=null, failures=0, sentContext=false, uncertain=null, busy=false, editMode=false, editorRevision=null, editorTarget=null, restoredOutcomes=new Map(), appliedFilters={
+  }, workspace='', view='tasks', offset=0, selected=null, snapshot=null, fresh=false, poll=null, failures=0, sentContext=false, acceptedReceipt=null, uncertain=null, busy=false, editMode=false, editorRevision=null, editorTarget=null, restoredOutcomes=new Map(), appliedFilters={
     search:'',status:'',priority:''
   }, nextListOffset=null, reviewRevision=null, reviewHead=null, commentsOffset=0, logsOffset=0, historyOffset=0, artifactsOffset=0;
   const bound = (v,n=16000) => typeof v === 'string' ? v.slice(0,n) : '';
@@ -137,7 +137,7 @@
       b.setAttribute('aria-expanded',String(selected?.id===id));
       b.textContent=view==='runs'?`${id} · ${row.state||row.status||'Unknown'}`:`${id} · ${row.title||'Untitled'}`;
       const extra=document.createElement('span');
-      extra.textContent=view==='runs'?`${row.current_step||row.step||'Step unavailable'} · ${row.updated_at||row.created_at||''}`:`${row.status||''} · ${row.priority||''} · Crew ${row.crew||'unassigned'} · ${pretty(row.blockers||row.dependencies||'No blocker summary')} · ${row.updated_at||''}`;
+      extra.textContent=view==='runs'?`${row.state||'State unavailable'} · ${row.attempt==null?'Attempt unavailable':'Attempt '+row.attempt} · ${row.duration_ms==null?'Duration unavailable':'Duration '+row.duration_ms+' ms'} · ${row.current_step||row.step||'Step unavailable'} · ${row.updated_at||row.created_at||''}`:`${row.status||''} · ${row.priority||''} · Crew ${row.crew||'unassigned'} · ${pretty(row.blockers||row.dependencies||'No blocker summary')} · ${row.updated_at||''}`;
       const truncated=[row.title_truncated?'title':null,row.crew_truncated?'crew':null,row.relations_truncated?`relations (${row.relations?.length??50} of ${row.relations_total??'unknown'})`:null,row.dependencies_truncated?`dependencies (${row.dependencies?.length??50} of ${row.dependencies_total??'unknown'})`:null].filter(Boolean);
       if(truncated.length)extra.textContent+=` · Truncated: ${truncated.join(', ')}`;
       if(row.job_run_id_omitted)extra.textContent+=' · Run reference omitted';
@@ -179,8 +179,8 @@
     if(publicId(entity)!==selected.id)throw new Error('Entity identity mismatch');
     if(data.workspace&&data.workspace!==workspace)throw new Error('Destination identity mismatch');
     fresh=true;
-    el('projection-warning').hidden=!data.content_truncated;
-    el('projection-warning').textContent=data.content_truncated?`Detail projection truncated: ${(data.truncated_fields||[]).join(', ')||'large task fields'}. Editing/review may be unavailable until the complete evidence can be read.`:'';
+    el('projection-warning').hidden=!data.content_truncated&&!data.truncated_fields?.length;
+    el('projection-warning').textContent=(data.content_truncated||data.truncated_fields?.length)?`Detail projection truncated: ${(data.truncated_fields||[]).join(', ')||'large task fields'}. Editing/review may be unavailable until the complete evidence can be read.`:'';
     el('panel').hidden=false;
     el('panel').classList.remove('stale');
     el('title').textContent=entity.title||selected.id;
@@ -189,7 +189,7 @@
     if(selected.kind==='task'){
       const comments=data.comments?.items||data.comments||entity.comments||[];
       const hasReviewComment=comments.some(comment=>commentBody(comment).startsWith('desktop_review_verdict='));
-      for(const [label,key]of [['Status','status'],['Description','description'],['Acceptance criteria','acceptance_criteria'],['Crew','crew'],['Priority','priority'],['Dependencies','dependencies'],['Relations','relations'],['Execution summary','execution_summary'],['Review evidence','review'],['Open workflow findings','findings'],['Artifacts','artifacts'],['External references / pull requests','external_refs'],['PR delivery state','pr_status'],['Reviewed PR head','reviewed_head'],['PR evidence availability','reviewed_head_reason'],['History','history']])field(label,data[key]??entity[key]??(key==='dependencies'?entity.relations:key==='review'&&hasReviewComment?'Recorded review comments below; workflow findings unavailable.':undefined)??'Unavailable');
+      for(const [label,key]of [['Status','status'],['Description','description'],['Acceptance criteria','acceptance_criteria'],['Crew','crew'],['Priority','priority'],['Dependencies','dependencies'],['Relations','relations'],['Execution summary','execution_summary'],['Review evidence','review'],['Review evidence availability','review_reason'],['Open workflow findings','findings'],['Artifacts','artifacts'],['External references / pull requests','external_refs'],['PR delivery state','pr_status'],['Reviewed PR head','reviewed_head'],['PR evidence availability','reviewed_head_reason'],['History','history']])field(label,data[key]??entity[key]??(key==='dependencies'?entity.relations:key==='review'&&hasReviewComment?'Recorded review comments below; workflow findings unavailable.':undefined)??'Unavailable');
       renderComments(comments);
       el('comment-form').hidden=false;
       el('review-form').hidden=entity.status!=='review';
@@ -218,7 +218,10 @@
       }
     }
     else{
-      for(const [label,key]of [['Status','state'],['Steps','steps'],['Workers / progress','execution_progress'],['Timestamps','timestamps'],['Duration','duration_ms'],['Cost / usage','usage'],['Failure details','failure'],['Log excerpts','logs']])field(label,data[key]??entity[key]??'Unavailable');
+      field('Timestamps',Object.fromEntries(['scheduled_at','created_at','started_at','finished_at'].map(key=>[key,entity[key]??'Unavailable'])));
+      const stepsShown=Array.isArray(entity.steps)?entity.steps.length:0;
+      field('Step coverage',`${stepsShown} steps shown of ${entity.steps_total??'unknown'}. ${entity.steps_truncated?'Truncated to the first 50 steps.':''}`);
+      for(const [label,key]of [['Status','state'],['Steps','steps'],['Workers / progress','execution_progress'],['Duration','duration_ms'],['Cost / usage','usage'],['Failure details','failure'],['Log excerpts','logs']])field(label,data[key]??entity[key]??'Unavailable');
       el('comment-form').hidden=true;
       el('review-form').hidden=true;
     }
@@ -365,7 +368,7 @@
     let payload;
     if(uncertain){
       payload=uncertain;
-      state('Reconciling the same request identity and payload…');
+      state(acceptedReceipt?'Write succeeded; reconciling its authoritative snapshot with the same request identity…':'Reconciling the same request identity and payload…');
     }
     else{
       try {
@@ -378,12 +381,25 @@
         return;
       }
       uncertain=payload;
+      acceptedReceipt=null;
     }
     const submittedGeneration=generation;
     busy=true;
     controls();
     try{
       const result=await tool('orbit_desktop_task_write',payload);
+      if(result.accepted===true&&!result.snapshot){
+        acceptedReceipt={
+          workspace:payload.workspace,task_id:result.task_id||operation.id
+        };
+        const message=`${payload.workspace} · ${acceptedReceipt.task_id||'proposed task'}: Write succeeded; refresh unavailable. ${bound(result.refresh_error,1000)} Refresh reconciles the same accepted request; draft preserved.`;
+        el('write-state').hidden=false;
+        el('write-state').textContent=message;
+        if(payload.workspace===workspace&&submittedGeneration===generation)stale(message);
+        else state(message);
+        return;
+      }
+      if(acceptedReceipt&&(result.conflict||result.refusal))throw new Error('Backend refused a previously accepted request; authoritative reconciliation is still required');
       if(result.refusal&&result.mutation_applied===false){
         uncertain=null;
         state(`${payload.workspace} · ${operation.id||'proposed task'}: write refused. ${bound(result.refusal.message,1000)} Draft preserved; correct it and submit again.`);
@@ -406,6 +422,9 @@
       }
       if(!result.snapshot?.task||(operation.kind!=='create'&&publicId(result.snapshot.task)!==operation.id))throw new Error('Incompatible write receipt; reconcile the same request identity');
       uncertain=null;
+      acceptedReceipt=null;
+      el('write-state').hidden=false;
+      el('write-state').textContent=`${payload.workspace} · ${publicId(result.snapshot.task)}: ${result.replayed?'Write reconciled; one accepted effect.':'Write succeeded.'}`;
       state(result.replayed?'Request reconciled; one accepted effect.':'Write succeeded.');
       const same=payload.workspace===workspace&&submittedGeneration===generation;
       if(same&&result.snapshot?.task){
@@ -435,7 +454,14 @@
       if(!disposed)state(`${message} ${fresh?'Current selection is refreshed.':'Refresh unavailable; the write still succeeded.'}`);
     }
     catch(e){
-      if(payload.workspace===workspace&&submittedGeneration===generation)stale(`Write outcome requires reconciliation. ${bound(e.message,1000)} Refresh reconciles the identical request; your draft is preserved.`);
+      if(acceptedReceipt){
+        const message=`${payload.workspace} · ${acceptedReceipt.task_id||operation.id||'task'}: Write succeeded; authoritative refresh remains unavailable. ${bound(e.message,1000)} Retry uses the same accepted request identity.`;
+        el('write-state').hidden=false;
+        el('write-state').textContent=message;
+        if(payload.workspace===workspace&&submittedGeneration===generation)stale(message);
+        else state(message);
+      }
+      else if(payload.workspace===workspace&&submittedGeneration===generation)stale(`Write outcome requires reconciliation. ${bound(e.message,1000)} Refresh reconciles the identical request; your draft is preserved.`);
       else state(`${payload.workspace}: write outcome unknown. Refresh reconciles the original request without changing this selection.`);
     }
     finally{
