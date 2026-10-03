@@ -7,12 +7,12 @@ This matrix covers the exact 37 modern advertised names in `crates/orbit-cli/tes
 | Advertised tool | Function | Refusal | Persistence | Workspace / authority | Limit |
 | --- | --- | --- | --- | --- | --- |
 | orbit_agent_invoke | S-agent | S-agent-denial | — | S-agent-denial | Synthetic CLI response; real providers untested |
-| orbit_auto_task_add | I-auto-crud | I-auto-policy | I-owner | I-owner | Positive runtime routing; no dedicated stdio CRUD proof |
-| orbit_auto_task_delete | I-auto-delete | I-auto-delete | I-auto-delete | — | Forced/open-mint behavior is runtime evidence |
-| orbit_auto_task_list | I-auto-list | S-replica | I-auto-crud | I-owner | Bounded extension also I-domain |
-| orbit_auto_task_mint | I-auto-mint | I-auto-policy | I-auto-mint | I-domain | Manual mint creates a task; no provider dispatch |
-| orbit_auto_task_toggle | I-domain | I-domain | I-owner | I-owner | Checked stale state is runtime evidence |
-| orbit_auto_task_update | I-auto-crud | I-auto-policy | I-owner | I-owner | Positive runtime routing; no dedicated stdio CRUD proof |
+| orbit_auto_task_add | S-auto-crud, I-auto-crud | I-auto-policy | S-auto-crud, I-owner | I-owner | Definition creation read back after server restart |
+| orbit_auto_task_delete | S-auto-crud, I-auto-delete | S-auto-crud, I-auto-delete | S-auto-crud, I-auto-delete | — | Open-mint refusal preserves bytes; forced deletion retains minted task |
+| orbit_auto_task_list | S-auto-crud, I-auto-list | S-replica | S-auto-crud, I-auto-crud | I-owner | Ordinary list read after restart; bounded extension also I-domain |
+| orbit_auto_task_mint | S-auto-crud, I-auto-mint | I-auto-policy | S-auto-crud, I-auto-mint | I-domain | Creates a proposed task without dispatch; scheduler cursor proof I-auto-mint |
+| orbit_auto_task_toggle | S-auto-crud, I-domain | I-domain | S-auto-crud, I-owner | I-owner | Ordinary toggle persisted across restart; checked stale toggle also I-domain |
+| orbit_auto_task_update | S-auto-crud, I-auto-crud | S-auto-crud, I-auto-policy | S-auto-crud, I-owner | S-auto-crud, I-owner | Updated description read after restart; wrong workspace preserves bytes |
 | orbit_command_exec | I-command | I-command-denial | I-command-audit | I-command-denial | Local safe argv fixtures; remote command effects untested |
 | orbit_crew_list | S-replica | S-selector | — | S-federated | Read-only catalog |
 | orbit_drain_claim_bind | I-bind-settle | I-bind-settle | I-bind-settle | I-bind-settle | Recording transport; no live follower |
@@ -28,7 +28,7 @@ This matrix covers the exact 37 modern advertised names in `crates/orbit-cli/tes
 | orbit_search | S-search | S-search-denial | S-search | S-replica | Lexical consistency; external semantic provider untested |
 | orbit_task_add | S-records, S-guarded | S-context | S-guarded | S-replica, S-selector | Guarded proposed create and ordinary authoring |
 | orbit_task_artifact_get | S-artifact | I-artifact-denial | I-artifact | S-artifact | Text/raster fixtures; no external download |
-| orbit_task_artifact_put | I-artifact | I-artifact-authority | I-artifact | I-artifact-authority | Runtime byte/provenance proof; no dedicated stdio write proof |
+| orbit_task_artifact_put | S-artifact-write | S-artifact-write, I-artifact-authority | S-artifact-write | S-artifact-write, I-artifact-authority | Exact UTF-8 bytes after server restart; path and workspace refusals |
 | orbit_task_list | S-records | S-selector | S-guarded | S-selector | Field projections, bounded pages |
 | orbit_task_pull | I-pull | I-pull-denial | I-pull | I-pull-denial | Recording transport; no live remote owner |
 | orbit_task_show | S-records, S-guarded | S-selector | S-guarded | S-selector | Global ID and explicit workspace filter |
@@ -38,9 +38,9 @@ This matrix covers the exact 37 modern advertised names in `crates/orbit-cli/tes
 | orbit_workflow_auto | S-domain, I-drain | S-domain, I-drain | I-drain | S-domain | Stdio status; start/stop runtime fixture, no provider delivery |
 | orbit_workflow_run_delivery | S-delivery | S-delivery | — | S-delivery | Agent can read bounded delivery evidence without run access |
 | orbit_workflow_run_list | S-domain, I-runs | I-runs | S-domain | I-runs | Combined catalog observed over stdio |
-| orbit_workflow_run_resume | I-resume (application only) | S-domain, I-runs | I-resume (application only) | I-runs | Positive production MCP resume not demonstrated |
-| orbit_workflow_run_show | I-runs | I-runs | I-runs | I-runs | Recovery/lineage and unavailable evidence fixtures |
-| orbit_workflow_run_workers | I-workers (application only) | S-domain, I-workers | I-workers (application only) | S-domain | Positive production MCP adjustment not demonstrated |
+| orbit_workflow_run_resume | S-resume | S-resume, I-runs | S-resume | S-resume, I-runs | Deterministic sleep-only job; retained successful checkpoint and retry lineage |
+| orbit_workflow_run_show | S-resume, I-runs | I-runs | S-resume, I-runs | I-runs | Retry lineage read after server restart; unavailable evidence fixtures |
+| orbit_workflow_run_workers | S-workers | S-workers, I-workers | S-workers | S-workers | Disposable running record; no provider or detached worker dispatched |
 | orbit_workflow_ship | I-ship | I-ship, S-governed | I-ship | I-ship | Synthetic dispatch; actual provider/GitHub delivery untested |
 | orbit_workspace_list | S-federated | S-selector | — | S-federated | Local machine-qualified routing; live SSH destinations untested |
 
@@ -60,6 +60,10 @@ All `S` proofs are in `crates/orbit-cli/tests/mcp_roundtrip.rs` or its indicated
 - **S-rehome**: `mcp_friction_rehome_moves_a_record_into_its_registered_owner` asserts target copy/source disposition and repeated refusal.
 - **S-context**: `mcp_task_add_and_update_validate_context_selectors`.
 - **S-search / S-search-denial**: `task_mutations_are_immediately_searchable_from_the_cli_and_mcp` / `mcp_search_without_query_or_tag_keeps_its_refusal_message`.
+- **S-artifact-write**: `transport_operations::stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape` attaches exact bytes, restarts the server, reads them back, and proves source/destination escapes and unknown workspace cannot alter the artifact projection.
+- **S-auto-crud**: `transport_operations::stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state` adds/updates/toggles/reloads a definition, mints a proposed task, proves open-mint deletion and wrong-workspace update preserve bytes, forces definition deletion while retaining the task, and asserts no run was dispatched.
+- **S-workers**: `transport_operations::stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unauthorized_calls` seeds a disposable running record, adjusts its ceiling through stdio, reopens the revision, and proves stale, wrong-workspace and unprivileged calls preserve state. No worker is spawned.
+- **S-resume**: `transport_operations::stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_lineage` resumes a failed two-step sleep-only job, observes success over stdio, reopens retry lineage, proves the successful checkpoint was retained, and refuses completed-run and unprivileged resume. The worker performs no provider dispatch.
 - **S-artifact**: `mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_filter`.
 - **S-delivery**: `an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run`.
 - **S-governed**: `mcp_server_advertises_governed_tools_but_denies_an_unprivileged_session` and `a_remote_originated_agent_session_is_refused_a_governed_tool`. Advertisement alone grants nothing.
@@ -96,4 +100,4 @@ The distributed proofs are in `crates/orbit-core/src/application/distributed/tes
 
 `federated::tests::route::old_same_name_peer_without_extension_schema_refuses_before_dispatch` checks that snapshot/view/default-input and every guarded task field are refused on old same-name schemas before any destination call. `domain_clients_negotiate_legacy_peers_before_dispatch_and_keep_unknown_outcomes` checks a post-dispatch lost reply remains unknown and is never resubmitted.
 
-The highest remaining transport gaps are positive MCP resume/worker-ceiling adjustment, stdio artifact writes, and stdio auto-task CRUD. The corresponding runtime/application behavior has named evidence above, but should not be presented as production MCP proof. Real remote deployment, an installed historical mux binary, native launcher rendering, real provider invocation/completion, remote candidate settlement and GitHub delivery were not run. Parser/schema-only evidence covers legal field names and discovery shape; it proves neither admission nor a durable effect.
+Positive stdio resume, worker-ceiling adjustment, artifact writes and auto-task CRUD now have the isolated proofs above. They cover the stated transitions, not every legal argument or concurrent interleaving. Real remote deployment, an installed historical mux binary, native launcher rendering, real provider invocation/completion, remote candidate settlement and GitHub delivery were not run. Parser/schema-only evidence covers legal field names and discovery shape; it proves neither admission nor a durable effect.
