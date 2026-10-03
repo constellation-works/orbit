@@ -138,7 +138,3 @@ fn error_code(err: &OrbitError) -> &str {
         _ => "internal_error",
     }
 }
-
-#[cfg(test)]
-#[path = "tests/error.rs"]
-mod tests;

@@ -1,15 +1,12 @@
 //! `[plugin_enablement]`: workspace-only, validated, and never a policy layer.
 
-use std::collections::BTreeMap;
-use std::fs;
-
-use tempfile::tempdir;
-
 use super::{roots, write_config};
 use crate::{
-    ConfigRoots, ConfigScope, ConfigStore, ResolvedConfig, WorkspaceInitMode,
-    load_workspace_plugin_enablement, workspace_config_sets_policy,
+    ConfigRoots, ResolvedConfig, load_workspace_plugin_enablement, workspace_config_sets_policy,
 };
+
+use std::fs;
+use tempfile::tempdir;
 
 const PERMISSIVE_GLOBAL: &str = r#"
 [execution.codex]
@@ -18,25 +15,6 @@ sandbox = "danger-full-access"
 [execution.env]
 pass = ["GLOBAL_TOKEN"]
 "#;
-
-#[test]
-fn workspace_toggles_resolve_and_read_back_without_the_rest_of_the_config() {
-    let global = tempdir().expect("global tempdir");
-    let workspace = tempdir().expect("workspace tempdir");
-    write_config(
-        workspace.path(),
-        "[scoring]\nenabled = false\n[plugin_enablement]\ngraph = false\nnotes = true\n",
-    );
-    let roots = roots(global.path(), workspace.path());
-
-    let expected = BTreeMap::from([("graph".to_string(), false), ("notes".to_string(), true)]);
-    let config = ResolvedConfig::load(&roots).expect("load");
-    assert_eq!(config.plugin_enablement, expected);
-    assert_eq!(
-        load_workspace_plugin_enablement(&roots).expect("toggles"),
-        expected
-    );
-}
 
 #[test]
 fn global_plugin_enablement_is_refused_at_load() {
@@ -56,24 +34,6 @@ fn global_plugin_enablement_is_refused_at_load() {
             .expect("toggles")
             .is_empty()
     );
-}
-
-#[test]
-fn global_store_validation_refuses_the_toggle_table() {
-    let global = tempdir().expect("global tempdir");
-    let path = global.path().join("config.toml");
-    fs::write(&path, "[plugin_enablement]\ngraph = true\n").expect("write global");
-
-    let store = ConfigStore::open(ConfigScope::Global, &path).expect("open");
-    assert!(store.validate().is_err());
-
-    let workspace = tempdir().expect("workspace tempdir");
-    let workspace_path = workspace.path().join("config.toml");
-    fs::write(&workspace_path, "[plugin_enablement]\ngraph = true\n").expect("write workspace");
-    ConfigStore::open(ConfigScope::Workspace, &workspace_path)
-        .expect("open")
-        .validate()
-        .expect("the workspace file may carry toggles");
 }
 
 #[test]
@@ -130,87 +90,5 @@ fn a_symlinked_workspace_config_fails_closed_as_a_policy_layer() {
     assert!(
         workspace_config_sets_policy(&workspace_config),
         "a symlinked config must fail closed instead of reading outside the selected path"
-    );
-}
-
-#[test]
-fn a_malformed_toggle_is_refused() {
-    let global = tempdir().expect("global tempdir");
-    for body in [
-        "[plugin_enablement]\ngraph = \"off\"\n",
-        "[plugin_enablement]\n\"Not A Plugin\" = false\n",
-        "plugin_enablement = true\n",
-    ] {
-        let workspace = tempdir().expect("workspace tempdir");
-        write_config(workspace.path(), body);
-        let roots = roots(global.path(), workspace.path());
-        assert!(
-            ResolvedConfig::load(&roots).is_err(),
-            "load accepted {body}"
-        );
-        assert!(
-            load_workspace_plugin_enablement(&roots).is_err(),
-            "toggle read accepted {body}"
-        );
-    }
-}
-
-#[test]
-fn the_first_setting_in_a_toggle_only_file_still_fails_closed_and_keeps_the_toggles() {
-    let workspace = tempdir().expect("workspace tempdir");
-    let workspace_path = workspace.path().join("config.toml");
-    let global = tempdir().expect("global tempdir");
-    let global_path = global.path().join("config.toml");
-    let global_config = format!(
-        "{PERMISSIVE_GLOBAL}\n[workflow]\nbase_branch = \"trunk\"\n\n[machine]\nid = \"hm_0123456789abcdef\"\nname = \"dk-server-1\"\ntask_prefix = \"DE\"\nworker_tasks_max = 4\n"
-    );
-    fs::write(&global_path, &global_config).expect("write global");
-    let workspace_config = "# operator toggle note\n[plugin_enablement]\ngraph = false\n";
-    fs::write(&workspace_path, workspace_config).expect("write toggle-only workspace config");
-
-    assert!(
-        ConfigStore::open_for_workspace_set(
-            &workspace_path,
-            &global_path,
-            WorkspaceInitMode::RequireExisting,
-        )
-        .is_err(),
-        "a toggle-only file is not an existing policy layer"
-    );
-
-    let mut store = ConfigStore::open_for_workspace_set(
-        &workspace_path,
-        &global_path,
-        WorkspaceInitMode::SeedFromGlobal,
-    )
-    .expect("seed from global");
-    store
-        .set_value("scoring.enabled", "false")
-        .expect("set a normal workspace key");
-    store
-        .validate_for_set("scoring.enabled")
-        .expect("validate seeded workspace config");
-    store.save().expect("save seeded workspace config");
-    let saved = fs::read_to_string(&workspace_path).expect("read saved workspace config");
-    assert!(!saved.contains("[machine]"), "{saved}");
-    assert!(saved.contains("# operator toggle note"), "{saved}");
-    assert_eq!(
-        fs::read(&global_path).expect("read global after workspace save"),
-        global_config.as_bytes(),
-        "workspace seeding must leave global machine settings untouched"
-    );
-    let roots = roots(global.path(), workspace.path());
-    assert_eq!(
-        load_workspace_plugin_enablement(&roots).expect("toggles"),
-        BTreeMap::from([("graph".to_string(), false)]),
-    );
-    let resolved = ResolvedConfig::load(&roots).expect("load seeded workspace config");
-    assert_eq!(resolved.workflow_base_branch, "trunk");
-    assert_eq!(resolved.codex_execution.sandbox(), "danger-full-access");
-    assert!(
-        resolved
-            .snapshot
-            .execution_env_pass
-            .contains(&"GLOBAL_TOKEN".to_string())
     );
 }

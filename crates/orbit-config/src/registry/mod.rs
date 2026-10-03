@@ -183,8 +183,6 @@ pub(crate) use keys::{
     REMOVED_CONFIG_KEYS, is_machine_identity_key, parse_crew_field_key, removed_key_note,
 };
 pub(crate) use settings::read_optional;
-#[cfg(test)]
-pub(crate) use settings::resolve_default_crew;
 pub use settings::{
     CONFIG_KEY_REGISTRY, ConfigSnapshot, MachineSettings, WorkerContainmentSettings,
 };

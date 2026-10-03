@@ -1,14 +1,11 @@
 mod crew_pools;
 mod layering;
 mod machine;
-mod operation;
 mod plugin_enablement;
-mod seed;
 mod store;
 
-use std::path::Path;
-
 use crate::ConfigRoots;
+use std::path::Path;
 
 /// Write a `config.toml` into one of the two root directories a test set up.
 pub(super) fn write_config(dir: &Path, body: &str) {

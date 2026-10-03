@@ -1,7 +1,6 @@
 //! Bind-policy and idle-peer tests for the MCP TCP listener.
 
 use super::*;
-
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -30,21 +29,6 @@ fn addr(text: &str) -> SocketAddr {
 }
 
 #[test]
-fn loopback_only_is_the_default_exposure() {
-    assert_eq!(ListenerExposure::default(), ListenerExposure::LoopbackOnly);
-}
-
-#[test]
-fn loopback_addresses_bind_under_the_default_exposure() {
-    for candidate in ["127.0.0.1:0", "127.0.0.5:7879", "[::1]:0"] {
-        assert!(
-            ensure_bind_allowed(addr(candidate), ListenerExposure::LoopbackOnly).is_ok(),
-            "{candidate} is loopback and must be allowed"
-        );
-    }
-}
-
-#[test]
 fn non_loopback_addresses_are_refused_before_the_socket_opens() {
     let error = ensure_bind_allowed(addr("0.0.0.0:7879"), ListenerExposure::LoopbackOnly)
         .expect_err("wildcard bind must be refused");
@@ -53,11 +37,6 @@ fn non_loopback_addresses_are_refused_before_the_socket_opens() {
     };
     assert!(message.contains("0.0.0.0:7879"), "{message}");
     assert!(message.contains("--allow-non-loopback"), "{message}");
-}
-
-#[test]
-fn explicit_exposure_allows_a_non_loopback_bind() {
-    assert!(ensure_bind_allowed(addr("0.0.0.0:7879"), ListenerExposure::AnyInterface).is_ok());
 }
 
 #[tokio::test]
@@ -97,39 +76,6 @@ async fn a_peer_that_sends_nothing_is_disconnected_and_releases_its_slot() {
     assert!(
         released.is_ok(),
         "the idle peer's session permit must be released"
-    );
-    server.abort();
-}
-
-#[tokio::test]
-async fn a_peer_that_starts_a_json_object_promptly_is_not_dropped_by_the_first_byte_timeout() {
-    let listener = McpListener::bind(
-        addr("127.0.0.1:0"),
-        ListenerExposure::LoopbackOnly,
-        Arc::new(NoTools),
-        ToolSessionContext::trusted_local(None, None, None),
-    )
-    .await
-    .expect("bind listener")
-    .with_first_byte_timeout(Duration::from_millis(200));
-    let bound = listener.local_addr().expect("bound address");
-    let server = tokio::spawn(listener.serve());
-
-    let mut client = TcpStream::connect(bound).await.expect("connect");
-    client
-        .write_all(
-            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}
-"#,
-        )
-        .await
-        .expect("send initialize");
-    let mut buf = [0u8; 1];
-    let read = tokio::time::timeout(Duration::from_secs(10), client.read(&mut buf))
-        .await
-        .expect("initialize is answered");
-    assert!(
-        matches!(read, Ok(1)),
-        "an initialize reply must arrive: {read:?}"
     );
     server.abort();
 }

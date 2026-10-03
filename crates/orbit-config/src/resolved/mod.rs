@@ -23,10 +23,6 @@ pub use crew::disabled_crew_message;
 pub use execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 
 pub(crate) use compatibility::warn_compatibility_keys;
-#[cfg(test)]
-pub(crate) use compatibility::{
-    REMOVED_CONFIG_KEY_WARNING, RETIRED_DOCS_CONFIG_WARNING, RETIRED_ROUTINES_CONFIG_WARNING,
-};
 pub(crate) use crew::default_crews;
 
 #[cfg(test)]

@@ -3,8 +3,6 @@ use std::sync::Arc;
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::normalize_self_reported_actor;
-#[cfg(test)]
-use orbit_types::tool::ToolSchema;
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
@@ -28,16 +26,6 @@ use super::structured::mcp_tool_call_result;
 use crate::error::tool_error_result;
 
 impl OrbitToolServer {
-    /// Return the host's complete exposed surface after validating only the
-    /// canonical and advertised names the MCP kernel itself owns.
-    #[cfg(test)]
-    pub(super) fn tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        let definitions = self.load_tool_definitions()?;
-        self.name_map()
-            .map_err(|error| OrbitError::InvalidInput(error.message.into_owned()))?;
-        Ok(definitions.as_ref().clone())
-    }
-
     /// The host's definitions, loaded and validated once and then shared.
     fn load_tool_definitions(&self) -> Result<Arc<Vec<McpToolDefinition>>, OrbitError> {
         if let Some(definitions) = self.definitions.get() {
@@ -94,15 +82,6 @@ impl OrbitToolServer {
             })
             .as_ref()
             .clone()
-    }
-
-    #[cfg(test)]
-    pub(super) fn tool_schemas(&self) -> Result<Vec<ToolSchema>, OrbitError> {
-        Ok(self
-            .tool_definitions()?
-            .into_iter()
-            .map(|definition| definition.schema)
-            .collect())
     }
 
     /// Resolve the advertised wire input schema for one canonical definition.
@@ -231,14 +210,6 @@ impl OrbitToolServer {
             .get(advertised)
             .cloned()
             .unwrap_or_else(|| advertised.to_string()))
-    }
-
-    #[cfg(test)]
-    pub(super) async fn call_tool_request(
-        &self,
-        request: CallToolRequestParams,
-    ) -> Result<CallToolResult, McpError> {
-        self.dispatch_tool_call(request).await
     }
 
     async fn dispatch_tool_call(

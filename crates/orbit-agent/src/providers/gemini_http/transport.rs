@@ -77,16 +77,14 @@ impl GeminiHttpTransport {
         Ok(self)
     }
 
-    // `pub(super)` widened for sibling test access.
-    pub(super) fn generate_content_endpoint(&self) -> String {
+    fn generate_content_endpoint(&self) -> String {
         format!(
             "{}/v1beta/models/{}:generateContent",
             self.base_url, self.model
         )
     }
 
-    // `pub(super)` widened for sibling test access.
-    pub(super) fn cached_contents_endpoint(&self) -> String {
+    fn cached_contents_endpoint(&self) -> String {
         format!("{}/v1beta/cachedContents", self.base_url)
     }
 
@@ -102,11 +100,6 @@ impl GeminiHttpTransport {
         }
 
         Ok(request)
-    }
-
-    #[cfg(test)]
-    pub(super) fn api_key_header_for_test(&self) -> &HeaderValue {
-        &self.api_key_header
     }
 
     fn try_create_cached_content(
@@ -386,13 +379,6 @@ fn network_request_error(_: reqwest::Error) -> TransportError {
     // Do not format the request-bound error: reqwest may retain request data,
     // including the API-key header, in an error's diagnostic representation.
     TransportError::Network("Gemini request failed".to_string())
-}
-
-// `pub(super)` widened for sibling test access; it is not part of production
-// error translation because request-bound errors may contain sensitive data.
-#[cfg(test)]
-pub(super) fn network_error(error: reqwest::Error) -> TransportError {
-    TransportError::Network(error.without_url().to_string())
 }
 
 fn normalize_base_url(base_url: String) -> String {
