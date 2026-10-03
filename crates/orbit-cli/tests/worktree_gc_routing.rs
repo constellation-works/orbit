@@ -517,3 +517,114 @@ fn run_git(cwd: &Path, args: &[&str]) -> String {
     );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
+
+#[test]
+fn direct_gc_cli_previews_refuses_dirty_and_reclaims_only_the_selected_worktree() {
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repo_a = temp.path().join("a");
+    let repo_b = temp.path().join("b");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&repo_a).unwrap();
+    fs::create_dir_all(&repo_b).unwrap();
+    init_git_repo(&repo_a);
+    init_git_repo(&repo_b);
+    run_success(
+        &repo_a,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "direct-gc-fixture",
+            "--task-prefix",
+            "DG",
+        ],
+    );
+    fixture_crew::configure_sol(&home.join(".orbit"));
+    let a = register_workspace(&repo_a, &home, "direct-gc-a");
+    let b = register_workspace(&repo_b, &home, "direct-gc-b");
+    let (tree_a, task_a) = seed_eligible_worktree(&a, &home, "direct-a");
+    let (tree_b, _) = seed_eligible_worktree(&b, &home, "direct-b");
+    let run_id = tree_a
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .strip_prefix("orbit-")
+        .unwrap();
+    let args = [
+        "gc",
+        "worktrees",
+        "--run",
+        run_id,
+        "--older-than-hours",
+        "0",
+        "--json",
+    ];
+    let gc = |args: &[&str]| -> Value {
+        let output = command(&repo_a, &home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    let preview = run_json(&repo_a, &home, &args);
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["reports"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["reports"][0]["action"], "would_remove");
+    assert_eq!(preview["reports"][0]["task_id"], task_a);
+    assert!(tree_a.exists() && tree_b.exists());
+    let dirty = tree_a.join("README.md");
+    fs::write(&dirty, "uncommitted operator work\n").unwrap();
+    let confirmed = [
+        "gc",
+        "worktrees",
+        "--run",
+        run_id,
+        "--older-than-hours",
+        "0",
+        "--confirm",
+        "--json",
+    ];
+    command(&repo_a, &home)
+        .args(confirmed)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("capability_denied"));
+    assert!(
+        tree_a.exists() && tree_b.exists(),
+        "unprivileged collection changes no checkout"
+    );
+    let refusal = gc(&confirmed);
+    assert_eq!(
+        refusal["reports"][0]["action"],
+        "skipped:dirty_rescue_candidate"
+    );
+    assert_eq!(
+        fs::read_to_string(&dirty).unwrap(),
+        "uncommitted operator work\n"
+    );
+    assert!(tree_b.exists());
+    run_git(&tree_a, &["restore", "README.md"]);
+    let removed = gc(&confirmed);
+    assert_eq!(removed["dry_run"], false);
+    assert_eq!(removed["reports"][0]["action"], "removed");
+    assert!(removed["bytes_reclaimed"].as_u64().unwrap() > 0);
+    assert!(!tree_a.exists());
+    assert!(tree_b.exists(), "another workspace's checkout must survive");
+    assert_eq!(
+        fs::read_to_string(tree_b.join("fixture.txt")).unwrap(),
+        "direct-b"
+    );
+    assert!(!run_git(&repo_a, &["worktree", "list", "--porcelain"]).contains(run_id));
+    assert!(gc(&confirmed)["reports"].as_array().unwrap().is_empty());
+    assert_eq!(
+        run_json(&repo_a, &home, &["task", "show", &task_a, "--json"])["status"],
+        "archived"
+    );
+}
