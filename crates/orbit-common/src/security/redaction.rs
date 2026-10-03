@@ -171,18 +171,15 @@ fn proper_prefix_table(pat: &[u8]) -> Vec<usize> {
 }
 
 pub fn redact_sensitive_env_json(value: Value) -> Value {
-    match value {
-        Value::String(raw) => Value::String(redact_sensitive_env_text(&raw)),
-        Value::Array(items) => {
-            Value::Array(items.into_iter().map(redact_sensitive_env_json).collect())
-        }
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, value)| (key, redact_sensitive_env_json(value)))
-                .collect(),
-        ),
-        other => other,
-    }
+    redact_json_with(value, redact_sensitive_env_text)
+}
+
+/// Scrub sensitive environment values and known secret patterns from JSON strings.
+///
+/// Object keys and non-string values retain their types, so provider results
+/// remain usable as structured step output after redaction.
+pub fn redact_all_json(value: Value) -> Value {
+    redact_json_with(value, redact_all)
 }
 
 /// Replace `$HOME` / `$USERPROFILE` with `~` in the given string. Prevents
