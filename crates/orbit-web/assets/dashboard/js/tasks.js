@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeCopyButton, copyText, copyWithFeedback } from './common.js';
+import { getWorkspaceRevision, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -1068,6 +1068,7 @@ function setDetailEditing(detail, field, open) {
 }
 
 function buildTaskFieldEditor(task, field, detail, context, editSlot = null) {
+  const revision = getWorkspaceRevision();
   const spec = TASK_FIELD_EDITORS[field];
   const mutable = canMutateTask(task);
   const editTitle = `Edit ${spec.label} for ${task.id}`;
@@ -1085,7 +1086,9 @@ function buildTaskFieldEditor(task, field, detail, context, editSlot = null) {
       editTitle,
       disabledTitle: aggregateRefusalTitle(editTitle, `edit ${spec.label}`),
       save: (text, options) => patchJson(taskMutationPath(task), spec.toPayload(text, options)),
-      onSaved: (updatedTask) => completeFieldSave(task.id, field, updatedTask, context),
+      onSaved: (updatedTask) => {
+        if (revision === getWorkspaceRevision()) completeFieldSave(task.id, field, updatedTask, context);
+      },
       onEditingChange: (open) => setDetailEditing(detail, field, open),
       editSlot,
     }),
@@ -1158,12 +1161,14 @@ function assessedComplexity(task) {
 }
 
 async function applyTaskComplexityChange(task, nextValue, context) {
+  const revision = getWorkspaceRevision();
   const previousValue = assessedComplexity(task);
   if (!nextValue || nextValue === previousValue || !canMutateTask(task)) return;
   complexityFeedback.set(task.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
     const updatedTask = await patchJson(taskMutationPath(task), { complexity: nextValue });
+    if (revision !== getWorkspaceRevision()) return;
     applyUpdatedTask(updatedTask, context);
     complexityFeedback.set(task.id, {
       kind: "success",
@@ -1175,6 +1180,7 @@ async function applyTaskComplexityChange(task, nextValue, context) {
         : undefined,
     });
   } catch (error) {
+    if (revision !== getWorkspaceRevision()) return;
     complexityFeedback.set(task.id, {
       kind: "error",
       text: `complexity update failed: ${error.message || String(error)}`,
@@ -2132,6 +2138,10 @@ function buildCrewUpdateControl(task, context) {
 }
 
 async function applyTaskStatusChange(task, nextStatus, context) {
+  // A transition can first read the full record for its evidence requirement.
+  // Leaving that workspace abandons the interaction before any write, and a
+  // later mutation result must not be applied to another workspace visit.
+  const revision = getWorkspaceRevision();
   if (!nextStatus || nextStatus === task.status || !canMutateTask(task)) return;
   let transition = statusTransition(task, nextStatus);
   // A target the projection did not offer is an override, not a mistake: the
@@ -2149,6 +2159,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     try {
       detail = await loadTaskDetail(task, context);
     } catch (error) {
+      if (revision !== getWorkspaceRevision()) return;
       statusFeedback.set(task.id, {
         kind: "error",
         text: `status update failed: ${error.message || String(error)}`,
@@ -2156,6 +2167,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
       renderTasks(taskList(context), context);
       return;
     }
+    if (revision !== getWorkspaceRevision()) return;
     transition = detail.status === task.status ? statusTransition(detail, nextStatus) : null;
     if (!transition) {
       statusFeedback.set(task.id, {
@@ -2205,6 +2217,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   renderTasks(taskList(context), context);
   try {
     const updatedTask = await patchJson(taskMutationPath(task), payload);
+    if (revision !== getWorkspaceRevision()) return;
     applyUpdatedTask(updatedTask, context);
     const feedback = {
       kind: "success",
@@ -2217,6 +2230,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     statusFeedback.set(task.id, feedback);
     expandedTaskIds.delete(task.id);
   } catch (error) {
+    if (revision !== getWorkspaceRevision()) return;
     statusFeedback.set(task.id, {
       kind: "error",
       text: `status update failed: ${error.message || String(error)}`,
@@ -2255,12 +2269,14 @@ function statusTransitionEvidenceUnavailable(requiredField) {
 }
 
 async function applyTaskCrewChange(task, nextValue, context) {
+  const revision = getWorkspaceRevision();
   const previousValue = explicitCrewValue(task);
   if (nextValue === previousValue || !canMutateTask(task)) return;
   crewFeedback.set(task.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
     const updatedTask = await patchJson(taskMutationPath(task), { crew: nextValue || null });
+    if (revision !== getWorkspaceRevision()) return;
     applyUpdatedTask(updatedTask, context);
     crewFeedback.set(task.id, {
       kind: "success",
@@ -2268,6 +2284,7 @@ async function applyTaskCrewChange(task, nextValue, context) {
       undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
     });
   } catch (error) {
+    if (revision !== getWorkspaceRevision()) return;
     crewFeedback.set(task.id, {
       kind: "error",
       text: `crew update failed: ${error.message || String(error)}`,
