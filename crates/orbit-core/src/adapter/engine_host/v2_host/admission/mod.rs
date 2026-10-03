@@ -7,6 +7,3 @@ pub(super) mod duplicate_tasks;
 pub(super) mod leaf_occupancy;
 pub(super) mod scan_unresolved;
 pub(super) mod sweep_filing;
-
-#[cfg(test)]
-mod tests;

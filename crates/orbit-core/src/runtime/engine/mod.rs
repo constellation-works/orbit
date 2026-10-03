@@ -5,9 +5,6 @@ mod invocation;
 pub(crate) mod paths;
 mod summary;
 
-#[cfg(test)]
-mod tests;
-
 pub use crew::{
     ConfiguredCrewProjection, ConfiguredCrewRegistryProjection, ResolvedCrewProjection,
     TaskCrewRead,

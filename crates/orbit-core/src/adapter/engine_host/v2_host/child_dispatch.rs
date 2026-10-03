@@ -27,9 +27,9 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 
 /// Audit command for a child submission attempt, successful or not.
-pub(super) const CHILD_DISPATCH_AUDIT: &str = "pipeline.child_dispatch";
+const CHILD_DISPATCH_AUDIT: &str = "pipeline.child_dispatch";
 /// Audit command for the parent's observation of a child's terminal state.
-pub(super) const CHILD_WAIT_AUDIT: &str = "pipeline.child_wait";
+const CHILD_WAIT_AUDIT: &str = "pipeline.child_wait";
 
 /// The parent step that is dispatching, as the engine named it.
 pub(super) fn parent_step_id(input: &Value) -> Option<String> {

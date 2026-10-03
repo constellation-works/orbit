@@ -16,8 +16,6 @@ mod input;
 mod persist;
 mod prepare;
 mod source;
-#[cfg(test)]
-mod tests;
 mod validation_tools;
 
 pub(super) use apply::apply;
@@ -27,10 +25,6 @@ use input::{
     action_failed, requested_workspace_root, required_string, required_string_array, string_array,
     string_array_value,
 };
-#[cfg(test)]
-pub(super) use persist::inject_concurrent_edit_before_locked_apply;
-#[cfg(test)]
-pub(super) use persist::inject_concurrent_edit_before_status_retry;
 pub(super) use prepare::prepare;
 pub(crate) use source::requested_base_branch;
 

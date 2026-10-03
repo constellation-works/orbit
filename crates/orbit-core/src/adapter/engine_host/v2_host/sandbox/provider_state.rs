@@ -139,7 +139,7 @@ pub(super) fn validated_linux_provider_state_root(
     Ok(validated)
 }
 
-pub(super) fn ensure_linux_provider_directory(
+fn ensure_linux_provider_directory(
     path: &Path,
     home: Option<&Path>,
 ) -> Result<PathBuf, DispatchError> {
@@ -161,7 +161,7 @@ pub(super) fn ensure_linux_provider_directory(
 /// Writable state root for an active Cursor executor on Linux. The CLI stores
 /// logged-in authentication, settings, permissions, and sessions under
 /// `$HOME/.cursor`; no other provider receives this grant. [ORB-10945]
-pub(super) fn linux_cursor_state_roots_with(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
+fn linux_cursor_state_roots_with(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
     if orbit_types::workflow::Provider::parse(provider).ok()
         != Some(orbit_types::workflow::Provider::Cursor)
     {
@@ -189,7 +189,7 @@ fn linux_pi_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
 /// caller's list is *created* by `ensure_linux_provider_directory`, so an
 /// unconditional entry would mkdir a `~/.pi` on hosts that never installed Pi.
 /// [ORB-11296]
-pub(super) fn linux_pi_state_roots_with(
+fn linux_pi_state_roots_with(
     provider: &str,
     home: Option<&Path>,
     pi_coding_agent_dir: Option<&Path>,
@@ -223,7 +223,7 @@ fn linux_opencode_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBu
 
 /// XDG roots that locate OpenCode's writable state on Linux.
 #[derive(Default, Clone)]
-pub(super) struct OpencodeStateEnv {
+struct OpencodeStateEnv {
     pub(super) xdg_data_home: Option<PathBuf>,
     pub(super) xdg_config_home: Option<PathBuf>,
     pub(super) xdg_state_home: Option<PathBuf>,
@@ -240,7 +240,7 @@ pub(super) struct OpencodeStateEnv {
 /// entry in the caller's list is *created* by `ensure_linux_provider_directory`,
 /// so an unconditional entry would mkdir an `~/.local/share/opencode` on hosts
 /// that never installed OpenCode. [ORB-11295]
-pub(super) fn linux_opencode_state_roots_with(
+fn linux_opencode_state_roots_with(
     provider: &str,
     home: Option<&Path>,
     env: OpencodeStateEnv,
@@ -294,7 +294,7 @@ fn linux_copilot_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf
 /// The override values are parameters rather than direct env reads so the
 /// gate can be asserted without mutating process state from a test.
 // pub(super) widened for the sibling tests/ layout.
-pub(super) fn linux_copilot_state_roots_with(
+fn linux_copilot_state_roots_with(
     provider: &str,
     home: Option<&Path>,
     copilot_home: Option<&Path>,

@@ -169,15 +169,12 @@ pub(crate) fn workspace_auto_run_input(
 ///
 /// Production re-execs `current_exe` at `job run-pipeline-worker <run_id>`. A
 /// test binary must never re-exec itself: libtest reads the worker argv as test
-/// filters and recurses through the whole suite. In-crate tests install a small
-/// script per thread with [`set`]; tests in downstream crates, whose submissions
-/// reach the spawn on another thread (e.g. a dashboard handler's blocking pool),
+/// filters and recurses through the whole suite. Tests whose submissions reach
+/// the spawn on another thread (e.g. a dashboard handler's blocking pool)
 /// install one for the whole process with [`install_process_wide`] through the
 /// `test-support` feature [ORB-12902].
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod worker_command_override {
-    #[cfg(test)]
-    use std::cell::RefCell;
     use std::path::Path;
     use std::process::{Command, Stdio};
     use std::sync::{Mutex, PoisonError};
@@ -185,28 +182,7 @@ pub(crate) mod worker_command_override {
     /// Replaced with the submitted run id in every argv entry.
     pub const RUN_ID_PLACEHOLDER: &str = "{run_id}";
 
-    #[cfg(test)]
-    thread_local! {
-        static ARGV: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
-    }
-
     static PROCESS_ARGV: Mutex<Option<Vec<String>>> = Mutex::new(None);
-
-    /// Install `argv` as this thread's worker program until [`clear`].
-    #[cfg(test)]
-    pub(crate) fn set<I, S>(argv: I)
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
-        ARGV.with(|slot| *slot.borrow_mut() = Some(argv));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn clear() {
-        ARGV.with(|slot| *slot.borrow_mut() = None);
-    }
 
     /// Launch `argv` instead of this binary for every pipeline worker the
     /// process spawns from now on, on any thread. Each entry has
@@ -214,8 +190,7 @@ pub(crate) mod worker_command_override {
     /// the run's workspace with the worker's usual log redirection.
     ///
     /// Last install wins, so a test binary should install one argv for all of
-    /// its tests. A thread-local [`set`] in orbit-core's own tests takes
-    /// precedence.
+    /// its tests.
     #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     pub fn install_process_wide<I, S>(argv: I)
     where
@@ -235,10 +210,6 @@ pub(crate) mod worker_command_override {
     }
 
     fn installed_argv() -> Option<Vec<String>> {
-        #[cfg(test)]
-        if let Some(argv) = ARGV.with(|slot| slot.borrow().clone()) {
-            return Some(argv);
-        }
         PROCESS_ARGV
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

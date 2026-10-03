@@ -35,7 +35,7 @@ ephemeral-port = { max-threads = 1 }
 
 # orbit-core unit tests that mutate the process environment or cwd.
 [[profile.default.overrides]]
-filter = 'package(orbit-core) & kind(lib) & test(/^(adapter::command::tests::|adapter::engine_host::runtime_host::tests::|adapter::engine_host::v2_host::tests::(recovery_execution_sandbox|sandbox_nested)::|adapter::tool_host::artifact_redaction::tests::|adapter::tool_host::tests::(command_tools|friction_tools|task_tools|workflow_tools)::|application::job::run::tests::(owner|reconcile)::|application::routines::tests::sweep::|application::search::tests::(global|types)::|bootstrap::init::tests::|bootstrap::tests::global_defaults::|runtime::engine::tests::crew::|runtime::task::tests::locks::|runtime::tests::(activity_catalog|authorization|config_path|resolve|run_input|runtime)::|runtime::workspace::tests::claim::)/)'
+filter = 'package(orbit-core) & kind(lib) & test(/^(adapter::tool_host::tests::(command_tools|task_tools|workflow_tools)::|application::job::run::tests::(owner|reconcile)::|application::routines::tests::sweep::|application::search::tests::(global|types)::|bootstrap::tests::global_defaults::|runtime::task::tests::locks::|runtime::tests::(authorization|config_path|run_input)::|runtime::workspace::tests::claim::)/)'
 test-group = 'stateful-runtime'
 
 # `web_serve_root` and `web_serve_shutdown` both pick a port with `free_port()`

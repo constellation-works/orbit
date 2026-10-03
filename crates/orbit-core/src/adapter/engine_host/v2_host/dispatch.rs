@@ -634,7 +634,7 @@ fn dependency_admission_for_input(
 // pure parsing helper directly rather than through a full lock-conflict
 // integration setup — see docs/design-patterns/test_layout.md migration
 // recipe step 6.
-pub(super) fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
+fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
     output
         .get("conflicts")
         .and_then(Value::as_array)
@@ -653,7 +653,7 @@ pub(super) fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
 // writer directly for no-op, error, lock, and lost-update coverage rather
 // than only through a full `reserve_locks` setup — see
 // docs/design-patterns/test_layout.md migration recipe step 6.
-pub(super) fn update_run_waiting_reasons(
+fn update_run_waiting_reasons(
     runtime: &OrbitRuntime,
     input: &Value,
     waiting_on_deps: Option<Vec<String>>,

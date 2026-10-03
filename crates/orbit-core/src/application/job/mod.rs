@@ -45,8 +45,6 @@ pub use pipeline::{
 };
 #[cfg(test)]
 pub(crate) use run::TERMINAL_OUTCOME_CONFLICT_CODE;
-#[cfg(test)]
-pub(crate) use run::job_run_get_counter;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{
     ActivityInvocationEvidence, DrainAdmissionsStopChange, DrainAdmissionsStopRequest,

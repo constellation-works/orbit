@@ -218,27 +218,6 @@ impl OrbitRuntime {
         )
     }
 
-    /// Bootstrap feasibility fixture only. Does not establish admission or
-    /// re-entry isolation, so must never be exposed by a production executable.
-    #[cfg(test)]
-    pub(crate) fn initialize_research_fixture(
-        roots: OrbitRuntimeRoots,
-    ) -> Result<Self, OrbitError> {
-        crate::bootstrap::product_profile::initialize_research_catalog(&roots)?;
-        let resolved =
-            ResolvedConfig::load(&ConfigRoots::new(&roots.global_root, &roots.shared_root))?;
-        Self::build_from_resolved_config(
-            &roots.global_root,
-            &roots.shared_root,
-            &roots.local_root,
-            None,
-            &resolved,
-            orbit_store::workflow::layout::LayoutUpgradeReport::default(),
-            HostLifetime::ShortLived,
-            false,
-        )
-    }
-
     pub fn in_memory() -> Result<Self, OrbitError> {
         let temp_dir = tempfile::Builder::new()
             .prefix("orbit-in-memory-")

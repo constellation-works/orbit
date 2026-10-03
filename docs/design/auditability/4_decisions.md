@@ -496,7 +496,7 @@ Liveness is computed at read time, not stored. `orbit_common::process::identity:
 ## Provider completions correlate by invocation ancestry
 
 **Recorded:** 2026-09-05 · [ORB-11284]
-**Paths:** `crates/orbit-core/src/runtime/audit/run.rs`, `crates/orbit-core/src/runtime/audit/tests/run.rs`
+**Paths:** `crates/orbit-core/src/runtime/audit/run.rs`, `crates/orbit-web/src/api/tests/runs.rs`
 
 ### Context
 

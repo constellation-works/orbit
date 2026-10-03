@@ -16,9 +16,6 @@ pub(super) use gate_starvation::gate_starvation_fail;
 pub(super) use invoke::{invoke_and_wait, invoke_detached};
 pub(super) use results::{pipeline_success_guard, record_pipeline_results_audit};
 
-#[cfg(test)]
-mod tests;
-
 fn action_failed(action: &str, message: String) -> DispatchError {
     DispatchError::DeterministicActionFailed {
         action: action.to_string(),

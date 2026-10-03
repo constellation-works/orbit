@@ -185,10 +185,7 @@ pub(crate) struct LeafPullLauncher<'a> {
 
 impl LeafPullLauncher<'_> {
     /// This runtime, bound to the admission's claim and leaf run.
-    pub(crate) fn bound_runtime(
-        &self,
-        admission: &LocalPullAdmission,
-    ) -> Result<OrbitRuntime, OrbitError> {
+    fn bound_runtime(&self, admission: &LocalPullAdmission) -> Result<OrbitRuntime, OrbitError> {
         let claim = admission
             .receipt
             .as_ref()

@@ -26,12 +26,12 @@ pub(crate) const INVALID_REQUEST: &str = "plugin_broker_invalid_request";
 /// The run does not authorize this call: the tool is not a plugin tool, its
 /// activity policy or the plugin's grants refuse it, or the request names a
 /// cwd or workspace outside the run.
-pub(crate) const REFUSED: &str = "plugin_broker_refused";
+const REFUSED: &str = "plugin_broker_refused";
 /// The tool's input does not satisfy its schema.
-pub(crate) const INVALID_INPUT: &str = "plugin_broker_invalid_input";
+const INVALID_INPUT: &str = "plugin_broker_invalid_input";
 /// The call was authorized but could not complete: the backend failed,
 /// timed out, or answered with something other than its envelope.
-pub(crate) const CALL_FAILED: &str = "plugin_broker_call_failed";
+const CALL_FAILED: &str = "plugin_broker_call_failed";
 
 /// Why a request frame could not be read.
 #[derive(Debug)]

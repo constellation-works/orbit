@@ -29,7 +29,7 @@ use crate::runtime::audit::coordination::{
 };
 use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 
-pub(crate) const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
+const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
 
 pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     let workspace_id = workspace_task_reservation_id(runtime)?;
@@ -414,12 +414,12 @@ pub(crate) fn reserve_with_index(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum TaskLockReservationScope {
+enum TaskLockReservationScope {
     TaskIds(Vec<String>),
     Files(Vec<String>),
 }
 
-pub(super) fn parse_task_lock_reservation_scope(
+fn parse_task_lock_reservation_scope(
     input: &Value,
 ) -> Result<TaskLockReservationScope, OrbitError> {
     let task_ids = optional_string_list_alias(input, &["task_ids", "taskIds", "task-ids"])?;
@@ -655,7 +655,7 @@ impl TaskLockIndex {
     /// Invalid entries are the only ones a lock surface loses, and they are
     /// reported rather than dropped in silence: a task whose every declaration
     /// is unusable would otherwise read as a claim protecting no files.
-    pub(crate) fn declared_lock_surface(
+    fn declared_lock_surface(
         &self,
         task: &TaskEnvelopeV2,
         workspace_root: &Path,

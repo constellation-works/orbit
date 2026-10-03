@@ -152,7 +152,7 @@ pub(crate) struct RunListProjectionReads {
     pub per_run_recovery_projection_limit: usize,
 }
 
-pub(crate) fn project_workflow_run_list(
+fn project_workflow_run_list(
     runtime: &OrbitRuntime,
     runs: &[JobRun],
 ) -> Result<(Vec<Value>, RunListProjectionReads), OrbitError> {

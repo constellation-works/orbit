@@ -86,8 +86,6 @@ pub(crate) fn load_installed_plugin(
         }
     }
 
-    #[cfg(test)]
-    record_plugin_dir_load(&root);
     let loaded = Arc::new(load_plugin_dir(&root)?);
     plugin_host_load_cache().plugins.insert(
         root,
@@ -98,25 +96,4 @@ pub(crate) fn load_installed_plugin(
         },
     );
     Ok(loaded)
-}
-
-#[cfg(test)]
-static PLUGIN_DIR_LOAD_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
-
-#[cfg(test)]
-fn record_plugin_dir_load(root: &Path) {
-    let counts = PLUGIN_DIR_LOAD_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut counts = counts.lock().unwrap_or_else(PoisonError::into_inner);
-    *counts.entry(root.to_path_buf()).or_default() += 1;
-}
-
-#[cfg(test)]
-pub(super) fn plugin_dir_load_count(root: &Path) -> usize {
-    PLUGIN_DIR_LOAD_COUNTS
-        .get_or_init(|| Mutex::new(BTreeMap::new()))
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(root)
-        .copied()
-        .unwrap_or_default()
 }

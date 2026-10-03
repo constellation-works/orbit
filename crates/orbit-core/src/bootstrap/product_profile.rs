@@ -13,34 +13,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbit_common::OrbitError;
 
-pub(crate) const PRODUCT_MARKER: &str = ".orbit-product";
+const PRODUCT_MARKER: &str = ".orbit-product";
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// When set, staging is fsynced and publication then fails before the public
-/// marker name exists.
-#[cfg(test)]
-static FAIL_MARKER_PUBLISH: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Bytes planted at the public marker path after staging and before the
-/// no-clobber link, simulating a peer that won the race with a finished file.
-#[cfg(test)]
-static PLANT_BEFORE_LINK: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProductProfile {
     Orbit,
-    #[cfg(test)]
-    ResearchFixture,
 }
 
 impl ProductProfile {
     pub(crate) fn identity(self) -> &'static str {
         match self {
             Self::Orbit => "orbit:v1\n",
-            #[cfg(test)]
-            Self::ResearchFixture => "orbit-research-fixture:v1\n",
         }
     }
 
@@ -177,8 +162,6 @@ fn publish_complete_marker(marker: &Path, identity: &str) -> io::Result<()> {
         file.write_all(identity.as_bytes())?;
         file.sync_all()?;
     }
-    #[cfg(test)]
-    apply_publish_test_seam(marker)?;
     fs::hard_link(&staging, marker)?;
     let parent = marker.parent().ok_or_else(|| {
         io::Error::new(
@@ -218,73 +201,4 @@ impl Drop for StagingCleanup<'_> {
     fn drop(&mut self) {
         let _ = fs::remove_file(self.0);
     }
-}
-
-#[cfg(test)]
-fn apply_publish_test_seam(marker: &Path) -> io::Result<()> {
-    if FAIL_MARKER_PUBLISH.swap(false, Ordering::SeqCst) {
-        return Err(io::Error::other(
-            "injected product marker publication failure",
-        ));
-    }
-    let planted = match PLANT_BEFORE_LINK.lock() {
-        Ok(mut slot) => slot.take(),
-        Err(poisoned) => poisoned.into_inner().take(),
-    };
-    if let Some(bytes) = planted {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(marker)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-pub(crate) fn arm_marker_publish_failure() {
-    FAIL_MARKER_PUBLISH.store(true, Ordering::SeqCst);
-}
-
-#[cfg(test)]
-pub(crate) fn arm_marker_planted_before_link(bytes: Vec<u8>) {
-    match PLANT_BEFORE_LINK.lock() {
-        Ok(mut slot) => *slot = Some(bytes),
-        Err(poisoned) => *poisoned.into_inner() = Some(bytes),
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn clear_marker_publish_faults() {
-    FAIL_MARKER_PUBLISH.store(false, Ordering::SeqCst);
-    match PLANT_BEFORE_LINK.lock() {
-        Ok(mut slot) => *slot = None,
-        Err(poisoned) => *poisoned.into_inner() = None,
-    }
-}
-
-/// Minimal alternative catalog: a shared safety policy, no engineering assets.
-/// This function is intentionally absent from production builds.
-#[cfg(test)]
-pub(crate) fn initialize_research_catalog(
-    roots: &crate::runtime::OrbitRuntimeRoots,
-) -> Result<(), OrbitError> {
-    let profile = ProductProfile::ResearchFixture;
-    let selected = [
-        roots.global_root.as_path(),
-        roots.shared_root.as_path(),
-        roots.local_root.as_path(),
-    ];
-    profile.validate_roots(&selected)?;
-    for root in selected {
-        profile.claim_root(root)?;
-    }
-    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-        &roots.global_root,
-        &roots.shared_root,
-    ))?;
-    let policy_store = orbit_store::compose::global_policy_def_store(config.persistence.policy_dir);
-    crate::bootstrap::policy::seed_default_policies(policy_store.as_ref(), false)?;
-    Ok(())
 }

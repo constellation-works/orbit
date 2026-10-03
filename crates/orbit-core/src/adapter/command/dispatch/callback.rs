@@ -70,9 +70,7 @@ pub(crate) fn override_activity_tools_for_test(
 
 /// Override the managed-agent activity tool policy for this test thread.
 #[cfg(test)]
-pub(crate) fn override_activity_tool_policy_for_test(
-    policy: ActivityToolPolicyEnv,
-) -> TestActivityToolsGuard {
+fn override_activity_tool_policy_for_test(policy: ActivityToolPolicyEnv) -> TestActivityToolsGuard {
     let previous = TEST_ACTIVITY_TOOLS.with(|tools| tools.replace(Some(policy)));
     TestActivityToolsGuard { previous }
 }
@@ -398,7 +396,7 @@ pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {
 /// not arrive — keeps the legacy `ORBIT_ACTIVITY_TOOLS` allowlist with its
 /// exact historical semantics. A deny-mode dispatcher stamps that allowlist
 /// as the concrete callable set, so falling back to it never widens access.
-pub(crate) fn activity_tool_policy_from_env_values(
+fn activity_tool_policy_from_env_values(
     policy: Option<&str>,
     disallow_list: Option<&str>,
     activity: Option<&str>,

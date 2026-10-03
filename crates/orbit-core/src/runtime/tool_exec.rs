@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -344,9 +342,6 @@ fn active_git_checkout_root(
 }
 
 fn git_checkout_root(path: &Path) -> Option<PathBuf> {
-    #[cfg(test)]
-    GIT_CHECKOUT_PROBES.with(|count| count.set(count.get() + 1));
-
     let output = Command::new("git")
         .current_dir(path)
         .args(["rev-parse", "--show-toplevel"])
@@ -365,9 +360,6 @@ fn git_checkout_root(path: &Path) -> Option<PathBuf> {
 }
 
 fn git_common_dir(path: &Path) -> Option<PathBuf> {
-    #[cfg(test)]
-    GIT_COMMON_DIR_PROBES.with(|count| count.set(count.get() + 1));
-
     let output = Command::new("git")
         .current_dir(path)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
@@ -383,32 +375,6 @@ fn git_common_dir(path: &Path) -> Option<PathBuf> {
     }
     let path = PathBuf::from(raw_path);
     Some(path.canonicalize().unwrap_or(path))
-}
-
-#[cfg(test)]
-thread_local! {
-    static GIT_CHECKOUT_PROBES: Cell<usize> = const { Cell::new(0) };
-    static GIT_COMMON_DIR_PROBES: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) struct ContextResolutionProbes;
-
-#[cfg(test)]
-impl ContextResolutionProbes {
-    pub(crate) fn capture() -> Self {
-        GIT_CHECKOUT_PROBES.with(|count| count.set(0));
-        GIT_COMMON_DIR_PROBES.with(|count| count.set(0));
-        Self
-    }
-
-    pub(crate) fn git_checkout_probes(&self) -> usize {
-        GIT_CHECKOUT_PROBES.with(Cell::get)
-    }
-
-    pub(crate) fn git_common_dir_probes(&self) -> usize {
-        GIT_COMMON_DIR_PROBES.with(Cell::get)
-    }
 }
 
 fn read_activity_fs_profile_from_env() -> Option<String> {

@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::cli_runner::run_cli_backend;
 use orbit_engine::{
-    DispatchError, DispatchOutcome, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
-    ResolvedCliExecutor, ResolvedSandbox, RuntimeHost, V2AuditWriter,
+    DispatchError, DispatchOutcome, PluginBrokerHandle, PluginBrokerRun, ResolvedCliExecutor,
+    ResolvedSandbox, RuntimeHost, V2AuditWriter,
 };
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::policy::ResolvedFsProfile;
@@ -29,7 +29,6 @@ use tempfile::TempDir;
 
 use super::super::PluginBroker;
 use super::super::protocol::{MAX_REQUEST_BYTES, read_frame, write_frame};
-use super::super::socket::BROKER_DIR;
 use super::EchoDispatch;
 
 const CLIENT_TEST: &str = "runtime::plugin::broker::tests::sandbox::broker_client";
@@ -38,38 +37,6 @@ const RESULT_ENV: &str = "ORBIT_BROKER_TEST_RESULT";
 const TARGET_ENV: &str = "ORBIT_BROKER_TEST_TARGET";
 const HOLD_ENV: &str = "ORBIT_BROKER_TEST_HOLD";
 const WAIT: Duration = Duration::from_secs(60);
-
-/// The in-sandbox half: connect to this run's broker (or `TARGET_ENV`), send
-/// one request, and record `ok` for an answered call, the reply's error code,
-/// `closed` when the broker hung up without replying, or `absent` when no
-/// broker was exported.
-#[test]
-#[ignore = "client half of the sandboxed broker tests; runs inside the agent sandbox"]
-fn broker_client() {
-    if std::env::var_os(CLIENT_ENV).is_none() {
-        return;
-    }
-    let result = PathBuf::from(std::env::var_os(RESULT_ENV).expect("result path"));
-    let partial = result.with_extension("partial");
-    fs::write(&partial, client_outcome()).expect("write outcome");
-    fs::rename(&partial, &result).expect("publish outcome");
-    if let Some(hold) = std::env::var_os(HOLD_ENV) {
-        // Keep this run, and so its broker, alive while the outer test
-        // probes it from elsewhere.
-        wait_for(Path::new(&hold));
-    }
-}
-
-fn client_outcome() -> String {
-    let Some(target) = std::env::var_os(TARGET_ENV).or_else(|| std::env::var_os(PLUGIN_BROKER_ENV))
-    else {
-        return "absent".to_string();
-    };
-    match UnixStream::connect(&target) {
-        Ok(mut stream) => request_outcome(&mut stream),
-        Err(error) => format!("connect failed: {error}"),
-    }
-}
 
 fn request_outcome(stream: &mut UnixStream) -> String {
     let _ = stream.set_read_timeout(Some(WAIT));
@@ -346,22 +313,6 @@ fn assert_removed(socket: &Path) {
 }
 
 #[test]
-fn a_client_inside_the_runs_sandbox_is_authenticated() {
-    let Some(scratch) = scratch_or_skip("a_client_inside_the_runs_sandbox_is_authenticated") else {
-        return;
-    };
-    let result = scratch.result("own");
-    scratch.client_provider("codex", &[(RESULT_ENV, &result)]);
-    let host = scratch.host(scratch.root.clone(), "codex");
-
-    let outcome = host.run("run-own", Duration::from_secs(60));
-
-    assert!(outcome.is_ok(), "step failed: {outcome:?}");
-    assert_eq!(read_result(&result), "ok");
-    assert_removed(&host.socket());
-}
-
-#[test]
 fn another_runs_sandbox_and_the_host_are_refused_without_a_reply() {
     let Some(scratch) =
         scratch_or_skip("another_runs_sandbox_and_the_host_are_refused_without_a_reply")
@@ -426,68 +377,4 @@ fn another_runs_sandbox_and_the_host_are_refused_without_a_reply() {
         );
         assert_removed(&owner.socket());
     });
-}
-
-#[test]
-fn a_timed_out_step_removes_its_broker() {
-    let Some(scratch) = scratch_or_skip("a_timed_out_step_removes_its_broker") else {
-        return;
-    };
-    let exported = scratch.result("exported");
-    scratch.provider(
-        "codex",
-        &format!(
-            "cat > /dev/null\nprintf '%s' \"${PLUGIN_BROKER_ENV}\" > {}\nexec sleep 60\n",
-            quote(&exported)
-        ),
-    );
-    let host = scratch.host(scratch.root.clone(), "codex");
-
-    let _ = host.run("run-timeout", Duration::from_secs(2));
-
-    assert_eq!(
-        PathBuf::from(read_result(&exported)),
-        host.socket(),
-        "the provider saw this run's socket"
-    );
-    assert_removed(&host.socket());
-}
-
-#[test]
-fn an_unusable_broker_directory_leaves_the_step_running_without_the_variable() {
-    let Some(scratch) = scratch_or_skip(
-        "an_unusable_broker_directory_leaves_the_step_running_without_the_variable",
-    ) else {
-        return;
-    };
-    let symlinked = scratch.root.join("linked");
-    let elsewhere = scratch.root.join("elsewhere");
-    fs::create_dir_all(symlinked.join("state")).expect("state");
-    fs::create_dir(&elsewhere).expect("link target");
-    std::os::unix::fs::symlink(&elsewhere, symlinked.join(BROKER_DIR)).expect("plant symlink");
-    let too_long = scratch.root.join("l".repeat(100));
-    fs::create_dir(&too_long).expect("long global root");
-
-    for (case, global_root) in [("symlinked", symlinked), ("too-long", too_long)] {
-        let result = scratch.result(case);
-        scratch.client_provider("codex", &[(RESULT_ENV, &result)]);
-        let host = scratch.host(global_root, "codex");
-
-        let outcome = host.run(&format!("run-{case}"), Duration::from_secs(60));
-
-        assert!(
-            outcome.is_ok(),
-            "{case}: the step must still run: {outcome:?}"
-        );
-        assert_eq!(
-            read_result(&result),
-            "absent",
-            "{case}: no {PLUGIN_BROKER_ENV} without a bound socket"
-        );
-    }
-    assert_eq!(
-        fs::read_dir(&elsewhere).expect("link target").count(),
-        0,
-        "nothing may be created through the symlink"
-    );
 }

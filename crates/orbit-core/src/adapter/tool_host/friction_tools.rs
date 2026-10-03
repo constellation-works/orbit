@@ -354,7 +354,7 @@ fn optional_usize(input: &Value, field: &str) -> Result<Option<usize>, OrbitErro
     Ok(Some(n as usize))
 }
 
-pub(super) fn record_to_json(stored: StoredFrictionRecord) -> Result<Value, OrbitError> {
+fn record_to_json(stored: StoredFrictionRecord) -> Result<Value, OrbitError> {
     let mut value = serde_json::to_value(&stored.record)
         .map_err(|error| OrbitError::Store(format!("serialize friction record: {error}")))?;
     if let Some(object) = value.as_object_mut() {

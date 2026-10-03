@@ -67,7 +67,7 @@ pub(in super::super) fn invoke_and_wait(
 /// Internal seam over the two pipeline tools so tests can drive the phase
 /// ordering — checkpoint before wait, prompt failure without one — without
 /// spawning real detached workers.
-pub(in super::super) fn invoke_and_wait_with<Invoke, Wait>(
+fn invoke_and_wait_with<Invoke, Wait>(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

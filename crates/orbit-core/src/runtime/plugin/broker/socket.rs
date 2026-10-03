@@ -22,7 +22,7 @@ use orbit_common::process::ancestry::{ProcessStartKey, process_start_key};
 /// The broker root, relative to the global root.
 pub(crate) const BROKER_DIR: &str = "state/plugin-broker";
 /// The socket's name inside a run's directory.
-pub(crate) const SOCKET_NAME: &str = "broker.sock";
+const SOCKET_NAME: &str = "broker.sock";
 /// The file naming the host process that owns a run's directory.
 const OWNER_NAME: &str = "owner";
 /// Owner-only mode for the broker root and every run directory.

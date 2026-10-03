@@ -262,7 +262,7 @@ impl OrbitRuntime {
 
     // The callback lets a synchronized test put a competing finalization
     // between this caller's old snapshot and the atomic store decision.
-    pub(crate) fn finalize_job_run_with_cleanup_after_prior_read(
+    fn finalize_job_run_with_cleanup_after_prior_read(
         &self,
         run_id: &str,
         state: JobRunState,

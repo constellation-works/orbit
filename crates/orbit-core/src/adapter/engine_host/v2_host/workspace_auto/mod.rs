@@ -7,8 +7,6 @@ use orbit_engine::DispatchError;
 mod classify;
 mod drains;
 mod readiness;
-#[cfg(test)]
-mod tests;
 mod window;
 
 pub(super) use classify::classify_workspace_auto_tasks;

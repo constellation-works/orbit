@@ -52,7 +52,7 @@ pub(crate) fn file_dependabot_alert_tasks(
     file_dependabot_alert_tasks_with_lookup(runtime, input, runtime)
 }
 
-pub(in crate::adapter::engine_host::v2_host) fn file_dependabot_alert_tasks_with_lookup<L>(
+fn file_dependabot_alert_tasks_with_lookup<L>(
     runtime: &OrbitRuntime,
     input: &Value,
     lookup: &L,

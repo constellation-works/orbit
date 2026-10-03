@@ -57,8 +57,6 @@ fn apply_task_automation_update_under_lock(
     update: TaskAutomationUpdate,
 ) -> Result<Task, OrbitError> {
     let existing_task = runtime.get_task(task_id)?;
-    #[cfg(test)]
-    runtime.invoke_after_locked_state_read(&existing_task);
     if update.status == Some(TaskStatus::InProgress)
         && crate::application::task::in_progress_transition_requires_plan(existing_task.status)
     {

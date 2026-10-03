@@ -1,12 +1,12 @@
 # CI log fixture goldens
 
 These are sanitized, captured-shape excerpts reconstructed from the historical
-runner samples in the existing regression tests, rather than new live GitHub
+runner samples in the former regression unit tests, rather than new live GitHub
 reads. Repository names are fixture placeholders such as `acme/orbit` and
 `openai/orbit`; credentials are masks or visibly synthetic repeated-character
 tokens. No real credential was copied.
 
-JSON fixture names map to the existing unit tests below. A `/suffix` names a
+JSON fixture names map to the retired unit tests below. A `/suffix` names a
 variant of that regression. Streamed `parts` concatenate strings and
 `{"text": "...", "repeat": N}` segments, keeping large source/retention-limit
 fixtures small on disk. The fixtures vary chunk boundaries, ANSI, Unicode,
@@ -20,17 +20,17 @@ parser results and retained evidence, not task descriptions or prompt prose.
 The separate core integration binary drives `OrbitRuntime::run_deterministic`
 with `file_ci_failure_tasks`, then reads the filed task. Every scenario has an
 isolated store; reruns within a scenario verify persisted deduplication.
-`first_batch` submits distinct diagnostics together, as the original tests do,
+`first_batch` submits distinct diagnostics together, as the original tests did,
 so pre-existing owner similarity cannot suppress the second diagnostic. It
 re-executes in a child with cleared authority, disposable HOME and a 120-second
 deadline, with kill/reap on exit. There was no existing CI-filing integration
 binary to extend. `parsed.json` records signatures, retained log bodies,
 fallback/note flags, filed counts and dedupe keys, omitting allocated task IDs.
 
-All existing unit tests remain. Retirement tasks can use this mapping when
-removing duplicated cases.
+The log-signature unit tests were retired; these goldens are their only
+guard. The mapping records which fixture replaced each one.
 
-| Existing test file | Regression / fixture prefix | Golden |
+| Former test file | Regression / fixture prefix | Golden |
 | --- | --- | --- |
 | `log_signature.rs` | `excerpt_keeps_the_run_command_and_trailing_error_not_the_env_dump` | `parsed.json` |
 | `log_signature.rs` | `excerpt_without_an_error_anchor_says_so_and_still_shows_the_command` | `parsed.json` |
