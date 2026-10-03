@@ -3430,6 +3430,15 @@ fn dashboard_all_workspaces_survives_reload_through_the_address() {
     ));
 }
 
+#[test]
+fn dashboard_malformed_run_bookmarks_recover_to_the_runs_list() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_routes.mjs")
+    ));
+}
+
 // Keyboard focus survives the rebuilds the dashboard does: expanding a row,
 // refreshing a panel, and cancelling an inline edit.
 #[test]
