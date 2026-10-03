@@ -946,6 +946,130 @@ fn linux_resolution_appends_git_protection_after_provider_grants() {
     );
 }
 
+/// [ORB-13841 / jrun-20261003-2101-c5] Deterministically remove the lock
+/// after read_dir yields it, through the sandbox-preparation boundary used by
+/// worktree setup. Both shared and separate per-worktree metadata remain denied.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_worktree_sandbox_preparation_revalidates_disappearing_git_entries() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &linux_worktree_sandbox_preparation_revalidates_disappearing_git_entries,
+    )) {
+        return;
+    }
+
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use crate::runtime::git_sandbox::{GitScanHookGuard, GitScanStage};
+
+    for (location, nested, directory) in [
+        ("shared", true, false),
+        ("per-worktree", false, false),
+        ("shared", true, true),
+    ] {
+        let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+        let repo_root = repo_root.canonicalize().unwrap();
+        let common = repo_root.join(".git");
+        let objects = common.join("objects");
+        let git_dir = if nested {
+            common.join("worktrees/worker")
+        } else {
+            repo_root.join("worker-metadata")
+        };
+        let worktree = repo_root.join(".orbit/state/worktrees/orbit-jrun-git-scan");
+        std::fs::create_dir_all(&objects).unwrap();
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        let pointer = worktree.join(".git");
+        std::fs::write(&pointer, format!("gitdir: {}\n", git_dir.display())).unwrap();
+        std::fs::write(git_dir.join("commondir"), format!("{}\n", common.display())).unwrap();
+        let lock = if directory {
+            objects.join("transient-directory")
+        } else if location == "shared" {
+            objects.join("maintenance.lock")
+        } else {
+            git_dir.join("index.lock")
+        };
+        if directory {
+            std::fs::create_dir(&lock).unwrap();
+        } else {
+            std::fs::write(&lock, "lock").unwrap();
+        }
+        seed_executor(
+            &runtime,
+            "claude",
+            Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+        );
+        let disappearances = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&disappearances);
+        let scans = Rc::new(Cell::new(0));
+        let scanned = Rc::clone(&scans);
+        let scan_root = lock.parent().unwrap().to_path_buf();
+        let _hook = GitScanHookGuard::install(move |stage, path| {
+            if stage == GitScanStage::ReadDirectory && path == scan_root {
+                scanned.set(scanned.get() + 1);
+            }
+            let removal_stage = if directory {
+                GitScanStage::ReadDirectory
+            } else {
+                GitScanStage::InspectEntry
+            };
+            if stage == removal_stage && path == lock {
+                if directory {
+                    std::fs::remove_dir(path)?;
+                } else {
+                    std::fs::remove_file(path)?;
+                }
+                observed.set(observed.get() + 1);
+            }
+            Ok(())
+        });
+        let sandbox = runtime
+            .resolve_executor_sandbox("claude", None, Some(&worktree))
+            .expect("a genuinely vanished Git lock must not deny sandbox preparation")
+            .unwrap();
+        assert_eq!(
+            disappearances.get(),
+            1,
+            "the fixture must reproduce the race"
+        );
+        assert!(
+            scans.get() >= 2,
+            "the vanished entry requires a complete rescan"
+        );
+        assert!(sandbox.managed_worktree);
+        for denied in [
+            &pointer,
+            &git_dir.join("HEAD"),
+            &common.join("objects/new-object"),
+        ] {
+            assert!(
+                linux_bwrap_write_grant_diagnostic(&sandbox.fs_profile, denied)
+                    .unwrap()
+                    .is_some(),
+                "{location}: {} must stay denied after revalidation",
+                denied.display()
+            );
+        }
+        let prepared = prepare_linux_bwrap_write_grants(&sandbox.fs_profile, &worktree).unwrap();
+        assert!(
+            prepared.unsatisfied.is_empty(),
+            "{:?}",
+            prepared.unsatisfied
+        );
+        let plan = compile_linux_bwrap_argv(
+            &sandbox.fs_profile,
+            "/bin/true",
+            &[],
+            Some(&worktree),
+            sandbox.managed_worktree,
+        )
+        .expect("the revalidated worktree sandbox must compile for provider launch");
+        assert!(plan.dropped_grants.is_empty(), "{:?}", plan.dropped_grants);
+    }
+}
+
 /// A redirected runtime store must stay out of the profile that reaches
 /// Bubblewrap, not just out of the helper that builds it.
 #[cfg(target_os = "linux")]

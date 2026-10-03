@@ -354,6 +354,18 @@ special files or hard-linked metadata files fail closed before launch: a read-on
 protect a writable alias of the same inode. This deliberately does not support
 local clones whose metadata is hard-linked into another repository.
 
+Host Git operations can remove a transient entry such as `maintenance.lock`
+between directory enumeration and inspection. Preparation restarts the whole
+metadata scan on a descendant `NotFound`, with at most three attempts, and
+requires a complete successful pass. It keeps directory device/inode identities
+across attempts and checks the metadata root and its ancestors before and after
+each pass. Missing roots, directory replacements, unsafe entries and other I/O
+errors still deny preparation; repeated disappearance exhausts the bounded
+retry rather than admitting an unstable traversal. This handles the pre-provider
+`worktree_setup` failure in [ORB-13841], run `jrun-20261003-2101-c5`, without
+changing the Git write-denial surface. That UI task needs an explicit retry
+after the repair lands; this repair does not dispatch it.
+
 The compiler pins writable ancestor entries of existing denied paths as mount
 points so they cannot be renamed aside. Beneath the private `/tmp` tmpfs,
 Bubblewrap's automatically created mount parents would also be writable even
