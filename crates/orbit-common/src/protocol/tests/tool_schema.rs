@@ -34,9 +34,9 @@ fn task_mutation_argument_schemas_forbid_additional_properties() {
 #[test]
 fn other_tool_argument_schemas_still_allow_additional_properties() {
     assert!(tool_arguments_allow_additional_properties(
-        "orbit.task.show"
+        "orbit.friction.show"
     ));
-    let schema = tool_input_schema_for("orbit.task.list", &[param("status")]);
+    let schema = tool_input_schema_for("orbit.friction.list", &[param("status")]);
     assert_eq!(
         schema
             .get("additionalProperties")
