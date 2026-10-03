@@ -6,4 +6,4 @@ All durable Orbit state that is not a search index. Depends only on `orbit-types
 - A live write spanning both drivers joins in `repository/`, never in a driver. A one-shot data movement is a `workflow`, never a side effect of opening a store.
 - New capability → trait in `contracts`, one impl in one driver, constructor in `compose`. Shared mechanics → `fs`. Concrete construction and migration access stay in composition/bootstrap/`maintenance`.
 - SQLite migrations are append-only: never renumber or edit a shipped entry in `driver/sqlite/migration/ledger.rs`. Feature crates use namespaced registries via `migration/feature.rs`, not the global ledger.
-- No crate-root `tests/`; the direction guardrail excludes `**/tests/**`, so fixtures may cross layers.
+- Crate-root `tests/` holds integration tests through the public `compose`, `contracts`, `maintenance` and `workflow` surfaces; each test runs its fixture in an isolated child process. Admitted unit tests stay in sibling `tests/` dirs; the direction guardrail excludes `**/tests/**`, so their fixtures may cross layers.
