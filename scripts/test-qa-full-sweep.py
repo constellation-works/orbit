@@ -49,7 +49,8 @@ _OUTPUT_LIMIT = 1_048_576
 def run(argv, *, cwd, env, timeout=180, input_text=None):
     started = datetime.now(timezone.utc).isoformat()
     evidence = {"command": argv, "started_at": started, "exit_code": None,
-                "stdout": "", "stderr": "", "outcome": "FAIL", "output_truncated": False}
+                "stdout": "", "stderr": "", "outcome": "FAIL", "output_truncated": False,
+                "cleanup_verified": False}
     if os.name != "posix":
         evidence["stderr"] = "QA process-group supervision requires a POSIX host"
         return evidence
@@ -59,6 +60,16 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
     threads = []
     tails = {"stdout": bytearray(), "stderr": bytearray()}
     truncated = {"stdout": False, "stderr": False}
+
+    def terminate_group():
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError as error:
+            evidence["stderr"] += f"\npolite process-group termination failed: {error}"
+            return
+        time.sleep(.25)
 
     def drain(stream, name):
         try:
@@ -110,10 +121,15 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             evidence["stderr"] = f"timeout after {timeout}s"
             # Do not wait/reap before signalling: the live or zombie supervisor
             # reserves its own process-group identity throughout cleanup.
-            os.killpg(process.pid, signal.SIGTERM)
-            time.sleep(.25)
+            terminate_group()
     except (OSError, ValueError) as error:
         evidence["stderr"] = str(error)
+        if process is not None:
+            terminate_group()
+    except BaseException:
+        if process is not None:
+            terminate_group()
+        raise
     finally:
         if write_fd is not None:
             os.close(write_fd)
@@ -121,10 +137,12 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             os.close(owner_read_fd)
         os.close(read_fd)
         if process is not None:
+            swept = False
             try:
                 os.killpg(process.pid, signal.SIGKILL)
+                swept = True
             except ProcessLookupError:
-                pass
+                swept = True
             except OSError as error:
                 evidence["exit_code"] = None
                 evidence["stderr"] += f"\nprocess-group cleanup failed: {error}"
@@ -132,14 +150,26 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                 # own group, if the host refuses the outer process's signal.
                 os.close(owner_write_fd)
                 owner_write_fd = None
+            try:
+                process.wait(timeout=5)
+                evidence["cleanup_verified"] = swept
+            except subprocess.TimeoutExpired:
+                evidence["exit_code"] = None
+                evidence["stderr"] += "\nsupervisor reap deadline expired; descendant cleanup is unverified"
+                # Reap the known supervisor only as a final bounded fallback.
+                # A refused group sweep remains an unknown cleanup outcome.
                 process.kill()
-            process.wait()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    evidence["stderr"] += "\nsupervisor still could not be reaped"
         if owner_write_fd is not None:
             os.close(owner_write_fd)
         for thread in threads:
             thread.join(timeout=2)
         if any(thread.is_alive() for thread in threads):
             evidence["exit_code"] = None
+            evidence["cleanup_verified"] = False
             evidence["stderr"] += "\ncommand descendant retained an output pipe after group cleanup"
         evidence["stdout"] = tails["stdout"].decode(errors="replace")
         captured_stderr = tails["stderr"].decode(errors="replace")
@@ -1057,6 +1087,8 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
 
 
 def process_self_test():
+    from unittest import mock
+
     with tempfile.TemporaryDirectory(prefix="orbit-qa-process-self-test-") as directory:
         temp = Path(directory)
         env = isolated_environment(temp)
@@ -1101,6 +1133,23 @@ def process_self_test():
         clean = run([sys.executable, "-c", completed_parent], cwd=temp, env=env, timeout=3)
         if clean["exit_code"] != 0:
             raise AssertionError("clean parent with pipe-inheriting descendant did not complete")
+        with mock.patch("os.killpg", side_effect=PermissionError("fixture signal refusal")):
+            refused = run([sys.executable, "-c", parent], cwd=temp, env=env, timeout=.5)
+        if refused["outcome"] != "FAIL" or refused["cleanup_verified"]:
+            raise AssertionError("refused group cleanup was reported as verified or successful")
+        original_wait = subprocess.Popen.wait
+        waits = []
+
+        def expired_first_reap(process, timeout=None):
+            waits.append(timeout)
+            if len(waits) == 1:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            return original_wait(process, timeout=timeout)
+
+        with mock.patch.object(subprocess.Popen, "wait", expired_first_reap):
+            expired = run([sys.executable, "-c", "print('complete')"], cwd=temp, env=env)
+        if expired["outcome"] != "FAIL" or expired["cleanup_verified"] or any(value is None for value in waits):
+            raise AssertionError("reap deadline did not retain a bounded, unverified failure")
         time.sleep(2.1)
         if marker.exists():
             raise AssertionError("supervised command left a grandchild after timeout or clean exit")
