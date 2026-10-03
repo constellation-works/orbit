@@ -20,7 +20,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 
 ## Gates
 
-`make ci-fast`, `make ci-lint`, and `make goldens` must pass before a task moves to `review`. `make goldens UPDATE=1` regenerates CLI help / MCP snapshot goldens after an intentional surface change — review the diff. Full `make ci` runs in CI on every PR; don't run it per task.
+`make ci-fast`, `make ci-lint`, and `make goldens` must pass before a task moves to `review`. `make goldens UPDATE=1` regenerates CLI help / MCP snapshot and sandbox profile goldens after an intentional surface or policy change — review the diff. Full `make ci` runs in CI on every PR; don't run it per task.
 
 ## Code
 

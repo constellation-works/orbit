@@ -1,0 +1,27 @@
+wrapper: /usr/bin/bwrap
+--die-with-parent
+--new-session
+--unshare-all
+--share-net
+--ro-bind / /
+--dev /dev
+--proc /proc
+--tmpfs /tmp
+--ro-bind <ROOT> <ROOT>
+--ro-bind <ROOT>/repo <ROOT>/repo
+--ro-bind <ROOT>/repo/.orbit <ROOT>/repo/.orbit
+--bind <HOME>/.cargo/registry <HOME>/.cargo/registry
+--bind <HOME>/.cargo/git <HOME>/.cargo/git
+--bind <HOME>/.orbit/state/logs <HOME>/.orbit/state/logs
+--bind <HOME>/.orbit/state/audit <HOME>/.orbit/state/audit
+--bind <HOME>/.orbit/orbit.db <HOME>/.orbit/orbit.db
+--bind <HOME>/.orbit/tasks <HOME>/.orbit/tasks
+--ro-bind <ROOT>/repo/.orbit/auto_tasks <ROOT>/repo/.orbit/auto_tasks
+--tmpfs <HOME>/.aws
+--ro-bind /dev/null <HOME>/.cargo/credentials.toml
+--tmpfs <HOME>/.ssh
+--ro-bind <HOME>/.orbit/state/plugin-broker/masked <HOME>/.orbit/state/plugins
+--ro-bind <HOME>/.orbit/state/plugin-broker/masked <HOME>/.orbit/state/plugin-secrets
+--chdir <ROOT>/inspection
+--
+/usr/bin/true

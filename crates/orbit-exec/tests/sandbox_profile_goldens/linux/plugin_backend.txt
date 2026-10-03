@@ -1,0 +1,5 @@
+deny_tcp: true
+ReadFile <HOME>/.orbit/plugins/demo/backend.sh
+ReadTree <HOME>/.orbit/plugins/demo
+ReadTree <HOME>/.orbit/state/plugins/demo
+WriteTree <HOME>/.orbit/state/plugins/demo
