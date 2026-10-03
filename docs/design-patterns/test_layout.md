@@ -1,9 +1,11 @@
 ---
 type: pattern
 summary: "Per-Module Sibling tests/ Directory"
-last_validated: 2026-09-12
+last_validated: 2026-10-03
 ---
 # Per-Module Sibling tests/ Directory
+
+This pattern governs *where* unit tests live; whether a unit test should exist at all is decided by [Boundary-First Testing](test_strategy.md) — integration, golden and e2e tests are the default, and a unit test must meet its admission criteria.
 
 Unit tests for the source files in a module live in a *sibling* `tests/` directory under that same module. Each test file mirrors its source file by name. Because the test file is a sibling of the source it covers (not a child of it), it can only reach `pub`, `pub(crate)`, and `pub(super)` items — never raw private ones. That *structurally* enforces "test through the module's exposed surface" without relying on author discipline.
 
@@ -51,7 +53,7 @@ The principle: keep production directory listings free of `#[cfg(test)]` artefac
 
 ## When to reach for it
 
-- **You're adding a new module that needs tests.** Use this layout from the first file. If the module is a single source file with no nested directory yet, still put tests in a sibling `tests/<name>.rs`.
+- **You're adding a new module whose logic meets the unit-test admission criteria in [test_strategy.md](test_strategy.md).** Use this layout from the first file. If the module is a single source file with no nested directory yet, still put tests in a sibling `tests/<name>.rs`.
 - **A module's inline test block has grown beyond a smoke test.** Move it to `<module>/tests/<source_filename>.rs` and let untestability surface as design pressure for cleaner public seams.
 - **A test wants to verify behaviour at a `pub`/`pub(crate)` boundary.** That's exactly what this layout targets.
 
