@@ -75,6 +75,114 @@ fn blocked_running_checks_are_repolled_and_merge_when_clean() {
     assert_eq!(host.task_status("T1"), TaskStatus::Done);
 }
 
+/// The `gh pr view --json` projection of a protected PR whose required checks
+/// have just started. `gh` serializes the absent review decision as `""`, not
+/// the GraphQL `null` [ORB-13759].
+const GH_BLOCKED_CHECKS_STARTING: &str = r#"{
+  "baseRefName": "agent-main",
+  "headRefName": "orbit/test-batch",
+  "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "mergeCommit": null,
+  "mergeStateStatus": "BLOCKED",
+  "mergeable": "MERGEABLE",
+  "mergedAt": null,
+  "number": 42,
+  "reviewDecision": "",
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {"__typename": "CheckRun", "completedAt": "0001-01-01T00:00:00Z", "conclusion": "", "detailsUrl": "https://github.com/o/r/actions/runs/1/job/1", "name": "test", "startedAt": "2026-10-03T03:20:29Z", "status": "IN_PROGRESS", "workflowName": "CI"},
+    {"__typename": "CheckRun", "completedAt": "0001-01-01T00:00:00Z", "conclusion": "", "detailsUrl": "https://github.com/o/r/actions/runs/1/job/2", "name": "lint", "startedAt": "0001-01-01T00:00:00Z", "status": "QUEUED", "workflowName": "CI"}
+  ],
+  "url": "https://github.com/o/r/pull/42"
+}"#;
+
+fn gh_blocked_checks_starting() -> Value {
+    serde_json::from_str(GH_BLOCKED_CHECKS_STARTING).expect("gh-shaped observation")
+}
+
+/// [ORB-13759] The recorded incident: a completion-authorized run reads its
+/// freshly published PR as BLOCKED with gh's empty review decision while
+/// checks start. It waits within its budget, then makes the permitted
+/// conditional merge of the pinned candidate and verifies delivery.
+#[test]
+fn gh_empty_review_decision_with_starting_checks_waits_then_merges_the_pinned_candidate() {
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    host.queue_pr_status([
+        gh_blocked_checks_starting(),
+        open_at("CLEAN", PUBLISHED_HEAD_SHA),
+        merged_state(),
+    ]);
+    host.queue_merge_capabilities_with_auto_merge(true, true, true, true, true);
+    let mut input = published_input(root.path());
+    input["max_wait_seconds"] = json!(10);
+
+    let output = pr_complete(&host, &input).expect("wait for checks, then deliver");
+
+    assert_eq!(output["merge"]["merged"], true);
+    assert_eq!(output["merge"]["waited_seconds"], 5);
+    assert_eq!(output["merge"]["auto_merge_requested"], false);
+    assert_eq!(
+        output["merge"]["delivery_evidence"]["head_sha"],
+        PUBLISHED_HEAD_SHA
+    );
+    assert_eq!(status_reads(&host), 3, "BLOCKED is polled again");
+    let merges = merge_calls(&host);
+    assert_eq!(merges.len(), 1, "one ordinary merge once checks settle");
+    assert_eq!(merges[0]["auto"], false);
+    assert_eq!(merges[0]["reviewed_head_sha"], PUBLISHED_HEAD_SHA);
+    assert!(
+        merges[0].get("admin").is_none(),
+        "completion must never request an administrative bypass"
+    );
+    assert_eq!(output["completed_task_ids"], json!(["T1"]));
+    assert_eq!(host.task_status("T1"), TaskStatus::Done);
+}
+
+/// [ORB-13759] An empty review decision only permits waiting on checks that
+/// are provably in flight. Settled checks, failures, unknown review shapes and
+/// a moved head still refuse before any merge request.
+#[test]
+fn gh_empty_review_decision_never_merges_on_its_own() {
+    let mut settled = gh_blocked_checks_starting();
+    settled["statusCheckRollup"] = json!([
+        {"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}
+    ]);
+    let mut failed = gh_blocked_checks_starting();
+    failed["statusCheckRollup"][1] = json!({"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"});
+    let mut missing_review = gh_blocked_checks_starting();
+    missing_review
+        .as_object_mut()
+        .expect("object")
+        .remove("reviewDecision");
+    let mut unknown_review = gh_blocked_checks_starting();
+    unknown_review["reviewDecision"] = json!("DISMISSED");
+    let mut moved_head = gh_blocked_checks_starting();
+    moved_head["headRefOid"] = json!(MOVED_HEAD_SHA);
+
+    for (case, status, expected) in [
+        (
+            "settled",
+            settled,
+            "required reviews or checks are not satisfied",
+        ),
+        ("failed", failed, "status check 'lint' failed"),
+        ("missing", missing_review, "review decision is unavailable"),
+        ("unknown", unknown_review, "review decision is unavailable"),
+        ("moved", moved_head, "delivery_evidence_stale"),
+    ] {
+        let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+        host.queue_pr_status([status]);
+        host.queue_merge_capabilities_with_auto_merge(true, true, true, true, true);
+
+        let error = pr_complete(&host, &published_input(root.path()))
+            .expect_err("an empty review decision alone must not merge");
+
+        assert!(error.to_string().contains(expected), "{case}: {error}");
+        assert!(merge_calls(&host).is_empty(), "{case}: no merge request");
+        assert_eq!(host.task_status("T1"), TaskStatus::Review, "{case}");
+    }
+}
+
 #[test]
 fn blocked_failed_check_and_required_review_never_request_a_merge() {
     for (check, review, expected) in [

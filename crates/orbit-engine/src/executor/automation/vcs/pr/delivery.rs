@@ -344,7 +344,12 @@ fn classify_blocked_pr(pull_request: &Value) -> PrMergeState {
         {
             return PrMergeState::Blocked(format!("review is required ({decision})"));
         }
-        Some(Value::Null) => {} // GitHub uses null when no review decision applies.
+        // No review decision applies: the GraphQL API reports null, and
+        // `gh pr view --json` serializes that same null as an empty string
+        // [ORB-13759]. Either only permits waiting on in-flight checks below;
+        // a field that is absent altogether stays unavailable.
+        Some(Value::Null) => {}
+        Some(Value::String(decision)) if decision.is_empty() => {}
         Some(Value::String(decision)) if decision == "APPROVED" => {}
         _ => return PrMergeState::Blocked("review decision is unavailable".into()),
     }
