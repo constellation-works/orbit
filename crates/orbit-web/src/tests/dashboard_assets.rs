@@ -3493,6 +3493,15 @@ fn dashboard_summary_rows_expand_through_the_detail_endpoint() {
     ));
 }
 
+#[test]
+fn dashboard_task_edits_do_not_cross_workspace_visits() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_task_mutation_scope.mjs")
+    ));
+}
+
 // ORB-12516: claim provenance and the owner's handoff actions are the one
 // dashboard surface where a wrong word is a wrong decision — an expired
 // reservation that reads as a revocation, or a "review" that reads as a code
