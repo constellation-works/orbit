@@ -164,8 +164,10 @@ passing, failing, ignored, and suite counts for these checks.
 The command harness requires a POSIX host. It drains stdout and stderr while
 retaining at most one MiB per stream and marks truncated output. A disposable
 supervisor owns each command's process group until cleanup finishes. Timeout,
-normal command completion, and loss of the QA parent all terminate surviving
-descendants before fixture disposal; timeout and lost-supervisor outcomes fail.
+normal command completion, and loss of the QA parent sweep the owned group.
+The report records whether cleanup was verified. A refused group signal or
+expired reap deadline fails with an explicit unverified cleanup outcome;
+timeout and lost-supervisor outcomes also fail.
 `python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.
