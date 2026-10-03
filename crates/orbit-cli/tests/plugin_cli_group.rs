@@ -1636,3 +1636,108 @@ fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgr
     assert_eq!(upgraded["environment_in_plugin_state"], true, "{upgraded}");
     assert_eq!(tree_listing(&install_root), tree_listing(&source));
 }
+
+#[cfg(unix)]
+#[test]
+fn migrate_legacy_sidecars_through_cli_preserves_sources_and_refuses_overwrite() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let legacy = fixture.source("legacy-input");
+    std::fs::create_dir_all(&legacy).unwrap();
+    let backend = legacy.join("legacy-backend");
+    let backend_bytes = b"#!/bin/sh\nprintf '{\"ok\":true}\\n'\n";
+    std::fs::write(&backend, backend_bytes).unwrap();
+    std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let sidecar = legacy.join("legacy-status.orbit-tool.yaml");
+    let sidecar_bytes =
+        "schemaVersion: 1\nname: legacy.status\ndescription: Local status.\nparameters: []\n";
+    std::fs::write(&sidecar, sidecar_bytes).unwrap();
+    let binary = backend.to_str().unwrap();
+    let printed = || {
+        let output = fixture
+            .orbit()
+            .args(["plugin", "migrate", binary, "--format", "json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        stdout_json(&output)
+    };
+    let first = printed();
+    assert_eq!(first["path"], Value::Null);
+    assert_eq!(printed(), first, "print-only migration is deterministic");
+    assert!(!legacy.join(".orbit-plugin").exists());
+    assert_eq!(std::fs::read(&backend).unwrap(), backend_bytes);
+    assert_eq!(std::fs::read_to_string(&sidecar).unwrap(), sidecar_bytes);
+
+    let destination = fixture.source("migrated");
+    let destination_arg = destination.to_str().unwrap();
+    let args = [
+        "plugin",
+        "migrate",
+        binary,
+        "--out-dir",
+        destination_arg,
+        "--version",
+        "0.2.0",
+        "--format",
+        "json",
+    ];
+    let output = fixture.orbit().args(args).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let migrated = stdout_json(&output);
+    let root = destination.join(".orbit-plugin");
+    let manifest = root.join("plugin.yaml");
+    assert_eq!(migrated["path"], manifest.to_string_lossy().as_ref());
+    let yaml = std::fs::read_to_string(&manifest).unwrap();
+    assert_eq!(migrated["manifest"], yaml);
+    assert!(yaml.contains("version: 0.2.0"), "{yaml}");
+    assert!(yaml.contains("command: bin/legacy-backend"), "{yaml}");
+    assert!(yaml.contains("name: status"), "{yaml}");
+    assert!(
+        !yaml.contains("origin:"),
+        "migration grants no first-party provenance"
+    );
+    let copied = root.join("bin/legacy-backend");
+    assert_eq!(std::fs::read(&copied).unwrap(), backend_bytes);
+    fixture
+        .orbit()
+        .args(["plugin", "validate", destination_arg])
+        .assert()
+        .success();
+
+    fixture
+        .orbit()
+        .args(args)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("refusing to overwrite"));
+    assert_eq!(std::fs::read_to_string(&manifest).unwrap(), yaml);
+    assert_eq!(std::fs::read(&copied).unwrap(), backend_bytes);
+    assert_eq!(std::fs::read(&backend).unwrap(), backend_bytes);
+    assert_eq!(std::fs::read_to_string(&sidecar).unwrap(), sidecar_bytes);
+
+    let invalid = legacy.join("invalid.orbit-tool.yaml");
+    std::fs::write(&invalid, "schemaVersion: 2\nname: legacy.invalid\n").unwrap();
+    let refused_destination = fixture.source("refused-migration");
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "migrate",
+            binary,
+            "--sidecar",
+            invalid.to_str().unwrap(),
+            "--out-dir",
+            refused_destination.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("reads v1 sidecars only"));
+    assert!(
+        !refused_destination.exists(),
+        "invalid input is rejected before writing output"
+    );
+    assert_eq!(std::fs::read_to_string(&manifest).unwrap(), yaml);
+    assert_eq!(std::fs::read(&copied).unwrap(), backend_bytes);
+}
