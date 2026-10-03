@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use predicates::prelude::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::tempdir;
 
 const INACTIVE_TOOL_NAMES: &[&str] = &[
@@ -50,6 +50,112 @@ fn orbit_at_home_as_operator(
     let mut command = orbit_at_home(work, home);
     command.env("ORBIT_OPERATOR", "1");
     command
+}
+
+#[cfg(unix)]
+#[test]
+fn disabled_external_tool_remains_inspectable_without_becoming_executable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let json = |args: &[&str]| -> Value {
+        let stdout = orbit_at_home(&work, &home)
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&stdout).unwrap()
+    };
+    let marker = work.join("execution-marker");
+    let executable = work.join("fixture-tool");
+    let quoted_marker = marker.to_string_lossy().replace('\'', "'\"'\"'");
+    std::fs::write(
+        &executable,
+        format!("#!/bin/sh\nprintf executed > '{quoted_marker}'\nprintf '{{\"ok\":true}}\\n'\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let name = "qa.disabled_inspection";
+    json(&[
+        "tool",
+        "add",
+        executable.to_str().unwrap(),
+        "--name",
+        name,
+        "--description",
+        "isolated fixture",
+        "--format",
+        "json",
+    ]);
+    let enabled = json(&["tool", "show", name, "--format", "json"]);
+    json(&["tool", "disable", name, "--format", "json"]);
+    let disabled = json(&["tool", "show", name, "--format", "json"]);
+    assert_eq!(disabled["name"], name);
+    assert_eq!(disabled["enabled"], false);
+    assert_eq!(disabled["active"], true);
+    assert_eq!(disabled["status"], "disabled");
+    assert_eq!(disabled["description"], enabled["description"]);
+    assert_eq!(disabled["parameters"], enabled["parameters"]);
+    let listed = json(&["tool", "list", "--all", "--json"]);
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row == &disabled)
+    );
+    orbit_at_home(&work, &home)
+        .args(["tool", "run", name, "--input", "{}", "--format", "json"])
+        .assert()
+        .failure();
+    assert!(
+        !marker.exists(),
+        "inspection must not re-enable or execute a disabled external tool"
+    );
+    assert_eq!(json(&["tool", "show", name, "--format", "json"]), disabled);
+    let held_executable = work.join("held-fixture-tool");
+    std::fs::rename(&executable, &held_executable).unwrap();
+    assert_eq!(
+        json(&["tool", "show", name, "--format", "json"]),
+        disabled,
+        "missing executable must not erase catalog metadata"
+    );
+    std::fs::rename(&held_executable, &executable).unwrap();
+    let builtin = json(&["tool", "show", "orbit.task.list", "--format", "json"]);
+    orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "add",
+            executable.to_str().unwrap(),
+            "--name",
+            "orbit.task.list",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot overwrite built-in"));
+    assert_eq!(
+        json(&["tool", "show", "orbit.task.list", "--format", "json"]),
+        builtin
+    );
+    orbit_at_home(&work, &home)
+        .args(["tool", "show", "qa.no_such_tool", "--format", "json"])
+        .assert()
+        .failure();
+    json(&["tool", "enable", name, "--format", "json"]);
+    assert_eq!(
+        json(&["tool", "run", name, "--input", "{}", "--format", "json"])["ok"],
+        true
+    );
+    assert!(
+        marker.exists(),
+        "the fixture must establish that an enabled call really executes"
+    );
 }
 
 #[test]
