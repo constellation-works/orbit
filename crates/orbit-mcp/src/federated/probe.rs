@@ -96,6 +96,24 @@ pub trait DestinationProbe: Send + Sync {
     /// showed a workspace does not decide the next call's error.
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError>;
 
+    /// Open only the deterministic protocol endpoint. No public-route fallback.
+    fn open_internal_drain_route(
+        &self,
+        _destination: &Destination,
+    ) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        Err(crate::internal_drain::refusal())
+    }
+
+    /// Refuse a retired public request locally, preserving the accepting audit.
+    fn refuse_internal_drain(
+        &self,
+        _name: &str,
+        _input: Value,
+        _context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Err(crate::internal_drain::refusal())
+    }
+
     fn open_worker_route(
         &self,
         destination: &Destination,
@@ -113,6 +131,17 @@ pub trait DestinationProbe: Send + Sync {
 /// classifies live errors *before* `call_tool`; a stale or unreachable
 /// destination must not observe the call.
 pub trait RoutedSession: Send {
+    fn internal_drain_protocol(&mut self) -> Result<bool, OrbitError> {
+        Ok(false)
+    }
+    fn call_internal_drain(
+        &mut self,
+        _name: &str,
+        _arguments: Value,
+        _context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Err(crate::internal_drain::refusal())
+    }
     fn snapshot(&mut self) -> Result<DestinationSnapshot, OrbitError>;
     fn advertised_tools(&mut self) -> Result<Vec<String>, OrbitError>;
     /// Verify an extension against the peer's live input schema. Names alone
@@ -167,6 +196,25 @@ impl SshDestinationProbe {
 }
 
 impl DestinationProbe for SshDestinationProbe {
+    fn open_internal_drain_route(
+        &self,
+        destination: &Destination,
+    ) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        let child = spawn_destination_session(
+            destination,
+            &self.caller_machine_id,
+            self.orchestrator.as_deref(),
+            McpSessionAuthority::Agent,
+            true,
+        )?;
+        let mut session =
+            DestinationSession::start(destination.clone(), child, self.probe_timeout)?;
+        session.handshake_with_worker(None)?;
+        Ok(Box::new(SshRoutedSession::new(
+            session,
+            self.delivery_timeout,
+        )))
+    }
     fn open_worker_route(
         &self,
         destination: &Destination,
@@ -209,6 +257,24 @@ impl InProcessDestinationProbe {
 }
 
 impl DestinationProbe for InProcessDestinationProbe {
+    fn open_internal_drain_route(
+        &self,
+        destination: &Destination,
+    ) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        self.open_route(destination)
+    }
+
+    fn refuse_internal_drain(
+        &self,
+        name: &str,
+        input: Value,
+        call_context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let mut context = self.session_context.clone();
+        context.trace_id = call_context.trace_id;
+        context.self_reported_actor = call_context.self_reported_actor;
+        self.inner.refuse_internal_drain(name, input, context)
+    }
     fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
         let content = self.inner.call_tool(
             crate::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL,
@@ -237,6 +303,21 @@ struct InProcessRoutedSession {
 }
 
 impl RoutedSession for InProcessRoutedSession {
+    fn internal_drain_protocol(&mut self) -> Result<bool, OrbitError> {
+        Ok(true)
+    }
+
+    fn call_internal_drain(
+        &mut self,
+        name: &str,
+        arguments: Value,
+        call_context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let mut context = self.session_context.clone();
+        context.trace_id = call_context.trace_id;
+        context.self_reported_actor = call_context.self_reported_actor;
+        self.inner.call_internal_drain(name, arguments, context)
+    }
     fn snapshot(&mut self) -> Result<DestinationSnapshot, OrbitError> {
         Ok(self.snapshot.clone())
     }
@@ -312,6 +393,22 @@ impl CompositeDestinationProbe {
 }
 
 impl DestinationProbe for CompositeDestinationProbe {
+    fn open_internal_drain_route(
+        &self,
+        destination: &Destination,
+    ) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        self.probe_for(destination)
+            .open_internal_drain_route(destination)
+    }
+
+    fn refuse_internal_drain(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.local.refuse_internal_drain(name, input, context)
+    }
     fn open_worker_route(
         &self,
         destination: &Destination,
@@ -349,6 +446,7 @@ impl SshDestinationProbe {
             } else {
                 self.authority
             },
+            false,
         )?;
         // The session is one process; the guard ends it on every path,
         // including the timeout path where the child is still mid-answer.
@@ -383,6 +481,25 @@ impl SshRoutedSession {
 }
 
 impl RoutedSession for SshRoutedSession {
+    fn internal_drain_protocol(&mut self) -> Result<bool, OrbitError> {
+        let response = self
+            .session
+            .request_probe(crate::internal_drain::PREFLIGHT_METHOD, json!({}))?;
+        Ok(response["result"]["protocol"].as_u64() == Some(crate::INTERNAL_DRAIN_PROTOCOL))
+    }
+
+    fn call_internal_drain(
+        &mut self,
+        name: &str,
+        arguments: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        if context.worker_invocation.is_some() || self.session.worker_invocation.is_some() {
+            return Err(crate::internal_drain::refusal());
+        }
+        self.session.restart_budget(self.delivery_timeout);
+        self.session.call_internal_drain(name, arguments)
+    }
     fn snapshot(&mut self) -> Result<DestinationSnapshot, OrbitError> {
         if let Some(snapshot) = &self.snapshot {
             return Ok(snapshot.clone());
@@ -452,6 +569,7 @@ fn spawn_destination_session(
     caller_machine_id: &str,
     orchestrator: Option<&str>,
     authority: McpSessionAuthority,
+    internal: bool,
 ) -> Result<Child, OrbitError> {
     let ssh = destination.ssh_target().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
@@ -459,15 +577,16 @@ fn spawn_destination_session(
             destination.machine_id
         ))
     })?;
+    let mut remote =
+        crate::remote::remote_serve_command(caller_machine_id, orchestrator, authority);
+    if internal {
+        remote.push_str(" --internal-drain");
+    }
     Command::new("ssh")
         .arg("-T")
         .arg("--")
         .arg(ssh)
-        .arg(crate::remote::remote_serve_command(
-            caller_machine_id,
-            orchestrator,
-            authority,
-        ))
+        .arg(remote)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // The destination's logs are its own; folding them into this process's
@@ -689,6 +808,28 @@ impl DestinationSession {
         }
         if content.is_null() {
             return Ok(json!({}));
+        }
+        Ok(content.clone())
+    }
+
+    /// Deliver without a public tool schema. The original arguments, including
+    /// the durable admission request ID, are forwarded unchanged.
+    pub(super) fn call_internal_drain(
+        &mut self,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, OrbitError> {
+        self.line_cap
+            .store(MAX_TOOL_RESULT_LINE_BYTES, Ordering::Release);
+        let response = self.request(
+            crate::internal_drain::CALL_METHOD,
+            json!({"protocol": crate::INTERNAL_DRAIN_PROTOCOL, "name": name, "arguments": arguments}),
+            LostAnswer::OutcomeUnknown { tool: name },
+        )?;
+        let result = &response["result"];
+        let content = &result["structuredContent"];
+        if result["isError"].as_bool().unwrap_or(false) {
+            return Err(remote_tool_error(&self.destination, content));
         }
         Ok(content.clone())
     }

@@ -69,26 +69,24 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // [ORB-12581] Unadvertised, but registered active: `orbit tool run` is the
     // operator's only route to it, and the governed row — not placement — is
     // what refuses an agent.
-    ("orbit.drain.claim.bind", Placement::Advertised),
-    ("orbit.drain.claim.settle", Placement::Advertised),
+    ("orbit.drain.claim.bind", Placement::Unadvertised),
+    ("orbit.drain.claim.settle", Placement::Unadvertised),
     ("orbit.drain.claims", Placement::Unadvertised),
-    // [ORB-12582] The read-only drain surface beside it: advertised, because a
-    // follower reaches it over MCP, and governed to the `agent` floor in
-    // AGENT_FLOOR_GOVERNED_TOOLS below rather than to `operator`.
-    ("orbit.drain.probe", Placement::Advertised),
-    ("orbit.drain.receipt.lookup", Placement::Advertised),
+    // The unadvertised owner/follower protocol retains the identification
+    // floor in AGENT_FLOOR_GOVERNED_TOOLS, instead of operator authority.
+    ("orbit.drain.probe", Placement::Unadvertised),
+    ("orbit.drain.receipt.lookup", Placement::Unadvertised),
     ("orbit.task.delete", Placement::Unadvertised),
     ("orbit.task.locks.release", Placement::Unadvertised),
     ("orbit.task.locks.reserve", Placement::Unadvertised),
-    // [ORB-13625] The executor lifecycle: advertised for the same reason as the
-    // probe, and on the same `agent` floor. What fences an attempt is the
-    // claim journal, not the capability.
-    ("orbit.task.pull", Placement::Advertised),
+    // The internal executor lifecycle retains the same identification floor;
+    // the claim journal fences each attempt.
+    ("orbit.task.pull", Placement::Unadvertised),
     ("orbit.task.reject", Placement::Unadvertised),
     ("orbit.workspace.claim.release", Placement::Unadvertised),
 ];
 
-/// Advertised governed tools whose allowed set names `agent` on purpose.
+/// Internal governed tools whose allowed set names `agent` on purpose.
 ///
 /// The rule below forbids that pairing everywhere else, because governing an
 /// operation the ordinary MCP caller already holds the capability for buys
@@ -277,7 +275,12 @@ fn an_advertised_governed_tool_is_deliberately_out_of_reach_for_an_agent_session
 
     for name in AGENT_FLOOR_GOVERNED_TOOLS {
         assert!(
-            governed_tool_operations().any(|operation| operation.id == *name),
+            !advertised.contains(*name),
+            "deterministic protocol operations must stay off public MCP: {name}"
+        );
+        assert!(
+            governed_tool_operations().any(|operation| operation.id == *name
+                && operation.allowed.contains(&McpCapability::Agent)),
             "'{name}' is declared an identification floor but is no longer governed at all, so \
              an unidentified caller reaches it again"
         );

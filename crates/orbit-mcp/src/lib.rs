@@ -21,6 +21,7 @@ mod adapter;
 mod error;
 #[doc(hidden)]
 pub mod federated;
+mod internal_drain;
 mod listener;
 mod remote;
 mod stdio_session;
@@ -33,6 +34,7 @@ use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use serde_json::Value;
 
 pub use adapter::OrbitToolServer;
+pub use internal_drain::{INTERNAL_DRAIN_PROTOCOL, internal_drain_name};
 pub use listener::{DEFAULT_MCP_LISTEN_PORT, ListenerExposure, McpListener};
 pub use remote::{
     FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, McpServerIdentity, McpSessionAuthority,
@@ -45,8 +47,8 @@ pub use stdio_session::{RESUME_ENV, StdioExit};
 /// Back-end for the complete MCP tool surface.
 ///
 /// The host returns the definitions it intends to expose and receives every
-/// canonicalized call with one trusted per-call context. The kernel performs no
-/// authorization or cross-machine routing.
+/// canonicalized call with one trusted per-call context. The host owns domain
+/// authorization and cross-machine routing.
 pub trait McpHost: Send + Sync + 'static {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError>;
 
@@ -76,6 +78,27 @@ pub trait McpHost: Send + Sync + 'static {
         session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError>;
 
+    /// Execute a deterministic protocol operation through a launch-selected
+    /// internal transport. The default host has no such route.
+    fn call_internal_drain(
+        &self,
+        _name: &str,
+        _input: Value,
+        _context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Err(internal_drain::refusal())
+    }
+
+    /// Persist a public/internal-route refusal using the host's audit boundary.
+    fn refuse_internal_drain(
+        &self,
+        _name: &str,
+        _input: Value,
+        _context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Err(internal_drain::refusal())
+    }
+
     /// Whether workspace-scoped tools on this host take the federated
     /// host-qualified selector rather than a v1 local selector.
     ///
@@ -99,5 +122,16 @@ pub async fn serve_stdio_with_context(
     trusted_context: ToolSessionContext,
 ) -> Result<StdioExit, OrbitError> {
     let server = OrbitToolServer::new_with_context(host, trusted_context);
+    stdio_session::serve(server, stdio_session::resumed_session()).await
+}
+
+/// Serve the deterministic drain RPC on a server explicitly launched for it.
+/// Client names, metadata and public tools/call never enable this route.
+pub async fn serve_internal_drain_stdio(
+    host: Arc<dyn McpHost>,
+    trusted_context: ToolSessionContext,
+) -> Result<StdioExit, OrbitError> {
+    let mut server = OrbitToolServer::new_with_context(host, trusted_context);
+    server.internal_drain = true;
     stdio_session::serve(server, stdio_session::resumed_session()).await
 }

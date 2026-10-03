@@ -17,6 +17,14 @@ available. By default the owner approves each handoff before it lands; an owner
 can instead opt in to landing validated handoffs itself (see
 [What this is not](#what-this-is-not)).
 
+The deterministic owner/follower RPC is separate from ordinary agent MCP.
+Probe, receipt lookup, admission, bind and settle have no public tool schemas;
+public calls refuse their canonical and formerly advertised names. Orbit's
+runtime selects the internal endpoint through the SSH launch, and client names
+or initialize metadata cannot enable it. Both machines must support that
+internal protocol revision; there is no public fallback. The owner-side CLI
+diagnostics below remain available with their existing authority checks.
+
 ## 1. Keep one owner
 
 A repository checkout, a logical workspace, and a machine's live task store
@@ -100,12 +108,12 @@ forwarded over SSH are audit attribution, not credentials.
 
 ## 4. Probe the owner
 
-From a session that reaches the **owner**. Both drain tools require an
+Run the diagnostic CLI on the **owner**, locally or through an operator SSH
+shell. Both drain tools require an
 identified caller, `agent` or `operator`; a plain shell has neither, so set
 `ORBIT_OPERATOR=1` for a deliberate operator run (it is recorded in the audit
-trail; an MCP session needs a server started with `--operator` instead). A
-replica checkout refuses these tools and names its owner: run them on the owner
-or through its federated selector.
+trail). A replica checkout refuses these diagnostics and names its owner:
+run the CLI there. The follower runtime uses the internal owner route.
 
 ```bash
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{

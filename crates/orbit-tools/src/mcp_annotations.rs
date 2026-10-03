@@ -23,8 +23,6 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.auto_task.list"
         | "orbit.auto_task.show"
         | "orbit.drain.claims"
-        | "orbit.drain.probe"
-        | "orbit.drain.receipt.lookup"
         | "orbit.friction.list"
         | "orbit.friction.show"
         | "orbit.friction.stats"
@@ -42,14 +40,11 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.auto_task.add"
         | "orbit.auto_task.mint"
         | "orbit.friction.add"
-        | "orbit.task.add"
-        | "orbit.task.pull" => A::additive(false),
+        | "orbit.task.add" => A::additive(false),
 
         // Edits that set the fields given and touch nothing else.
         "orbit.auto_task.toggle"
         | "orbit.auto_task.update"
-        | "orbit.drain.claim.bind"
-        | "orbit.drain.claim.settle"
         | "orbit.friction.update"
         | "orbit.workflow.run.workers" => A::additive(true),
 

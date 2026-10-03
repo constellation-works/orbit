@@ -53,6 +53,7 @@ pub(super) fn serve_mcp_stdio(
     authority: McpSessionAuthority,
     bound_workspace: Option<String>,
     bound_orchestrator: Option<String>,
+    internal_drain: bool,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
     orbit_mcp::warn_ignored_caller_authorization(&global_root);
@@ -63,10 +64,12 @@ pub(super) fn serve_mcp_stdio(
         bound_workspace,
         bound_orchestrator,
     )?;
-    finish_stdio_session(block_on_server(orbit_mcp::serve_stdio_with_context(
-        host,
-        session_context,
-    ))?)
+    let exit = if internal_drain {
+        block_on_server(orbit_mcp::serve_internal_drain_stdio(host, session_context))?
+    } else {
+        block_on_server(orbit_mcp::serve_stdio_with_context(host, session_context))?
+    };
+    finish_stdio_session(exit)
 }
 
 /// Serve the federated mux: the accepting machine plus operator-configured
@@ -811,12 +814,43 @@ impl McpHost for ServerMcpHost {
             .collect()
     }
 
+    fn refuse_internal_drain(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.audit_global_failure(
+            name,
+            input,
+            context,
+            OrbitError::PolicyDenied(
+                "distributed drain requires the internal runtime route".into(),
+            ),
+        )
+    }
+
+    fn call_internal_drain(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let Some(canonical) = orbit_mcp::internal_drain_name(name) else {
+            return self.refuse_internal_drain(name, input, context);
+        };
+        self.call_workspace_tool(canonical, input, context)
+    }
+
     fn call_tool(
         &self,
         name: &str,
         input: Value,
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        if let Some(canonical) = orbit_mcp::internal_drain_name(name) {
+            return self.refuse_internal_drain(canonical, input, context);
+        }
         // The mux's destination-side discovery path is intentionally absent
         // from tools/list. It retains Invalid local checkouts for descriptor
         // health without changing direct v1 orbit.workspace.list behavior.

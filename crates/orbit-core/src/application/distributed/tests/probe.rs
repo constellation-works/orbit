@@ -485,7 +485,7 @@ fn a_session_without_agent_capability_reaches_neither_read_only_tool() {
 /// Every read-only drain tool has an entry point that actually resolves
 /// [ORB-12581].
 ///
-/// The probe and the receipt lookup are advertised, so MCP reaches them. Claim
+/// Probe and receipt lookup use the internal runtime route. Claim
 /// inspection is not advertised and has no subcommand of its own, which leaves
 /// `orbit tool run` as its only route — and that route applies
 /// `ensure_tool_agent_facing`, so registering it inactive made the documented
@@ -507,8 +507,8 @@ fn the_operator_reaches_claim_inspection_through_the_cli_tool_route() {
         .into_iter()
         .map(|definition| definition.schema.name)
         .collect::<BTreeSet<_>>();
-    assert!(advertised.contains("orbit.drain.probe"));
-    assert!(advertised.contains("orbit.drain.receipt.lookup"));
+    assert!(!advertised.contains("orbit.drain.probe"));
+    assert!(!advertised.contains("orbit.drain.receipt.lookup"));
     assert!(
         !advertised.contains("orbit.drain.claims"),
         "claim inspection stays an operator surface, off MCP"

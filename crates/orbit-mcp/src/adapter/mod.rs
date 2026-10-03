@@ -33,6 +33,7 @@ type ListToolsCache = HashMap<(SelectorAdvertisement, Option<String>), Arc<ListT
 /// and translated back before dispatch.
 pub struct OrbitToolServer {
     host: Arc<dyn McpHost>,
+    pub(crate) internal_drain: bool,
     /// The workspace this server process was launched for, when the launching
     /// configuration named one.
     ///
@@ -66,6 +67,7 @@ impl OrbitToolServer {
         trusted_context.workspace = normalized_selector(trusted_context.workspace.as_deref());
         Self {
             host,
+            internal_drain: false,
             launch_workspace: trusted_context.workspace.clone(),
             session_context: RwLock::new(trusted_context),
             definitions: OnceLock::new(),

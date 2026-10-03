@@ -113,6 +113,14 @@ pub struct ServeArgs {
     /// Presence also marks the server session's transport as SSH MCP.
     #[arg(long, value_name = "MACHINE_ID", hide = true, conflicts_with = "mode")]
     pub remote_caller_machine_id: Option<String>,
+    /// Deterministic owner/follower RPC; selected by Orbit's runtime SSH argv.
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with = "mode",
+        requires = "remote_caller_machine_id"
+    )]
+    pub internal_drain: bool,
     /// Serve sessions with operator authority, so they may perform governed
     /// operations such as dispatching a workflow or deleting a task.
     ///
@@ -176,7 +184,11 @@ impl ServeArgs {
         }
         let global_root = orbit_core::runtime::resolve_global_root()?;
         let worker = orbit_core::OrbitRuntime::current_worker_invocation(&global_root)?;
-        if worker.is_some() && (self.operator || matches!(self.mode, Some(ServeMode::Remote))) {
+        if worker.is_some()
+            && (self.operator
+                || self.internal_drain
+                || matches!(self.mode, Some(ServeMode::Remote)))
+        {
             return Err(OrbitError::PolicyDenied(
                 "managed workers require an agent session with preserved invocation context".into(),
             ));
@@ -218,6 +230,7 @@ impl ServeArgs {
                 self.workspace
                     .or_else(orbit_core::runtime::managed_workspace_selector_from_env),
                 self.orchestrator,
+                self.internal_drain,
             )?,
         }
         Ok(CommandOutput::Silent)

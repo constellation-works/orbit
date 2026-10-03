@@ -530,3 +530,30 @@ fn bounded_line_reader_rejects_invalid_utf8() {
 
     assert!(read_bounded_line(&mut reader, &cap).is_err());
 }
+
+#[test]
+fn an_internal_preflight_stall_is_unreachable_before_admission() {
+    let mut session = SshRoutedSession::new(
+        stalled_session(Duration::from_millis(50)),
+        Duration::from_secs(1),
+    );
+    assert!(matches!(
+        session.internal_drain_protocol(),
+        Err(OrbitError::UnreachableDestination(_))
+    ));
+}
+
+#[test]
+fn a_lost_internal_admission_answer_is_outcome_unknown() {
+    let mut session = stalled_session(Duration::from_millis(50));
+    let error = session
+        .call_internal_drain(
+            "orbit.task.pull",
+            json!({"request_id":"original-admission"}),
+        )
+        .expect_err("no reply");
+    assert!(
+        matches!(error, OrbitError::OutcomeUnknown { .. }),
+        "a sent internal admission may have committed: {error}"
+    );
+}

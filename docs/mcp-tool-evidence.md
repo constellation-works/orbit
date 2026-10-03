@@ -1,6 +1,6 @@
 # MCP behavioral evidence
 
-This matrix covers the exact 37 modern advertised names in `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` on the consolidation candidate. It is a map of demonstrated behavior, not a claim that every argument, state, provider, or remote deployment was exercised. Retired desktop tool aliases are neither advertised nor callable. Clients and destinations must use the current domain contracts; no older-client translation is performed.
+This matrix covers the exact 32 modern advertised names in `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` after removal of the five deterministic drain operations. It is a map of demonstrated behavior, not a claim that every argument, state, provider, or remote deployment was exercised. Retired desktop tool aliases are neither advertised nor callable. Clients and destinations must use the current domain contracts; no older-client translation is performed.
 
 `S` means the production Orbit binary over real stdio and disposable stores. `W` means the MCP transport kernel over an in-memory wire or loopback fixture. `I` means registered runtime tools or application integration with temporary stores. Application-only evidence is labeled explicitly. A dash means this review has no named evidence for that dimension; it does not mean that behavior is unsupported. Persistence means an asserted durable readback or byte-preserving refusal, not merely a successful response.
 
@@ -15,10 +15,6 @@ This matrix covers the exact 37 modern advertised names in `crates/orbit-cli/tes
 | orbit_auto_task_update | S-auto-crud, I-auto-crud | S-auto-crud, I-auto-policy | S-auto-crud, I-owner | S-auto-crud, I-owner | Updated description read after restart; wrong workspace preserves bytes |
 | orbit_command_exec | I-command | I-command-denial | I-command-audit | I-command-denial | Local safe argv fixtures; remote command effects untested |
 | orbit_crew_list | S-replica | S-selector | — | S-federated | Read-only catalog |
-| orbit_drain_claim_bind | I-bind-settle | I-bind-settle | I-bind-settle | I-bind-settle | Recording transport; no live follower |
-| orbit_drain_claim_settle | I-bind-settle | I-settle | I-bind-settle | I-bind-settle | Recording transport; no real candidate delivery |
-| orbit_drain_probe | I-probe | I-probe | I-probe | I-probe | Asserts observation creates no admission state |
-| orbit_drain_receipt_lookup | I-receipt | I-receipt | I-receipt | I-receipt | Upgrade/version namespace fixtures |
 | orbit_friction_add | S-records | S-replica | S-records | S-replica | Disposable records |
 | orbit_friction_list | I-friction-list | S-replica | S-rehome | S-replica | Structured list and replica refusal |
 | orbit_friction_rehome | S-rehome | S-rehome | S-rehome | S-rehome | Two registered disposable checkouts |
@@ -30,7 +26,6 @@ This matrix covers the exact 37 modern advertised names in `crates/orbit-cli/tes
 | orbit_task_artifact_get | S-artifact | I-artifact-denial | I-artifact | S-artifact | Text/raster fixtures; no external download |
 | orbit_task_artifact_put | S-artifact-write | S-artifact-write, I-artifact-authority | S-artifact-write | S-artifact-write, I-artifact-authority | Exact UTF-8 bytes after server restart; path and workspace refusals |
 | orbit_task_list | S-records | S-selector | S-guarded | S-selector | Field projections, bounded pages |
-| orbit_task_pull | I-pull | I-pull-denial | I-pull | I-pull-denial | Recording transport; no live remote owner |
 | orbit_task_show | S-records, S-guarded | S-selector | S-guarded | S-selector | Global ID and explicit workspace filter |
 | orbit_task_update | S-records, S-guarded | S-context, S-guarded | S-guarded | S-selector | Restart receipts and stale revision refusal |
 | orbit_ui_inspect | S-presentation, W-presentation | W-presentation | — | S-presentation, W-presentation | Presentation read, native launcher untested |
@@ -69,6 +64,34 @@ All `S` proofs are in `crates/orbit-cli/tests/mcp_roundtrip.rs` or its indicated
 - **S-governed**: `mcp_server_advertises_governed_tools_but_denies_an_unprivileged_session` and `a_remote_originated_agent_session_is_refused_a_governed_tool`. Advertisement alone grants nothing.
 - **S-presentation**: `mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fallback`.
 
+## Internal distributed protocol
+
+The five former public tools (`orbit_drain_probe`, `orbit_drain_receipt_lookup`,
+`orbit_drain_claim_bind`, `orbit_drain_claim_settle`, `orbit_task_pull`) are absent
+from ordinary local, federated and managed-agent discovery. Public `tools/call`
+refuses their canonical and advertised spellings before admission or mutation.
+They have no public compatibility aliases.
+
+`internal_drain::public_drain_calls_and_spoofed_initialize_are_refused_and_audited`
+uses production stdio and checks the 32-tool count, both retired spellings,
+operator and managed-agent discovery, spoofed client/initialize claims, denied
+custom RPC and durable refusal audit rows without changing task state.
+
+`internal_drain::follower_internal_transport_reconciles_lost_admission_and_fences_claims`
+exercises the production `SshDestinationProbe` and server through a disposable
+SSH process substitute. Only the executable and destination filesystem are
+substituted; Orbit composes the internal launch argv and sends its actual RPC.
+The fixture probes, drops one committed admission reply, restarts the owner
+session, looks up and replays the original receipt, binds, settles a failure,
+and reads the original receipt and current phase again. It asserts one durable
+claim and unchanged request identity, machine/run/stale-claim/workspace refusals,
+and successful caller-attributed audit rows. Internal preflight negotiates a
+protocol revision without loading general tool schemas. Existing application
+proofs below cover capability floors and owner-local execution.
+
+These isolated results do not establish a live SSH login, provider execution,
+native-client integration, or successful remote candidate handoff/landing.
+
 ## Runtime and application proofs
 
 The registered tool-host proofs are in `crates/orbit-core/src/adapter/tool_host/tests/` and passed together in the 227-test tool-host run. They cross runtime authorization/dispatch and real temporary storage; they do not cross production stdio.
@@ -87,7 +110,7 @@ The registered tool-host proofs are in `crates/orbit-core/src/adapter/tool_host/
 - **I-workers** (application-only `application/job/run/tests/worker_limit.rs`): `raising_the_ceiling_preserves_the_run_and_records_what_changed`, `a_stale_revision_is_refused_as_a_conflict_and_writes_nothing`, and `an_over_limit_or_zero_ceiling_is_refused_before_any_write`.
 - **I-resume** (application-only `application/job/tests/resume.rs`): `resume_reconciliation_is_idempotent_and_scoped_to_the_retry_lineage` and `resume_submission_rejects_a_non_terminal_run_before_persisting_anything`. Delivery-tail steps and worker processes are deterministic fixtures.
 
-The distributed proofs are in `crates/orbit-core/src/application/distributed/tests/`, use recording transports and passed together as 34 tests. No SSH or live owner was contacted.
+The additional distributed application proofs are in `crates/orbit-core/src/application/distributed/tests/`, use isolated stores and recording transports. No SSH or live owner was contacted.
 
 - **I-probe**: `probe::probe_reports_owner_facts_and_creates_no_admission_state`, `probe::probe_reports_the_first_refusal_the_admission_ladder_would_raise`, and `probe::the_read_only_surface_serves_an_owner_local_session_and_refuses_a_replica`.
 - **I-receipt**: `probe::an_upgraded_lookup_finds_the_original_receipt_without_rewriting_it`, `probe::an_incompatible_lookup_protocol_refuses_instead_of_answering`, and `probe::a_worker_reads_its_own_namespace_and_only_an_operator_reads_across_attempts`.
