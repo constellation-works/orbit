@@ -1,20 +1,20 @@
 [
   {
-    "content_hash": "<CONTENT_HASH>",
     "id": "orbit",
-    "meta": null,
-    "path": "<HOME>/.orbit/skills/orbit"
+    "content_hash": "<CONTENT_HASH>",
+    "path": "<HOME>/.orbit/skills/orbit",
+    "meta": null
   },
   {
-    "content_hash": "<CONTENT_HASH>",
     "id": "orbit-orchestrate",
-    "meta": null,
-    "path": "<HOME>/.orbit/skills/orbit-orchestrate"
+    "content_hash": "<CONTENT_HASH>",
+    "path": "<HOME>/.orbit/skills/orbit-orchestrate",
+    "meta": null
   },
   {
-    "content_hash": "<CONTENT_HASH>",
     "id": "orbit-setup",
-    "meta": null,
-    "path": "<HOME>/.orbit/skills/orbit-setup"
+    "content_hash": "<CONTENT_HASH>",
+    "path": "<HOME>/.orbit/skills/orbit-setup",
+    "meta": null
   }
 ]

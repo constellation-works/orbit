@@ -79,7 +79,7 @@ rusqlite = { version = "0.31", features = ["bundled", "chrono", "trace"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 # Keep the shared import name while using the YAML organization's maintained fork.
 serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 regex = "1"

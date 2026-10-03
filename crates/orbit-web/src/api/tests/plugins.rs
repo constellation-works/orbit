@@ -84,7 +84,7 @@ fn write_plugin(root: &Path) {
     let backend = root.join("bin/backend.sh");
     std::fs::write(
         &backend,
-        "#!/bin/sh\ncat > /dev/null\nprintf '{\"ok\":true,\"output\":{\"indexed\":7,\"state\":\"ready\"}}\\n'\n",
+        "#!/bin/sh\ncat > /dev/null\nprintf '{\"ok\":true,\"output\":{\"z\":1,\"a\":2}}\\n'\n",
     )
     .expect("write backend");
     #[cfg(unix)]
@@ -497,11 +497,16 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
     let status = response.status();
     let payload = body_json(response).await;
     assert_eq!(status, StatusCode::OK, "{payload}");
+    let output = payload["output"]
+        .as_object()
+        .expect("the panel serves an object output");
     assert_eq!(
-        payload["output"],
-        serde_json::json!({ "indexed": 7, "state": "ready" }),
-        "the panel serves the source tool's output"
+        output.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["z", "a"],
+        "the API preserves the exec plugin's JSON member order"
     );
+    assert_eq!(payload["output"]["z"], 1);
+    assert_eq!(payload["output"]["a"], 2);
 }
 
 /// `source` and `install_path` are display-only host paths, so the listing

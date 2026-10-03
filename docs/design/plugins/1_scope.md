@@ -1005,12 +1005,14 @@ state, diagnostics, tools, panels, links) and draws each panel with one generic 
 
 | `render` | Input the panel's tool returns | Rendering |
 |---|---|---|
-| `kv` | an object | one label/value row per key; nested values as compact JSON |
-| `table` | an array of objects (or `{rows: [...]}`) | columns are the union of row keys, first-seen order |
+| `kv` | an object | one label/value row per key in the plugin's JSON member order; nested values as compact JSON |
+| `table` | an array of objects (or `{rows: [...]}`) | columns are the union of row keys, first-seen order across rows and each row's JSON member order |
 | `markdown` | a string, or an object with a `markdown` or `text` string | the dashboard's `renderMarkdown` wrapper (raw HTML escaped, then DOMPurify) |
 | `json` | anything | pretty-printed JSON |
 
-Mismatched output falls back to `json`; `group` is a presentation hint.
+Mismatched output falls back to `json`; `group` is a presentation hint. The API preserves
+the JSON member order returned by the plugin, so `kv` labels and the `table` renderer's
+first-seen column order reflect the plugin's exec reply.
 
 - `GET /api/plugins/<ns>/panels/<id>` runs the panel source through the audited tool dispatch
   with no caller input, for any dashboard session. This is safe because a panel source must be

@@ -110,7 +110,11 @@ pub(super) fn derive_args(input_schema: &Value, positional: &[String]) -> Vec<De
             }
         }
     }
-    for (name, property) in properties {
+    // JSON object storage preserves insertion order for plugin panel data,
+    // but CLI flags keep their established alphabetical help order.
+    let mut declared_properties = properties.iter().collect::<Vec<_>>();
+    declared_properties.sort_unstable_by_key(|(name, _)| *name);
+    for (name, property) in declared_properties {
         args.push(derive_one(name, property));
     }
     // A promoted property intentionally appears twice (its positional entry

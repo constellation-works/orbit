@@ -246,7 +246,7 @@ enum SelectorRejection {
     /// `canonical` is the form the write would store.
     Missing {
         canonical: String,
-        error: OrbitError,
+        error: Box<OrbitError>,
     },
     /// Malformed, unsupported kind, outside the workspace, or the wrong
     /// target kind: never relaxed.
@@ -256,7 +256,8 @@ enum SelectorRejection {
 impl SelectorRejection {
     fn into_error(self) -> OrbitError {
         match self {
-            Self::Missing { error, .. } | Self::Invalid(error) => error,
+            Self::Missing { error, .. } => *error,
+            Self::Invalid(error) => error,
         }
     }
 }
@@ -323,11 +324,11 @@ fn resolve_selector_in(
 
     if !exists_in_workspace(&canonical, canonical_workspace) {
         return Err(SelectorRejection::Missing {
-            error: OrbitError::InvalidInput(format!(
+            error: Box::new(OrbitError::InvalidInput(format!(
                 "selector `{entry}` does not resolve to an existing in-workspace target; \
                  only the filesystem anchor is verified, not a `symbol:` name or kind. \
                  {MISSING_CONTEXT_ESCAPE_HINT}"
-            )),
+            ))),
             canonical,
         });
     }

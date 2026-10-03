@@ -24,7 +24,8 @@ pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
     let context = load_handoff_context(host, input, "pr_open")?;
     match open_or_reuse_pr(host, input, &context) {
         Ok(output) => Ok(output),
-        Err((phase, error)) => {
+        Err(failure) => {
+            let (phase, error) = *failure;
             record_failed_handoff(host, &context, input, phase, &error)?;
             Err(error)
         }
@@ -35,7 +36,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
-) -> Result<Value, (FailedHandoffPhase, OrbitError)> {
+) -> Result<Value, Box<(FailedHandoffPhase, OrbitError)>> {
     let head = required_input_string(input, "head").map_err(invalid_prepare)?;
     let base = required_input_string(input, "base").map_err(invalid_prepare)?;
     let base_ref = required_input_string(input, "base_ref").map_err(invalid_prepare)?;
@@ -46,33 +47,33 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     )
     .map_err(invalid_prepare)?;
     if current_branch.trim() != head {
-        return Err((
+        return Err(Box::new((
             FailedHandoffPhase::PrLookup,
             OrbitError::Execution(format!(
                 "pr_open: prepared branch '{head}' is not checked out (found '{}')",
                 current_branch.trim()
             )),
-        ));
+        )));
     }
     // ORB-10644: divergence against the pinned base says nothing about whether
     // that base is still a branch work can land through. A base that merged and
     // was deleted (or restored to its pre-merge tip) still resolves, so every
     // later step would report success against a PR nobody merges again.
     ensure_base_can_still_land(&context.workspace_path, "pr_open", base, base_sha, input)
-        .map_err(|error| (FailedHandoffPhase::ObsoleteBase, error))?;
+        .map_err(|error| Box::new((FailedHandoffPhase::ObsoleteBase, error)))?;
     // [ORB-11333] A before-PR gate binds to exact head and base commits. The
     // PR is only opened for the candidate the reviewer actually settled.
     ensure_reviewed_candidate(&context.workspace_path, input, base_sha)
-        .map_err(|error| (FailedHandoffPhase::StaleReviewGate, error))?;
+        .map_err(|error| Box::new((FailedHandoffPhase::StaleReviewGate, error)))?;
     let freshness = branch_freshness_against_ref(&context.workspace_path, head, base_ref, base_sha)
         .map_err(invalid_prepare)?;
     if freshness.commits_behind != 0 || freshness.commits_ahead == 0 {
-        return Err((
+        return Err(Box::new((
             FailedHandoffPhase::EmptyBranch,
             OrbitError::Execution(format!(
                 "pr_open: prepared head '{head}' must be ahead of and not behind base checkpoint '{base_sha}'"
             )),
-        ));
+        )));
     }
     let diff_output = git_output(
         &context.workspace_path,
@@ -131,7 +132,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                         "workspace_path": context.workspace_path,
                     }),
                 )
-                .map_err(|error| (FailedHandoffPhase::PrCreate, error))?;
+                .map_err(|error| Box::new((FailedHandoffPhase::PrCreate, error)))?;
             let pr_url = created
                 .get("url")
                 .and_then(Value::as_str)
@@ -139,15 +140,15 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
                 .ok_or_else(|| {
-                    (
+                    Box::new((
                         FailedHandoffPhase::PrCreate,
                         OrbitError::Execution(
                             "private automation VCS PR create did not return a PR url".to_string(),
                         ),
-                    )
+                    ))
                 })?;
             let (pr_number, viewed_url) = view_pr(host, &context.workspace_path, &pr_url)
-                .map_err(|error| (FailedHandoffPhase::PrView, error))?;
+                .map_err(|error| Box::new((FailedHandoffPhase::PrView, error)))?;
             Ok(pr_output(PrOutput {
                 decision: "performed",
                 pr_created: true,
@@ -161,7 +162,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                 freshness: &freshness,
             }))
         }
-        Err(error) => Err((FailedHandoffPhase::PrLookup, error)),
+        Err(error) => Err(Box::new((FailedHandoffPhase::PrLookup, error))),
     }
 }
 
@@ -243,8 +244,8 @@ pub(in crate::executor::automation::vcs) fn ensure_reviewed_candidate(
     Ok(())
 }
 
-fn invalid_prepare(error: OrbitError) -> (FailedHandoffPhase, OrbitError) {
-    (FailedHandoffPhase::PrLookup, error)
+fn invalid_prepare(error: OrbitError) -> Box<(FailedHandoffPhase, OrbitError)> {
+    Box::new((FailedHandoffPhase::PrLookup, error))
 }
 
 fn view_pr<H: RuntimeHost + ?Sized>(
