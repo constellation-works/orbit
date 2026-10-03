@@ -39,6 +39,7 @@ use super::git::{
     BaseSyncMode, git_command_success, git_output, git_output_raw, git_success,
     resolve_worktree_start_point,
 };
+use super::handoff::reports_failure;
 use super::pr::{DeliveryPin, PrMergeState, classify_pr_state};
 use super::review_gate::revision;
 
@@ -718,28 +719,11 @@ pub(super) fn handoff_execution_summary(
          exact candidate and the owner holds every captured log.",
         candidate.candidate.commit, candidate.base.commit
     );
-    let implementation = input
-        .get("implementation")
-        .filter(|value| value.is_object());
-    let text = |value: Option<&Value>| {
-        value
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(ToOwned::to_owned)
-    };
-    let recorded = input_string_field(input, "execution_summary")
-        .or_else(|| text(implementation.and_then(|output| output.get("execution_summary"))))
-        .or_else(|| text(implementation.and_then(|output| output.get("summary"))));
-    let Some(summary) = recorded else {
+    let implementation = implementation_output(input);
+    let Some(summary) = implementer_summary(input) else {
         return Ok(delivered);
     };
-    if summary
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(str::trim)
-        == Some("Outcome: failed")
-    {
+    if reports_failure(&summary) {
         return Err(refused(
             "the implementer's execution summary reports `Outcome: failed`; a claimed leaf \
              hands off only delivered work",
@@ -775,6 +759,40 @@ pub(super) fn handoff_execution_summary(
     composed.push_str("\n\n");
     composed.push_str(&delivered);
     Ok(composed)
+}
+
+/// The implement step's output, when the pipeline passed it as `implementation`.
+fn implementation_output(input: &Value) -> Option<&Value> {
+    input
+        .get("implementation")
+        .filter(|value| value.is_object())
+}
+
+fn text(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Whether this step was handed this run's implementer output at all: an
+/// explicit `execution_summary` or the implement step's `implementation`.
+pub(super) fn carries_implementer_output(input: &Value) -> bool {
+    input_string_field(input, "execution_summary").is_some()
+        || implementation_output(input).is_some()
+}
+
+/// This run's implementer summary, trimmed, in the precedence
+/// [`handoff_execution_summary`] documents (items 1 and 2). The claimed
+/// delivery gate
+/// ([`reject_failed_attempt`](super::handoff::reject_failed_attempt)) judges
+/// the same text the handoff carries [ORB-13755].
+pub(super) fn implementer_summary(input: &Value) -> Option<String> {
+    let implementation = implementation_output(input);
+    input_string_field(input, "execution_summary")
+        .or_else(|| text(implementation.and_then(|output| output.get("execution_summary"))))
+        .or_else(|| text(implementation.and_then(|output| output.get("summary"))))
 }
 
 /// `text`, cut to [`MAX_HANDOFF_SUMMARY_BYTES`] with the cut reported.

@@ -38,6 +38,11 @@ spec:
         type: integer
       sync_required:
         type: boolean
+      # A claimed leaf's implement-step output. Under the claim's worker
+      # binding the delivery gate judges its summary, not the owner's
+      # stored one; any other run ignores it.
+      implementation:
+        type: [object, "null"]
   output_schema_json:
     type: object
     required:

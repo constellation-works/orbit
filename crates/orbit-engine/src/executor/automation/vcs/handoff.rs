@@ -10,6 +10,7 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use super::super::input::{
     canonicalize_existing_dir, input_string_field, required_input_string, required_job_run_id,
 };
+use super::claim::{carries_implementer_output, implementer_summary};
 use super::pr::meaningful_execution_summary;
 
 const FAILED_HANDOFF_ACTOR: &str = "system";
@@ -35,12 +36,7 @@ pub(super) fn reject_failed_delivery(task: &Task) -> Result<(), OrbitError> {
         )));
     };
 
-    let first_line = summary
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default();
-    if first_line != DELIVERY_FAILED_LINE {
+    if !reports_failure(summary) {
         return Ok(());
     }
 
@@ -49,6 +45,64 @@ pub(super) fn reject_failed_delivery(task: &Task) -> Result<(), OrbitError> {
          '{DELIVERY_FAILED_LINE}'; durable delivery fails closed when the task record reports failure",
         task.id
     )))
+}
+
+/// Whether `summary`'s first nonblank line is exactly `Outcome: failed`.
+pub(super) fn reports_failure(summary: &str) -> bool {
+    summary.lines().map(str::trim).find(|line| !line.is_empty()) == Some(DELIVERY_FAILED_LINE)
+}
+
+/// The delivery gate for the attempt this run is delivering [ORB-13755].
+///
+/// A local run judges the durable task record ([`reject_failed_delivery`]).
+/// A claimed leaf cannot: its implementer writes no owner task state
+/// (distributed-drain design §3, "Claimed-mode implementation"), so until
+/// this attempt's handoff is accepted the owner's stored summary is whatever
+/// a *previous* attempt left — after a failed attempt, its `Outcome: failed`
+/// settlement. Gating on that refused every claimed retry of a once-failed
+/// task, however its new implementation went.
+///
+/// So under the trusted worker binding, for the claim's own task, a step the
+/// pipeline handed this run's implementer output judges that output instead:
+/// the source [`claim_handoff`](super::claim::claim_handoff) composes the
+/// owner's summary from and refuses on. A current summary reporting
+/// `Outcome: failed` is still refused here, before the caller touches Git.
+/// A claimed implementer that reported no summary is not refused; its handoff
+/// carries a generic delivery statement. Without the binding, or without
+/// implementer output in the input, the durable gate applies unchanged.
+pub(super) fn reject_failed_attempt<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    task: &Task,
+) -> Result<(), OrbitError> {
+    let Some(current) = claimed_attempt_summary(host, input, task) else {
+        return reject_failed_delivery(task);
+    };
+    match current {
+        Some(summary) if reports_failure(&summary) => Err(OrbitError::Execution(format!(
+            "task '{}' cannot be delivered: this claimed attempt's implementer summary begins \
+             with '{DELIVERY_FAILED_LINE}'; a claimed leaf delivers only work its own attempt \
+             reports as done",
+            task.id
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// This claimed attempt's implementer summary for `task`, when this step may
+/// judge it: `None` outside a claimed leaf, for a task other than the claim's,
+/// or when the step was handed no implementer output; `Some(None)` when the
+/// implementer output carries no summary text.
+pub(super) fn claimed_attempt_summary<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    task: &Task,
+) -> Option<Option<String>> {
+    let binding = host.worker_invocation()?;
+    if binding.task_id != task.id || !carries_implementer_output(input) {
+        return None;
+    }
+    Some(implementer_summary(input))
 }
 
 pub(super) struct HandoffContext {
@@ -91,7 +145,7 @@ pub(super) fn load_handoff_context<H: RuntimeHost + ?Sized>(
                 task.id, task.status
             )));
         }
-        reject_failed_delivery(&task)?;
+        reject_failed_attempt(host, input, &task)?;
         tasks.push(task);
     }
 

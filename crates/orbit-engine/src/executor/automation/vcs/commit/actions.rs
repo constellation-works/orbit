@@ -15,7 +15,9 @@ use super::super::super::input::{
 };
 use super::super::failure::commit_head_matches_failure_handoff;
 use super::super::git::git_output;
-use super::super::handoff::reject_failed_delivery;
+use super::super::handoff::{
+    claimed_attempt_summary, reject_failed_attempt, reject_failed_delivery,
+};
 use super::super::pr::meaningful_execution_summary;
 use super::author::{append_co_author_trailers, commit_author_for_tasks};
 use super::checkpoint::{
@@ -198,30 +200,42 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
 
     ensure_no_unmerged_changes(&workspace_path)?;
 
-    // ORB-10603: the summary the gate reads is durable state, and nothing in the
-    // pipeline filled it when the implementing agent skipped the instruction to
-    // persist one. Derive it read-only from the change about to be delivered —
-    // never from the agent's advisory response envelope — and only when the
-    // agent persisted nothing of its own.
-    let task = ensure_durable_execution_summary(host, task.clone(), &workspace_path, batch_id)?;
+    let task = if claimed_attempt_summary(host, input, task).is_some() {
+        // ORB-13755: a claimed leaf delivers this attempt, whose summary lives
+        // in the implementer output the pipeline handed this step, not in the
+        // owner's record (which a previous attempt may have left reporting
+        // failure). The gate judges that output before any Git mutation, and
+        // nothing is derived or written here: the owner's summary is the one
+        // its handoff acceptance records.
+        reject_failed_attempt(host, input, task)?;
+        task.clone()
+    } else {
+        // ORB-10603: the summary the gate reads is durable state, and nothing in
+        // the pipeline filled it when the implementing agent skipped the
+        // instruction to persist one. Derive it read-only from the change about
+        // to be delivered — never from the agent's advisory response envelope —
+        // and only when the agent persisted nothing of its own.
+        let task = ensure_durable_execution_summary(host, task.clone(), &workspace_path, batch_id)?;
 
-    // ORB-10313: fail closed on the durable execution outcome before staging
-    // files, mutating the index, or committing. Only read-only resolution and
-    // validation run ahead of it; the gate itself is unchanged, and an empty or
-    // underivable summary still refuses delivery here.
-    if meaningful_execution_summary(&task.execution_summary).is_none() {
-        // Derivation found no uncommitted change to describe, so the agent
-        // finished without leaving one and without saying why. Name that
-        // outcome rather than only the missing field, and what resolves it.
-        return Err(OrbitError::Execution(format!(
-            "task '{}' requires a meaningful persisted execution_summary before delivery; the \
-             implementing agent recorded none and the worktree holds no uncommitted change to \
-             derive one from. A task that needs no change must say so in its summary and \
-             attach no-diff evidence; otherwise re-run it",
-            task.id
-        )));
-    }
-    reject_failed_delivery(&task)?;
+        // ORB-10313: fail closed on the durable execution outcome before staging
+        // files, mutating the index, or committing. Only read-only resolution and
+        // validation run ahead of it; the gate itself is unchanged, and an empty
+        // or underivable summary still refuses delivery here.
+        if meaningful_execution_summary(&task.execution_summary).is_none() {
+            // Derivation found no uncommitted change to describe, so the agent
+            // finished without leaving one and without saying why. Name that
+            // outcome rather than only the missing field, and what resolves it.
+            return Err(OrbitError::Execution(format!(
+                "task '{}' requires a meaningful persisted execution_summary before delivery; \
+                 the implementing agent recorded none and the worktree holds no uncommitted \
+                 change to derive one from. A task that needs no change must say so in its \
+                 summary and attach no-diff evidence; otherwise re-run it",
+                task.id
+            )));
+        }
+        reject_failed_delivery(&task)?;
+        task
+    };
 
     // ADR-0219: an explicitly side-effect-only task may skip a *clean* commit
     // phase instead of failing it. ORB-12683: a descendant HEAD means the run

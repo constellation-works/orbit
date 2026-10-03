@@ -47,6 +47,11 @@ spec:
           Allow HEAD to have moved past the pinned `base_sha`, as a stacked
           local merge does. A clean moved HEAD is `already_committed`
           rather than `skipped_no_diff_expected`, so delivery still runs.
+      # A claimed leaf's implement-step output. Under the claim's worker
+      # binding the delivery gate judges its summary, not the owner's
+      # stored one; any other run ignores it.
+      implementation:
+        type: [object, "null"]
   output_schema_json:
     type: object
     properties:

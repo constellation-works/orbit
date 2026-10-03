@@ -158,6 +158,21 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   applied), then a line naming the delivered candidate. Each part is bounded, and a summary whose
   first line is `Outcome: failed` is refused before it becomes a settlement. Acceptance writes it
   as the owner's `execution_summary`.
+- The delivery gate judges this attempt ([ORB-13755]). Until acceptance, the owner's stored
+  summary is whatever an earlier attempt left, and after a failed attempt that is its
+  `Outcome: failed` failure settlement. The `Outcome: failed` gate in `git_commit` and in the
+  PR leaf's `pr_prepare`, `git_rebase`, `git_push` and `pr_open` (`load_handoff_context`) once
+  read that stored summary, so every claimed retry of a once-failed task was refused at `commit`,
+  however its new implementation went. Both leaves now pass those steps the same
+  `implementation` output. Under the trusted worker binding, for the claim's own task, the gate
+  judges that output's summary (the same text `claim_handoff` composes from), not the stored
+  one. A current `Outcome: failed` is still refused before any Git mutation, and the claimed
+  `git_commit` derives and writes no summary. An implementer that reported no summary is not
+  refused, since its handoff carries the generic delivery statement. Without the binding, or on
+  a step handed no implementer output, the durable ORB-10313 gate applies unchanged. The
+  rejected alternative was having the owner clear the summary when it admits a claim. That
+  erases the prior failure evidence, and it still leaves the leaf gating on owner state it
+  cannot write.
 - `step_failure_recovery` treats the implement step's output as the claimed task's summary of
   record and has only repair-and-retry: no direct delivery, resume or review transition.
 - `pr_conflict_recovery` (the `sync_base` rebase hook) carries the same contract in its prompt: it
@@ -666,6 +681,7 @@ Acceptance criteria, not reported as passing.
 | Pull drain cancelled while its leaves are live | Each leaf delivers its own handoff or failure when it ends; unlaunched claims settle as failures; no claim is left `running` without a responsible follower process ([ORB-13663]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
 | Claimed implementer with no route to the owner (agent sandbox) | Claimed mode denies it the owner task tools; its output summary reaches `claim_handoff` and becomes the owner's `execution_summary` |
+| Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
 | Handoff commits, response lost | Exactly one handoff and review transition |
 | Review-only handoff reaches the landing consumer | No merge without recorded authorization |
@@ -726,5 +742,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-12617] — unified capacity accounting and added fault-injection acceptance fixtures.
 - [ORB-13642] — added claimed-mode implementation and evidence-bearing failure settlement.
 - [ORB-13663] — moved settlement ownership from the admitting drain to the admission record.
+- [ORB-13755] — scoped the claimed delivery gate to the attempt being delivered.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

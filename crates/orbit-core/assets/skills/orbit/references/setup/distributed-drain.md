@@ -135,6 +135,8 @@ returns.
 - A leaf that fails before handing off settles its claim as a failure: the
   owner's task moves to `blocked` with the leaf run, failed step and error in
   its summary. Inspect the run itself on the follower (`orbit run show <run>`).
+  A later claimed retry is judged on its own implementer's summary, so that
+  stale `Outcome: failed` needs no hand-clearing before re-dispatch.
 - `orbit run concurrency <run-id> --set N` retunes the slot ceiling live.
 
 ## Read-only owner surface

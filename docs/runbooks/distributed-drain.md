@@ -317,7 +317,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   launches, such as `step_failure_recovery`), and returns its execution summary
   in the step output. `claim_handoff` carries that summary in the typed
   handoff, and the owner writes it as the task's `execution_summary` when it
-  accepts. Do not loosen the sandbox or add SSH credentials to it to "fix" a
+  accepts. The leaf's delivery gate judges that same summary, so a retry is
+  not refused on the `Outcome: failed` a previous attempt left on the owner;
+  do not clear it by hand. Do not loosen the sandbox or add SSH credentials to it to "fix" a
   leaf; an agent that reports an unreachable owner store is a prompt or
   binary mismatch, not a transport problem (check the follower's binary is
   current).
