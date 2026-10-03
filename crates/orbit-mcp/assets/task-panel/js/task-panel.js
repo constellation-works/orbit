@@ -524,13 +524,25 @@
     void refresh();
   });
   for(const tab of ['tasks','runs','review'])el(tab).addEventListener('click',()=>{
+    saveDraft();
+    saveAnnotations();
+    selected=null;
+    snapshot=null;
+    fresh=false;
+    el('panel').hidden=true;
+    el('editor').hidden=true;
+    el('history-results').hidden=true;
+    el('list').replaceChildren();
+    el('pagination').textContent='';
+    el('previous').disabled=el('next').disabled=true;
+    restoreAnnotations();
     view=tab;
     offset=0;
     el('status').replaceChildren();
-    for(const value of (view==='runs'?['','pending','running','success','failed','timeout','retrying','cancelled','interrupted']:['','proposed','backlog','in_progress','review','done'])){
+    for(const value of (view==='runs'?['','pending','running','success','failed','timeout','retrying','cancelled','interrupted']:['','proposed','backlog','in_progress','review','blocked','done','rejected','archived','someday'])){
       const option=document.createElement('option');
       option.value=value;
-      option.textContent=value||'All';
+      option.textContent=value?value[0].toUpperCase()+value.slice(1).replaceAll('_',' '):'All';
       el('status').append(option);
     }
     el('status').value=view==='review'?'review':'';

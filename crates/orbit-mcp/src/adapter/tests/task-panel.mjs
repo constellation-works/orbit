@@ -1244,3 +1244,24 @@ test('canonical run rows show observed state attempt and duration without treati
   assert.ok(running.includes('Duration unavailable'));
   assert.ok(!running.includes('Duration 0 ms'));
 });
+
+test('switching views clears unrelated detail and stale rows while preserving comment drafts', async()=>{
+  const f=fixture(); await f.init();
+  f.click('refresh'); f.answer(f.last(),f.list([{id:'ORB-1',title:'One'}])); await flush();
+  f.get('list').children[0].handlers.click(); f.answer(f.last(),f.detail()); await flush();
+  f.get('comment').value='unsent comment';
+  f.click('runs');
+  assert.equal(f.get('panel').hidden,true);
+  assert.equal(f.get('list').children.length,0);
+  assert.equal(f.last().params.arguments.scope,'runs');
+  assert.ok(!f.posted.slice(-1).some(m=>m.params?.arguments?.scope==='task'));
+  f.answer(f.last(),f.list()); await flush();
+  f.click('tasks'); f.answer(f.last(),f.list([{id:'ORB-1',title:'One'}])); await flush();
+  f.get('list').children[0].handlers.click(); f.answer(f.last(),f.detail()); await flush();
+  assert.equal(f.get('comment').value,'unsent comment');
+});
+test('task filters expose blocked and terminal statuses, with human readable labels',async()=>{
+  const f=fixture(); await f.init(); f.click('tasks');
+  for(const status of ['blocked','rejected','archived','someday']) assert.ok(f.get('status').options.some(o=>o.value===status));
+  assert.equal(f.get('status').options.find(o=>o.value==='in_progress').textContent,'In progress');
+});
