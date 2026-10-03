@@ -196,6 +196,15 @@ impl Fixture {
             "{args:?} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        if std::env::var_os("ORBIT_QA_TRACE_CLI").is_some() {
+            eprintln!(
+                "QA_CLI {}",
+                serde_json::json!({
+                    "test": std::thread::current().name(), "argv": args,
+                    "exit_code": output.status.code(),
+                })
+            );
+        }
         serde_json::from_slice(&output.stdout).expect("json output")
     }
 
@@ -247,6 +256,56 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
         fixture.snapshot(),
         before,
         "invalid readiness must also preserve state"
+    );
+}
+
+#[test]
+fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
+    let fixture = Fixture::init();
+    let jobs = fixture.home.join(".orbit/resources/jobs");
+    fs::create_dir_all(&jobs).unwrap();
+    fs::write(jobs.join("fixture_job.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_job\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
+    let input = serde_json::json!({"seconds": 0, "marker": "persisted-replay-input"});
+    fixture
+        .db()
+        .execute(
+            "UPDATE job_runs SET input_json=?1 WHERE run_id=?2",
+            params![input.to_string(), FAILED],
+        )
+        .unwrap();
+    let source = fixture.json(&["run", "show", FAILED, "--no-reconcile", "--json"]);
+    let replay = fixture.json(&["job", "replay", FAILED, "--json"]);
+    assert_eq!(replay["success"], true);
+    assert_eq!(replay["source_run_id"], FAILED);
+    let id = replay["run_id"].as_str().unwrap();
+    assert_ne!(id, FAILED);
+    let stored = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    assert_eq!(stored["run"]["state"], "success");
+    assert_eq!(stored["run"]["retry_source_run_id"], FAILED);
+    let persisted_input: String = fixture
+        .db()
+        .query_row(
+            "SELECT input_json FROM job_runs WHERE run_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&persisted_input).unwrap(),
+        input
+    );
+    assert_eq!(
+        fixture.json(&["run", "show", FAILED, "--no-reconcile", "--json"]),
+        source
+    );
+    fixture
+        .orbit()
+        .args(["job", "replay", "jrun-missing-fixture", "--json"])
+        .assert()
+        .failure();
+    assert_eq!(
+        fixture.json(&["run", "show", FAILED, "--no-reconcile", "--json"]),
+        source
     );
 }
 

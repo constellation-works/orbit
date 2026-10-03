@@ -88,6 +88,14 @@ impl Fixture {
             .get_output()
             .stdout
             .clone();
+        if std::env::var_os("ORBIT_QA_TRACE_CLI").is_some() {
+            eprintln!(
+                "QA_CLI {}",
+                serde_json::json!({
+                    "test": std::thread::current().name(), "argv": args, "exit_code": 0,
+                })
+            );
+        }
         serde_json::from_slice(&output).unwrap_or_else(|error| {
             panic!(
                 "JSON for {args:?}: {error}; {}",
@@ -234,4 +242,121 @@ fn portable_archive_cli_round_trip_and_corrupt_input_preserve_tasks() {
         .assert()
         .failure();
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), local);
+}
+
+#[cfg(unix)]
+#[test]
+fn skill_cli_links_only_owned_catalog_entries_and_preserves_user_files() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new();
+    let first = fixture.json(&["skill", "link", "--json"]);
+    let roots = first["roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 2);
+    let external = fixture.repo.join("user-skill");
+    fs::create_dir_all(&external).unwrap();
+    fs::write(external.join("SKILL.md"), "user-owned skill bytes").unwrap();
+    for root in roots {
+        let root = PathBuf::from(root.as_str().unwrap());
+        assert!(
+            root.starts_with(fixture._temp.path()),
+            "fixture root must stay disposable"
+        );
+        fs::write(root.join("user-note.txt"), "preserve me").unwrap();
+        symlink(&external, root.join("user-skill")).unwrap();
+    }
+    let listed = fixture.json(&["skill", "list", "--json"]);
+    let selected = &listed.as_array().unwrap()[0];
+    let id = selected["id"].as_str().unwrap();
+    let shown = fixture.json(&["skill", "show", id, "--json"]);
+    assert_eq!(shown["id"], id);
+    assert_eq!(shown["content_hash"], selected["content_hash"]);
+    assert!(!shown["content"].as_str().unwrap().is_empty());
+    let doctor = fixture.json(&["skill", "doctor", "--json"]);
+    assert!(
+        doctor
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["skill_id"] == id)
+    );
+    fixture
+        .command(&["skill", "show", "missing-fixture-skill", "--json"])
+        .assert()
+        .failure();
+    let unlinked = fixture.json(&["skill", "unlink", "--json"]);
+    assert!(unlinked["removed_count"].as_u64().unwrap() > 0);
+    for root in roots {
+        let root = PathBuf::from(root.as_str().unwrap());
+        assert_eq!(
+            fs::read_to_string(root.join("user-note.txt")).unwrap(),
+            "preserve me"
+        );
+        assert_eq!(fs::read_link(root.join("user-skill")).unwrap(), external);
+    }
+    assert_eq!(
+        fs::read_to_string(external.join("SKILL.md")).unwrap(),
+        "user-owned skill bytes"
+    );
+    assert_eq!(
+        fixture.json(&["skill", "unlink", "--json"])["removed_count"],
+        0
+    );
+    assert!(
+        fixture.json(&["skill", "link", "--json"])["linked_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        fixture.json(&["skill", "link", "--json"])["linked_count"],
+        0
+    );
+    assert_eq!(fixture.json(&["skill", "show", id, "--json"]), shown);
+}
+
+#[test]
+fn lock_contention_cli_reports_shared_backlog_surface_without_reserving() {
+    let fixture = Fixture::new();
+    fs::write(fixture.repo.join("README.md"), "contention fixture\n").unwrap();
+    let mut ids = Vec::new();
+    for title in ["Contending first task", "Contending second task"] {
+        let task = fixture.json(&[
+            "task",
+            "add",
+            "--title",
+            title,
+            "--complexity",
+            "low",
+            "--status",
+            "backlog",
+            "--context",
+            "file:README.md",
+            "--acceptance-criteria",
+            "bounded contention",
+            "--json",
+        ]);
+        ids.push(task["id"].as_str().unwrap().to_string());
+    }
+    let before = fixture.json(&["task", "locks", "list", "--json"]);
+    let report = fixture.json(&["task", "locks", "contention", "--limit", "1", "--json"]);
+    assert_eq!(report["pending"]["constrained"], 2);
+    let hotspots = report["hotspots"].as_array().unwrap();
+    assert_eq!(hotspots.len(), 1);
+    assert_eq!(hotspots[0]["selector"], "file:README.md");
+    assert_eq!(hotspots[0]["tasks"], 2);
+    for id in ids {
+        assert!(
+            hotspots[0]["task_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == &id)
+        );
+    }
+    assert_eq!(
+        fixture.json(&["task", "locks", "list", "--json"]),
+        before,
+        "contention is a diagnostic, not a reservation"
+    );
 }
