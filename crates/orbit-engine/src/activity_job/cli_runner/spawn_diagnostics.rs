@@ -192,7 +192,7 @@ pub(super) fn macos_keychain_auth_diagnostic(
 /// Test-friendly variant: callers pass HOME explicitly instead of reading
 /// process-global state, which the compiler's carve-out also depends on.
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn macos_keychain_auth_diagnostic_with(
+fn macos_keychain_auth_diagnostic_with(
     provider: &str,
     sandbox: Option<&ResolvedSandbox>,
     output: &str,

@@ -57,9 +57,7 @@ pub(super) struct WorktreeStatusCounts {
 /// whole output, which would eat the leading status column of a single-line
 /// result (` M path` -> `M path`) and misalign the index/worktree columns by
 /// one byte (see `git_output`'s doc comment).
-pub(super) fn worktree_status_counts(
-    workspace_path: &Path,
-) -> Result<WorktreeStatusCounts, OrbitError> {
+fn worktree_status_counts(workspace_path: &Path) -> Result<WorktreeStatusCounts, OrbitError> {
     let status = git_output_raw(
         workspace_path,
         &["status", "--porcelain=v1", "--untracked-files=all"],

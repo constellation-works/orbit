@@ -1,22 +1,8 @@
 #![allow(missing_docs)]
 
-mod argv;
-mod claimed_leaf;
-pub(in crate::activity_job::cli_runner) mod cli_run;
-mod envelope;
-mod inspection;
-mod launcher;
 mod orchestrator_env;
-#[cfg(target_os = "macos")]
-mod orchestrator_macos;
-mod orchestrator_response;
-mod orchestrator_worktree;
-mod plugin_broker;
-mod rebase_recovery;
-mod response_diagnostics;
-mod spawn;
-mod spawn_diagnostics;
 mod stdout_preview;
+#[cfg(unix)]
 mod supervisor;
 pub(in crate::activity_job::cli_runner) mod test_support;
 mod trusted_host;

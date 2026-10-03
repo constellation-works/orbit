@@ -49,7 +49,7 @@ use super::review_gate::revision;
 pub(super) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
 /// Captured output kept per command. The log is owner-read evidence, not a
 /// build log archive, so a runaway command cannot balloon the task bundle.
-pub(super) const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
 
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::PolicyDenied(message.into())
@@ -100,7 +100,7 @@ pub(super) fn delivery(
 /// JSON type unchanged, so the pr-mode leaf receives a string. Reading only
 /// `as_u64` here made every published claimed PR fail at its handoff with
 /// "pull_request is required" while the number was sitting right there.
-pub(super) fn pull_request_number(value: &Value) -> Option<u64> {
+fn pull_request_number(value: &Value) -> Option<u64> {
     value
         .as_u64()
         .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
@@ -688,7 +688,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
 
 /// Largest implementer summary a handoff carries. The summary is prose for a
 /// reader, and the handoff travels to the owner in one coordination call.
-pub(super) const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
+const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
 
 /// The `execution_summary` the typed handoff carries to the owner.
 ///

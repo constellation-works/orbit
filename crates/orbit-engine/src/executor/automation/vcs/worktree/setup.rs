@@ -152,7 +152,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
 // exposed surface per docs/design-patterns/test_layout.md. (Logged via
 // orbit.task.update model=grok on ORB-00240 before this edit for the visibility
 // change on internal test helpers.)
-pub(crate) fn worktree_setup_output(
+fn worktree_setup_output(
     run_id: &str,
     workspace_path: String,
     head_ref: String,
@@ -179,7 +179,7 @@ pub(crate) fn worktree_setup_output(
 // exposed surface per docs/design-patterns/test_layout.md. (Logged via
 // orbit.task.update model=grok on ORB-00240 before this edit for the visibility
 // change on internal test helpers.)
-pub(crate) fn ensure_worktree(
+fn ensure_worktree(
     repo_root: &Path,
     worktree_path: &Path,
     start_point: &str,

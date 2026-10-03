@@ -602,7 +602,7 @@ pub fn run_cli_backend(
 /// bare Codex invocations, and Linux keep their existing environment surface.
 /// The macOS spawn layer supplies a public system bundle only when neither
 /// explicit value is present.
-pub(crate) fn provider_child_environment(
+fn provider_child_environment(
     host: &dyn RuntimeHost,
     provider: &str,
     sandbox: Option<&super::super::super::dispatcher::ResolvedSandbox>,

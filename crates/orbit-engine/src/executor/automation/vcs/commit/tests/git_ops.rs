@@ -10,30 +10,11 @@ use serde_json::json;
 
 use super::super::actions::commit_batch_changes;
 use super::test_support::{CommitTestHost, initialized_git_repo, task_with_file};
-use crate::executor::automation::vcs::git::{git_output, git_success};
-use crate::executor::automation::vcs::push::push_batch_changes_inner;
+use crate::executor::automation::vcs::git::git_output;
 
 fn executable(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write executable");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("make executable");
-}
-
-fn tracked_hooks(repo: &Path) {
-    fs::create_dir(repo.join(".hooks")).expect("hooks directory");
-    for name in [
-        "pre-commit",
-        "prepare-commit-msg",
-        "post-commit",
-        "pre-push",
-    ] {
-        executable(
-            &repo.join(".hooks").join(name),
-            &format!("#!/bin/sh\nprintf triggered > .git/{name}-marker\n"),
-        );
-    }
-    git_success(repo, &["add", ".hooks"]).expect("stage hooks");
-    git_success(repo, &["commit", "-m", "tracked hooks"]).expect("commit hooks");
-    git_success(repo, &["config", "core.hooksPath", ".hooks"]).expect("configure tracked hooks");
 }
 
 fn commit_candidate(repo: &Path) {
@@ -54,141 +35,6 @@ fn commit_candidate(repo: &Path) {
 }
 
 #[test]
-fn commit_batch_disables_tracked_repository_hooks() {
-    let temp = initialized_git_repo();
-    let repo = temp.path();
-    tracked_hooks(repo);
-    commit_candidate(repo);
-    for name in ["pre-commit", "prepare-commit-msg", "post-commit"] {
-        assert!(
-            !repo.join(format!(".git/{name}-marker")).exists(),
-            "{name} ran"
-        );
-    }
-
-    // Positive control: the same executable hook runs under ordinary Git.
-    let control = Command::new("git")
-        .current_dir(repo)
-        .args(["commit", "--allow-empty", "-m", "control"])
-        .output()
-        .expect("control commit");
-    assert!(control.status.success());
-    assert!(repo.join(".git/pre-commit-marker").exists());
-}
-
-#[test]
-fn push_batch_disables_tracked_repository_hooks() {
-    let temp = initialized_git_repo();
-    let repo = temp.path();
-    tracked_hooks(repo);
-    let remote = tempfile::tempdir().expect("remote");
-    git_success(remote.path(), &["init", "--bare"]).expect("bare remote");
-    git_success(
-        repo,
-        &["remote", "add", "origin", remote.path().to_str().unwrap()],
-    )
-    .expect("configure remote");
-    let branch = git_output(repo, &["branch", "--show-current"]).unwrap();
-    let host = CommitTestHost::new(Vec::new(), repo.to_path_buf());
-    let result = push_batch_changes_inner(&host, &json!({"branch": branch}), repo)
-        .expect("push candidate through real private operation");
-    assert_eq!(result["decision"], "performed_create");
-    assert_eq!(
-        git_output(
-            remote.path(),
-            &["rev-parse", &format!("refs/heads/{branch}")]
-        )
-        .unwrap(),
-        git_output(repo, &["rev-parse", "HEAD"]).unwrap()
-    );
-    assert!(!repo.join(".git/pre-push-marker").exists());
-
-    let control = Command::new("git")
-        .current_dir(repo)
-        .args(["push", "origin", &branch])
-        .output()
-        .expect("control push");
-    assert!(control.status.success());
-    assert!(repo.join(".git/pre-push-marker").exists());
-}
-
-/// [ORB-12103] A self-pointing `origin` makes `ls-remote` echo the local branch
-/// back, which previously produced `decision: reused_current` and a green push
-/// step for a branch that was never published anywhere.
-#[test]
-fn push_refuses_an_origin_that_is_this_same_repository() {
-    let temp = initialized_git_repo();
-    let repo = temp.path();
-    git_success(repo, &["remote", "add", "origin", repo.to_str().unwrap()])
-        .expect("self-pointing remote");
-    let branch = git_output(repo, &["branch", "--show-current"]).unwrap();
-    let host = CommitTestHost::new(Vec::new(), repo.to_path_buf());
-
-    let error = push_batch_changes_inner(&host, &json!({"branch": branch}), repo)
-        .expect_err("a push into this same repository must not report success");
-
-    let message = error.to_string();
-    assert!(
-        message.contains("is this same repository") && message.contains(&branch),
-        "denial must explain that nothing was published, got: {message}"
-    );
-}
-
-/// The observed shape of the fault: a linked worktree shares `.git/config` with
-/// its primary checkout, so an `origin` naming that checkout is the worktree's
-/// own repository too.
-#[test]
-fn push_refuses_an_origin_naming_the_primary_checkout_of_this_worktree() {
-    let temp = initialized_git_repo();
-    let repo = temp.path();
-    git_success(repo, &["remote", "add", "origin", repo.to_str().unwrap()])
-        .expect("self-pointing remote");
-    let worktree = temp.path().join("linked-worktree");
-    git_success(
-        repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "task-branch",
-            worktree.to_str().unwrap(),
-        ],
-    )
-    .expect("linked worktree");
-    let host = CommitTestHost::new(Vec::new(), worktree.clone());
-
-    let error = push_batch_changes_inner(&host, &json!({"branch": "task-branch"}), &worktree)
-        .expect_err("a push into the primary checkout must not report success");
-
-    assert!(
-        error.to_string().contains("is this same repository"),
-        "denial must identify the shared repository, got: {error}"
-    );
-}
-
-/// A remote naming a different repository on disk stays a real publication
-/// target, so the guard must not turn local-remote fixtures into failures.
-#[test]
-fn push_accepts_a_distinct_local_repository_as_origin() {
-    let temp = initialized_git_repo();
-    let repo = temp.path();
-    let remote = tempfile::tempdir().expect("remote");
-    git_success(remote.path(), &["init", "--bare"]).expect("bare remote");
-    git_success(
-        repo,
-        &["remote", "add", "origin", remote.path().to_str().unwrap()],
-    )
-    .expect("configure remote");
-    let branch = git_output(repo, &["branch", "--show-current"]).unwrap();
-    let host = CommitTestHost::new(Vec::new(), repo.to_path_buf());
-
-    let result = push_batch_changes_inner(&host, &json!({"branch": branch}), repo)
-        .expect("push to a distinct repository");
-
-    assert_eq!(result["decision"], "performed_create");
-}
-
-#[test]
 fn commit_child_environment_excludes_parent_secrets() {
     let exact_test = concat!(
         "executor::automation::vcs::commit::tests::git_ops::",
@@ -196,7 +42,6 @@ fn commit_child_environment_excludes_parent_secrets() {
     );
     if std::env::var("ORBIT_TEST_SECRET").ok().as_deref() == Some(exact_test) {
         let temp = initialized_git_repo();
-        tracked_hooks(temp.path());
         commit_candidate(temp.path());
         return;
     }

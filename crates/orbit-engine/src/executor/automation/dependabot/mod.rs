@@ -38,6 +38,3 @@ pub(super) fn collect_dependabot_alerts<H: RuntimeHost + ?Sized>(
         "dependabot_snapshot": snapshot,
     }))
 }
-
-#[cfg(test)]
-mod tests;

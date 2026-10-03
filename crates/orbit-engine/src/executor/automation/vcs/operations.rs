@@ -349,7 +349,7 @@ fn pr_merge_capabilities(input: &Value) -> Result<Value, OrbitError> {
     normalize_merge_capabilities(&response, name_with_owner)
 }
 
-pub(super) fn normalize_merge_capabilities(
+fn normalize_merge_capabilities(
     response: &Value,
     name_with_owner: &str,
 ) -> Result<Value, OrbitError> {

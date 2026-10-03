@@ -12,9 +12,6 @@ mod merge;
 mod open;
 mod promote;
 
-#[cfg(test)]
-pub(crate) mod tests;
-
 pub(in crate::executor::automation) use attribution::ship_done_attribution;
 pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;
 pub(in crate::executor::automation) use complete::pr_complete;

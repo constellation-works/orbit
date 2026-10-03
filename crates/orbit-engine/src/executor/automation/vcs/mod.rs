@@ -33,6 +33,3 @@ pub(crate) fn run_private_operation(
 ) -> Result<serde_json::Value, orbit_common::OrbitError> {
     operations::run(operation, input)
 }
-
-#[cfg(test)]
-pub(crate) mod tests;

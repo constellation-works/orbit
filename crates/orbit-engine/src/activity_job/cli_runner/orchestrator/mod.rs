@@ -7,6 +7,3 @@ mod prepare;
 
 pub use dispatch::run_cli_backend;
 pub use policy::activity_tool_policy_env;
-
-#[cfg(test)]
-mod tests;

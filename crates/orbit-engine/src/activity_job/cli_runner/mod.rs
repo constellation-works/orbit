@@ -16,11 +16,6 @@ mod supervisor;
 #[cfg(test)]
 mod tests;
 
-// `cli_agent_envelope_json` is the only place the provider's stdin frame is
-// built, so the recovery-input bound is asserted against it rather than a
-// second copy of the same shape [ORB-12467].
-#[cfg(test)]
-pub(super) use envelope::cli_agent_envelope_json;
 pub(super) use envelope::task_id_from_input;
 pub use inspection::is_source_inspection_checkout;
 pub use launcher::{MissingLauncher, locate_provider_launcher, missing_launcher_in};

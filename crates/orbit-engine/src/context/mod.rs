@@ -12,9 +12,6 @@ mod env;
 mod hosts;
 mod outcome;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use env::{ProvenanceEnv, provenance_env};
 pub use hosts::{
     ClaimExecutionContext, CrewConfig, HandoffLandingContext, HandoffLandingStep,

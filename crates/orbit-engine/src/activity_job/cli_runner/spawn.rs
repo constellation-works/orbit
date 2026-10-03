@@ -114,7 +114,7 @@ pub(crate) fn prepare_sandbox_for_dispatch(
     }
 }
 
-pub(crate) fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
+fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
     sandbox: &'a ResolvedSandbox,
     probe: BwrapProbeOutcome,
 ) -> Result<PreparedSandbox<'a>, SpawnError> {
@@ -299,9 +299,7 @@ fn spawn_linux_bwrap(
 /// Borrow the runtime owner's exact descriptors for the mount plan. `File`
 /// duplication is forbidden here because closing any duplicate for a SQLite
 /// database can release unrelated POSIX locks owned by this process.
-pub(crate) fn linux_bwrap_mount_authority(
-    sandbox: &ResolvedSandbox,
-) -> Vec<LinuxBwrapMountAuthority> {
+fn linux_bwrap_mount_authority(sandbox: &ResolvedSandbox) -> Vec<LinuxBwrapMountAuthority> {
     sandbox
         .runtime_write_authority
         .iter()
@@ -330,7 +328,7 @@ pub(crate) fn linux_bwrap_mask(sandbox: &ResolvedSandbox) -> Option<LinuxBwrapMa
 /// can never reach the provider, and a test that has to spawn a real sandbox to
 /// observe it would silently skip on any host without bwrap.
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn reject_unsatisfiable_managed_grants(
+fn reject_unsatisfiable_managed_grants(
     managed_worktree: bool,
     dropped_grants: &[UnsatisfiedWriteGrant],
 ) -> Result<(), SpawnError> {
@@ -366,7 +364,7 @@ fn describe_grants(grants: &[UnsatisfiedWriteGrant]) -> String {
 }
 
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn spawn_bare(
+fn spawn_bare(
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -429,7 +427,7 @@ fn spawn_macos_sandboxed(
 /// can assert the fail-closed and fallback branches without mutating
 /// process-global state.
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn spawn_macos_sandboxed_with(
+fn spawn_macos_sandboxed_with(
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -506,7 +504,7 @@ pub(crate) fn spawn_macos_sandboxed_with(
 /// public bundle when the operator has not selected either documented
 /// override. Explicit values keep their normal precedence and are validated,
 /// never replaced with the fallback after a typo or permissions failure.
-pub(crate) fn prepare_macos_codex_ca_environment_with(
+fn prepare_macos_codex_ca_environment_with(
     provider: &str,
     env: &[(String, String)],
     cwd: Option<&Path>,

@@ -75,7 +75,7 @@ pub(crate) fn orbit_tool_env() -> Result<Vec<(String, String)>, SpawnError> {
 }
 
 // pub(crate) widened for sibling tests under the repository's enforced test layout.
-pub(crate) fn orbit_tool_env_with(
+fn orbit_tool_env_with(
     configured: Option<&OsStr>,
     current_exe: &Path,
     inherited_path: Option<&OsStr>,
@@ -171,7 +171,7 @@ fn is_launchable_file(path: &Path) -> bool {
 }
 
 // pub(crate) widened for sibling tests under the repository's enforced test layout.
-pub(crate) fn resolve_provider_launcher_with(
+fn resolve_provider_launcher_with(
     provider: &str,
     program: &str,
     path: Option<&OsStr>,
@@ -192,7 +192,7 @@ pub(crate) fn resolve_provider_launcher_with(
 /// [`resolve_provider_launcher_with`], which supplies the supported system
 /// prefixes. Tests pass a temporary Homebrew-style prefix rather than
 /// writing into `/opt/homebrew/bin`.
-pub(crate) fn resolve_provider_launcher_with_extra_dirs(
+fn resolve_provider_launcher_with_extra_dirs(
     provider: &str,
     program: &str,
     path: Option<&OsStr>,
