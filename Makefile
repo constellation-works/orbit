@@ -58,7 +58,7 @@ help:
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
 	@echo "  make ci-fast      Pre-handoff gate for agents (fast guardrail mode; skips full workspace compile/test/doc steps)"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
-	@echo "  make goldens      Pre-handoff golden gate (orbit-cli help/description snapshots; UPDATE=1 regenerates)"
+	@echo "  make goldens      Pre-handoff golden gate (orbit-cli help/description and sandbox profile snapshots; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"
 	@echo "  make stability    Verify per-crate stability tier markers"
 	@echo "  make release-check  Verify Cargo/npm/release version lockstep (see docs/runbooks/release.md)"
@@ -165,8 +165,9 @@ ci-lint:
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -D clippy::disallowed_methods
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
 
-# Focused pre-review golden gate: CLI long-help text, output_goldens, and the
-# MCP tools/list snapshot. Compiles orbit-cli tests only. UPDATE=1 regenerates.
+# Focused pre-review golden gate: CLI long-help text, output_goldens, the
+# MCP tools/list snapshot, and the sandbox profile goldens. Compiles orbit-cli
+# tests plus the orbit-exec and orbit-core golden binaries. UPDATE=1 regenerates.
 goldens:
 	$(BUILD_BUDGET) -- ./scripts/check-goldens.sh $(GOLDENS_FLAGS)
 

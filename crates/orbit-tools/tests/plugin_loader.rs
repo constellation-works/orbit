@@ -1,15 +1,19 @@
 //! `orbit plugin validate` semantics against the design's manifest example
-//! and the documented rejections (docs/design/plugins/1_scope.md §2).
+//! and the documented rejections (docs/design/plugins/1_scope.md §2), and the
+//! archive members a plugin source install refuses.
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use orbit_tools::plugin::{
-    PluginLoadError, PluginValidationPolicy, load_plugin_dir, load_sidecar_manifest,
-    migrate_sidecars, validate_loaded_plugin,
+    PluginLoadError, PluginSourceRequest, PluginValidationPolicy, load_plugin_dir,
+    load_sidecar_manifest, migrate_sidecars, resolve_plugin_source, validate_loaded_plugin,
 };
-use orbit_types::plugin::{PluginBackendType, PluginMcpScope, SemverRange};
+use orbit_types::plugin::{
+    MANIFEST_FILE_NAME, PLUGIN_DIR_NAME, PluginBackendType, PluginMcpScope, SemverRange,
+};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -377,5 +381,94 @@ fn migrate_folds_the_orbit_graph_sidecars_into_one_v2_manifest() {
             .unwrap_or_else(|| panic!("parameter {} survived migration", param.name));
         assert_eq!(migrated.required, param.required, "{}", param.name);
         assert_eq!(migrated.description, param.description, "{}", param.name);
+    }
+}
+
+/// One zip member: a regular file, or a symbolic link to `target`.
+enum ZipMember<'a> {
+    File(&'a str),
+    Symlink(&'a str, &'a str),
+}
+
+/// Write a `.zip` plugin source whose first member is a manifest, followed by
+/// `members`, and resolve it the way `orbit plugin add <path>` does.
+fn install_zip(members: &[ZipMember<'_>]) -> (tempfile::TempDir, Result<(), String>) {
+    let staging = tempfile::tempdir().expect("staging dir");
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = || {
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)
+    };
+    writer
+        .start_file(format!("{PLUGIN_DIR_NAME}/{MANIFEST_FILE_NAME}"), options())
+        .expect("manifest member");
+    writer
+        .write_all(b"schemaVersion: 2\nkind: Plugin\n")
+        .expect("manifest body");
+    for member in members {
+        match member {
+            ZipMember::File(name) => {
+                writer.start_file(*name, options()).expect("file member");
+                writer.write_all(b"owned").expect("file body");
+            }
+            ZipMember::Symlink(name, target) => {
+                writer
+                    .add_symlink(*name, *target, options())
+                    .expect("symlink member");
+            }
+        }
+    }
+    let bytes = writer.finish().expect("finish zip").into_inner();
+    let archive = staging.path().join("plugin.zip");
+    std::fs::write(&archive, bytes).expect("write zip");
+    let source = archive.to_str().expect("utf-8 path").to_string();
+    let result = resolve_plugin_source(&PluginSourceRequest {
+        source: &source,
+        expected_digest: None,
+        digest_origin: "the test source",
+    })
+    .map(|_| ())
+    .map_err(|error| error.to_string());
+    (staging, result)
+}
+
+/// Zip member names are bare strings with no path semantics of their own, so
+/// the installer refuses each spelling of an escape rather than trusting the
+/// unpack library to skip it: `..`, an absolute path, and a Windows `\`
+/// separator that a zip writer may have produced.
+#[test]
+fn a_zip_source_with_a_member_escaping_the_unpack_root_is_refused() {
+    let outside = tempfile::tempdir().expect("outside dir");
+    let absolute = outside.path().join("planted");
+    let absolute = absolute.to_str().expect("utf-8 path");
+    for (member, why) in [
+        ("../escaped.txt", "`..`"),
+        (absolute, "absolute path"),
+        ("..\\escaped.txt", "`\\` as a path separator"),
+    ] {
+        let (_staging, result) = install_zip(&[ZipMember::File(member)]);
+        let error = result.expect_err("an escaping member must refuse the install");
+        assert!(
+            error.contains(member) && error.contains(why),
+            "the refusal must name {member:?} and say why ({why}): {error}"
+        );
+    }
+    assert!(
+        !outside.path().join("planted").exists(),
+        "an absolute member must not be written anywhere"
+    );
+}
+
+/// A symbolic-link member would be followed out of the install root when the
+/// tree is copied into place, so the installer refuses it whatever it targets.
+#[test]
+fn a_zip_source_with_a_symlink_member_is_refused() {
+    for target in ["/proc/self/environ", "../../outside", "bin/backend"] {
+        let member = format!("{PLUGIN_DIR_NAME}/env");
+        let (_staging, result) = install_zip(&[ZipMember::Symlink(&member, target)]);
+        let error = result.expect_err("a symlink member must refuse the install");
+        assert!(
+            error.contains("env") && error.contains("symbolic link"),
+            "the refusal must name the link member and why (target {target}): {error}"
+        );
     }
 }

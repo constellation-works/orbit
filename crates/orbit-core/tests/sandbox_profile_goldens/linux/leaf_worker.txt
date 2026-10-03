@@ -1,0 +1,131 @@
+provider: codex
+fs_profile: implementer
+cwd: <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden
+managed_worktree: true
+read:
+  <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/.env
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/.env.*
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/*.env
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/*.env.*
+modify:
+  <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/**
+  <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/auto_tasks/**
+  <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/routines/**
+  <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/config.toml
+  <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/resources/**
+  <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/tmp/**
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/.env
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/.env.*
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/*.env
+  !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/*.env.*
+  <ROOT>/repo/.orbit
+  <ROOT>/home/.orbit
+  <ROOT>/home/.orbit/state/logs
+  <ROOT>/home/.orbit/state/audit
+  <ROOT>/home/.orbit/tasks
+  <ROOT>/home/.orbit/orbit.db
+  <ROOT>/home/.orbit/orbit.db-wal
+  <ROOT>/home/.orbit/orbit.db-shm
+  <ROOT>/repo/.orbit/tasks
+  <ROOT>/repo/.orbit/frictions
+  <ROOT>/repo/.orbit/state/audit
+  <ROOT>/repo/.orbit/state/logs
+  <ROOT>/repo/.orbit/state/job-runs
+  <ROOT>/repo/.orbit/state/semantic.db
+  <ROOT>/repo/.orbit/state/semantic.db-wal
+  <ROOT>/repo/.orbit/state/semantic.db-shm
+  <ROOT>/home/.orbit/cache
+  <ROOT>/home/.codex
+  <ROOT>/home/.claude
+  <ROOT>/home/.gemini
+  <ROOT>/home/.grok
+  !<ROOT>/home/.orbit/state/recovery-authority/**
+runtime write authority:
+  <ROOT>/home/.orbit/state/logs
+  <ROOT>/home/.orbit/state/audit
+  <ROOT>/home/.orbit/tasks
+  <ROOT>/home/.orbit/orbit.db
+  <ROOT>/home/.orbit/orbit.db-wal
+  <ROOT>/home/.orbit/orbit.db-shm
+  <ROOT>/repo/.orbit/tasks
+  <ROOT>/repo/.orbit/frictions
+  <ROOT>/repo/.orbit/state/audit
+  <ROOT>/repo/.orbit/state/logs
+  <ROOT>/repo/.orbit/state/job-runs
+  <ROOT>/repo/.orbit/state/semantic.db
+  <ROOT>/repo/.orbit/state/semantic.db-wal
+  <ROOT>/repo/.orbit/state/semantic.db-shm
+  <ROOT>/home/.orbit/cache
+bwrap:
+  --die-with-parent
+  --new-session
+  --unshare-all
+  --share-net
+  --ro-bind / /
+  --dev /dev
+  --proc /proc
+  --tmpfs /tmp
+  --ro-bind <ROOT> <ROOT>
+  --ro-bind <ROOT>/home <ROOT>/home
+  --ro-bind <ROOT>/repo <ROOT>/repo
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden
+  --bind <ROOT>/repo/.orbit <ROOT>/repo/.orbit
+  --bind <ROOT>/home/.orbit <ROOT>/home/.orbit
+  --bind-fd <fd> <ROOT>/home/.orbit/state/logs
+  --bind-fd <fd> <ROOT>/home/.orbit/state/audit
+  --bind-fd <fd> <ROOT>/home/.orbit/tasks
+  --bind-fd <fd> <ROOT>/home/.orbit/orbit.db
+  --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-wal
+  --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-shm
+  --bind-fd <fd> <ROOT>/repo/.orbit/tasks
+  --bind-fd <fd> <ROOT>/repo/.orbit/frictions
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/audit
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/logs
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/job-runs
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db-wal
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db-shm
+  --bind-fd <fd> <ROOT>/home/.orbit/cache
+  --bind <ROOT>/home/.codex <ROOT>/home/.codex
+  --bind <ROOT>/home/.claude <ROOT>/home/.claude
+  --bind <ROOT>/home/.gemini <ROOT>/home/.gemini
+  --bind <ROOT>/home/.grok <ROOT>/home/.grok
+  --bind <ROOT>/home/.orbit/state <ROOT>/home/.orbit/state
+  --bind <ROOT>/repo/.orbit/state <ROOT>/repo/.orbit/state
+  --bind <ROOT>/repo/.orbit/state/worktrees <ROOT>/repo/.orbit/state/worktrees
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/auto_tasks <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/auto_tasks
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/routines <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/routines
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/config.toml <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/config.toml
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/resources <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/resources
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/tmp <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/tmp
+  --ro-bind <ROOT>/home/.orbit/state/recovery-authority <ROOT>/home/.orbit/state/recovery-authority
+  --dir /tmp/orbit-workspace
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --dir /tmp/orbit-build
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace/
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit /tmp/orbit-workspace/.orbit
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/auto_tasks /tmp/orbit-workspace/.orbit/auto_tasks
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/routines /tmp/orbit-workspace/.orbit/routines
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/config.toml /tmp/orbit-workspace/.orbit/config.toml
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/resources /tmp/orbit-workspace/.orbit/resources
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/tmp /tmp/orbit-workspace/.orbit/tmp
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugins
+  --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugin-secrets
+  --chdir <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden
+  --
+  /usr/bin/true
