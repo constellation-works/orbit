@@ -453,7 +453,7 @@
       }
       if(same&&(operation.kind==='create'||operation.kind==='edit')){
         const fields=operation.fields||operation;
-        const untouched=el('draft-title').value===fields.title&&el('draft-description').value===fields.description&&JSON.stringify(lines('draft-criteria'))===JSON.stringify(fields.acceptance_criteria)&&el('draft-priority').value===fields.priority;
+        const untouched=el('draft-title').value===fields.title&&el('draft-description').value===fields.description&&JSON.stringify(lines('draft-criteria'))===JSON.stringify(fields.acceptance_criteria)&&el('draft-priority').value===fields.priority&&el('draft-crew').value===(fields.crew||'');
         if(untouched){
           drafts.delete(draftKey());
           hideEditor();
