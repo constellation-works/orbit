@@ -14,6 +14,9 @@
 //! An explicit run lookup also keeps a store failure distinct from a missing
 //! run, so an unreadable record is not reported as nonexistent.
 
+#[path = "support/fixture_crew.rs"]
+mod fixture_crew;
+
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -40,6 +43,7 @@ impl Fixture {
         let home = temp.path().join("home");
         let work = temp.path().join("work");
         fs::create_dir_all(&home).expect("fixture home");
+        fs::create_dir_all(home.join("empty-bin")).expect("empty child PATH");
         fs::create_dir_all(&work).expect("fixture work");
         let fixture = Self {
             _temp: temp,
@@ -51,6 +55,9 @@ impl Fixture {
             .args(["workspace", "init", "--name", "fixture"])
             .assert()
             .success();
+        // Deterministic jobs still freeze crew admission; pin fixture selection
+        // while every child sees a PATH with no provider launcher.
+        fixture_crew::configure_sol(&fixture.home.join(".orbit"));
         // Opening the workspace once creates the store the seed writes into.
         fixture
             .orbit()
@@ -69,7 +76,8 @@ impl Fixture {
         command
             .current_dir(&self.work)
             .env("HOME", &self.home)
-            .env("USERPROFILE", &self.home);
+            .env("USERPROFILE", &self.home)
+            .env("PATH", self.home.join("empty-bin"));
         command
     }
 
@@ -194,7 +202,9 @@ impl Fixture {
         let output = self.orbit().args(args).output().expect("spawn orbit");
         assert!(
             output.status.success(),
-            "{args:?} failed: {}",
+            "{args:?} failed with {}\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         if std::env::var_os("ORBIT_QA_TRACE_CLI").is_some() {
