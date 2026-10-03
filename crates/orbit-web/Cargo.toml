@@ -34,6 +34,7 @@ url.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+reqwest.workspace = true
 # Substitute pipeline worker for tests that submit runs [ORB-12902].
 orbit-core = { path = "../orbit-core", features = ["test-support"] }
 serde_yaml.workspace = true
@@ -42,3 +43,4 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber.workspace = true
+wait-timeout.workspace = true
