@@ -17,6 +17,10 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
+#[cfg(unix)]
+#[path = "support/secret_sinks.rs"]
+mod secret_sinks;
+
 /// Distinctive enough that finding it anywhere is a leak, not a coincidence.
 const SECRET: &str = "orbit-test-secret-7f3a9c1e5b";
 
@@ -68,7 +72,8 @@ impl Fixture {
         command
             .current_dir(&self.work)
             .env("HOME", &self.home)
-            .env("USERPROFILE", &self.home);
+            .env("USERPROFILE", &self.home)
+            .timeout(std::time::Duration::from_secs(30));
         command
     }
 

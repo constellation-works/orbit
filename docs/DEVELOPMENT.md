@@ -129,6 +129,26 @@ environment, not a missing AppArmor profile or a product defect. Replay live
 spawn checks (`spawn_under_linux_bwrap`, `--run-ignored`) on the owning Linux
 host. Do not disable `linux-bwrap` or try to make bwrap nest from a fixture.
 
+The `plugin_secrets` integration binary also runs
+`secret_sinks::seeded_secrets_stay_out_of_persistence_logs_and_children`:
+
+```bash
+cargo test -p orbit-cli --test plugin_secrets seeded_secrets_stay_out
+```
+
+One isolated child seeds fake provider, SCM, cloud and database credentials
+before redactor initialization. It drives task writes and provider output through
+the CLI, then checks persisted task bundles, command/run audit rows, audit blobs,
+run logs, an attached diagnostic artifact, dashboard HTTP log views and the
+provider's actual environment. Every leak reports its sink. A hostile legacy
+process-log record also exercises dashboard rendering independently of the
+producer's redaction. Raw task attachments retain their byte-preserving contract;
+the attached diagnostic comes from the run-log producer. The fixture has a
+120-second child deadline, 30-second CLI deadlines, 10-second provider and
+dashboard readiness deadlines, and 5-second HTTP timeouts. Its disposable
+executor explicitly uses `sandbox: off`; it tests redaction and environment
+composition without nesting an OS sandbox.
+
 ## Testing & Coverage
 
 Authorization coverage is generated from the live governed-operation and

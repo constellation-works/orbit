@@ -8,7 +8,7 @@ use orbit_agent::{
     ParsedStdout, antigravity_terminal_error_diagnostic, normalize_cli_stdout,
     project_cli_response, provider_invocation_diagnostic,
 };
-use orbit_common::security::redaction::PatternRedactor;
+use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
 
@@ -422,7 +422,9 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
 
     Ok(DispatchOutcome {
         success,
-        output: Value::Object(output),
+        // Results become downstream step input and durable pipeline state.
+        // Scrub the parsed fields as well as the bounded stdout preview.
+        output: redact_all_json(Value::Object(output)),
         message,
         invocation: trace.map(|trace| DispatchInvocationTrace {
             provider,
