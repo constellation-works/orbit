@@ -31,6 +31,11 @@ spec:
         type: string
       expected_remote_sha:
         type: [string, "null"]
+      # A claimed leaf's implement-step output. Under the claim's worker
+      # binding the delivery gate judges its summary, not the owner's
+      # stored one; any other run ignores it.
+      implementation:
+        type: [object, "null"]
   output_schema_json:
     type: object
     required: [phase, decision, branch, local_sha, force_with_lease]

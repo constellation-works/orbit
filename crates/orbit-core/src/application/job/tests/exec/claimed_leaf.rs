@@ -30,7 +30,7 @@ use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::pull::adapters::{LeafPullLauncher, OwnerPullPeer};
 use crate::adapter::engine_host::v2_host::pull::drain::{PullDrain, PullLauncher, PullPeer};
 use crate::application::distributed::owner_binary_version;
-use crate::application::task::TaskAddParams;
+use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 mod crew;
 
@@ -463,6 +463,15 @@ const AGENT_SUMMARY: &str = "Outcome: success\nChanges:\n- claimed implementatio
 /// owner route needs. It refuses to run unless claimed mode denied it the
 /// owner task tools, makes its change, and returns its summary in its output.
 fn install_claimed_implementer(runtime: &OrbitRuntime, dir: &Path) {
+    install_claimed_implementer_reporting(runtime, dir, AGENT_SUMMARY);
+}
+
+/// [`install_claimed_implementer`], returning `execution_summary` instead.
+fn install_claimed_implementer_reporting(
+    runtime: &OrbitRuntime,
+    dir: &Path,
+    execution_summary: &str,
+) {
     use std::os::unix::fs::PermissionsExt;
 
     let result = json!({
@@ -470,7 +479,7 @@ fn install_claimed_implementer(runtime: &OrbitRuntime, dir: &Path) {
         "status": "success",
         "result": {
             "summary": "implemented the claimed change",
-            "execution_summary": AGENT_SUMMARY,
+            "execution_summary": execution_summary,
             "comment": "the owner was never contacted from the agent",
         },
         "error": null,
@@ -533,13 +542,24 @@ printf '%s\n' '{result}'
 /// mode the agent writes no owner task state: it is denied the owner task
 /// tools, returns its summary as the step's output, and the pipeline's
 /// handoff carries that summary into the owner's `execution_summary`.
-#[test]
-fn a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_route() {
-    if isolated_claimed_test(
-        "application::job::tests::exec::claimed_leaf::a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_route",
-    ) {
-        return;
-    }
+/// One owner-local claim of a fresh task, implemented by
+/// [`install_claimed_implementer`] returning `implementer_summary`. When
+/// `stored_summary` is set the owner's task already carries it before the
+/// pull, as a previous attempt's failure settlement leaves it.
+/// Bind `_root` when destructuring: it owns the fixture's directories.
+struct ClaimedImplementerRun {
+    _root: tempfile::TempDir,
+    runtime: OrbitRuntime,
+    repo_root: PathBuf,
+    task_id: String,
+    outcome: Option<Result<bool, String>>,
+    record: LocalPullAdmission,
+}
+
+fn run_claimed_implementer(
+    implementer_summary: &str,
+    stored_summary: Option<&str>,
+) -> ClaimedImplementerRun {
     let config = format!(
         "{}default_crew = \"fixture\"\n[crews.fixture]\nprovider = \"grok\"\nmodel = \"grok-build\"\n",
         workspace_config()
@@ -549,8 +569,19 @@ fn a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_rout
     seed_default_catalogs(&global_root);
     init_remoteless_repo(&repo_root);
     let runtime = runtime.with_automation_machine_identity(Some(MACHINE.to_string()));
-    install_claimed_implementer(&runtime, root.path());
+    install_claimed_implementer_reporting(&runtime, root.path(), implementer_summary);
     let task_id = seed_claimable_task(&runtime);
+    if let Some(summary) = stored_summary {
+        runtime
+            .update_task(
+                &task_id,
+                TaskUpdateParams {
+                    execution_summary: Some(summary.to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("seed the previous attempt's summary");
+    }
     let drain = drain_run(&runtime);
     let destination = destination(&runtime, MACHINE);
     let template = admission_request(&runtime, &drain, "local");
@@ -570,16 +601,42 @@ fn a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_rout
         launcher: &launcher,
     }
     .refill(&destination, &template, 1)
-    .expect("the claimed leaf runs to its handoff");
+    .expect("the claimed leaf is admitted and launched");
     assert_eq!(admitted, 1);
+    let outcome = launcher.outcome.borrow().clone();
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    ClaimedImplementerRun {
+        _root: root,
+        runtime,
+        repo_root,
+        task_id,
+        outcome,
+        record,
+    }
+}
+
+#[test]
+fn a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_route() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_route",
+    ) {
+        return;
+    }
+    let ClaimedImplementerRun {
+        _root,
+        runtime,
+        task_id,
+        outcome,
+        record,
+        ..
+    } = run_claimed_implementer(AGENT_SUMMARY, None);
     assert_eq!(
-        launcher.outcome.borrow().clone(),
+        outcome,
         Some(Ok(true)),
         "an owner the agent cannot reach does not fail the leaf"
     );
 
     // The handoff carried the agent's words, and the owner holds them.
-    let record = jobs.local_pull_admissions().expect("records").remove(0);
     assert_eq!(record.phase, LocalPullPhase::Settled);
     let Some(ClaimMutation::AcceptHandoff(handoff)) = record.settlement.clone() else {
         panic!("the leaf settles with a typed handoff: {record:?}");
@@ -609,6 +666,103 @@ fn a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_rout
     assert_eq!(
         task.execution_summary, handoff.execution_summary,
         "the owner's execution_summary is the one the agent returned"
+    );
+}
+
+/// What a previous claimed attempt's failure settlement leaves on the owner.
+const PREVIOUS_ATTEMPT_FAILED: &str = "Outcome: failed\nClaimed leaf run jrun-previous terminated \
+     as failed at step 'commit'.";
+
+/// [ORB-13755] A claimed retry of a once-failed task. The owner still holds
+/// the previous attempt's `Outcome: failed`, which this attempt cannot
+/// overwrite; its own implementer reports done. The delivery gate judges this
+/// attempt, so the leaf commits and hands off, and the owner's summary becomes
+/// the new one.
+#[test]
+fn a_claimed_retry_delivers_past_the_previous_attempts_failed_summary() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::a_claimed_retry_delivers_past_the_previous_attempts_failed_summary",
+    ) {
+        return;
+    }
+    let ClaimedImplementerRun {
+        _root,
+        runtime,
+        task_id,
+        outcome,
+        record,
+        ..
+    } = run_claimed_implementer(AGENT_SUMMARY, Some(PREVIOUS_ATTEMPT_FAILED));
+    assert_eq!(
+        outcome,
+        Some(Ok(true)),
+        "a stale failed summary does not refuse this attempt's delivery"
+    );
+    assert_eq!(record.phase, LocalPullPhase::Settled);
+    let Some(ClaimMutation::AcceptHandoff(handoff)) = record.settlement.clone() else {
+        panic!("the retry settles with a typed handoff: {record:?}");
+    };
+    assert!(
+        handoff.execution_summary.starts_with(AGENT_SUMMARY),
+        "the handoff carries this attempt's summary: {}",
+        handoff.execution_summary
+    );
+    let task = runtime.get_task(&task_id).expect("task");
+    assert_eq!(task.status, TaskStatus::Review);
+    assert_eq!(
+        task.execution_summary, handoff.execution_summary,
+        "the previous attempt's failure is replaced by this attempt's summary"
+    );
+}
+
+/// [ORB-13755] The same retry whose own implementer reports failure is still
+/// refused at `commit`, before any Git mutation: nothing is committed and no
+/// handoff is recorded.
+#[test]
+fn a_claimed_attempt_reporting_failure_is_refused_before_any_git_mutation() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::a_claimed_attempt_reporting_failure_is_refused_before_any_git_mutation",
+    ) {
+        return;
+    }
+    let ClaimedImplementerRun {
+        _root,
+        repo_root,
+        outcome,
+        record,
+        ..
+    } = run_claimed_implementer(
+        "Outcome: failed\nChanges:\n- the claimed change is incomplete",
+        Some(PREVIOUS_ATTEMPT_FAILED),
+    );
+    assert_ne!(outcome, Some(Ok(true)), "a failed attempt does not succeed");
+    assert!(
+        !matches!(record.settlement, Some(ClaimMutation::AcceptHandoff(_))),
+        "a failed attempt records no handoff: {record:?}"
+    );
+
+    // Every branch, including the leaf's, still points at the base: the
+    // refusal ran before the commit step staged or committed anything.
+    let base_tip = git_stdout(&repo_root, &["rev-parse", BASE_BRANCH]);
+    let heads = git_stdout(
+        &repo_root,
+        &["for-each-ref", "--format=%(objectname)", "refs/heads"],
+    );
+    assert!(
+        heads.lines().count() > 1 && heads.lines().all(|head| head == base_tip),
+        "no branch moved past the base {base_tip}: {heads}"
+    );
+    let worktrees = git_stdout(&repo_root, &["worktree", "list", "--porcelain"]);
+    let leaf_worktree = worktrees
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .find(|path| path.canonicalize().ok() != repo_root.canonicalize().ok())
+        .expect("the leaf's worktree is left for inspection");
+    assert_eq!(
+        git_stdout(&leaf_worktree, &["status", "--porcelain"]),
+        "M src/lib.rs",
+        "the implementation is left uncommitted and unstaged"
     );
 }
 
@@ -1437,6 +1591,66 @@ fn a_published_pr_claim_hands_off_a_pull_request_without_merging() {
     assert!(
         error.to_string().contains("distributed") || error.to_string().contains("not this machine"),
         "{error}"
+    );
+}
+
+/// [ORB-13755] The pull-request leaf gates again at every publishing step
+/// (`pr_prepare`, `git_rebase`, `git_push`, `pr_open`), and each judges this
+/// attempt too: a previous attempt's `Outcome: failed` on the owner does not
+/// stop a retry from publishing and handing off.
+#[test]
+fn a_published_pr_retry_publishes_past_the_previous_attempts_failed_summary() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::a_published_pr_retry_publishes_past_the_previous_attempts_failed_summary",
+    ) {
+        return;
+    }
+    let (_root, runtime, repo_root, _global) = publishing_runtime();
+    let task_id = seed_claimable_task(&runtime);
+    runtime
+        .update_task(
+            &task_id,
+            TaskUpdateParams {
+                execution_summary: Some(PREVIOUS_ATTEMPT_FAILED.to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed the previous attempt's summary");
+    let drain = drain_run(&runtime);
+    let destination = destination(&runtime, MACHINE);
+    let template = admission_request(&runtime, &drain, "pr");
+    let peer = OwnerPullPeer { runtime: &runtime };
+    let launcher = InProcessLauncher {
+        real: LeafPullLauncher { runtime: &runtime },
+        runtime: &runtime,
+        repo_root: repo_root.clone(),
+        job_name: "task_claimed_pr_pipeline",
+        launched: RefCell::new(Vec::new()),
+        outcome: RefCell::new(None),
+    };
+    let jobs = runtime.stores().jobs();
+    let admitted = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    }
+    .refill(&destination, &template, 1)
+    .expect("the published retry is admitted and launched");
+    assert_eq!(admitted, 1);
+    assert_eq!(
+        launcher.outcome.borrow().clone(),
+        Some(Ok(true)),
+        "a stale failed summary does not refuse this attempt's publication"
+    );
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    let Some(ClaimMutation::AcceptHandoff(handoff)) = record.settlement.clone() else {
+        panic!("the published retry settles with a typed handoff: {record:?}");
+    };
+    let task = runtime.get_task(&task_id).expect("task");
+    assert_eq!(task.status, TaskStatus::Review);
+    assert_eq!(
+        task.execution_summary, handoff.execution_summary,
+        "the previous attempt's failure is replaced by this attempt's summary"
     );
 }
 

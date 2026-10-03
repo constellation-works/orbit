@@ -82,6 +82,9 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_ref: "{{ steps.worktree.output.base_ref }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
+        # This attempt's implementer output: the delivery gate judges its
+        # summary rather than one a previous attempt left on the owner.
+        implementation: "{{ steps.implement_one.output }}"
 
     # Required validation runs on the committed candidate, before any handoff
     # exists. There is nothing to publish first: the local candidate is the

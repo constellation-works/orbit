@@ -9,7 +9,10 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{ExternalRef, Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{
+    ExecutionLocation, ExternalRef, Task, TaskArtifact, TaskPriority, TaskStatus, TaskType,
+};
+use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::Value;
 use tempfile::tempdir;
@@ -30,6 +33,8 @@ pub struct CommitTestHost {
     job_runs: Mutex<Vec<JobRun>>,
     run_states: Mutex<HashMap<String, PipelineState>>,
     artifacts: Vec<TaskArtifact>,
+    /// The trusted claim binding a claimed leaf's host carries, if any.
+    worker: Option<WorkerInvocation>,
 }
 
 impl CommitTestHost {
@@ -51,7 +56,25 @@ impl CommitTestHost {
             job_runs: Mutex::new(Vec::new()),
             run_states: Mutex::new(HashMap::new()),
             artifacts: Vec::new(),
+            worker: None,
         }
+    }
+
+    /// Run as a claimed leaf bound to `task_id`, as a follower's worker is.
+    pub fn with_claim_binding(mut self, task_id: &str) -> Self {
+        self.worker = Some(WorkerInvocation {
+            owner_machine_id: "owner-machine".into(),
+            owner_workspace_id: "owner-workspace".into(),
+            owner_destination: "owner-machine/owner-workspace".into(),
+            task_id: task_id.into(),
+            claim_id: "claim-1".into(),
+            execution: ExecutionLocation {
+                machine_id: "follower-machine".into(),
+                machine_name: None,
+            },
+            bound_run_id: "batch-1".into(),
+        });
+        self
     }
 
     pub fn with_crew_model(mut self, model: impl Into<String>) -> Self {
@@ -261,6 +284,10 @@ impl RuntimeHost for CommitTestHost {
 
     fn scoreboard_dir(&self) -> &Path {
         &self.scoreboard_dir
+    }
+
+    fn worker_invocation(&self) -> Option<WorkerInvocation> {
+        self.worker.clone()
     }
 }
 

@@ -70,6 +70,9 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_ref: "{{ steps.worktree.output.base_ref }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
+        # This attempt's implementer output: the delivery gate judges its
+        # summary rather than one a previous attempt left on the owner.
+        implementation: "{{ steps.implement_one.output }}"
 
     - id: prepare_branch
       recovery_activity: step_failure_recovery
@@ -80,6 +83,8 @@ spec:
         base_sync: "{{ input.base_sync }}"
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        # Same attempt-scoped delivery gate as `commit`.
+        implementation: "{{ steps.implement_one.output }}"
 
     - id: sync_base
       recovery_activity: pr_conflict_recovery
@@ -96,6 +101,8 @@ spec:
         remote_sha: "{{ steps.prepare_branch.output.remote_sha }}"
         commits_behind: "{{ steps.prepare_branch.output.commits_behind }}"
         sync_required: "{{ steps.prepare_branch.output.sync_required }}"
+        # Same attempt-scoped delivery gate as `commit`.
+        implementation: "{{ steps.implement_one.output }}"
 
     - id: push
       recovery_activity: step_failure_recovery
@@ -110,6 +117,8 @@ spec:
         rewrite_performed: "{{ steps.sync_base.output.rewritten }}"
         rewrite_head_before: "{{ steps.sync_base.output.head_sha_before }}"
         expected_remote_sha: "{{ steps.sync_base.output.remote_sha_before }}"
+        # Same attempt-scoped delivery gate as `commit`.
+        implementation: "{{ steps.implement_one.output }}"
 
     - id: pr_open
       recovery_activity: step_failure_recovery
@@ -126,6 +135,8 @@ spec:
         head: "{{ steps.sync_base.output.head }}"
         body: "{{ input.body }}"
         title: "{{ input.title }}"
+        # Same attempt-scoped delivery gate as `commit`.
+        implementation: "{{ steps.implement_one.output }}"
 
     - id: validate
       target: activity:claim_validate
