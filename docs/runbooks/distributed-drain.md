@@ -4,7 +4,7 @@ summary: Set up, migrate, run, and recover a single-owner distributed drain — 
 tags: [operations, distributed-drain, multi-host, recovery]
 paths:
   - "crates/orbit-tools/src/builtin/orbit/drain/**"
-  - "crates/orbit-core/src/application/distributed.rs"
+  - "crates/orbit-core/src/application/distributed/**"
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]

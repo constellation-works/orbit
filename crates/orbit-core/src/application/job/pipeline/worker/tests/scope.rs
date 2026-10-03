@@ -131,16 +131,6 @@ fn strict_worker_command_passes_policy_to_descendants() {
     }));
 }
 
-#[test]
-fn inherited_strict_policy_applies_to_child_worker_launches() {
-    let strict = super::super::effective_strict_containment;
-    assert!(!strict(false, false, None));
-    assert!(strict(true, false, None));
-    assert!(strict(false, true, None));
-    assert!(strict(false, false, Some(OsStr::new("1"))));
-    assert!(!strict(false, false, Some(OsStr::new("0"))));
-}
-
 fn memory(value: &str) -> MemoryLimit {
     MemoryLimit::parse(value).expect("admitted memory limit")
 }

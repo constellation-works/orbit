@@ -262,7 +262,7 @@ The MCP surface is a different case and is not reopened here: `orbit mcp serve -
 ## A governed row may be an identification floor, not only an operator gate
 
 **Recorded:** 2026-09-20 · [ORB-12582] · **Implemented** in [ORB-12582]
-**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/application/distributed.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, `crates/orbit-cli/tests/tool_list.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/application/distributed/probe.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, `crates/orbit-cli/tests/tool_list.rs`
 
 ### Context
 
