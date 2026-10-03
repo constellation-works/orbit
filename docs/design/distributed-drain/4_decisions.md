@@ -416,7 +416,7 @@ context remains a pre-admission diagnostic requiring operator correction, not a 
 the caller-authorization removal shipped in [ORB-12564]; applied to the code by [ORB-12495].
 **Code anchors:** `crates/orbit-mcp/src/remote/identity.rs::mcp_server_identity`,
 `crates/orbit-mcp/src/remote/proxy.rs::remote_serve_command`,
-`crates/orbit-core/src/application/distributed.rs`
+`crates/orbit-core/src/application/distributed/contract.rs`
 
 ### Context
 
@@ -457,7 +457,7 @@ ACL: an owner operator retains cross-attempt receipt inspection and deliberate r
 
 **Recorded:** 2026-09-27 · [ORB-13637], after the first live follower drain [ORB-13625].
 **Code anchors:** `crates/orbit-store/src/repository/task/coordination/handoff.rs::accept_typed_handoff`,
-`crates/orbit-core/src/application/distributed.rs::owner_completion_authority`,
+`crates/orbit-core/src/application/distributed/contract.rs::owner_completion_authority`,
 `crates/orbit-config/src/registry/settings.rs` (`workflow.distributed_completion`)
 
 ### Context

@@ -36,10 +36,8 @@ use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::handoff::{HandoffDelivery, TaskHandoff};
 use serde::Serialize;
 
-use super::{
-    ensure_distributed_mutation_available, is_remote, owner_binary_version, session_machine_id,
-    trusted_identity,
-};
+use super::contract::{is_remote, session_machine_id, trusted_identity};
+use super::{ensure_distributed_mutation_available, owner_binary_version};
 
 /// What `orbit.task.pull` answers: the immutable receipt and, separately, the
 /// claim's phase right now. A replayed receipt is historical evidence; the

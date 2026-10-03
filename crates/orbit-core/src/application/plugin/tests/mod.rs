@@ -4,6 +4,7 @@ mod definitions;
 mod delivery;
 mod fixture;
 mod grants;
+mod inspect;
 mod install;
 mod lifecycle;
 mod panels;
