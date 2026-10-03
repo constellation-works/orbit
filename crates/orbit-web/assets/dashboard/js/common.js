@@ -30,6 +30,20 @@ export function getWorkspaceRevision() {
   return workspaceRevision;
 }
 
+// Mutations keep the workspace they started in across asynchronous admission
+// reads, responses and refreshes. Returning to the same workspace is a new
+// visit: an earlier result must not update that visit's UI or start a write.
+export function captureWorkspaceVisit() {
+  const workspace = currentWorkspace;
+  const revision = workspaceRevision;
+  return {
+    workspace,
+    revision,
+    isCurrent: () => revision === workspaceRevision,
+    path: (path) => workspacePath(path, workspace),
+  };
+}
+
 export function onWorkspaceChange(listener) {
   workspaceListeners.add(listener);
   return () => workspaceListeners.delete(listener);
@@ -324,9 +338,13 @@ export async function requestPanel(bodyId, scope, request, render, countId) {
 // Append the selected workspace to an API path, unless one is already present
 // (aggregate endpoints like /api/tasks/all are called with no workspace set).
 export function withWorkspace(path) {
-  if (!currentWorkspace || /[?&]workspace=/.test(path)) return path;
+  return workspacePath(path, currentWorkspace);
+}
+
+function workspacePath(path, workspace) {
+  if (!workspace || /[?&]workspace=/.test(path)) return path;
   const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}workspace=${encodeURIComponent(currentWorkspace)}`;
+  return `${path}${sep}workspace=${encodeURIComponent(workspace)}`;
 }
 
 export function positiveIntParam(name, fallback) {

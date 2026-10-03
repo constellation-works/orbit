@@ -3493,6 +3493,33 @@ fn dashboard_task_approval_admission_stays_in_its_workspace_visit() {
     ));
 }
 
+#[test]
+fn dashboard_task_actions_stay_in_their_workspace_visit() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_task_action_scope.mjs")
+    ));
+}
+
+#[test]
+fn dashboard_run_cancel_admission_stays_in_its_workspace_visit() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_run_cancel_scope.mjs")
+    ));
+}
+
+#[test]
+fn dashboard_run_actions_stay_in_their_workspace_visit() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_run_action_scope.mjs")
+    ));
+}
+
 // ORB-12516: claim provenance and the owner's handoff actions are the one
 // dashboard surface where a wrong word is a wrong decision — an expired
 // reservation that reads as a revocation, or a "review" that reads as a code

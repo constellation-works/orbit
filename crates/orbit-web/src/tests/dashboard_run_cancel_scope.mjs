@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+const {setWorkspace}=await import('./js/common.js');
+const {buildCancelRunButton}=await import('./js/runs.js');
+const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+const flush=async()=>{for(let i=0;i<5;i++)await tick();};
+const response=(payload,status=200)=>({ok:status===200,status,json:async()=>payload,text:async()=>JSON.stringify(payload)});
+const reads=[];
+const writes=[];
+const prompts=[];
+let finishWrite;
+globalThis.fetch=async(path,options={})=>{
+ const url=new URL(path,'http://dashboard.test');
+ if(options.method==='POST'){writes.push(url);return new Promise(resolve=>{finishWrite=resolve;});}
+ return new Promise(resolve=>reads.push(resolve));
+};
+window.prompt=text=>{prompts.push(text);return 'cancel fixture';};
+const run={run_id:'jrun-leaf',job_id:'task_claimed_pr_pipeline',state:'running'};
+const body=document.getElementById('runs-body');
+setWorkspace('A');
+const abandoned=buildCancelRunButton(run,body);
+abandoned.dispatch('click');
+setWorkspace('B');
+reads.at(-1)(response({pull_claim:null}));
+await flush();
+assert.equal(prompts.length,0,'leaving A during the claim read must not prompt to cancel its old run');
+assert.equal(writes.length,0,'a stale cancel admission must not POST through workspace B');
+
+setWorkspace('A');
+const cancel=buildCancelRunButton(run,body);
+const countBefore=reads.length;
+cancel.dispatch('click');
+cancel.dispatch('click');
+assert.equal(reads.length,countBefore+1,'a pending claim read prevents duplicate cancel attempts');
+const rebuilt=buildCancelRunButton(run,body);
+assert.equal(rebuilt.disabled,true,'a refreshed cancel button stays disabled during admission');
+reads.at(-1)(response({pull_claim:null}));
+await flush();
+assert.equal(writes.length,1);
+assert.equal(writes[0].searchParams.get('workspace'),'A');
+setWorkspace('B');
+finishWrite(response({error:'A cancel refusal'},409));
+await flush();
+assert.ok(!body.textContent.includes('A cancel refusal'),'an old workspace cancel refusal never appears in B');
