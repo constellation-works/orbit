@@ -10,7 +10,8 @@ use std::process::Child;
 
 use orbit_common::OrbitError;
 
-use super::{LandlockGrant, LandlockPathGrant, RulesetScope};
+use super::grants::{LandlockGrant, LandlockPathGrant};
+use super::probe::RulesetScope;
 use crate::runner::ExecRequest;
 
 const ACCESS_FS_EXECUTE: u64 = 1 << 0;
