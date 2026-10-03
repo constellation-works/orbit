@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
+import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 
@@ -1596,6 +1596,7 @@ function autoDrainStartButton(payload, form) {
   form.start = button;
   form.syncConcurrency?.();
   button.addEventListener("click", async () => {
+    const visit = captureWorkspaceVisit();
     if (pendingOperations.has(key) || !autoDrainConcurrencyValid()) return;
     const workspace = selectedWorkspace();
     const counts = autoDrainCounts(payload);
@@ -1617,14 +1618,15 @@ function autoDrainStartButton(payload, form) {
     try {
       const body = { for_duration: duration, complete: autoDrainComplete };
       if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
-      const result = await postJson("/api/workflows/auto", body);
+      const result = await postJson(visit.path("/api/workflows/auto"), body);
+      if (!visit.isCurrent()) return;
       const runId = result?.run_id ?? null;
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
       feedback("auto-drain-operation-feedback", "success", `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).`);
       await refreshDrainAfterAction();
     } catch (error) {
-      feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);
+      if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);
     } finally {
       pendingOperations.delete(key);
       if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
@@ -1724,6 +1726,7 @@ function autoDrainStopButton(payload) {
   button.setAttribute("aria-label", pending ? copy.busy : copy.aria);
   button.disabled = Boolean(reasons.stop) || pending;
   button.addEventListener("click", async () => {
+    const visit = captureWorkspaceVisit();
     if (pendingOperations.has(key)) return;
     const workspace = selectedWorkspace();
     const targets = autoDrainStopTargets(live);
@@ -1733,7 +1736,8 @@ function autoDrainStopButton(payload) {
     feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${targets.join(" and ")}…` : "Delivering recorded settlements…");
     renderAutoDrain(payload);
     try {
-      const result = await postJson("/api/workflows/auto/stop", {});
+      const result = await postJson(visit.path("/api/workflows/auto/stop"), {});
+      if (!visit.isCurrent()) return;
       const coordinators = Array.isArray(result?.coordinators) ? result.coordinators : [];
       const remaining = coordinators.reduce((sum, change) => sum + (Array.isArray(change?.remaining_children) ? change.remaining_children.length : 0), 0);
       const changes = coordinators.map((change) => `${change?.run_id ?? "(no run id)"}: ${change?.outcome ?? "?"}`).join(", ");
@@ -1752,7 +1756,7 @@ function autoDrainStopButton(payload) {
       );
       await refreshDrainAfterAction();
     } catch (error) {
-      feedback("auto-drain-operation-feedback", "error", `${copy.label === "Stop" ? "Stopping admissions" : "Settling"} failed: ${error.message}`);
+      if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `${copy.label === "Stop" ? "Stopping admissions" : "Settling"} failed: ${error.message}`);
     } finally {
       pendingOperations.delete(key);
       if (lastAutoDrain) renderAutoDrain(lastAutoDrain);

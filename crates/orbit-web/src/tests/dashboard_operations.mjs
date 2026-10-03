@@ -624,9 +624,35 @@ assert(!descendants(get('auto-tasks-body')).some(node => String(node.className |
 await button('routines-body', 'Hide plugin-off definitions').click(); await tick(); await tick();
 assert(!get('auto-tasks-body').textContent.includes('graph-reindex') && !get('routines-body').textContent.includes('graph-refresh'), 'hiding again restores the default view');
 
-globalThis.operationsTestsPassed = true;
 globalThis.setDrainFixturePhase = async (phase) => {
   drainPhase = phase;
   drainRunId = phase === 'draining' ? 'jrun-20260923-0400-a1' : null;
   await fetchAndRenderAutoDrainPane();
 };
+
+// Late Start/Stop acknowledgements belong to the workspace visit that submitted them.
+setWorkspace('one'); drainPhase='idle'; drainRunId=null; responseError=null; failReadiness=false; controlsAuthorized=true;
+await fetchAndRenderOperations();
+delayPost=true;
+drainButton('Start 2h window').click(); await tick();
+setWorkspace('two'); await fetchAndRenderOperations();
+const beforeLateStart=requests.length;
+releasePost(); await tick(); await tick(); await tick();
+assert(!get('auto-drain-operation-feedback').textContent.includes('jrun-20260923-0400-a1'),'late Start cannot announce A run in B');
+assert(requests.length===beforeLateStart,'late Start cannot refresh B');
+
+setWorkspace('one'); drainPhase='draining'; drainRunId='jrun-one'; await fetchAndRenderOperations();
+drainButton('Stop').click(); await tick();
+setWorkspace('two'); drainPhase='idle'; drainRunId=null; await fetchAndRenderOperations();
+const beforeLateStop=requests.length;
+releasePost(); await tick(); await tick(); await tick();
+assert(!get('auto-drain-operation-feedback').textContent.includes('Admissions stopped'),'late Stop cannot announce A outcome in B');
+assert(requests.length===beforeLateStop,'late Stop cannot refresh B');
+setWorkspace('one'); await fetchAndRenderOperations();
+drainButton('Start 2h window').click(); await tick();
+setWorkspace('two'); setWorkspace('one'); await fetchAndRenderOperations();
+responseError='old visit refused';releasePost();await tick();await tick();await tick();
+assert(!get('auto-drain-operation-feedback').textContent.includes('old visit refused'),'A to B to A suppresses errors from the old A visit');
+delayPost=false;responseError=null;
+
+globalThis.operationsTestsPassed = true;
