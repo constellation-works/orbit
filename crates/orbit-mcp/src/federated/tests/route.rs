@@ -483,7 +483,14 @@ fn compatibility_never_discards_extra_write_fields_or_guesses_an_equivalent_tool
 fn old_same_name_peer_without_extension_schema_refuses_before_dispatch() {
     let probe = ScriptedProbe::new()
         .answering(OWNER_MACHINE, owner_snapshot())
-        .advertising(OWNER_MACHINE, &["orbit_task_show", "orbit_pipeline_invoke"])
+        .advertising(
+            OWNER_MACHINE,
+            &[
+                "orbit_task_show",
+                "orbit_task_update",
+                "orbit_pipeline_invoke",
+            ],
+        )
         .without_domain_extensions(OWNER_MACHINE);
     let log = probe.call_log();
     let host = FederatedMcpHost::new(destinations(), Arc::new(probe));
@@ -499,6 +506,18 @@ fn old_same_name_peer_without_extension_schema_refuses_before_dispatch() {
         (
             "orbit.pipeline.invoke",
             json!({"workspace":"hm_owner/ws_orbit","job_name":"job","input":{},"default_input":false}),
+        ),
+        (
+            "orbit.task.update",
+            json!({"workspace":"hm_owner/ws_orbit","id":"TST-1","expected_revision":"seen"}),
+        ),
+        (
+            "orbit.task.update",
+            json!({"workspace":"hm_owner/ws_orbit","id":"TST-1","verdict":{}}),
+        ),
+        (
+            "orbit.task.update",
+            json!({"workspace":"hm_owner/ws_orbit","id":"TST-1","complete":false}),
         ),
     ] {
         assert!(matches!(
