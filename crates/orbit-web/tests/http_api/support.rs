@@ -335,9 +335,14 @@ pub(super) fn serve_fixture() {
                     memory_percent: Some(50.0),
                     disks: paths
                         .iter()
-                        .map(|path| DiskSample {
+                        .enumerate()
+                        .map(|(index, path)| DiskSample {
                             path: path.clone(),
-                            used_percent: Some(40.0),
+                            used_percent: (phase != 3).then_some(if index == 0 {
+                                88.0
+                            } else {
+                                40.0
+                            }),
                         })
                         .collect(),
                 }

@@ -125,6 +125,11 @@ pub struct HostResourceStatus {
     pub stale: bool,
     pub cpu: ResourceReading,
     pub memory: ResourceReading,
+    /// Highest known usage across all watched paths; absent when none is known.
+    pub disk: Option<DiskReading>,
+    /// Per-path readings retained for admission's unknown-telemetry diagnostics.
+    /// The HTTP projection exposes only the aggregate `disk`.
+    #[serde(skip_serializing)]
     pub disks: Vec<DiskReading>,
     pub severity: ResourceSeverity,
     pub throttle: bool,
@@ -159,7 +164,6 @@ impl ResourcePressureEvaluator {
         let age = now.signed_duration_since(sample.sampled_at);
         let stale =
             age.num_milliseconds() < 0 || age.to_std().map_or(true, |age| age > RESOURCE_MAX_AGE);
-        let mut reasons = Vec::new();
         let mut pressures = Vec::new();
         let mut seen = Vec::new();
         let mut reading = |key: String, value: Option<f64>, high: u8, resume: u8, cpu: bool| {
@@ -225,12 +229,6 @@ impl ResourcePressureEvaluator {
                 state.high_since = None;
             }
             if state.held {
-                reasons.push(format!(
-                    "{key} {value:.1}% (high {high}%, resume below {resume}%, high since {})",
-                    state
-                        .high_since
-                        .map_or_else(String::new, |since| since.to_rfc3339())
-                ));
                 pressures.push(ResourcePressure {
                     resource: key.clone(),
                     percent: value,
@@ -273,6 +271,26 @@ impl ResourcePressureEvaluator {
                 path: disk.path,
             })
             .collect();
+        let disk = disks
+            .iter()
+            .filter(|disk| disk.reading.percent.is_some())
+            .max_by(|a, b| {
+                a.reading
+                    .percent
+                    .unwrap_or_default()
+                    .total_cmp(&b.reading.percent.unwrap_or_default())
+            })
+            .cloned();
+        // Evaluate every path above, but report just the worst held disk. Its
+        // hold may outlast a newer, higher reading that has not sustained high
+        // pressure yet, so choose from held pressures, not the display aggregate.
+        let worst_disk = pressures
+            .iter()
+            .filter(|pressure| pressure.resource.starts_with("disk "))
+            .max_by(|a, b| a.percent.total_cmp(&b.percent))
+            .cloned();
+        pressures.retain(|pressure| !pressure.resource.starts_with("disk "));
+        pressures.extend(worst_disk);
         // Keep recent disk history for other workspaces sharing the host root.
         // It is never included in this verdict unless this probe observes it.
         self.states.retain(|key, state| {
@@ -296,9 +314,22 @@ impl ResourcePressureEvaluator {
         } else {
             ResourceSeverity::Ok
         };
-        let throttle = !reasons.is_empty();
+        let throttle = !pressures.is_empty();
         let reason = if throttle {
-            reasons.join("; ")
+            pressures
+                .iter()
+                .map(|pressure| {
+                    format!(
+                        "{} {:.1}% (high {}%, resume below {}%, high since {})",
+                        pressure.resource,
+                        pressure.percent,
+                        pressure.high_percent,
+                        pressure.resume_percent,
+                        pressure.since.to_rfc3339()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
         } else if !settings.enabled {
             "Resource throttle disabled".into()
         } else if severities.contains(&ResourceSeverity::Unknown) {
@@ -313,6 +344,7 @@ impl ResourcePressureEvaluator {
             stale,
             cpu,
             memory,
+            disk,
             disks,
             severity,
             throttle,

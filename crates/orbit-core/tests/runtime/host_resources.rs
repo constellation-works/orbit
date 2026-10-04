@@ -41,6 +41,7 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
         .with_host_resource_probe(probe.clone());
     let first = runtime.host_resource_status();
     assert!(!first.throttle);
+    assert_eq!(first.disk.as_ref().unwrap().reading.percent, Some(10.0));
     assert_eq!(first.cpu.severity, ResourceSeverity::Critical);
     let clone = runtime.clone();
     probe.0.lock().unwrap().sampled_at = Utc::now() - Duration::seconds(5);
@@ -63,6 +64,7 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
     probe.0.lock().unwrap().sampled_at = Utc::now() - Duration::seconds(20);
     let stale = runtime.host_resource_status();
     assert!(stale.stale);
+    assert!(stale.disk.is_none());
     assert_eq!(stale.memory.severity, ResourceSeverity::Unknown);
 }
 
