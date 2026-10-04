@@ -355,7 +355,12 @@ fn main() {
     // This is the production entry point for CLI, MCP, sweep clock, and the
     // dashboard (`orbit web serve`). Test harnesses never execute this main.
     orbit_core::mark_process_as_pipeline_worker_binary();
-    orbit_common::observability::logging::init_default_subscriber("warn");
+    // Provider lines are retained for `run logs --follow`, while diagnostics
+    // stay quiet on stderr. An explicit RUST_LOG still overrides both defaults.
+    orbit_common::observability::logging::init_subscriber_with_file_filter(
+        "warn",
+        "warn,orbit_engine::activity_job::cli_runner::supervisor=info",
+    );
     output::pipe::install_handler();
 
     let (cli, requested_format, legacy_json) = parse_cli();

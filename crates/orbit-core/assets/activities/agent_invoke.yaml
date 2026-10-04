@@ -60,7 +60,10 @@ spec:
       # Shortens the declared `wall_clock_timeout_seconds` below; it can never
       # raise it, so the asset remains the ceiling.
       timeout_seconds:
-        type: number
+        type: integer
+        minimum: 1
+        maximum: 7200
+        default: 1800
       provider_sandbox:
         type: string
       trusted_host_admission:
@@ -152,4 +155,6 @@ spec:
     - docker
     - podman
   on_denial: terminate
-  wall_clock_timeout_seconds: 1800
+  # The API defaults to 1800 seconds and refuses requests above this ceiling.
+  # The engine may shorten it for an admitted request, never extend it.
+  wall_clock_timeout_seconds: 7200

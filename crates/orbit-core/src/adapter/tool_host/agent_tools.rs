@@ -25,6 +25,8 @@ pub(super) fn invoke(
     let idempotency_key = optional_string(&input, "idempotency_key")?;
     let provider_sandbox = optional_string(&input, "provider_sandbox")?;
     let timeout_seconds = parse_timeout(&input)?;
+    // Validate before admission creates a durable run, even for an asynchronous call.
+    let wait_seconds = parse_wait_seconds(&input)?;
     let actor = orbit_types::identity::normalize_optional_attribution_label(
         model.as_deref().or(agent.as_deref()),
         model.as_deref(),
@@ -41,11 +43,14 @@ pub(super) fn invoke(
         session_context,
     })?;
 
-    Ok(json!({
+    let mut response = json!({
         "run_id": submission.run_id,
         "job_id": submission.job_id,
         "submitted_at": submission.submitted_at,
         "state": if submission.queued { "queued" } else { "submitted" },
+        "queued": submission.queued,
+        "queue_position": submission.queue_position,
+        "waited": wait_seconds.is_some(),
         "deduplicated": submission.deduplicated,
         "timeout_seconds": submission.timeout_seconds,
         "authorized_by": submission.admission.authorized_by,
@@ -56,7 +61,31 @@ pub(super) fn invoke(
         "sandboxed": false,
         "provider_sandbox": submission.provider_sandbox,
         "warnings": submission.warnings,
-    }))
+    });
+    if let Some(seconds) = wait_seconds {
+        let result = runtime.wait_agent_invoke_run(&submission.run_id, Some(seconds))?;
+        response["state"] = json!(result.outcome);
+        let result = serde_json::to_value(result)
+            .map_err(|error| OrbitError::Execution(format!("encode agent invocation: {error}")))?;
+        response["answer"] = result["answer"].clone();
+        response["agent_invocation"] = result;
+    }
+    Ok(response)
+}
+
+fn parse_wait_seconds(input: &Value) -> Result<Option<u64>, OrbitError> {
+    match input.get("wait_seconds") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .filter(|seconds| *seconds <= 600)
+            .map(Some)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(
+                    "`wait_seconds` must be an integer from 0 to 600".to_string(),
+                )
+            }),
+    }
 }
 
 fn parse_timeout(input: &Value) -> Result<Option<u64>, OrbitError> {

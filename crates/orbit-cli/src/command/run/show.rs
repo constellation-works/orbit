@@ -386,7 +386,7 @@ fn catalog_layer_lines(layers: &[CatalogReferenceLayer]) -> String {
 /// in full, as the agent returned it [ORB-13899]; while the run is open, its
 /// newest message and last activity stand in for it. The blob reference
 /// names where the complete output is.
-fn agent_invocation_lines(value: &Value) -> String {
+pub(super) fn agent_invocation_lines(value: &Value) -> String {
     let Some(result) = value.as_object() else {
         return String::new();
     };

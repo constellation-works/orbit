@@ -163,11 +163,21 @@ impl OrbitRuntime {
                         *run
                     }
                     KeyedJobRunAdmission::Existing(run) => {
+                        let active_runs = self
+                            .stores()
+                            .jobs()
+                            .list_pending_or_running_job_runs(job_name)?;
+                        let queue_position = pipeline_run_queue_position(
+                            &active_runs,
+                            &run.run_id,
+                            spec.max_active_runs,
+                        );
                         return Ok(ChildSubmission::Resolved(PipelineInvokeResult {
                             run_id: run.run_id,
                             job_name: job_name.to_string(),
                             submitted_at: run.scheduled_at.to_rfc3339(),
-                            queued: run.state == JobRunState::Pending,
+                            queued: queue_position.is_some(),
+                            queue_position,
                         }));
                     }
                 }
@@ -227,7 +237,9 @@ impl OrbitRuntime {
                 .stores()
                 .jobs()
                 .list_pending_or_running_job_runs(job_name)?;
-            let queued = !pipeline_run_is_runnable(&active_runs, &run.run_id, spec.max_active_runs);
+            let queue_position =
+                pipeline_run_queue_position(&active_runs, &run.run_id, spec.max_active_runs);
+            let queued = queue_position.is_some();
 
             // A repeated automation admission resolves the original run. Only
             // pending runs need delivery; the existing Start CAS fences workers.
@@ -262,6 +274,7 @@ impl OrbitRuntime {
                 job_name: job_name.to_string(),
                 submitted_at: submitted_at.to_rfc3339(),
                 queued,
+                queue_position,
             }))
         })();
 
@@ -401,6 +414,15 @@ pub(super) fn pipeline_run_is_runnable(
     run_id: &str,
     max_active_runs: u32,
 ) -> bool {
+    runs.iter().any(|run| run.run_id == run_id)
+        && pipeline_run_queue_position(runs, run_id, max_active_runs).is_none()
+}
+
+fn pipeline_run_queue_position(
+    runs: &[JobRun],
+    run_id: &str,
+    max_active_runs: u32,
+) -> Option<usize> {
     let mut ordered = runs.to_vec();
     ordered.sort_by(|left, right| {
         left.scheduled_at
@@ -410,8 +432,9 @@ pub(super) fn pipeline_run_is_runnable(
     });
     ordered
         .iter()
-        .take(max_active_runs.max(1) as usize)
-        .any(|run| run.run_id == run_id)
+        .position(|run| run.run_id == run_id)
+        .and_then(|index| (index + 1).checked_sub(max_active_runs.max(1) as usize))
+        .filter(|position| *position > 0)
 }
 
 pub(crate) fn input_hash(input: &Value) -> String {

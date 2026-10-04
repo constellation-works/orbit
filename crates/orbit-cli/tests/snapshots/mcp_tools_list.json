@@ -1,7 +1,7 @@
 [
   {
     "name": "orbit_agent_invoke",
-    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability — the same test for a session that arrived over SSH as for a local one. Track it with `orbit_workflow_run_show`: `agent_invocation.answer` carries the agent's summary, findings, next_steps, any other result fields and its bounded final message, and `agent_invocation.progress` its latest message and last activity while it runs. Read the complete output with `orbit run logs <RUN_ID>` and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
+    "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID, or wait for its answer with `wait_seconds`. Queued submissions include `queued: true`, a one-based `queue_position` and a warning. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability — the same test for a session that arrived over SSH as for a local one. Track it with `orbit_workflow_run_show`: `agent_invocation.answer` carries the agent's summary, findings, next_steps, any other result fields and its bounded final message, and `agent_invocation.progress` its latest message and last activity while it runs. Read the complete output with `orbit run logs <RUN_ID>` and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -19,7 +19,16 @@
         },
         "timeout_seconds": {
           "type": "integer",
-          "description": "Wall-clock bound for the invocation. Defaults to 1800 and may not exceed 7200."
+          "description": "Provider wall-clock bound in seconds, excluding queue time. Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling.",
+          "minimum": 1,
+          "maximum": 7200,
+          "default": 1800
+        },
+        "wait_seconds": {
+          "type": "integer",
+          "description": "Wait up to this many seconds (integer from 0 to 600). Returns `answer` and `agent_invocation` if finished; otherwise returns the run ID and actual state so you can keep observing it. The deadline never cancels the run. Omit for an asynchronous submission.",
+          "minimum": 0,
+          "maximum": 600
         },
         "idempotency_key": {
           "type": "string",

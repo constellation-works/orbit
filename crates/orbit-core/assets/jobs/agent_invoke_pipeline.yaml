@@ -23,6 +23,9 @@ spec:
   kind: workflow
   # Exploration runs are operator-initiated and interactive in spirit; several
   # concurrent investigations are normal, and each is one subprocess.
+  # Keep eight as a host resource guard: provider processes have no executor
+  # sandbox or memory budget. Saturation is reported with position and warning
+  # by both submission surfaces instead of hiding the wait from the operator.
   max_active_runs: 8
 
   steps:
