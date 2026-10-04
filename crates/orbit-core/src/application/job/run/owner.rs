@@ -439,8 +439,8 @@ pub(super) fn running_run_owner_stale_reason(_run: &JobRun) -> Option<()> {
 ///   be re-derived under either environment, but `kill(pid, 0)` confirms the
 ///   PID is still alive. Stays Running; cancellation still refuses to signal
 ///   it (PID-reuse protection).
-/// - `ProbeUnavailable` — the `ps` invocation itself failed (spawn error,
-///   IO error, etc.) and `kill(pid, 0)` confirms the PID is still alive.
+/// - `ProbeUnavailable` — kernel data could not be read or the fallback
+///   `ps` invocation failed, and `kill(pid, 0)` confirms the PID is still alive.
 ///   A transient probe failure must never terminalize a live worker.
 /// - `Missing` — no PID recorded, or both the probe and `kill(pid, 0)`
 ///   agree the PID is gone. Stale.
@@ -514,7 +514,7 @@ where
     A: FnOnce(u32) -> bool,
 {
     // [ORB-10594] Ordered ahead of every probe: inside a private PID namespace
-    // both `ps` and `kill(pid, 0)` answer confidently and wrongly about a PID
+    // both the identity probe and `kill(pid, 0)` answer wrongly about a PID
     // that belongs to another namespace.
     if scope == PidNamespaceScope::Foreign {
         return OwnerIdentity::ForeignPidNamespace;
@@ -537,7 +537,7 @@ where
             ProbeOutcome::Token(_) => OwnerIdentity::Mismatch,
             ProbeOutcome::NoProcess => {
                 if is_alive(pid) {
-                    // Race: `ps` returned no-process but `kill(pid, 0)` still
+                    // Race: the probe returned no-process but `kill(pid, 0)` still
                     // sees the PID. Defer finalization until the probe agrees.
                     OwnerIdentity::ProbeUnavailable
                 } else {
@@ -591,7 +591,7 @@ pub(crate) enum RunOwnerLiveness {
 pub(crate) fn run_owner_liveness(run: &JobRun) -> RunOwnerLiveness {
     match classify_run_owner(run) {
         // `ProbeUnavailable` reaches here only when `kill(pid, 0)` succeeded,
-        // so some process holds the PID even though `ps` could not confirm the
+        // so some process holds the PID even though the probe could not confirm the
         // identity token. That is enough to refuse to treat the owner as gone.
         OwnerIdentity::Verified
         | OwnerIdentity::LegacyLiveUnverified

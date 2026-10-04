@@ -51,3 +51,60 @@ fn same_pid_namespace_still_detects_a_genuinely_dead_owner() {
     );
     assert_eq!(identity, OwnerIdentity::Missing);
 }
+
+/// Minimal in-memory run fixture: these tests do not open or mutate a store.
+#[cfg(unix)]
+fn owner_run(pid: Option<u32>, token: Option<String>) -> orbit_types::workflow::JobRun {
+    serde_json::from_value(serde_json::json!({
+        "run_id": "jrun-owner-signal-fixture",
+        "job_id": "fixture",
+        "attempt": 1,
+        "state": "running",
+        "scheduled_at": "2026-09-01T00:00:00Z",
+        "created_at": "2026-09-01T00:00:00Z",
+        "pid": pid,
+        "pid_start_time": token,
+    }))
+    .unwrap()
+}
+
+/// Safety branch unreachable through public cancellation, which only invokes
+/// signalling when a PID is present. No PID must never reach kill(0).
+#[cfg(unix)]
+#[test]
+fn signal_owner_without_pid_returns_no_pid() {
+    assert_eq!(
+        super::super::owner::signal_run_owner_process(&owner_run(None, None)).unwrap(),
+        "no_pid"
+    );
+}
+
+/// A synthetic namespace mismatch exercises the safety guard without needing
+/// namespace creation privileges or risking a real foreign process.
+#[cfg(target_os = "linux")]
+#[test]
+fn signal_owner_in_foreign_pid_namespace_never_signals_the_local_process() {
+    let owner = orbit_common::test_env::spawn_unrelated_process();
+    let token = format!("{STABLE_TOKEN_PREFIX}pidns=foreign:Sun Aug  2 20:13:45 2026");
+    assert_eq!(
+        super::super::owner::signal_run_owner_process(&owner_run(Some(owner.pid()), Some(token)))
+            .unwrap(),
+        "foreign_pid_namespace"
+    );
+    assert!(orbit_common::process::identity::process_is_alive(
+        owner.pid()
+    ));
+}
+
+/// Exercise a real reaped owner, rather than a mocked identity probe.
+#[cfg(unix)]
+#[test]
+fn signal_owner_after_exit_returns_already_exited() {
+    let owner = orbit_common::test_env::spawn_unrelated_process();
+    let pid = owner.pid();
+    drop(owner);
+    assert_eq!(
+        super::super::owner::signal_run_owner_process(&owner_run(Some(pid), None)).unwrap(),
+        "already_exited"
+    );
+}
