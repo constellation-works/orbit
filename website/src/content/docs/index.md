@@ -17,6 +17,14 @@ next: false
       <a class="orbit-button primary" href="/getting-started/">Get started →</a>
       <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
     </div>
+    <div class="orbit-hero-install">
+      <code><span class="orbit-hero-install-prompt" aria-hidden="true">$</span>npm install -g @orbit-tools/cli</code>
+      <button type="button" class="orbit-hero-install-copy" data-copy="npm install -g @orbit-tools/cli" aria-label="Copy install command">
+        <svg class="orbit-icon-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>
+        <svg class="orbit-icon-check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>
+      </button>
+      <span class="orbit-hero-install-status" role="status" aria-live="polite"></span>
+    </div>
     <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
     <div class="orbit-hero-providers">
       <div class="orbit-hero-providers-label">Drives the agent CLI you already sign in to</div>
@@ -30,7 +38,7 @@ next: false
         <li>OpenCode</li>
         <li>Pi</li>
       </ul>
-      <p class="orbit-hero-providers-note">Gemini CLI remains as a legacy executor. <a href="/concepts/agents/">How agents are invoked →</a></p>
+      <p class="orbit-hero-providers-note"><a href="/concepts/agents/">How agents are invoked →</a></p>
     </div>
   </div>
 
@@ -40,6 +48,28 @@ next: false
       <figcaption class="orbit-demo-caption">Captured from the real dashboard on a live workspace, 2026-10-03. Counts are from that day.</figcaption>
     </figure>
     <script>
+      {
+        // Copy the hero install command. Clipboard access needs a secure
+        // context; without it, select the command so the reader can copy it.
+        const button = document.querySelector('.orbit-hero-install-copy');
+        const status = document.querySelector('.orbit-hero-install-status');
+        let timer;
+        button?.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(button.dataset.copy);
+          } catch {
+            getSelection().selectAllChildren(button.previousElementSibling);
+            return;
+          }
+          button.classList.add('is-copied');
+          status.textContent = 'Copied';
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            button.classList.remove('is-copied');
+            status.textContent = '';
+          }, 1600);
+        });
+      }
       {
         // Autoplay is the default; a reader who asks for reduced motion gets the
         // poster frame and the native controls instead.

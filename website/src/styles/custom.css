@@ -257,6 +257,7 @@ html:not([data-has-sidebar]) header.header {
 .orbit-hero > *,
 .orbit-hero-copy > *,
 .orbit-hero-actions > *,
+.orbit-hero-install > *,
 .orbit-hero-providers > *,
 .orbit-hero-providers-list > *,
 .orbit-demo > *,
@@ -358,6 +359,79 @@ html:not([data-has-sidebar]) header.header {
   color: var(--sl-color-black);
 }
 
+/* The install command under the hero CTAs, one click to copy. Sized to its
+   content so it reads as a command, not a third button. */
+.orbit-hero-install {
+  align-items: center;
+  background: var(--sl-color-bg-inline-code);
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+  max-width: 100%;
+  padding: 0.3rem 0.3rem 0.3rem 0.875rem;
+  width: fit-content;
+}
+
+.orbit-hero-install code {
+  background: none;
+  border: 0;
+  color: var(--sl-color-gray-1);
+  font-family: var(--sl-font-mono);
+  font-size: 0.875rem;
+  overflow-x: auto;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.orbit-hero-install-prompt {
+  color: var(--sl-color-gray-4);
+  margin-right: 0.6em;
+  user-select: none;
+}
+
+.orbit-hero-install-copy {
+  align-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--sl-color-gray-3);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2rem;
+}
+
+.orbit-hero-install-copy:hover,
+.orbit-hero-install-copy:focus-visible {
+  border-color: var(--sl-color-gray-5);
+  color: var(--sl-color-white);
+}
+
+.orbit-hero-install-copy .orbit-icon-check,
+.orbit-hero-install-copy.is-copied .orbit-icon-copy {
+  display: none;
+}
+
+.orbit-hero-install-copy.is-copied .orbit-icon-check {
+  color: var(--sl-color-text-accent);
+  display: block;
+}
+
+.orbit-hero-install-status {
+  border: 0;
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 /* The provider strip under the hero CTAs, naming the CLIs Orbit drives. Set
    apart by a hairline rather than typeset as a mono strip, so it reads as a
    fact about the product and not as a second headline. */
@@ -388,8 +462,7 @@ html:not([data-has-sidebar]) header.header {
   gap: 0.5rem 1.375rem;
 }
 
-/* Gemini is still shipped but is no longer the current Google terminal agent,
-   so it is named apart from the list rather than dropped or implied current. */
+/* A pointer under the provider list to how each CLI is invoked. */
 .orbit-landing .orbit-hero-providers-note {
   color: var(--sl-color-gray-4);
   font-size: 0.8125rem;
