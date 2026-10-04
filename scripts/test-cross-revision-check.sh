@@ -279,7 +279,7 @@ diff -u "$before" "$after" \
   || fail "the helper must not modify the source checkout (including .git mtimes)"
 [[ ! -e "$SRC/.git/index.lock" ]] || fail "the helper must not leave a Git index lock behind"
 
-# --- 6. Scratch state stays outside the checkout and outside Orbit state -----
+# --- 6. Explicit scratch authority preserves checkout and state boundaries ---
 
 out="$TMP/inside-repo.out"
 status="$(run_helper "$out" --workdir "$SRC/scratch" -- ./probe.sh)"
@@ -291,6 +291,108 @@ out="$TMP/orbit-state.out"
 status="$(run_helper "$out" --workdir "$TMP/.orbit/state/scratch" -- ./probe.sh)"
 assert_eq "$status" "1" "a workdir inside .orbit must be refused"
 assert_contains "$out" "must not be inside Orbit state" "the refusal should name Orbit state"
+[[ ! -e "$TMP/.orbit/state/scratch" ]] || fail "a refused state workdir must not be created"
+
+# Model the managed checkout's ancestor layout independently of the caller's
+# TMPDIR. Only its explicit .orbit/tmp root is scratch; .orbit/state remains live.
+host="$TMP/scratch-host"
+managed="$host/.orbit/state/worktrees/managed"
+scratch="$managed/.orbit/tmp"
+mkdir -p "$scratch" "$managed/.orbit/state" "$SRC/.orbit/tmp" "$SRC/subdir"
+git -c init.defaultBranch=main init -q "$managed"
+
+out="$TMP/authorized-scratch.out"
+work="$scratch/explicit"
+status="$(
+  export ORBIT_SCRATCH_DIR="$scratch" TMPDIR="$scratch"
+  run_helper "$out" --workdir "$work" \
+    --baseline-marker MARKER_BASELINE --candidate-marker MARKER_CANDIDATE -- ./probe.sh
+)"
+assert_eq "$status" "0" "explicit scratch beneath managed worktree ancestors must succeed"
+assert_contains "$work/baseline.log" "marker=MARKER_BASELINE" "authorized scratch runs the baseline revision"
+assert_contains "$work/candidate.log" "marker=MARKER_CANDIDATE" "authorized scratch runs the candidate revision"
+
+out="$TMP/automatic-scratch.out"
+status="$(
+  export ORBIT_SCRATCH_DIR="$scratch" TMPDIR="$scratch"
+  run_helper "$out" --baseline-marker MARKER_BASELINE --candidate-marker MARKER_CANDIDATE -- ./probe.sh
+)"
+assert_eq "$status" "0" "automatic workdirs must honor the same explicit scratch contract"
+auto_work="$(sed -n 's/^  workdir=//p' "$out")"
+[[ "$auto_work" == "$scratch/"* && ! -e "$auto_work" ]] \
+  || fail "a successful automatic run must use authorized scratch and clean up its workdir"
+assert_contains "$out" "marker=MARKER_BASELINE" "automatic scratch runs the baseline revision"
+assert_contains "$out" "marker=MARKER_CANDIDATE" "automatic scratch runs the candidate revision"
+
+# Each hostile path must fail before any extract, target, log or directory is
+# created. Resolve symlinks and existing '..' components before containment.
+ln -s "$managed/.orbit/state" "$scratch/state-link"
+ln -s "$SRC" "$scratch/source-link"
+ln -s "$managed/.orbit/state" "$managed/state-as-tmp"
+mkdir -p "$scratch/.orbit/tmp" "$scratch/.orbit/state"
+for refused in \
+  "$scratch" \
+  "$managed/.orbit/state/refused" \
+  "$managed/.orbit/tmp-sibling/refused" \
+  "$scratch/state-link/refused" \
+  "$scratch/source-link/refused" \
+  "$scratch/../state/refused" \
+  "$scratch/missing/../../state/refused" \
+  "$scratch/.orbit/tmp/refused" \
+  "$scratch/.orbit/state/refused"; do
+  out="$TMP/refused-scratch.out"
+  status="$(
+    export ORBIT_SCRATCH_DIR="$scratch"
+    run_helper "$out" --workdir "$refused" -- ./probe.sh
+  )"
+  assert_eq "$status" "1" "scratch authority must not permit $refused"
+  [[ ! -e "$managed/.orbit/state/refused" && ! -e "$SRC/refused" \
+    && ! -e "$managed/.orbit/tmp-sibling" && ! -e "$scratch/missing" \
+    && ! -e "$scratch/.orbit/tmp/refused" && ! -e "$scratch/.orbit/state/refused" \
+    && ! -e "$scratch/baseline.log" ]] || fail "a refused path must not create output"
+done
+
+for declared in "" "$managed/.orbit/state" "$managed/state-as-tmp" "$scratch/.orbit/tmp" "$SRC/.orbit/tmp"; do
+  out="$TMP/refused-authority.out"
+  status="$(
+    export ORBIT_SCRATCH_DIR="$declared"
+    run_helper "$out" --workdir "$scratch/undeclared" -- ./probe.sh
+  )"
+  assert_eq "$status" "1" "scratch authority must reject an absent, unsafe or unrelated root: $declared"
+  [[ ! -e "$scratch/undeclared" ]] || fail "invalid scratch authority must not create output"
+done
+
+out="$TMP/source-scratch.out"
+status="$(
+  export ORBIT_SCRATCH_DIR="$SRC/.orbit/tmp"
+  run_helper "$out" --workdir "$SRC/.orbit/tmp/refused" -- ./probe.sh
+)"
+assert_eq "$status" "1" "explicit scratch authority must not override source-checkout protection"
+assert_contains "$out" "must live outside the source checkout" "source refusal takes precedence over scratch authority"
+[[ ! -e "$SRC/.orbit/tmp/refused" ]] || fail "declared source scratch must not be written"
+
+out="$TMP/source-subdir.out"
+status="$(
+  export ORBIT_SCRATCH_DIR="$SRC/.orbit/tmp"
+  run_helper "$out" --repo "$SRC/subdir" --workdir "$SRC/.orbit/tmp/refused" -- ./probe.sh
+)"
+assert_eq "$status" "1" "selecting a source subdirectory must still protect the entire checkout"
+assert_contains "$out" "must live outside the source checkout" "source protection resolves the Git root"
+[[ ! -e "$SRC/.orbit/tmp/refused" ]] || fail "a source subdirectory must not permit sibling writes"
+
+for temp_root in "$managed/.orbit/state" "$SRC/.orbit/tmp"; do
+  out="$TMP/refused-automatic.out"
+  before="$TMP/automatic-before"
+  after="$TMP/automatic-after"
+  snapshot "$temp_root" >"$before"
+  status="$(
+    export ORBIT_SCRATCH_DIR="$scratch" TMPDIR="$temp_root"
+    run_helper "$out" -- ./probe.sh
+  )"
+  assert_eq "$status" "1" "automatic workdirs must refuse protected TMPDIR: $temp_root"
+  snapshot "$temp_root" >"$after"
+  diff -u "$before" "$after" || fail "refused automatic workdirs must not mutate their TMPDIR"
+done
 
 # A failed run with an auto-created workdir must retain its logs for diagnosis.
 out="$TMP/auto-workdir-failure.out"

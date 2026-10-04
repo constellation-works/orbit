@@ -249,7 +249,21 @@ scripts/cross-revision-check.sh \
 | `--expect-baseline` / `--expect-candidate` | An unexpected failure reported as an ordinary arm result |
 | Per-arm marker required, sibling marker rejected | A stale or foreign test set passing as this revision's |
 | Read-only Git access (`rev-parse`, `archive`, `GIT_OPTIONAL_LOCKS=0`) | Writes to a managed read-only `.git`, or a mutated source checkout |
-| `--workdir` refused inside the checkout or under `.orbit/` | Scratch trees landing in the state being validated |
+| Explicit and automatic workdirs refused inside the source checkout or Orbit state; only descendants of the declared `ORBIT_SCRATCH_DIR` are allowed beneath `.orbit/` | Scratch trees landing in the state being validated |
+
+In managed executors, use the injected `ORBIT_SCRATCH_DIR` and set `TMPDIR` to
+an existing run directory beneath it. The scratch root must resolve to an
+existing Git checkout's `.orbit/tmp`. The helper allows descendants of that
+root even when its checkout lives beneath `.orbit/state/worktrees`; it refuses
+the root itself, nested `.orbit` directories, sibling state paths and symlink
+or traversal escapes. `TMPDIR` alone does not authorize writing Orbit state.
+Both `--workdir` and automatic workdirs use these checks before creating output.
+
+The source selected by `--repo` is resolved to its entire Git checkout. That
+checkout remains immutable, including its own `.orbit/tmp`, even when declared
+as scratch. Use a separate source repository
+when the executor's only writable scratch lies inside its checkout, as the
+throwaway fixture does. The scratch contract does not grant sandbox access.
 
 Limits worth stating in a validation summary:
 
@@ -268,7 +282,8 @@ Limits worth stating in a validation summary:
 
 Regression fixtures for the helper — arm isolation, mtime normalization, cache
 opt-out, producer exit code through bounded output, read-only `.git`, and
-workdir containment — run in CI and locally:
+workdir containment (including managed scratch authority and protected TMPDIR)
+— run in CI and locally:
 
 ```bash
 make cross-revision-check-test
