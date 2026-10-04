@@ -107,6 +107,8 @@ pub fn workspace_friction_store(
 /// pre-claim pre-flight). A database newer than this binary opens read-only
 /// under the forward-compatibility contract (ORB-12434), which is not
 /// readiness for those callers — fail here rather than mid-run.
+/// Supported schemas must also pass a write-lock probe with rollback, so
+/// observational read-only opens cannot pass readiness.
 pub fn ensure_sqlite_store_ready(
     database: &std::path::Path,
 ) -> Result<(), orbit_common::OrbitError> {
@@ -124,7 +126,7 @@ pub fn ensure_sqlite_store_ready(
             forward.supported_version
         )));
     }
-    Ok(())
+    store.check_writable()
 }
 
 pub fn global_executor_def_store(root: PathBuf) -> Arc<dyn ExecutorDefStoreBackend> {
