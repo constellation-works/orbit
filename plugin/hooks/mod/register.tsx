@@ -32,6 +32,7 @@ import { pane } from './views/pane'
 
 const PANE = 'orbit'
 const AFTER_TURN_MIN_MS = 30_000
+const RETRY_EMPTY_MS = 5000
 const SHIP_POLL_MS = 5000
 const TASK_UPDATE = /(^|__)orbit_task_update$/
 const TASK_ID = /^[A-Z][A-Z0-9]{1,11}-\d{1,9}$/
@@ -65,6 +66,7 @@ let settings: Settings = { host: null, refreshMs: 180_000, commitTrailer: true, 
 let configError: string | null = null
 let cwd = ''
 let target: Target | null = null
+let locating: Promise<Target> | null = null
 let inFlight = false
 let lastRefreshAt = 0
 let shipTimer: Timer | null = null
@@ -72,6 +74,13 @@ let shipTimer: Timer | null = null
 /** Which workspace this session's checkout belongs to, and where its tasks are read. */
 async function locate($: EngineInterface): Promise<Target> {
   if (target !== null) return target
+  locating ??= findTarget($).finally(() => {
+    locating = null
+  })
+  return locating
+}
+
+async function findTarget($: EngineInterface): Promise<Target> {
   let shown: { name: string; role: string } | null = null
   try {
     const ran = await $.process.run(localArgv(['workspace', 'show', '--format', 'json']), { cwd, timeoutMs: 10_000 })
@@ -124,6 +133,18 @@ async function refresh($: EngineInterface): Promise<void> {
     inFlight = false
     await publishStatus($)
   }
+}
+
+/**
+ * Reads the workspace when nothing has been read yet. The read session.start
+ * starts can finish before the session is bound and its write go nowhere, so
+ * the band, the pane and the commands each ask again while the snapshot is empty.
+ */
+async function ensureLoaded($: EngineInterface): Promise<void> {
+  if (inFlight || configError !== null) return
+  if ((await read($, snapshotAtom)) !== null || (await read($, errorAtom)) !== null) return
+  if ((await $.clock.now()) - lastRefreshAt < RETRY_EMPTY_MS) return
+  void refresh($)
 }
 
 async function say($: EngineInterface, text: string | null): Promise<void> {
@@ -333,7 +354,7 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if ((await $.clock.now()) - lastRefreshAt > AFTER_TURN_MIN_MS) void refresh($)
+    if ((await read($, snapshotAtom)) === null || (await $.clock.now()) - lastRefreshAt > AFTER_TURN_MIN_MS) void refresh($)
     return result
   })
 
@@ -341,12 +362,14 @@ export const register: Register = (on, options) => {
     const id = e.args.trim()
     if (TASK_ID.test(id)) await update($, selectedAtom, () => id)
     const isPlaced = await openPane($, 'board')
+    await ensureLoaded($)
     return { text: isPlaced ? 'Orbit board opened.' : 'The Orbit board opens once the terminal is wide enough.' }
   })
 
   on('command.run', { command: 'orbit-ship' }, async ($, e) => {
     const id = e.args.trim()
     await openPane($, 'ship')
+    await ensureLoaded($)
     if (!TASK_ID.test(id)) return { text: 'Orbit ship pane opened.' }
     await prepareShip($, id)
     return { text: `Ship preflight for ${id} is in the Orbit pane.` }
@@ -354,6 +377,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'orbit-map' }, async $ => {
     await openPane($, 'map')
+    await ensureLoaded($)
     return { text: 'Orbit map opened.' }
   })
 
@@ -404,7 +428,10 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || settings.band === 'off' || (await read($, isBandHiddenAtom))) return next(e)
     const snapshot = await read($, snapshotAtom)
     const error = configError ?? (await read($, errorAtom))
-    if (snapshot === null && error === null) return next(e)
+    if (snapshot === null && error === null) {
+      await ensureLoaded($)
+      return next(e)
+    }
     return band(
       $.ui.resolve(e),
       {
@@ -422,6 +449,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const table = $.ui.resolve(e)
+    await ensureLoaded($)
     return pane(
       table,
       {
