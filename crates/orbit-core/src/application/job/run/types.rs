@@ -28,7 +28,9 @@ pub struct JobRunCancelResult {
     /// `already_terminal` when the run reached a durable terminal outcome
     /// before this request could do so, or `cancelling` when a pull drain
     /// stopped admitting and is waiting for its launched leaves before it
-    /// ends `cancelled` on its own.
+    /// ends `cancelled` on its own. This describes the parent run; callers
+    /// must also inspect `unstopped_leaves` and `unstopped_children` before
+    /// treating a forced cancellation as complete.
     pub outcome: String,
     pub previous_state: String,
     pub final_state: String,
@@ -54,6 +56,25 @@ pub struct JobRunCancelResult {
     /// Their claims were not handed back: the owner keeps each until the
     /// leaf is seen to stop. Any entry makes the forced cancel a failure.
     pub unstopped_leaves: Vec<UnstoppedLeaf>,
+    /// Detached local-drain children whose stop could not be confirmed.
+    /// Any entry makes the forced cancel incomplete.
+    pub unstopped_children: Vec<UnstoppedChild>,
+}
+
+/// A detached child a forced local-drain cancel could not confirm stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UnstoppedChild {
+    pub child_run_id: String,
+    /// Why the child could not be confirmed stopped.
+    pub reason: String,
+}
+
+impl UnstoppedChild {
+    /// One line for a terminal report.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!("{}: {}", self.child_run_id, self.reason)
+    }
 }
 
 /// A claimed leaf a forced drain cancel could not confirm it stopped.

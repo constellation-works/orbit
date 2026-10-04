@@ -417,6 +417,7 @@ pub(super) async fn cancel_run_action(
             "waiting_leaves": result.waiting_leaves,
             "forced_runs": result.forced_runs,
             "unstopped_leaves": result.unstopped_leaves,
+            "unstopped_children": result.unstopped_children,
         }))
         .into_response(),
         Ok(Err(orbit_core::OrbitError::JobValidation(msg)))

@@ -721,6 +721,7 @@ pub(super) fn cancellation_result(
         waiting_leaves: Vec::new(),
         forced_runs: Vec::new(),
         unstopped_leaves: Vec::new(),
+        unstopped_children: Vec::new(),
     }
 }
 

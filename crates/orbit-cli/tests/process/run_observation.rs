@@ -1180,3 +1180,105 @@ fn run_show_exposes_degraded_pull_pass_health() {
 
 #[cfg(unix)]
 mod agent_invoke;
+
+/// A partial forced cancellation keeps its structured result on stdout and
+/// exits unsuccessfully in both JSON and terminal modes.
+#[test]
+fn force_cancel_reports_unstopped_local_children_and_exits_one() {
+    const MARKER: &str = "ORBIT_TEST_LOCAL_CANCEL_CHILD";
+    if std::env::var_os(MARKER).is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        let output = command
+            .args([
+                "--exact",
+                "run_observation::force_cancel_reports_unstopped_local_children_and_exits_one",
+                "--nocapture",
+            ])
+            .env(MARKER, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+    for as_json in [true, false] {
+        let fixture = Fixture::init();
+        let runtime = orbit_core::OrbitRuntime::from_roots(
+            &fixture.home.join(".orbit"),
+            &fixture.work.join(".orbit"),
+        )
+        .unwrap();
+        let drain = "jrun-cli-force-local";
+        let failed = "jrun-cli-unstopped-child";
+        let stopped = "jrun-cli-stopped-child";
+        let now = chrono::Utc::now();
+        for (id, job, state) in [
+            (drain, "workspace_auto_pipeline", "pending"),
+            (failed, "task_auto_pipeline", "running"),
+            (stopped, "task_auto_pipeline", "pending"),
+        ] {
+            // A live, unverified PID prevents orphan reconciliation. Pending
+            // runs need no signal; the running child cannot be confirmed gone.
+            fixture.db().execute(
+                "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,?4,?5,?5,?5,?6)",
+                params![id, fixture.workspace_id(), job, state, now.to_rfc3339(), std::process::id()],
+            ).unwrap();
+        }
+        let mut state = orbit_types::workflow::PipelineState::new(
+            drain.into(),
+            "workspace_auto_pipeline".into(),
+            serde_json::json!({}),
+        );
+        for child in [failed, stopped] {
+            state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
+                child.into(),
+                "task_auto_pipeline".into(),
+                "dispatch".into(),
+                false,
+                false,
+                now,
+            ));
+        }
+        runtime.write_run_state(drain, &state).unwrap();
+        let mut command = fixture.orbit();
+        command.args(["run", "cancel", drain, "--confirm", "--force"]);
+        if as_json {
+            command.arg("--json");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        if as_json {
+            let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(body["outcome"], "cancelled");
+            assert_eq!(body["final_state"], "cancelled");
+            assert_eq!(body["forced_runs"], serde_json::json!([stopped]));
+            assert_eq!(body["unstopped_children"][0]["child_run_id"], failed);
+            assert!(
+                body["unstopped_children"][0]["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("could not confirm")
+            );
+        } else {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for value in [drain, stopped, failed, "could not confirm"] {
+                assert!(text.contains(value), "missing {value}: {text}");
+            }
+        }
+        assert_eq!(fixture.run_state(drain), "cancelled");
+        assert_eq!(fixture.run_state(stopped), "cancelled");
+        assert_eq!(fixture.run_state(failed), "running");
+    }
+}

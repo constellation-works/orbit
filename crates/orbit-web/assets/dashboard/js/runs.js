@@ -302,18 +302,21 @@ function cancelNoticeFor(run, result) {
   const waiting = Array.isArray(result && result.waiting_leaves) ? result.waiting_leaves.length : 0;
   const forced = Array.isArray(result && result.forced_runs) ? result.forced_runs.length : 0;
   const unstopped = Array.isArray(result && result.unstopped_leaves) ? result.unstopped_leaves.length : 0;
+  const children = Array.isArray(result && result.unstopped_children) ? result.unstopped_children : [];
   const cancelling = result && result.outcome === "cancelling";
-  if (!settlements.text && !cancelling && forced === 0 && unstopped === 0) return null;
-  const notStopped = unstopped > 0
+  if (!settlements.text && !cancelling && forced === 0 && unstopped === 0 && children.length === 0) return null;
+  const notStopped = (unstopped > 0
     ? ` Could not confirm ${unstopped} leaves stopped; their claims stay with the owner.`
-    : "";
+    : "") + (children.length > 0
+      ? ` Could not confirm detached children stopped: ${children.map((child) => `${child.child_run_id}: ${child.reason}`).join("; ")}.`
+      : "");
   const head = cancelling
     ? `${run.run_id} cancelling: waiting for ${waiting} leaves.`
     : `${run.run_id} cancelled.${forced > 0 ? ` Stopped ${forced} running.` : ""}${notStopped}`;
   return {
     key: runIdentity(run),
     text: settlements.text ? `${head} Settlements: ${settlements.text}.` : head,
-    attention: settlements.attention || unstopped > 0,
+    attention: settlements.attention || unstopped > 0 || children.length > 0,
   };
 }
 

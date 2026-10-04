@@ -18,7 +18,8 @@
 //!   confirmed keeps its claim (`unstopped_leaves`). If the drain worker
 //!   itself cannot be confirmed stopped, cancellation fails before finalizing
 //!   the drain or changing its carried claims. A local auto drain's
-//!   `--force` also stops the children its cancel would otherwise detach.
+//!   `--force` also stops the children its cancel would otherwise detach,
+//!   reporting unconfirmed stops in `unstopped_children`.
 //!
 //! A drain that is queued, or whose worker is conclusively gone, has nothing
 //! to wait for and is cancelled at once; its unlaunched claims are released
@@ -39,7 +40,7 @@ use super::actions::cancellation_result;
 use super::owner::{
     RunOwnerLiveness, run_owner_liveness, run_owner_unstoppable_reason, signal_run_owner_confirmed,
 };
-use super::types::{JobRunCancelResult, UnstoppedLeaf};
+use super::types::{JobRunCancelResult, UnstoppedChild, UnstoppedLeaf};
 use crate::OrbitRuntime;
 use crate::application::distributed::PULL_DRAIN_JOB;
 
@@ -390,23 +391,42 @@ impl OrbitRuntime {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let mut result = self.cancel_job_run_with_reason(&run.run_id, actor, source, reason)?;
+        let mut result = self.cancel_job_run_cascading(
+            &run.run_id,
+            actor,
+            source,
+            reason,
+            signal_run_owner_confirmed,
+            0,
+        )?;
         for child in children {
-            let live = self
-                .get_job_run_backend(&child)?
-                .is_some_and(|child| !child.state.is_terminal());
-            if !live {
-                continue;
-            }
-            match self.cancel_job_run_with_reason(&child, actor, source, reason) {
-                Ok(_) => result.forced_runs.push(child),
-                Err(error) => tracing::warn!(
-                    target: "orbit.core.job_run",
-                    drain = %run.run_id,
-                    child = %child,
-                    %error,
-                    "forced drain cancel could not cancel a detached child",
-                ),
+            // Keep every child's failure in the result, including unreadable
+            // or missing run records, and continue stopping its siblings.
+            match self.cancel_job_run_cascading(
+                &child,
+                actor,
+                source,
+                reason,
+                signal_run_owner_confirmed,
+                0,
+            ) {
+                Ok(cancelled) if cancelled.outcome == "cancelled" => {
+                    result.forced_runs.push(child);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        target: "orbit.core.job_run",
+                        drain = %run.run_id,
+                        child = %child,
+                        %error,
+                        "forced drain cancel could not confirm a detached child stopped",
+                    );
+                    result.unstopped_children.push(UnstoppedChild {
+                        child_run_id: child,
+                        reason: error.to_string(),
+                    });
+                }
             }
         }
         Ok(result)

@@ -572,7 +572,13 @@ reports the transport error); `--force` ends it, and anything undelivered stays
 recorded for the retry below.
 
 For the owner's local drain (`orbit run auto`), cancel still detaches the task
-runs it started, which finish on their own; `--force` cancels them too.
+runs it started, which finish on their own; `--force` cancels them too. Stops
+are confirmed before each child is finalized. An unconfirmed stop is reported
+under `unstopped_children` with the child run ID and reason; the CLI exits 1
+and the dashboard flags the incomplete cancellation. The parent and children
+that were successfully stopped remain reported as cancelled and `forced_runs`
+respectively. The MCP forced-stop control also fails if a detached child
+cannot be confirmed stopped.
 
 The dashboard reports the same `pull_settlements` list after **Stop** and
 after **cancel**: a one-line summary counting each outcome, with any

@@ -47,5 +47,5 @@ pub use projection::{
     ActivityInvocationEvidence, job_run_to_json, job_run_to_json_with_activity_provenance,
     run_error_step,
 };
-pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedLeaf};
+pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild, UnstoppedLeaf};
 pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};

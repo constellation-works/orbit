@@ -30,7 +30,8 @@ makes the command exit 1. A queued drain, or one whose worker is gone, is \
 cancelled at once. Cancelling a drain that already ended delivers whatever it \
 left behind, and `--force` also stops leaves it left running.\n\n\
 `--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the \
-task runs it started, which a plain cancel leaves running. For any other run \
+task runs it started, which a plain cancel leaves running. A child whose stop \
+cannot be confirmed is listed with its reason and makes the command exit 1. For any other run \
 it changes nothing.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
@@ -77,6 +78,7 @@ impl Execute for RunCancelArgs {
             "waiting_leaves": result.waiting_leaves,
             "forced_runs": result.forced_runs,
             "unstopped_leaves": result.unstopped_leaves,
+            "unstopped_children": result.unstopped_children,
         });
         let mut lines = Vec::new();
         if result.outcome == "cancelling" {
@@ -121,21 +123,35 @@ impl Execute for RunCancelArgs {
         lines.extend(super::support::pull_settlement_lines(
             &result.pull_settlements,
         ));
-        if result.unstopped_leaves.is_empty() {
+        if result.unstopped_leaves.is_empty() && result.unstopped_children.is_empty() {
             return Ok(Payload::detail(doc, lines.join("\n")).into());
         }
-        // The drain is cancelled, but these leaves may still be running and
-        // their owners still hold the claims: the forced cancel failed.
-        lines.push(format!(
-            "not stopped with --force ({} leaves; their claims stay with the owner):",
-            result.unstopped_leaves.len()
-        ));
-        lines.extend(
-            result
-                .unstopped_leaves
-                .iter()
-                .map(|leaf| format!("  {}", leaf.describe())),
-        );
+        // The parent is cancelled, but any unconfirmed leaf or detached
+        // child makes the forced request incomplete.
+        if !result.unstopped_leaves.is_empty() {
+            lines.push(format!(
+                "not stopped with --force ({} leaves; their claims stay with the owner):",
+                result.unstopped_leaves.len()
+            ));
+            lines.extend(
+                result
+                    .unstopped_leaves
+                    .iter()
+                    .map(|leaf| format!("  {}", leaf.describe())),
+            );
+        }
+        if !result.unstopped_children.is_empty() {
+            lines.push(format!(
+                "not stopped with --force ({} detached children):",
+                result.unstopped_children.len()
+            ));
+            lines.extend(
+                result
+                    .unstopped_children
+                    .iter()
+                    .map(|child| format!("  {}", child.describe())),
+            );
+        }
         Ok(Payload::detail(doc, lines.join("\n"))
             .with_exit_code(1)
             .into())
