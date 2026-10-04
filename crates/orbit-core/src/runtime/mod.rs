@@ -27,6 +27,7 @@ pub mod event_bus;
 pub(crate) mod friction;
 #[cfg(target_os = "linux")]
 pub(crate) mod git_sandbox;
+pub mod host_resource;
 pub mod host_signal;
 pub mod mutation;
 mod orbit_runtime;

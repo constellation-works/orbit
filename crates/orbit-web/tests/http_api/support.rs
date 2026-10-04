@@ -161,6 +161,14 @@ impl Fixture {
     }
 
     pub(super) fn server(&self, operator: bool) -> Server {
+        self.server_impl(operator, false)
+    }
+
+    pub(super) fn resource_server(&self) -> Server {
+        self.server_impl(false, true)
+    }
+
+    fn server_impl(&self, operator: bool, resources: bool) -> Server {
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -172,6 +180,10 @@ impl Fixture {
             .args(["--ignored", "--exact", "server_child", "--nocapture"])
             .env(FIXTURE_ROOT, self.temp.path())
             .env("ORBIT_HTTP_PORT", port.to_string())
+            .env(
+                "ORBIT_HTTP_RESOURCE_FIXTURE",
+                if resources { "1" } else { "0" },
+            )
             .env("ORBIT_HTTP_OPERATOR", if operator { "1" } else { "0" })
             .env("ORBIT_LOG_PATH", self.path("process.log"))
             .stdout(Stdio::from(File::create(&log).unwrap()))
@@ -298,7 +310,45 @@ pub(super) fn serve_fixture() {
         workspace: Some("fixture".into()),
         operator: std::env::var("ORBIT_HTTP_OPERATOR").unwrap() == "1",
     };
-    orbit_web::serve_from_env(args, Some(&root.join("global"))).unwrap();
+    if std::env::var("ORBIT_HTTP_RESOURCE_FIXTURE").as_deref() == Ok("1") {
+        use orbit_core::runtime::host_resource::{
+            DiskSample, HostResourceProbe, HostResourceSample,
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Probe(AtomicUsize);
+        impl HostResourceProbe for Probe {
+            fn sample(&self, paths: &[PathBuf]) -> HostResourceSample {
+                let phase = self.0.fetch_add(1, Ordering::SeqCst);
+                HostResourceSample {
+                    sampled_at: Utc::now()
+                        - chrono::Duration::seconds(match phase {
+                            0 => 10,
+                            1 => 5,
+                            4.. => 20,
+                            _ => 0,
+                        }),
+                    cpu_percent: (phase != 3).then_some(95.0),
+                    memory_percent: Some(50.0),
+                    disks: paths
+                        .iter()
+                        .map(|path| DiskSample {
+                            path: path.clone(),
+                            used_percent: Some(40.0),
+                        })
+                        .collect(),
+                }
+            }
+        }
+        let runtime = OrbitRuntime::in_memory()
+            .unwrap()
+            .with_host_resource_probe(Arc::new(Probe(AtomicUsize::new(0))));
+        orbit_web::serve(&runtime, args).unwrap();
+    } else {
+        orbit_web::serve_from_env(args, Some(&root.join("global"))).unwrap();
+    }
 }
 
 pub(super) fn write_json(path: &Path, value: Value) {

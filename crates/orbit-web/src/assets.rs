@@ -42,6 +42,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/vendor/purify.min.js"),
     ),
     (
+        "/static/js/host-resources.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/host-resources.js"),
+    ),
+    (
         "/static/app.js",
         JS,
         include_bytes!("../assets/dashboard/app.js"),

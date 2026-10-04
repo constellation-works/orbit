@@ -38,3 +38,21 @@ fn dashboard_markdown_call_sites_use_sanitizing_wrapper() {
         "plugin source must not be assigned as raw innerHTML"
     );
 }
+
+#[test]
+fn host_resource_asset_executes_pressure_unknown_and_recovery_states() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "src/tests/dashboard_host_resources.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard asset behavior fixture");
+    assert!(
+        result.status.success(),
+        "dashboard host resource behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}

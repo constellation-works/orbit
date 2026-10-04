@@ -372,6 +372,7 @@ pub(crate) struct OrbitRuntimeSettings {
     /// Opt-in for unattended ship dispatch
     /// (`[workflow] auto_ship` in `config.toml`, default `false`).
     workflow_auto_ship: bool,
+    resource_throttle: orbit_config::ResourceThrottleSettings,
     /// Commands this owner requires a distributed execution claim to pass on
     /// its exact candidate before the delivery handoff is accepted
     /// (`[workflow] required_validation_commands`, default empty).
@@ -405,6 +406,7 @@ impl OrbitRuntimeSettings {
         pr_config: PrConfig,
         workflow_base_branch: String,
         workflow_auto_ship: bool,
+        resource_throttle: orbit_config::ResourceThrottleSettings,
         workflow_required_validation_commands: Vec<String>,
         workflow_distributed_completion: String,
         task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
@@ -424,6 +426,7 @@ impl OrbitRuntimeSettings {
             pr_config,
             workflow_base_branch,
             workflow_auto_ship,
+            resource_throttle,
             workflow_required_validation_commands,
             workflow_distributed_completion,
             task_pilot_freshness,
@@ -455,6 +458,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn workflow_base_branch(&self) -> &str {
         &self.workflow_base_branch
+    }
+
+    pub(crate) fn resource_throttle(&self) -> &orbit_config::ResourceThrottleSettings {
+        &self.resource_throttle
     }
 
     pub(crate) fn workflow_auto_ship(&self) -> bool {

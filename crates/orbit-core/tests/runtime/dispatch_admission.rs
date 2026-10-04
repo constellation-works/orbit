@@ -36,7 +36,7 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(120);
 /// Run `test` alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. The parent
 /// waits up to [`CHILD_DEADLINE`] and reaps the child on any exit.
-fn isolated(test: &str) -> bool {
+pub(super) fn isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_DISPATCH_ADMISSION_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
@@ -45,10 +45,14 @@ fn isolated(test: &str) -> bool {
     let stdout_path = home.path().join("stdout.log");
     let stderr_path = home.path().join("stderr.log");
     // libtest names a test by its module path below the crate root.
-    let qualified = format!(
-        "{}::{test}",
-        module_path!().split_once("::").expect("test module").1
-    );
+    let qualified = if test.contains("::") {
+        test.to_string()
+    } else {
+        format!(
+            "{}::{test}",
+            module_path!().split_once("::").expect("test module").1
+        )
+    };
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);

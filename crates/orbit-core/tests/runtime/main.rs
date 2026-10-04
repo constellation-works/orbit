@@ -12,3 +12,5 @@ mod dispatch_admission;
 mod distributed_drain;
 mod relation_auto_close;
 mod sandbox_off;
+
+mod host_resources;
