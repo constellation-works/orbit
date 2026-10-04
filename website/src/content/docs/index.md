@@ -10,51 +10,48 @@ next: false
 
 <section class="orbit-hero">
   <div class="orbit-hero-copy">
-    <div class="orbit-hero-claim">
-      <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>See what shipped in the latest release</span><span aria-hidden="true">→</span></a>
-      <h1 id="_top" class="orbit-hero-headline">Your agent files the work. Orbit ships it. <span class="orbit-hero-headline-muted">You review the pull request.</span></h1>
+    <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>See what shipped in the latest release</span><span aria-hidden="true">→</span></a>
+    <h1 id="_top" class="orbit-hero-headline">Your agent files the work. Orbit ships it. <span class="orbit-hero-headline-muted">You review the pull request.</span></h1>
+    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask for a change in the agent you already use; Orbit turns it into a scoped task, runs it in an isolated worktree, and hands back a pull request with every step on the record.</p>
+    <div class="orbit-hero-actions">
+      <a class="orbit-button primary" href="/getting-started/">Get started →</a>
+      <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
     </div>
-    <div class="orbit-hero-pitch">
-      <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask for a change in the agent you already use; Orbit turns it into a scoped task, runs it in an isolated worktree, and hands back a pull request with every step on the record.</p>
-      <div class="orbit-hero-actions">
-        <a class="orbit-button primary" href="/getting-started/">Get started →</a>
-        <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
-      </div>
-      <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
+    <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
+    <div class="orbit-hero-providers">
+      <div class="orbit-hero-providers-label">Drives the agent CLI you already sign in to</div>
+      <ul class="orbit-hero-providers-list">
+        <li>Claude Code</li>
+        <li>Codex</li>
+        <li>Antigravity</li>
+        <li>Grok</li>
+        <li>Copilot</li>
+        <li>Cursor</li>
+        <li>OpenCode</li>
+        <li>Pi</li>
+      </ul>
+      <p class="orbit-hero-providers-note">Gemini CLI remains as a legacy executor. <a href="/concepts/agents/">How agents are invoked →</a></p>
     </div>
   </div>
 
-  <figure class="orbit-demo">
-    <video class="orbit-demo-video" src="/media/orbit-demo.mp4" poster="/media/orbit-demo-poster.jpg" width="1920" height="1080" autoplay controls muted loop playsinline preload="auto" aria-label="Illustrative 31-second session. On the left, your agent CLI; on the right, the task Orbit holds. You ask for the fsProfile lookup to be documented, and orbit.task.add files it as proposed with acceptance criteria and a file scope. You say yes; orbit.task.update moves it to backlog. orbit.workflow.ship runs it in an isolated worktree under file locks through plan, execute and review, ending with a pull request opened and the task in review; the merge stays yours. orbit run auto then drains three tasks in parallel while a fourth waits on a file lock. Finally orbit task show prints the task record and git log shows the task ID on the commit."></video>
-    <figcaption class="orbit-demo-caption">Illustrative session, not captured output. Tool names, states and steps are real; identifiers are placeholders.</figcaption>
-  </figure>
-  <script>
-    {
-      // Autoplay is the default; a reader who asks for reduced motion gets the
-      // poster frame and the native controls instead.
-      const video = document.querySelector('.orbit-demo-video');
-      const reduce = matchMedia('(prefers-reduced-motion: reduce)');
-      const sync = () => (reduce.matches ? video.pause() : video.play().catch(() => {}));
-      if (video) {
-        if (reduce.matches) video.pause();
-        reduce.addEventListener('change', sync);
+  <div class="orbit-hero-side">
+    <figure class="orbit-demo">
+      <video class="orbit-demo-video" src="/media/orbit-dashboard-tour.mp4" poster="/media/orbit-dashboard-tour-poster.jpg" width="1320" height="1100" autoplay controls muted loop playsinline preload="auto" aria-label="A 37-second tour of the real Orbit dashboard on a live workspace. Proposed tasks wait for your approval. An auto-drain runs four tasks in parallel, limit eight, while overlapping work waits on file locks. A task's durable record shows the why, its properties and the job run that executed it. The run list shows 12,796 runs, newest first. A pull-request pipeline run steps from an isolated worktree through implement, commit, review gate and push to pr_open in 31 minutes 46 seconds. The audit log counts 41,598 tool calls in 24 hours, 0.3 percent failed. A scoreboard compares Codex, Claude, Grok and Gemini."></video>
+      <figcaption class="orbit-demo-caption">Captured from the real dashboard on a live workspace, 2026-10-03. Counts are from that day.</figcaption>
+    </figure>
+    <script>
+      {
+        // Autoplay is the default; a reader who asks for reduced motion gets the
+        // poster frame and the native controls instead.
+        const video = document.querySelector('.orbit-demo-video');
+        const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+        const sync = () => (reduce.matches ? video.pause() : video.play().catch(() => {}));
+        if (video) {
+          if (reduce.matches) video.pause();
+          reduce.addEventListener('change', sync);
+        }
       }
-    }
-  </script>
-
-  <div class="orbit-hero-providers">
-    <div class="orbit-hero-providers-label">Drives the agent CLI you already sign in to</div>
-    <ul class="orbit-hero-providers-list">
-      <li>Claude Code</li>
-      <li>Codex</li>
-      <li>Antigravity</li>
-      <li>Grok</li>
-      <li>Copilot</li>
-      <li>Cursor</li>
-      <li>OpenCode</li>
-      <li>Pi</li>
-    </ul>
-    <p class="orbit-hero-providers-note">Gemini CLI remains as a legacy executor. <a href="/concepts/agents/">How agents are invoked →</a></p>
+    </script>
   </div>
 </section>
 
