@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::spawn::SpawnError;
 
@@ -152,6 +152,15 @@ fn supported_system_bin_dirs() -> impl Iterator<Item = PathBuf> {
     SUPPORTED_SYSTEM_BIN_DIRS.iter().map(PathBuf::from)
 }
 
+/// Whether `program` names a launcher without parent-directory traversal:
+/// a bare name searched in the launcher directories, or an explicit path that
+/// stays where it is spelled. Neither may step out through `..`.
+fn launcher_program_is_plain(program: &str) -> bool {
+    Path::new(program)
+        .components()
+        .all(|component| !matches!(component, Component::ParentDir))
+}
+
 fn is_launchable_file(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
@@ -200,6 +209,11 @@ fn resolve_provider_launcher_with_extra_dirs(
     cwd: Option<&Path>,
     extra_bin_dirs: impl IntoIterator<Item = PathBuf>,
 ) -> Result<String, SpawnError> {
+    if !launcher_program_is_plain(program) {
+        return Err(SpawnError::permanent(format!(
+            "provider launcher `{program}` for provider `{provider}` must not contain parent-directory traversal"
+        )));
+    }
     let configured = Path::new(program);
     if configured.components().count() > 1 {
         return Ok(program.to_string());

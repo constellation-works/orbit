@@ -221,6 +221,15 @@ extensions:
           "path-injection",
           "manual",
         ]
+      # Recovery run ids are refused unless they are non-empty ASCII
+      # alphanumerics, `-` and `_`, so the checkout is one leaf directly under
+      # the state dir's recovery-checkouts directory.
+      - [
+          "orbit_core::application::task::blocked_recovery::recovery_checkout_path",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
   - addsTo:
       pack: codeql/rust-all
       extensible: barrierGuardModel
@@ -262,6 +271,15 @@ extensions:
         ]
       - [
           "orbit_tools::plugin::callback::is_token_hex",
+          "Argument[0]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+      # Provider launcher names and explicit launcher paths may not contain
+      # parent-directory traversal; dispatch refuses them before any lookup.
+      - [
+          "orbit_engine::activity_job::cli_runner::launcher::launcher_program_is_plain",
           "Argument[0]",
           "true",
           "path-injection",

@@ -709,3 +709,53 @@ fn an_empty_crew_pool_turns_the_backstop_off() {
     assert!(tick.dispatched.is_empty());
     assert!(runtime.blocked_task_recovery_disabled_reason().is_some());
 }
+
+#[test]
+fn a_recovery_checkout_never_resolves_outside_its_directory() {
+    if !enter_isolated_child(
+        module_path!(),
+        "a_recovery_checkout_never_resolves_outside_its_directory",
+    ) {
+        return;
+    }
+    let (_root, runtime) = recovery_runtime(r#"["implementer"]"#);
+    let state_dir = runtime.paths().state_dir.clone();
+    let outside = state_dir.join("outside");
+    std::fs::create_dir_all(outside.join("keep")).expect("create outside dir");
+    let head = run_git(&runtime.paths().repo_root, &["rev-parse", "HEAD"]).expect("rev-parse");
+    let head = head.stdout.trim().to_string();
+
+    for hostile in ["../outside", "..", "a/../../outside", "/tmp", ""] {
+        assert!(
+            matches!(
+                runtime.remove_recovery_checkout(hostile),
+                Err(OrbitError::InvalidInput(_))
+            ),
+            "removal must refuse run id {hostile:?}"
+        );
+        assert!(
+            matches!(
+                runtime.create_recovery_checkout(hostile, &head),
+                Err(OrbitError::InvalidInput(_))
+            ),
+            "creation must refuse run id {hostile:?}"
+        );
+    }
+    assert!(
+        outside.join("keep").is_dir(),
+        "a refused run id leaves directories outside the recovery checkouts alone"
+    );
+
+    let checkout = runtime
+        .create_recovery_checkout("jrun-legit_1", &head)
+        .expect("create checkout");
+    let checkouts = state_dir
+        .join("recovery-checkouts")
+        .canonicalize()
+        .expect("checkouts dir");
+    assert_eq!(checkout.parent(), Some(checkouts.as_path()));
+    runtime
+        .remove_recovery_checkout("jrun-legit_1")
+        .expect("remove checkout");
+    assert!(!checkout.exists());
+}
