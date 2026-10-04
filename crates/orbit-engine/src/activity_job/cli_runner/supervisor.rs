@@ -62,7 +62,7 @@ use wait_timeout::ChildExt;
 /// Default wall-clock timeout when `AgentLoopSpec::wall_clock_timeout_seconds`
 /// is zero. Matches §7.6 guidance: CLI subprocesses must have a mandatory
 /// wall-clock guard.
-pub(super) const DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS: u64 = 300;
+pub(crate) const DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS: u64 = 300;
 
 type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
 

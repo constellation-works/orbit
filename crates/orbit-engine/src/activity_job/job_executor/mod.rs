@@ -58,6 +58,7 @@ mod fan_out;
 mod loop_block;
 mod parallel;
 mod recovery;
+mod reviewer;
 mod step;
 mod target;
 mod templating;

@@ -16,7 +16,9 @@ use orbit_types::task::{
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::workflow::ActivityToolDenyPolicy;
 use orbit_types::workflow::activity_job::Provider;
-use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    JobRun, JobRunStartOutcome, JobRunState, PipelineState, ReviewerInvocationEvent,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -118,6 +120,27 @@ pub struct ReviewLandingRequest {
     pub managed_merge: bool,
     /// The merge commit the provider reported, when it reported one.
     pub landed_commit: Option<String>,
+}
+
+/// A review attempt whose reviewer step failed or whose run is ending
+/// without a settled verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewReleaseRequest {
+    /// The run closing the attempt; its own reviewer runtime is charged.
+    pub run_id: String,
+    pub lineage_key: String,
+    pub attempt_id: String,
+}
+
+/// A before-PR reviewer invocation starting or ending for its attempt, so
+/// the lineage is charged reviewer process runtime only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerInvocationRequest {
+    /// The run executing the reviewer step.
+    pub run_id: String,
+    pub lineage_key: String,
+    pub attempt_id: String,
+    pub event: ReviewerInvocationEvent,
 }
 
 /// Trusted execution facts for one claimed distributed leaf [ORB-12616].
@@ -485,6 +508,23 @@ pub trait RuntimeHost: Send + Sync {
     /// Record how a reviewed candidate actually landed after a managed
     /// merge. Hosts without review evidence keep the pre-existing behavior.
     fn record_review_landing(&self, _request: &ReviewLandingRequest) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    /// Close a review attempt that ended without a verdict, charging the
+    /// reviewer runtime spent, so a failed or terminated reviewer step never
+    /// leaves its attempt open. Hosts without review evidence have nothing
+    /// to close.
+    fn release_review_attempt(&self, _request: &ReviewReleaseRequest) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    /// Record a reviewer invocation starting or ending for its attempt.
+    /// Hosts without review evidence have nothing to charge.
+    fn record_reviewer_invocation(
+        &self,
+        _request: &ReviewerInvocationRequest,
+    ) -> Result<(), OrbitError> {
         Ok(())
     }
 

@@ -22,6 +22,7 @@ use crate::runtime::engine::crew::enforce_crew_allowlist;
 
 use super::context::{GateContext, admitted_run_id, not_applicable};
 use super::judgement::write_artifact;
+use super::release::release_abandoned;
 
 /// Admit a reviewer for the committed, base-synchronized candidate.
 ///
@@ -38,6 +39,16 @@ pub(crate) fn review_gate_admit(
         action: action.to_string(),
         message,
     };
+    let refused = |message: String| DispatchError::DeterministicActionRefused {
+        action: action.to_string(),
+        message,
+    };
+    // A capability or budget refusal is a decision a retry would only
+    // repeat; everything else (Git, store contention) may be transient.
+    let refused_or_failed = |error: OrbitError| match error {
+        OrbitError::CapabilityDenied(message) => refused(message),
+        other => failed(other.to_string()),
+    };
     // A run without a captured review admission predates the policy or was
     // never a delivery submission: it keeps the pre-existing behavior and
     // never loads tasks or Git state for a gate that cannot apply.
@@ -45,11 +56,34 @@ pub(crate) fn review_gate_admit(
     // `job_run_id`, which a caller may spell as a stable worktree token that
     // has no run record [ORB-11520].
     let run_id = admitted_run_id(input).map_err(|error| failed(error.to_string()))?;
+    let rebase = match input.get("re_review_after").and_then(Value::as_str) {
+        Some(step_id) => match completion_rebase(runtime, &run_id, step_id, input)
+            .map_err(|error| failed(error.to_string()))?
+        {
+            Some(rebase) => Some(rebase),
+            None => return Ok(not_applicable("re_review_not_required", None)),
+        },
+        None => None,
+    };
     let Some(admission) =
         run_review_admission(runtime, &run_id).map_err(|error| failed(error.to_string()))?
     else {
+        if rebase.is_some() {
+            return Err(refused(
+                "review_gate_stale: completion rebased a reviewed head but the run no longer \
+                 carries a review admission"
+                    .to_string(),
+            ));
+        }
         return Ok(not_applicable("review_admission_missing", None));
     };
+    if rebase.is_some() && !admission.gates_pr() {
+        return Err(refused(
+            "review_gate_stale: completion rebased a reviewed head but the run's review \
+             admission no longer gates the PR"
+                .to_string(),
+        ));
+    }
     if !admission.gates_pr() {
         let reason = match admission.timing {
             orbit_types::workflow::ReviewTiming::None => "review_policy_none",
@@ -70,16 +104,21 @@ pub(crate) fn review_gate_admit(
     if input.get("mode").and_then(Value::as_str) == Some("local") {
         // V1 rejects `before-pr` on a local-only route instead of changing
         // what the policy means; a pipeline may learn its route late.
-        return Err(failed(
+        return Err(refused(
             "review_policy_local_route_refused: this run carries a before-pr review admission \
              but delivers locally; ship through the PR route or choose none/after-landing"
                 .to_string(),
         ));
     }
 
-    let context = GateContext::load(runtime, input, Some(admission.clone()))
+    // A re-review pins the candidate to the base completion rebased onto.
+    let mut admit_input = input.clone();
+    if let (Some(rebase), Some(object)) = (&rebase, admit_input.as_object_mut()) {
+        object.insert("base_sha".to_string(), json!(rebase.base_sha));
+    }
+    let context = GateContext::load(runtime, &admit_input, Some(admission.clone()))
         .map_err(|error| failed(error.to_string()))?;
-    let outcome = admit(runtime, &context, &admission);
+    let outcome = admit(runtime, &context, &admission, rebase.as_ref());
     let audit_args = json!({
         "phase": "admit",
         "run_id": context.run_id,
@@ -102,16 +141,82 @@ pub(crate) fn review_gate_admit(
             outcome.as_ref().err().map(ToString::to_string),
         )
         .map_err(|error| failed(error.to_string()))?;
-    outcome.map_err(|error| failed(error.to_string()))
+    outcome.map_err(refused_or_failed)
+}
+
+/// The head a completion step rebased onto a new base and left unpublished
+/// for re-review, as that step recorded it for this run.
+struct CompletionRebase {
+    head_sha: String,
+    base_sha: String,
+}
+
+/// Whether the completion step `step_id` asked for a re-review. Read from the
+/// run's own recorded pipeline rather than a step template: the completion
+/// step is skipped on review-only and no-diff routes, and a `when:` may not
+/// read a skippable step's output.
+fn completion_rebase(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_id: &str,
+    input: &Value,
+) -> Result<Option<CompletionRebase>, OrbitError> {
+    let completes = input.get("completion").and_then(Value::as_str) == Some("done");
+    let no_diff = input
+        .get("skipped_no_diff_expected")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !completes || no_diff {
+        return Ok(None);
+    }
+    let state = runtime.stores().jobs().read_run_state(run_id)?;
+    let output = state
+        .as_ref()
+        .and_then(|state| state.pipeline.get(step_id))
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "re-review admission: run '{run_id}' recorded no `{step_id}` checkpoint"
+            ))
+        })?;
+    if output.get("re_review_required").and_then(Value::as_bool) != Some(true) {
+        return Ok(None);
+    }
+    let sha = |key: &str| {
+        output["rebased"]
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|sha| !sha.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                OrbitError::Execution(format!(
+                    "re-review admission: `{step_id}` asked for a re-review without \
+                     rebased.{key}"
+                ))
+            })
+    };
+    Ok(Some(CompletionRebase {
+        head_sha: sha("head_sha")?,
+        base_sha: sha("base_sha")?,
+    }))
 }
 
 fn admit(
     runtime: &OrbitRuntime,
     context: &GateContext,
     admission: &ReviewAdmission,
+    rebase: Option<&CompletionRebase>,
 ) -> Result<Value, OrbitError> {
     let crew = resolve_reviewer_crew(runtime, admission, context)?;
     let candidate = candidate_identity(&context.workspace_path, &context.base_sha()?)?;
+    if let Some(rebase) = rebase
+        && candidate.head.commit != rebase.head_sha
+    {
+        return Err(OrbitError::Execution(format!(
+            "review_gate_stale: the worktree head {} is not the rebased head {} completion \
+             recorded",
+            candidate.head.commit, rebase.head_sha
+        )));
+    }
     if candidate.commits.is_empty() {
         return Err(OrbitError::Execution(format!(
             "review_gate_admit: candidate {} adds no commits over base {}; nothing to review",
@@ -122,6 +227,12 @@ fn admit(
 
     let store = runtime.review_store()?;
     let lineage_key = context.lineage_key();
+    release_abandoned(
+        runtime,
+        &context.workspace_id,
+        &lineage_key,
+        &context.run_id,
+    )?;
     let now = Utc::now();
     let (reservation, ledger) = store.review_reserve(
         &context.workspace_id,
@@ -139,10 +250,11 @@ fn admit(
         ReviewReservation::Reserved { attempt } => (attempt, false),
         ReviewReservation::Resumed { attempt } => (attempt, true),
         ReviewReservation::Exhausted { reason, consumed } => {
-            return Err(OrbitError::Execution(format!(
+            return Err(OrbitError::CapabilityDenied(format!(
                 "review_budget_exhausted: {reason} for lineage '{lineage_key}' (reviewer starts \
-                 {}/{}, repair cycles {}/{}, {}s of {}s); a recorded decision must reset or \
-                 re-scope this candidate before another review",
+                 {}/{}, repair cycles {}/{}, {}s of {}s); resume after a recorded decision \
+                 re-scopes the candidate, or dispatch a fresh delivery run, which starts a new \
+                 lineage with a full budget",
                 consumed.reviewer_starts,
                 ledger.budget.reviewer_starts,
                 consumed.repair_cycles,

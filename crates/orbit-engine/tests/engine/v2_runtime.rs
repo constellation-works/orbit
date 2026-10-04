@@ -11,7 +11,9 @@
 //! dispatches through a stub `RuntimeHost` and persists its §7 envelope
 //! events, a deterministic step's tool binding comes from the dispatch rather
 //! than its tool arguments, and job assets with `parallel:`, `fan_out:` and `loop:` blocks
-//! keep their join semantics when run through `execute_job_with_resume`.
+//! keep their join semantics when run through `execute_job_with_resume`,
+//! and the shipped before-PR `review` step retries and recovers a failing
+//! reviewer while charging only reviewer invocations.
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_runtime::/)'`.
 
@@ -21,12 +23,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_agent::loop_engine::InMemorySink;
-use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
+use orbit_common::OrbitError;
+use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{
-    DispatchError, JobOutcome, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
-    V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
+    DispatchError, JobOutcome, ResolvedCliExecutor, ReviewerInvocationRequest, RuntimeHost,
+    V2AuditWriter, V2DispatchInput, V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
+    resolve_job_catalog_refs_for_execution,
 };
-use orbit_types::workflow::activity_job::{ActivityV2, V2AuditEvent, V2AuditEventKind};
+use orbit_types::workflow::ReviewerInvocationEvent;
+use orbit_types::workflow::activity_job::{
+    ActivityV2, ActivityV2Spec, DeterministicSpec, V2AuditEvent, V2AuditEventKind,
+};
 use serde_json::{Value, json};
 
 #[test]
@@ -676,5 +683,227 @@ impl RuntimeHost for GraphHost {
             });
         }
         Ok(input.clone())
+    }
+}
+
+// --------------------------------------------------------------------------
+// Before-PR reviewer resilience [ORB-13890]
+// --------------------------------------------------------------------------
+
+/// The shipped `review` step's own `retry:` and `recovery_activity:`, driven
+/// with a fault-injected reviewer. A transient failure is retried and the
+/// step succeeds without recovery; a persistent one exhausts its attempts,
+/// gets one `step_failure_recovery` and one re-attempt, and only then fails
+/// the run. Each reviewer dispatch — and nothing else — reports its start
+/// and end, so backoff and recovery are never charged as review minutes.
+#[test]
+fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
+    for (failures, succeeds, expected_calls) in [
+        (1, true, vec![REVIEWER, REVIEWER]),
+        (
+            usize::MAX,
+            false,
+            vec![REVIEWER, REVIEWER, RECOVERY, REVIEWER],
+        ),
+    ] {
+        let audit_root = tempfile::tempdir().expect("audit tempdir");
+        let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), "review-run");
+        let host = ReviewerHost::failing(failures);
+        let result = execute_job_with_resume(
+            &shipped_review_step_job(),
+            json!({ "task_ids": ["T-1"] }),
+            "review-run",
+            writer.clone(),
+            &host,
+            None,
+        );
+        let events = writer.events_snapshot().expect("persisted audit events");
+
+        assert_eq!(
+            matches!(&result, Ok(outcome) if outcome.success),
+            succeeds,
+            "{failures} failure(s): {result:?}"
+        );
+        assert_eq!(host.calls(), expected_calls, "{failures} failure(s)");
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                V2AuditEventKind::StepRetry { step_id, .. } if step_id == "review"
+            )),
+            "the reviewer step retried after its first failure"
+        );
+        let recovered = events.iter().any(|event| {
+            matches!(
+                &event.kind,
+                V2AuditEventKind::StepRecoveryAttempted { step_id, recovery_activity, .. }
+                    if step_id == "review" && recovery_activity == RECOVERY
+            )
+        });
+        assert_eq!(recovered, !succeeds, "recovery runs only once retries fail");
+
+        let reviewer_calls = expected_calls
+            .iter()
+            .filter(|call| **call == REVIEWER)
+            .count();
+        let invocations = host.invocations();
+        assert_eq!(invocations.len(), reviewer_calls * 2);
+        for pair in invocations.chunks(2) {
+            assert!(matches!(
+                pair[0].event,
+                ReviewerInvocationEvent::Started { timeout_seconds } if timeout_seconds > 0
+            ));
+            assert!(matches!(
+                pair[1].event,
+                ReviewerInvocationEvent::Finished { .. }
+            ));
+            for request in pair {
+                assert_eq!(
+                    (
+                        request.run_id.as_str(),
+                        request.lineage_key.as_str(),
+                        request.attempt_id.as_str()
+                    ),
+                    ("review-run", "lineage-1", "rvw-1")
+                );
+            }
+        }
+    }
+}
+
+const REVIEWER: &str = "agent_review_repair";
+const RECOVERY: &str = "step_failure_recovery";
+
+/// Stub worktree and admission steps followed by the shipped `review` step,
+/// whose reviewer and recovery activities resolve to scripted actions. Only
+/// the backoff sleep is shortened; attempts and recovery stay as shipped.
+fn shipped_review_step_job() -> orbit_types::workflow::JobV2 {
+    let shipped = std::fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
+    )
+    .expect("read the shipped PR pipeline");
+    let mut review = load_job_asset(&shipped)
+        .expect("the shipped PR pipeline loads")
+        .spec
+        .steps
+        .into_iter()
+        .find(|step| step.id == "review")
+        .expect("the shipped PR pipeline has a review step");
+    let retry = review
+        .retry
+        .as_mut()
+        .expect("the review step declares retry");
+    retry.initial_backoff_ms = 1;
+    retry.backoff_cap_ms = 1;
+
+    let stub = |id: &str| {
+        json!({
+            "id": id,
+            "spec": { "type": "deterministic", "action": id, "config": {} },
+        })
+    };
+    let mut job = job_asset(json!([stub("worktree"), stub("review_gate_admit")]));
+    job.steps.push(review);
+    let mut catalog = V2ActivityCatalog::new();
+    for name in [REVIEWER, RECOVERY] {
+        catalog.insert(
+            name,
+            ActivityV2 {
+                description: format!("scripted `{name}`"),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: name.to_string(),
+                    config: Value::Null,
+                }),
+            },
+        );
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).expect("resolve the review step");
+    job
+}
+
+/// Serves the stub gate steps, a reviewer that fails its first `failures`
+/// dispatches like an unavailable provider, and a recovery that succeeds.
+struct ReviewerHost {
+    failures_left: Mutex<usize>,
+    calls: Mutex<Vec<&'static str>>,
+    invocations: Mutex<Vec<ReviewerInvocationRequest>>,
+}
+
+impl ReviewerHost {
+    fn failing(failures: usize) -> Self {
+        Self {
+            failures_left: Mutex::new(failures),
+            calls: Mutex::default(),
+            invocations: Mutex::default(),
+        }
+    }
+
+    fn calls(&self) -> Vec<&'static str> {
+        self.calls.lock().expect("call log").clone()
+    }
+
+    fn invocations(&self) -> Vec<ReviewerInvocationRequest> {
+        self.invocations.lock().expect("invocations").clone()
+    }
+}
+
+impl RuntimeHost for ReviewerHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        match action {
+            "worktree" => Ok(json!({
+                "job_run_id": "review-run",
+                "workspace_path": "/worktrees/review-run",
+            })),
+            "review_gate_admit" => Ok(json!({
+                "applies": true,
+                "first_task_id": "T-1",
+                "attempt_id": "rvw-1",
+                "lineage_key": "lineage-1",
+                "manifest_artifact": "review-manifest.json",
+                "report_artifact": "review-report.json",
+                "reviewer": { "crew": "reviewers" },
+            })),
+            REVIEWER => {
+                self.calls.lock().expect("call log").push(REVIEWER);
+                let mut failures_left = self.failures_left.lock().expect("failures");
+                if *failures_left == 0 {
+                    return Ok(
+                        json!({ "summary": "reviewed", "verdict": "passed_without_repairs" }),
+                    );
+                }
+                *failures_left = failures_left.saturating_sub(1);
+                Err(DispatchError::CliInvocationFailed(
+                    "provider overloaded".to_string(),
+                ))
+            }
+            RECOVERY => {
+                self.calls.lock().expect("call log").push(RECOVERY);
+                Ok(json!({ "recovered": true }))
+            }
+            other => panic!("unexpected action `{other}`"),
+        }
+    }
+
+    fn system_crew_for_dispatch(&self) -> Option<String> {
+        Some("system".to_string())
+    }
+
+    fn record_reviewer_invocation(
+        &self,
+        request: &ReviewerInvocationRequest,
+    ) -> Result<(), OrbitError> {
+        self.invocations
+            .lock()
+            .expect("invocations")
+            .push(request.clone());
+        Ok(())
     }
 }

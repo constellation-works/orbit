@@ -62,17 +62,17 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
             ],
         },
         Case {
-            name: "invalid: an empty check identity",
+            name: "invalid: an empty check identity relates no corrected command",
             records: vec![
                 superseded(ATTEMPT, Some("")),
-                required(ATTEMPT, Some(""), true),
+                required(CORRECTED, Some(""), true),
             ],
         },
         Case {
-            name: "invalid: a whitespace check identity",
+            name: "invalid: a whitespace check identity relates no corrected command",
             records: vec![
                 superseded(ATTEMPT, Some("   ")),
-                required(ATTEMPT, Some("   "), true),
+                required(CORRECTED, Some("   "), true),
             ],
         },
         Case {
@@ -148,12 +148,29 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
 
 /// The accepting shapes the refusals above are measured against: the same
 /// command rerun, or a corrected command sharing the attempt's check identity.
+/// A `check` only one record carries never stops the same command from
+/// relating them [ORB-13894: a final `make ci-fast` pass without `check`
+/// settled a passing review as incomplete].
 #[test]
 fn a_superseded_attempt_replaced_by_the_same_check_is_coverage() {
     for (name, records) in [
         (
             "same command rerun",
             vec![superseded(ATTEMPT, None), required(ATTEMPT, None, true)],
+        ),
+        (
+            "same command rerun whose replacement omits the attempt's check",
+            vec![
+                superseded(ATTEMPT, Some("orbit-core-tests")),
+                required(ATTEMPT, None, true),
+            ],
+        ),
+        (
+            "same command rerun with an empty check and different spacing",
+            vec![
+                superseded(ATTEMPT, Some("")),
+                required(&format!("  {}", ATTEMPT.replace(' ', "  ")), None, true),
+            ],
         ),
         (
             "corrected command with a shared check identity",

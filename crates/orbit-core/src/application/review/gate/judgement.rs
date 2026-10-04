@@ -36,8 +36,11 @@ pub(super) struct Judgement {
 }
 
 impl Judgement {
-    /// Read the report the reviewer persisted for this attempt. A missing,
-    /// stale, or unreadable report is an incomplete review, never a pass.
+    /// Read the reports the reviewer persisted for this attempt on any of
+    /// the bundle's tasks and merge them. Reports from before the attempt
+    /// started are ignored; none at all, or one that is unreadable, names
+    /// another contract, or names another attempt, is an incomplete review,
+    /// never a pass. Benign shape drift is accepted ([`ReviewReport::parse`]).
     pub(super) fn from_report(
         runtime: &OrbitRuntime,
         context: &GateContext,
@@ -54,39 +57,52 @@ impl Judgement {
             task_meaning_digest: task_meaning_digest.clone(),
             selectors_widened: Vec::new(),
         };
-        let first_task = &context.task_ids[0];
-        let Some(artifact) = runtime.get_task_artifact(first_task, REVIEW_REPORT_ARTIFACT)? else {
-            return Ok(incomplete(
-                "report_missing: the reviewer persisted no review-report.json",
-            ));
-        };
-        let manifest = runtime.get_task_artifact_manifest(first_task)?;
-        let provenance = manifest
-            .iter()
-            .find(|file| file.path == REVIEW_REPORT_ARTIFACT);
-        if provenance.is_some_and(|file| file.created_at < attempt.started_at) {
-            return Ok(incomplete(
-                "report_stale: review-report.json predates this attempt",
-            ));
-        }
-        let report: ReviewReport = match serde_json::from_slice(&artifact.content) {
-            Ok(report) => report,
-            Err(error) => {
-                return Ok(incomplete(&format!("report_unreadable: {error}")));
+        let mut reports = Vec::new();
+        let mut stale = false;
+        for task_id in &context.task_ids {
+            let Some(artifact) = runtime.get_task_artifact(task_id, REVIEW_REPORT_ARTIFACT)? else {
+                continue;
+            };
+            let manifest = runtime.get_task_artifact_manifest(task_id)?;
+            if manifest
+                .iter()
+                .find(|file| file.path == REVIEW_REPORT_ARTIFACT)
+                .is_some_and(|file| file.created_at < attempt.started_at)
+            {
+                stale = true;
+                continue;
             }
+            let report = match ReviewReport::parse(&artifact.content) {
+                Ok(report) => report,
+                Err(error) => {
+                    return Ok(incomplete(&format!(
+                        "report_unreadable: the report on {task_id}: {error}"
+                    )));
+                }
+            };
+            if report.schema_version != REVIEW_CONTRACT_VERSION {
+                return Ok(incomplete(&format!(
+                    "report_contract_mismatch: the report on {task_id} has schema_version {} \
+                     instead of {REVIEW_CONTRACT_VERSION}",
+                    report.schema_version
+                )));
+            }
+            if report.attempt_id != attempt.attempt_id {
+                return Ok(incomplete(&format!(
+                    "report_attempt_mismatch: the report on {task_id} names attempt {} but {} \
+                     was admitted",
+                    report.attempt_id, attempt.attempt_id
+                )));
+            }
+            reports.push(report);
+        }
+        let Some(report) = merge_reports(reports) else {
+            return Ok(incomplete(if stale {
+                "report_stale: review-report.json predates this attempt"
+            } else {
+                "report_missing: the reviewer persisted no review-report.json"
+            }));
         };
-        if report.schema_version != REVIEW_CONTRACT_VERSION {
-            return Ok(incomplete(&format!(
-                "report_contract_mismatch: schema_version {} is not {REVIEW_CONTRACT_VERSION}",
-                report.schema_version
-            )));
-        }
-        if report.attempt_id != attempt.attempt_id {
-            return Ok(incomplete(&format!(
-                "report_attempt_mismatch: report names attempt {} but {} was admitted",
-                report.attempt_id, attempt.attempt_id
-            )));
-        }
         Ok(Self {
             verdict: report.verdict,
             findings: report.findings,
@@ -339,22 +355,6 @@ impl Judgement {
         }
     }
 
-    /// A pass may not spend more wall time than the captured lineage budget,
-    /// including this attempt's elapsed seconds. Non-pass verdicts still
-    /// record the honest elapsed time.
-    pub(super) fn enforce_wall_time(&mut self, ledger: &ReviewLedger, elapsed_seconds: u64) {
-        if !self.verdict.passed() {
-            return;
-        }
-        let budget_seconds = u64::from(ledger.budget.minutes).saturating_mul(60);
-        if ledger.consumed_seconds.saturating_add(elapsed_seconds) > budget_seconds {
-            self.downgrade(
-                "review_minutes_exhausted: this attempt exceeded the captured lineage \
-                 wall-time allowance",
-            );
-        }
-    }
-
     fn downgrade(&mut self, reason: &str) {
         self.verdict = ReviewVerdict::Incomplete;
         self.validation_complete = false;
@@ -363,6 +363,54 @@ impl Judgement {
             _ => reason.to_string(),
         });
     }
+}
+
+/// One report for the bundle: the most severe verdict, every distinct
+/// finding and validation record, and every distinct summary and escalation.
+fn merge_reports(reports: Vec<ReviewReport>) -> Option<ReviewReport> {
+    let mut reports = reports.into_iter();
+    let mut merged = reports.next()?;
+    for report in reports {
+        if verdict_severity(report.verdict) > verdict_severity(merged.verdict) {
+            merged.verdict = report.verdict;
+        }
+        for finding in report.findings {
+            if !merged.findings.contains(&finding) {
+                merged.findings.push(finding);
+            }
+        }
+        for record in report.validation {
+            if !merged.validation.contains(&record) {
+                merged.validation.push(record);
+            }
+        }
+        append_distinct(&mut merged.summary, &report.summary, "\n");
+        if let Some(escalation) = report.escalation {
+            let current = merged.escalation.get_or_insert_with(String::new);
+            append_distinct(current, &escalation, "; ");
+        }
+    }
+    Some(merged)
+}
+
+fn verdict_severity(verdict: ReviewVerdict) -> u8 {
+    match verdict {
+        ReviewVerdict::PassedWithoutRepairs => 0,
+        ReviewVerdict::PassedWithRepairs => 1,
+        ReviewVerdict::ChangesRequired => 2,
+        ReviewVerdict::Incomplete => 3,
+    }
+}
+
+fn append_distinct(current: &mut String, addition: &str, separator: &str) {
+    let addition = addition.trim();
+    if addition.is_empty() || current.split(separator).any(|part| part.trim() == addition) {
+        return;
+    }
+    if !current.trim().is_empty() {
+        current.push_str(separator);
+    }
+    current.push_str(addition);
 }
 
 /// Whether every task still means what was admitted except for selectors

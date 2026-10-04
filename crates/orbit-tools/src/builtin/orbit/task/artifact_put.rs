@@ -9,6 +9,7 @@ use orbit_policy::resolve_symlinks;
 use orbit_types::policy::FsOperation;
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact};
 use orbit_types::tool::{ToolParam, ToolSchema};
+use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT, ReviewReport};
 use serde_json::{Map, Value, json};
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext};
@@ -43,7 +44,7 @@ impl Tool for OrbitTaskArtifactPutTool {
 
         ToolSchema {
             name: "orbit.task.artifact.put".to_string(),
-            description: "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage.".to_string(),
+            description: "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match.".to_string(),
             parameters,
             builtin: true,
         }
@@ -109,6 +110,7 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
         &resolve_source_path(ctx.cwd.as_deref().map(Path::new), &source_path),
     )?;
     let artifact = read_bounded_artifact(&resolved_source_path, artifact_path.as_deref())?;
+    validate_review_report(&artifact)?;
 
     // Build the TaskUpdate input from attachment and transport fields only.
     // Future TaskUpdate fields cannot silently widen artifact.put authority.
@@ -128,6 +130,33 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
         }]),
     );
     Ok(Value::Object(update_input))
+}
+
+/// A before-PR reviewer's report is validated on attach, so the reviewer
+/// learns of a contract mismatch while it can still fix the file rather than
+/// at settlement, where it would make the review incomplete.
+fn validate_review_report(artifact: &TaskArtifact) -> Result<(), OrbitError> {
+    if artifact.path != REVIEW_REPORT_ARTIFACT {
+        return Ok(());
+    }
+    let report = ReviewReport::parse(&artifact.content).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
+        ))
+    })?;
+    if report.schema_version != REVIEW_CONTRACT_VERSION {
+        return Err(OrbitError::InvalidInput(format!(
+            "{REVIEW_REPORT_ARTIFACT} has schema_version {}; the review report contract is \
+             version {REVIEW_CONTRACT_VERSION}",
+            report.schema_version
+        )));
+    }
+    if report.attempt_id.trim().is_empty() {
+        return Err(OrbitError::InvalidInput(format!(
+            "{REVIEW_REPORT_ARTIFACT} must name the admitted attempt_id"
+        )));
+    }
+    Ok(())
 }
 
 fn read_bounded_artifact(

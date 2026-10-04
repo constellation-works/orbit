@@ -30,7 +30,30 @@ pub(super) fn read_ledger(
     raw.as_deref().map(decode).transpose()
 }
 
-/// Write the ledger, fencing on the revision the caller read.
+/// Every ledger with an attempt `run_id` still holds.
+pub(super) fn ledgers_held_by(
+    conn: &Connection,
+    workspace_id: &str,
+    run_id: &str,
+) -> Result<Vec<ReviewLedger>, OrbitError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT ledger_json FROM review_lineages WHERE workspace_id=?1 AND holder_run_id=?2",
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let rows = statement
+        .query_map(params![workspace_id, run_id], |row| row.get::<_, String>(0))
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    rows.map(|raw| {
+        raw.map_err(|error| OrbitError::Store(error.to_string()))
+            .and_then(|raw| decode(&raw))
+    })
+    .collect()
+}
+
+/// Write the ledger, fencing on the revision the caller read. The holder
+/// column mirrors the run still holding an attempt, so a terminating run
+/// finds what it must release without decoding every ledger.
 pub(super) fn write_ledger(
     conn: &Connection,
     workspace_id: &str,
@@ -43,12 +66,13 @@ pub(super) fn write_ledger(
         None => {
             ledger.revision = 1;
             conn.execute(
-                "INSERT INTO review_lineages VALUES (?1,?2,?3,?4)",
+                "INSERT INTO review_lineages (workspace_id, lineage_key, revision, ledger_json, holder_run_id) VALUES (?1,?2,?3,?4,?5)",
                 params![
                     workspace_id,
                     ledger.lineage_key,
                     ledger.revision,
-                    encode(ledger)?
+                    encode(ledger)?,
+                    ledger.holder_run_id(),
                 ],
             )
             .map_err(|error| OrbitError::Store(error.to_string()))?;
@@ -57,10 +81,11 @@ pub(super) fn write_ledger(
             ledger.revision = previous.saturating_add(1);
             let changed = conn
                 .execute(
-                    "UPDATE review_lineages SET revision=?1, ledger_json=?2 WHERE workspace_id=?3 AND lineage_key=?4 AND revision=?5",
+                    "UPDATE review_lineages SET revision=?1, ledger_json=?2, holder_run_id=?3 WHERE workspace_id=?4 AND lineage_key=?5 AND revision=?6",
                     params![
                         ledger.revision,
                         encode(ledger)?,
+                        ledger.holder_run_id(),
                         workspace_id,
                         ledger.lineage_key,
                         previous

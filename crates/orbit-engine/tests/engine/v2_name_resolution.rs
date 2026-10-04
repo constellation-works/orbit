@@ -34,7 +34,7 @@ use orbit_engine::activity_job::{
 };
 use orbit_engine::{
     DispatchError, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
-    dispatch_v2_activity,
+    dispatch_v2_activity, resolve_job_catalog_refs_for_execution, validate_job,
 };
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
@@ -52,6 +52,29 @@ fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_e_retired_session_rejection_runs_after_resolution()?;
     scenario_f_deterministic_activities_dispatch()?;
 
+    Ok(())
+}
+
+/// [ORB-13890] A shipped job whose `when:` reads a skippable step's output
+/// is refused by `validate_job` at dispatch, failing every run of it; the
+/// asset smoke only parses, so validate each shipped job as execution does.
+#[test]
+fn every_shipped_job_resolves_and_passes_execution_validation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let catalog = load_reference_catalog()?;
+    let mut validated = 0;
+    for entry in std::fs::read_dir(repo_root().join("crates/orbit-core/assets/jobs"))? {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+            continue;
+        }
+        let mut job = load_job_asset(&std::fs::read_to_string(&path)?)?.spec;
+        resolve_job_catalog_refs_for_execution(&mut job, &catalog)
+            .and_then(|()| validate_job(&job))
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        validated += 1;
+    }
+    assert!(validated > 0, "no shipped jobs found");
     Ok(())
 }
 
