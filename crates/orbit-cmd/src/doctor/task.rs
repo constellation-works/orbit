@@ -1,3 +1,5 @@
+use orbit_core::application::task::EpisodeDisposition;
+
 use super::*;
 
 /// Task-store partitions under `<global_root>/tasks/workspaces/<ws_id>/`
@@ -201,6 +203,57 @@ pub(super) fn doctor_check_infra_blocked_tasks(runtime: &OrbitRuntime) -> Worksp
         WorkspaceDoctorStatus::Warning,
         clauses.join("; "),
         steps.join(" "),
+    )
+}
+
+/// The final-recovery backstop for blocked tasks: whether it runs here, which
+/// blocked tasks it escalated to a human, and which it has yet to look at.
+pub(super) fn doctor_check_blocked_task_recovery(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const NAME: &str = "blocked-task-recovery";
+    if let Some(reason) = runtime.blocked_task_recovery_disabled_reason() {
+        return check(NAME, WorkspaceDoctorStatus::Skipped, reason);
+    }
+    let views = match runtime.blocked_recovery_view(chrono::Utc::now()) {
+        Ok(views) => views,
+        Err(error) => {
+            return check(
+                NAME,
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot classify blocked tasks: {error}"),
+            );
+        }
+    };
+    let mut escalated = Vec::new();
+    let (mut pending, mut human, mut too_old) = (0, 0, 0);
+    for view in &views {
+        match &view.disposition {
+            EpisodeDisposition::Decided(record) => escalated.push(format!(
+                "{} ({} {} by run {})",
+                view.episode.task_id, record.decision, record.outcome, record.run_id
+            )),
+            EpisodeDisposition::Eligible => pending += 1,
+            EpisodeDisposition::HumanIntervened { .. } => human += 1,
+            EpisodeDisposition::TooOld => too_old += 1,
+        }
+    }
+    let summary = format!(
+        "{pending} blocked task(s) awaiting recovery, {human} left to the human who acted, \
+         {too_old} blocked too long for automatic recovery"
+    );
+    if escalated.is_empty() {
+        return check(NAME, WorkspaceDoctorStatus::Ok, summary);
+    }
+    actionable_check(
+        NAME,
+        WorkspaceDoctorStatus::Warning,
+        format!(
+            "{} task(s) still blocked after final recovery: {}; {summary}",
+            escalated.len(),
+            escalated.join(", ")
+        ),
+        "Read the final_recovery comment on each task (`orbit task show <id>`), then requeue, \
+         reject, or archive it by hand."
+            .to_string(),
     )
 }
 

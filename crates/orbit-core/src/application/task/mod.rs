@@ -1,6 +1,7 @@
 //! Task commands and coordinated record writes.
 
 mod add;
+mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;
 mod desktop;
@@ -20,6 +21,12 @@ mod update;
 /// reservations, status-derived locks, and the admission work that freezes a
 /// claim's footprint all resolve declarations through it.
 pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
+pub(crate) use blocked_recovery::BlockedRecoveryPreparation;
+pub use blocked_recovery::{
+    BLOCKED_TASK_RECOVERY_JOB, BlockEpisode, BlockSource, BlockedRecoveryInput,
+    BlockedRecoveryTick, BlockedRecoveryView, EpisodeDisposition, FinalRecoveryRecord,
+    MAX_ACTIVE_BLOCKED_RECOVERIES, MAX_EPISODE_AGE_HOURS, episode_disposition,
+};
 pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::ContextFileRestoration;
 pub use final_recovery::{

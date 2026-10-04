@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 mod add;
+mod blocked_recovery;
 mod contention;
 mod desktop;
 mod final_recovery;

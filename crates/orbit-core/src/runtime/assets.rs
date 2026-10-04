@@ -14,6 +14,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/agent_implement.yaml"),
     ),
     (
+        "apply_blocked_task_recovery",
+        include_str!("../../assets/activities/apply_blocked_task_recovery.yaml"),
+    ),
+    (
         "apply_task_pilot_results",
         include_str!("../../assets/activities/apply_task_pilot_results.yaml"),
     ),
@@ -150,6 +154,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/review_gate_settle.yaml"),
     ),
     (
+        "prepare_blocked_task_recovery",
+        include_str!("../../assets/activities/prepare_blocked_task_recovery.yaml"),
+    ),
+    (
         "prepare_task_pilot",
         include_str!("../../assets/activities/prepare_task_pilot.yaml"),
     ),
@@ -212,6 +220,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "agent_invoke_pipeline",
         include_str!("../../assets/jobs/agent_invoke_pipeline.yaml"),
+    ),
+    (
+        "blocked_task_recovery_pipeline",
+        include_str!("../../assets/jobs/blocked_task_recovery_pipeline.yaml"),
     ),
     (
         "ci_failure_sweep_pipeline",

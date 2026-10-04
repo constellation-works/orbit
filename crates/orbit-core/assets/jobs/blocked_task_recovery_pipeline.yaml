@@ -1,0 +1,75 @@
+# Final-recovery backstop for tasks that reach `blocked` outside a delivery
+# pipeline: a run that crashed, timed out, was interrupted or failed before its
+# first step; a claimed leaf whose settlement failed; a gate or auto run that
+# blocked its task before a leaf ran.
+#
+# Trigger
+# - The owner's sweep tick submits one run per block episode (the task's
+#   latest transition into `blocked`). Followers and worker processes never
+#   submit. The tick skips an episode that already has a final-recovery
+#   decision, one a human touched after the block (a comment or status change
+#   by anyone other than Orbit or an agent), and one older than 72 hours.
+# - Admission is keyed by `episode_key`, and at most two runs are active at
+#   once. A run that ends without applying a decision is settled on a later
+#   tick as an escalation, so every episode gets exactly one decision.
+#
+# Decision
+# - `recover` runs the shipped `final_recovery` activity with a crew drawn
+#   from `workflow.final_recovery_crews`, in a detached checkout of the
+#   workspace base branch that `apply` removes again.
+# - `apply` hands the decision to the same deterministic applier the delivery
+#   pipelines use. A blocked task has no live run, so `resume` becomes an
+#   escalation; `requeue` restarts work and shares the applier's requeue
+#   bound. Every decision is a task comment carrying this run's id.
+#
+# Opt-out: set `workflow.final_recovery_crews = []`. With an empty pool the
+# tick submits nothing.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: blocked_task_recovery_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 2
+  default_input:
+    task_id: ""
+    episode_key: ""
+    block_source: run_failed
+    failed_run_id: ""
+    observed_status: blocked
+    observed_updated_at: ""
+
+  steps:
+    - id: prepare
+      target: activity:prepare_blocked_task_recovery
+      default_input:
+        task_id: "{{ input.task_id }}"
+        episode_key: "{{ input.episode_key }}"
+        block_source: "{{ input.block_source }}"
+        failed_run_id: "{{ input.failed_run_id }}"
+        observed_status: "{{ input.observed_status }}"
+        observed_updated_at: "{{ input.observed_updated_at }}"
+
+    - id: recover
+      when: "{{ steps.prepare.output.proceed }} == true"
+      target: activity:final_recovery
+      default_input:
+        task_id: "{{ steps.prepare.output.recovery.task_id }}"
+        run_id: "{{ steps.prepare.output.recovery.run_id }}"
+        workspace_path: "{{ steps.prepare.output.recovery.workspace_path }}"
+        repo_root: "{{ steps.prepare.output.recovery.repo_root }}"
+        failed_step_id: "{{ steps.prepare.output.recovery.failed_step_id }}"
+        activity_name: "{{ steps.prepare.output.recovery.activity_name }}"
+        error_message: "{{ steps.prepare.output.recovery.error_message }}"
+        base_ref: "{{ steps.prepare.output.recovery.base_ref }}"
+        base_sha: "{{ steps.prepare.output.recovery.base_sha }}"
+        crew_config_key: workflow.final_recovery_crews
+
+    - id: apply
+      when: "{{ steps.prepare.output.proceed }} == true"
+      target: activity:apply_blocked_task_recovery
+      default_input:
+        prepared: "{{ steps.prepare.output }}"
+        result: "{{ steps.recover.output }}"

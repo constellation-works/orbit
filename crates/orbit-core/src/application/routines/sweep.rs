@@ -358,6 +358,32 @@ pub(crate) fn run_sweep_at_with_providers_at(
             }),
         }
     }
+    // The final-recovery backstop runs last: it only submits runs for tasks
+    // already blocked, and stands down itself off the owner or with an empty
+    // `workflow.final_recovery_crews` pool.
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            match runtime.run_blocked_task_recovery_tick(now_utc) {
+                Ok(tick) => {
+                    if !tick.dispatched.is_empty() || !tick.settled.is_empty() {
+                        tracing::info!(
+                            target: "orbit.core.sweep",
+                            workspace = %workspace.name,
+                            dispatched = tick.dispatched.len(),
+                            settled = tick.settled.len(),
+                            "sweep.blocked_task_recovery"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.blocked_task_recovery_failed"
+                ),
+            }
+        }
+    }
 
     Ok(SweepOutcome {
         machine_name: local_machine.machine_name,
