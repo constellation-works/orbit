@@ -5,14 +5,9 @@ use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_te
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 
 pub(super) const STDOUT_TEXT_PREVIEW_LIMIT_BYTES: usize = 64 * 1024;
-/// Extra bytes kept around the 64 KiB preview so a secret that straddles the
-/// cut is still fully inside the redaction window. After redaction, a windowed
-/// source drops this untrusted edge so a split fragment cannot survive when
-/// earlier substitutions shrink the text by more than the margin.
-const STDOUT_TEXT_PREVIEW_REDACTION_MARGIN_BYTES: usize = 1024;
-
 pub(super) struct StdoutTextPreview {
     pub(super) text: String,
+    /// Whether bounding omitted redacted text; capture truncation is separate.
     pub(super) truncated: bool,
     pub(super) preview_bytes: usize,
 }
@@ -33,28 +28,14 @@ pub(super) fn bounded_redacted_text(
     prefer_tail: bool,
     limit: usize,
 ) -> StdoutTextPreview {
-    let window = preview_source_window(
-        raw,
-        prefer_tail,
-        limit,
-        STDOUT_TEXT_PREVIEW_REDACTION_MARGIN_BYTES,
-    );
-    let redacted = redactor.apply_str(&redact_sensitive_env_text(window));
-    // A secret that straddles the far window edge is split, so the in-window
-    // fragment is not a redactor match. Earlier substitutions can shrink the
-    // redacted window by more than the margin and pull that fragment inside
-    // `limit`. Drop the untrusted raw edge (`window.len() - limit`) from the
-    // redacted text whenever the source was larger than the window.
-    let source_windowed = raw.len() > window.len();
-    let untrusted_edge = window.len().saturating_sub(limit);
-    let keep = if source_windowed {
-        redacted.len().saturating_sub(untrusted_edge).min(limit)
-    } else {
-        limit
-    };
-    let truncated = source_windowed || redacted.len() > keep;
-    let text = if redacted.len() > keep {
-        truncate_preview_text(&redacted, prefer_tail, keep)
+    // Redact the complete capture before selecting a preview. Cutting a raw
+    // window can split a secret of any length; a fixed margin cannot protect
+    // that fragment when substitutions both expand and shrink the text. The
+    // supervisor already bounds the capture independently of this preview.
+    let redacted = redactor.apply_str(&redact_sensitive_env_text(raw));
+    let truncated = redacted.len() > limit;
+    let text = if truncated {
+        truncate_preview_text(&redacted, prefer_tail, limit)
     } else {
         redacted
     };
@@ -64,21 +45,6 @@ pub(super) fn bounded_redacted_text(
         text,
         truncated,
         preview_bytes,
-    }
-}
-
-fn preview_source_window(raw: &str, prefer_tail: bool, limit: usize, margin: usize) -> &str {
-    let cap = limit.saturating_add(margin);
-    if raw.len() <= cap {
-        return raw;
-    }
-    if prefer_tail {
-        let requested_start = raw.len() - cap;
-        let boundary = ceil_char_boundary(raw, requested_start);
-        &raw[boundary..]
-    } else {
-        let boundary = floor_char_boundary(raw, cap);
-        &raw[..boundary]
     }
 }
 

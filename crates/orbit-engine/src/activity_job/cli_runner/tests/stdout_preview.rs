@@ -2,7 +2,7 @@
 
 use orbit_common::security::redaction::argv_redactor;
 
-use super::super::stdout_preview::stdout_text_preview;
+use super::super::stdout_preview::{bounded_redacted_text, stdout_text_preview};
 
 #[test]
 fn stdout_text_preview_redacts_a_secret_that_straddles_the_64kib_cut() {
@@ -89,5 +89,90 @@ fn stdout_text_preview_redacts_a_secret_that_straddles_the_window_cap_after_shri
             preview.text.contains("[REDACTED_ENV]"),
             "trusted-region copies must still redact (prefer_tail={prefer_tail})"
         );
+    }
+}
+
+#[test]
+fn tail_preview_hides_boundary_secret_with_mixed_redaction_lengths() {
+    const LIMIT: usize = 64 * 1024;
+    const CAP: usize = LIMIT + 1024;
+    const RAW_LEN: usize = 100 * 1024;
+    const FRAGMENT: &str = "TAIL_SECRET_FRAGMENT";
+    let short = "Q7v9";
+    let shrinking = format!("later-secret-{}", "s".repeat(587));
+
+    // The first case places the fragment just beyond the raw margin. Expanding
+    // the short value makes a fixed redacted-byte cut stop before that margin.
+    // The second also guards secrets whose in-window suffix exceeds the margin.
+    for suffix_len in [1035, 3000] {
+        let mut secret = "l".repeat(5000 - suffix_len);
+        secret.push_str(&"m".repeat(100));
+        secret.push_str(short);
+        secret.push_str(&"m".repeat(suffix_len - 104 - FRAGMENT.len()));
+        secret.push_str(FRAGMENT);
+        let _guard = orbit_common::test_env::scoped([
+            ("ORBIT_PREVIEW_BOUNDARY_TEST_TOKEN", Some(secret.as_str())),
+            ("ORBIT_PREVIEW_EXPANDING_TEST_TOKEN", Some(short)),
+            (
+                "ORBIT_PREVIEW_SHRINKING_TEST_TOKEN",
+                Some(shrinking.as_str()),
+            ),
+        ]);
+        let window_start = RAW_LEN - CAP;
+        let mut raw = "x".repeat(window_start - (secret.len() - suffix_len));
+        raw.push_str(&secret);
+        raw.push_str(&"y".repeat((RAW_LEN - LIMIT).saturating_sub(raw.len())));
+        for _ in 0..3 {
+            raw.push_str(&shrinking);
+        }
+        raw.push_str(&"z".repeat(RAW_LEN - raw.len() - "visible tail".len()));
+        raw.push_str("visible tail");
+        assert_eq!(raw.len(), RAW_LEN);
+
+        let preview = stdout_text_preview(&raw, argv_redactor(), true);
+        assert!(
+            !preview.text.contains(FRAGMENT) && !preview.text.contains(&"m".repeat(32)),
+            "ORB-13939: boundary-secret bytes must not survive mixed expansion/shrinkage (suffix_len={suffix_len})"
+        );
+        assert!(!preview.text.contains(short));
+        assert!(!preview.text.contains(&shrinking));
+        assert!(preview.text.contains("[REDACTED_ENV]"));
+        assert!(preview.text.ends_with("visible tail"));
+        assert!(preview.truncated);
+        assert_eq!(preview.preview_bytes, preview.text.len());
+        assert!(preview.preview_bytes <= LIMIT);
+    }
+}
+
+#[test]
+fn bounded_preview_preserves_selection_and_byte_metadata() {
+    let secret = "captured-value-".repeat(400);
+    let _guard = orbit_common::test_env::scoped([(
+        "ORBIT_PREVIEW_COMPLETE_TEST_TOKEN",
+        Some(secret.as_str()),
+    )]);
+    let compressed = format!("head\n{secret}\ntail\n");
+    let fully_redacted = "head\n[REDACTED_ENV]\ntail\n";
+    for (raw, limit, head, tail, truncated) in [
+        ("head\nmiddle\ntail\n", 10, "head\nmiddl", "tail\n", true),
+        ("αβγδε", 5, "αβ", "δε", true),
+        ("complete\n", 9, "complete\n", "complete\n", false),
+        ("", 0, "", "", false),
+        ("omitted", 0, "", "", true),
+        (
+            compressed.as_str(),
+            64,
+            fully_redacted,
+            fully_redacted,
+            false,
+        ),
+    ] {
+        for (prefer_tail, expected) in [(false, head), (true, tail)] {
+            let preview = bounded_redacted_text(raw, argv_redactor(), prefer_tail, limit);
+            assert_eq!(preview.text, expected);
+            assert_eq!(preview.truncated, truncated);
+            assert_eq!(preview.preview_bytes, expected.len());
+            assert!(preview.preview_bytes <= limit);
+        }
     }
 }
