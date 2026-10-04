@@ -321,6 +321,7 @@ Making a host capable of running the sandbox is an operator responsibility, and 
 ## Derive Linux sandbox write-grant anchors from the effective profile at each spawn
 
 **Recorded:** 2026-08-09 03:42:52.076176Z · [ORB-10602]
+**Status:** Superseded; the current rule-derived anchor-kind contract treats exact rules as file anchors and `<root>/**` rules as directory anchors.
 **Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`
 
 ### Context
