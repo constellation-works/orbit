@@ -16,6 +16,7 @@ export type PaneData = {
   error: string | null
   view: OrbitView
   selected: string | null
+  openLanes: string[] | null
   active: string | null
   ship: OrbitShip | null
   flash: string | null
@@ -42,7 +43,7 @@ export function pane(kit: Kit, data: PaneData, act: Actions, Svg?: ElementConstr
   } else if (view === 'map') {
     body = mapView(kit, { snapshot, selected: data.selected, active: data.active, columns: data.columns }, act, Svg)
   } else {
-    body = boardView(kit, { snapshot, selected: data.selected, active: data.active, columns: data.columns }, act)
+    body = boardView(kit, { snapshot, selected: data.selected, active: data.active, openLanes: data.openLanes, now: data.now }, act)
   }
 
   return (

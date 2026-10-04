@@ -1,67 +1,102 @@
-// The Board view: open tasks in lanes by status, and the selected task's
-// details with the actions that apply to its status.
+// The Board view: one collapsible section per status, most urgent first, each
+// task a full-width row whose details open beneath it when pressed.
 
 import type { OrbitSnapshot, OrbitTask } from '../../../types'
 import type { Actions } from './kit'
-import { ACCENT, clip, lane, LANES, laneOf } from '../model'
+import { ACCENT, ago, DONE_COLOR, lane, LANES, laneOf, type OpenStatus } from '../model'
 import type { Kit } from './kit'
 
 export type BoardData = {
   snapshot: OrbitSnapshot
   selected: string | null
   active: string | null
-  columns: number
+  /** Sections the person opened; null keeps the defaults (every one but Done). */
+  openLanes: string[] | null
+  now: number
 }
 
-const WIDE = 100
+type Section = { id: string; name: string; glyph: string; color: string; tasks: OrbitTask[] }
+
+/** Attention first: what is stuck, then what is moving, then what waits. */
+const ORDER: readonly OpenStatus[] = ['blocked', 'in-progress', 'review', 'proposed', 'backlog']
+export const DONE_SECTION = 'done'
+export const DEFAULT_OPEN: readonly string[] = ORDER
+const ROW_LIMIT = 20
+/** Priorities worth a color; medium and low read as the default. */
+const PRIORITY_COLOR: Record<string, string> = { critical: 'red', high: 'yellow' }
+
+export const isOpen = (openLanes: string[] | null, id: string): boolean => (openLanes ?? DEFAULT_OPEN).includes(id)
 
 export function boardView(kit: Kit, data: BoardData, act: Actions) {
   const { Box, Text } = kit
-  const { snapshot, columns } = data
-  const isWide = columns >= WIDE
-  const laneWidth = isWide ? Math.floor((columns - (LANES.length - 1)) / LANES.length) : columns
-  const limit = isWide ? 10 : 5
-  const chosen = data.selected === null ? undefined : [...snapshot.tasks, ...snapshot.doneRecently].find(task => task.id === data.selected)
-
-  const lanes = LANES.map(spec => {
-    const tasks = lane(snapshot.tasks, spec.status)
-    return (
-      <Box key={`lane:${spec.status}`} flexDirection="column" width={isWide ? laneWidth : undefined} marginBottom={isWide ? 0 : 1}>
-        <Text wrap="truncate-end">
-          <Text color={spec.color}>{spec.glyph}</Text> <Text bold>{spec.name}</Text> <Text dimColor>{tasks.length}</Text>
-        </Text>
-        {tasks.slice(0, limit).map(task => cardRow(kit, task, data, laneWidth, act))}
-        {tasks.length > limit ? <Text dimColor>+{tasks.length - limit} more</Text> : null}
-        {tasks.length === 0 ? <Text dimColor>—</Text> : null}
-      </Box>
-    )
-  })
+  const { snapshot } = data
+  const sections: Section[] = [
+    ...ORDER.map(status => {
+      const spec = LANES.find(item => item.status === status)
+      return { id: status, name: spec?.name ?? status, glyph: spec?.glyph ?? '·', color: spec?.color ?? 'white', tasks: lane(snapshot.tasks, status) }
+    }),
+    { id: DONE_SECTION, name: 'Done today', glyph: '✓', color: DONE_COLOR, tasks: snapshot.doneRecently },
+  ]
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" rowGap={1}>
       {snapshot.tasks.length === 0 ? <Text dimColor>No open tasks in {snapshot.workspace}.</Text> : null}
-      <Box flexDirection={isWide ? 'row' : 'column'} columnGap={1}>
-        {lanes}
-      </Box>
-      {snapshot.doneRecently.length > 0 ? (
-        <Text dimColor wrap="truncate-end">
-          <Text color="green">✓</Text> done in 24h: {snapshot.doneRecently.map(task => task.id).join(' ')}
-        </Text>
-      ) : null}
-      {chosen ? details(kit, chosen, data, act) : <Text dimColor>Select a task for its criteria, dependencies and actions.</Text>}
+      {sections.map(section => sectionView(kit, section, data, act))}
     </Box>
   )
 }
 
-function cardRow(kit: Kit, task: OrbitTask, data: BoardData, width: number, act: Actions) {
+function sectionView(kit: Kit, section: Section, data: BoardData, act: Actions) {
+  const { Box, Button, Text } = kit
+  const count = section.tasks.length
+  const isQuiet = count === 0
+  // An empty section is its header alone, whatever the person left it as.
+  const open = !isQuiet && isOpen(data.openLanes, section.id)
+
+  return (
+    <Box key={`section:${section.id}`} flexDirection="column">
+      <Box columnGap={1}>
+        <Text dimColor>{isQuiet ? ' ' : open ? '▾' : '▸'}</Text>
+        <Text color={isQuiet ? undefined : section.color} dimColor={isQuiet}>
+          {section.glyph}
+        </Text>
+        <Button key={`lane:${section.id}`} label={section.name} plain dimColor={isQuiet} onPress={() => act.toggleLane(section.id)} />
+        <Text dimColor>{count}</Text>
+      </Box>
+      {open ? (
+        <Box flexDirection="column" paddingLeft={2} rowGap={0}>
+          {section.tasks.slice(0, ROW_LIMIT).map(task => taskRow(kit, task, data, act))}
+          {count > ROW_LIMIT ? <Text dimColor>{`+${count - ROW_LIMIT} more · /orbit-board <id> opens one`}</Text> : null}
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+function taskRow(kit: Kit, task: OrbitTask, data: BoardData, act: Actions) {
   const { Box, Button, Text } = kit
   const isSelected = data.selected === task.id
   const isMine = data.active === task.id
-  const label = clip(`${isMine ? '◉ ' : ''}${task.id} ${task.title}`, Math.max(8, width - 2))
+  const updated = Date.parse(task.updatedAt)
+  const urgent = PRIORITY_COLOR[task.priority]
+  const meta = [task.type, task.crew, Number.isFinite(updated) ? ago(data.now - updated) : null].filter(Boolean).join(' · ')
+
   return (
-    <Box key={`row:${task.id}`}>
-      <Text color={ACCENT}>{isSelected ? '▸' : ' '}</Text>
-      <Button key={`card:${task.id}`} label={label} plain dimColor={!isSelected && !isMine} onPress={() => act.select(task.id)} />
+    <Box key={`row:${task.id}`} flexDirection="column" marginTop={isSelected ? 1 : 0} marginBottom={isSelected ? 1 : 0}>
+      <Box columnGap={1}>
+        <Text color={ACCENT}>{isSelected ? '▾' : isMine ? '◉' : ' '}</Text>
+        <Button key={`card:${task.id}`} label={task.id} plain dimColor={!isSelected && !isMine} onPress={() => act.select(isSelected ? null : task.id)} />
+        <Box flexDirection="column" flexShrink={1}>
+          <Text bold={isSelected} wrap="wrap">
+            {task.title}
+          </Text>
+          <Text wrap="truncate-end">
+            {urgent ? <Text color={urgent}>{task.priority} · </Text> : null}
+            <Text dimColor>{meta}</Text>
+          </Text>
+        </Box>
+      </Box>
+      {isSelected ? details(kit, task, data, act) : null}
     </Box>
   )
 }
@@ -69,7 +104,7 @@ function cardRow(kit: Kit, task: OrbitTask, data: BoardData, width: number, act:
 function details(kit: Kit, task: OrbitTask, data: BoardData, act: Actions) {
   const { Box, Button, Text } = kit
   const spec = laneOf(task.status)
-  const meta = [task.status, task.priority, task.type, task.complexity, task.crew ? `crew ${task.crew}` : null].filter(Boolean).join(' · ')
+  const facts = [task.complexity ? `complexity ${task.complexity}` : null, task.deps.length > 0 ? `depends on ${task.deps.join(', ')}` : null, task.runId ? `last run ${task.runId}` : null].filter(Boolean)
   const buttons: { key: string; label: string; hotkey: string; isPrimary?: boolean; press: () => void }[] = []
 
   if (task.status === 'proposed') {
@@ -94,29 +129,20 @@ function details(kit: Kit, task: OrbitTask, data: BoardData, act: Actions) {
   }
 
   return (
-    <Box key="details" flexDirection="column" marginTop={1} borderStyle="round" borderDimColor paddingX={1}>
-      <Text wrap="truncate-end">
-        <Text bold color={ACCENT}>
-          {task.id}
-        </Text>{' '}
-        <Text color={spec?.color}>{spec?.glyph ?? '✓'}</Text>
-        <Text dimColor> {meta}</Text>
-      </Text>
-      <Text bold>{task.title}</Text>
-      {task.deps.length > 0 || task.runId ? (
-        <Text dimColor wrap="truncate-end">
-          {task.deps.length > 0 ? `depends on ${task.deps.join(', ')}` : ''}
-          {task.deps.length > 0 && task.runId ? ' · ' : ''}
-          {task.runId ? `last run ${task.runId}` : ''}
+    <Box key="details" flexDirection="column" marginLeft={2} marginTop={1} borderStyle="round" borderColor={spec?.color} borderDimColor paddingX={1}>
+      {facts.length > 0 ? (
+        <Text dimColor wrap="wrap">
+          {facts.join(' · ')}
         </Text>
       ) : null}
-      {task.criteria.slice(0, 6).map(item => (
-        <Text>
-          <Text dimColor>○ </Text>
-          {item}
-        </Text>
+      {task.criteria.length > 0 ? <Text bold>Acceptance criteria</Text> : <Text dimColor>No acceptance criteria recorded.</Text>}
+      {task.criteria.slice(0, 8).map((item, index) => (
+        <Box key={`criterion:${index}`} columnGap={1}>
+          <Text dimColor>○</Text>
+          <Text wrap="wrap">{item}</Text>
+        </Box>
       ))}
-      {task.criteria.length > 6 ? <Text dimColor>+{task.criteria.length - 6} more criteria</Text> : null}
+      {task.criteria.length > 8 ? <Text dimColor>+{task.criteria.length - 8} more criteria</Text> : null}
       {buttons.length > 0 ? (
         <Box marginTop={1} columnGap={1} flexWrap="wrap">
           {buttons.map(button => (

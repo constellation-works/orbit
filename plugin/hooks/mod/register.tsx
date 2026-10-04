@@ -27,6 +27,7 @@ import {
   withTaskTrailer,
 } from './model'
 import { band } from './views/band'
+import { DEFAULT_OPEN } from './views/board'
 import type { Actions } from './views/kit'
 import { pane } from './views/pane'
 
@@ -63,6 +64,7 @@ const shipAtom = atom({ plugin: 'orbit', key: 'ship' } as const, null)
 const viewAtom = atom({ plugin: 'orbit', key: 'view' } as const, 'board')
 const selectedAtom = atom({ plugin: 'orbit', key: 'selected' } as const, null)
 const flashAtom = atom({ plugin: 'orbit', key: 'flash' } as const, null)
+const openLanesAtom = atom({ plugin: 'orbit', key: 'openLanes' } as const, null)
 
 let settings: Settings = { host: null, refreshMs: 180_000, commitTrailer: true, band: 'on' }
 let configError: string | null = null
@@ -334,6 +336,11 @@ function actionsFor($: EngineInterface): Actions {
     refresh: () => void refresh($),
     setView: next => void openPane($, next),
     select: taskId => void update($, selectedAtom, () => taskId),
+    toggleLane: section =>
+      void update($, openLanesAtom, prior => {
+        const open = prior ?? [...DEFAULT_OPEN]
+        return open.includes(section) ? open.filter(id => id !== section) : [...open, section]
+      }),
     clearFlash: () => void say($, null),
     hideBand: () => void update($, isBandHiddenAtom, () => true),
     closePane: () => void $.ui.close({ id: PANE }),
@@ -500,6 +507,7 @@ export const register: Register = (on, options) => {
         error: configError ?? (await read($, errorAtom)),
         view: await read($, viewAtom),
         selected: await read($, selectedAtom),
+        openLanes: await read($, openLanesAtom),
         active: await read($, activeAtom),
         ship: await read($, shipAtom),
         flash: await read($, flashAtom),

@@ -72,7 +72,8 @@ test('the board approves a proposed task with `orbit task update --approve`', as
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
     for (const task of TASKS) expect(await ui.find({ key: `card:${task.id}` })).toBeDefined()
-    await ui.press({ key: 'card:ORB-4' })
+    // The selection outlives the mount: open the row only where it is shut.
+    if ((await ui.find({ key: 'approve' })) === undefined) await ui.press({ key: 'card:ORB-4' })
     ran.length = 0
     await ui.press({ key: 'approve' })
     expect(ran.some(run => run.args.slice(0, 4).join(' ') === 'task update ORB-4 --approve')).toBe(true)
@@ -89,7 +90,7 @@ test('Ship… on a backlog task opens the preflight with Launch armed', async ($
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
     await ui.press({ key: 'tab:board' })
-    await ui.press({ key: 'card:ORB-2' })
+    if ((await ui.find({ key: 'ship' })) === undefined) await ui.press({ key: 'card:ORB-2' })
     await ui.press({ key: 'ship' })
     expect(await ui.find({ key: 'launch' })).toBeDefined()
     await ui.press({ key: 'clear' })
@@ -209,4 +210,27 @@ test('an unregistered checkout reads the owner the federated MCP names when owne
   await ui.press({ key: 'tab:board' })
   expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
   await ui.unmount()
+})
+
+test('board sections fold: Done starts shut, and a header press shuts or opens its section', async ($, on) => {
+  fakeOrbit(on, [])
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
+    await ui.press({ key: 'tab:board' })
+    for (const section of ['blocked', 'in-progress', 'review', 'proposed', 'backlog', 'done']) expect(await ui.find({ key: `lane:${section}` })).toBeDefined()
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+    await ui.press({ key: 'lane:backlog' })
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeUndefined()
+    await ui.press({ key: 'lane:backlog' })
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+    await ui.press({ key: 'card:ORB-1' })
+    expect(await ui.find({ key: 'rescue' })).toBeDefined()
+    await ui.press({ key: 'card:ORB-1' })
+    expect(await ui.find({ key: 'rescue' })).toBeUndefined()
+    await ui.unmount()
+  }
 })
