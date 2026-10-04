@@ -171,12 +171,12 @@
    stack (~194px). The four health metrics ride inline in it. */
 .topbar {
   flex: 0 0 auto;
-  height: 60px;
+  min-height: 60px;
   border-bottom: 1px solid var(--hair);
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 0 24px;
+  padding: 10px 24px;
   background: var(--bg);
 }
 
@@ -190,7 +190,7 @@
 
 .topbar-spacer { flex: 1 1 auto; }
 
-.kpis { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.kpis { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 
 .kpi {
   display: inline-flex;
@@ -218,6 +218,13 @@
   border-radius: 50%;
   background: var(--state-failed);
 }
+.host-resource-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 10px; margin-left: 4px; border-left: 1px solid var(--border); }
+.kpi.host-resource { cursor: default; }
+.kpi.host-resource.elevated { background: color-mix(in srgb, var(--state-pending) 10%, var(--bg)); border-color: var(--state-pending); color: var(--state-pending); }
+.kpi.host-resource.critical { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
+.kpi.host-resource.elevated .v, .kpi.host-resource.critical .v { color: inherit; }
+.kpi.host-resource.unknown .v { color: var(--fg-dim); }
+.host-resource-held { font-size: 11px; font-weight: 600; }
 .kpi-window {
   font-size: 12px;
   color: var(--fg-dim);
@@ -228,13 +235,12 @@
 .kpi-spark path { fill: none; stroke: var(--accent); stroke-width: 1.2px; }
 .kpi-spark .baseline { stroke: var(--hair); stroke-width: 1px; }
 
-/* The bar needs about 1000px of window to hold the crumb, four metrics, the
-   window label and Refresh on one row. Narrower than that they overlapped, so
-   the decorative sparkline goes first and then the bar wraps. */
-@media (max-width: 1100px) {
+/* Leave room for the windowed metrics and live host chips. The groups wrap
+   within the bar on smaller screens. */
+@media (max-width: 1400px) {
   .kpi-spark { display: none; }
 }
-@media (max-width: 1000px) {
+@media (max-width: 1300px) {
   .topbar {
     height: auto;
     min-height: 52px;

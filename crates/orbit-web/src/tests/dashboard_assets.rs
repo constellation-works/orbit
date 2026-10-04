@@ -40,7 +40,7 @@ fn dashboard_markdown_call_sites_use_sanitizing_wrapper() {
 }
 
 #[test]
-fn host_resource_asset_executes_pressure_unknown_and_recovery_states() {
+fn host_resource_chips_execute_topbar_aggregate_pressure_unknown_and_recovery_states() {
     let result = std::process::Command::new("node")
         .args([
             "--experimental-vm-modules",
