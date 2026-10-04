@@ -15,6 +15,9 @@ mod resume;
 pub mod review_gate;
 mod worktree;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) use claim::{claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
 pub(super) use failure::pr_failure_handoff;

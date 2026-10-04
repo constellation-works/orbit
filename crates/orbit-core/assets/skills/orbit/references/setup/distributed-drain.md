@@ -25,8 +25,9 @@ routing is in [tool-surface.md](../tool-surface.md).
 ## What v1 does not do
 
 - No heartbeat, automatic reclamation, fleet registry, or follower merge.
-- No automatic review. v1 admits only `review_policy = none`. Status `review`
-  means a delivery handoff is waiting, not that a reviewer ran.
+- No before-PR review. `none` and `after-landing` are admitted; under
+  `after-landing`, the owner reviews the landed delivery. Status `review` means
+  a delivery handoff is waiting, not that a reviewer ran.
 - Age, reservation TTL, and a missing local run are diagnostics, not proof of
   death.
 - Seeded `ship_sweep`, `workspace_ship_pipeline`, and `orbit run ship-sweep`
@@ -49,8 +50,9 @@ orbit config get operation.review_policy
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `1`, equivalent crew and toolchain resolution, and
-`operation.review_policy = none`. Empty
+protocol schema `1`, equivalent crew and toolchain resolution, and an admitted
+review policy pair: `none`/`none`, or an `after-landing` owner with a `none` or
+`after-landing` replica. `before-pr` remains refused. Empty
 `workflow.required_validation_commands` is fail-closed for a claimed handoff.
 A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
 ignored: `orbit doctor` warns; delete the files. Deny a caller by removing its
@@ -228,8 +230,8 @@ someone inspects `blocked` and `job_run_machine`.
 
 ## Verify
 
-A clean probe, matching versions, `review_policy = none`, and a replica role
-mean the hosts are **installed**. Start a drain only when the user asked for
-one, and leave schedules untouched. After the first claim, confirm on the owner
-that `orbit.drain.claims` shows it on the follower's machine, and that after
-handoff the task is in `review` with its PR and nothing merged.
+A clean probe, matching versions, an admitted review policy pair, and a replica
+role mean the hosts are **installed**. Start a drain only when the user asked
+for one, and leave schedules untouched. After the first claim, confirm on the
+owner that `orbit.drain.claims` shows it on the follower's machine, and that
+after handoff the task is in `review` with its PR and nothing merged.

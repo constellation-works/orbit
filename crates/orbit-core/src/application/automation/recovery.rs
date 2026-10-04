@@ -73,9 +73,11 @@ pub fn recover_auto_task(
             .automation_state(&consumer)?
             .ok_or_else(|| OrbitError::InvalidInput("unknown delivery consumer".into()))?;
         let receipts = store.automation_receipts(&consumer, 100)?;
-        let (page, record) = source
+        let (mut page, record) = source
             .replay_history(&trigger.branch, &state, receipts.len())
             .map_err(automation_error_to_orbit)?;
+        let handoffs = runtime.stores().tasks().accepted_handoffs()?;
+        super::provider::attribute(&mut page.deliveries, &handoffs);
         Some(recovery::HistoryReplayInput { page, record })
     } else {
         None

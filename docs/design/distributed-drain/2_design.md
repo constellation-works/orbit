@@ -485,13 +485,14 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 | Required crews and providers available and authenticated | Resolved workspace/task execution requirements and provider-specific probes |
 | Binary version and orchestration schema match the owner | Owner read-only capability/version response; pull enforces parity again |
 | Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
-| Review policy is `none` on owner and executor | Owner policy captured at admission; executor verifies the same policy before binding |
+| Review policy pair is admitted | Owner policy captured at admission; `none` / `none` and an `after-landing` owner with a `none` or `after-landing` executor are accepted |
 | Sandbox and required OS/toolchain capabilities available | Existing doctor checks plus workspace execution prerequisites |
 | Repository readable and credentials configured for push and PR operations | Git transport checks and provider authentication; `gh auth status` alone does not prove Git push permission |
 
 The owner resolves ship mode, base/landing branches and completion authority. Follower execution
 always stops at handoff; local ship mode is refused for followers. Equal binary/schema versions do
-not imply equal crew, policy or toolchain configuration; v1 requires both.
+not imply equal crew, policy or toolchain configuration. Admission checks the review policy pair;
+the follower separately resolves the execution crew and toolchain it needs.
 
 ### 4.1 Read-only admission probe
 
@@ -532,7 +533,7 @@ mutation has an idempotency or reconciliation contract before step recovery retr
 | Tasks, dependencies, comments, history, coordination artifacts, claim state | Owner for reads and writes; no replica-local fallback |
 | Ready ordering, lock admission, claim settlement, handoff acceptance | Owner transactions |
 | Worktree, Git operations, agent execution, build/test, local run/step state and logs | Executing host |
-| Review policy | `none` only in v1; typed not-required disposition and validation evidence live on owner |
+| Review policy | `none` and `after-landing` are admitted; the handoff carries the owner's typed disposition and validation evidence |
 | Completion authority, landing intent, merge verification, task completion | Owner |
 
 **Worker invocation.** `WorkerInvocation` carries owner destination/workspace, task, claim,
