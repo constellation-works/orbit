@@ -222,26 +222,26 @@ pub(in super::super) fn prepare(
         let Some(source) = &source else {
             continue;
         };
-        let (fingerprint, status_neutral_fingerprint) =
-            crate::application::automation::preparation::fingerprints(
-                runtime,
-                &task,
-                &source.source_revision,
-                &policy,
-            )
-            .map_err(|error| action_failed(action, error.to_string()))?;
+        let fingerprints = crate::application::automation::preparation::fingerprints(
+            runtime,
+            &task,
+            &source.source_revision,
+            &policy,
+        )
+        .map_err(|error| action_failed(action, error.to_string()))?;
         // Each task is checked against the batch member that claimed it.
         if claim.as_ref().is_some_and(|claim| {
             claim
                 .members()
                 .iter()
                 .find(|member| member.task_ids.contains(task_id))
-                .is_none_or(|member| member.fingerprint != fingerprint)
+                .is_none_or(|member| member.fingerprint != fingerprints.material)
         }) {
             return Err(action_failed(action, "state-trigger task meaning changed"));
         }
-        snapshot["material_fingerprint"] = json!(fingerprint);
-        snapshot["status_neutral_fingerprint"] = json!(status_neutral_fingerprint);
+        snapshot["material_fingerprint"] = json!(fingerprints.material);
+        snapshot["status_neutral_fingerprint"] = json!(fingerprints.status_neutral);
+        snapshot["material_components"] = json!(fingerprints.components);
     }
 
     // Size partitions only. Crew homogeneity is the state-consumer batching

@@ -32,3 +32,6 @@ pub(crate) use source::requested_base_branch;
 /// both a prepared task snapshot and the assessment apply reports for it
 /// [ORB-11980].
 pub(super) const VALIDATION_TOOL_WARNINGS: &str = "validation_tool_warnings";
+
+#[cfg(test)]
+mod tests;
