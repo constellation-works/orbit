@@ -6,8 +6,8 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{LoadedPlugin, PluginProgramStatus, program_statuses};
 use orbit_types::plugin::{
-    InstalledPlugin, PluginDisabledLayer, PluginExecutionKind, PluginGrant, PluginSandbox,
-    PluginStatus, plugin_tool_name,
+    InstalledPlugin, PluginBuildRecord, PluginDisabledLayer, PluginExecutionKind, PluginGrant,
+    PluginSandbox, PluginStatus, plugin_tool_name,
 };
 
 use super::super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
@@ -79,6 +79,10 @@ pub struct PluginSummary {
     /// The Orbit version this plugin's conformance goldens last passed on
     /// (§5), when `orbit plugin test` has recorded one.
     pub certified_orbit_version: Option<String>,
+    /// What this host recorded about the install-time build that produced
+    /// the plugin's outputs (design `docs/design/plugins/3_install_time_build.md`
+    /// §3.6), when it was built here.
+    pub build: Option<PluginBuildRecord>,
     /// Why the plugin is not active, when it is not.
     pub diagnostic: Option<String>,
     /// Whether `.orbit/plugins.yaml` pins this plugin.
@@ -131,6 +135,7 @@ pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitE
             panels: Vec::new(),
             links: Vec::new(),
             certified_orbit_version: None,
+            build: None,
             diagnostic: runtime_diagnostic(runtime, &name),
             pinned: true,
             host_enabled: false,
@@ -303,6 +308,7 @@ pub(in crate::application::plugin) fn summary_for_installed(
         panels,
         links,
         certified_orbit_version: installed.certified_orbit_version.clone(),
+        build: installed.build.clone(),
         diagnostic: None,
         pinned: false,
         host_enabled: installed.enabled,

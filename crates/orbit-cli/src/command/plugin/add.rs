@@ -4,7 +4,9 @@ use orbit_core::adapter::command::PluginAddOptions;
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::support::{append_enable_report_text, enable_report_json, plugin_record};
+use super::support::{
+    append_enable_report_text, enable_report_json, plugin_record, show_build_plan,
+};
 
 #[derive(Args)]
 pub struct PluginAddArgs {
@@ -30,6 +32,12 @@ pub struct PluginAddArgs {
     /// `orbit plugin enable --grant` documents.
     #[arg(long = "grant", value_delimiter = ',', requires = "enable")]
     pub grants: Vec<String>,
+    /// Consent to build this source on this host. A `git+<url>#<full
+    /// commit id>` source whose manifest declares `spec.build` is refused
+    /// without it; the refusal prints the build plan to review. Consent
+    /// covers this one command and never comes from a pin or config.
+    #[arg(long)]
+    pub allow_build: bool,
 }
 
 impl Execute for PluginAddArgs {
@@ -41,6 +49,8 @@ impl Execute for PluginAddArgs {
                 digest: self.digest,
                 enable: self.enable,
                 grants: self.grants,
+                allow_build: self.allow_build,
+                show_build_plan: Some(show_build_plan),
             },
         )?;
         let summary = &result.summary;

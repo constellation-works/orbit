@@ -343,12 +343,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_job_runs_job_created_and_retry_indexes,
     },
+    // Plugin standard: the build record of a plugin built from a
+    // commit-pinned `git+` source under `--allow-build`
+    // (`docs/design/plugins/3_install_time_build.md` §3.6).
+    Migration {
+        version: 35,
+        name: "plugin_build_record",
+        // A reinstall must overwrite the build record; an older upsert keeps
+        // the previous build's record beside a tree no build produced.
+        compat: MigrationCompatibility::ReadCompatible,
+        apply: super::apply_plugin_build_record,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 34;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 35;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

@@ -2,10 +2,12 @@
 
 use orbit_common::OrbitError;
 use orbit_types::plugin::{
-    InstalledPlugin, PluginGrantEntry, PluginGrantSet, PluginStatus, parse_grants,
+    InstalledPlugin, PluginGrantEntry, PluginGrantSet, PluginPin, PluginStatus, git_commit_source,
+    parse_archive_digest, parse_grants,
 };
 
 use crate::OrbitRuntime;
+use crate::runtime::plugin::build_witness::verify_build_record;
 use crate::runtime::plugin::cache::load_installed_plugin;
 use crate::runtime::plugin::grants::{verify_install_path, verify_recorded_grants};
 use crate::runtime::plugin::host::projected_status;
@@ -21,6 +23,53 @@ use super::workspace::{
     disable_plugin_in_workspace, enable_plugin_in_workspace, workspace_plugin_toggles,
     write_workspace_toggle,
 };
+
+/// How an installed build differs from its pin: a different commit, or an
+/// artifact digest the install does not record. Offline: compares the row
+/// with the pin and nothing else.
+pub(crate) fn build_pin_drift(pin: &PluginPin, installed: &InstalledPlugin) -> Option<String> {
+    let name = &pin.name;
+    let pinned_commit = pin
+        .source
+        .as_deref()
+        .and_then(git_commit_source)
+        .map(|(_, commit)| commit);
+    let pinned_digest = pin
+        .artifact_digest
+        .as_deref()
+        .and_then(|digest| parse_archive_digest(digest).ok())
+        .map(|hex| format!("sha256:{hex}"));
+    let upgrade = format!(
+        "`orbit plugin upgrade {name} {} --allow-build`",
+        pin.source.as_deref().unwrap_or("<source>")
+    );
+    match &installed.build {
+        Some(build) => {
+            if let Some(commit) = pinned_commit.filter(|commit| *commit != build.commit) {
+                return Some(format!(
+                    "installed build of commit {} does not match the pinned commit {commit}; \
+                     rebuild it with {upgrade}",
+                    build.commit
+                ));
+            }
+            pinned_digest
+                .filter(|digest| *digest != build.artifact_digest)
+                .map(|digest| {
+                    format!(
+                        "installed build has artifact digest {}, but the pin names {digest}; \
+                         rebuild it with {upgrade}",
+                        build.artifact_digest
+                    )
+                })
+        }
+        None => pinned_digest.map(|digest| {
+            format!(
+                "the pin names artifact digest {digest}, but this install records no build; \
+                 rebuild it with {upgrade}"
+            )
+        }),
+    }
+}
 
 /// What `orbit plugin sync` found for one pinned plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +106,16 @@ pub fn sync_plugins(
     for pin in &pins.plugins {
         let installed = runtime.stores().plugins().get_plugin(&pin.name)?;
         match installed {
+            // §3.7: an installed build that differs from what the pin
+            // expects is unsatisfied here, and is neither enabled, toggled on
+            // nor seeded. A differing pin never causes a rebuild.
+            Some(installed) if build_pin_drift(pin, &installed).is_some() => {
+                outcomes.push(PluginSyncOutcome {
+                    name: pin.name.clone(),
+                    status: PluginStatus::Inactive,
+                    message: build_pin_drift(pin, &installed).unwrap_or_default(),
+                });
+            }
             Some(installed) => {
                 let satisfied = pin
                     .version
@@ -231,6 +290,10 @@ pub fn sync_plugins(
                     // then take the same reviewed enable path used above.
                     enable: false,
                     grants: Vec::new(),
+                    // §3.7: a committed pin never starts a build, and sync
+                    // has no flag that could.
+                    allow_build: false,
+                    show_build_plan: None,
                 };
                 match super::super::install::install_pinned_plugin(
                     runtime,
@@ -304,6 +367,17 @@ pub fn sync_plugins(
                             message,
                         });
                     }
+                    Err(OrbitError::PluginBuildConsentRequired(_)) => {
+                        outcomes.push(PluginSyncOutcome {
+                            name: pin.name.clone(),
+                            status: PluginStatus::Missing,
+                            message: format!(
+                                "not installed: {source} builds at install time, and a pin never \
+                                 starts a build; review the plan and consent with `orbit plugin \
+                                 add {source} --allow-build`"
+                            ),
+                        });
+                    }
                     // One pin's failure must not stop the rest: a host that
                     // cannot reach one source still converges on the others.
                     Err(error) => outcomes.push(PluginSyncOutcome {
@@ -347,6 +421,9 @@ fn sync_effective_status(
         return Ok((PluginStatus::Inactive, Some(diagnostic)));
     }
     if let Err(diagnostic) = verify_install_path(&global_root, installed) {
+        return Ok((PluginStatus::Inactive, Some(diagnostic)));
+    }
+    if let Err(diagnostic) = verify_build_record(&global_root, installed) {
         return Ok((PluginStatus::Inactive, Some(diagnostic)));
     }
     if workspace_plugin_toggles(runtime)?.get(&installed.name) == Some(&false) {

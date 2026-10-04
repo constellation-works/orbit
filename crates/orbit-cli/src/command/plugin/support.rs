@@ -13,6 +13,15 @@ pub enum PluginScope {
     Workspace,
 }
 
+/// Prints the build plan to stderr before a consented `spec.build` runs, so
+/// the operator sees what runs even when stdout is machine-readable.
+pub(super) fn show_build_plan(plan: &str) {
+    use std::io::Write;
+    let mut stderr = std::io::stderr();
+    let _ = writeln!(stderr, "{plan}");
+    let _ = stderr.flush();
+}
+
 /// Why a plugin is not active in the selected workspace, in the words
 /// `list` and `show` print. `None` for an active plugin.
 pub(super) fn state_reason(summary: &PluginSummary) -> Option<String> {
@@ -82,6 +91,7 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
             }))
             .collect::<Vec<_>>(),
         "certified_orbit_version": summary.certified_orbit_version,
+        "build": summary.build,
         "diagnostic": summary.diagnostic,
         "panels": summary
             .panels

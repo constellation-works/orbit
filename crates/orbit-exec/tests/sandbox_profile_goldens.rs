@@ -19,6 +19,13 @@
 //! to its target on both platforms: that is why the runtime resolver must
 //! drop one before compiling.
 //!
+//! More cases render the install-time plugin build profile, one per phase
+//! (`plugin_build_fetch`, `plugin_build_offline`), through
+//! [`orbit_exec::compile_linux_build_argv`]; the rendering elides the host's
+//! system runtime binds, which vary by distribution. macOS runs no `fetch`
+//! phase, so [`orbit_exec::compile_macos_build_profile`] renders only
+//! `plugin_build_offline`.
+//!
 //! The fixture renders in a child of this binary with a cleared environment
 //! and a fixture `HOME`, so provider and Cargo overrides on the host cannot
 //! leak into the output. Fixture paths render as `<ROOT>`.
@@ -37,8 +44,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use orbit_exec::{
-    MacosNetworkAccess, append_macos_network_access, append_macos_read_boundary,
-    append_macos_subpath_mask, compile_macos_sandbox_profile,
+    BuildPhaseNetwork, BuildSandboxSpec, MacosNetworkAccess, append_macos_network_access,
+    append_macos_read_boundary, append_macos_subpath_mask, compile_macos_sandbox_profile,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -123,6 +130,8 @@ fn render_compiled_profiles_in_a_pinned_environment() {
         let text = fixture.render_macos(&case);
         std::fs::write(macos.join(format!("{}.sbpl", case.name)), text).expect("write sbpl");
     }
+    let text = fixture.render_build_macos(BuildPhaseNetwork::None);
+    std::fs::write(macos.join("plugin_build_offline.sbpl"), text).expect("write build sbpl");
     #[cfg(target_os = "linux")]
     {
         let linux = output.join("linux");
@@ -130,6 +139,10 @@ fn render_compiled_profiles_in_a_pinned_environment() {
         for case in fixture.cases() {
             let text = fixture.render_linux(&case);
             std::fs::write(linux.join(format!("{}.txt", case.name)), text).expect("write plan");
+        }
+        for (name, network) in BUILD_CASES {
+            let text = fixture.render_build_linux(network);
+            std::fs::write(linux.join(format!("{name}.txt")), text).expect("write build plan");
         }
     }
 }
@@ -242,6 +255,14 @@ fn golden_matches(name: &str, actual: &str) -> bool {
     false
 }
 
+/// The Linux install-time plugin build profile, one case per phase
+/// (`docs/design/plugins/3_install_time_build.md` §3.2–§3.3).
+#[cfg(target_os = "linux")]
+const BUILD_CASES: [(&str, BuildPhaseNetwork); 2] = [
+    ("plugin_build_fetch", BuildPhaseNetwork::Https),
+    ("plugin_build_offline", BuildPhaseNetwork::None),
+];
+
 /// One activity policy and the provider whose CLI it confines.
 struct Case {
     name: &'static str,
@@ -273,6 +294,8 @@ struct Fixture {
     redirected_global: PathBuf,
     plugin_root: PathBuf,
     plugin_state: PathBuf,
+    build_dir: PathBuf,
+    build_readable: Vec<PathBuf>,
 }
 
 impl Fixture {
@@ -286,6 +309,13 @@ impl Fixture {
         let redirected_global = root.join("redirected/.orbit");
         let plugin_root = global.join("plugins/demo");
         let plugin_state = global.join("state/plugins/demo");
+        let build_dir = global.join("plugins/demo/.build-golden");
+        let toolchain = home.join(".rustup/toolchains/stable-golden");
+        let build_readable = vec![
+            home.join(".cargo/bin/cargo"),
+            toolchain.clone(),
+            home.join(".rustup/settings.toml"),
+        ];
         for dir in [
             home.join(".ssh"),
             home.join(".aws"),
@@ -311,6 +341,9 @@ impl Fixture {
             root.join("outside"),
             plugin_root.clone(),
             plugin_state.clone(),
+            build_dir.join("src"),
+            toolchain.join("bin"),
+            home.join(".cargo/bin"),
         ] {
             std::fs::create_dir_all(&dir).expect("fixture dir");
         }
@@ -318,6 +351,8 @@ impl Fixture {
         std::fs::write(global.join("orbit.db"), "").expect("global db");
         std::fs::write(redirected_global.join("orbit.db"), "").expect("redirected db");
         std::fs::write(plugin_root.join("backend.sh"), "#!/bin/sh\n").expect("backend");
+        std::fs::write(home.join(".cargo/bin/cargo"), "").expect("cargo proxy");
+        std::fs::write(home.join(".rustup/settings.toml"), "").expect("rustup settings");
         std::os::unix::fs::symlink(root.join("outside"), redirected_global.join("cache"))
             .expect("redirect the host cache store");
         Self {
@@ -330,7 +365,73 @@ impl Fixture {
             redirected_global,
             plugin_root,
             plugin_state,
+            build_dir,
+            build_readable,
         }
+    }
+
+    fn build_spec(&self, network: BuildPhaseNetwork) -> BuildSandboxSpec<'_> {
+        BuildSandboxSpec {
+            build_dir: &self.build_dir,
+            readable: &self.build_readable,
+            home: Some(self.home.as_os_str()),
+            network,
+        }
+    }
+
+    fn render_build_macos(&self, network: BuildPhaseNetwork) -> String {
+        self.normalize(&orbit_exec::compile_macos_build_profile(
+            &self.build_spec(network),
+        ))
+    }
+
+    /// The build argv with the host's system runtime binds elided: which of
+    /// `/lib64`, `/etc/pki` or `/etc/gai.conf` exist, and which are links,
+    /// depends on the distribution, not the policy. Every fixture path, the
+    /// namespaces and the write bind are kept.
+    #[cfg(target_os = "linux")]
+    fn render_build_linux(&self, network: BuildPhaseNetwork) -> String {
+        let argv = [
+            self.home.join(".cargo/bin/cargo").display().to_string(),
+            "build".to_string(),
+        ];
+        let args = orbit_exec::compile_linux_build_argv(
+            &self.build_spec(network),
+            &argv,
+            &self.build_dir.join("src"),
+        );
+        let mut lines: Vec<String> = Vec::new();
+        let mut elided = false;
+        let mut index = 0;
+        while index < args.len() {
+            let arg = &args[index];
+            let arity = match arg.as_str() {
+                "--ro-bind" | "--bind" | "--symlink" => 2,
+                "--proc" | "--dev" | "--tmpfs" | "--remount-ro" | "--chdir" => 1,
+                "--" => args.len() - index - 1,
+                _ => 0,
+            };
+            let operands = &args[index + 1..(index + 1 + arity).min(args.len())];
+            let system = matches!(arg.as_str(), "--ro-bind" | "--symlink")
+                && operands
+                    .last()
+                    .is_some_and(|target| !target.starts_with(&*self.root.to_string_lossy()));
+            if system {
+                if !elided {
+                    lines.push("(system runtime binds: host-dependent, elided)".to_string());
+                    elided = true;
+                }
+            } else {
+                let mut line = arg.clone();
+                for operand in operands {
+                    line.push(' ');
+                    line.push_str(operand);
+                }
+                lines.push(line);
+            }
+            index += 1 + arity;
+        }
+        self.normalize(&(lines.join("\n") + "\n"))
     }
 
     /// Rules for the global runtime stores every agent's nested `orbit`

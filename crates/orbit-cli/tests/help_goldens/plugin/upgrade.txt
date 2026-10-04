@@ -22,6 +22,9 @@ Options:
       --workspace <SELECTOR>
           Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
 
+      --allow-build
+          Consent to build this source on this host. A `git+<url>#<full commit id>` source whose manifest declares `spec.build` is refused without it, even when the commit and command are unchanged; the refusal prints the build plan to review. Consent covers this one command and never comes from a pin or config
+
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
