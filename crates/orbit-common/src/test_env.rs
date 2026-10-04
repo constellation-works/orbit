@@ -90,12 +90,24 @@ pub const MANAGED_RUN_ENV: &[&str] = &[
 /// That is not hypothetical: it created three real task records before it was
 /// caught (ORB-11300).
 ///
+/// Git's repository locators also outrank cwd. Scrub Git setup commands as
+/// well as Orbit children: otherwise `git init` can initialize the parent's
+/// repository, and a workflow worker can acquire the parent's fetch lock even
+/// though its home and Orbit authority were isolated (ORB-13940).
+///
 /// Clearing the whole set — routing, managed-run trust, actor identity,
 /// inherited sandbox grants, and the plugin broker socket — makes a fixture's
 /// authority a property of the fixture rather than of how the suite was
 /// launched. Apply it with [`clear_inherited_authority`] *before* any variable
 /// a test sets on purpose, so the deliberate value wins.
 pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
+    // Git repository and write destinations override a fixture's cwd.
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     // Durable routing: which registry, workspace, and data root the child
     // writes to. `ORBIT_REGISTRY_ROOT` and `ORBIT_WORKSPACE` outrank `HOME`.
     "ORBIT_ROOT",

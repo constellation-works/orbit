@@ -143,6 +143,19 @@ commands against ambient authority in a managed worker. See
 [`crates/orbit-cli/tests/workspace/ambient_authority_isolation.rs`](../crates/orbit-cli/tests/workspace/ambient_authority_isolation.rs)
 for the regression coverage.
 
+Apply the same shared scrub to fixture Git setup commands. `GIT_DIR`,
+`GIT_WORK_TREE`, and `GIT_COMMON_DIR` override cwd independently of Orbit's
+environment. Leaving them inherited can make `git init` initialize the parent
+repository and route a workflow's Git fetch lock into the parent checkout.
+
+Workflow-dispatch fixtures must also observe their detached workers reaching a
+terminal state in the fixture's run history before dropping its temporary home
+and checkout. A successful submission only proves admission, not where the
+worker opened its store. Check that the fixture records the expected runs and
+that a disposable parent registry presented through the managed environment
+gains no runs. The output-goldens fixture exercises this boundary with a
+task-pilot dispatch that stops before any agent work.
+
 Live `bwrap` spawn is not available from inside an agent-executor or job-run
 worktree. The outer sandbox blocks nested `unshare(CLONE_NEWUSER)`, so even
 `bwrap --ro-bind / / --tmpfs /tmp --dev /dev -- echo works` fails with
