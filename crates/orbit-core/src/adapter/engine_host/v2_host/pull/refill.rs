@@ -2,11 +2,10 @@
 //!
 //! Each call carries every earlier admission forward — retry, bind, launch,
 //! settle — and, while the window is open and the owner would admit this
-//! executor, tops the free slots up with new pull requests. It never fails the
-//! drain for an owner that is unreachable or refusing, nor for a local store
-//! read that fails: that is reported in the output and the next iteration tries
-//! again, because the settlements of work already running must keep flowing
-//! whatever the owner currently says about new work.
+//! executor, tops the free slots up with new pull requests. Three consecutive
+//! failed passes latch a durable degraded warning and stop new admissions.
+//! Settlement retries keep flowing. If run state cannot be read or recorded,
+//! the activity fails visibly rather than retrying without health evidence.
 //!
 //! Each request declares the crews this window can run [ORB-13941]: the
 //! provider preflight taken on the window's first pass, minus every crew a
@@ -28,7 +27,7 @@
 //! launched back to the owner's backlog, and waits for the launched leaves to
 //! finish and settle. The pass that finds nothing left unsettled ends the
 //! drain `cancelled`. If that state cannot be read, the entire pass waits and
-//! retries before probing or advancing pending requests: neither new work nor
+//! fails before probing or advancing pending requests: neither new work nor
 //! an earlier unanswered request may be admitted without knowing whether the
 //! drain is cancelling.
 
@@ -41,8 +40,7 @@ use orbit_store::contracts::{
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, LocalPullAdmission, PullDestination,
 };
 use orbit_types::workflow::{
-    CrewExclusion, CrewExclusionSource, DrainAdmissionPass, DrainCancelRequest, PullCrewPreflight,
-    ResourceThrottle,
+    CrewExclusion, CrewExclusionSource, DrainCancelRequest, PullCrewPreflight,
 };
 use serde_json::{Value, json};
 
@@ -110,47 +108,22 @@ pub(crate) fn pull_refill(
         peer: &peer,
         launcher: &launcher,
     };
-    let cancel = match runtime.read_run_state(&run_id) {
-        Ok(state) => state.and_then(|state| state.drain_cancel),
-        Err(failure) => {
-            tracing::warn!(
-                target: "orbit.core.pull",
-                %run_id,
-                selector = %destination.selector,
-                %failure,
-                "pull drain could not read cancellation state; retrying next iteration",
-            );
-            return Ok(json!({
-                "admitted": 0,
-                "unsettled": Value::Null,
-                "admitting": false,
-                "refusal": Value::Null,
-                "crews": Value::Null,
-                "consecutive_failures": 0,
-                "reclaimed_build_bytes": 0,
-                "error": failure.to_string(),
-                "host_shutdown": Value::Null,
-                "resource_throttle": Value::Null,
-                "resource_telemetry_unknown": [],
-                "cancelling": false,
-                "done": false,
-                "wait": true,
-                "sleep_seconds": poll,
-            }));
-        }
-    };
+    let state = runtime.read_run_state(&run_id).map_err(|error| {
+        failed(format!(
+            "pull drain could not read cancellation and pass health: {error}"
+        ))
+    })?;
+    let degraded = state
+        .as_ref()
+        .and_then(|state| state.drain_last_pass.as_ref())
+        .is_some_and(|pass| pass.degraded);
+    let cancel = state.and_then(|state| state.drain_cancel);
     // A launched leaf whose worker died is reconciled first, so this pass
     // records and delivers its failure rather than waiting on it.
     runtime.reconcile_orphaned_claimed_leaves(&destination);
     if let Some(cancel) = cancel {
-        return Ok(cancelling_pass(
-            runtime,
-            &drain,
-            &run_id,
-            &destination,
-            &cancel,
-            poll,
-        ));
+        return cancelling_pass(runtime, &drain, &run_id, &destination, &cancel, poll)
+            .map_err(|error| failed(error.to_string()));
     }
 
     // Stop admitting while a host shutdown is pending: anything started now
@@ -180,7 +153,8 @@ pub(crate) fn pull_refill(
     };
     let breaker_open =
         consecutive_failures.is_some_and(|count| count >= CONSECUTIVE_FAILURE_BREAKER);
-    let mut admitting = !window_expired
+    let mut admitting = !degraded
+        && !window_expired
         && host_shutdown.is_none()
         && resource.throttle.is_none()
         && !breaker_open
@@ -220,6 +194,13 @@ pub(crate) fn pull_refill(
                 }
             }
             Ok(verdict) => {
+                if verdict
+                    .refusal
+                    .as_deref()
+                    .is_some_and(|message| message.starts_with("protocol_mismatch:"))
+                {
+                    error = verdict.refusal.clone();
+                }
                 refusal = Some(
                     verdict
                         .refusal
@@ -308,7 +289,18 @@ pub(crate) fn pull_refill(
                     .to_string()
             })
         });
-    record_pass(runtime, &run_id, resource.throttle.clone());
+    let health = runtime
+        .record_pull_pass(&run_id, resource.throttle.clone(), error.as_deref())
+        .map_err(|error| failed(format!("pull drain could not record pass health: {error}")))?;
+    admitting &= !health.degraded;
+    let refusal =
+        refusal.or_else(|| {
+            health.degraded.then(|| format!(
+            "pass_failures: drain degraded after {} consecutive failed passes; fix the cause \
+             run `orbit run auto --stop`, and start a new drain once this one ends; settlement retries continue",
+            health.consecutive_pass_failures
+        ))
+        });
     Ok(json!({
         "admitted": admitted,
         "unsettled": unsettled,
@@ -318,6 +310,9 @@ pub(crate) fn pull_refill(
         "consecutive_failures": consecutive_failures,
         "reclaimed_build_bytes": reclaimed_build_bytes,
         "error": error,
+        "last_pass_error": health.last_pass_error,
+        "consecutive_pass_failures": health.consecutive_pass_failures,
+        "degraded": health.degraded,
         "host_shutdown": host_shutdown.map(|shutdown| shutdown.describe()),
         "resource_throttle": resource.throttle,
         "resource_telemetry_unknown": resource.unknown,
@@ -338,7 +333,7 @@ fn cancelling_pass(
     destination: &PullDestination,
     cancel: &DrainCancelRequest,
     poll: u64,
-) -> Value {
+) -> Result<Value, OrbitError> {
     let cause = match cancel.reason.as_deref() {
         Some(reason) => format!("the drain was cancelled by {}: {reason}", cancel.actor),
         None => format!("the drain was cancelled by {}", cancel.actor),
@@ -394,7 +389,8 @@ fn cancelling_pass(
             "cancelling pull drain pass did not complete; retrying next iteration",
         );
     }
-    json!({
+    let health = runtime.record_pull_pass(run_id, None, error.as_deref())?;
+    Ok(json!({
         "admitted": 0,
         "unsettled": unsettled,
         "admitting": false,
@@ -402,6 +398,9 @@ fn cancelling_pass(
         "consecutive_failures": 0,
         "reclaimed_build_bytes": reclaimed_build_bytes,
         "error": error,
+        "last_pass_error": health.last_pass_error,
+        "consecutive_pass_failures": health.consecutive_pass_failures,
+        "degraded": health.degraded,
         "host_shutdown": Value::Null,
         "resource_throttle": Value::Null,
         "resource_telemetry_unknown": [],
@@ -410,36 +409,7 @@ fn cancelling_pass(
         "done": done,
         "wait": !done,
         "sleep_seconds": if done { 0 } else { poll },
-    })
-}
-
-/// Record this pass on the drain's own state, so readiness and `orbit run
-/// show` report a throttle the drain is holding. A pull drain queues nothing
-/// locally: the owner orders the backlog. Best effort, like the local drain's.
-fn record_pass(runtime: &OrbitRuntime, run_id: &str, resource_throttle: Option<ResourceThrottle>) {
-    let mut pass = Some(DrainAdmissionPass {
-        recorded_at: chrono::Utc::now(),
-        queued: 0,
-        deferred: Vec::new(),
-        excluded: Vec::new(),
-        excluded_total: 0,
-        resource_throttle,
-    });
-    if let Err(failure) = runtime
-        .stores()
-        .jobs()
-        .update_run_state(run_id, &mut |_, state| {
-            state.drain_last_pass = pass.take();
-            Ok(())
-        })
-    {
-        tracing::warn!(
-            target: "orbit.core.pull",
-            run_id,
-            %failure,
-            "pull drain could not record its pass; readiness will not report its throttle",
-        );
-    }
+    }))
 }
 
 /// The drain's crew window, taking and persisting its preflight on the first
@@ -555,6 +525,12 @@ fn probe(
                 report.get("owner_machine_id"),
                 destination.owner_machine_id
             )),
+        });
+    }
+    if let Some(refusal) = crate::application::distributed::protocol_mismatch(&report) {
+        return Ok(ProbeVerdict {
+            ship: None,
+            refusal: Some(refusal),
         });
     }
     let admits = report.get("admits").and_then(Value::as_bool) == Some(true);

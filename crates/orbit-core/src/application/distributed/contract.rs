@@ -163,6 +163,10 @@ impl crate::OrbitRuntime {
                     "declared caller version, schema, or drain context is missing or malformed"
                         .to_string()
                 }
+                AdmissionRefusal::ProtocolMismatch => format!(
+                    "protocol_mismatch: caller revision {}; owner revision {}",
+                    request.caller_schema, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
+                ),
                 AdmissionRefusal::VersionMismatch => format!(
                     "caller declares binary {} / protocol schema {}; this owner serves {} / {}",
                     request.caller_version,
@@ -236,4 +240,21 @@ pub(super) fn trusted_identity(
     } else {
         AdmissionIdentity::trusted_local(location)
     }
+}
+
+/// Compare the probe's contract revision before sending any admission fields.
+/// Older owners call this `version_mismatch`; the follower still reports the
+/// protocol-specific refusal with both revisions.
+pub(crate) fn protocol_mismatch(report: &serde_json::Value) -> Option<String> {
+    let owner = report
+        .get("protocol_schema")
+        .and_then(serde_json::Value::as_u64);
+    (owner != Some(u64::from(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA))).then(|| {
+        let owner = owner.map_or_else(|| "unknown".to_string(), |value| value.to_string());
+        format!(
+            "protocol_mismatch: caller revision {}; owner revision {owner}; deploy matching \
+             protocol revisions on both endpoints and restart their long-lived processes",
+            DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
+        )
+    })
 }

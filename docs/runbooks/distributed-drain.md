@@ -72,7 +72,7 @@ orbit doctor
 
 Confirm:
 
-- binary versions match;
+- binary versions and distributed-drain protocol revisions match;
 - each host has a distinct task prefix;
 - exactly one checkout of this repository reports role `owner`;
 - `orbit doctor` `mcp-callers` is `ok`, or a leftover
@@ -228,13 +228,13 @@ agent envelope or `ORBIT_OPERATOR=1`.
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 1,
+  "caller_schema": 2,
   "caller_review_policy": "none"
 }'
 ```
 
 The probe reports owner machine, binary version, distributed-drain protocol
-schema `1`, this session's capabilities, diagnostic caller machine,
+schema `2`, this session's capabilities, diagnostic caller machine,
 owner-resolved ship configuration, and review policy. Declaring version,
 schema, or review policy also reports the **first refusal admission would
 raise**, in admission order. It creates no receipt, reservation, claim, or
@@ -248,7 +248,8 @@ Expected refusals you may see (and must not work around):
 | Error | Meaning |
 |---|---|
 | `capability_refused` | Destination is a replica, or the session lacks agent/operator identity |
-| `version_mismatch` | Caller binary or protocol schema differs from the owner |
+| `version_mismatch` | Caller binary version differs from the owner |
+| `protocol_mismatch` | Caller and owner protocol revisions differ; diagnostics name both |
 | `ship_mode_unsupported` | A remote caller targeted a local-only ship workspace |
 | `review_policy_unsupported` | Owner or executor review policy is not `none` |
 
@@ -763,6 +764,19 @@ orbit run show <drain-run>   # Throttled: line from the drain's last pass
   `workflow.resource_throttle.enabled = false`; no pressure is then sampled
   for admission.
 
+Followers must match the owner's distributed-drain protocol revision, independently of
+`orbit --version`. Deploy matching revisions on both hosts and restart long-lived processes.
+The read-only probe reports `protocol_schema`; a mismatch is `protocol_mismatch` with both
+revisions, including when an older owner calls its refusal `version_mismatch`.
+
+`orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
+count. JSON carries `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
+`pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
+warning and stop new admissions for that drain. A successful pass before the threshold resets
+the streak. Degraded drains keep retrying settlements and outlive their window until nothing
+is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
+`orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
+
 ## Verification
 
 On the owner:
@@ -774,7 +788,7 @@ orbit doctor
 orbit config get operation.review_policy
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<owner-version>",
-  "caller_schema": 1,
+  "caller_schema": 2,
   "caller_review_policy": "none"
 }'
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'

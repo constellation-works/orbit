@@ -72,7 +72,8 @@ Move tasks with `orbit task export` /
 
 ## 2. Match binaries, crews, and review policy
 
-Every participant must run the same Orbit version and toolchains, and use
+Every participant must run the same Orbit version, distributed-drain protocol
+revision (currently `2`), and toolchains, and use
 review policy `none`. Crews may differ between hosts. A replica only receives
 tasks whose crew it can run, so name shared crews the same on every host:
 
@@ -86,6 +87,19 @@ v1 refuses `before-pr` and `after-landing` for distributed admission rather
 than silently downgrading them. Empty required-validation configuration is
 fail-closed for a claimed handoff. Compiler caches and build slots stay
 per host; they are not a shared fleet.
+
+Followers must match the owner's distributed-drain protocol revision, independently of
+`orbit --version`. Deploy matching revisions on both hosts and restart long-lived processes.
+The read-only probe reports `protocol_schema`; a mismatch is `protocol_mismatch` with both
+revisions, including when an older owner calls its refusal `version_mismatch`.
+
+`orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
+count. JSON carries `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
+`pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
+warning and stop new admissions for that drain. A successful pass before the threshold resets
+the streak. Degraded drains keep retrying settlements and outlive their window until nothing
+is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
+`orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
 
 ## 3. SSH login is owner access
 
@@ -119,7 +133,7 @@ run the CLI there. The follower runtime uses the internal owner route.
 ```bash
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 1,
+  "caller_schema": 2,
   "caller_review_policy": "none"
 }'
 ```

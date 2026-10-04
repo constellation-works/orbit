@@ -156,6 +156,16 @@ pub struct DrainAdmissionPass {
     /// Host resource pressure that held this pass's admissions [ORB-13901].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_throttle: Option<ResourceThrottle>,
+    /// The latest failed pull pass; cleared by success before degradation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_pass_error: Option<String>,
+    /// Consecutive failed pull passes, independent of failed claimed leaves.
+    #[serde(default)]
+    pub consecutive_pass_failures: u32,
+    /// Sticky warning state: new admissions stop, but settlements keep flowing.
+    /// Start a new drain after fixing the cause.
+    #[serde(default)]
+    pub degraded: bool,
 }
 
 /// One host resource whose sustained pressure holds new admissions.

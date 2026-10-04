@@ -46,6 +46,7 @@ mod probe;
 mod serve;
 mod settlement;
 
+pub(crate) use contract::protocol_mismatch;
 pub use contract::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, DeclaredCallerContract, OWNER_COMPLETION_POLICY,
     ensure_distributed_mutation_available, owner_binary_version,

@@ -1056,6 +1056,9 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         deferred: Vec::new(),
         excluded: Vec::new(),
         excluded_total: 0,
+        last_pass_error: None,
+        consecutive_pass_failures: 0,
+        degraded: false,
         resource_throttle: Some(orbit_types::workflow::ResourceThrottle {
             resources: vec![orbit_types::workflow::ResourcePressure {
                 resource: "memory".into(),
@@ -1094,6 +1097,85 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
             .is_some_and(|error| error.contains("resource_throttled") && error.contains(held)),
         "{refused}"
     );
+}
+
+/// A durable failed-pass record is visible through the actual CLI in text
+/// and JSON, independently of successful coordinator step outputs.
+#[test]
+fn run_show_exposes_degraded_pull_pass_health() {
+    const CHILD: &str = "ORBIT_TEST_PULL_PASS_HEALTH_CHILD";
+    const TEST: &str = "run_observation::run_show_exposes_degraded_pull_pass_health";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path());
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            std::time::Duration::from_secs(30),
+            64 * 1024,
+        )
+        .unwrap();
+        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
+        return;
+    }
+    let fixture = Fixture::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let id = "jrun-cli-degraded-pull";
+    let now = chrono::Utc::now();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
+    ).unwrap();
+    let mut state = orbit_types::workflow::PipelineState::new(
+        id.into(),
+        "workspace_pull_pipeline".into(),
+        serde_json::json!({}),
+    );
+    state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+        recorded_at: now,
+        queued: 0,
+        deferred: Vec::new(),
+        excluded: Vec::new(),
+        excluded_total: 0,
+        resource_throttle: None,
+        last_pass_error: Some("protocol_mismatch: caller revision 2; owner revision 1".into()),
+        consecutive_pass_failures: 3,
+        degraded: true,
+    });
+    runtime.write_run_state(id, &state).unwrap();
+    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let pass = &shown["pipeline_state"]["drain_last_pass"];
+    assert_eq!(pass["consecutive_pass_failures"], 3);
+    assert_eq!(pass["degraded"], true);
+    assert_eq!(
+        pass["last_pass_error"],
+        "protocol_mismatch: caller revision 2; owner revision 1"
+    );
+    let output = fixture
+        .orbit()
+        .args(["run", "show", id, "--no-reconcile"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("consecutive_failures=3"), "{text}");
+    assert!(
+        text.contains("last_pass_error=protocol_mismatch:"),
+        "{text}"
+    );
+    assert!(text.contains("Drain degraded:"), "{text}");
 }
 
 #[cfg(unix)]

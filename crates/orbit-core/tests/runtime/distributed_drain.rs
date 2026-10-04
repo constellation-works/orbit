@@ -142,6 +142,8 @@ struct Wire {
     task_reads_remote_error: Mutex<Option<(String, String)>>,
     /// When set, every tool call fails at the transport: an owner outage.
     unreachable: Mutex<bool>,
+    /// An older owner fixture: revision 1 rejects the new crews field.
+    protocol: Mutex<Option<u32>>,
 }
 
 impl Wire {
@@ -186,7 +188,7 @@ impl DrainOwnerTransport for Wire {
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
             ..ToolSessionContext::default()
         };
-        let answer = self.owner.run_tool_with_context_and_role(
+        let mut answer = self.owner.run_tool_with_context_and_role(
             name,
             input,
             Role::Admin,
@@ -195,6 +197,14 @@ impl DrainOwnerTransport for Wire {
                 ..ToolContext::default()
             },
         )?;
+        if name == "orbit.drain.probe" {
+            if let Some(revision) = *self.protocol.lock().unwrap() {
+                answer["protocol_schema"] = json!(revision);
+                answer["admits"] = json!(false);
+                answer["refusal"] = json!("version_mismatch");
+                answer["diagnostics"] = json!(["older owner requires protocol revision 1"]);
+            }
+        }
         let mut lose = self.lose.lock().unwrap();
         if let Some(at) = lose.iter().position(|tool| *tool == name) {
             lose.remove(at);
@@ -317,6 +327,7 @@ impl Pair {
             task_reads_fail: Mutex::default(),
             task_reads_remote_error: Mutex::default(),
             unreachable: Mutex::default(),
+            protocol: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), FOLLOWER);
         let follower = follower
@@ -687,11 +698,11 @@ fn launch_refused(pass: &Value) -> bool {
     error_of(pass).contains("re-exec")
 }
 
-/// An unreadable persisted cancel request holds the whole pass until the
-/// state can be read again; it cannot probe, request or launch work.
+/// An unreadable persisted cancel request fails the whole pass visibly; it
+/// cannot probe, request or launch work without readable control state.
 #[test]
-fn unreadable_cancel_state_holds_refill_and_retries() {
-    if !isolated("unreadable_cancel_state_holds_refill_and_retries") {
+fn unreadable_cancel_state_fails_visibly_without_admission() {
+    if !isolated("unreadable_cancel_state_fails_visibly_without_admission") {
         return;
     }
     let pair = Pair::new(1);
@@ -720,26 +731,17 @@ fn unreadable_cancel_state_holds_refill_and_retries() {
         .to_string();
 
     for expired in [false, true] {
-        let pass = pair
+        let failure = pair
             .follower
             .run_deterministic(
                 "pull_refill",
                 &json!({}),
-                &json!({
-                    "run_id": drain,
-                    "destination": pair.destination,
-                    "window_expired": expired,
-                    "poll_sleep_seconds": 7,
-                }),
+                &json!({"run_id": drain, "destination": pair.destination,
+                "window_expired": expired}),
                 ToolContext::default(),
             )
-            .expect("a read failure is reported for retry");
-        assert!(error_of(&pass).contains(&read_error), "{pass}");
-        assert_eq!(pass["admitted"], 0, "{pass}");
-        assert_eq!(pass["admitting"], false, "{pass}");
-        assert_eq!(pass["done"], false, "{pass}");
-        assert_eq!(pass["wait"], true, "{pass}");
-        assert_eq!(pass["sleep_seconds"], 7, "{pass}");
+            .expect_err("unreadable pass health fails visibly, without touching admissions");
+        assert!(failure.to_string().contains(&read_error), "{failure}");
     }
     assert!(pair.wire.calls("orbit.drain.probe").is_empty());
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
@@ -755,6 +757,106 @@ fn unreadable_cancel_state_holds_refill_and_retries() {
     assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
     assert!(pair.wire.calls("orbit.drain.probe").is_empty());
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
+}
+
+/// Revision 1 owners reject additive fields despite equal binary versions.
+/// Negotiation must stop the newer follower before it sends `crews`.
+#[test]
+fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
+    if !isolated("an_older_owner_is_refused_before_a_newer_request_is_sent") {
+        return;
+    }
+    let pair = Pair::new(1);
+    *pair.wire.protocol.lock().unwrap() = Some(1);
+    let drain = pair.start_drain();
+    let pass = pair.pass(&drain);
+    let refusal = pass["refusal"].as_str().unwrap();
+    assert!(refusal.starts_with("protocol_mismatch:"), "{pass}");
+    assert!(
+        refusal.contains("caller revision 2; owner revision 1"),
+        "{pass}"
+    );
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+    assert!(pair.owner_claims().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+
+    // A newer owner's boundary likewise refuses an older follower by type.
+    *pair.wire.protocol.lock().unwrap() = None;
+    let probe = pair
+        .wire
+        .call(
+            "",
+            "orbit.drain.probe",
+            json!({
+                "caller_version": orbit_core::application::distributed::owner_binary_version(),
+                "caller_schema": 1, "caller_review_policy": "none",
+            }),
+        )
+        .unwrap();
+    assert_eq!(probe["refusal"], "protocol_mismatch");
+    assert!(
+        probe["diagnostics"]
+            .to_string()
+            .contains("caller revision 1; owner revision 2")
+    );
+    let request = json!({"request_id": "old-request", "caller_version": probe["binary_version"],
+        "caller_schema": 1, "caller_review_policy": "none", "ship": probe["ship"],
+        "run_context": {"run_id": "old-drain", "job_name": "workspace_pull_pipeline"}});
+    let failure = pair.wire.call("", "orbit.task.pull", request).unwrap_err();
+    assert!(
+        failure
+            .to_string()
+            .contains("protocol_mismatch: caller revision 1; owner revision 2"),
+        "{failure}"
+    );
+    assert!(pair.owner_claims().is_empty());
+}
+
+/// Transport errors persist, a successful pass resets a transient streak,
+/// and three failures latch a warning instead of idling invisibly forever.
+#[test]
+fn repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it() {
+    if !isolated("repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it") {
+        return;
+    }
+    let pair = Pair::new(0);
+    let drain = pair.start_drain();
+    *pair.wire.unreachable.lock().unwrap() = true;
+    assert_eq!(pair.pass(&drain)["consecutive_pass_failures"], 1);
+    *pair.wire.unreachable.lock().unwrap() = false;
+    let recovered = pair.pass(&drain);
+    assert_eq!(recovered["consecutive_pass_failures"], 0);
+    assert!(recovered["last_pass_error"].is_null());
+    *pair.wire.unreachable.lock().unwrap() = true;
+    for count in 1..=3 {
+        let pass = pair.pass(&drain);
+        assert_eq!(pass["consecutive_pass_failures"], count);
+        assert_eq!(pass["degraded"], count == 3);
+        let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
+        let health = state.drain_last_pass.unwrap();
+        assert_eq!(health.consecutive_pass_failures, count);
+        assert!(
+            health
+                .last_pass_error
+                .unwrap()
+                .contains("Connection timed out")
+        );
+    }
+    *pair.wire.unreachable.lock().unwrap() = false;
+    let before = pair.wire.calls("orbit.drain.probe").len();
+    let held = pair.pass(&drain);
+    assert_eq!(held["admitting"], false);
+    assert_eq!(held["degraded"], true);
+    assert!(
+        held["refusal"]
+            .as_str()
+            .unwrap()
+            .starts_with("pass_failures:")
+    );
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), before);
+    let fresh = pair.pass(&pair.start_drain());
+    assert_eq!(fresh["degraded"], false);
+    assert_eq!(fresh["consecutive_pass_failures"], 0);
 }
 
 /// A readable run state with no cancellation still probes and admits work.
@@ -1742,7 +1844,11 @@ fn a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends()
 
     pair.leaf_hands_off(&leaf);
     *pair.wire.unreachable.lock().unwrap() = true;
+    for _ in 0..3 {
+        pair.pass(&drain);
+    }
     let outage = pair.pass(&drain);
+    assert_eq!(outage["degraded"], true, "{outage}");
     assert_eq!(outage["done"], false, "{outage}");
     assert!(
         error_of(&outage).contains("Connection timed out"),

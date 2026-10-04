@@ -185,8 +185,9 @@ pub struct AdmissionShipContract {
 ///
 /// It versions the distributed-drain protocol alone, not the scoreboard's
 /// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
-/// Incompatible request/response changes increment it.
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 1;
+/// Increment it whenever a new request field would be rejected by an older
+/// endpoint, even if optional. Revision 2 adds executor crew capabilities.
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 2;
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without
@@ -204,6 +205,7 @@ pub const ADMISSION_RECEIPT_LOOKUP_SCHEMA: u32 = 1;
 #[serde(rename_all = "snake_case")]
 pub enum AdmissionRefusal {
     InvalidInput,
+    ProtocolMismatch,
     VersionMismatch,
     ShipModeUnsupported,
     ReviewPolicyUnsupported,
@@ -214,6 +216,7 @@ impl AdmissionRefusal {
         match self {
             Self::InvalidInput => "invalid_input",
             Self::VersionMismatch => "version_mismatch",
+            Self::ProtocolMismatch => "protocol_mismatch",
             Self::ShipModeUnsupported => "ship_mode_unsupported",
             Self::ReviewPolicyUnsupported => "review_policy_unsupported",
         }

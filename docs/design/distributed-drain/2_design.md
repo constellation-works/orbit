@@ -286,6 +286,19 @@ no settlement can ever be accepted, so the record settles locally with the refus
 its settlement pending. One record that cannot move forward does not stop the others from being
 reconciled in the same pass, though its error still blocks fresh admission for that pass.
 
+Followers must match the owner's distributed-drain protocol revision, independently of
+`orbit --version`. Deploy matching revisions on both hosts and restart long-lived processes.
+The read-only probe reports `protocol_schema`; a mismatch is `protocol_mismatch` with both
+revisions, including when an older owner calls its refusal `version_mismatch`.
+
+`orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
+count. JSON carries `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
+`pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
+warning and stop new admissions for that drain. A successful pass before the threshold resets
+the streak. Degraded drains keep retrying settlements and outlive their window until nothing
+is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
+`orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
+
 ### Pull-mode contract
 
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified
@@ -548,7 +561,7 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 | Check | Source of truth |
 |---|---|
 | Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); an unauthenticated provider is excluded by its first typed `provider_unavailable` leaf |
-| Binary version and orchestration schema match the owner | Owner read-only capability/version response; pull enforces parity again |
+| Binary version and distributed-drain protocol revision match the owner | Owner read-only capability/version response; pull enforces parity again |
 | Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
 | Review policy is `none` on owner and executor | Owner policy captured at admission; executor verifies the same policy before binding |
 | Sandbox and required OS/toolchain capabilities available | Existing doctor checks plus workspace execution prerequisites |
@@ -568,7 +581,10 @@ no receipts, reservations, claims or tasks. A caller may declare its version, pr
 review policy, and the probe reports the first refusal admission would raise by running the same
 ordered ladder (`orbit_store::admission_refusal`).
 
-- The protocol schema starts at `1` and versions pull, probe and lifecycle shapes; it is not the
+- Protocol revision `2` includes executor crew capabilities. Increment the revision for request
+  fields an older endpoint rejects, including optional fields. The follower compares the owner
+  probe's revision before sending admission fields; `protocol_mismatch` names both revisions.
+  Matching crate versions alone are insufficient on development branches. This is not the
   scoreboard's `ORCHESTRATION_SCHEMA_VERSION`, and MCP initialization metadata is insufficient.
 - The owner's read-only surface is `orbit.drain.probe`, `orbit.drain.receipt.lookup` and the
   operator-only `orbit.drain.claims` listing ([§3.1](#31-attempt-ownership-and-recovery)); its

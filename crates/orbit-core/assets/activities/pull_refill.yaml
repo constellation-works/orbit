@@ -15,9 +15,11 @@ spec:
     owner's probe admits this executor, it tops the free slots up with new
     pull requests, each persisted before it is sent. An owner refusal is
     reconciled against the owner's receipt before the request is closed. An
-    unreachable or refusing owner is reported in `error` or
-    `refusal` rather than failing the drain, because settlements of work
-    already running must keep flowing. `unsettled` counts admissions still
+    unreachable or refusing owner is reported in `error` or `refusal`.
+    Three consecutive failed passes latch `degraded`, stop new admissions
+    and preserve `last_pass_error` and `consecutive_pass_failures` on the
+    drain's last pass. Settlement retries continue; fix the cause and start
+    a new drain. An unreadable or unwritable pass record fails visibly. `unsettled` counts admissions still
     holding a slot; the drain runs past its window until it is zero. There is
     no local fallback: a runtime without a federated owner route refuses.
     After three consecutive claims this drain admitted settle as failures, it
@@ -57,6 +59,11 @@ spec:
       consecutive_failures:
         type: integer
       error: {}
+      last_pass_error: {}
+      consecutive_pass_failures:
+        type: integer
+      degraded:
+        type: boolean
       host_shutdown: {}
       resource_throttle: {}
       resource_telemetry_unknown:
