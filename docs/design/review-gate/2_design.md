@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-09-21
+last_updated: 2026-10-04
 last_validated: 2026-09-21
 status: Accepted
 feature: review-gate
@@ -11,7 +11,7 @@ summary: Shipped review contract — captured timing, the before-PR gate, what v
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890]
 ---
 
 # Review Gate — Design [ORB-11333]
@@ -30,9 +30,9 @@ keeps loading.
 | --- | --- |
 | `operation.review_policy` | `none` (default), `after-landing`, `before-pr` |
 | `operation.review_crew` | crew name (before-PR review only) |
-| `operation.review_reviewer_starts` | 1..=10 (2) |
+| `operation.review_reviewer_starts` | 1..=10 (3) |
 | `operation.review_repair_cycles` | 0..=10 (2) |
-| `operation.review_minutes` | 1..=1440 (30) |
+| `operation.review_minutes` | 1..=1440 (90) |
 
 `orbit config show` lists the explicit `operation.*` values with their file
 provenance and the layer that supplied each effective value.
@@ -44,7 +44,7 @@ review is not run by this policy but by the `delivery-code-review` auto-task,
 which mints its tasks with the crew in its own template, so setting
 `review_crew` does not change who reviews landed work (see [delivery
 automation operations](../automation-triggers/5_operations.md)). The three
-`review_*` budgets bound one delivery candidate lineage. The resolved-policy
+`review_*` budgets bound one delivery run lineage (§5). The resolved-policy
 version is 2; a version-1 snapshot fails closed and must be replaced.
 
 ## 2. Captured timing
@@ -81,18 +81,38 @@ start against the lineage ledger, and writes `review-manifest.json` on every
 task under the run's authority. An unconfigured, unresolvable, or excluded crew
 escalates (`review_crew_unconfigured`, `review_crew_unavailable`,
 `review_crew_excluded`); the gate never substitutes the implementer. A
-restart before settlement resumes the open attempt for the same candidate
-and task meaning without consuming another start; a different candidate
-settles the interrupted attempt as `incomplete` first.
+retried admission in the same run resumes its open attempt for the same
+candidate and task meaning without consuming another start; a different
+candidate, or an attempt another run of the lineage left open, is released
+as `incomplete` first (§5).
 
 The reviewer is a fresh invocation with its own instruction, tool allowlist,
-and 30-minute wall clock. It reads the manifest, verifies claims against code,
-repairs only concrete in-scope defects directly in the worktree, runs
-validation, and persists `review-report.json` (schema version 1: verdict,
-findings with dispositions, validation records with `passed` / `failed` /
-`denied` / `not_run`, the `role` each is evidence of, and optional `check`
-identity, escalation). It never
-runs Git writes, changes task lifecycle, approves, or merges.
+and 60-minute wall clock, independent of what the lineage has already spent.
+It reads the manifest, verifies claims against code, repairs only concrete
+in-scope defects directly in the worktree, runs validation, and persists
+`review-report.json` (schema version 1: verdict, findings with dispositions,
+validation records with `passed` / `failed` / `denied` / `not_run`, the
+`role` each is evidence of, and optional `check` identity, escalation). It
+never runs Git writes, changes task lifecycle, approves, or merges.
+
+The instruction carries the report's exact JSON Schema, and
+`orbit.task.artifact.put` validates a `review-report.json` on attach,
+refusing a mismatch with the offending field named so the reviewer can fix it
+while it still runs [ORB-13890]. Both the validator and settlement read
+through `ReviewReport::parse`, which accepts benign shape drift that leaves
+the meaning unambiguous — a bare-string `disposition`, enum labels in another
+case or with `-`/space separators, `pass`/`fail`/`skipped` outcomes, a single
+path string, a numeric finding id or string `schema_version`, a missing
+`schema_version`, `summary`, or finding `severity`, and `null` lists — and
+refuses anything else.
+
+Admission and settlement retry transient failures (three attempts,
+exponential backoff) and the reviewer step retries once; each then gets one
+`step_failure_recovery` diagnosis before the run fails. A retried reviewer
+continues the same attempt and must verify or revert edits an interrupted
+invocation left in the worktree. Decisions are refusals that neither retry
+nor recover: a settled non-pass verdict, an exhausted budget, an
+unconfigured, unavailable, or excluded crew, and a local route.
 
 ## 4. What the validation records establish [ORB-11528] [ORB-11545]
 
@@ -129,15 +149,16 @@ incomplete when coverage re-reads the records. Candidates already refused
 under the old rule recover through a fresh run, not by editing stored evidence.
 
 Settlement rechecks the checked-out head against the admitted candidate,
-reads the report with its artifact provenance (missing, predating the
-attempt, wrong attempt, or unreadable is `incomplete`), commits every
+reads every bundle task's report with its artifact provenance — reports that
+predate the attempt are ignored, the rest merge into the most severe verdict
+with every distinct finding and validation record — (none, a wrong attempt,
+another contract version, or an unreadable report is `incomplete`), commits every
 uncommitted change as one repair commit authored `<family>-reviewer
 <<family>-reviewer@orbit.local>` with the Orbit committer and an
 `Orbit-Review-Attempt` trailer, and cross-checks the claim: a pass with
 open findings, a claimed repair that changed nothing, a claimed clean pass
 that changed the tree, repairs outside the task selectors, a spent repair
-cycle, elapsed wall time beyond the captured lineage `review_minutes`
-allowance, validation records that do not establish the candidate (§4), or any
+cycle, validation records that do not establish the candidate (§4), or any
 task-meaning change other than selectors added through the task API
 downgrades the verdict to `incomplete` with the reason recorded. Verdicts are
 `passed_without_repairs` (`independent_review`), `passed_with_repairs`
@@ -166,26 +187,42 @@ task-meaning or head drift first.
 
 A pass returns `reviewed_head_sha` / `reviewed_base_sha`; `pr_open` refuses
 (`review_gate_stale`, phase `stale-review-gate`) when the checked-out head or
-pinned base differ. A non-pass fails the step; the failure handoff commits
-leftover reviewer work under the reviewer identity, pushes the candidate
-branch, blocks the task with `review_gate_escalation`, and opens no PR.
+pinned base differ. A non-pass refuses the step; the failure handoff
+releases the attempt if it has no verdict yet (§5), commits leftover reviewer
+work under the reviewer identity, pushes the candidate branch, blocks the task
+with `review_gate_escalation`, and opens no PR.
 Passing grants no lifecycle transition; `completion: review` still stops at
 the handoff.
 
 ## 5. Budgets
 
-The ledger is keyed by workspace, sorted task set, and base branch. It spans
-retries, interruptions, candidate invalidations, and delivery lineage; nothing
-resets it. The first budget written on a lineage is captured; a later config
-change cannot expand or replace it. Reviewer starts are reserved before a
-reviewer launches. An interrupted open attempt on a changed candidate settles
-as incomplete with the wall time already spent, once. Repair cycles and wall
-seconds settle with the attempt. The reviewer invocation timeout is the
-captured leftover seconds (capped by the activity's declared ceiling), and a
-pass that exceeds the leftover allowance is refused. Exhaustion escalates
-(`review_budget_exhausted: review_starts_exhausted |
-review_minutes_exhausted`). Provider token/cost caps are not enforced; usage
-stays unknown.
+The ledger is keyed by workspace, sorted task set, base branch, and delivery
+run lineage: the first run of the resume chain (`retry_source_run_id`). A
+resumed run shares its source's ledger, so resuming never resets the budget;
+a fresh delivery run of the same tasks — the re-admission after a block —
+starts a new lineage with a full budget [ORB-13890]. Settlement uses the
+lineage its admission named. The first budget written on a lineage is
+captured; a later config change cannot expand or replace it. Reviewer starts
+are reserved before a reviewer launches.
+
+No attempt stays open after its reviewer step fails or its run ends. The
+failure handoff releases every attempt the run admitted that has no verdict:
+it settles the attempt `incomplete`, marked released, charging the reviewer
+runtime the run spent on it. An attempt a killed run left open is released by
+the next admission of the lineage, charged only up to when that run finished
+(or the next run started). A resumed run that reuses the admission checkpoint
+may still settle a released attempt with its verdict, replacing the
+provisional charge with the earlier charge plus the time since the resume
+started; a released attempt that a later start superseded is stale. Time no
+run spent on an attempt is never charged.
+
+`review_minutes` gates admission only: once the lineage's charged reviewer
+runtime reaches it, no new start is admitted. It does not shorten an admitted
+reviewer, whose own activity timeout bounds each invocation, and a pass that
+overran the remainder still settles on its evidence. Repair cycles settle
+with the attempt. Exhaustion refuses admission (`review_budget_exhausted:
+review_starts_exhausted | review_minutes_exhausted`). Provider token/cost
+caps are not enforced; usage stays unknown.
 
 ## 6. Managed completion and landing
 
@@ -199,8 +236,25 @@ leaving the task in review. Ungated runs retain ordinary `gh pr merge` and
 repository-enabled auto-merge. See the
 [provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
 
-Completion refuses to repair a conflicting reviewed PR (a conflict repair is
-unreviewed content), and after the verified merge reads the merge commit,
+A conflicting reviewed PR is never merged as rebased, unreviewed content
+[ORB-13890]. `complete_pr` runs with `re_review_on_conflict`: it rebases the
+branch locally through the pinned `git_rebase` (a real conflict still reaches
+`pr_conflict_recovery`), publishes nothing, completes no task, and returns
+`re_review_required` with the rebase checkpoint. The pipeline then reviews the
+rebased head with a new start in the same lineage (`re_review_gate_admit`,
+`re_review`, `re_review_gate_settle`), republishes the reviewed final
+candidate under a lease on the old published head (`re_push`), and completes
+it (`complete_reviewed_pr`). A second conflict there, a caller without the
+flag, or a non-pass re-review keeps the published PR and the task in review.
+`complete_pr` is skipped on review-only and no-diff routes, and a `when:` may
+not read a skippable step's output, so `re_review_gate_admit` and
+`re_review_gate_settle` always run: with `re_review_after: complete_pr` the
+admission reads that step's checkpoint from the run's recorded pipeline (a
+resume inherits it), answers `re_review_not_required` unless it asked for a
+re-review, pins the recorded rebase base, and fails when the worktree head is
+not the recorded rebased head. Its `applies` gates the remaining steps.
+
+After the verified merge, completion reads the merge commit,
 fetches it, and records a landing: `fast_forward`, `squash`, `merge_commit`,
 or `rebase` when the landing started from the reviewed base tree and produced
 the reviewed final tree, otherwise uncovered with `base_changed`,
@@ -261,7 +315,10 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
   `passed_with_repairs` verdict carries the weaker assurance
   `independent_review_with_self_authored_repairs` and says so.
 - Provider token and cost caps are not enforced; only starts, repair cycles,
-  and wall time are bounded, so reviewer spend stays unknown.
+  and reviewer runtime are bounded, so reviewer spend stays unknown.
+- A resume charges an attempt from the resumed run's start, which includes
+  the skipped steps before the reviewer; the overcount is bounded by that
+  replay and never includes time no run was working.
 - `before-pr` has no meaning on the local-only delivery route and is refused
   at submission rather than downgraded.
 - A denied required check is not evidence either way: it keeps its own
@@ -273,5 +330,6 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
 - [ORB-11528] — adds validation-record roles to the certificate contract.
 - [ORB-11545] — tightens what a superseded validation record may claim.
 - [ORB-12491] — retires epic assembly, the one caller that gated a combined candidate later.
+- [ORB-13890] — closes failed attempts, keys budgets per delivery run lineage, adds gate retry/recovery, tolerant report reading, and the completion re-review.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

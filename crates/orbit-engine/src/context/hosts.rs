@@ -120,6 +120,16 @@ pub struct ReviewLandingRequest {
     pub landed_commit: Option<String>,
 }
 
+/// A review attempt whose reviewer step failed or whose run is ending
+/// without a settled verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewReleaseRequest {
+    /// The run closing the attempt; its own reviewer runtime is charged.
+    pub run_id: String,
+    pub lineage_key: String,
+    pub attempt_id: String,
+}
+
 /// Trusted execution facts for one claimed distributed leaf [ORB-12616].
 ///
 /// The runtime resolves every field from its own process worker binding and
@@ -476,6 +486,14 @@ pub trait RuntimeHost: Send + Sync {
     /// Record how a reviewed candidate actually landed after a managed
     /// merge. Hosts without review evidence keep the pre-existing behavior.
     fn record_review_landing(&self, _request: &ReviewLandingRequest) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    /// Close a review attempt that ended without a verdict, charging the
+    /// reviewer runtime spent, so a failed or terminated reviewer step never
+    /// leaves its attempt open. Hosts without review evidence have nothing
+    /// to close.
+    fn release_review_attempt(&self, _request: &ReviewReleaseRequest) -> Result<(), OrbitError> {
         Ok(())
     }
 

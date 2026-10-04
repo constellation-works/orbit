@@ -22,12 +22,14 @@ use crate::application::task::TaskUpdateParams;
 use super::admit::reviewer_identity;
 use super::context::GateContext;
 use super::judgement::{Judgement, repair_author_label, verdict_comment, write_artifact};
+use super::release::{Segment, reviewer_runtime};
 
 /// Close the admitted attempt with an honest verdict.
 ///
 /// A pass returns the reviewed head and base the PR steps must recheck; a
-/// non-pass fails the step so the pipeline's failure handoff preserves the
-/// candidate and blocks the task with the escalation.
+/// non-pass refuses the step — a settled verdict is not retried — so the
+/// pipeline's failure handoff preserves the candidate and blocks the task
+/// with the escalation.
 pub(crate) fn review_gate_settle(
     runtime: &OrbitRuntime,
     action: &str,
@@ -112,16 +114,19 @@ pub(crate) fn review_gate_settle(
 
     match outcome {
         Ok(Settled::Passed(value)) => Ok(value),
-        Ok(Settled::Blocked { certificate }) => Err(failed(format!(
-            "review_gate_blocked: verdict {} ({}); {} finding(s) recorded; the candidate stays \
-             unpublished until a recorded decision resumes delivery",
-            certificate.verdict.as_str(),
-            certificate
-                .escalation
-                .as_deref()
-                .unwrap_or("no escalation reason recorded"),
-            certificate.findings.len()
-        ))),
+        Ok(Settled::Blocked { certificate }) => Err(DispatchError::DeterministicActionRefused {
+            action: action.to_string(),
+            message: format!(
+                "review_gate_blocked: verdict {} ({}); {} finding(s) recorded; the candidate \
+                 stays unpublished until a recorded decision resumes delivery",
+                certificate.verdict.as_str(),
+                certificate
+                    .escalation
+                    .as_deref()
+                    .unwrap_or("no escalation reason recorded"),
+                certificate.findings.len()
+            ),
+        }),
         Err(error) => Err(failed(error.to_string())),
     }
 }
@@ -139,7 +144,13 @@ fn settle(
     admission_output: &Value,
 ) -> Result<Settled, OrbitError> {
     let store = runtime.review_store()?;
-    let lineage_key = context.lineage_key();
+    // The admission names the lineage it reserved in; a resumed run reuses
+    // that admission, so settlement never re-derives a different key.
+    let lineage_key = admission_output
+        .get("lineage_key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.trim().is_empty())
+        .map_or_else(|| context.lineage_key(), ToOwned::to_owned);
     let ledger = store
         .review_ledger(&context.workspace_id, &lineage_key)?
         .ok_or_else(|| {
@@ -160,10 +171,21 @@ fn settle(
 
     // A replay after the certificate was recorded reconciles it instead of
     // judging the candidate twice. A ledger that settled without one is an
-    // interrupted settlement, finished below from the same evidence.
+    // interrupted settlement, finished below from the same evidence. A
+    // released attempt — its reviewer step failed or its run ended — had no
+    // verdict, so a resumed run settles it like an open one, unless a later
+    // admission already superseded it.
+    let released = attempt.released_at.is_some();
+    if released && ledger.attempts.last().map(|last| &last.attempt_id) != Some(&attempt.attempt_id)
+    {
+        return Err(OrbitError::Execution(format!(
+            "review_gate_stale: attempt {attempt_id} was released and a later reviewer start \
+             superseded it"
+        )));
+    }
     let recorded = match attempt.state {
-        ReviewAttemptState::Settled { verdict } => Some(verdict),
-        ReviewAttemptState::Open => None,
+        ReviewAttemptState::Settled { verdict } if !released => Some(verdict),
+        ReviewAttemptState::Settled { .. } | ReviewAttemptState::Open => None,
     };
     if recorded.is_some()
         && let Some(certificate) = store.review_certificate(&context.workspace_id, attempt_id)?
@@ -233,9 +255,10 @@ fn settle(
 
     // A resumed settlement judges against the ledger as it stood before its
     // own charge, with the elapsed time it already recorded.
-    let judged_ledger = match recorded {
-        Some(_) => ledger.before_settling(attempt_id),
-        None => Some(ledger.clone()),
+    let judged_ledger = if recorded.is_some() || released {
+        ledger.before_settling(attempt_id)
+    } else {
+        Some(ledger.clone())
     }
     .ok_or_else(|| {
         OrbitError::Execution(format!(
@@ -244,8 +267,12 @@ fn settle(
     })?;
     judgement.reconcile_verdict(&judged_ledger, repair.as_ref());
     let now = Utc::now();
-    let elapsed_seconds = attempt.elapsed_at(now);
-    judgement.enforce_wall_time(&judged_ledger, elapsed_seconds);
+    // Charge reviewer runtime only; the minutes budget gates new starts, so
+    // an admitted reviewer that overruns it still settles on its evidence.
+    let elapsed_seconds = match recorded {
+        Some(_) => attempt.elapsed_at(now),
+        None => reviewer_runtime(runtime, &attempt, &context.run_id, Segment::Closing, now)?,
+    };
 
     let settled = match recorded {
         Some(verdict) => {

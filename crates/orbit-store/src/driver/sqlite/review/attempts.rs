@@ -1,5 +1,6 @@
 //! Review attempt reservation and settlement against the ledger budget.
 
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::{
@@ -15,7 +16,8 @@ fn attempt_id(lineage_key: &str, index: u32) -> String {
     format!("rvw-{}-{index}", &digest[..12])
 }
 
-/// Mark an attempt settled. Returns false when the attempt is unknown.
+/// Mark an attempt settled. A released attempt's provisional charge is
+/// replaced by `elapsed_seconds`. Returns false when the attempt is unknown.
 pub(super) fn settle_attempt(
     ledger: &mut ReviewLedger,
     attempt_id: &str,
@@ -30,10 +32,52 @@ pub(super) fn settle_attempt(
     else {
         return false;
     };
+    let previous = match attempt.released_at.take() {
+        Some(_) => attempt.elapsed_seconds.unwrap_or(0),
+        None => 0,
+    };
     attempt.state = ReviewAttemptState::Settled { verdict };
     attempt.repair_cycles = repair_cycles;
     attempt.elapsed_seconds = Some(elapsed_seconds);
-    ledger.consumed_seconds = ledger.consumed_seconds.saturating_add(elapsed_seconds);
+    ledger.consumed_seconds = ledger
+        .consumed_seconds
+        .saturating_sub(previous)
+        .saturating_add(elapsed_seconds);
+    true
+}
+
+/// Close an attempt that has no reviewer verdict: settle it `incomplete`,
+/// charging `charge_seconds` of reviewer runtime, and mark it released so a
+/// resumed run may still settle it with a verdict. Releasing an already
+/// released attempt replaces its charge. Returns false when the attempt is
+/// unknown or was settled with a verdict, which a release never rewrites.
+pub(super) fn release_attempt(
+    ledger: &mut ReviewLedger,
+    attempt_id: &str,
+    charge_seconds: u64,
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(attempt) = ledger
+        .attempts
+        .iter_mut()
+        .find(|attempt| attempt.attempt_id == attempt_id)
+    else {
+        return false;
+    };
+    let previous = match (&attempt.state, attempt.released_at) {
+        (ReviewAttemptState::Open, _) => 0,
+        (ReviewAttemptState::Settled { .. }, Some(_)) => attempt.elapsed_seconds.unwrap_or(0),
+        (ReviewAttemptState::Settled { .. }, None) => return false,
+    };
+    attempt.state = ReviewAttemptState::Settled {
+        verdict: ReviewVerdict::Incomplete,
+    };
+    attempt.elapsed_seconds = Some(charge_seconds);
+    attempt.released_at = Some(now);
+    ledger.consumed_seconds = ledger
+        .consumed_seconds
+        .saturating_sub(previous)
+        .saturating_add(charge_seconds);
     true
 }
 
@@ -85,6 +129,7 @@ pub(super) fn reserve_new_in(
         state: ReviewAttemptState::Open,
         repair_cycles: 0,
         elapsed_seconds: None,
+        released_at: None,
     };
     ledger.attempts.push(attempt.clone());
     write_ledger(

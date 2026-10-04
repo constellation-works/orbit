@@ -3,14 +3,13 @@
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReservation,
-    ReviewVerdict,
 };
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
-use super::attempts::{reserve_new, reserve_new_in, settle_attempt};
+use super::attempts::{release_attempt, reserve_new, reserve_new_in, settle_attempt};
 use super::ledger::{decode, encode, read_ledger, write_ledger};
 use crate::Store;
-use crate::contracts::{ReviewReserveRequest, ReviewSettlement, ReviewStoreBackend};
+use crate::contracts::{ReviewRelease, ReviewReserveRequest, ReviewSettlement, ReviewStoreBackend};
 
 impl ReviewStoreBackend for Store {
     fn review_ledger(
@@ -48,12 +47,11 @@ impl ReviewStoreBackend for Store {
                 {
                     return Ok((ReviewReservation::Resumed { attempt: open }, ledger));
                 }
-                settle_attempt(
+                release_attempt(
                     &mut ledger,
                     &open.attempt_id,
-                    ReviewVerdict::Incomplete,
-                    0,
                     open.elapsed_at(request.now),
+                    request.now,
                 );
                 write_ledger(
                     conn,
@@ -87,6 +85,7 @@ impl ReviewStoreBackend for Store {
             let previous_revision = ledger.revision;
             let already_settled = ledger.attempts.iter().any(|attempt| {
                 attempt.attempt_id == settlement.attempt_id
+                    && attempt.released_at.is_none()
                     && matches!(attempt.state, ReviewAttemptState::Settled { .. })
             });
             if already_settled {
@@ -111,6 +110,49 @@ impl ReviewStoreBackend for Store {
                 &mut ledger,
                 settlement.now,
             )?;
+            Ok(ledger)
+        })
+    }
+
+    fn review_release(
+        &self,
+        workspace_id: &str,
+        release: &ReviewRelease<'_>,
+    ) -> Result<ReviewLedger, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn = tx.connection();
+            let mut ledger =
+                read_ledger(conn, workspace_id, release.lineage_key)?.ok_or_else(|| {
+                    OrbitError::Store(format!(
+                        "review lineage '{}' has no ledger to release",
+                        release.lineage_key
+                    ))
+                })?;
+            let previous_revision = ledger.revision;
+            if !ledger
+                .attempts
+                .iter()
+                .any(|attempt| attempt.attempt_id == release.attempt_id)
+            {
+                return Err(OrbitError::Store(format!(
+                    "review attempt '{}' is not part of lineage '{}'",
+                    release.attempt_id, release.lineage_key
+                )));
+            }
+            if release_attempt(
+                &mut ledger,
+                release.attempt_id,
+                release.elapsed_seconds,
+                release.now,
+            ) {
+                write_ledger(
+                    conn,
+                    workspace_id,
+                    Some(previous_revision),
+                    &mut ledger,
+                    release.now,
+                )?;
+            }
             Ok(ledger)
         })
     }

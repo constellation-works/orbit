@@ -54,7 +54,7 @@ pub(super) fn invocation_timeout_seconds(
     // bound, so the asset stays the ceiling and no run input can extend an
     // unsandboxed subprocess past it. Only the admitted mode reads the key;
     // every other activity keeps its declared timeout verbatim.
-    let timeout_seconds = match trusted_host.and(
+    match trusted_host.and(
         input
             .get("timeout_seconds")
             .and_then(Value::as_u64)
@@ -62,13 +62,6 @@ pub(super) fn invocation_timeout_seconds(
     ) {
         Some(requested) => requested.min(declared_timeout_seconds),
         None => declared_timeout_seconds,
-    };
-    // A reviewer invocation may carry the captured leftover lineage
-    // allowance. It can only shorten the same ceiling; a zero leftover
-    // still gets one second so the process is not unbounded.
-    match input.get("remaining_seconds").and_then(Value::as_u64) {
-        Some(remaining) => timeout_seconds.min(remaining.max(1)),
-        None => timeout_seconds,
     }
 }
 

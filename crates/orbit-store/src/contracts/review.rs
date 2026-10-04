@@ -37,6 +37,16 @@ pub struct ReviewSettlement<'a> {
     pub now: DateTime<Utc>,
 }
 
+/// Close an attempt that ended without a reviewer verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewRelease<'a> {
+    pub lineage_key: &'a str,
+    pub attempt_id: &'a str,
+    /// Total reviewer runtime to charge for the attempt.
+    pub elapsed_seconds: u64,
+    pub now: DateTime<Utc>,
+}
+
 pub trait ReviewStoreBackend: Send + Sync {
     /// The ledger for one lineage, if any attempt was ever reserved.
     fn review_ledger(
@@ -47,7 +57,7 @@ pub trait ReviewStoreBackend: Send + Sync {
 
     /// Reserve a reviewer start. An open attempt for the same candidate and
     /// task meaning is resumed rather than charged again; a different
-    /// candidate settles the open attempt as incomplete, charging elapsed
+    /// candidate releases the open attempt as incomplete, charging elapsed
     /// wall time from `started_at` to `now` once, then applies the captured
     /// budget to the new start.
     fn review_reserve(
@@ -56,11 +66,23 @@ pub trait ReviewStoreBackend: Send + Sync {
         request: &ReviewReserveRequest<'_>,
     ) -> Result<(ReviewReservation, ReviewLedger), OrbitError>;
 
-    /// Settle an attempt. Replaying the same settlement changes nothing.
+    /// Settle an attempt. Replaying the same settlement changes nothing; a
+    /// released attempt is settled again with the verdict, its provisional
+    /// charge replaced.
     fn review_settle(
         &self,
         workspace_id: &str,
         settlement: &ReviewSettlement<'_>,
+    ) -> Result<ReviewLedger, OrbitError>;
+
+    /// Release an attempt whose reviewer step failed or whose run ended:
+    /// an open (or already released) attempt is settled `incomplete` with
+    /// `elapsed_seconds` charged, so no failed attempt stays open. An attempt
+    /// settled with a verdict is left unchanged.
+    fn review_release(
+        &self,
+        workspace_id: &str,
+        release: &ReviewRelease<'_>,
     ) -> Result<ReviewLedger, OrbitError>;
 
     /// Record an immutable certificate. Re-recording identical bytes is a

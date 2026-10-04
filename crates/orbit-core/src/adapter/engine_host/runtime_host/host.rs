@@ -296,6 +296,13 @@ impl RuntimeHost for OrbitRuntime {
         crate::application::review::record_review_landing(self, request)
     }
 
+    fn release_review_attempt(
+        &self,
+        request: &orbit_engine::ReviewReleaseRequest,
+    ) -> Result<(), OrbitError> {
+        crate::application::review::release_review_attempt(self, request)
+    }
+
     fn handoff_landing_context(
         &self,
         handoff_id: &str,

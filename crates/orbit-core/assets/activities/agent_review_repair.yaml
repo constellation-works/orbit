@@ -35,12 +35,6 @@ spec:
       crew:
         type: string
         description: The separately configured review crew resolved by review_gate_admit.
-      remaining_seconds:
-        type: integer
-        description: >
-          Captured leftover wall-time allowance for this lineage attempt, in
-          seconds. The host shortens the activity timeout to this value; it
-          cannot extend the declared ceiling.
   output_schema_json:
     type: object
     properties:
@@ -70,11 +64,14 @@ spec:
       repair; the gate widens `context_files` from that declaration.
     - Read broadly; write narrowly. Reading unrelated code does not authorize
       editing it.
-    - Honor the remaining wall-time budget in the pinned manifest
-      (`remaining.seconds`, also supplied as `remaining_seconds`). Stop and
-      write an `incomplete` report before that allowance is exhausted. The
-      activity timeout is a ceiling on this leftover, not extra time beyond
-      the captured lineage budget.
+    - This invocation has its own wall-clock bound, independent of what the
+      lineage has already spent. If you cannot finish, write an `incomplete`
+      report before stopping rather than leaving no report.
+    - The worktree may already hold uncommitted changes when you start: an
+      earlier invocation of this same attempt was interrupted after editing.
+      Treat them as your own unverified repairs. Keep each one only if a
+      finding you record names it and validation passes with it; otherwise
+      revert it by editing the file back (never with Git).
 
     Procedure
 
@@ -82,8 +79,7 @@ spec:
        `orbit.task.artifact.get` (`id` = `task_id`, `path` =
        `manifest_artifact`). Confirm `attempt_id` matches the supplied
        `attempt_id`, that `git rev-parse HEAD` equals `candidate.commit`, and
-       that `base.commit` is an ancestor of HEAD. Note `remaining.seconds`
-       and treat it as the wall-time you may spend. On any mismatch write a
+       that `base.commit` is an ancestor of HEAD. On any mismatch write a
        report with verdict `incomplete` and stop.
     2. Review spec compliance first: check every acceptance criterion against
        the actual diff (`git diff <base.commit>..HEAD`), the affected callers,
@@ -143,21 +139,44 @@ spec:
          a denied required check, ambiguous intent, mismatch); set
          `escalation`.
     6. Write the report to a temporary file and attach it with
-       `orbit.task.artifact.put` (`id` = `task_id`, `path` = `report_artifact`)
-       using exactly this shape:
+       `orbit.task.artifact.put` (`id` = `task_id`, `path` = `report_artifact`).
+       The put validates the report and refuses a malformed one with the
+       offending field named; fix the file and put it again until it is
+       accepted. A report that never attaches settles `incomplete`. The report
+       must match this JSON Schema exactly:
 
-       {"schema_version":1,"attempt_id":"<attempt_id>","verdict":"<verdict>",
-        "summary":"<one paragraph>",
-        "findings":[{"id":"F1","severity":"high|medium|low","summary":"...",
-                     "paths":["src/x.rs"],
-                     "disposition":{"kind":"open|repaired"}}],
-        "validation":[{"command":"make ci-fast","outcome":"passed|failed|denied|not_run",
-                       "role":"required|expected_failure|excluded|superseded",
-                       "check":"optional identity shared with the replacing required check",
-                       "note":"required unless the role is `required`"}],
-        "escalation":"<required decision, when not a pass>"}
+       {"type":"object",
+        "required":["schema_version","attempt_id","verdict","summary"],
+        "properties":{
+          "schema_version":{"const":1},
+          "attempt_id":{"type":"string","description":"the supplied attempt_id"},
+          "verdict":{"enum":["passed_without_repairs","passed_with_repairs",
+                             "changes_required","incomplete"]},
+          "summary":{"type":"string","description":"one paragraph"},
+          "findings":{"type":"array","items":{"type":"object",
+            "required":["id","severity","summary","disposition"],
+            "properties":{
+              "id":{"type":"string","description":"stable, e.g. F1"},
+              "severity":{"type":"string","description":"high, medium or low"},
+              "summary":{"type":"string"},
+              "paths":{"type":"array","items":{"type":"string"},
+                       "description":"repository-relative paths"},
+              "disposition":{"type":"object","required":["kind"],
+                "properties":{
+                  "kind":{"enum":["open","repaired","disposed"]},
+                  "reason":{"type":"string","description":"required for disposed"}}}}}},
+          "validation":{"type":"array","items":{"type":"object",
+            "required":["command","outcome"],
+            "properties":{
+              "command":{"type":"string"},
+              "outcome":{"enum":["passed","failed","denied","not_run"]},
+              "role":{"enum":["required","expected_failure","excluded","superseded"]},
+              "check":{"type":"string","description":"identity shared with the replacing required check"},
+              "note":{"type":"string","description":"required unless role is required"}}}},
+          "escalation":{"type":"string","description":"the decision needed, when not a pass"}}}
 
-       Attach the report for every task id in `task_ids`.
+       Attach the report for every task id in `task_ids`; the gate reads and
+       merges every task's report for this attempt.
     7. Return one Orbit response envelope whose result carries `summary` and
        `verdict`. Leave your repairs uncommitted in the worktree. The host
        treats every changed or untracked path you leave there as an intended
@@ -199,4 +218,4 @@ spec:
     - docker
     - podman
   on_denial: terminate
-  wall_clock_timeout_seconds: 1800
+  wall_clock_timeout_seconds: 3600

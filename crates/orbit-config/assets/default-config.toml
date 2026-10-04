@@ -64,6 +64,6 @@ base_branch = "main"
 # Automatic review policy. `before-pr` holds PR creation for a fresh reviewer
 # from `review_crew` on the PR route; `after-landing` schedules review of
 # landed deliveries. The lineage budget keys (review_reviewer_starts,
-# review_repair_cycles, review_minutes) bound one delivery candidate.
+# review_repair_cycles, review_minutes) bound one delivery run and its resumes.
 # review_policy = "none"       # or "before-pr", "after-landing"
 # review_crew = "sol"          # reviewer crew for before-pr

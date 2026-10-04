@@ -67,6 +67,7 @@ pub use review::{
     ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewFinding, ReviewInvalidation,
     ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport, ReviewReservation, ReviewTiming,
     ReviewValidation, ReviewVerdict, ReviewerIdentity, ValidationOutcome, ValidationRole,
+    seconds_between,
 };
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,

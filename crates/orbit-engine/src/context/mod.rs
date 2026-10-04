@@ -16,8 +16,8 @@ pub(crate) use env::{ProvenanceEnv, provenance_env};
 pub use hosts::{
     ClaimExecutionContext, CrewConfig, HandoffLandingContext, HandoffLandingStep,
     HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
-    ResolvedActivityTools, ReviewLandingRequest, RuntimeHost, StepRecoveryAdmission,
-    TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
+    StepRecoveryAdmission, TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 pub use outcome::{
     WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, blocked_workflow_failure_update,
