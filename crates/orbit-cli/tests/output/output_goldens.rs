@@ -213,6 +213,34 @@ fn fixture_does_not_inherit_config_when_tempdir_is_nested_in_checkout() {
     );
 }
 
+#[test]
+fn task_pilot_json_flag_selects_structured_output() {
+    let fixture = Fixture::new();
+
+    // A zero limit makes the detached pilot worker stop during preparation,
+    // before it can fan out to any agent tasks. The CLI still reports the
+    // submitted run through the same output path this behavior check covers.
+    let plain = fixture.run(&["run", "task-pilot", "--max-tasks", "0"], &[]);
+    let plain_text = String::from_utf8_lossy(&plain.stdout);
+    assert!(plain_text.contains("Workflow: task-pilot"), "{plain_text}");
+    assert!(plain_text.contains("Run ID:"), "{plain_text}");
+    assert!(
+        serde_json::from_slice::<Value>(&plain.stdout).is_err(),
+        "default task-pilot output unexpectedly became JSON: {plain_text}"
+    );
+
+    let json = fixture.run(&["run", "task-pilot", "--max-tasks", "0", "--json"], &[]);
+    let document = parse_json_stdout(&json, "run task-pilot --json");
+    assert_eq!(document["workflow"], "task-pilot");
+    assert!(document["run_id"].as_str().is_some_and(|id| !id.is_empty()));
+    assert!(document["state"].as_str().is_some());
+    let json_text = String::from_utf8_lossy(&json.stdout);
+    assert!(
+        !json_text.contains("Workflow:"),
+        "human task-pilot text leaked into --json output: {json_text}"
+    );
+}
+
 /// Replace the two sources of run-to-run non-determinism a fresh workspace
 /// still carries once identity and geometry are pinned: wall-clock
 /// timestamps (`created_at`/`updated_at`, and the table's own
