@@ -1,0 +1,10 @@
+# Check text out with LF on every platform, whatever core.autocrlf says.
+# Goldens and include_str!/include_bytes! assets must have identical bytes on
+# Windows, and shell scripts and hooks cannot run with CRLF line endings.
+* text=auto eol=lf
+
+# Tracked binary assets: never normalised or diffed as text.
+*.gif binary
+*.png binary
+*.woff2 binary
+*.whl binary

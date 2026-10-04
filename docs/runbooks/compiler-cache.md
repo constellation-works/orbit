@@ -43,7 +43,7 @@ a host that can create Linux mount namespaces.
 | Host cache seam | Orbit global registry (`~/.orbit`), language-neutral | `$HOME/.orbit/cache/` |
 | Rust compiler cache | Operator opt-in via sccache | `$HOME/.orbit/cache/compiler/` |
 | rustc wrapper | Repository | `scripts/rustc-compiler-cache.sh` |
-| Cargo hook | Repository | `.cargo/config.toml` (`build.rustc-wrapper`) |
+| Cargo hook | Repository | `.cargo/config.toml` (`build.rustc-wrapper`); native Windows [overrides it off](#windows) |
 | Per-worktree build output | Each managed worktree | `$CARGO_TARGET_DIR` or `<worktree>/target/` |
 
 Linux implementer sandboxes grant `$HOME/.orbit/cache` as a narrow extra write
@@ -71,6 +71,24 @@ not expanded back to the unique worktree prefix.
 Unavailable cache (missing binary, unwritable directory, `ORBIT_COMPILER_CACHE=0`)
 execs `rustc` with the original argv. Compilation stays correct; it is just
 uncached.
+
+## Windows
+
+`.cargo/config.toml` sets `build.rustc-wrapper` to `scripts/rustc-compiler-cache.sh`,
+a bash script that cargo cannot execute on `x86_64-pc-windows-msvc`. Cargo
+config has no per-OS wrapper setting, so native Windows builds, including the
+compile-only Windows CI job, disable the wrapper with an empty override:
+
+```powershell
+$env:CARGO_BUILD_RUSTC_WRAPPER = ""
+cargo check --target x86_64-pc-windows-msvc
+```
+
+An empty `CARGO_BUILD_RUSTC_WRAPPER` (or `RUSTC_WRAPPER`) overrides the config
+value and runs plain `rustc`. The default is unchanged on macOS and Linux
+hosts and Orbit workers: the wrapper stays configured and keeps its opt-in
+fallback behaviour. Windows itself is supported through WSL2, where the
+Linux workflow applies and no override is needed.
 
 ## Inspect
 
