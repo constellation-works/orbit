@@ -75,7 +75,7 @@ No display font. No serif anywhere. Both families ship as npm packages
 
 - **Logo:** a single thin ring with an offset dot. Must be legible at 16px favicon size.
 - **Section dividers** in long pages: 1px rule with a small ring glyph centered.
-- **Landing page:** the hero carries one demo video of an illustrative session (see 3.5), not an orbit diagram. It is the only motion on the site and stops for readers who ask for reduced motion.
+- **Landing page:** the hero carries one demo video, a tour of the real dashboard (see 3.5), not an orbit diagram. It is the only motion on the site and stops for readers who ask for reduced motion.
 - No starfields, parallax, planet illustrations, or animation anywhere inside docs content.
 
 ### 3.4 Layout
@@ -104,27 +104,23 @@ Three-column, fixed:
 
 The homepage uses an in-content hero in place of Starlight's auto-rendered title (which is hidden via a scoped CSS rule on the homepage only).
 
-The hero stacks three rows:
-
-**Copy** — opens like the sections below it. On the left, the release chip
-(`Early access`, linking to the changelog) over a 3.6rem headline whose last
-sentence is muted. On the right, a lede that says what Orbit is, primary and
-secondary CTAs, and a one-line requirements note, bottom-aligned with the
-headline. Below 54rem the two columns stack.
-
-**Demo video** — full content width, because the 16:9 frame carries its own
-text and is unreadable in a half column. A silent, looping 31 s render of an
-illustrative session from `marketing/media/video/orbit-readme-demo`: the
-reader's agent CLI on the left and the task Orbit holds on the right, through
-file → approve → ship → review → scale → record. The site serves a web
-re-encode at `public/media/orbit-demo.mp4` with a poster frame from the review
-beat. It autoplays muted with native controls; under
-`prefers-reduced-motion: reduce` it stays on the poster. The `figcaption` says
-it is illustrative, and the `aria-label` narrates the session.
-
-**Provider strip** — the shipped CLI executors as a plain list under a
+**Hero, left column** — release chip (`Early access`, linking to the
+changelog), a 3.6rem headline whose last sentence is muted, a lede that says
+what Orbit is, primary and secondary CTAs, a one-line requirements note, and
+the provider strip: the shipped CLI executors as a plain list under a
 hairline, with the legacy Gemini executor named in a footnote rather than
 implied current.
+
+**Hero, right column** — one **dashboard tour**: a silent, looping 37 s video
+of the real dashboard on a live workspace (approve → drain → record → runs →
+pipeline → audit → agents), laid out for this column at 6:5 and drawn at 2x so
+the captures stay sharp at ~660px. Source and screenshots live in
+`marketing/media/video/orbit-dashboard-tour`; the site serves a web re-encode
+at `public/media/orbit-dashboard-tour.mp4` with a poster frame from the
+approve beat. It autoplays muted with native controls; under
+`prefers-reduced-motion: reduce` it stays on the poster. The `figcaption`
+dates the capture, so its counts read as a snapshot rather than a live metric,
+and the `aria-label` narrates the tour. Below 54rem the columns stack.
 
 Below the hero, in order:
 
@@ -151,7 +147,7 @@ full docs index.
 
 Commands shown on this page must match current CLI behaviour, and illustrative
 output must say that it is illustrative. The page advertises no unlanded feature
-and publishes no live metric.
+and publishes no live metric; captured numbers carry their capture date.
 
 The homepage's extra script handles the Menu's Escape / breakpoint close. The
 shared theme script applies the dark default (or a stored light choice) before styles load. The Quickstart

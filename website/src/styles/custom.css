@@ -256,12 +256,11 @@ html:not([data-has-sidebar]) header.header {
    Zero it for every landing container that lays its children out itself. */
 .orbit-hero > *,
 .orbit-hero-copy > *,
-.orbit-hero-claim > *,
-.orbit-hero-pitch > *,
 .orbit-hero-actions > *,
 .orbit-hero-providers > *,
 .orbit-hero-providers-list > *,
 .orbit-demo > *,
+.orbit-hero-side > *,
 .orbit-section > *,
 .orbit-section-head > *,
 .orbit-section-intro > *,
@@ -286,26 +285,18 @@ html:not([data-has-sidebar]) header.header {
 /* ------------------------------------------------------------------------
    Hero
    ------------------------------------------------------------------------ */
-/* The hero stacks three rows: the copy, the demo video at the full 75rem
-   width (it is a 16:9 frame with its own text, unreadable in a half column),
-   then the provider strip. The copy opens like every section below it: the
-   claim on the left, the lede and CTAs on the right, their last lines aligned. */
+/* Copy on the left, the demo video on the right. Center the video against the
+   taller copy column so the slack splits above and below it instead of pooling
+   under it. */
 .orbit-hero {
-  display: flex;
-  flex-direction: column;
-  gap: 3rem;
+  align-items: center;
+  display: grid;
+  gap: 3.5rem;
+  grid-template-columns: minmax(0, 30rem) minmax(0, 1fr);
   padding: 4rem 0;
 }
 
 .orbit-hero-copy {
-  align-items: end;
-  display: grid;
-  gap: 1.75rem 4rem;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-}
-
-.orbit-hero-claim,
-.orbit-hero-pitch {
   display: flex;
   flex-direction: column;
 }
@@ -318,7 +309,7 @@ html:not([data-has-sidebar]) header.header {
   font-weight: 650;
   letter-spacing: -0.022em;
   line-height: 1.02;
-  margin: 0;
+  margin: 0 0 1.375rem;
   text-wrap: balance;
 }
 
@@ -375,6 +366,7 @@ html:not([data-has-sidebar]) header.header {
   display: flex;
   flex-direction: column;
   gap: 0.625rem;
+  margin-top: 2.75rem;
   padding-top: 1.5rem;
 }
 
@@ -415,10 +407,11 @@ html:not([data-has-sidebar]) header.header {
   text-decoration: underline;
 }
 
-/* Hero demo: a 31 s illustrative session (agent CLI beside the task Orbit
-   holds), rendered from marketing/media/video/orbit-readme-demo. The frame's
-   background is the video's own, so letterboxing never shows in either theme.
-   The figcaption marks it illustrative, as the page requires. */
+/* Hero demo: a 37 s tour of the real dashboard, captured on a live workspace
+   and laid out for this column (6:5, drawn at 2x), rendered from
+   marketing/media/video/orbit-dashboard-tour. The frame's background is the
+   video's own, so letterboxing never shows in either theme. The figcaption
+   dates the capture, since its counts are a snapshot, not a live metric. */
 .orbit-demo {
   display: flex;
   flex-direction: column;
@@ -428,8 +421,8 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-demo-video {
-  aspect-ratio: 16 / 9;
-  background: #070a12;
+  aspect-ratio: 6 / 5;
+  background: #07090d;
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 10px;
   box-shadow: 0 30px 80px rgb(0 0 0 / 0.5);
@@ -870,8 +863,9 @@ a.orbit-card:focus-visible :is(h2, h3) {
 }
 
 @media (max-width: 72rem) {
-  .orbit-hero-copy {
-    column-gap: 3rem;
+  .orbit-hero {
+    gap: 3rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .orbit-hero-headline {
@@ -1116,11 +1110,8 @@ a.orbit-card:focus-visible :is(h2, h3) {
 
   .orbit-hero {
     gap: 2.5rem;
-    padding: 2rem 0 3rem;
-  }
-
-  .orbit-hero-copy {
     grid-template-columns: minmax(0, 1fr);
+    padding: 2rem 0 3rem;
   }
 
   .orbit-hero-headline {
@@ -1226,7 +1217,7 @@ a.orbit-card:focus-visible :is(h2, h3) {
 }
 
 /* ------------------------------------------------------------------------
-   Hero: release chip, requirements line, and provider list
+   Hero: release chip, requirements line, and the right-hand column
    ------------------------------------------------------------------------ */
 .orbit-hero-release {
   align-items: center;
@@ -1276,6 +1267,13 @@ a.orbit-card:focus-visible :is(h2, h3) {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+.orbit-hero-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
 }
 
 /* ------------------------------------------------------------------------
