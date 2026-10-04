@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010]
-last_validated: 2026-09-10
+last_validated: 2026-10-03
 ---
 
 # Full pre-release QA sweep
@@ -35,9 +35,9 @@ The executor runs the harness from the repository root:
 
 ```bash
 ./scripts/qa-full-sweep.sh --build-candidate \
-  --output qa-full-sweep-report.json --run-commands
-orbit task artifact put <TASK_ID> qa-full-sweep-report.json \
-  --path qa-full-sweep-report.json --model claude --json
+  --output .orbit/tmp/qa-full-sweep/qa-full-sweep-report.json --run-commands
+orbit tool run orbit.task.artifact.put --input \
+  '{"id":"<TASK_ID>","source_path":".orbit/tmp/qa-full-sweep/qa-full-sweep-report.json","path":"qa-full-sweep-report.json","model":"codex"}'
 ```
 
 `orbit.task.artifact.put` is intentionally fail-closed: its `source_path`
@@ -49,14 +49,13 @@ gitignored, so it does not appear in `git status`) and attach from there:
 ```bash
 stage_dir=.orbit/tmp/qa-full-sweep
 mkdir -p "$stage_dir/browser"
-cp -R /tmp/orbit-qa-evidence/browser/. "$stage_dir/browser/"
 
 # Attach each staged evidence file; this example attaches the browser result.
-orbit task artifact put <TASK_ID> "$stage_dir/browser/result.json" \
-  --path browser/result.json --model claude --json
+orbit tool run orbit.task.artifact.put --input \
+  '{"id":"<TASK_ID>","source_path":".orbit/tmp/qa-full-sweep/browser/result.json","path":"browser/result.json","model":"codex"}'
 ```
 
-The copy must be inside the checkout (under `.orbit/tmp/`) before
+Retained evidence must be inside the checkout (under `.orbit/tmp/`) before
 `artifact put` runs. Do not stage into a tracked or untracked-visible path;
 leftover copies outside `.orbit/` (or a generated report that is untracked)
 are delivery-boundary failures. If the retained evidence is represented
@@ -79,10 +78,11 @@ retains screenshots plus `result.json` in the output-side evidence directory.
 
 ```bash
 ./scripts/qa-full-sweep.sh --build-candidate --run-commands \
-  --playwright-module /tmp/orbit-browser-check/node_modules/playwright/index.mjs \
-  --playwright-browsers-path /tmp/orbit-browser-check/browsers \
-  --browser-ld-library-path /tmp/orbit-browser-check/sysroot/usr/lib/x86_64-linux-gnu \
-  --browser-evidence-dir /tmp/orbit-qa-evidence/browser
+  --output .orbit/tmp/qa-full-sweep/qa-full-sweep-report.json \
+  --playwright-module .orbit/tmp/orbit-browser-check/node_modules/playwright/index.mjs \
+  --playwright-browsers-path .orbit/tmp/orbit-browser-check/browsers \
+  --browser-ld-library-path .orbit/tmp/orbit-browser-check/sysroot/usr/lib/x86_64-linux-gnu \
+  --browser-evidence-dir .orbit/tmp/qa-full-sweep/browser
 ```
 
 Attach both the JSON report and its retained evidence directory (or its file
@@ -118,7 +118,7 @@ checkout of that same commit:
 ```bash
 ./scripts/qa-full-sweep.sh --build-candidate --run-commands \
   --platform-evidence /absolute/path/to/macos-platform-evidence.json \
-  --output qa-full-sweep-report.json
+  --output .orbit/tmp/qa-full-sweep/qa-full-sweep-report.json
 ```
 
 The workflow creates the bounded report with
@@ -167,6 +167,32 @@ or a required case that was skipped, renamed, or filtered out, cannot satisfy
 that scenario. The report retains the observed passing case names. Suite and
 surface mappings identify the selected boundary checks; they do not establish
 that every workflow asset or every subcommand has been executed.
+All Cargo rows require named behavioral cases and an explicit `--test` target
+or `--lib`. The inventory guard checks targets through `cargo metadata`
+without compiling. To compile and list each exact selection, retaining its
+selected names without claiming execution, run:
+
+```bash
+python3 scripts/test-qa-full-sweep.py --check --check-cargo-selections
+```
+
+The consolidated CLI targets are `mcp`, `output`, `process`, `task`, `tool`,
+and `workspace`; core runtime and fake-provider cases use `runtime` and
+`provider`. MCP case names start with `mcp_roundtrip::`, including nested
+`desktop::`, `transport_operations::`, and `internal_drain::` cases. HTTP
+boundary checks run in `orbit-web --test http_api`, and workflow boundary
+checks run in `orbit-engine --test engine`. Keep filters and `required_tests`
+module-qualified, especially when using `--exact`.
+
+A retired case without equivalent admitted boundary coverage stays in the
+inventory as `kind: coverage-gap` with a concrete `coverage_gap` explanation
+and its original assertions. It has no executable command or passing cases:
+the harness emits `BLOCKED`, and even unrelated PASS evidence cannot make it
+earn release sign-off. `task-list-pagination` currently has this gap for
+exhaustive filtered pagination and invalid or cross-workspace cursor refusal.
+Browser page navigation does not replace those HTTP contracts. Add admitted
+HTTP coverage before converting the row back to `cargo-test`.
+
 The command harness requires a POSIX host. It drains stdout and stderr while
 retaining at most one MiB per stream and marks truncated output. A disposable
 supervisor owns each command's process group until cleanup finishes. Timeout,
@@ -177,6 +203,8 @@ timeout and lost-supervisor outcomes also fail.
 `python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.
+Before task handoff, report `make ci-fast`, `make ci-lint`, and `make goldens`
+as passed, failed, or not run with reasons. Full `make ci` runs on PRs.
 
 For a subcommand grammar audit, run
 `python3 scripts/test-qa-full-sweep.py --orbit-bin target/debug/orbit --list-cli-paths`.
