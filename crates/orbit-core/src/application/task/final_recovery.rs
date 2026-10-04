@@ -152,6 +152,9 @@ impl OrbitRuntime {
     /// re-checked under the task write lock and recorded as one task comment
     /// naming the run, whether it was applied, overridden or refused:
     ///
+    /// - a run whose comment the task already holds was applied before; its
+    ///   recorded outcome is returned and nothing is written, so applying a
+    ///   run's decision again is a no-op [ORB-13907];
     /// - a task that is already terminal, or that changed after
     ///   `request.observed`, is refused;
     /// - `complete_no_diff` completes only when `evidence_commit` is reachable
@@ -171,9 +174,17 @@ impl OrbitRuntime {
         }
         self.ensure_coordination_task_write_permitted()?;
         let mut applied = None;
+        let mut replayed = false;
         self.stores()
             .tasks()
             .with_task_write_lock(&request.task_id, &mut || {
+                if let Some(recorded) =
+                    self.recorded_final_recovery(&request.task_id, &request.run_id)?
+                {
+                    applied = Some(recorded);
+                    replayed = true;
+                    return Ok(());
+                }
                 let task = self.get_task(&request.task_id)?;
                 let plan = match refusal(&task, request) {
                     Some(reason) => Plan::refused(&task, request, &decision, reason),
@@ -192,16 +203,34 @@ impl OrbitRuntime {
                 "final recovery applier did not run under the task lock".to_string(),
             )
         })?;
-        if matches!(
-            outcome,
-            FinalRecoveryOutcome::Completed {
-                status: TaskStatus::Done,
-                ..
-            }
-        ) {
+        if !replayed
+            && matches!(
+                outcome,
+                FinalRecoveryOutcome::Completed {
+                    status: TaskStatus::Done,
+                    ..
+                }
+            )
+        {
             self.record_resolves_side_effects(&self.get_task(&request.task_id)?)?;
         }
         Ok(outcome)
+    }
+
+    /// The outcome the applier recorded on the task for `run_id`'s decision,
+    /// when it already applied one: read back from the decision comment it
+    /// wrote with the task change.
+    pub(crate) fn recorded_final_recovery(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<Option<FinalRecoveryOutcome>, OrbitError> {
+        let marker = format!("final_recovery run_id={run_id} decision=");
+        Ok(self
+            .get_task_comments(task_id)?
+            .iter()
+            .find(|comment| comment.message.starts_with(&marker))
+            .map(|comment| recorded_outcome(&comment.message)))
     }
 
     fn plan(
@@ -465,6 +494,47 @@ fn refusal(task: &Task, request: &FinalRecoveryRequest) -> Option<String> {
         ));
     }
     None
+}
+
+/// The outcome a decision comment records: its header's `outcome=` (and a
+/// completion's `status=`), with the detail lines `plan`
+/// writes below it. A comment this module did not write as expected reads as
+/// an escalation, which never settles the task twice.
+fn recorded_outcome(message: &str) -> FinalRecoveryOutcome {
+    let header = message.lines().next().unwrap_or_default();
+    let field = |key: &str| {
+        header
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix(key))
+    };
+    let detail = |key: &str| {
+        message
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .map(|value| value.trim().to_string())
+    };
+    let escalated = FinalRecoveryOutcome::Escalated { reason: None };
+    match field("outcome=") {
+        Some("completed") => {
+            match (
+                field("status=").and_then(|status| status.parse().ok()),
+                detail("evidence_commit: "),
+            ) {
+                (Some(status), Some(evidence_commit)) => FinalRecoveryOutcome::Completed {
+                    status,
+                    evidence_commit,
+                },
+                _ => escalated,
+            }
+        }
+        Some("rejected") => FinalRecoveryOutcome::Rejected,
+        Some("archived") => FinalRecoveryOutcome::Archived,
+        Some("requeued") => FinalRecoveryOutcome::Requeued,
+        Some("refused") => FinalRecoveryOutcome::Refused {
+            reason: detail("reason: ").unwrap_or_default(),
+        },
+        _ => escalated,
+    }
 }
 
 fn comment_header(request: &FinalRecoveryRequest, decision: &FinalRecoveryDecision) -> String {

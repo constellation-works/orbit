@@ -211,6 +211,7 @@ const ACTIVITIES: &[&str] = &[
     "pr_promote",
     "pr_complete",
     "pr_failure_handoff",
+    "final_recovery",
 ];
 
 fn run_shipped_pipeline(
