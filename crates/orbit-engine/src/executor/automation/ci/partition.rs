@@ -15,6 +15,11 @@ pub(super) struct RunPartition {
     pub(super) in_flight: Vec<Value>,
     pub(super) mixed_candidates: Vec<Value>,
     pub(super) deferred: Vec<Value>,
+    /// Cancelled current runs keyed by run id, mapped to the newest run of the
+    /// same workflow on the same branch. GitHub concurrency cancels a run in
+    /// favour of exactly such a successor, so once expansion shows the
+    /// cancellation has no failed step it is superseded rather than evidence.
+    pub(super) cancelled_successors: std::collections::BTreeMap<u64, Value>,
 }
 
 /// Classify repository-wide runs by relevant workflow/ref identity.
@@ -149,6 +154,14 @@ pub(super) fn partition_runs(
                 // cancellation that has nothing to repair.
                 if !run_is_cancelled(run) {
                     seen_current = true;
+                } else if let (Some(run_id), Some(newer)) = (
+                    run.get("run_id").and_then(Value::as_u64),
+                    ref_runs
+                        .first()
+                        .copied()
+                        .filter(|newer| run_order(newer) > run_order(run)),
+                ) {
+                    out.cancelled_successors.insert(run_id, newer.clone());
                 }
             }
         }
@@ -174,7 +187,7 @@ pub(super) fn run_is_unsuccessful(run: &Value) -> bool {
     unsuccessful_conclusion(run.get("conclusion").and_then(Value::as_str))
 }
 
-fn run_is_cancelled(run: &Value) -> bool {
+pub(super) fn run_is_cancelled(run: &Value) -> bool {
     run.get("conclusion").and_then(Value::as_str) == Some("cancelled")
 }
 
@@ -288,6 +301,16 @@ pub(super) fn supersede_older_when_cancelled_run_is_actionable(
         kept.push(finding);
     }
     kept
+}
+
+/// A cancelled run whose expansion found no failed step, on a workflow/ref
+/// that already has a newer run. It is neither a failure nor inconclusive: the
+/// newer run is the evidence for that identity.
+pub(super) fn superseded_cancellation_entry(cancelled: &Value, newer: &Value) -> Value {
+    let mut entry = stale_from_findings(cancelled, newer);
+    entry["reason"] = json!("cancelled_superseded_by_newer_workflow_run");
+    entry["investigated"] = json!(true);
+    entry
 }
 
 fn workflow_ref_key(failure: &Value) -> (String, String) {
