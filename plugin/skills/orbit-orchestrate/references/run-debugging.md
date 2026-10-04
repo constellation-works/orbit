@@ -153,8 +153,13 @@ tail when triaging one.
   mid-turn: exit zero is not evidence the investigation succeeded.
 - `timed_out: true` means the wall-clock bound killed it — resubmit with a
   longer `--timeout` (the maximum is 7200s) or a narrower prompt.
-- `summary` and the bounded preview are the answer; `orbit run logs <RUN_ID>`
-  has the complete captured output when the preview is truncated.
+- `answer` is the answer: `summary`, `findings`, `next_steps`, any other
+  result field under `extra`, and the bounded `final_message`. `failure_reason`
+  names a missing or malformed response envelope. `orbit run logs <RUN_ID>` has
+  the complete captured output, failed invocations included.
+- `progress` carries the newest `latest_message` and `last_activity_at` while
+  the agent runs; a stale `last_activity_at` on a live child is a quiet agent,
+  not a lost one.
 
 These runs execute their provider subprocess outside the executor sandbox by
 explicit per-invocation operator admission, so a sandbox-denial diagnostic is

@@ -55,12 +55,20 @@ fn plant_agent_cli_stub(bin: &Path, name: &str) {
 }
 
 fn plant_agent_response_stub(bin: &Path, name: &str) {
+    plant_agent_stub_printing(bin, name, AGENT_ANSWER_ENVELOPE);
+}
+
+/// [ORB-13899] An answer using every part of the envelope `result` an
+/// operator reads: the named fields and one the prompt asked for.
+const AGENT_ANSWER_ENVELOPE: &str = r##"{"schemaVersion":1,"status":"success","result":{"summary":"remote probe complete","findings":["the clock restarts on reload"],"next_steps":["pin the reload interval"],"report_markdown":"# Probe\n\nAll clear."},"error":null}"##;
+
+/// Overwrite the stub `name` with one that drains stdin and prints
+/// `stdout_line`, which must not contain a single quote.
+fn plant_agent_stub_printing(bin: &Path, name: &str, stdout_line: &str) {
     plant_agent_cli_stub(bin, name);
-    let stub = bin.join(name);
     std::fs::write(
-        &stub,
-        "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' \
-         '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"summary\":\"remote probe complete\"},\"error\":null}'\n",
+        bin.join(name),
+        format!("#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{stdout_line}'\n"),
     )
     .expect("write response stub");
 }
@@ -1295,6 +1303,42 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
     assert_eq!(terminal["state"], "success", "{terminal}");
     assert_eq!(terminal["agent_invocation"]["completed_envelope"], true);
 
+    // [ORB-13899] The answer is readable where an MCP caller already looks,
+    // with no log parsing: every result field and the agent's final message.
+    let answer = &terminal["agent_invocation"]["answer"];
+    assert_eq!(answer["summary"], "remote probe complete", "{terminal}");
+    assert_eq!(answer["findings"], json!(["the clock restarts on reload"]));
+    assert_eq!(answer["next_steps"], json!(["pin the reload interval"]));
+    assert_eq!(
+        answer["extra"],
+        json!({ "report_markdown": "# Probe\n\nAll clear." }),
+        "only the agent's own extra fields, never Orbit's metadata"
+    );
+    assert_eq!(answer["final_message"], AGENT_ANSWER_ENVELOPE);
+    assert_eq!(answer["final_message_truncated"], false);
+
+    // The CLI reads the same answer, as JSON and as text.
+    let shown = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["run", "show", &run_id, "--json"]),
+    );
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("run show JSON");
+    assert_eq!(shown["run"]["agent_invocation"]["answer"], *answer);
+    let text = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["run", "show", &run_id]),
+    );
+    let text = String::from_utf8_lossy(&text.stdout);
+    for expected in [
+        "summary: remote probe complete",
+        "findings:\n    - the clock restarts on reload",
+        "next_steps:\n    - pin the reload interval",
+        "report_markdown:\n    # Probe\n    \n    All clear.",
+        "final message: {\"schemaVersion\":1",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+
     let connection =
         Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open destination store");
     let input_json: String = connection
@@ -1308,6 +1352,69 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
     assert_eq!(
         input["trusted_host_admission"]["caller_machine_id"],
         "hm_caller"
+    );
+}
+
+/// [ORB-13899] An invocation that exits 0 without a response envelope did not
+/// answer. It fails with a reason naming the envelope, and its raw output
+/// stays reachable although a failed step checkpoints nothing.
+#[test]
+fn an_invocation_without_a_response_envelope_fails_with_its_reason() {
+    let workspace = McpWorkspace::init();
+    for provider in ["codex", "claude"] {
+        plant_agent_stub_printing(
+            &McpWorkspace::stub_bin_dir(&workspace.home),
+            provider,
+            "I looked around and everything seems fine.",
+        );
+    }
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let submitted = client.call_tool_ok(
+        "orbit_agent_invoke",
+        json!({
+            "prompt": "probe without answering",
+            "cwd": workspace.work,
+            "timeout_seconds": 30,
+            "model": "codex",
+        }),
+    );
+    let run_id = submitted["run_id"].as_str().expect("run id").to_string();
+
+    let deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let terminal = loop {
+        let shown = client.call_tool_ok("orbit_workflow_run_show", json!({ "id": run_id }));
+        if matches!(
+            shown["state"].as_str(),
+            Some("success" | "failed" | "timeout" | "cancelled" | "interrupted")
+        ) {
+            break shown;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "agent invocation did not finish: {shown}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let invocation = &terminal["agent_invocation"];
+    assert_eq!(terminal["state"], "failed", "{terminal}");
+    let reason = invocation["failure_reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("response envelope"),
+        "the reason must name the missing envelope: {terminal}"
+    );
+    assert!(
+        invocation["stdout_blob_ref"].as_str().is_some(),
+        "the raw output must stay reachable: {terminal}"
+    );
+    assert_eq!(invocation["answer"], Value::Null, "{terminal}");
+
+    let logs = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["run", "logs", &run_id]),
+    );
+    assert!(
+        String::from_utf8_lossy(&logs.stdout).contains("everything seems fine"),
+        "`orbit run logs` must print the raw output"
     );
 }
 

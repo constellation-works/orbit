@@ -88,7 +88,10 @@ impl Tool for OrbitAgentInvokeTool {
                  the same OS user as Orbit, so it can reach anything that user can; it is \
                  admitted per invocation and requires operator capability — the same test for a \
                  session that arrived over SSH as for a local one. Track it with \
-                 `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop \
+                 `orbit.workflow.run.show`: `agent_invocation.answer` carries the agent's \
+                 summary, findings, next_steps, any other result fields and its bounded final \
+                 message, and `agent_invocation.progress` its latest message and last activity \
+                 while it runs. Read the complete output with `orbit run logs <RUN_ID>` and stop \
                  it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, \
                  and dispatches nothing."
                     .to_string(),

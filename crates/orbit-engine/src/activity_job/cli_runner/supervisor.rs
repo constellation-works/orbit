@@ -79,6 +79,9 @@ const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 const CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_ENV: &str = "ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES";
 const DEFAULT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 const OUTPUT_LINE_EVENT_LIMIT_BYTES: usize = 64 * 1024;
+/// Newest stdout bytes a progress sample carries. Large enough for one
+/// provider event holding a long assistant message.
+const PROGRESS_WINDOW_BYTES: usize = 64 * 1024;
 
 type SharedOutputCapture = Arc<Mutex<RollingOutputCapture>>;
 type WaitHook<'a> = &'a dyn Fn(&mut Child) -> std::io::Result<Option<ExitStatus>>;
@@ -156,6 +159,28 @@ impl RollingOutputCapture {
         }
     }
 
+    /// The newest complete lines of the capture, at most `window` bytes.
+    fn recent(&self, window: usize) -> Vec<u8> {
+        let (bytes, from_start) = if self.truncated {
+            let skip = self.tail.len().saturating_sub(window);
+            (
+                self.tail.iter().skip(skip).copied().collect::<Vec<_>>(),
+                false,
+            )
+        } else {
+            let start = self.prefix.len().saturating_sub(window);
+            (self.prefix[start..].to_vec(), start == 0)
+        };
+        if from_start {
+            return bytes;
+        }
+        // The window may open mid-line; that fragment is not a line.
+        bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or_else(Vec::new, |idx| bytes[idx + 1..].to_vec())
+    }
+
     fn finish(&self) -> CapturedOutput {
         if !self.truncated {
             return CapturedOutput {
@@ -195,6 +220,20 @@ impl RollingOutputCapture {
     }
 }
 
+/// [ORB-13899] What a running child has written to stdout so far.
+pub(super) struct OutputProgress {
+    pub(super) observed_bytes: usize,
+    /// The newest complete stdout lines, bounded.
+    pub(super) recent: Vec<u8>,
+}
+
+/// Samples a running child's stdout every `interval` until it exits, so a
+/// long invocation is observable before it finishes.
+pub(super) struct ProgressReporter<'a> {
+    pub(super) interval: Duration,
+    pub(super) report: &'a dyn Fn(&OutputProgress),
+}
+
 pub(super) struct SpawnTraceContext<'a> {
     pub(super) provider: &'a str,
     pub(super) job_run_id: &'a str,
@@ -217,6 +256,9 @@ pub(super) struct SpawnWithTimeoutRequest<'a> {
     /// inside this module (process-group cleanup), so a long-running provider
     /// child has no observable identity while it runs.
     pub(super) on_spawn: Option<&'a dyn Fn(u32)>,
+    /// Called on the supervising thread between waits on the child, so only
+    /// before supervision has seen it exit.
+    pub(super) on_progress: Option<ProgressReporter<'a>>,
     /// Test seam for exercising wait failures without depending on another
     /// thread reaping the child between wait calls. Injected hooks are
     /// try_wait-style (non-blocking); production blocks in `wait_timeout`.
@@ -328,6 +370,7 @@ pub(super) fn spawn_with_timeout(
         trace,
         output_capture_limit,
         on_spawn,
+        on_progress,
         wait,
         live_readers,
         spawned_child,
@@ -403,7 +446,26 @@ pub(super) fn spawn_with_timeout(
     });
 
     let deadline = started + timeout;
-    let wait_result = wait_until_exit_or_deadline(&mut child, deadline, wait);
+    let sample_progress = || {
+        if let Some(progress) = on_progress.as_ref()
+            && let Ok(capture) = stdout_buf.lock()
+        {
+            let sample = OutputProgress {
+                observed_bytes: capture.observed_bytes,
+                recent: capture.recent(PROGRESS_WINDOW_BYTES),
+            };
+            drop(capture);
+            (progress.report)(&sample);
+        }
+    };
+    let wait_result = wait_until_exit_or_deadline(
+        &mut child,
+        deadline,
+        wait,
+        on_progress
+            .as_ref()
+            .map(|progress| (progress.interval, &sample_progress as &dyn Fn())),
+    );
     // `wait` failures are host-side and not clearly deterministic — leave
     // them retryable after the common cleanup below.
     let (exit_status, wait_error, timed_out) = match wait_result {
@@ -446,13 +508,19 @@ pub(super) fn spawn_with_timeout(
 /// Production uses `wait_timeout` for the remaining wall-clock budget so a
 /// long-running agent does not wake 40 times per second. The test `wait` hook
 /// is try_wait-style and may still poll.
+///
+/// With `progress`, production waits in slices of its interval and samples
+/// between them, so sampling stops once a wait reports the exit.
 fn wait_until_exit_or_deadline(
     child: &mut Child,
     deadline: Instant,
     wait: Option<WaitHook<'_>>,
+    progress: Option<(Duration, &dyn Fn())>,
 ) -> io::Result<Option<ExitStatus>> {
+    let mut next_sample = progress.map(|(interval, _)| Instant::now() + interval);
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let slice_end = next_sample.map_or(deadline, |next| next.min(deadline));
+        let remaining = slice_end.saturating_duration_since(Instant::now());
         let result = match wait {
             Some(wait) => wait(child),
             None => child.wait_timeout(remaining),
@@ -460,10 +528,19 @@ fn wait_until_exit_or_deadline(
         match result {
             Ok(Some(status)) => return Ok(Some(status)),
             Ok(None) => {
-                if wait.is_none() || Instant::now() >= deadline {
+                let now = Instant::now();
+                if now >= deadline {
                     return Ok(None);
                 }
-                thread::sleep(Duration::from_millis(25));
+                if let (Some((interval, sample)), Some(next)) = (progress, next_sample)
+                    && now >= next
+                {
+                    sample();
+                    next_sample = Some(now + interval);
+                }
+                if wait.is_some() {
+                    thread::sleep(Duration::from_millis(25));
+                }
             }
             Err(err) => return Err(err),
         }

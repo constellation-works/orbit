@@ -271,6 +271,25 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid_start_time: Option<String>,
     },
+    /// [ORB-13899] The provider child produced output since the previous
+    /// observation. Emitted at most once per supervision interval while the
+    /// child runs, and only when its stdout grew, so the event time is the
+    /// run's last observed activity.
+    ///
+    /// Pairs with `cli.invocation.process` the same way
+    /// `cli.invocation.finished` does. `latest_message` is the newest
+    /// assistant message Orbit could read from the output tail — bounded and
+    /// redacted — and absent when the tail carried none.
+    CliInvocationActivity {
+        provider: String,
+        /// Bytes the child has written to stdout so far.
+        observed_bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latest_message: Option<String>,
+        /// Whether `latest_message` was cut to its bound.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        latest_message_truncated: bool,
+    },
     /// §7.6 — CLI backend subprocess finished (either naturally or by
     /// wall-clock timeout). `timed_out == true` iff the subprocess was killed
     /// because it exceeded `wall_clock_timeout_ms`.
@@ -329,6 +348,7 @@ impl V2AuditEventKind {
             }
             V2AuditEventKind::CliInvocationStarted { .. } => "cli.invocation.started",
             V2AuditEventKind::CliInvocationProcess { .. } => "cli.invocation.process",
+            V2AuditEventKind::CliInvocationActivity { .. } => "cli.invocation.activity",
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }

@@ -1,6 +1,7 @@
 //! Provider subprocess dispatch for `backend: cli`: argv and environment
 //! composition, the run's plugin broker, and spawn supervision.
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,8 +29,10 @@ use super::super::envelope::{cli_agent_envelope_json, task_id_from_input, task_i
 use super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::super::plugin_broker::RunPluginBroker;
 use super::super::spawn::{CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV, SpawnError};
+use super::super::stdout_preview::{PROGRESS_MESSAGE_LIMIT_BYTES, bounded_assistant_message};
 use super::super::supervisor::{
-    SpawnTraceContext, SpawnWithTimeoutRequest, spawn_for_supervision, spawn_with_timeout,
+    OutputProgress, ProgressReporter, SpawnTraceContext, SpawnWithTimeoutRequest,
+    spawn_for_supervision, spawn_with_timeout,
 };
 use super::completion::{ProviderExit, project_completion};
 use super::policy::{
@@ -41,6 +44,10 @@ use super::prepare::{
     trusted_host_admission,
 };
 use crate::context::RuntimeHost;
+
+/// How often a running provider's stdout is sampled for progress. Bounds the
+/// staleness of `last_activity_at` and the progress rows one invocation writes.
+const PROVIDER_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 
 pub fn run_cli_backend(
     host: &dyn RuntimeHost,
@@ -455,6 +462,30 @@ pub fn run_cli_backend(
         });
     };
 
+    // [ORB-13899] Live progress: the newest assistant message and, through
+    // the event time, the last moment the child produced output. Silence
+    // emits nothing, so a quiet child adds no rows.
+    let progress_audit = Arc::clone(&audit);
+    let progress_provider = provider.clone();
+    let reported_bytes = Cell::new(0usize);
+    let report_progress = |progress: &OutputProgress| {
+        if progress.observed_bytes == reported_bytes.replace(progress.observed_bytes) {
+            return;
+        }
+        let message = bounded_assistant_message(
+            &progress_provider,
+            &progress.recent,
+            redaction,
+            PROGRESS_MESSAGE_LIMIT_BYTES,
+        );
+        progress_audit.emit_lossy(V2AuditEventKind::CliInvocationActivity {
+            provider: progress_provider.clone(),
+            observed_bytes: progress.observed_bytes as u64,
+            latest_message_truncated: message.as_ref().is_some_and(|message| message.truncated),
+            latest_message: message.map(|message| message.text),
+        });
+    };
+
     // A managed Linux Bubblewrap launch snapshots the write-policy gaps its
     // mounts cannot cover while compiling those mounts; take that snapshot off
     // the spawned child rather than walking the worktree a second time.
@@ -502,6 +533,10 @@ pub fn run_cli_backend(
             },
             output_capture_limit: None,
             on_spawn: Some(&on_spawn),
+            on_progress: Some(ProgressReporter {
+                interval: PROVIDER_PROGRESS_INTERVAL,
+                report: &report_progress,
+            }),
             wait: None,
             live_readers: None,
             spawned_child: Some(spawned),

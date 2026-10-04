@@ -188,7 +188,32 @@ where
                     duration_ms: None,
                     // Overwritten below; only unfinished records are probed.
                     liveness: ProcessLiveness::Exited,
+                    last_activity_at: None,
+                    latest_message: None,
+                    latest_message_truncated: false,
+                    stdout_blob_ref: None,
                 });
+            }
+            Some("cli_invocation_activity") => {
+                // Correlated exactly as a completion is: the open child the
+                // same invocation spawned.
+                let Some(record) = matching_provider_process_for_completion(
+                    &mut records,
+                    &invocation_parent_by_process_event,
+                    &event,
+                ) else {
+                    continue;
+                };
+                record.last_activity_at = event.timestamp.or(record.last_activity_at);
+                // A sample whose tail held no message keeps the previous one.
+                if let Some(message) = event.raw.get("latest_message").and_then(Value::as_str) {
+                    record.latest_message = Some(message.to_string());
+                    record.latest_message_truncated = event
+                        .raw
+                        .get("latest_message_truncated")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                }
             }
             Some("cli_invocation_finished") => {
                 let Some(record) = matching_provider_process_for_completion(
@@ -206,6 +231,11 @@ where
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 record.duration_ms = event.raw.get("duration_ms").and_then(Value::as_u64);
+                record.stdout_blob_ref = event
+                    .raw
+                    .get("stdout_blob_ref")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
             }
             _ => {}
         }

@@ -28,7 +28,8 @@ use super::super::spawn_diagnostics::{
     macos_keychain_auth_diagnostic, macos_sandbox_apply_failure_diagnostic,
 };
 use super::super::stdout_preview::{
-    STDOUT_TEXT_PREVIEW_LIMIT_BYTES, StdoutTextPreview, stdout_text_preview,
+    BoundedMessage, FINAL_MESSAGE_LIMIT_BYTES, STDOUT_TEXT_PREVIEW_LIMIT_BYTES, StdoutTextPreview,
+    bounded_assistant_message, stdout_text_preview,
 };
 use super::super::supervisor::CapturedOutput;
 
@@ -310,10 +311,13 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             ),
             sandbox_write_diagnostic.as_deref(),
         ))
-    } else if spec.require_response_envelope {
-        response_envelope_error
-            .clone()
-            .map(|error| with_sandbox_write_attribution(error, sandbox_write_diagnostic.as_deref()))
+    } else if spec.require_response_envelope
+        && let Some(error) = response_envelope_error.clone()
+    {
+        Some(with_sandbox_write_attribution(
+            error,
+            sandbox_write_diagnostic.as_deref(),
+        ))
     } else if completion_protocol_violation {
         // Ordered last on purpose: an activity that opted into the content
         // contract already produced a strictly more specific diagnostic above,
@@ -332,8 +336,42 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         truncated: stdout_text_truncated,
         preview_bytes: stdout_text_preview_bytes,
     } = stdout_preview;
+    // [ORB-13899] What the agent last said, for an operator reading the run.
+    // Taken from the answer projection, so it never quotes tool traffic.
+    let final_message = bounded_assistant_message(
+        &provider,
+        stdout.protocol_bytes(),
+        redaction,
+        FINAL_MESSAGE_LIMIT_BYTES,
+    );
     let mut output = parsed_result.and_then(Result::ok).unwrap_or_default();
+    // The envelope `result` keys, recorded before Orbit's own fields join
+    // them, so a reader can tell the agent's answer from invocation metadata.
+    let response_result_fields = if response_envelope_valid {
+        serde_json::json!(output.keys().collect::<Vec<_>>())
+    } else {
+        Value::Null
+    };
+    let (final_message_text, final_message_truncated, final_message_bytes) = match final_message {
+        Some(BoundedMessage {
+            text,
+            truncated,
+            original_bytes,
+        }) => (
+            Value::String(text),
+            truncated,
+            serde_json::json!(original_bytes),
+        ),
+        None => (Value::Null, false, Value::Null),
+    };
     for (key, value) in [
+        ("response_result_fields", response_result_fields),
+        ("final_message", final_message_text),
+        (
+            "final_message_truncated",
+            Value::Bool(final_message_truncated),
+        ),
+        ("final_message_bytes", final_message_bytes),
         ("provider", Value::String(provider.clone())),
         ("argv_redacted", serde_json::json!(argv_redacted)),
         ("stdin_blob_ref", Value::String(stdin_blob_ref.clone())),

@@ -160,6 +160,16 @@ pub struct RunProviderProcess {
     pub timed_out: bool,
     pub duration_ms: Option<u64>,
     pub liveness: ProcessLiveness,
+    /// [ORB-13899] When the child last produced output, from its newest
+    /// `cli.invocation.activity` event. `None` until the first one.
+    pub last_activity_at: Option<DateTime<Utc>>,
+    /// The newest assistant message any of those events carried, bounded and
+    /// redacted at the source.
+    pub latest_message: Option<String>,
+    pub latest_message_truncated: bool,
+    /// The complete captured stdout, once the child finished. Readable after a
+    /// failed step too, whose output never reaches the pipeline state.
+    pub stdout_blob_ref: Option<String>,
 }
 
 impl RunProviderProcess {
@@ -184,6 +194,10 @@ impl RunProviderProcess {
             "exit_code": self.exit_code,
             "timed_out": self.timed_out,
             "duration_ms": self.duration_ms,
+            "last_activity_at": self.last_activity_at.map(|ts| ts.to_rfc3339()),
+            "latest_message": self.latest_message,
+            "latest_message_truncated": self.latest_message_truncated,
+            "stdout_blob_ref": self.stdout_blob_ref,
         })
     }
 }

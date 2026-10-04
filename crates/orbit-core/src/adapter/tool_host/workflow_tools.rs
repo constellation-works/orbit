@@ -65,11 +65,33 @@ pub(super) fn ship(
     }))
 }
 
+/// One run: the record, the child Runs it dispatched, and what it is doing
+/// now.
+///
+/// [ORB-10971] The `JobRun` row alone cannot answer "what did this run submit,
+/// and is it still waiting on it" — that lives in the run's `PipelineState`.
+/// Reading it here is what keeps the MCP surface agreeing with the CLI and the
+/// dashboard about lineage instead of each reader seeing a different half of
+/// the truth. An unreadable state degrades to an empty list rather than
+/// failing the read.
 pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = orbit_common::protocol::tool_input::required_string(&input, &["id"], "id")?;
     let run = runtime.show_job_run(&id)?;
-    let mut value = run_json_with_lineage(runtime, &run)?;
-    value["execution_progress"] = execution_progress_json(runtime, &run.run_id);
+    let state = runtime.read_run_state(&run.run_id).ok().flatten();
+    let recovery = runtime.collect_run_recovery_attempts(&run.run_id).ok();
+    let mut value = run_json_enriched(Some(runtime), &run, state.as_ref(), recovery.as_ref())?;
+    let progress = runtime
+        .collect_run_execution_progress(&run.run_id)
+        .unwrap_or_else(|_| RunExecutionProgress::unavailable());
+    // [ORB-13899] One run, so the invocation also gets its child's evidence:
+    // live progress, and the output reference a failed step never checkpoints.
+    value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
+        &run,
+        state.as_ref().map(|state| &state.step_outputs),
+        progress.provider_processes.last(),
+    ))
+    .map_err(serialize_error("serialize agent invocation result"))?;
+    value["execution_progress"] = execution_progress_json(&progress);
     Ok(value)
 }
 
@@ -83,17 +105,15 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
 /// a liveness probe per open child, which is the right price for one deliberate
 /// read and the wrong one for a 200-run page.
 ///
-/// The projection is identifiers, timestamps and process facts only — no
-/// provider output — so it stays bounded and carries nothing to redact. An
+/// The projection is identifiers, timestamps and process facts plus each
+/// child's newest assistant message, which the engine bounded and redacted
+/// before persisting it [ORB-13899]. An
 /// unreadable audit trail degrades to `unavailable` rather than failing the
 /// durable run read, as every other evidence field here does.
-fn execution_progress_json(runtime: &OrbitRuntime, run_id: &str) -> Value {
-    let progress = runtime
-        .collect_run_execution_progress(run_id)
-        .unwrap_or_else(|_| RunExecutionProgress::unavailable());
+fn execution_progress_json(progress: &RunExecutionProgress) -> Value {
     json!({
         "state": progress.state,
-        "active_step": progress.active_step.map(|step| json!({
+        "active_step": progress.active_step.as_ref().map(|step| json!({
             "step_id": step.step_id,
             "step_index": step.step_index,
             "started_at": step.started_at.map(|value| value.to_rfc3339()),
@@ -247,19 +267,6 @@ fn run_json(run: &JobRun) -> Result<Value, OrbitError> {
     Ok(value)
 }
 
-/// [ORB-10971] The run record plus the child Runs it dispatched.
-///
-/// The `JobRun` row alone cannot answer "what did this run submit, and is it
-/// still waiting on it" — that lives in the run's `PipelineState`. Reading it
-/// here is what keeps the MCP surface agreeing with the CLI and the dashboard
-/// about lineage instead of each reader seeing a different half of the truth.
-/// An unreadable state degrades to an empty list rather than failing the read.
-fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, OrbitError> {
-    let state = runtime.read_run_state(&run.run_id).ok().flatten();
-    let recovery = runtime.collect_run_recovery_attempts(&run.run_id).ok();
-    run_json_enriched(Some(runtime), run, state.as_ref(), recovery.as_ref())
-}
-
 fn run_json_enriched(
     runtime: Option<&OrbitRuntime>,
     run: &JobRun,
@@ -295,6 +302,7 @@ fn run_json_enriched(
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         run,
         state.map(|state| &state.step_outputs),
+        None,
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
     // Recovery evidence remains separate from the run and step errors above:

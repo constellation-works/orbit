@@ -42,12 +42,13 @@ use orbit_types::workflow::activity_job::{
     least_restrictive_provider_sandbox_warning, parse_provider_sandbox_label,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
     PipelineInvokeResult, PipelineSubmission, RetryKey, input_hash,
 };
+use crate::runtime::audit::run::RunProviderProcess;
 
 /// Catalog job that carries one agent invocation.
 pub const AGENT_INVOKE_JOB_ID: &str = "agent_invoke_pipeline";
@@ -144,19 +145,65 @@ pub struct AgentInvokeResult {
     /// Whether the invocation terminated with a well-formed response envelope.
     /// `false` on an otherwise-clean exit means the agent stopped mid-turn.
     pub completed_envelope: bool,
-    /// The agent's own summary, when it returned one.
+    /// The agent's own summary, when it returned one. Also carried on
+    /// `answer`; kept here for readers of the original shape.
     pub summary: Option<String>,
+    /// What the agent answered [ORB-13899]. `None` until the invocation
+    /// checkpoints a step output, which a failed one never does.
+    pub answer: Option<AgentInvokeAnswer>,
+    /// What the provider child is doing, or last did [ORB-13899]. `None` until
+    /// its process is recorded.
+    pub progress: Option<AgentInvokeProgress>,
     /// Bounded preview of the captured output.
     pub preview: Option<String>,
     /// Whether `preview` is shorter than what the invocation actually produced.
     pub preview_truncated: bool,
     /// Durable reference to the complete captured stdout, readable with
-    /// `orbit run logs <RUN_ID>` after the preview is exhausted.
+    /// `orbit run logs <RUN_ID>` after the preview is exhausted. Present for
+    /// a failed invocation too, once its process has finished.
     pub stdout_blob_ref: Option<String>,
     /// Effective provider inner sandbox persisted at submission, as
     /// `provider:mode`. Absent on runs submitted before this field existed.
     pub provider_sandbox: Option<String>,
 }
+
+/// The agent's answer, as its response envelope and final message gave it
+/// [ORB-13899].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentInvokeAnswer {
+    pub summary: Option<String>,
+    /// The envelope's `findings`, in order. Usually strings; kept as JSON so a
+    /// structured finding is not dropped.
+    pub findings: Vec<Value>,
+    pub next_steps: Vec<Value>,
+    /// Every other field of the envelope `result` — `report_markdown`, for
+    /// instance — exactly as the agent returned it.
+    pub extra: Map<String, Value>,
+    /// The agent's final assistant message, redacted and bounded from its
+    /// start.
+    pub final_message: Option<String>,
+    /// Whether `final_message` was cut; the rest is in `final_message_blob_ref`.
+    pub final_message_truncated: bool,
+    /// Size of the final message before it was bounded.
+    pub final_message_bytes: Option<u64>,
+    /// The complete captured stdout holding the full message, when it was cut.
+    pub final_message_blob_ref: Option<String>,
+}
+
+/// Live evidence from the provider child [ORB-13899].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentInvokeProgress {
+    /// When the child last produced output, as RFC 3339. `None` before its
+    /// first sampled output.
+    pub last_activity_at: Option<String>,
+    /// The newest assistant message sampled while it ran, bounded.
+    pub latest_message: Option<String>,
+    pub latest_message_truncated: bool,
+}
+
+/// Step-output keys an invocation's answer reads by name; every other
+/// envelope `result` key is `extra`.
+const ANSWER_FIELDS: [&str; 3] = ["summary", "findings", "next_steps"];
 
 impl OrbitRuntime {
     /// Admit and submit one exploration invocation.
@@ -352,15 +399,24 @@ fn persisted_invocation_settings(
 /// Reads the run record and its persisted state rather than the live process:
 /// results survive the submitting client disconnecting, and stay readable long
 /// after the subprocess is gone.
+///
+/// `process` is the provider child the run's audit trail recorded, when the
+/// caller read it: it carries live progress and, for a failed invocation, the
+/// only reference to its captured output.
 pub fn agent_invoke_result(
     run: &JobRun,
     step_outputs: Option<&std::collections::BTreeMap<u32, Value>>,
+    process: Option<&RunProviderProcess>,
 ) -> Option<AgentInvokeResult> {
     if run.job_id != AGENT_INVOKE_JOB_ID {
         return None;
     }
     let output = step_outputs.and_then(|outputs| outputs.values().next_back());
     let field = |key: &str| output.and_then(|value| value.get(key));
+    let stdout_blob_ref = field("stdout_blob_ref")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| process.and_then(|process| process.stdout_blob_ref.clone()));
 
     let timed_out = field("timed_out").and_then(Value::as_bool).unwrap_or(false);
     let preview = field("stdout_text")
@@ -394,11 +450,15 @@ pub fn agent_invoke_result(
         summary: field("summary")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
+        answer: output.map(|output| invocation_answer(output, stdout_blob_ref.as_deref())),
+        progress: process.map(|process| AgentInvokeProgress {
+            last_activity_at: process.last_activity_at.map(|ts| ts.to_rfc3339()),
+            latest_message: process.latest_message.clone(),
+            latest_message_truncated: process.latest_message_truncated,
+        }),
         preview,
         preview_truncated,
-        stdout_blob_ref: field("stdout_blob_ref")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        stdout_blob_ref,
         provider_sandbox: run
             .input
             .as_ref()
@@ -406,6 +466,48 @@ pub fn agent_invoke_result(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
     })
+}
+
+/// The answer half of a checkpointed step output.
+///
+/// `extra` is the envelope `result` keys the engine recorded, less the named
+/// ones. Outputs written before that record existed have no `extra`: Orbit's
+/// own fields share the object and cannot be told apart from the agent's.
+fn invocation_answer(output: &Value, stdout_blob_ref: Option<&str>) -> AgentInvokeAnswer {
+    let field = |key: &str| output.get(key);
+    let list = |key: &str| {
+        field(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let extra = field("response_result_fields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|key| !ANSWER_FIELDS.contains(key))
+        .filter_map(|key| field(key).map(|value| (key.to_string(), value.clone())))
+        .collect();
+    let final_message_truncated = field("final_message_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    AgentInvokeAnswer {
+        summary: field("summary")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        findings: list("findings"),
+        next_steps: list("next_steps"),
+        extra,
+        final_message: field("final_message")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        final_message_truncated,
+        final_message_bytes: field("final_message_bytes").and_then(Value::as_u64),
+        final_message_blob_ref: final_message_truncated
+            .then(|| stdout_blob_ref.map(ToOwned::to_owned))
+            .flatten(),
+    }
 }
 
 /// The run state, rendered as the outcome vocabulary an operator reads.

@@ -28,12 +28,15 @@ metadata:
 spec:
   type: agent_loop
   trustedHostExecution: true
-  # Completion is enforced, content is advisory: an investigation that exits 0
-  # without terminating its envelope stopped mid-turn and must not checkpoint
-  # as success. What it *concluded* stays advisory — an operator reads the
-  # answer, Orbit does not act on it.
+  # The envelope is enforced, its conclusions are advisory. An investigation
+  # that exits 0 without terminating its envelope stopped mid-turn, and one
+  # whose envelope carries no `result` object returned no answer; neither may
+  # checkpoint as success, and each fails with a reason naming why. The raw
+  # output stays readable through the run's stdout blob either way. What the
+  # agent *concluded* is advisory — an operator reads the answer, Orbit does
+  # not act on it.
   require_completion_envelope: true
-  require_response_envelope: false
+  require_response_envelope: true
   description: >
     Operator-admitted exploration and debugging invocation. Runs one provider
     subprocess on the host, outside the executor sandbox, in an explicit
@@ -102,6 +105,9 @@ spec:
       "findings":["concrete finding with its evidence"],
       "next_steps":["what the operator could do next"]
     },"error":null}
+
+    `result` may carry further fields when the prompt asks for them (for
+    example a `report_markdown` string); the operator receives every field.
 
     If the investigation could not be completed, return the same envelope with
     `status":"failed"` and a non-empty `error.message` saying what blocked it.
