@@ -284,7 +284,7 @@ define_config_settings! {
     },
     workflow_required_validation_commands: Vec<String> => Vec<String> {
         key: "workflow.required_validation_commands", value_type: "array<string>",
-        description: "Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted.",
+        description: "Commands every delivered candidate must pass: owner PR and local deliveries run them before push or merge, and a distributed execution claim must pass them before this owner accepts its handoff; empty skips the owner check and refuses every claimed handoff.",
         section: ConfigSection::Delivery, order: 60,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
