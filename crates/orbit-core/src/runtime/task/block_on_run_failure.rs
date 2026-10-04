@@ -3,6 +3,8 @@
 //! `interrupted`, every task coupled to that run — stamped with its
 //! `job_run_id` during `worktree_setup` — is moved to `blocked` so a
 //! human/orchestrator has to look before anything runs again.
+//! A backlog task whose latest status decision is this run's final-recovery
+//! requeue is preserved: recovery already authorized another attempt.
 //!
 //! This is the symmetric counterpart to the coupling-in that
 //! `worktree_setup` performs (stamping `job_run_id` and moving tasks to
@@ -20,9 +22,9 @@
 //!
 //! `blocked` is a deliberate dead end for automation: workflow admission
 //! accepts only `backlog` and `in-progress`, so the ship sweep skips these
-//! tasks. The only ways out are a human/orchestrator decision (moving the task
-//! to `backlog` or `in-progress` with `orbit.task.update`) or resuming the run
-//! that blocked it.
+//! tasks. The ways out are a human/orchestrator decision (moving the task
+//! to `backlog` or `in-progress` with `orbit.task.update`), a final-recovery
+//! requeue, or resuming the run that blocked it.
 //!
 //! Some failures are the host's, not the task's: dispatch could not find the
 //! provider launcher. That error is permanent for its run, but installing the
@@ -45,6 +47,8 @@ use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{JobRun, JobRunState};
 
 use crate::OrbitRuntime;
+
+use super::FINAL_RECOVERY_REQUEUED_EVENT;
 
 /// A blocked task whose block was caused by host configuration — its run
 /// failed because dispatch could not find the provider launcher — rather than
@@ -234,19 +238,53 @@ impl OrbitRuntime {
             blocked_workflow_failure_update
         };
         let tasks = self.list_run_tasks(run_id)?;
+        let requeue_note_prefix = format!("final recovery (run_id={run_id}): ");
         for task in tasks {
-            if !task_is_blockable_on_run_failure(task.status) {
-                continue;
-            }
-            let update = blocked_update(
-                &run.job_id,
-                run_id,
-                error_code.as_deref(),
-                error_message.as_deref(),
-            );
+            // Recovery and cleanup serialize the decision with the status
+            // write. Re-read the binding too: another run may have admitted
+            // this task since list_run_tasks took its snapshot.
+            let result =
+                self.stores()
+                    .tasks()
+                    .with_task_write_lock(&task.id, &mut || {
+                        let current = self.get_task(&task.id)?;
+                        if current.job_run_id.as_deref() != Some(run_id)
+                            || !task_is_blockable_on_run_failure(current.status)
+                        {
+                            return Ok(());
+                        }
+                        // The task event, written with the requeue, survives even
+                        // when recording its run-state outcome failed. An older
+                        // requeue or another run's decision grants no exemption.
+                        if current.status == TaskStatus::Backlog
+                            && self
+                                .get_task_history(&task.id)?
+                                .iter()
+                                .rev()
+                                .find(|entry| {
+                                    entry.to_status.is_some()
+                                        || entry.event == FINAL_RECOVERY_REQUEUED_EVENT
+                                })
+                                .is_some_and(|entry| {
+                                    entry.event == FINAL_RECOVERY_REQUEUED_EVENT
+                                        && entry.note.as_deref().is_some_and(|note| {
+                                            note.starts_with(&requeue_note_prefix)
+                                        })
+                                })
+                        {
+                            return Ok(());
+                        }
+                        let update = blocked_update(
+                            &run.job_id,
+                            run_id,
+                            error_code.as_deref(),
+                            error_message.as_deref(),
+                        );
+                        self.apply_task_automation_update(&task.id, update)
+                    });
             // Per-task best-effort: one task's write failure must not strand the
             // rest of the bundle.
-            if let Err(error) = self.apply_task_automation_update(&task.id, update) {
+            if let Err(error) = result {
                 tracing::warn!(
                     run_id,
                     task_id = %task.id,

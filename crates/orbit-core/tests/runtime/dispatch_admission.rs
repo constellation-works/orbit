@@ -100,11 +100,7 @@ pub(super) fn isolated(test: &str) -> bool {
     let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
     let status = status
         .unwrap_or_else(|| panic!("`{test}` ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    assert!(status.success(), "`{test}` failed:\n{stdout}\n{stderr}");
-    assert!(
-        stdout.contains("test result: ok. 1 passed;"),
-        "the child must run `{test}` itself:\n{stdout}"
-    );
+    orbit_common::test_env::assert_child_test_passed(&qualified, status, stdout, stderr);
     false
 }
 

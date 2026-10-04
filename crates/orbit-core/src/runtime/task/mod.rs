@@ -14,6 +14,10 @@ mod tests;
 pub use block_on_run_failure::InfraBlockedTask;
 pub use reservation_cleanup::StaleTaskReservation;
 
+/// History event a final-recovery requeue records; cleanup preserves that
+/// decision and the applier counts these events toward its requeue bound.
+pub const FINAL_RECOVERY_REQUEUED_EVENT: &str = "final_recovery_requeued";
+
 /// One task's declared context selectors, canonicalized against a workspace
 /// root without consulting the filesystem for the target's existence.
 ///
