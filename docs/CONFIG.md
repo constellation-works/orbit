@@ -107,11 +107,11 @@ final_recovery_crews = ["sol:100", "opus:20"]
 |---|---|---|
 | `workflow.resource_throttle.enabled` | `true` | Enable the host pressure throttle verdict. Disabling it retains resource telemetry and severity. |
 | `workflow.resource_throttle.cpu_high_percent` | `90` | CPU high-water mark. |
-| `workflow.resource_throttle.cpu_resume_percent` | `75` | Resume below this CPU percentage. |
+| `workflow.resource_throttle.cpu_resume_percent` | `85` | Resume below this CPU percentage. |
 | `workflow.resource_throttle.memory_high_percent` | `90` | Memory high-water mark. |
-| `workflow.resource_throttle.memory_resume_percent` | `80` | Resume below this memory percentage. |
-| `workflow.resource_throttle.disk_high_percent` | `85` | High-water mark for each observed filesystem. |
-| `workflow.resource_throttle.disk_resume_percent` | `80` | Resume below this filesystem usage percentage. |
+| `workflow.resource_throttle.memory_resume_percent` | `85` | Resume below this memory percentage. |
+| `workflow.resource_throttle.disk_high_percent` | `90` | High-water mark for each observed filesystem. |
+| `workflow.resource_throttle.disk_resume_percent` | `85` | Resume below this filesystem usage percentage. |
 
 Percentages are integers in `1..=100`; every resume mark must be strictly less than its high-water mark. These settings inherit per key and appear in `orbit config show`. Workspace runtimes use their resolved settings. The host dashboard uses the serving machine's global settings, sampled when its monitor first opens; restart the dashboard after changing those settings.
 
@@ -120,6 +120,8 @@ The probe caches native reads for two seconds. Linux CPU is one-minute load divi
 Disk usage uses space available to the current user: `(total - available) / total`. Observations cover checkout and `.orbit/state/worktrees` filesystems plus the global Orbit root (`~/.orbit`, or the serving root override). A not-yet-created worktrees directory uses its nearest existing ancestor. All watched paths still participate in sampling and admission. The host API exposes a single `disk` object with the highest known percentage, its severity and path (`null` when no disk reading is known), rather than a per-path array. Held disk pressure reports only the highest held path in reasons and CLI/MCP warnings. The host-scoped `GET /api/host/resources` observes all active registered local checkout paths, independent of `?workspace=`, and remains usable with no selected workspace. It does not query remote hosts.
 
 A value below resume is `ok`, between resume and high is `elevated`, and at or above high is `critical`. The evaluator requires high readings spanning at least ten seconds before setting `throttle=true`; it keeps each hold until that resource falls below resume. Repeated calls using the same cached timestamp do not establish sustained pressure. Gaps longer than fifteen seconds restart the observation window. Unavailable, invalid, future-dated or older-than-fifteen-second samples are explicitly `unknown` and release that resource's hold (fail open); another known resource can still hold the verdict. The API includes severity, sample time/age, thresholds, verdict and reason. The dashboard shows exactly three live CPU, Memory and Disk chips after the topbar's windowed metrics and window label. Elevated and critical chips are tinted; held resources carry a `throttled` marker. Tooltips include sample age, verdict and reason, plus the worst-known path for Disk. It polls every five seconds and checks staleness every second, marking aging data unknown even while a request is pending. While the verdict throttles, local drains, pull drains and ship discovery start no new task, and readiness, `orbit run show`, `orbit run auto`, MCP and the dashboard Drain card name the held resource, value, threshold and since-when; running work is never cancelled. See [Host resource pressure](runbooks/distributed-drain.md#host-resource-pressure). Disabling the throttle restores unthrottled admission.
+
+The dashboard's **Settings › System** view shows these seven keys as one panel: per resource the throttle-at and resume-below marks, each with its source (`default`, `global` or `workspace`), the live reading and severity, and the current verdict with each held resource and since-when. Edits use the same `PUT /api/config/keys/{key}` write path as the Effective view, so a resume mark at or above its high mark is refused with the same inline error, but they write the **global** file by default because the topbar chips and admission on this host read the serving machine's global settings. When the workspace file also sets a key, the view marks the override; that value wins for the workspace's runtimes.
 
 ### `[workflow.task_pilot_freshness]` — when a task is piloted again
 

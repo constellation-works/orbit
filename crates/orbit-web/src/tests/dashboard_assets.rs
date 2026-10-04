@@ -56,3 +56,21 @@ fn host_resource_chips_execute_topbar_aggregate_pressure_unknown_and_recovery_st
         String::from_utf8_lossy(&result.stderr)
     );
 }
+
+#[test]
+fn settings_system_view_executes_render_provenance_override_edit_and_refused_write() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "src/tests/dashboard_config_system.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard asset behavior fixture");
+    assert!(
+        result.status.success(),
+        "dashboard settings system behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}

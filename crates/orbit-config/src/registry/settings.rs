@@ -290,21 +290,21 @@ define_config_settings! {
     },
     workflow_resource_throttle_cpu_resume_percent: u8 => u8 {
         key: "workflow.resource_throttle.cpu_resume_percent", value_type: "integer",
-        description: "Host cpu resume percentage (1..=100, default 75).",
+        description: "Host cpu resume percentage (1..=100, default 85).",
         section: ConfigSection::Delivery, order: 131,
-        resolve: |raw: Option<u8>| resolve_percent(raw, 75, "workflow.resource_throttle.cpu_resume_percent"),
+        resolve: |raw: Option<u8>| resolve_percent(raw, 85, "workflow.resource_throttle.cpu_resume_percent"),
     },
     workflow_resource_throttle_disk_high_percent: u8 => u8 {
         key: "workflow.resource_throttle.disk_high_percent", value_type: "integer",
-        description: "Host disk high-water percentage (1..=100, default 85).",
+        description: "Host disk high-water percentage (1..=100, default 90).",
         section: ConfigSection::Delivery, order: 132,
-        resolve: |raw: Option<u8>| resolve_percent(raw, 85, "workflow.resource_throttle.disk_high_percent"),
+        resolve: |raw: Option<u8>| resolve_percent(raw, 90, "workflow.resource_throttle.disk_high_percent"),
     },
     workflow_resource_throttle_disk_resume_percent: u8 => u8 {
         key: "workflow.resource_throttle.disk_resume_percent", value_type: "integer",
-        description: "Host disk resume percentage (1..=100, default 80).",
+        description: "Host disk resume percentage (1..=100, default 85).",
         section: ConfigSection::Delivery, order: 133,
-        resolve: |raw: Option<u8>| resolve_percent(raw, 80, "workflow.resource_throttle.disk_resume_percent"),
+        resolve: |raw: Option<u8>| resolve_percent(raw, 85, "workflow.resource_throttle.disk_resume_percent"),
     },
     workflow_resource_throttle_enabled: bool => bool {
         key: "workflow.resource_throttle.enabled", value_type: "bool",
@@ -320,9 +320,9 @@ define_config_settings! {
     },
     workflow_resource_throttle_memory_resume_percent: u8 => u8 {
         key: "workflow.resource_throttle.memory_resume_percent", value_type: "integer",
-        description: "Host memory resume percentage (1..=100, default 80).",
+        description: "Host memory resume percentage (1..=100, default 85).",
         section: ConfigSection::Delivery, order: 136,
-        resolve: |raw: Option<u8>| resolve_percent(raw, 80, "workflow.resource_throttle.memory_resume_percent"),
+        resolve: |raw: Option<u8>| resolve_percent(raw, 85, "workflow.resource_throttle.memory_resume_percent"),
     },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",

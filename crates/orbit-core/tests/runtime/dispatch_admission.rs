@@ -957,7 +957,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
     assert!(matches!(explicit_submission, OrbitError::NotFound { .. }));
 
     // Hysteresis survives a fresh open but recovery is immediate below resume.
-    probe.memory(85.0, Utc::now());
+    probe.memory(87.0, Utc::now());
     assert!(open(&workspace).resource_admission().throttle.is_some());
     probe.memory(70.0, Utc::now());
     assert!(open(&workspace).resource_admission().throttle.is_none());
@@ -1068,7 +1068,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
     assert_eq!(pressure["resource"], "memory", "{held}");
     assert_eq!(pressure["percent"], 95.0, "{held}");
     assert_eq!(pressure["high_percent"], 90, "{held}");
-    assert_eq!(pressure["resume_percent"], 80, "{held}");
+    assert_eq!(pressure["resume_percent"], 85, "{held}");
     assert!(pressure["since"].is_string(), "{held}");
     assert_eq!(held["sleep_seconds"], 30, "a throttled drain polls: {held}");
     let pass = runtime
@@ -1142,7 +1142,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
     assert!(explicit.resource_throttle.is_some());
 
     // Between the resume and high marks the hold continues.
-    probe.memory(85.0, Utc::now());
+    probe.memory(87.0, Utc::now());
     let band = classify(&runtime, &drain);
     assert_eq!(band["loose_task_ids"], json!([]), "{band}");
 

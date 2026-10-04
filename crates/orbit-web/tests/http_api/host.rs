@@ -12,7 +12,7 @@ fn host_resources_are_host_scoped_and_expose_pressure_recovery_unknown_and_age()
             assert_eq!(first["cpu"]["severity"], json!("critical"));
             assert_eq!(first["throttle"], json!(false));
             assert!(first["sample_age_seconds"].as_f64().unwrap() >= 10.0);
-            assert_eq!(first["disk"]["percent"], json!(88.0));
+            assert_eq!(first["disk"]["percent"], json!(92.0));
             assert_eq!(first["disk"]["severity"], json!("critical"));
             assert!(first["disk"]["path"].as_str().is_some());
             assert!(
@@ -22,7 +22,7 @@ fn host_resources_are_host_scoped_and_expose_pressure_recovery_unknown_and_age()
             json_ok(server.get("/api/host/resources?workspace=all"));
             let held = json_ok(server.get("/api/host/resources"));
             assert_eq!(held["throttle"], json!(true));
-            assert_eq!(held["disk"]["percent"], json!(88.0));
+            assert_eq!(held["disk"]["percent"], json!(92.0));
             assert_eq!(
                 held["pressures"]
                     .as_array()

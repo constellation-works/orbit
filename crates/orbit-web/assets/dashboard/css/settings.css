@@ -156,3 +156,35 @@
   .config-row-main, .config-crew-cells { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .config-paths { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* The System view: the resource throttle as one panel. A row per resource
+   with its live reading beside the two marks that govern it. */
+.config-system .config-section-body { display: flex; flex-direction: column; }
+.config-verdict {
+  padding: 2px 8px; border: 1px solid var(--border); border-radius: 2px;
+  font: 11px/1.4 var(--font-mono); text-transform: uppercase; color: var(--fg-dim);
+}
+.config-verdict.held { color: var(--state-failed); border-color: var(--state-failed); }
+.config-verdict.open { color: var(--state-success); border-color: var(--state-success); }
+.config-sys-verdict { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--hair); }
+.config-sys-enabled { display: flex; gap: 12px; align-items: baseline; }
+.config-sys-verdict-text { font-size: 12.5px; color: var(--fg-dim); overflow-wrap: anywhere; }
+.config-sys-verdict-text.held { color: var(--state-failed); }
+.config-sys-grid {
+  display: grid; grid-template-columns: minmax(90px, 0.8fr) minmax(140px, 1fr) minmax(180px, 1.4fr) minmax(180px, 1.4fr);
+  gap: 10px; align-items: baseline; padding: 8px 14px;
+}
+.config-sys-head { color: var(--fg-dim); font-size: 11px; border-bottom: 1px solid var(--hair); }
+.config-sys-resource { border-bottom: 1px solid var(--hair); }
+.config-sys-resource:last-child { border-bottom: none; }
+.config-sys-cell { display: inline-flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.config-sys-cell.overridden .config-value { color: var(--fg-dim); text-decoration: line-through; }
+.config-sys-reading { display: inline-flex; gap: 8px; align-items: baseline; font-size: 12px; }
+.config-sys-reading.elevated .config-sys-severity { color: var(--status-open); }
+.config-sys-reading.critical .config-sys-severity, .config-sys-reading.throttled .host-resource-held { color: var(--state-failed); }
+.config-sys-severity { color: var(--fg-mute); font-size: 11px; }
+
+@media (max-width: 900px) {
+  .config-sys-grid { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .config-sys-head { display: none; }
+}
