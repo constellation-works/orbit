@@ -597,8 +597,8 @@ html:not([data-has-sidebar]) header.header {
 }
 
 /* The task lifecycle as a rail: every state the walkthrough passes through,
-   with the default ship's stop marked. `done` is dashed because the default
-   path leaves it to a separate, explicit approval. */
+   with the step you come back for marked. Notes sit under the state they
+   annotate; the last one hangs from the right edge so it stays in the rail. */
 .orbit-rail {
   align-items: flex-start;
   display: flex;
@@ -627,10 +627,6 @@ html:not([data-has-sidebar]) header.header {
   height: 1px;
 }
 
-.orbit-rail li.is-stop::after {
-  background: repeating-linear-gradient(90deg, var(--sl-color-gray-5) 0 6px, transparent 6px 12px);
-}
-
 .orbit-rail-state {
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 999px;
@@ -648,12 +644,6 @@ html:not([data-has-sidebar]) header.header {
   color: var(--sl-color-accent-high);
 }
 
-.orbit-rail li.is-later .orbit-rail-state {
-  border-style: dashed;
-  border-color: var(--sl-color-gray-5);
-  color: var(--sl-color-gray-4);
-}
-
 .orbit-rail-note {
   color: var(--sl-color-text-accent);
   font-family: var(--sl-font-mono);
@@ -663,6 +653,11 @@ html:not([data-has-sidebar]) header.header {
   position: absolute;
   top: calc(100% + 0.5rem);
   white-space: nowrap;
+}
+
+.orbit-rail li:last-child .orbit-rail-note {
+  left: auto;
+  right: 0;
 }
 
 .orbit-landing .orbit-walk-next {
@@ -730,7 +725,7 @@ html:not([data-has-sidebar]) header.header {
   letter-spacing: 0.08em;
 }
 
-/* Where the default ship stops: the one card the reader has to notice. */
+/* The step you come back for: the one card the reader has to notice. */
 .orbit-card.is-stop {
   border-color: var(--sl-color-accent);
 }
