@@ -26,6 +26,7 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.task.artifact.put", McpToolClass::ControlPlane),
     ("orbit.task.eligible", McpToolClass::ControlPlane),
     ("orbit.task.list", McpToolClass::ControlPlane),
+    ("orbit.task.review_reset", McpToolClass::ControlPlane),
     ("orbit.task.show", McpToolClass::ControlPlane),
     ("orbit.task.update", McpToolClass::ControlPlane),
     ("orbit.workflow.run.list", McpToolClass::Execute),
@@ -83,12 +84,14 @@ fn a_replica_refuses_control_plane_and_runs_execute_class_tools() {
         &checkout_record(Some(WorkspaceCheckoutRole::Replica)),
     );
 
-    let refused = ensure_tool_class_held("orbit.task.add", held)
-        .expect_err("a replica is not the control plane");
-    assert!(
-        matches!(&refused, OrbitError::CapabilityRefused(message) if message.contains("control_plane")),
-        "{refused}"
-    );
+    for tool in ["orbit.task.add", "orbit.task.review_reset"] {
+        let refused =
+            ensure_tool_class_held(tool, held).expect_err("a replica is not the control plane");
+        assert!(
+            matches!(&refused, OrbitError::CapabilityRefused(message) if message.contains("control_plane")),
+            "{tool}: {refused}"
+        );
+    }
 
     for allowed in [
         "orbit.workflow.run.show",
