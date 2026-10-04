@@ -148,3 +148,49 @@ fn custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration() {
         Some(ExecutorSandboxKind::MacosSandboxExec)
     );
 }
+
+/// [ORB-13857] Where no sandbox backend exists, shipped agent executors keep
+/// their declared kind — on a fresh seed and on an install whose earlier seed
+/// dropped it — so dispatch refuses them instead of spawning bare. Explicit
+/// `off` and `local-shell` are left as they are.
+#[test]
+fn seed_without_a_host_backend_keeps_the_declared_sandbox() {
+    let store = InMemoryExecutorStore::default();
+    store
+        .upsert_executor_def(&base_def("claude", ExecutorType::DirectAgent))
+        .expect("seed dropped-sandbox install");
+    let mut off = base_def("gemini", ExecutorType::DirectAgent);
+    off.sandbox = Some(ExecutorSandboxKind::Off);
+    store.upsert_executor_def(&off).expect("seed operator off");
+
+    seed_default_executors_for_platform(&store, false, "windows").expect("seed");
+
+    for def in store.list_executor_defs().expect("list") {
+        let expected = match def.name.as_str() {
+            "local-shell" => None,
+            "gemini" => Some(ExecutorSandboxKind::Off),
+            _ => Some(ExecutorSandboxKind::MacosSandboxExec),
+        };
+        assert_eq!(def.sandbox, expected, "{} on windows", def.name);
+    }
+}
+
+/// [ORB-13857] macOS keeps sandbox-exec on a fresh seed and, as before, does
+/// not rewrite an installed default that carries no sandbox.
+#[test]
+fn seed_on_macos_keeps_sandbox_exec_and_existing_choices() {
+    let store = InMemoryExecutorStore::default();
+    store
+        .upsert_executor_def(&base_def("claude", ExecutorType::DirectAgent))
+        .expect("seed installed default");
+
+    seed_default_executors_for_platform(&store, false, "macos").expect("seed");
+
+    for def in store.list_executor_defs().expect("list") {
+        let expected = match def.name.as_str() {
+            "local-shell" | "claude" => None,
+            _ => Some(ExecutorSandboxKind::MacosSandboxExec),
+        };
+        assert_eq!(def.sandbox, expected, "{} on macos", def.name);
+    }
+}
