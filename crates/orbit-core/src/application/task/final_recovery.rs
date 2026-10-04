@@ -21,8 +21,7 @@ use super::helpers::SYSTEM_ACTOR_LABEL;
 use super::lifecycle::ensure_completion_run_stopped;
 use crate::OrbitRuntime;
 
-/// History event a final-recovery requeue records; the requeue bound counts it.
-pub const FINAL_RECOVERY_REQUEUED_EVENT: &str = "final_recovery_requeued";
+pub use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
 const COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";
 const ARCHIVED_EVENT: &str = "final_recovery_archived";
@@ -403,14 +402,17 @@ impl OrbitRuntime {
             message: plan.comment.clone(),
         };
         let transition = plan.status != task.status;
+        // A requeue is a new retry decision even if the task is already in
+        // backlog. Its event must guard cleanup and count toward the bound.
+        let record_status = transition || matches!(plan.outcome, FinalRecoveryOutcome::Requeued);
         self.with_mutation(|| {
             let updated = self.stores().task_records().update(
                 &task.id,
                 StoreTaskUpdateParams {
                     actor: SYSTEM_ACTOR_LABEL.to_string(),
                     status: transition.then_some(plan.status),
-                    status_event: transition.then(|| plan.event.to_string()),
-                    status_note: transition.then(|| plan.note.clone()),
+                    status_event: record_status.then(|| plan.event.to_string()),
+                    status_note: record_status.then(|| plan.note.clone()),
                     execution_summary: plan.execution_summary.clone(),
                     append_comments: vec![comment.clone()],
                     expected_status: Some(vec![task.status]),

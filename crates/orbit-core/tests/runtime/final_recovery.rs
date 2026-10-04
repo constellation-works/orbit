@@ -22,6 +22,8 @@ use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
 use serde_json::json;
 use tempfile::TempDir;
 
+mod terminalization;
+
 struct Fixture {
     _root: TempDir,
     global: PathBuf,
@@ -89,15 +91,8 @@ impl Fixture {
 
     /// A running pipeline whose first three steps have checkpoints.
     fn running_run(&self, task: &str) -> String {
-        let input = json!({ "task_ids": [task] });
-        let run = self
-            .jobs
-            .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
-            .unwrap();
-        self.jobs
-            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
-            .unwrap();
-        let mut state = PipelineState::new(run.run_id.clone(), run.job_id, input);
+        let run = self.pipeline_run(task, "task_pr_pipeline");
+        let mut state = self.state(&run);
         for index in 0..3 {
             state.record_step(
                 index,
@@ -106,6 +101,20 @@ impl Fixture {
                 None,
             );
         }
+        self.jobs.write_run_state(&run, &state).unwrap();
+        run
+    }
+
+    fn pipeline_run(&self, task: &str, job: &str) -> String {
+        let input = json!({ "task_ids": [task] });
+        let run = self
+            .jobs
+            .insert_job_run(job, 1, Utc::now(), Some(input.clone()), None)
+            .unwrap();
+        self.jobs
+            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        let state = PipelineState::new(run.run_id.clone(), run.job_id, input);
         self.jobs.write_run_state(&run.run_id, &state).unwrap();
         run.run_id
     }
@@ -240,6 +249,11 @@ fn archive() -> FinalRecoveryDecision {
 
 #[test]
 fn an_empty_crew_pool_skips_final_recovery_and_records_nothing() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::an_empty_crew_pool_skips_final_recovery_and_records_nothing",
+    ) {
+        return;
+    }
     let fixture = fixture("[]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -253,6 +267,11 @@ fn an_empty_crew_pool_skips_final_recovery_and_records_nothing() {
 
 #[test]
 fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints",
+    ) {
+        return;
+    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -306,6 +325,11 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
 
 #[test]
 fn a_local_decision_is_applied_to_the_task_through_the_applier() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::a_local_decision_is_applied_to_the_task_through_the_applier",
+    ) {
+        return;
+    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -336,6 +360,11 @@ fn a_local_decision_is_applied_to_the_task_through_the_applier() {
 
 #[test]
 fn an_escalation_blocks_the_task_and_continues_into_the_failure_path() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::an_escalation_blocks_the_task_and_continues_into_the_failure_path",
+    ) {
+        return;
+    }
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
     let run = fixture.running_run(&task);
@@ -360,6 +389,11 @@ fn an_escalation_blocks_the_task_and_continues_into_the_failure_path() {
 
 #[test]
 fn a_settled_task_stands_when_recording_its_outcome_fails() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::a_settled_task_stands_when_recording_its_outcome_fails",
+    ) {
+        return;
+    }
     // Decided by the on-call ORB-13886 review of ORB-13907: a task mutation
     // must not be followed by failure_activity because the run-state write
     // after it failed.
@@ -392,6 +426,11 @@ fn a_settled_task_stands_when_recording_its_outcome_fails() {
 
 #[test]
 fn a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome",
+    ) {
+        return;
+    }
     let fixture = fixture("[\"sol\"]");
 
     // Crash after the task write: the resumed run's replay finds the decision
