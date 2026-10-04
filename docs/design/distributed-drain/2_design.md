@@ -393,11 +393,16 @@ owns delivery:
   to `backlog` with the reason as its status note, and adds the comment to the task. Only a
   launched leaf that ended without its handoff settles as `Fail`; the breaker counts only those.
   The exception is a provider that could not be used [ORB-13941]: the CLI runner stamps a failure
-  whose own stderr or terminal error reports an authentication failure with the typed
+  whose own stderr, terminal error, or structured provider failure reports an authentication failure with the typed
   `[provider_unavailable]` marker, and a launched leaf that ended on such a step settles as a
   `Release` carrying `provider_unavailable { crew, reason }`. The task returns to `backlog`, the
   breaker does not count it, and the drain excludes that crew for the rest of its window, so the
   same task is not pulled straight back. The crew is the one the leaf resolved at start.
+  Claude error results with HTTP 401/403 or authentication failure text, Codex error/failed-turn
+  frames, and Grok/Gemini error objects are provider evidence, even when the CLI exits 0.
+  Assistant transcripts, tool results, and Orbit work-failure envelopes are not provider evidence.
+  A step ending with `provider_unavailable` skips step-failure recovery: signing in requires
+  an operator, and a recovery agent cannot repair the provider credentials.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.

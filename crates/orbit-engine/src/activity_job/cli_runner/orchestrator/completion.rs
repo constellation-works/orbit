@@ -171,11 +171,13 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     let completion_status_failure = spec.require_completion_envelope
         && completion_envelope_error.is_none()
         && matches!(envelope_status.as_deref(), Some("failed") | Some("timeout"));
+    let provider_auth_error = structured_provider_auth_error(&provider, stdout.protocol_bytes());
     // Two orthogonal contracts. `require_completion_envelope` gates step
     // completion and its status outcome (above); `require_response_envelope` additionally gates the
     // envelope's *content* for activities whose downstream templates consume it
     // (ADR-0224 / L-0087) — outside that opt-in, parsing stays advisory.
     let success = exit_success
+        && provider_auth_error.is_none()
         && !completion_protocol_violation
         && !completion_status_failure
         && (!spec.require_response_envelope || response_envelope_valid);
@@ -215,6 +217,11 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         Some(format!(
             "cli subprocess exceeded {}s wall-clock timeout",
             timeout_seconds
+        ))
+    } else if let Some(diagnostic) = provider_auth_error {
+        Some(format!(
+            "{PROVIDER_UNAVAILABLE_MARKER} {}",
+            bounded_diagnostic(&diagnostic, redaction)
         ))
     } else if !exit_success {
         let stderr_text = String::from_utf8_lossy(stderr.protocol_bytes());
@@ -480,4 +487,78 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             trace,
         }),
     })
+}
+
+/// Read only provider-owned failure frames, never assistant or tool text.
+/// Claude can emit an error result even with exit 0; the wrapper must still
+/// fail the invocation rather than allowing an earlier answer to succeed.
+fn structured_provider_auth_error(provider: &str, stdout: &[u8]) -> Option<String> {
+    serde_json::Deserializer::from_slice(stdout)
+        .into_iter::<Value>()
+        .filter_map(Result::ok)
+        .find_map(|frame| {
+            // Orbit envelopes describe the work, not provider availability.
+            if frame.get("schemaVersion").is_some() {
+                return None;
+            }
+            let failure = match provider {
+                "claude"
+                    if frame.get("is_error").and_then(Value::as_bool) == Some(true)
+                        && matches!(
+                            frame.get("type").and_then(Value::as_str),
+                            None | Some("result")
+                        ) =>
+                {
+                    &frame
+                }
+                "codex"
+                    if matches!(
+                        frame.get("type").and_then(Value::as_str),
+                        Some("error" | "turn.failed")
+                    ) =>
+                {
+                    frame.get("error").unwrap_or(&frame)
+                }
+                "grok" | "gemini"
+                    if matches!(
+                        frame.get("type").and_then(Value::as_str),
+                        None | Some("error")
+                    ) =>
+                {
+                    frame.get("error")?
+                }
+                _ => return None,
+            };
+            let status = [failure, &frame].into_iter().find_map(|fields| {
+                [
+                    "api_error_status",
+                    "status",
+                    "status_code",
+                    "http_status",
+                    "code",
+                ]
+                .iter()
+                .find_map(|key| {
+                    let value = fields.get(*key)?;
+                    let status = value.as_u64().or_else(|| value.as_str()?.parse().ok())?;
+                    matches!(status, 401 | 403).then_some(status)
+                })
+            });
+            let message = failure.as_str().or_else(|| {
+                ["message", "result", "type", "status", "code"]
+                    .iter()
+                    .filter_map(|key| failure.get(*key).and_then(Value::as_str))
+                    .find(|text| provider_authentication_failure(text))
+            });
+            if status.is_none() && !message.is_some_and(provider_authentication_failure) {
+                return None;
+            }
+            let status = status
+                .map(|status| format!(" (HTTP {status})"))
+                .unwrap_or_default();
+            Some(format!(
+                "{provider} provider authentication failure{status}: {}",
+                message.unwrap_or("provider credentials were rejected")
+            ))
+        })
 }

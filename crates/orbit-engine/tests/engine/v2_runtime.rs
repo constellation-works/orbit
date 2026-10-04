@@ -884,6 +884,69 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
 const REVIEWER: &str = "agent_review_repair";
 const RECOVERY: &str = "step_failure_recovery";
 
+/// Both dispatch errors and unsuccessful CLI outcomes bypass recovery when
+/// the provider is unusable; the CLI-outcome case lives in v2_cli_agent.
+#[test]
+fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
+    struct UnavailableHost;
+    impl RuntimeHost for UnavailableHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            _: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            assert_eq!(action, "unavailable", "recovery must never dispatch");
+            Err(DispatchError::CliInvocationFailed(
+                "[provider_unavailable] provider authentication failed".into(),
+            ))
+        }
+    }
+    let mut job = job_asset(json!([{
+        "id":"implement_one", "recovery_activity":"auth_recovery",
+        "spec":{"type":"deterministic", "action":"unavailable", "config":{}}
+    }]));
+    let mut catalog = V2ActivityCatalog::new();
+    catalog.insert(
+        "auth_recovery",
+        ActivityV2 {
+            description: String::new(),
+            input_schema_json: Value::Null,
+            output_schema_json: Value::Null,
+            fs_profile: None,
+            spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                action: "unexpected_recovery".into(),
+                config: Value::Null,
+            }),
+        },
+    );
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+    let audit = tempfile::tempdir().unwrap();
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), "auth-error");
+    let error = execute_job_with_resume(
+        &job,
+        json!({}),
+        "auth-error",
+        writer.clone(),
+        &UnavailableHost,
+        None,
+    )
+    .unwrap_err();
+    assert!(orbit_types::workflow::is_provider_unavailable(
+        None,
+        Some(&error.to_string())
+    ));
+    assert!(
+        !writer
+            .events_snapshot()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.kind, V2AuditEventKind::StepRecoveryAttempted { .. })),
+        "an unavailable provider does not consume recovery admission"
+    );
+}
+
 /// Stub worktree and admission steps followed by the shipped `review` step,
 /// whose reviewer and recovery activities resolve to scripted actions. Only
 /// the backoff sleep is shortened; attempts and recovery stay as shipped.

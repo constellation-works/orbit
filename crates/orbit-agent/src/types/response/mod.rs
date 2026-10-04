@@ -15,10 +15,11 @@ pub use envelope::{DeclaredResponseFailure, ParsedStdout};
 pub use protocol_schema::response_envelope_json_schema_arg;
 pub use wrapper::provider_invocation_diagnostic;
 
-/// Phrases a provider CLI prints — on stderr or as its terminal error — when
+/// Phrases a provider CLI prints in its own failure diagnostics when
 /// it cannot authenticate. Lowercase, matched case-insensitively [ORB-13941].
 const PROVIDER_AUTH_FAILURE_PHRASES: &[&str] = &[
     "authentication failed",
+    "failed to authenticate",
     "authentication required",
     "authentication_error",
     "not authenticated",
@@ -28,6 +29,9 @@ const PROVIDER_AUTH_FAILURE_PHRASES: &[&str] = &[
     "please login",
     "login required",
     "oauth session expired",
+    "oauth token revoked",
+    "token expired",
+    "unauthorized",
     "no authentication information found",
     "invalid api key",
     "invalid_api_key",
@@ -37,8 +41,8 @@ const PROVIDER_AUTH_FAILURE_PHRASES: &[&str] = &[
 /// Whether a provider's own failure text says it could not authenticate, so
 /// the provider is unusable on this host until an operator signs it in again.
 ///
-/// Pass only text the provider wrote about itself — its stderr, its terminal
-/// error — never the agent's transcript, where a tool's own login failure
+/// Pass only text the provider wrote about itself — its stderr, terminal
+/// error or structured failure — never the agent's transcript, where a tool's own login failure
 /// would read the same.
 #[must_use]
 pub fn provider_authentication_failure(text: &str) -> bool {
