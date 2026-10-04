@@ -3,7 +3,7 @@ summary: "Task Artifacts — Decisions"
 type: design
 title: "Task Artifacts — Decisions"
 owner: codex
-last_updated: 2026-08-11
+last_updated: 2026-10-04
 last_validated: 2026-10-04
 status: Draft
 feature: task-artifacts
@@ -241,6 +241,8 @@ The hook treats ORBIT_ACTIVE_TASK_ID as the explicit active-task binding, with O
 - Review-thread surfacing remains a local task-store read and does not perform network I/O or cwd inference.
 - Existing ORBIT_TASK_ID-spawned executions keep working while newer shims can depend on the clearer ORBIT_ACTIVE_TASK_ID name.
 - Cost: Orbit now has two task-id environment names during a compatibility window, so documentation and tests must keep their precedence explicit.
+
+**Superseded 2026-07-20:** The review-thread surface and hooks were retired; see [Retired Review-Thread Sidecars](./specs/task-bundle-v2.md#retired-review-thread-sidecars).
 
 ## History notes elide only what another record retains in full
 
