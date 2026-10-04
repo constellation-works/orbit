@@ -7,6 +7,15 @@ use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
 
+/// Host-proven liveness and settlement facts for an admitted action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ActionLiveness {
+    /// The task or job run can no longer submit evidence.
+    pub terminal: bool,
+    /// It stopped without evidence the evaluator would accept.
+    pub failed_without_evidence: bool,
+}
+
 pub(super) fn retire_covered_prefix(
     store: &dyn AutomationStoreBackend,
     state: AutomationState,
@@ -141,31 +150,36 @@ fn settle_failed(
     next
 }
 
-/// True when the consumer's admitted action has stopped without evidence the
-/// next settlement would accept, so that settlement can only fail it.
-///
-/// Operator reset and recovery read this instead of the raw `admitted` state:
-/// an action whose task is terminal is not executing, and refusing to touch
-/// it until some evaluation happens to run is how a consumer wedged. Unknown
-/// liveness is `Pending`, which keeps the action executing.
-pub fn action_stopped(
+/// Inspect whether an admitted action is terminal and whether it stopped
+/// without acceptable evidence. Reset uses terminal liveness to avoid
+/// refusing a closed task as executing; reissue and diagnostics use the
+/// failure fact so a closed action with valid evidence is not retried.
+pub fn action_liveness(
     host: &dyn DeliveryHost,
     state: &AutomationState,
     now: DateTime<Utc>,
-) -> Result<bool, AutomationError> {
+) -> Result<ActionLiveness, AutomationError> {
     let Some(active) = state
         .active
         .as_ref()
         .filter(|active| active.state == BatchState::Admitted && active.action_id.is_some())
     else {
-        return Ok(false);
+        return Ok(ActionLiveness::default());
     };
 
     Ok(match host.outcome(active)? {
-        ActionOutcome::Pending => false,
-        ActionOutcome::Failed { .. } => true,
+        ActionOutcome::Pending => ActionLiveness::default(),
+        ActionOutcome::Failed { .. } => ActionLiveness {
+            terminal: true,
+            failed_without_evidence: true,
+        },
         ActionOutcome::Evidence(facts) => {
-            facts.action_stopped && evidence::validate(active, &facts, now).is_err()
+            let terminal = facts.action_stopped;
+            ActionLiveness {
+                terminal,
+                failed_without_evidence: terminal
+                    && evidence::validate(active, &facts, now).is_err(),
+            }
         }
     })
 }

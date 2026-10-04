@@ -209,7 +209,9 @@ pub fn wedged_delivery_consumers(
         }
         let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
         let state = store.automation_state(&consumer)?;
-        if !super::auto_task_action_stopped(runtime, &definition, state.as_ref(), now) {
+        if !super::auto_task_action_liveness(runtime, &definition, state.as_ref(), now)
+            .failed_without_evidence
+        {
             continue;
         }
         if let Some(active) = state.and_then(|state| state.active) {

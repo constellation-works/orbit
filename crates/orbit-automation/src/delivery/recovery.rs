@@ -44,9 +44,10 @@ pub struct Recovery<'a> {
     pub now: DateTime<Utc>,
     /// Host-proven canonical page and audit proof for an explicit replay.
     pub replay: Option<HistoryReplayInput>,
-    /// The host proved the admitted action stopped without acceptable
-    /// evidence ([`super::action_stopped`]): it is settled, not executing.
-    pub action_stopped: bool,
+    /// The host proved the admitted action's task or run is terminal.
+    pub action_terminal: bool,
+    /// The terminal action stopped without acceptable evidence.
+    pub action_failed_without_evidence: bool,
 }
 
 pub struct HistoryReplayInput {
@@ -287,7 +288,7 @@ fn refusals(
     }
 
     // Live execution is never interrupted; its action has to settle first.
-    if executing(state, request.action_stopped) {
+    if executing(state, request.action_terminal) {
         refuse(refusal::ACTIVE_EXECUTION);
     }
 
@@ -310,7 +311,7 @@ fn refusals(
 
     if requested.reissue_action {
         match state.active.as_ref() {
-            Some(active) if settled(active, request.action_stopped) => {
+            Some(active) if settled(active, request.action_failed_without_evidence) => {
                 if store
                     .automation_receipt(&state.consumer, &active.batch.id)?
                     .is_some()
@@ -362,23 +363,23 @@ pub(super) fn debt(
 
 /// Whether the consumer's active attempt is still executing. A claim awaiting
 /// admission is; an admitted action is unless the host proved it stopped.
-pub(super) fn executing(state: &AutomationState, action_stopped: bool) -> bool {
+pub(super) fn executing(state: &AutomationState, action_terminal: bool) -> bool {
     state
         .active
         .as_ref()
         .is_some_and(|active| match active.state {
             BatchState::Claimed => true,
-            BatchState::Admitted => !action_stopped,
+            BatchState::Admitted => !action_terminal,
             _ => false,
         })
 }
 
 /// Whether the attempt closed without accepted evidence: settled failed or
 /// exhausted, or admitted to an action the host proved stopped.
-fn settled(active: &BatchAttempt, action_stopped: bool) -> bool {
+fn settled(active: &BatchAttempt, action_failed_without_evidence: bool) -> bool {
     match active.state {
         BatchState::Failed | BatchState::Exhausted => true,
-        BatchState::Admitted => action_stopped,
+        BatchState::Admitted => action_failed_without_evidence,
         _ => false,
     }
 }
@@ -387,7 +388,7 @@ fn settled(active: &BatchAttempt, action_stopped: bool) -> bool {
 pub(super) fn stalled_action(
     store: &dyn AutomationStoreBackend,
     state: &AutomationState,
-    action_stopped: bool,
+    action_failed_without_evidence: bool,
 ) -> Result<Option<StalledAction>, AutomationError> {
     let receipts = store.automation_receipts(&state.consumer, 100)?;
     Ok(state.active.as_ref().map(|active| StalledAction {
@@ -403,7 +404,7 @@ pub(super) fn stalled_action(
             .map(|delivery| delivery.key.clone())
             .collect(),
         commits: active.batch.commits.len(),
-        reissuable: settled(active, action_stopped)
+        reissuable: settled(active, action_failed_without_evidence)
             && !receipts
                 .iter()
                 .any(|receipt| receipt.batch_id == active.batch.id),
@@ -424,7 +425,7 @@ fn project(
             state,
             request.epoch,
             &request.trigger.branch,
-            request.action_stopped,
+            request.action_failed_without_evidence,
         ),
         identity: RecoveryIdentity {
             recorded_epoch: state.epoch.clone(),
@@ -434,7 +435,7 @@ fn project(
             configured_trigger: request.trigger.clone(),
         },
         debt: debt(store, state)?,
-        action: stalled_action(store, state, request.action_stopped)?,
+        action: stalled_action(store, state, request.action_failed_without_evidence)?,
         history_replay,
         refusals: refusals(store, request, requested, state)?,
         applied,
@@ -588,7 +589,7 @@ pub(super) fn scheduling_reason(
     state: &AutomationState,
     epoch: &str,
     branch: &str,
-    action_stopped: bool,
+    action_failed_without_evidence: bool,
 ) -> String {
     // A recorded stall outranks configuration: it is why evaluation stopped.
     if let Some(stall) = state.stall.as_ref() {
@@ -600,7 +601,7 @@ pub(super) fn scheduling_reason(
     }
 
     match state.active.as_ref() {
-        Some(active) if settled(active, action_stopped) => "needs_attention".into(),
+        Some(active) if settled(active, action_failed_without_evidence) => "needs_attention".into(),
         Some(_) => "batch_pending".into(),
         None => "not_stalled".into(),
     }

@@ -19,7 +19,7 @@ mod waiver;
 pub(crate) use digest::json_definition_epoch;
 pub use digest::{definition_epoch, digest, input_digest};
 pub use evaluate::evaluate;
-pub use reconcile::action_stopped;
+pub use reconcile::{ActionLiveness, action_liveness};
 pub use waiver::waive;
 
 /// Authority/source owner, implemented by Core. It never decides coverage rules.

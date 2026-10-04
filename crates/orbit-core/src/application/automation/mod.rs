@@ -153,19 +153,18 @@ fn evaluate(
     Ok(diagnostic)
 }
 
-/// Whether a delivery auto-task consumer holds an admitted action that
-/// stopped without evidence its settlement would accept — the shared rule
-/// reset, recovery and `orbit doctor` read. A consumer without state has none.
-/// An outcome that cannot be read leaves the action executing, so `--force`
-/// stays the only way past an action whose liveness is unknown.
-fn auto_task_action_stopped(
+/// Liveness and evidence facts for an admitted delivery auto-task action, as
+/// used by reset, recovery and `orbit doctor`. A consumer without state has
+/// no action. An unreadable outcome stays unknown, so `--force` remains the
+/// only way past an action whose liveness cannot be proved.
+fn auto_task_action_liveness(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     state: Option<&AutomationState>,
     now: DateTime<Utc>,
-) -> bool {
+) -> orbit_automation::delivery::ActionLiveness {
     let Some(state) = state else {
-        return false;
+        return orbit_automation::delivery::ActionLiveness::default();
     };
     let host = Host {
         runtime,
@@ -173,13 +172,13 @@ fn auto_task_action_stopped(
         source: source::Source::new(&runtime.paths().repo_root),
     };
 
-    delivery::action_stopped(&host, state, now).unwrap_or_else(|error| {
+    delivery::action_liveness(&host, state, now).unwrap_or_else(|error| {
         tracing::warn!(
             consumer = state.consumer,
             %error,
             "cannot read the admitted action's outcome; treating it as executing"
         );
-        false
+        orbit_automation::delivery::ActionLiveness::default()
     })
 }
 

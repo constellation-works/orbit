@@ -39,7 +39,8 @@ fn recovery<'a>(
         by: "operator",
         now: now(),
         replay: None,
-        action_stopped: false,
+        action_terminal: false,
+        action_failed_without_evidence: false,
     }
 }
 
@@ -190,17 +191,23 @@ fn wedged() -> (
 #[test]
 fn an_admitted_action_is_stopped_only_once_its_task_closed_without_acceptable_evidence() {
     let (_store, host, _trigger, state) = wedged();
-    assert!(delivery::action_stopped(&host, &state, now()).unwrap());
+    let liveness = delivery::action_liveness(&host, &state, now()).unwrap();
+    assert!(liveness.terminal);
+    assert!(liveness.failed_without_evidence);
 
     // The executor can still replace malformed bytes while its task is open.
     host.stopped.store(false, Ordering::SeqCst);
-    assert!(!delivery::action_stopped(&host, &state, now()).unwrap());
+    let open = delivery::action_liveness(&host, &state, now()).unwrap();
+    assert!(!open.terminal);
+    assert!(!open.failed_without_evidence);
 
     // Valid evidence on a closed task is settled by acceptance, not failure.
     host.stopped.store(true, Ordering::SeqCst);
     *host.raw_evidence.lock().unwrap() = None;
     host.evidence(state.active.as_ref().unwrap());
-    assert!(!delivery::action_stopped(&host, &state, now()).unwrap());
+    let accepted = delivery::action_liveness(&host, &state, now()).unwrap();
+    assert!(accepted.terminal);
+    assert!(!accepted.failed_without_evidence);
 }
 
 #[test]
@@ -215,7 +222,8 @@ fn recovery_reissues_an_admitted_action_whose_task_closed_without_evidence() {
     };
     assert!(reasons.contains(refusal::ACTIVE_EXECUTION), "{reasons}");
 
-    executing.action_stopped = true;
+    executing.action_terminal = true;
+    executing.action_failed_without_evidence = true;
     let preview = recovery::preview(store.as_ref(), &executing).unwrap();
     assert_eq!(preview.reason, "needs_attention");
     assert!(preview.action.as_ref().unwrap().reissuable);
@@ -231,6 +239,28 @@ fn recovery_reissues_an_admitted_action_whose_task_closed_without_evidence() {
     assert_eq!(attempt.attempt, 2);
     assert_eq!(attempt.batch, state.active.unwrap().batch);
     assert_eq!(after.covered, revision(0));
+}
+
+#[test]
+fn recovery_does_not_reissue_a_terminal_action_with_acceptable_evidence() {
+    let (store, host, trigger, state) = wedged();
+    *host.raw_evidence.lock().unwrap() = None;
+    host.evidence(state.active.as_ref().unwrap());
+    let liveness = delivery::action_liveness(&host, &state, now()).unwrap();
+    assert!(liveness.terminal);
+    assert!(!liveness.failed_without_evidence);
+
+    let reissue = request(false, true);
+    let mut operation = recovery(&trigger, "v1", &reissue);
+    operation.action_terminal = liveness.terminal;
+    operation.action_failed_without_evidence = liveness.failed_without_evidence;
+    let error =
+        recovery::apply(store.as_ref(), &operation).expect_err("valid evidence is not reissued");
+    let AutomationError::Refused(reasons) = error else {
+        panic!("expected a typed refusal, got {error}");
+    };
+    assert!(!reasons.contains(refusal::ACTIVE_EXECUTION), "{reasons}");
+    assert!(reasons.contains(refusal::NO_SETTLED_ACTION), "{reasons}");
 }
 
 #[test]
@@ -250,7 +280,8 @@ fn reset_forgets_a_consumer_whose_admitted_action_already_stopped() {
         now: now(),
         baseline: revision(2),
         released_refs: vec![],
-        action_stopped: false,
+        action_terminal: false,
+        action_failed_without_evidence: false,
     };
 
     let error = reset::apply(store.as_ref(), &operation).expect_err("live action refused");
@@ -260,8 +291,41 @@ fn reset_forgets_a_consumer_whose_admitted_action_already_stopped() {
     assert!(reasons.contains(refusal::ACTION_EXECUTING), "{reasons}");
     assert_eq!(store.automation_state(CONSUMER).unwrap(), Some(state));
 
-    operation.action_stopped = true;
+    operation.action_terminal = true;
+    operation.action_failed_without_evidence = true;
     let applied = reset::apply(store.as_ref(), &operation).unwrap();
     assert!(applied.applied);
+    assert!(store.automation_state(CONSUMER).unwrap().is_none());
+}
+
+#[test]
+fn reset_can_forget_a_terminal_action_with_acceptable_evidence() {
+    let (store, host, trigger, state) = wedged();
+    *host.raw_evidence.lock().unwrap() = None;
+    host.evidence(state.active.as_ref().unwrap());
+    let liveness = delivery::action_liveness(&host, &state, now()).unwrap();
+    assert!(liveness.terminal);
+    assert!(!liveness.failed_without_evidence);
+
+    let request = ResetRequest {
+        reason: "the review task has already closed".into(),
+        force: false,
+    };
+    let operation = reset::Reset {
+        consumer: CONSUMER,
+        epoch: "v1",
+        trigger: &trigger,
+        host_refusal: None,
+        request: &request,
+        by: "operator",
+        now: now(),
+        baseline: revision(2),
+        released_refs: vec![],
+        action_terminal: liveness.terminal,
+        action_failed_without_evidence: liveness.failed_without_evidence,
+    };
+    let applied = reset::apply(store.as_ref(), &operation).unwrap();
+    assert!(applied.applied);
+    assert!(!applied.action.unwrap().reissuable);
     assert!(store.automation_state(CONSUMER).unwrap().is_none());
 }

@@ -36,9 +36,10 @@ pub struct Reset<'a> {
     /// Pinned `refs/orbit/automation/<consumer-digest>/*` refs the host holds
     /// for the forgotten batches. Recorded by an apply; empty on a preview.
     pub released_refs: Vec<String>,
-    /// The host proved the admitted action stopped without acceptable
-    /// evidence ([`super::action_stopped`]): forgetting it orphans nothing.
-    pub action_stopped: bool,
+    /// The host proved the admitted action's task or run is terminal.
+    pub action_terminal: bool,
+    /// The terminal action stopped without acceptable evidence.
+    pub action_failed_without_evidence: bool,
 }
 
 /// Project what a reset would forget, without touching any state.
@@ -98,7 +99,11 @@ fn record(
         reset: Some(ResetRecord {
             previous_generation: state.generation,
             forgotten: recovery::debt(store, state)?,
-            abandoned_action: recovery::stalled_action(store, state, request.action_stopped)?,
+            abandoned_action: recovery::stalled_action(
+                store,
+                state,
+                request.action_failed_without_evidence,
+            )?,
             baseline: request.baseline.clone(),
             released_refs: request.released_refs.clone(),
             cleared_stall: state.stall.clone(),
@@ -127,7 +132,7 @@ fn refusals(request: &Reset<'_>, state: &AutomationState) -> Vec<String> {
     // Destroying the claim an executor is working against orphans its action.
     // The operator may still force it once they accept that outcome. An action
     // whose task already closed has no executor left to orphan.
-    if !request.request.force && recovery::executing(state, request.action_stopped) {
+    if !request.request.force && recovery::executing(state, request.action_terminal) {
         refusals.push(refusal::ACTION_EXECUTING.into());
     }
 
@@ -150,12 +155,12 @@ fn project(
             state,
             request.epoch,
             &request.trigger.branch,
-            request.action_stopped,
+            request.action_failed_without_evidence,
         ),
         generation: state.generation,
         epoch: state.epoch.clone(),
         debt: recovery::debt(store, state)?,
-        action: recovery::stalled_action(store, state, request.action_stopped)?,
+        action: recovery::stalled_action(store, state, request.action_failed_without_evidence)?,
         stall: state.stall.clone(),
         baseline: request.baseline.clone(),
         refusals: if applied {
