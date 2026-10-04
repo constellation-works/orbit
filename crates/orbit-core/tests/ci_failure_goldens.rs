@@ -22,7 +22,7 @@ impl Drop for ChildGuard {
     }
 }
 
-fn isolated() -> bool {
+fn isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_CI_LOG_GOLDEN_CHILD";
     if std::env::var_os(MARKER).is_some() {
         return true;
@@ -35,12 +35,7 @@ fn isolated() -> bool {
         command.env_remove(key);
     });
     command
-        .args([
-            "--exact",
-            "ci_failure_fixture_goldens",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
         .env(MARKER, "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -58,7 +53,7 @@ fn isolated() -> bool {
         std::thread::sleep(Duration::from_millis(20));
     };
     orbit_common::test_env::assert_child_test_passed(
-        "ci_failure_fixture_goldens",
+        test,
         status,
         std::fs::read(stdout).unwrap(),
         std::fs::read(stderr).unwrap(),
@@ -73,7 +68,7 @@ fn failure(log: &str, index: usize, checkout: &str) -> Value {
         "workflow": "CI", "status": "completed", "conclusion": "failure", "event": "push",
         "url": format!("https://github.com/acme/orbit/actions/runs/{}", 10 + index),
         "created_at": "2026-09-07T07:24:42Z", "head_branch": "agent-main", "ref_kind": "integration",
-        "event_reported_head_sha": "1".repeat(40), "current_ref_head_sha": "1".repeat(40),
+        "event_reported_head_sha": checkout, "current_ref_head_sha": "1".repeat(40),
         "actual_checkout_shas": [checkout], "checkout_evidence": [format!("HEAD is now at {checkout}")],
         "checkout_evidence_scope": "all", "investigated": true, "log_excerpt": log,
         "log_truncated": false,
@@ -95,7 +90,7 @@ fn file(runtime: &OrbitRuntime, runs: Vec<Value>) -> Value {
 
 #[test]
 fn ci_failure_fixture_goldens() {
-    if !isolated() {
+    if !isolated("ci_failure_fixture_goldens") {
         return;
     }
     let cases: Vec<Value> =
@@ -200,4 +195,111 @@ fn ci_failure_fixture_goldens() {
             "all CI golden cases must run"
         );
     }
+}
+
+#[test]
+fn ci_failure_branch_routing_retains_owner_evidence_and_only_files_landing_checkouts() {
+    if !isolated(
+        "ci_failure_branch_routing_retains_owner_evidence_and_only_files_landing_checkouts",
+    ) {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let owner = runtime
+        .add_task(TaskAddParams {
+            title: "Sandbox implementation".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let branch = format!("orbit/{}-ddb04571", owner.id);
+    let mut pr = failure("error: sandbox directory escaped", 0, &"3".repeat(40));
+    pr["event"] = json!("pull_request");
+    pr["head_branch"] = json!(branch);
+    pr["ref_kind"] = json!("pull_request");
+    pr["pr_number"] = json!(3140);
+
+    // Legacy schema-2 collectors put PR failures in current_failures too.
+    let first = file(&runtime, vec![pr.clone()]);
+    assert_eq!(
+        first["filed_count"], 0,
+        "unmerged task PRs cannot mint landing repairs"
+    );
+    assert_eq!(first["pilot_candidate_count"], 0);
+    assert_eq!(first["attributed"][0]["task_id"], owner.id);
+    let path = first["attributed"][0]["artifact"].as_str().unwrap();
+    let receipt = runtime.get_task_artifact(&owner.id, path).unwrap().unwrap();
+    let retained: Value = serde_json::from_slice(&receipt.content).unwrap();
+    assert_eq!(retained["failure"], pr);
+    assert_eq!(runtime.get_task(&owner.id).unwrap().status, owner.status);
+    let repeated = file(&runtime, vec![pr.clone()]);
+    assert_eq!(repeated["attributed"], first["attributed"]);
+    assert_eq!(runtime.get_task_artifacts(&owner.id).unwrap().len(), 1);
+
+    // The new collector's separate branch_failures partition uses the same route.
+    let output = runtime.run_deterministic("file_ci_failure_tasks", &json!({}), &json!({
+        "ci_evidence": {
+            "schema_version": 2, "collected": true,
+            "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
+            "current_failures": [], "branch_failures": [pr.clone()],
+        }
+    }), ToolContext::default()).unwrap();
+    assert_eq!(output["attributed"], first["attributed"]);
+    assert_eq!(output["filed_count"], 0);
+
+    let push = failure("error: independent landing regression", 1, &"4".repeat(40));
+    let output = file(&runtime, vec![pr, push.clone()]);
+    assert_eq!(
+        output["filed_count"], 1,
+        "push failures still file landing repairs"
+    );
+    assert_eq!(output["attributed"].as_array().unwrap().len(), 1);
+    let repeated = file(&runtime, vec![push]);
+    assert_eq!(repeated["filed_count"], 0);
+    assert_eq!(repeated["skipped_existing"].as_array().unwrap().len(), 1);
+
+    // A PR source SHA equalling the tip is insufficient: its *checkout* must match.
+    for (index, event, checkout, expected) in [
+        (2, "pull_request", '5', 0),
+        (3, "pull_request", '1', 1),
+        (4, "merge_group", '1', 1),
+        (5, "merge_group", '6', 0),
+        (6, "push", '7', 0),
+    ] {
+        let mut finding = failure(
+            &format!("error: routing case {index}"),
+            index,
+            &checkout.to_string().repeat(40),
+        );
+        finding["event"] = json!(event);
+        finding["event_reported_head_sha"] = json!("1".repeat(40));
+        if event == "merge_group" {
+            finding["head_branch"] = json!("gh-readonly-queue/agent-main/pr-3140");
+            finding["ref_kind"] = json!("other");
+        }
+        let output = file(&runtime, vec![finding]);
+        assert_eq!(
+            output["filed_count"].as_u64().unwrap()
+                + output["skipped_existing"].as_array().unwrap().len() as u64,
+            expected,
+            "event {event}, checkout {checkout}"
+        );
+    }
+
+    let mut orphan = failure("error: unmatched branch failure", 7, &"8".repeat(40));
+    orphan["event"] = json!("pull_request");
+    orphan["head_branch"] = json!("orbit/ORB-999999999-deadbeef");
+    let error = runtime.run_deterministic("file_ci_failure_tasks", &json!({}), &json!({
+        "ci_evidence": {"schema_version": 2, "collected": true, "current_failures": [orphan]}
+    }), ToolContext::default()).unwrap_err();
+    assert!(
+        error.to_string().contains("task_branch_owner"),
+        "missing owners remain retryable rather than minting repairs"
+    );
 }

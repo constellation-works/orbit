@@ -227,3 +227,81 @@ fn newer_cancellations_never_erase_an_older_actionable_failure() {
     assert_eq!(run_ids(&evidence, "stale_or_superseded"), [11]);
     assert_eq!(budget_errors(&evidence), 0);
 }
+
+// Script the discovery boundary: an unmerged task PR is retained separately,
+// including when the open-PR page omits it, rather than becoming a landing repair.
+#[test]
+fn collector_separates_task_pr_failures_from_landing_push_failures() {
+    let mut pr = run(
+        71,
+        "ci",
+        HEAD,
+        "completed",
+        Some("failure"),
+        "2026-10-04T18:40:00Z",
+    );
+    pr["event"] = json!("pull_request");
+    pr["head_branch"] = json!("orbit/ORB-13887-ddb04571");
+    let push = run(
+        72,
+        "ci",
+        HEAD,
+        "completed",
+        Some("failure"),
+        "2026-10-04T18:41:00Z",
+    );
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("orbit/ORB-13887-ddb04571", HEAD)
+        .with_runs(vec![vec![pr, push]]);
+    let evidence = collect(&queries, &input()).expect("collect");
+    assert_eq!(run_ids(&evidence, "current_failures"), [72]);
+    assert_eq!(run_ids(&evidence, "branch_failures"), [71]);
+}
+
+#[test]
+fn landing_checkout_classification_requires_push_identity_or_observed_tip() {
+    use super::super::partition::is_landing_failure;
+    use super::super::refs::{RefKind, ScannedRef};
+    let refs = [ScannedRef {
+        kind: RefKind::Integration,
+        branch: "topic".into(),
+        head_sha: Some(HEAD.into()),
+        pr_number: None,
+        pr_url: None,
+    }];
+    let old = "2".repeat(40);
+    let foreign = "3".repeat(40);
+    for (event, branch, checkout, expected) in [
+        ("push", "topic", &old, true),
+        ("push", "topic", &foreign, false),
+        ("pull_request", "topic", &foreign, false),
+        ("pull_request", "orbit/ORB-13887-ddb04571", &foreign, false),
+        (
+            "pull_request",
+            "orbit/ORB-13887-ddb04571",
+            &HEAD.to_string(),
+            true,
+        ),
+        (
+            "merge_group",
+            "gh-readonly-queue/topic/pr-1",
+            &HEAD.to_string(),
+            true,
+        ),
+        (
+            "merge_group",
+            "gh-readonly-queue/topic/pr-1",
+            &foreign,
+            false,
+        ),
+    ] {
+        let failure = json!({"event": event, "head_branch": branch,
+            "event_reported_head_sha": old, "actual_checkout_shas": [checkout]});
+        assert_eq!(
+            is_landing_failure(&refs, &failure),
+            expected,
+            "event {event}, branch {branch}"
+        );
+    }
+}
