@@ -114,3 +114,30 @@ test('a replica checkout reads its owner over SSH when ownerHost is set', { opti
   expect(remote.length).toBeGreaterThan(0)
   expect(remote.every(run => run.args.includes('owner-box') && run.args.includes('BatchMode=yes'))).toBe(true)
 })
+
+test('opening the board reads the workspace again when the first read left nothing', async ($, on) => {
+  const ran: Ran[] = []
+  fakeOrbit(on, ran)
+  // The first snapshot write goes nowhere, as one made before the session is bound does.
+  let isDropped = false
+  on('state.set', ($, e, next) => {
+    if (isDropped || e.key !== 'snapshot') return next(e)
+    isDropped = true
+    return { value: { isSet: true, version: 0 } }
+  })
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+  expect(isDropped).toBe(true)
+  const reads = ran.filter(run => run.args[0] === 'task').length
+
+  await clock.advance(6000)
+  await $.command.run({ command: 'orbit-board', args: '' } as never)
+  await clock.advance(0)
+
+  expect(ran.filter(run => run.args[0] === 'task').length).toBeGreaterThan(reads)
+  const ui = await $.ui.mount({ plugin: 'orbit', surface: 'terminal', ...PANE })
+  await ui.press({ key: 'tab:board' })
+  expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+  await ui.unmount()
+})
