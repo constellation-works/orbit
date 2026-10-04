@@ -1,5 +1,5 @@
 {
-  "description": "Tell the session at start when cwd is not inside an initialized Orbit workspace.",
+  "description": "Tell the session at start when cwd is not inside an initialized Orbit workspace; load the Orbit mod (band, status line, toasts, Board / Ship / Map pane).",
   "hooks": {
     "SessionStart": [
       {
@@ -13,5 +13,8 @@
         ]
       }
     ]
-  }
+  },
+  "modules": [
+    "./mod/register.tsx"
+  ]
 }

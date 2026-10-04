@@ -14,5 +14,37 @@
     "task-management",
     "agent-orchestration",
     "mcp"
-  ]
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "ownerHost": {
+      "type": "string",
+      "title": "Owner host",
+      "description": "SSH host or alias of the machine that owns the workspace, for checkouts that are Orbit replicas or not registered here. Empty reads the local workspace only.",
+      "default": ""
+    },
+    "refreshMinutes": {
+      "type": "number",
+      "title": "Refresh interval (minutes)",
+      "description": "How often the band and pane re-read the workspace; they also refresh after a turn.",
+      "default": 3
+    },
+    "band": {
+      "type": "string",
+      "title": "Band",
+      "description": "The Orbit band above the prompt: full, one compact line, or off.",
+      "default": "on",
+      "options": [
+        "on",
+        "compact",
+        "off"
+      ]
+    },
+    "commitTrailer": {
+      "type": "boolean",
+      "title": "Task trailer on commits",
+      "description": "Add a Task: trailer to git commits made while this session works an Orbit task.",
+      "default": true
+    }
+  }
 }
