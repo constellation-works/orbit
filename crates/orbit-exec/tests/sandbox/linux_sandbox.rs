@@ -985,27 +985,49 @@ fn kernel_enforces_allowed_outside_and_subtree_writes_when_available() {
     let allowed_file = workspace.join("allowed.txt");
     let outside_file = outside.join("outside.txt");
     let denied_file = denied.join("denied.txt");
+    let existing_file = denied.join("existing.txt");
+    std::fs::write(&existing_file, "before").expect("existing denied file");
+    std::fs::create_dir(denied.join("tmp")).expect("artifact scratch root");
     let resolved = profile(vec![
         format!("{}/**", workspace.display()),
         format!("!{}/**", denied.display()),
+        format!("{}/**", denied.join("tmp").display()),
     ]);
-    let script = format!(
-        "printf allowed > '{}'; ! printf outside > '{}'; ! printf denied > '{}'",
-        allowed_file.display(),
-        outside_file.display(),
-        denied_file.display()
-    );
-    let plan = compile_linux_bwrap_argv(
+    // Recovery seeds this ignored root before launch. A direct invocation has
+    // no post-run guard: the kernel must refuse both new and existing writes,
+    // including moving the deny root aside to plant a replacement.
+    let script = r#"
+set -eu
+deny() { if "$@"; then echo "unexpected write: $*" >&2; exit 91; fi; }
+printf allowed > "$WORKSPACE/allowed.txt"
+printf scratch > "$DENIED/tmp/log.txt"
+deny sh -c 'printf outside > "$1/outside.txt"' sh "$OUTSIDE"
+deny sh -c 'printf denied > "$1/denied.txt"' sh "$DENIED"
+deny sh -c 'printf changed > "$1/existing.txt"' sh "$DENIED"
+deny mkdir "$DENIED/nested"
+deny mv "$DENIED" "$WORKSPACE/orbit-moved"
+"#;
+    let mut plan = compile_linux_bwrap_argv(
         &resolved,
         "/bin/sh",
-        &["-c".to_string(), script],
+        &["-c".to_string(), script.to_string()],
         Some(&workspace),
         false,
     )
     .expect("compile");
+    assert!(
+        plan.take_post_run_guard().is_none(),
+        "this is a direct invocation"
+    );
+    let env = [
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("WORKSPACE".to_string(), workspace.display().to_string()),
+        ("OUTSIDE".to_string(), outside.display().to_string()),
+        ("DENIED".to_string(), denied.display().to_string()),
+    ];
     let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
         plan: &plan,
-        env: &[],
+        env: &env,
         cwd: Some(&workspace),
         stdin: Stdio::null(),
         stdout: Stdio::null(),
@@ -1020,6 +1042,16 @@ fn kernel_enforces_allowed_outside_and_subtree_writes_when_available() {
     );
     assert!(!outside_file.exists());
     assert!(!denied_file.exists());
+    assert_eq!(
+        std::fs::read_to_string(existing_file).expect("unchanged denied file"),
+        "before"
+    );
+    assert!(!denied.join("nested").exists());
+    assert!(!workspace.join("orbit-moved").exists());
+    assert_eq!(
+        std::fs::read_to_string(denied.join("tmp/log.txt")).expect("artifact scratch write"),
+        "scratch"
+    );
 }
 
 #[cfg(target_os = "linux")]

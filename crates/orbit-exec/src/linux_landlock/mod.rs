@@ -1,4 +1,4 @@
-//! Linux Landlock read confinement for activity-scoped `proc.spawn`.
+//! Linux Landlock confinement primitives and the plugin backend boundary.
 //!
 //! Guessing which argv strings look like paths cannot see what an allowed
 //! program will do with them. `git`, `bash`, and `python3` are all on shipped
@@ -7,16 +7,16 @@
 //! without a single path-shaped argument. The read boundary therefore has to
 //! live where the child does, not in the request.
 //!
-//! This module compiles the activity's resolved read profile into a Landlock
+//! The retained read API compiles a resolved read profile into a Landlock
 //! ruleset and applies it between `fork` and `exec`, so the child and every
-//! descendant it spawns inherit it. The request-time argv check remains, but
-//! only as an early, explainable deny for `git -C /etc`; it is no longer the
-//! security boundary.
+//! descendant it spawns inherit it. Managed `proc.spawn` now inherits its
+//! enclosing worker's Bubblewrap or sandbox-exec boundary without adding
+//! Landlock. Production Landlock callers use the explicit plugin boundary.
 //!
 //! # What the ruleset covers
 //! Read and execute access (`READ_FILE`, `READ_DIR`, `EXECUTE`) plus
 //! `REFER`, which governs moving a file between directories. For the
-//! activity-scoped profile, writes are not handled here: agent write
+//! retained read-profile API, writes are not handled here: agent write
 //! confinement belongs to the Bubblewrap mount namespace in
 //! [`crate::linux_sandbox`], and handling writes in two places would leave
 //! two answers to one question.

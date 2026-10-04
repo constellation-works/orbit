@@ -471,6 +471,7 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
 }
 
 #[test]
+#[allow(clippy::print_stdout)] // Report unavailable native sandbox checks visibly.
 fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
     if !enter_isolated_child(
         module_path!(),
@@ -511,6 +512,153 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
         prepared.checkout.join(".git").exists(),
         "the agent gets a checkout of the base"
     );
+    let denied_root = prepared.checkout.join(".orbit");
+    assert!(
+        denied_root.is_dir(),
+        "recovery preparation must supply the sandbox's deny root before the agent step"
+    );
+    assert_eq!(
+        std::fs::read_dir(&denied_root).expect("deny root").count(),
+        0,
+        "the recovery checkout must not contain copied runtime stores"
+    );
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::process::Stdio;
+
+        use orbit_exec::linux_bwrap_write_grant_diagnostic;
+        use orbit_types::workflow::ExecutorSandboxKind;
+
+        let kind = if cfg!(target_os = "linux") {
+            ExecutorSandboxKind::LinuxBwrap
+        } else {
+            ExecutorSandboxKind::MacosSandboxExec
+        };
+        crate::adapter::engine_host::v2_host::test_support::seed_executor(
+            &runtime,
+            "claude",
+            Some(kind),
+        );
+        let sandbox = runtime
+            .resolve_executor_sandbox("claude", None, Some(&prepared.checkout))
+            .expect("resolve recovery sandbox")
+            .expect("native sandbox");
+        assert!(
+            linux_bwrap_write_grant_diagnostic(
+                &sandbox.fs_profile,
+                &prepared.checkout.join("source.rs")
+            )
+            .expect("source grant")
+            .is_none(),
+            "recovery must retain source writes on both backends"
+        );
+        for relative in [
+            "state/new.json",
+            "config.toml",
+            "resources/new.json",
+            "tmp/new.env",
+        ] {
+            assert!(
+                linux_bwrap_write_grant_diagnostic(
+                    &sandbox.fs_profile,
+                    &denied_root.join(relative)
+                )
+                .expect("deny rule")
+                .is_some(),
+                "recovery's own .orbit tree must stay denied after runtime grants and policy exceptions"
+            );
+        }
+        assert!(
+            linux_bwrap_write_grant_diagnostic(
+                &sandbox.fs_profile,
+                &denied_root.join("tmp/log.txt")
+            )
+            .expect("scratch grant")
+            .is_none(),
+            "the required artifact scratch directory must stay writable"
+        );
+        orbit_common::fs::path::ensure_orbit_scratch_dir(&prepared.checkout)
+            .expect("prepare scratch as the agent launcher does");
+        let args = [
+            "-c".to_string(),
+            "set -eu; printf reached > agent-step.txt; printf scratch > .orbit/tmp/agent.log"
+                .to_string(),
+        ];
+        #[cfg(target_os = "linux")]
+        {
+            orbit_exec::prepare_linux_bwrap_write_grants(&sandbox.fs_profile, &prepared.checkout)
+                .expect("prepare the same write anchors as the agent launcher");
+            let mut plan = orbit_exec::compile_linux_bwrap_argv(
+                &sandbox.fs_profile,
+                "/bin/sh",
+                &args,
+                Some(&prepared.checkout),
+                sandbox.managed_worktree,
+            )
+            .expect(
+                "the effective recovery profile must reach the agent step without a deny refusal",
+            );
+            let guard = plan
+                .take_post_run_guard()
+                .expect("future filename denies need a post-run guard");
+            let probe = orbit_exec::probe_bwrap();
+            if probe.available {
+                let child =
+                    orbit_exec::spawn_under_linux_bwrap(orbit_exec::LinuxBwrapSpawnRequest {
+                        plan: &plan,
+                        env: &[],
+                        cwd: Some(&prepared.checkout),
+                        stdin: Stdio::null(),
+                        stdout: Stdio::piped(),
+                        stderr: Stdio::piped(),
+                    })
+                    .expect("spawn the recovery agent step");
+                let outcome = orbit_exec::supervise_child(child, Some(30_000), None)
+                    .expect("bounded recovery agent step");
+                assert!(outcome.result.success, "agent step: {:?}", outcome.result);
+                guard.verify().expect("allowed source and scratch writes");
+            } else {
+                println!("SKIP: recovery agent kernel launch: {}", probe.detail);
+            }
+            std::fs::write(prepared.checkout.join("new.env"), "forbidden")
+                .expect("simulate an agent write");
+            assert!(
+                matches!(guard.verify(), Err(OrbitError::PolicyDenied(_))),
+                "recovery must reject newly created files covered by the effective policy's deny globs"
+            );
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let profile_text =
+                orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, "claude")
+                    .expect("compile the effective recovery sandbox");
+            if orbit_exec::sandbox_exec_available() {
+                let (child, _profile_file) =
+                    orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
+                        profile_text: &profile_text,
+                        program: "/bin/sh",
+                        args: &args,
+                        env: &[],
+                        cwd: Some(&prepared.checkout),
+                        stdin: Stdio::null(),
+                        stdout: Stdio::piped(),
+                        stderr: Stdio::piped(),
+                        inherited_fds: &[],
+                    })
+                    .expect("spawn the recovery agent step");
+                let outcome = orbit_exec::supervise_child(child, Some(30_000), None)
+                    .expect("bounded recovery agent step");
+                assert!(outcome.result.success, "agent step: {:?}", outcome.result);
+            } else {
+                assert_ne!(
+                    std::env::var("ORBIT_REQUIRE_SANDBOX_EXEC").as_deref(),
+                    Ok("1"),
+                    "native recovery launch must run on the admitted macOS CI host"
+                );
+                println!("SKIP: recovery agent kernel launch: sandbox-exec is unavailable");
+            }
+        }
+    }
     let outcome = runtime
         .apply_blocked_task_recovery(
             &input,

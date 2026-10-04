@@ -128,6 +128,101 @@ probe write-root ': > "$WRITE_ROOT/written"'
     );
 }
 
+/// Recovery uses the prepared-root case. Seatbelt must also enforce the
+/// original absent-root deny dynamically, rather than silently dropping it.
+#[test]
+fn sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots() {
+    if let Err(reason) = sandbox_exec_can_apply() {
+        if std::env::var(REQUIRE_ENV).as_deref() == Ok("1") {
+            panic!("{REQUIRE_ENV}=1 but sandbox-exec cannot apply a profile here: {reason}");
+        }
+        println!("SKIP: sandbox-exec cannot apply a profile on this host: {reason}");
+        return;
+    }
+
+    for prepared in [false, true] {
+        let fixture = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
+        let root = fixture.path().canonicalize().expect("canonical root");
+        let checkout = root.join("checkout");
+        let denied = checkout.join(".orbit");
+        std::fs::create_dir(&checkout).expect("checkout");
+        if prepared {
+            std::fs::create_dir(&denied).expect("prepared deny root");
+            std::fs::write(denied.join("existing.txt"), "before").expect("denied file");
+            std::fs::create_dir(denied.join("tmp")).expect("artifact scratch root");
+        }
+        let profile = ResolvedFsProfile {
+            name: "recovery".to_string(),
+            read: vec![format!("{}/**", checkout.display())],
+            modify: vec![
+                format!("{}/**", checkout.display()),
+                format!("!{}/**", denied.display()),
+                format!("{}/**", denied.join("tmp").display()),
+                format!("!{}/**/*.env", checkout.display()),
+            ],
+        };
+        let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+        let script = r#"
+set -eu
+deny() { if "$@"; then echo "unexpected write: $*" >&2; exit 91; fi; }
+printf reached > "$CHECKOUT/agent-step.txt"
+if [ "$PREPARED" = true ]; then
+    printf scratch > "$DENIED/tmp/log.txt"
+    deny sh -c 'printf secret > "$1/tmp/new.env"' sh "$DENIED"
+    deny sh -c 'printf changed > "$1/existing.txt"' sh "$DENIED"
+    deny mv "$DENIED" "$CHECKOUT/orbit-moved"
+else
+    deny mkdir "$DENIED"
+fi
+deny mkdir -p "$DENIED/nested"
+deny sh -c 'printf created > "$1/created.txt"' sh "$DENIED"
+"#;
+        let env = [
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("CHECKOUT".to_string(), checkout.display().to_string()),
+            ("DENIED".to_string(), denied.display().to_string()),
+            ("PREPARED".to_string(), prepared.to_string()),
+        ];
+        let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+            profile_text: &profile_text,
+            program: "/bin/sh",
+            args: &["-c".to_string(), script.to_string()],
+            env: &env,
+            cwd: Some(&checkout),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            inherited_fds: &[],
+        })
+        .expect("spawn recovery agent step under sandbox-exec");
+        wait_bounded(child);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("agent-step.txt")).expect("agent reached"),
+            "reached"
+        );
+        assert!(!denied.join("created.txt").exists());
+        assert!(!denied.join("nested").exists());
+        assert!(!checkout.join("orbit-moved").exists());
+        if prepared {
+            assert_eq!(
+                std::fs::read_to_string(denied.join("existing.txt")).expect("denied file"),
+                "before"
+            );
+            assert_eq!(
+                std::fs::read_to_string(denied.join("tmp/log.txt"))
+                    .expect("artifact scratch write"),
+                "scratch"
+            );
+            assert!(!denied.join("tmp/new.env").exists());
+        } else {
+            assert!(
+                !denied.exists(),
+                "the agent must not create the absent deny root"
+            );
+        }
+    }
+}
+
 /// `Ok` when `sandbox-exec` runs a permissive profile; otherwise the reason it
 /// cannot, for the skip message.
 fn sandbox_exec_can_apply() -> Result<(), String> {

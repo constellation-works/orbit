@@ -709,6 +709,7 @@ impl OrbitRuntime {
 
     /// Create the detached checkout of `base_sha` a recovery run's agent
     /// inspects, replacing a leftover from an earlier attempt of the same run.
+    /// Prepare its ignored `.orbit` deny root before any sandboxed launch.
     pub(crate) fn create_recovery_checkout(
         &self,
         recovery_run_id: &str,
@@ -735,6 +736,17 @@ impl OrbitRuntime {
                 output.stderr.trim()
             )));
         }
+        // Managed task worktrees already create this root through scratch
+        // setup. Bubblewrap needs an existing inode for the read-only bind,
+        // and Seatbelt can deny the same subtree. Keep it empty here; the
+        // launcher prepares scratch, but no task/runtime stores are copied.
+        let denied_root = path.join(".orbit");
+        std::fs::create_dir(&denied_root).map_err(|error| {
+            OrbitError::Execution(format!(
+                "prepare recovery checkout deny root {}: {error}",
+                denied_root.display()
+            ))
+        })?;
         path.canonicalize().map_err(|error| {
             OrbitError::Execution(format!("resolve recovery checkout {target}: {error}"))
         })

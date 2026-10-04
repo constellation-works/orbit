@@ -60,3 +60,20 @@ fn active_worktree_root(runtime: &OrbitRuntime, subprocess_cwd: &Path) -> Option
     let first = components.next()?;
     Some(worktrees_root.join(first.as_os_str()))
 }
+
+/// Recovery owns a detached checkout directly beneath its host-owned state
+/// directory. Recognize only that exact checkout, never the pool or an alias
+/// outside it, so sandbox preparation and post-run checks stay run-scoped.
+pub(super) fn recovery_checkout_root(
+    runtime: &OrbitRuntime,
+    subprocess_cwd: &Path,
+) -> Option<PathBuf> {
+    let cwd = subprocess_cwd.canonicalize().ok()?;
+    let checkouts = runtime
+        .paths()
+        .state_dir
+        .join("recovery-checkouts")
+        .canonicalize()
+        .ok()?;
+    (cwd.parent() == Some(checkouts.as_path())).then_some(cwd)
+}

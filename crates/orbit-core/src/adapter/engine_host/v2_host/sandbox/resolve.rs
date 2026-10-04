@@ -16,6 +16,8 @@ use super::runtime_grants::append_linux_runtime_write_roots;
 use super::worktree::active_worktree_subpath;
 #[cfg(target_os = "macos")]
 use super::worktree::append_active_worktree_root;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::worktree::recovery_checkout_root;
 
 pub(crate) fn resolve_executor_sandbox(
     runtime: &OrbitRuntime,
@@ -59,6 +61,8 @@ pub(super) fn resolve_executor_sandbox_on(
             sandbox_unavailable_message(provider, kind, host_os),
         ));
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let recovery_checkout = subprocess_cwd.and_then(|cwd| recovery_checkout_root(runtime, cwd));
     match kind {
         // Carry explicit off through preparation so the runner can suppress
         // provider-inner sandboxing and audit the choice without probing an OS
@@ -86,10 +90,12 @@ pub(super) fn resolve_executor_sandbox_on(
             {
                 // Read-only reviewer activities may run from an invocation-owned
                 // inspection checkout, so their read grants must follow that
-                // checkout. Implementer profiles stay anchored at the registered
-                // workspace; the active worktree is re-allowed separately below
-                // after the workspace's `.orbit` deny rules.
-                let profile_root = if fs_profile == Some("reviewer") {
+                // checkout. Recovery also needs its own checkout-relative
+                // grants and denies. Other implementer profiles stay anchored
+                // at the registered workspace, with the active worktree
+                // re-allowed separately below.
+                let profile_root = if fs_profile == Some("reviewer") || recovery_checkout.is_some()
+                {
                     subprocess_cwd
                 } else {
                     None
@@ -122,11 +128,12 @@ pub(super) fn resolve_executor_sandbox_on(
                 }
                 deny_registered_auto_task_definition_writes(runtime, &mut resolved);
                 append_recovery_authority_deny(runtime, &mut resolved)?;
+                deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
                 Ok(Some(ResolvedSandbox {
                     kind,
                     fs_profile: resolved,
                     allow_fallback: executor.allow_fallback,
-                    managed_worktree: false,
+                    managed_worktree: recovery_checkout.is_some(),
                     runtime_write_authority: Vec::new(),
                     mask: Some(agent_plugin_mask(runtime)?),
                 }))
@@ -182,9 +189,14 @@ pub(super) fn resolve_executor_sandbox_on(
                             DispatchError::CliInvocationPermanent(error.to_string())
                         })?;
                 }
-                let managed_worktree = subprocess_cwd
-                    .and_then(|cwd| active_worktree_subpath(runtime, cwd))
-                    .is_some();
+                deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
+                // Recovery is host-prepared too. Its policy includes future
+                // filename denies that need the same post-run guard as a task
+                // worktree, even after the .orbit mount anchor exists.
+                let managed_worktree = recovery_checkout.is_some()
+                    || subprocess_cwd
+                        .and_then(|cwd| active_worktree_subpath(runtime, cwd))
+                        .is_some();
                 Ok(Some(ResolvedSandbox {
                     kind,
                     fs_profile: resolved,
@@ -195,6 +207,31 @@ pub(super) fn resolve_executor_sandbox_on(
                 }))
             }
         }
+    }
+}
+
+/// Recovery has no writable Orbit stores. Preserve only its existing scratch
+/// exception, with subsequent deny rules, after all convenience grants.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn deny_recovery_checkout_orbit(checkout: Option<&Path>, resolved: &mut ResolvedFsProfile) {
+    if let Some(checkout) = checkout {
+        let scratch = format!("{}/.orbit/tmp/**", checkout.display());
+        let scratch_rules = resolved
+            .modify
+            .iter()
+            .position(|rule| rule == &scratch)
+            .map(|index| {
+                resolved.modify[index..]
+                    .iter()
+                    .filter(|rule| *rule == &scratch || rule.starts_with('!'))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        resolved
+            .modify
+            .push(format!("!{}/.orbit/**", checkout.display()));
+        resolved.modify.extend(scratch_rules);
     }
 }
 
