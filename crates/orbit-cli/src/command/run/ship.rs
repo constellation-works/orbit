@@ -120,12 +120,15 @@ impl Execute for ShipCommand {
         };
         // [ORB-13901] Discovery is refused while throttled; an explicit
         // selection proceeds and is warned.
-        let warning = if self.task_ids.is_empty() {
-            None
+        let mut warnings: Vec<String> = if self.task_ids.is_empty() {
+            Vec::new()
         } else {
             super::auto::resource_throttle_warning(runtime)
+                .into_iter()
+                .collect()
         };
-        workflow_dispatch_payload_with_warning(SHIP_WORKFLOW, &[run], warning)
+        warnings.extend(runtime.validation_env_preflight_warning());
+        workflow_dispatch_payload_with_warning(SHIP_WORKFLOW, &[run], warnings)
     }
 }
 

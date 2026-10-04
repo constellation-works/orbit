@@ -271,6 +271,16 @@ pub(crate) fn build_context_from_roots(
         .snapshot
         .workflow_distributed_completion
         .clone();
+    // Config admitted the mode's spelling; Core translates it into the exec
+    // layer's policy, as it does for PR settings above.
+    let validation_env = orbit_exec::ValidationEnvPolicy {
+        login_shell: runtime_config.snapshot.workflow_validation_env_login_shell,
+        path: runtime_config.snapshot.workflow_validation_env_path.clone(),
+        path_mode: orbit_exec::ValidationPathMode::parse(
+            &runtime_config.snapshot.workflow_validation_env_path_mode,
+        )
+        .unwrap_or_default(),
+    };
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
     let system_crew = runtime_config.system_crew.clone();
@@ -309,6 +319,7 @@ pub(crate) fn build_context_from_roots(
             workflow_auto_ship,
             runtime_config.resource_throttle.clone(),
             workflow_required_validation_commands,
+            validation_env,
             workflow_distributed_completion,
             runtime_config.snapshot.task_pilot_freshness(),
             crews,

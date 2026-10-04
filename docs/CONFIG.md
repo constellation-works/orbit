@@ -98,7 +98,7 @@ final_recovery_crews = ["sol:100", "opus:20"]
 | `workflow.low_complexity_crews`, `medium_…`, `hard_…`, `xhard_…` | `[]` | Crew pools a crew-less task draws from at creation, by complexity. Empty means "use `default_crew`". See [pools](#automatic-crew-pools-by-complexity). |
 | `workflow.final_recovery_crews` | `["sol:100", "opus:20"]` | Weighted crew pool the final-recovery activity draws once per run after step recovery is exhausted; entries are `name` or `name:weight` (all bare or all weighted). Unset defaults to `["sol:100", "opus:20"]`, keeping only the members the crew registry defines; `[]` disables final recovery. See [final recovery pool](#final-recovery-pool). |
 | `workflow.auto_ship` | `false` | Opt in to unattended ship dispatch from the sweep/routine scheduler. While `false`, the ship sweep skips with `auto_ship_disabled`. |
-| `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass. `task_pr_pipeline` and `task_local_pipeline` run them on the exact candidate before push or merge and attach each log to the task; a failure goes to step recovery. A distributed-drain claim must pass them before this owner accepts its handoff. Empty skips the owner-path check and refuses every claimed handoff. |
+| `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass. `task_pr_pipeline` and `task_local_pipeline` run them on the exact candidate before push or merge and attach each log to the task; a failure goes to step recovery, except a [missing tool](#workflowvalidation_env--the-toolchain-required-validation-runs-with). A distributed-drain claim must pass them before this owner accepts its handoff. Empty skips the owner-path check and refuses every claimed handoff. |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff. `review` waits for an operator's **Approve handoff**; `done` has the owner authorize it on acceptance and land it through `task_landing_pipeline`, rechecking this key before the merge. |
 
 ### `[workflow.resource_throttle]` — host pressure
@@ -137,6 +137,43 @@ source_sensitivity = "ignore"
 | `workflow.task_pilot_freshness.source_sensitivity` | `ignore` | Whether moving the observed branch head makes an assessment stale. `ignore`: never; the pinned revision is still recorded as evidence. `context_files`: only when the head changed a path one of the task's selectors names (`file:` and `dir:` by prefix, `symbol:` through its file). `any`: every head move. |
 
 Eligibility is separate: a routine's `eligibility` block still decides which tasks are piloted at all, so a task that becomes eligible with no fresh assessment is still piloted, while retagging an already-assessed, still-eligible task is not. A task-pilot routine's `trigger.state.freshness` block overrides either key for that routine (routine, then this table, then the defaults). A value that differs from the default is itself material, so changing it re-pilots the tasks assessed under the old value once. Assessments accepted before this setting existed stay fresh while their task is unchanged. See [automation triggers](design/automation-triggers/5_operations.md).
+
+### `[workflow.validation_env]` — the toolchain required validation runs with
+
+```toml
+[workflow.validation_env]
+login_shell = true
+path = []
+path_mode = "prepend"
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.validation_env.login_shell` | `true` | Resolve PATH and toolchain locators (`CARGO_HOME`, `RUSTUP_HOME`, `GOPATH`, `GOROOT`, `GOBIN`, `JAVA_HOME`, `PYENV_ROOT`, `NVM_DIR`, `VOLTA_HOME`, `PNPM_HOME`, `BUN_INSTALL`, `HOMEBREW_*`) from the owner's login shell: the account's shell from the user database, else `$SHELL`, else `/bin/sh`, run as `<shell> -l -c …`. The probe has a 10-second limit and is cached for two minutes. Nothing else from the profile is taken. `false` never starts the shell. |
+| `workflow.validation_env.path` | `[]` | PATH entries to add. A leading `~/` expands to `HOME`. |
+| `workflow.validation_env.path_mode` | `prepend` | `prepend` puts `path` before the resolved PATH; `replace` makes it the whole PATH. |
+
+The owner-side commands that run repository tooling are `workflow.required_validation_commands` and `local_shell` steps. They use this environment, layered over the [allowlisted agent environment](#executionenv--the-agent-subprocess-environment), so a drain launched from a minimal PATH (a service manager, `env -i`, an SSH command) still finds the user's toolchain. Each validation log and step output records `validation_env`, with these fields:
+
+- `source`, which decided PATH:
+  - `config` when `path` has entries;
+  - otherwise `login_shell` when the probe returned a PATH;
+  - otherwise `launcher_fallback`, the launching process's PATH.
+- the PATH itself;
+- the probed shell and any probe error.
+
+**Missing tools are environment failures.** A required command can fail because a tool is missing. Orbit detects this from:
+
+- exit status 127;
+- a shell `command not found` / `not found` line;
+- `make`'s `Error 127`;
+- `No such file or directory` for the program;
+- a missing cargo subcommand;
+- a guardrail's "`<tool>` is required … install" line, for a tool that is absent from PATH.
+
+Such a failure says nothing about the candidate. The step fails with the `[validation_environment]` marker and error code `validation_environment`, naming the tool, PATH and source; the log records `failure_kind: "environment"` and `missing_tool`. Step recovery, final recovery and blocked-task recovery do not run. No review, rework or recovery budget is spent. The failure handoff opens no `[BLOCKED]` PR and pushes nothing. It blocks the task under `validation_environment_blocked`, which keeps the validated candidate in its worktree. Fix the environment, check `orbit doctor`, then `orbit job resume <run>`. A claimed leaf on a follower skips repair the same way. Its claim settles as a failure carrying the diagnostic. It is not released for another follower to pull and implement again.
+
+`orbit doctor` reports the resolution as `validation-env`. `orbit run auto`, `orbit run ship`, MCP `orbit.workflow.auto` (`status` and `start`) and `orbit.workflow.ship` warn in two cases while required commands are configured. The first is when the login shell cannot be probed. The second is when resolution is disabled and `path` is empty. They also warn when the resolved PATH drops login-shell entries, which can happen under `replace`.
 
 **The `system` name.** Shipped job steps such as `task_pilot_pipeline` name `crew: system` directly. At load that name is aliased onto the crew `workflow.system_crew` names, so `system_crew = "luna"` runs the task pilot on Luna. A user-authored `[crews.system]` table wins over the alias. Older configs without `system_crew` fall back to an existing `[crews.qa]`, then to the default crew. An unknown custom name is not substituted and fails at dispatch. A missing or unusable system crew leaves the original failed step failed, with a diagnostic naming `workflow.system_crew`.
 

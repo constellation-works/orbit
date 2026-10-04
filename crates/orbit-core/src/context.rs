@@ -377,6 +377,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// its exact candidate before the delivery handoff is accepted
     /// (`[workflow] required_validation_commands`, default empty).
     workflow_required_validation_commands: Vec<String>,
+    /// `[workflow.validation_env]`: how required validation and `local_shell`
+    /// resolve PATH and toolchain locators [ORB-13987].
+    validation_env: orbit_exec::ValidationEnvPolicy,
     /// How far this owner takes an accepted distributed handoff: `review` or
     /// `done` (`[workflow] distributed_completion`, default `review`).
     workflow_distributed_completion: String,
@@ -410,6 +413,7 @@ impl OrbitRuntimeSettings {
         workflow_auto_ship: bool,
         resource_throttle: orbit_config::ResourceThrottleSettings,
         workflow_required_validation_commands: Vec<String>,
+        validation_env: orbit_exec::ValidationEnvPolicy,
         workflow_distributed_completion: String,
         task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
         crews: std::collections::BTreeMap<String, Crew>,
@@ -431,6 +435,7 @@ impl OrbitRuntimeSettings {
             workflow_auto_ship,
             resource_throttle,
             workflow_required_validation_commands,
+            validation_env,
             workflow_distributed_completion,
             task_pilot_freshness,
             crews,
@@ -474,6 +479,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn workflow_required_validation_commands(&self) -> &[String] {
         &self.workflow_required_validation_commands
+    }
+
+    pub(crate) fn validation_env(&self) -> &orbit_exec::ValidationEnvPolicy {
+        &self.validation_env
     }
 
     pub(crate) fn workflow_distributed_completion(&self) -> &str {

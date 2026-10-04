@@ -159,6 +159,51 @@ pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoc
     }
 }
 
+/// Where required validation finds the user's toolchain [ORB-13987].
+///
+/// Required commands run with PATH and toolchain locators resolved from the
+/// owner's login shell, independent of whatever launches the worker. This row
+/// resolves that environment the way a delivery run would and warns when the
+/// login shell cannot be probed (validation then falls back to the launcher's
+/// PATH), when resolution is disabled without a configured PATH, or when the
+/// resolved PATH drops login-shell entries.
+pub(super) fn doctor_check_validation_env(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    if runtime.workflow_required_validation_commands().is_empty() {
+        return check(
+            "validation-env",
+            WorkspaceDoctorStatus::Skipped,
+            "no `workflow.required_validation_commands`; required validation does not run here"
+                .to_string(),
+        );
+    }
+    let environment = runtime.validation_environment();
+    match environment.preflight_warning() {
+        Some(warning) => actionable_check(
+            "validation-env",
+            WorkspaceDoctorStatus::Warning,
+            warning,
+            "Make the login shell's profile export the toolchain PATH (`$SHELL -l -c 'echo \
+             $PATH'` should list it), or set `workflow.validation_env.path` with `orbit config \
+             set`, then rerun `orbit doctor`."
+                .to_string(),
+        ),
+        None => check(
+            "validation-env",
+            WorkspaceDoctorStatus::Ok,
+            format!(
+                "required validation PATH comes from {}{}: PATH={}",
+                environment.source.as_str(),
+                environment
+                    .login_shell
+                    .as_ref()
+                    .map(|shell| format!(" ({})", shell.display()))
+                    .unwrap_or_default(),
+                environment.path().unwrap_or("<unset>")
+            ),
+        ),
+    }
+}
+
 /// Delivery automation consumers that cannot make progress: evaluation
 /// suspended by a stall, an enabled definition whose branch does not exist, or
 /// an enabled definition this host may never admit work for.

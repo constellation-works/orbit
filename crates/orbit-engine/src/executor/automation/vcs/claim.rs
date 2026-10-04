@@ -26,7 +26,10 @@
 //! its base and before it is published or landed: an agent's report that it
 //! ran the commands is not evidence; this step is. Both steps run each command
 //! through [`run_required_command`], so they see the same shell, environment,
-//! timeout, output capture and failure text. The owner step fails like any
+//! timeout, output capture and failure text. That environment is resolved from
+//! the owner's login shell rather than the worker's launcher, and a command
+//! that fails for lack of a tool is reported as the validation environment's
+//! failure rather than the candidate's [ORB-13987]. The owner step fails like any
 //! other deterministic step, so a workflow can attach `step_failure_recovery`
 //! to repair the candidate (for example commit a formatting fix) before the
 //! one post-recovery attempt reruns every command.
@@ -37,7 +40,6 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::text::floor_char_boundary;
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{
@@ -56,6 +58,7 @@ use super::git::{
 };
 use super::handoff::{completed_task_ids_from_input, reports_failure};
 use super::pr::{DeliveryPin, PrMergeState, classify_pr_state};
+use super::required_command::run_required_command;
 use super::review_gate::revision;
 
 fn refused(message: impl Into<String>) -> OrbitError {
@@ -522,8 +525,10 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
 
     let mut logs = Vec::new();
     let mut commands = Vec::new();
+    let mut validation_env = Value::Null;
     for (index, command) in context.required_commands.iter().enumerate() {
         let run = run_required_command(host, &workspace_path, command)?;
+        validation_env = run.environment_record();
         if !run.passed {
             return Err(run.failure(&candidate.candidate.commit));
         }
@@ -568,6 +573,7 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         "commands": commands,
         "tested_head": candidate.candidate.commit,
         "validated_base": candidate.base.commit,
+        "validation_env": validation_env,
     }))
 }
 
@@ -775,86 +781,6 @@ fn bounded_summary(text: &str) -> String {
     )
 }
 
-/// Ceiling for one required validation command. Long enough for a real
-/// repository check suite, short enough that a wedged command settles the
-/// step instead of holding it open indefinitely.
-const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
-/// Captured output kept per command. The log is reader evidence, not a build
-/// log archive, so a runaway command cannot balloon the task bundle.
-const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
-
-/// One required command's captured result on the candidate.
-struct RequiredCommandRun {
-    command: String,
-    exit_code: i32,
-    timed_out: bool,
-    passed: bool,
-    output: String,
-}
-
-impl RequiredCommandRun {
-    /// The refusal both validation steps report for a command that did not
-    /// pass, carrying its captured output.
-    fn failure(&self, candidate: &str) -> OrbitError {
-        OrbitError::Execution(format!(
-            "required validation '{}' did not pass on candidate {candidate}: {}",
-            self.command, self.output
-        ))
-    }
-}
-
-/// Run one required command in `workspace_path`.
-///
-/// A repository check suite is not a Git invocation: it gets the same
-/// allow-listed child environment an agent subprocess would, so a command
-/// that needs a configured toolchain variable can still find it.
-fn run_required_command<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace_path: &Path,
-    command: &str,
-) -> Result<RequiredCommandRun, OrbitError> {
-    let command = command.trim();
-    if command.is_empty() {
-        return Err(OrbitError::PolicyDenied(
-            "owner required validation contains an empty command".to_string(),
-        ));
-    }
-    let environment = host.agent_subprocess_environment(&[]);
-    let validation_path = environment
-        .iter()
-        .find(|(name, _)| name == "PATH")
-        .map(|(_, value)| value.as_str())
-        .unwrap_or("<unset; /bin/sh uses its default search path>")
-        .to_string();
-    let outcome = run_process(
-        &ExecRequest {
-            program: "/bin/sh".to_string(),
-            args: vec!["-c".to_string(), command.to_string()],
-            current_dir: Some(workspace_path.to_string_lossy().into_owned()),
-            timeout_ms: Some(VALIDATION_TIMEOUT_MS),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(environment),
-            debug: false,
-        },
-        &NoSandbox,
-    )?;
-    let mut output = capture(&outcome.stdout, &outcome.stderr);
-    // Include failures below a build script too (e.g. make exits 2 when a
-    // guardrail cannot resolve rg), rather than relying on shell exit 127.
-    if !outcome.success {
-        output.push_str(&format!("\nRequired validation PATH={validation_path}"));
-    }
-    Ok(RequiredCommandRun {
-        command: command.to_string(),
-        exit_code: outcome
-            .exit_code
-            .unwrap_or(if outcome.success { 0 } else { -1 }),
-        timed_out: outcome.timed_out,
-        passed: outcome.success && !outcome.timed_out,
-        output,
-    })
-}
-
 /// The tree a validation result describes is the committed HEAD only while
 /// the named branch still points there and no tracked or untracked input
 /// differs from it. Ignored build output is intentionally outside this check.
@@ -966,8 +892,10 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
 
     let mut logs = Vec::new();
     let mut passed = Vec::new();
+    let mut validation_env = Value::Null;
     for (index, command) in commands.iter().enumerate() {
         let run = run_required_command(host, &workspace_path, command)?;
+        validation_env = run.environment_record();
         let content = serde_json::to_vec(&json!({
             "schema_version": 1,
             "run_id": run_id,
@@ -979,6 +907,9 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "exit_code": run.exit_code,
             "timed_out": run.timed_out,
             "output": run.output,
+            "validation_env": validation_env,
+            "failure_kind": run.failure_kind(),
+            "missing_tool": run.missing_tool_name(),
         }))
         .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
         logs.push((format!("validation/{run_id}/{index}.json"), content));
@@ -1001,6 +932,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         "tested_head": candidate,
         "validation": serde_json::to_value(&references)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
+        "validation_env": validation_env,
     });
     if let Some(owned_paths) = owned_paths {
         output["owned_paths"] = json!(owned_paths);
@@ -1066,29 +998,4 @@ fn attach_logs<H: RuntimeHost + ?Sized>(
         });
     }
     Ok(references)
-}
-
-/// Interleave what the command said, bounded. Truncation is reported inside
-/// the captured text so a reader never mistakes a clipped log for the whole
-/// output.
-fn capture(stdout: &str, stderr: &str) -> String {
-    let mut combined = String::new();
-    if !stdout.trim().is_empty() {
-        combined.push_str(stdout.trim_end());
-    }
-    if !stderr.trim().is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(stderr.trim_end());
-    }
-    if combined.len() <= MAX_CAPTURED_OUTPUT_BYTES {
-        return combined;
-    }
-    let cut = floor_char_boundary(&combined, MAX_CAPTURED_OUTPUT_BYTES);
-    format!(
-        "[truncated to {cut} of {} bytes]\n{}",
-        combined.len(),
-        &combined[..cut]
-    )
 }

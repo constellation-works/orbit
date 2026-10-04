@@ -140,7 +140,10 @@ no origin or PR credentials.
   `workflow.required_validation_commands` on that exact candidate and checks the same Git state
   after each command. Passing logs are attached to the owner's task through the routed
   coordination transport only after all commands pass without changing the candidate. Git-ignored
-  build output is allowed. An empty owner requirement list fails closed on both sides.
+  build output is allowed. An empty owner requirement list fails closed on both sides. Commands
+  run in the executor's own resolved toolchain environment (`workflow.validation_env`); one that
+  fails for lack of a tool is a typed `validation_environment` failure, which no step or final
+  recovery repairs ([ORB-13987]).
 - `claim_handoff` re-observes the same identity, refuses a worktree that moved or became dirty, and
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
   call. The leaf's worker delivers it as the run terminalizes; a disconnect leaves one immutable

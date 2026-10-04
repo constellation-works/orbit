@@ -31,6 +31,12 @@ const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
 const FOREIGN_REBASE_EVENT: &str = "pr_foreign_rebase_refused";
 /// A before-PR review gate stopped delivery [ORB-11333].
 const REVIEW_GATE_EVENT: &str = "review_gate_escalation";
+/// Required validation could not find a tool; the candidate was not judged
+/// [ORB-13987].
+const VALIDATION_ENVIRONMENT_EVENT: &str = "validation_environment_blocked";
+/// Largest validation diagnostic the blocking comment repeats; the full
+/// output is in the attached validation log.
+const MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 
 /// The pipeline steps that belong to the before-PR review gate: admission,
 /// the reviewer, settlement, and owner revalidation of the reviewer's fixes
@@ -160,6 +166,25 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         conflicting_paths = conflicts_from_error(error_message);
     }
 
+    // [ORB-13987] Required validation lacked a tool. Nothing about the
+    // candidate is known, so it is neither published as a `[BLOCKED]` PR nor
+    // repaired: it stays exactly as validated for `orbit job resume`. Checked
+    // before the review-gate branch because `rework_validate` fails inside
+    // that loop.
+    if orbit_types::workflow::is_validation_environment_failure(
+        Some(error_code),
+        Some(error_message),
+    ) {
+        return preserve_validation_environment_candidate(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_message,
+            &workspace_path,
+        );
+    }
+
     // [ORB-11333] A review-gate failure keeps the implementation and any
     // partial reviewer repairs attributed to their authors, pushes the
     // candidate so the evidence survives, and opens no PR: publication is
@@ -283,6 +308,82 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pr_number": pr_number,
         "pr_url": pr_url,
         "pr_created": pr_created,
+        "task_status": "blocked",
+    }))
+}
+
+/// Keep a candidate whose required validation could not run because a tool
+/// was missing [ORB-13987].
+///
+/// The validation step only runs on a clean, committed candidate, so there is
+/// nothing to commit and nothing to push: the branch and the run's worktree
+/// already hold it, and `orbit job resume` reruns validation on that exact
+/// head once the environment is fixed. The task is blocked under its own
+/// event, which the blocked-task recovery backstop does not treat as a code
+/// failure, and no PR is opened.
+fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let diagnostic = error_message.trim();
+    let cut = orbit_common::text::floor_char_boundary(
+        diagnostic,
+        MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES,
+    );
+    let note = format!(
+        "required validation lacked a tool in its environment: run={run_id}, \
+         failed_step={failed_step_id}, candidate={head_sha}, branch={branch}; the candidate was \
+         not judged and no PR was opened"
+    );
+    let body = format!(
+        "## Validation environment\n\nA required validation command could not run because a \
+         tool it calls is missing from the validation environment. This is the host's \
+         environment, not a defect in the candidate, so no repair ran, no review or rework \
+         budget was spent, and no PR was opened.\n\n- Run: `{run_id}`\n- Failed step: \
+         `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n\n\
+         Make the tool available to the owner's login shell (or set \
+         `workflow.validation_env.path`), check with `orbit doctor`, then resume validation on \
+         the same candidate with `orbit job resume {run_id}`.\n\n## Failure\n\n```text\n{}{}\n```",
+        &diagnostic[..cut],
+        if cut < diagnostic.len() {
+            format!("\n[truncated to {cut} of {} bytes]", diagnostic.len())
+        } else {
+            String::new()
+        }
+    );
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Blocked),
+            status_event: Some(VALIDATION_ENVIRONMENT_EVENT.to_string()),
+            status_note: Some(note.clone()),
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!("{note}\n\n{body}"),
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "blocked_validation_environment",
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "candidate_preserved": true,
+        "pr_created": false,
         "task_status": "blocked",
     }))
 }

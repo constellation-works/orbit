@@ -49,6 +49,11 @@ spec:
         description: Digest-pinned owner artifact references, one per command.
         items:
           type: object
+      validation_env:
+        type: [object, "null"]
+        description: >
+          How PATH was resolved for the commands: source (`login_shell`,
+          `config` or `launcher_fallback`), PATH and the login-shell outcome.
       commands:
         type: array
         items:

@@ -19,7 +19,11 @@
 //!
 //! A shell step is not an agent: it receives no prompt, no model, no tool
 //! allowlist, and none of the Orbit registry/workspace identity variables a
-//! CLI agent is launched with.
+//! CLI agent is launched with. Its environment is the allowlisted one with
+//! PATH and toolchain locators resolved the way required validation resolves
+//! them ([`RuntimeHost::validation_subprocess_environment`]), so a step finds
+//! the same tools whether the worker was launched from ssh, a service unit or
+//! launchd [ORB-13987].
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -94,7 +98,9 @@ pub(super) fn local_shell<H: RuntimeHost + Sync + ?Sized>(
     let workspace_root = resolve_workspace_root(host, input)?;
     let cwd = resolve_cwd(&workspace_root, config.cwd.as_deref())?;
 
-    let mut environment = host.agent_subprocess_environment(&[]);
+    // Repository tooling resolves PATH like required validation does: from
+    // the owner's login shell, not the worker's launcher [ORB-13987].
+    let mut environment = host.validation_subprocess_environment().env;
     apply_env_overrides(&mut environment, &executor.env);
     apply_env_overrides(&mut environment, &config.env);
 

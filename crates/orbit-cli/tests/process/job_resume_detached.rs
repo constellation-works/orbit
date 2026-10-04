@@ -221,6 +221,44 @@ mod unix {
         }
     }
 
+    /// [ORB-13987] `orbit run auto` still starts a drain whose required
+    /// validation cannot use the login shell, and says so at submission.
+    #[test]
+    fn auto_warns_when_required_validation_cannot_use_the_login_shell() {
+        let fixture = Fixture::new();
+        fixture.write_pipeline_job("workspace_auto_pipeline");
+        let installed = fixture.home.join(".orbit/bin/orbit");
+        fs::create_dir_all(installed.parent().expect("installation directory"))
+            .expect("create installation directory");
+        fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install tested binary");
+        for (key, value) in [
+            (
+                "workflow.required_validation_commands",
+                r#"["make ci-fast"]"#,
+            ),
+            ("workflow.validation_env.login_shell", "false"),
+        ] {
+            fixture
+                .command()
+                .args(["config", "set", "--seed-from-global", key, value])
+                .assert()
+                .success();
+        }
+
+        let submitted = fixture.installed_json(&installed, &["run", "auto", "--json"]);
+
+        let warning = submitted["warning"].as_str().unwrap_or_default();
+        assert!(
+            warning.contains("`workflow.validation_env.login_shell = false`")
+                && warning.contains("source: launcher_fallback"),
+            "the submission names the disabled resolution and its fallback: {submitted}"
+        );
+        let run_id = submitted["run_id"]
+            .as_str()
+            .expect("the drain still starts");
+        fixture.poll_run(run_id, "success", Duration::from_secs(10));
+    }
+
     /// ORB-13854: a real gate must explicitly release its reservation before
     /// reporting a failed child, rather than relying on terminal-run cleanup.
     #[test]

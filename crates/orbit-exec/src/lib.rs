@@ -42,6 +42,8 @@
 //!   deny-by-default build profile, with [`probe_build_sandbox`] deciding
 //!   whether this host can apply it and [`BUILD_FETCH_PHASE_SUPPORTED`]
 //!   whether it runs a network `fetch` phase at all
+//! - [`ValidationEnvironment`] — the login-shell-resolved environment
+//!   owner-side repository tooling (required validation, `local_shell`) runs in
 //! - [`physical_with_missing_tail`] — the one resolution a granted path
 //!   gets, shared by the layer that validates it and the layer that compiles
 //!   the rule for it
@@ -60,6 +62,7 @@ mod result;
 mod runner;
 mod sandbox;
 mod supervision;
+mod validation_env;
 
 pub use build_sandbox::{
     BUILD_FETCH_PHASE_SUPPORTED, BuildLog, BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest,
@@ -98,3 +101,8 @@ pub use runner::{
     supervise_child, supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};
+pub use validation_env::{
+    LOGIN_SHELL_CACHE_TTL, LOGIN_SHELL_TIMEOUT, LOGIN_SHELL_TOOLCHAIN_VARS, LoginShell,
+    LoginShellEnv, ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment,
+    ValidationPathMode, program_on_path,
+};

@@ -9,11 +9,15 @@ spec:
     committed candidate, using the same command runner, environment and
     failure text as `claim_validate`, and attach one captured log per command
     to every task the run delivers. The candidate must be a clean checkout of
-    a named branch containing `base_sha`. A failing command fails the step
-    with its output after its log is attached, so step recovery can repair the
-    candidate and retry. With `ownership_base_sha`, every path the candidate
-    changed since that commit must first be owned by a delivered task's
-    selectors. An empty requirement list runs no command.
+    a named branch containing `base_sha`. Commands run with the toolchain
+    environment `workflow.validation_env` resolves (the owner's login shell
+    by default), recorded as `validation_env`. A failing command fails the
+    step with its output after its log is attached, so step recovery can
+    repair the candidate and retry; a command that fails for lack of a tool
+    fails as a `validation_environment` failure that no recovery repairs.
+    With `ownership_base_sha`, every path the candidate changed since that
+    commit must first be owned by a delivered task's selectors. An empty
+    requirement list is a no-op.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, completed_task_ids]
@@ -63,5 +67,10 @@ spec:
         description: Digest-pinned task artifact references, one per command.
         items:
           type: object
+      validation_env:
+        type: [object, "null"]
+        description: >
+          How PATH was resolved for the commands: source (`login_shell`,
+          `config` or `launcher_fallback`), PATH and the login-shell outcome.
   action: candidate_validate
   config: {}

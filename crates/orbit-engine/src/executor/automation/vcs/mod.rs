@@ -11,9 +11,13 @@ mod landing;
 mod operations;
 mod pr;
 mod push;
+mod required_command;
 mod resume;
 pub mod review_gate;
 mod worktree;
+
+#[cfg(test)]
+mod tests;
 
 pub(super) use claim::{candidate_validate, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;

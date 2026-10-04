@@ -22,7 +22,9 @@
 //!   it was not a human's and leaves the task alone;
 //! - a recovery run for the episode already exists (the episode key is also
 //!   the run's admission key, so two ticks cannot admit two runs);
-//! - the block is older than [`MAX_EPISODE_AGE_HOURS`].
+//! - the block is older than [`MAX_EPISODE_AGE_HOURS`];
+//! - the blocking note carries the validation-environment marker: required
+//!   validation lacked a tool, which no task decision fixes [ORB-13987].
 //!
 //! The backstop never resumes: `resume` is escalated, and `requeue` is how
 //! work restarts. A recovery run that ends without applying a decision — the
@@ -144,6 +146,11 @@ impl BlockEpisode {
             .find(|entry| entry.to_status == Some(TaskStatus::Blocked))?;
         let source = BlockSource::of(entry)?;
         let note = entry.note.clone().unwrap_or_default();
+        // [ORB-13987] Required validation lacked a tool: the host needs
+        // fixing, not the task, so no recovery agent is spent on it.
+        if orbit_types::workflow::is_validation_environment_failure(None, Some(&note)) {
+            return None;
+        }
         let failed_run_id = note_field(&note, "run_id=")
             .map(str::to_string)
             .or_else(|| task.job_run_id.clone());

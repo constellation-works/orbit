@@ -10,7 +10,15 @@ pub mod handoff;
 mod job;
 mod review;
 mod routine;
-mod run;
+mod run {
+    // Retain the run subtree while exposing its validation failure classifier.
+    include!("run/mod.rs");
+
+    pub use state::{
+        VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
+        is_validation_environment_failure,
+    };
+}
 mod ship;
 mod skill;
 pub use error::WorkflowError;
@@ -84,7 +92,8 @@ pub use run::{
     FinalRecoveryObservedTask, LandingMethod, LandingObservation, LandingObservationStatus,
     PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight,
     RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure, ResourceThrottle,
-    RunDeliveryObservation, RunDeliveryStatus, RunIdRole, is_provider_unavailable,
+    RunDeliveryObservation, RunDeliveryStatus, RunIdRole, VALIDATION_ENVIRONMENT_ERROR_CODE,
+    VALIDATION_ENVIRONMENT_MARKER, is_provider_unavailable, is_validation_environment_failure,
     run_id_candidate, run_id_minute_stem, run_id_role,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};

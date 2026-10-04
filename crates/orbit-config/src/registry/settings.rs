@@ -342,6 +342,24 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 120,
         resolve: |raw: Option<SourceSensitivity>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_validation_env_login_shell: bool => bool {
+        key: "workflow.validation_env.login_shell", value_type: "bool",
+        description: "Resolve required-validation and local_shell PATH (plus toolchain locators such as CARGO_HOME) from the owner user's login shell instead of whatever launched the worker (default true); false keeps the launcher's PATH.",
+        section: ConfigSection::Delivery, order: 61,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    workflow_validation_env_path: Vec<String> => Vec<String> {
+        key: "workflow.validation_env.path", value_type: "array<string>",
+        description: "PATH entries for required validation and local_shell steps, combined with the resolved PATH per `workflow.validation_env.path_mode`; a leading `~/` expands to HOME. Empty adds nothing.",
+        section: ConfigSection::Delivery, order: 62,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_validation_env_path_mode: String => String {
+        key: "workflow.validation_env.path_mode", value_type: "string",
+        description: "How `workflow.validation_env.path` combines with the resolved PATH: `prepend` (default) puts it first, `replace` makes it the whole PATH.",
+        section: ConfigSection::Delivery, order: 63,
+        resolve: |raw: Option<String>| resolve_validation_path_mode(raw),
+    },
     workflow_xhard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.xhard_complexity_crews", value_type: "array<string>",
         description: "Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
@@ -905,6 +923,16 @@ impl ConfigSnapshot {
             disk_high_percent: self.workflow_resource_throttle_disk_high_percent,
             disk_resume_percent: self.workflow_resource_throttle_disk_resume_percent,
         }
+    }
+}
+
+fn resolve_validation_path_mode(raw: Option<String>) -> Result<String, OrbitError> {
+    let mode = raw.unwrap_or_else(|| "prepend".to_string());
+    match mode.trim() {
+        "prepend" | "replace" => Ok(mode.trim().to_string()),
+        other => Err(OrbitError::InvalidInput(format!(
+            "workflow.validation_env.path_mode must be `prepend` or `replace`, got `{other}`"
+        ))),
     }
 }
 

@@ -65,10 +65,19 @@ pub(super) fn ship(
     });
     // [ORB-13901] Discovery is refused while the host is throttled; an
     // explicit selection proceeds and says so.
+    let mut warnings = Vec::new();
     if !task_ids.is_empty()
         && let Some(throttle) = runtime.admission_resource_throttle().throttle
     {
-        shipped["warning"] = json!(throttle.hold_reason());
+        warnings.push(throttle.hold_reason());
+    }
+    // [ORB-13987] Required validation may not find the user's toolchain.
+    if let Some(warning) = runtime.validation_env_preflight_warning() {
+        shipped["validation_env_warning"] = json!(warning);
+        warnings.push(warning);
+    }
+    if !warnings.is_empty() {
+        shipped["warning"] = json!(warnings.join("\n"));
     }
     Ok(shipped)
 }
