@@ -31,7 +31,8 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_common::security::release::sha256_hex;
+use orbit_types::task::{TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -39,7 +40,7 @@ use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
     DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
 use crate::adapter::engine_host::v2_host::admission::sweep_filing::bounded_u64;
-use crate::application::task::TaskAddParams;
+use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 use super::cancellation::{
     drop_inconclusive_log_errors, inconclusive_audit, split_inconclusive_cancellations,
@@ -152,12 +153,14 @@ where
     }
 
     let max_tasks = bounded_u64(input, "max_tasks", DEFAULT_MAX_TASKS, MAX_MAX_TASKS)? as usize;
+    let findings = ["current_failures", "branch_failures"]
+        .into_iter()
+        .filter_map(|key| evidence.get(key).and_then(Value::as_array))
+        .flatten()
+        .cloned()
+        .collect();
     let (failures, inconclusive) = split_inconclusive_cancellations(
-        evidence
-            .get("current_failures")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+        findings,
         evidence
             .get("inconclusive")
             .and_then(Value::as_array)
@@ -233,6 +236,31 @@ where
     let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors, schema_version);
     let (complete, already_repaired) = exclude_already_repaired(complete, evidence);
     let audit = repaired_audit(audit, &already_repaired);
+    // Recheck old/replayed snapshots too: ref_kind and the PR/event head alone
+    // do not prove the failing checkout belongs to a landing branch.
+    let (complete, branch_failures): (Vec<_>, Vec<_>) = complete
+        .into_iter()
+        .partition(|failure| landing_checkout(evidence, failure));
+    let mut branch_observations = Vec::new();
+    let mut excluded_branch_failures = Vec::new();
+    for failure in branch_failures {
+        let Some(owner) = task_branch_owner(&failure) else {
+            excluded_branch_failures.push(failure);
+            continue;
+        };
+        match runtime.get_task(&owner) {
+            Ok(_) => branch_observations.push((owner, failure)),
+            Err(error) => deferred.push(json!({
+                "run_id": failure.get("run_id"), "job_id": failure.get("job_id"),
+                "head_branch": failure.get("head_branch"), "retryable": true,
+                "reasons": [{
+                    "stage": "registration", "operation": "task_branch_owner",
+                    "run_id": failure.get("run_id"), "job_id": failure.get("job_id"),
+                    "retryable": true, "message": bounded_error(&error.to_string()),
+                }],
+            })),
+        }
+    }
     // A run-scoped retryable error whose run never made it into
     // `current_failures` at all — an in-flight run with an observed failed
     // job but logs collection could not read yet — has no failure row for
@@ -287,6 +315,7 @@ where
     }
 
     if clusters.is_empty() {
+        let attributed = retain_branch_observations(runtime, &branch_observations)?;
         // Nothing was complete enough to file. The gaps are the whole result,
         // so this stays a retryable error rather than a clean sweep.
         if !deferred.is_empty() {
@@ -297,7 +326,11 @@ where
             ));
         }
         return Ok(json!({
-            "outcome": OUTCOME_NO_CURRENT_FAILURE,
+            "outcome": if attributed.is_empty() && excluded_branch_failures.is_empty() {
+                OUTCOME_NO_CURRENT_FAILURE
+            } else {
+                OUTCOME_CURRENT_FAILURES
+            },
             "capability": capability,
             "clusters": 0,
             "filed_count": 0,
@@ -309,9 +342,11 @@ where
             "deferred": [],
             "inconclusive": inconclusive,
             "already_repaired": already_repaired,
+            "attributed": attributed,
+            "excluded_branch_failures": excluded_branch_failures,
             "audit": audit,
             "detail": if inconclusive.is_empty() {
-                "the queries ran and found no current, non-superseded failure"
+                "no landing-branch repair remains; task-branch evidence is retained on its owner and other branch failures are excluded"
             } else {
                 "the queries ran and found no current, non-superseded failure; cancelled jobs without failed steps remain explicit inconclusive evidence, not a pass"
             },
@@ -396,6 +431,8 @@ where
                 .transpose()
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    let attributed = retain_branch_observations(runtime, &branch_observations)?;
 
     for ((cluster, duplicate_match), duplicate_task) in
         clusters.iter().zip(duplicate_matches).zip(duplicate_tasks)
@@ -517,6 +554,8 @@ where
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
         "repair_assessments": repair_assessments,
+        "attributed": attributed,
+        "excluded_branch_failures": excluded_branch_failures,
         "skipped_over_cap": skipped_over_cap,
         "deferred": deferred,
         "inconclusive": inconclusive,
@@ -524,4 +563,71 @@ where
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))
+}
+
+/// Pushes may describe an older landing commit; PR/queue checkouts must match
+/// a currently observed landing tip. Never substitute the PR's source SHA.
+fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
+    let Some(checkout) = failure["actual_checkout_shas"]
+        .as_array()
+        .filter(|shas| shas.len() == 1)
+        .and_then(|shas| shas[0].as_str())
+        .filter(|sha| !sha.is_empty())
+    else {
+        return false;
+    };
+    evidence["heads"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|head| {
+            matches!(head["kind"].as_str(), Some("integration" | "release"))
+                && (head["current_head_sha"].as_str() == Some(checkout)
+                    || (failure["event"] == "push"
+                        && head["branch"].as_str().is_some()
+                        && head["branch"] == failure["head_branch"]
+                        && failure["event_reported_head_sha"].as_str() == Some(checkout)))
+        })
+}
+
+fn task_branch_owner(failure: &Value) -> Option<String> {
+    let branch = failure["head_branch"]
+        .as_str()?
+        .strip_prefix("orbit/ORB-")?;
+    let number = branch.split('-').next()?;
+    (!number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| format!("ORB-{number}"))
+}
+
+/// Immutable, content-addressed receipts survive retries without duplicate
+/// comments, changing task meaning, or promoting the owner's lifecycle.
+fn retain_branch_observations(
+    runtime: &OrbitRuntime,
+    observations: &[(String, Value)],
+) -> Result<Vec<Value>, OrbitError> {
+    let mut attributed = Vec::new();
+    for (owner, failure) in observations {
+        let content = serde_json::to_string(&json!({
+            "schema_version": 1, "kind": "task_branch_ci_failure", "failure": failure,
+        }))
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        let path = format!(
+            "ci-branch-observations/{}.json",
+            sha256_hex(content.as_bytes())
+        );
+        if runtime.get_task_artifact(owner, &path)?.is_none() {
+            runtime.update_task(
+                owner,
+                TaskUpdateParams {
+                    upsert_artifacts: vec![TaskArtifact::from_text(path.clone(), content)],
+                    ..Default::default()
+                },
+            )?;
+        }
+        attributed.push(json!({
+            "task_id": owner, "run_id": failure.get("run_id"),
+            "job_id": failure.get("job_id"), "artifact": path,
+        }));
+    }
+    Ok(attributed)
 }

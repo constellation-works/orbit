@@ -250,7 +250,13 @@ user-authored and is still reported and preserved in place.
 The seeded `ci_failure_sweep` targets `job:ci_failure_sweep_pipeline` hourly at
 `5 * * * *` — deliberately clear of the other defaults' minutes — with `missed_run: skip`
 and `overlap: forbid`. The pipeline runs every GitHub query on the host, files each
-current, non-stale failure cluster as a proposed bug task carrying that evidence inline,
+current, non-stale landing failure cluster as a proposed bug task carrying that evidence inline,
+using the actual job checkout: a landing-ref push must test its event commit,
+while a PR or merge-queue checkout must match an observed landing tip.
+Unmerged `orbit/<task>` branch failures are recorded as idempotent evidence artifacts
+on the owning task, with no remediation task or pilot candidate. Missing task owners
+remain retryable, and other non-landing failures are explicitly excluded.
+The existing freshness selection still precedes routing. The pipeline
 dedupes against still-open owners by failure key, and pilots each candidate through the
 existing task-pilot job. The all-join lets independently valid pilots apply even when a
 sibling is stale or fails. Within a returned partition, deterministic apply also commits

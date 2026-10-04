@@ -175,6 +175,26 @@ fn landing_branch_names(refs: &[ScannedRef]) -> std::collections::BTreeSet<&str>
         .collect()
 }
 
+/// Positive landing evidence: a push checks out its event commit on a landing
+/// ref, or an observed checkout equals a landing tip (including PR/merge queue).
+/// Missing checkout evidence keeps push candidates here for ordinary deferral;
+/// it never makes an unmerged PR a landing failure.
+pub(super) fn is_landing_failure(refs: &[ScannedRef], failure: &Value) -> bool {
+    let checkout = failure["actual_checkout_shas"]
+        .as_array()
+        .filter(|shas| shas.len() == 1)
+        .and_then(|shas| shas[0].as_str());
+    refs.iter()
+        .filter(|scanned| matches!(scanned.kind, RefKind::Integration | RefKind::Release))
+        .any(|scanned| {
+            checkout.is_some_and(|sha| scanned.head_sha.as_deref() == Some(sha))
+                || (run_branch(failure) == scanned.branch
+                    && failure["event"] == "push"
+                    && checkout
+                        .is_none_or(|sha| failure["event_reported_head_sha"].as_str() == Some(sha)))
+        })
+}
+
 pub(super) fn run_branch(run: &Value) -> &str {
     run.get("head_branch").and_then(Value::as_str).unwrap_or("")
 }

@@ -25,8 +25,8 @@ use serde_json::{Value, json};
 
 use super::investigate::{cancelled_without_failed_steps, investigate};
 use super::partition::{
-    RunPartition, is_actionable_current_failure, is_inconclusive_cancellation, partition_runs,
-    run_branch, run_is_cancelled, run_is_completed, sort_current_failures,
+    RunPartition, is_actionable_current_failure, is_inconclusive_cancellation, is_landing_failure,
+    partition_runs, run_branch, run_is_cancelled, run_is_completed, sort_current_failures,
     supersede_older_when_cancelled_run_is_actionable, superseded_cancellation_entry,
 };
 use super::query::{CiQueries, RemoteBranchHeads};
@@ -352,8 +352,12 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
     sort_current_failures(&mut current);
     sort_current_failures(&mut inconclusive);
     let discovered = current.len();
+    let (current, branch_failures): (Vec<_>, Vec<_>) = current
+        .into_iter()
+        .partition(|failure| is_landing_failure(&refs, failure));
     let investigated_ids = current
         .iter()
+        .chain(branch_failures.iter())
         .filter(|failure| failure.get("investigated").and_then(Value::as_bool) == Some(true))
         .filter_map(|failure| failure.get("run_id").cloned())
         .collect::<Vec<_>>();
@@ -400,7 +404,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         "collected": true,
         "outcome_hint": if retryable_error_count > 0 {
             OUTCOME_RETRYABLE_ERROR
-        } else if current.is_empty() {
+        } else if current.is_empty() && branch_failures.is_empty() {
             OUTCOME_NO_CURRENT_FAILURE
         } else {
             OUTCOME_CURRENT_FAILURES
@@ -410,6 +414,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         "heads": refs.iter().map(head_json).collect::<Vec<_>>(),
         "latest_runs": latest,
         "current_failures": current,
+        "branch_failures": branch_failures,
         "stale_or_superseded": stale,
         "in_flight": in_flight,
         "deferred": deferred,
@@ -420,6 +425,9 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "latest_run_ids": latest_ids,
             "current_failures": current_ids.len(),
             "current_failure_run_ids": current_ids,
+            "branch_failures": branch_failures.len(),
+            "branch_failure_run_ids": branch_failures.iter()
+                .filter_map(|failure| failure.get("run_id").cloned()).collect::<Vec<_>>(),
             "investigated_failures": investigated_count,
             "investigated_failure_run_ids": investigated_ids,
             "deferred_failures": deferred_ids.len(),

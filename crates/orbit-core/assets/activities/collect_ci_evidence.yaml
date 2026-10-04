@@ -37,6 +37,10 @@ spec:
     unrelated pull-request run cannot erase a landing-branch failure, and a
     genuinely newer completed non-unsuccessful check of the same identity
     (or a landing-branch success, for non-landing noise) does suppress it.
+    Only landing-ref pushes of the observed event commit, or job checkouts
+    matching an observed integration/release tip, remain in current_failures.
+    Other live branch failures are retained in branch_failures, including
+    unmerged task PRs, so filing cannot mistake their source for landing code.
     Already-failed jobs inside an in-flight workflow remain visible as current;
     only complete job evidence may be filed. A pending check alone is never a
     repair task. Incomplete mixed-state logs stay in `retryable_errors` until a
@@ -138,6 +142,8 @@ spec:
           latest_runs:
             type: array
           current_failures:
+            type: array
+          branch_failures:
             type: array
           stale_or_superseded:
             type: array

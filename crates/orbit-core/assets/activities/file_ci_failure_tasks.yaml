@@ -6,7 +6,15 @@ spec:
   type: deterministic
   description: >
     Turn one `collect_ci_evidence` snapshot into quarantined proposed bug tasks.
-    Clusters the snapshot's current, non-stale failures by root cause
+    Files only landing-ref pushes whose job checkout matches the event commit,
+    or job checkouts matching an observed integration/release tip. Unmerged
+    orbit task branches never mint landing repairs: their complete evidence
+    is retained as idempotent artifacts on the branch's owning task and reported
+    in attributed, without changing its status or producing pilot candidates.
+    A missing owner stays retryable; other non-landing failures are reported in
+    excluded_branch_failures. The guard also applies to older snapshots that
+    included task PR failures in current_failures.
+    Clusters the snapshot's current, non-stale landing failures by root cause
     (workflow, failing job, failing step, normalized error signature, and the
     commit the runner actually tested) so one regression repeated across a push
     run and a pull-request run of the same commit becomes one task rather than
@@ -172,6 +180,12 @@ spec:
               enum: [exact_key, material_coverage, confirmed_duplicate, covered_by_repair]
             match_evidence:
               type: object
+      attributed:
+        type: array
+        description: Task-branch failures retained as artifacts on their owning tasks.
+      excluded_branch_failures:
+        type: array
+        description: Non-landing failures without an owning task branch; no repair is filed.
       repair_assessments:
         type: array
         description: >
