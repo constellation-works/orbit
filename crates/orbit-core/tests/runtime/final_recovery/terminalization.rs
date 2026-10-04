@@ -316,9 +316,17 @@ fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
     }
     let fixture = fixture("[\"sol\"]");
     let git = |args: &[&str]| {
-        let output = orbit_common::fs::git::run_git(&fixture.repo, args).unwrap();
-        assert!(output.success, "git {args:?}: {}", output.stderr);
-        output.stdout.trim().to_string()
+        let mut command = std::process::Command::new("git");
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        let output = command
+            .args(args)
+            .current_dir(&fixture.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     };
     git(&["init", "-q", "-b", "main"]);
     git(&[
