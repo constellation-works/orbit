@@ -4,11 +4,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::task::TaskStatus;
 use crate::workflow::JobRunState;
 use crate::workflow::JobRunTrigger;
 use crate::workflow::child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
+use crate::workflow::final_recovery::FinalRecoveryDecision;
 
 /// A live operator request to stop a bounded drain's new admissions [ORB-11283].
 ///
@@ -262,6 +264,57 @@ pub struct ActivityCrewDraw {
     pub eligible_pool: Vec<ActivityCrewPoolMember>,
 }
 
+/// The task revision final recovery observed when it was admitted.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalRecoveryObservedTask {
+    pub status: TaskStatus,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Idempotency key of a run's final-recovery decision: the run that admitted
+/// it and that run's attempt. The applier names the run in the task comment
+/// it writes, and a decision whose run already has that comment is not
+/// applied again.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalRecoveryKey {
+    pub run_id: String,
+    pub attempt: u32,
+}
+
+/// A run's job-level final recovery [ORB-13907], recorded when it is admitted.
+///
+/// Admission writes this before the activity is dispatched, so a crash during
+/// the activity, a resume decision, or an operator resume seeded from this
+/// state never dispatches final recovery for the run a second time. The
+/// decision is recorded here before it touches the task. A run resumed from
+/// state that holds a decision other than `resume` applies that decision again
+/// instead of dispatching, so a crash at any point converges on one outcome.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalRecoveryCheckpoint {
+    pub key: FinalRecoveryKey,
+    /// Top-level step whose failure admitted final recovery.
+    pub failed_step_id: String,
+    pub task_id: String,
+    /// The task as it stood at admission; the applier refuses a decision once
+    /// the task has changed since. Absent for a claimed leaf, whose task lives
+    /// on its owner and is re-read there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<FinalRecoveryObservedTask>,
+    /// Base ref a `complete_no_diff` commit must be reachable from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+    pub admitted_at: DateTime<Utc>,
+    /// The decision acted on, recorded before it is applied. The engine's
+    /// substitutions (an invalid resume step, a failed activity) are recorded
+    /// as the `escalate` they became.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<FinalRecoveryDecision>,
+    /// What applying the decision did (`resume`, `settled: …` or
+    /// `escalated: …`); absent while the decision is only intended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+}
+
 /// Persistent pipeline state for a job run.
 ///
 /// Stored as `state.json` in the run bundle directory. Steps read accumulated
@@ -370,6 +423,10 @@ pub struct PipelineState {
     /// with the rest of the state so a resumed run keeps the same crew.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub activity_crew_draws: BTreeMap<String, ActivityCrewDraw>,
+    /// This run's final recovery [ORB-13907]; present once it was admitted.
+    /// Resume clones it, so a resumed run never invokes final recovery again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_recovery: Option<FinalRecoveryCheckpoint>,
     /// How this run was submitted [ORB-12255]. Absent on runs recorded before
     /// trigger provenance existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -403,6 +460,7 @@ impl PipelineState {
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
             activity_crew_draws: BTreeMap::new(),
+            final_recovery: None,
             trigger: None,
             updated_at: Utc::now(),
         }

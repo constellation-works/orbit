@@ -5,11 +5,14 @@ use std::cell::RefCell;
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
-    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimEvidence, ClaimMutation,
-    JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, ProviderUnavailable,
-    PullDestination,
+    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimEvidence, ClaimFinalRecovery,
+    ClaimMutation, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase,
+    ProviderUnavailable, PullDestination,
 };
-use orbit_types::workflow::{PROVIDER_UNAVAILABLE_MARKER, is_provider_unavailable};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpoint, FinalRecoveryDecision, PROVIDER_UNAVAILABLE_MARKER,
+    is_provider_unavailable,
+};
 
 use crate::application::distributed::{is_owner_refusal, is_owner_transport_failure};
 
@@ -563,7 +566,11 @@ impl PullDrain<'_> {
             return Ok(None);
         }
         let record = self.ensure_bound(record)?;
-        let settlement = leaf_failure_settlement(&record, &run, None);
+        let final_recovery = self
+            .jobs
+            .read_run_state(id)?
+            .and_then(|state| state.final_recovery);
+        let settlement = leaf_failure_settlement(&record, &run, None, final_recovery.as_ref());
         self.record_settlement(&record, settlement).map(Some)
     }
 
@@ -784,10 +791,16 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// the leaf's own worker, a cancel and a drain pass agree on the value.
 /// `diagnostic` is the `(code, message)` the terminalizing caller knows before
 /// its diagnostic step is durable.
+///
+/// [ORB-13907] `final_recovery` is the leaf's recorded final recovery. Its
+/// decision rides on the settlement for the owner to apply — a follower never
+/// writes its owner's task — unless it was `resume`, whose rerun then failed
+/// on its own.
 pub(crate) fn leaf_failure_settlement(
     record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
     diagnostic: Option<(&str, &str)>,
+    final_recovery: Option<&FinalRecoveryCheckpoint>,
 ) -> ClaimMutation {
     if matches!(
         record.phase,
@@ -814,8 +827,24 @@ pub(crate) fn leaf_failure_settlement(
         evidence.provider_unavailable = Some(unavailable);
         return ClaimMutation::Release(evidence);
     }
+    let mut summary = terminal_failure_summary_with(run, diagnostic);
+    let final_recovery = final_recovery.and_then(|checkpoint| {
+        let decision = checkpoint.decision.clone()?;
+        if matches!(decision, FinalRecoveryDecision::Resume { .. }) {
+            return None;
+        }
+        summary.push_str(&format!(
+            "\nFinal recovery decided `{}`; the owner applies it.",
+            decision.kind()
+        ));
+        Some(ClaimFinalRecovery {
+            run_id: run.run_id.clone(),
+            decision,
+        })
+    });
     ClaimMutation::Fail(ClaimEvidence {
-        summary: Some(terminal_failure_summary_with(run, diagnostic)),
+        summary: Some(summary),
+        final_recovery,
         ..Default::default()
     })
 }

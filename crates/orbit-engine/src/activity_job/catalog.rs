@@ -141,6 +141,8 @@ pub enum ResolveError {
     RecoveryActivityNotInCatalog { name: String },
     #[error("job failure_activity `{name}` not found in catalog")]
     FailureActivityNotInCatalog { name: String },
+    #[error("job final_recovery_activity `{name}` not found in catalog")]
+    FinalRecoveryActivityNotInCatalog { name: String },
     #[error("step `{step_id}`: recovery_activity `{name}` not found in catalog")]
     StepRecoveryActivityNotInCatalog { step_id: String, name: String },
 }
@@ -689,6 +691,14 @@ pub fn resolve_job_target_refs(
     job.resolved_failure_activity = match job.failure_activity.as_deref() {
         Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
             ResolveError::FailureActivityNotInCatalog {
+                name: name.to_string(),
+            }
+        })?),
+        None => None,
+    };
+    job.resolved_final_recovery_activity = match job.final_recovery_activity.as_deref() {
+        Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
+            ResolveError::FinalRecoveryActivityNotInCatalog {
                 name: name.to_string(),
             }
         })?),

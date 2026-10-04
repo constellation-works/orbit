@@ -156,6 +156,9 @@ fn validate_job_activity_references<'a>(
     if let Some(name) = &job.failure_activity {
         references.push(name.as_str());
     }
+    if let Some(name) = &job.final_recovery_activity {
+        references.push(name.as_str());
+    }
     for step in &job.steps {
         collect_step_activity_references(step, &mut references)
             .map_err(|message| refusal(path, message))?;

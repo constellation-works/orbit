@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod commit_verifier;
+mod final_recovery;
 mod history_note;
 mod pr_landing;
 mod review_rework;

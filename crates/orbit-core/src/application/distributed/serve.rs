@@ -171,6 +171,9 @@ impl crate::OrbitRuntime {
     /// Settle a claim with the follower's durable settlement: a typed handoff
     /// or a failure. Anything else is a lifecycle operation the executor does
     /// not own — approval, revocation and recovery stay owner-operator acts.
+    ///
+    /// A failure may carry the leaf's final-recovery decision [ORB-13907]; the
+    /// owner applies it to its own task once the claim has failed.
     pub fn serve_claim_settle(
         &self,
         session: &ToolSessionContext,
@@ -196,11 +199,18 @@ impl crate::OrbitRuntime {
             run,
         );
         match settlement {
-            ClaimMutation::Fail(evidence) => self.mutate_execution_claim(
-                Some(&context),
-                &fail_mutation_id(&claim.claim_id),
-                &ClaimMutation::Fail(evidence),
-            ),
+            ClaimMutation::Fail(evidence) => {
+                let final_recovery = evidence.final_recovery.clone();
+                let result = self.mutate_execution_claim(
+                    Some(&context),
+                    &fail_mutation_id(&claim.claim_id),
+                    &ClaimMutation::Fail(evidence),
+                )?;
+                if let Some(final_recovery) = final_recovery {
+                    self.apply_settled_final_recovery(&claim, run_id, &result, &final_recovery);
+                }
+                Ok(result)
+            }
             ClaimMutation::Release(evidence) => self.mutate_execution_claim(
                 Some(&context),
                 &release_mutation_id(&claim.claim_id),
