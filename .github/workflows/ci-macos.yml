@@ -119,7 +119,8 @@ jobs:
       # [ORB-13237] A plugin backend the host spawns on an agent's behalf must
       # stay inside the agent's profile, widened only by its own plugin state.
       # These live tests spawn through the real sandbox-exec; the Linux
-      # sandbox gate runs the same tests under Landlock.
+      # sandbox gate covers the Linux boundary through orbit-exec's
+      # Bubblewrap integration tests.
       - name: Run brokered plugin backend confinement tests (real sandbox-exec)
         run: cargo test --no-fail-fast -p orbit-tools --locked plugin::tests::backend::brokered -- --include-ignored
 
@@ -173,7 +174,7 @@ jobs:
         run: ./scripts/check-ci-macos.sh --evidence-output macos-platform-evidence.json
 
       - name: Upload exact-checkout macOS QA evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: macos-platform-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: macos-platform-evidence.json
