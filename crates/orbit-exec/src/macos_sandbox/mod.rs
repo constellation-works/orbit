@@ -31,7 +31,7 @@ pub(crate) mod provider_dirs;
 pub(crate) mod sbpl_filter;
 pub(crate) mod spawn;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
 

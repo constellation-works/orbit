@@ -41,6 +41,7 @@ fn minimal() -> PluginManifest {
             web: None,
             tests: vec![],
             secrets: vec![],
+            build: None,
         },
     }
 }
@@ -150,4 +151,137 @@ fn a_link_url_must_be_http_or_https() {
     manifest
         .validate_structure()
         .expect("the scheme check is case-insensitive");
+}
+
+const BUILD_MANIFEST: &str = r#"
+schemaVersion: 2
+kind: Plugin
+metadata:
+  name: graph
+  version: 0.4.1
+spec:
+  backend:
+    type: exec
+    command: bin/orbit-graph
+  tools:
+    - name: query
+      execution_kind: read_only
+  build:
+    programs: [cargo]
+    fetch: [cargo, fetch, --locked]
+    command: [cargo, build, --release, --offline, --locked, --target-dir, "{{build_dir}}/target"]
+    outputs:
+      - from: target/release/orbit-graph
+        to: bin/orbit-graph
+    timeout_ms: 1200000
+"#;
+
+/// The design's own example parses and validates, and a key the schema does
+/// not know is refused rather than ignored: a typo'd `comand` must not leave
+/// a manifest that silently builds nothing.
+#[test]
+fn spec_build_parses_and_refuses_unknown_fields() {
+    let manifest: PluginManifest = serde_yaml::from_str(BUILD_MANIFEST).expect("parse");
+    manifest
+        .validate_structure()
+        .expect("the design example is valid");
+    let build = manifest.spec.build.expect("spec.build is read");
+    assert_eq!(
+        crate::plugin::render_build_argv(&build.command, "/b")[6],
+        "/b/target"
+    );
+
+    let typo = BUILD_MANIFEST.replace("    timeout_ms: 1200000", "    shell: true");
+    let error = serde_yaml::from_str::<PluginManifest>(&typo).unwrap_err();
+    assert!(
+        error.to_string().contains("shell"),
+        "an unknown spec.build key is refused by name: {error}"
+    );
+}
+
+/// Each structural refusal names the offending key, so `orbit plugin
+/// validate` points at what to fix.
+#[test]
+fn spec_build_refusals_name_their_field() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("command: [cargo, build", "command: [", "spec.build.command"),
+        (
+            "\"{{build_dir}}/target\"]",
+            "\"{{workspace}}/target\"]",
+            "spec.build.command[6]",
+        ),
+        (
+            "fetch: [cargo, fetch, --locked]",
+            "fetch: [\"{{build_dir}}/cargo\"]",
+            "spec.build.fetch[0]",
+        ),
+        (
+            "to: bin/orbit-graph",
+            "to: plugin.yaml",
+            "spec.build.outputs[0].to",
+        ),
+        (
+            "to: bin/orbit-graph",
+            "to: ../bin/orbit",
+            "spec.build.outputs[0].to",
+        ),
+        (
+            "from: target/release/orbit-graph",
+            "from: /etc/passwd",
+            "spec.build.outputs[0].from",
+        ),
+        (
+            "timeout_ms: 1200000",
+            "timeout_ms: 3600001",
+            "spec.build.timeout_ms",
+        ),
+        (
+            "programs: [cargo]",
+            "programs: [bin/cargo]",
+            "spec.build.programs[0]",
+        ),
+        (
+            "fetch: [cargo, fetch, --locked]",
+            "fetch: [curl, https://example.test/payload]",
+            "spec.build.fetch[0]",
+        ),
+    ];
+    for (from, to, field) in cases {
+        let yaml = BUILD_MANIFEST.replacen(from, to, 1);
+        // An empty command list leaves the rest of the original line behind.
+        let yaml = yaml.replace(
+            "command: [, --release, --offline, --locked, --target-dir, \"{{build_dir}}/target\"]",
+            "command: []",
+        );
+        let manifest: PluginManifest =
+            serde_yaml::from_str(&yaml).unwrap_or_else(|error| panic!("{field}: {error}"));
+        let error = manifest
+            .validate_structure()
+            .expect_err(&format!("{field} must be refused"));
+        assert_eq!(&error.field, field, "{}", error.message);
+    }
+}
+
+/// The artifact digest preimage is the same whatever order the outputs were
+/// declared or copied in, so two hosts building one commit reproducibly
+/// record one value (§3.6).
+#[test]
+fn artifact_digest_preimage_is_order_independent() {
+    use crate::plugin::{PluginBuildOutputRecord, artifact_digest_preimage};
+    let a = PluginBuildOutputRecord {
+        to: "bin/a".into(),
+        mode: 0o755,
+        sha256: "aa".into(),
+    };
+    let b = PluginBuildOutputRecord {
+        to: "lib/b".into(),
+        mode: 0o644,
+        sha256: "bb".into(),
+    };
+    let forward = artifact_digest_preimage(&[a.clone(), b.clone()]);
+    assert_eq!(forward, artifact_digest_preimage(&[b, a]));
+    assert_eq!(
+        forward,
+        "orbit.plugin.build.v1\nbin/a\u{0}755\u{0}aa\nlib/b\u{0}644\u{0}bb\n"
+    );
 }

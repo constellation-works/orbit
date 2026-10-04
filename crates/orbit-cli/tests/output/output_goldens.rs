@@ -464,6 +464,146 @@ fn assert_golden(file_name: &str, actual: &str) {
     );
 }
 
+/// Source-build provenance reaches the real CLI without running a build.
+/// Seed a deterministic, witnessed record in an isolated child so the golden
+/// exercises doctor rendering on hosts where a live build cannot run.
+#[cfg(unix)]
+#[test]
+fn plugin_build_doctor_matches_golden() {
+    use orbit_types::plugin::{
+        PLUGIN_BUILD_CONSENT_FLAG, PLUGIN_BUILD_PROFILE_LINUX, PluginBuildConsent,
+        PluginBuildOutputRecord, PluginBuildRecord,
+    };
+    use sha2::{Digest, Sha256};
+
+    const CHILD: &str = "ORBIT_TEST_BUILD_DOCTOR_GOLDEN_CHILD";
+    const EXACT: &str = "output_goldens::plugin_build_doctor_matches_golden";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .args(["--exact", EXACT, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .expect("isolated golden child");
+        test_env::assert_child_test_passed(EXACT, output.status, &output.stdout, &output.stderr);
+        return;
+    }
+    let fixture = Fixture::new();
+    let source = fixture._temp.path().join("source/.orbit-plugin");
+    let bin = source.join("bin");
+    std::fs::create_dir_all(&bin).expect("plugin source");
+    let backend = b"#!/bin/sh\n";
+    std::fs::write(bin.join("backend"), backend).expect("prebuilt backend");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(bin.join("backend"), std::fs::Permissions::from_mode(0o755))
+        .expect("executable backend");
+    std::fs::write(
+        source.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: demo
+  version: 1.2.3
+  description: Built fixture.
+spec:
+  backend:
+    type: exec
+    command: bin/backend
+  tools:
+    - name: hello
+      description: Hello.
+      execution_kind: read_only
+"#,
+    )
+    .expect("manifest");
+    fixture.run(
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("source path"),
+            "--enable",
+        ],
+        &[],
+    );
+    let outputs = vec![PluginBuildOutputRecord {
+        to: "bin/backend".to_string(),
+        mode: 0o755,
+        sha256: format!("{:x}", Sha256::digest(backend)),
+    }];
+    let record = PluginBuildRecord {
+        source: format!("git+https://example.test/demo.git#{}", "a".repeat(40)),
+        commit: "a".repeat(40),
+        fetch: None,
+        command: vec!["compiler".to_string(), "--offline".to_string()],
+        programs: Vec::new(),
+        toolchain_roots: Vec::new(),
+        profile: PLUGIN_BUILD_PROFILE_LINUX.to_string(),
+        landlock_abi: None,
+        artifact_digest: orbit_tools::plugin::plugin_artifact_digest(&outputs),
+        outputs,
+        consent: PluginBuildConsent {
+            at: "2026-10-04T00:00:00Z".to_string(),
+            os_user: "operator".to_string(),
+            orbit_version: "fixture-version".to_string(),
+            flag: PLUGIN_BUILD_CONSENT_FLAG.to_string(),
+        },
+        log: String::new(),
+    };
+    let global = fixture.home.join(".orbit");
+    let connection = rusqlite::Connection::open(global.join("orbit.db")).expect("fixture store");
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE plugins SET build_json = ?1 WHERE name = 'demo'",
+                [serde_json::to_string(&record).expect("record JSON")]
+            )
+            .expect("seed build"),
+        1
+    );
+    std::fs::write(
+        global.join("plugins/.grants/demo.build.json"),
+        serde_json::to_vec(&json!({"schema_version": 1, "plugin": "demo", "record": record}))
+            .expect("witness JSON"),
+    )
+    .expect("witness");
+    let plugin = parse_json_stdout(
+        &fixture.run(&["plugin", "doctor", "--format", "json"], &[]),
+        "plugin doctor",
+    );
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let doctor_output = command
+        .current_dir(&fixture.work)
+        .env("HOME", &fixture.home)
+        .env("USERPROFILE", &fixture.home)
+        .args(["doctor", "--format", "json"])
+        .output()
+        .expect("doctor report");
+    // Other readiness checks can fail on a host without provider CLIs;
+    // the build section is independently required to report intact provenance.
+    let doctor = parse_json_stdout(&doctor_output, "doctor");
+    let build_row = doctor
+        .as_array()
+        .expect("doctor rows")
+        .iter()
+        .find(|row| row["check"] == "plugin-builds")
+        .expect("source builds row");
+    assert_eq!(
+        build_row["status"], "ok",
+        "intact provenance is informational"
+    );
+    let actual =
+        serde_json::to_string_pretty(&json!({"plugin_doctor": plugin, "doctor": build_row}))
+            .expect("golden JSON")
+            + "\n";
+    assert_golden("plugin_build_doctor.json", &actual);
+}
+
 #[test]
 fn authorization_matrix_matches_live_registry() {
     let agent = ToolSessionContext::trusted_local(None, Some("local".into()), None);

@@ -186,7 +186,9 @@ Rules:
 
 ```
 orbit plugin add <path|git+url#ref|archive>   →  installed   (~/.orbit/plugins/<ns>/<version>/)
-orbit plugin upgrade <ns> [source] [--grant …]
+orbit plugin add <git+url#commit> --allow-build
+                                              →  installed   (spec.build ran in the build sandbox; build recorded)
+orbit plugin upgrade <ns> [source] [--grant …] [--allow-build]
                                               →  upgraded    (permission diff printed; widening requires re-consent)
 orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
@@ -223,10 +225,12 @@ source to its plugin root before reading anything:
 `validate` and `test` report the resolved plugin root. `scaffold <ns>` creates
 `<ns>/.orbit-plugin/`, and `migrate --out-dir <dir>` writes into `<dir>/.orbit-plugin/`.
 
-**No source form runs plugin code at install.** Every form must already contain the backend
-executable. An opt-in `spec.build` that builds a commit-pinned `git+` source at install time is
-decided but not implemented. Its threat model, which covers the build sandbox, network phases,
-per-install `--allow-build` consent and the rule that a pin alone never builds, is
+**Only a consented, commit-pinned `git+` source runs plugin code at install.** Every other
+form must already contain its backend executable, including any `spec.build` output it
+declares. A `git+<url>#<full commit id>` source whose manifest declares `spec.build` builds
+in a deny-by-default sandbox only with `--allow-build` on that `add` or `upgrade` command line;
+`sync` and a pin alone never build. The contract — build sandbox, network phases, consent,
+artifact digest, build record and doctor rows — is
 [3_install_time_build.md](./3_install_time_build.md).
 
 **Workspace toggles.** The host row is the ceiling; a workspace may narrow it.

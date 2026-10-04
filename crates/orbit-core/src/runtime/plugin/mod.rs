@@ -4,6 +4,7 @@
 pub(crate) mod backend;
 #[cfg(unix)]
 pub(crate) mod broker;
+pub mod build_witness;
 pub(crate) mod cache;
 pub(crate) mod config;
 pub(crate) mod definitions;
