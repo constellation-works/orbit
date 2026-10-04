@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use orbit_agent::{
     ParsedStdout, antigravity_terminal_error_diagnostic, normalize_cli_stdout,
-    project_cli_response, provider_invocation_diagnostic,
+    project_cli_response, provider_authentication_failure, provider_invocation_diagnostic,
 };
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
+use orbit_types::workflow::PROVIDER_UNAVAILABLE_MARKER;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
 
@@ -224,82 +225,91 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                 "cli subprocess was terminated by a signal and reported no exit code".to_string()
             }
         };
-        Some(
-            sandbox_write_diagnostic
-                .clone()
-                // Ordered first among the provider-output diagnostics: when
-                // sandbox-exec itself could not apply the profile the provider
-                // never ran, so no marker any later branch keys on can be
-                // genuine. [DANI-10509]
-                .or_else(|| {
-                    macos_sandbox_apply_failure_diagnostic(
-                        &provider,
-                        sandbox,
-                        exit_code,
-                        stderr_text.as_ref(),
-                    )
-                    .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
-                })
-                // Copilot reports an unavailable explicit model only on
-                // stderr. Join it to the resolved crew before the generic
-                // exit-code path loses the configuration source.
-                .or_else(|| {
-                    input
-                        .get("crew")
-                        .and_then(Value::as_str)
-                        .and_then(|crew| {
-                            copilot_model_unavailable_diagnostic(
-                                &provider,
-                                crew,
-                                stderr_text.as_ref(),
-                            )
-                        })
-                        .map(|diagnostic| {
-                            format!(
-                                "{} {}",
-                                exit_message(),
-                                bounded_diagnostic(&diagnostic, redaction)
-                            )
-                        })
-                })
-                // A Keychain-backed provider login reads as "expired" whether it
-                // really expired or the sandbox hid the credential. Orbit
-                // compiled the profile, so it is the layer that can say which
-                // one this was — and the provider's own message cannot.
-                // [ORB-10929]
-                .or_else(|| {
-                    macos_keychain_auth_diagnostic(
-                        &provider,
-                        sandbox,
-                        &format!("{trace_stdout_text}\n{stderr_text}"),
-                    )
-                    .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
-                })
-                // [ORB-10746] A bare exit code cannot distinguish "this CLI
-                // has no --json-schema" from "the provider rejected Orbit's
-                // schema" from any other nonzero exit, and the first two are
-                // configuration faults an operator can act on immediately.
-                .or_else(|| {
-                    provider_invocation_diagnostic(trace_stdout_text.as_ref(), stderr_text.as_ref())
-                        .map(|diagnostic| bounded_diagnostic(&diagnostic, redaction))
-                })
-                // Antigravity writes terminal `ERROR` on stdout and often
-                // leaves stderr empty. Read the raw capture: normalization
-                // drops failed terminals so they cannot satisfy completion.
-                // [ORB-11337]
-                .or_else(|| {
-                    antigravity_terminal_error_diagnostic(&provider, stdout.protocol_bytes()).map(
-                        |diagnostic| {
-                            format!(
-                                "{} {}",
-                                exit_message(),
-                                bounded_diagnostic(&diagnostic, redaction)
-                            )
-                        },
-                    )
-                })
-                .unwrap_or_else(exit_message),
-        )
+        let diagnostic = sandbox_write_diagnostic
+            .clone()
+            // Ordered first among the provider-output diagnostics: when
+            // sandbox-exec itself could not apply the profile the provider
+            // never ran, so no marker any later branch keys on can be
+            // genuine. [DANI-10509]
+            .or_else(|| {
+                macos_sandbox_apply_failure_diagnostic(
+                    &provider,
+                    sandbox,
+                    exit_code,
+                    stderr_text.as_ref(),
+                )
+                .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
+            })
+            // Copilot reports an unavailable explicit model only on
+            // stderr. Join it to the resolved crew before the generic
+            // exit-code path loses the configuration source.
+            .or_else(|| {
+                input
+                    .get("crew")
+                    .and_then(Value::as_str)
+                    .and_then(|crew| {
+                        copilot_model_unavailable_diagnostic(&provider, crew, stderr_text.as_ref())
+                    })
+                    .map(|diagnostic| {
+                        format!(
+                            "{} {}",
+                            exit_message(),
+                            bounded_diagnostic(&diagnostic, redaction)
+                        )
+                    })
+            })
+            // A Keychain-backed provider login reads as "expired" whether it
+            // really expired or the sandbox hid the credential. Orbit
+            // compiled the profile, so it is the layer that can say which
+            // one this was — and the provider's own message cannot.
+            // [ORB-10929]
+            .or_else(|| {
+                macos_keychain_auth_diagnostic(
+                    &provider,
+                    sandbox,
+                    &format!("{trace_stdout_text}\n{stderr_text}"),
+                )
+                .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
+            })
+            // [ORB-10746] A bare exit code cannot distinguish "this CLI
+            // has no --json-schema" from "the provider rejected Orbit's
+            // schema" from any other nonzero exit, and the first two are
+            // configuration faults an operator can act on immediately.
+            .or_else(|| {
+                provider_invocation_diagnostic(trace_stdout_text.as_ref(), stderr_text.as_ref())
+                    .map(|diagnostic| bounded_diagnostic(&diagnostic, redaction))
+            })
+            // Antigravity writes terminal `ERROR` on stdout and often
+            // leaves stderr empty. Read the raw capture: normalization
+            // drops failed terminals so they cannot satisfy completion.
+            // [ORB-11337]
+            .or_else(|| {
+                antigravity_terminal_error_diagnostic(&provider, stdout.protocol_bytes()).map(
+                    |diagnostic| {
+                        format!(
+                            "{} {}",
+                            exit_message(),
+                            bounded_diagnostic(&diagnostic, redaction)
+                        )
+                    },
+                )
+            })
+            .unwrap_or_else(exit_message);
+        // [ORB-13941] A provider that could not authenticate is unusable on
+        // this host, not a failed attempt at the work. Only text the provider
+        // wrote about itself is read, never the agent's transcript; the typed
+        // marker lets a pull drain release the claim instead of failing it.
+        let terminal_error =
+            antigravity_terminal_error_diagnostic(&provider, stdout.protocol_bytes());
+        if provider_authentication_failure(&stderr_text)
+            || terminal_error
+                .as_deref()
+                .is_some_and(provider_authentication_failure)
+        {
+            Some(format!("{PROVIDER_UNAVAILABLE_MARKER} {diagnostic}"))
+        } else {
+            Some(diagnostic)
+        }
     } else if (spec.require_completion_envelope || spec.require_response_envelope)
         && matches!(envelope_status.as_deref(), Some("failed") | Some("timeout"))
     {

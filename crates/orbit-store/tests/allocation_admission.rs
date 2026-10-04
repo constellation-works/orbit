@@ -364,6 +364,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
             completion: "review".into(),
             authorization_reference: None,
         },
+        crews: None,
     }
 }
 
@@ -694,6 +695,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
             completion: "review".into(),
             authorization_reference: None,
         },
+        crews: None,
     }
 }
 

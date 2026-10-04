@@ -8,6 +8,11 @@
 //! again, because the settlements of work already running must keep flowing
 //! whatever the owner currently says about new work.
 //!
+//! Each request declares the crews this window can run [ORB-13941]: the
+//! provider preflight taken on the window's first pass, minus every crew a
+//! claimed leaf has since found unusable. The owner skips a task whose crew is
+//! not among them, so a follower never burns a claim it cannot run.
+//!
 //! The drain outlives its window. `unsettled` counts admissions that still hold
 //! a slot, and the job loop runs until the window has closed *and* that count
 //! is zero, so a leaf that finishes after the window still has its handoff
@@ -20,19 +25,24 @@
 //! finish and settle. The pass that finds nothing left unsettled ends the
 //! drain `cancelled`.
 
+use std::cell::RefCell;
+
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, LocalPullAdmission, PullDestination,
 };
-use orbit_types::workflow::DrainCancelRequest;
+use orbit_types::workflow::{
+    CrewExclusion, CrewExclusionSource, DrainCancelRequest, PullCrewPreflight,
+};
 use serde_json::{Value, json};
 
+use super::super::cli_executor::resolve_cli_executor;
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain};
 use crate::OrbitRuntime;
-use crate::application::distributed::owner_binary_version;
+use crate::application::distributed::{PullCrewWindow, owner_binary_version};
 
 /// The job that runs this action. Recorded in each request's run context, so
 /// the owner's claim names the drain that holds it.
@@ -118,6 +128,10 @@ pub(crate) fn pull_refill(
     let mut admitted = 0;
     let mut refusal = None;
     let mut error: Option<String> = None;
+    // What this window can run: its preflight, minus every crew a leaf has
+    // since found unusable [ORB-13941]. Read by the refill after it has
+    // reconciled, so a leaf this pass settles already counts.
+    let crews: RefCell<Option<PullCrewWindow>> = RefCell::new(None);
     // An already open breaker skips the probe; `refill` rechecks it after
     // reconciling, since settling a newly failed leaf can open it mid-pass.
     // A streak that cannot be read admits nothing: the drain reports it and
@@ -144,17 +158,23 @@ pub(crate) fn pull_refill(
                 ship: Some(ship),
                 refusal: None,
             }) => {
-                let template = AdmissionRequest {
-                    request_id: String::new(),
-                    caller_version: owner_binary_version().to_string(),
-                    caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-                    caller_review_policy: runtime.local_review_policy_label(),
-                    run_context: AdmissionRunContext {
-                        run_id: run_id.clone(),
-                        job_name: PULL_DRAIN_JOB_NAME.to_string(),
-                        machine_name: None,
-                    },
-                    ship,
+                let template = || {
+                    let window = crew_window(runtime, &run_id)?;
+                    let capability = (!window.runs_nothing()).then(|| window.capability());
+                    *crews.borrow_mut() = Some(window);
+                    Ok(capability.map(|capability| AdmissionRequest {
+                        request_id: String::new(),
+                        caller_version: owner_binary_version().to_string(),
+                        caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                        caller_review_policy: runtime.local_review_policy_label(),
+                        run_context: AdmissionRunContext {
+                            run_id: run_id.clone(),
+                            job_name: PULL_DRAIN_JOB_NAME.to_string(),
+                            machine_name: None,
+                        },
+                        ship: ship.clone(),
+                        crews: Some(capability),
+                    }))
                 };
                 let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);
                 let pass = drain.refill_pass(&destination, &template, ceiling);
@@ -195,6 +215,20 @@ pub(crate) fn pull_refill(
     let consecutive_failures = consecutive_failures.unwrap_or(0);
     let breaker_open = consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER;
     admitting &= !breaker_open;
+    // The window as this pass left it, read again when the refill did not
+    // run or stopped before building a request.
+    let crews = match crews.into_inner() {
+        Some(window) => Some(window),
+        None => match crew_window(runtime, &run_id) {
+            Ok(window) => Some(window),
+            Err(failure) => {
+                error.get_or_insert(failure.to_string());
+                None
+            }
+        },
+    };
+    let runs_nothing = crews.as_ref().is_some_and(PullCrewWindow::runs_nothing);
+    admitting &= !runs_nothing;
     // An unreadable count is not zero: the drain must not finish while it
     // cannot tell whether a settlement is still owed.
     let unsettled = match drain.unsettled(&destination) {
@@ -222,14 +256,29 @@ pub(crate) fn pull_refill(
             "pull drain pass did not complete; retrying next iteration",
         );
     }
+    let refusal = refusal
+        .or_else(|| {
+            breaker_open.then(|| {
+                format!(
+                    "circuit_open: the last {consecutive_failures} claims this drain admitted all \
+                     settled as failures; inspect them and start a new drain once the cause is \
+                     fixed"
+                )
+            })
+        })
+        .or_else(|| {
+            runs_nothing.then(|| {
+                "no_runnable_crew: every configured crew is excluded on this host for this \
+                 window; see `crews.excluded`, fix the providers, and start a new drain"
+                    .to_string()
+            })
+        });
     Ok(json!({
         "admitted": admitted,
         "unsettled": unsettled,
         "admitting": admitting,
-        "refusal": refusal.or_else(|| breaker_open.then(|| format!(
-            "circuit_open: the last {consecutive_failures} claims this drain admitted all settled as \
-             failures; inspect them and start a new drain once the cause is fixed"
-        ))),
+        "refusal": refusal,
+        "crews": crews,
         "consecutive_failures": consecutive_failures,
         "reclaimed_build_bytes": reclaimed_build_bytes,
         "error": error,
@@ -322,6 +371,90 @@ fn cancelling_pass(
         "wait": !done,
         "sleep_seconds": if done { 0 } else { poll },
     })
+}
+
+/// The drain's crew window, taking and persisting its preflight on the first
+/// pass of the window. A preflight that cannot be persisted is still used for
+/// this pass, and taken again on the next.
+fn crew_window(runtime: &OrbitRuntime, run_id: &str) -> Result<PullCrewWindow, OrbitError> {
+    let stored = runtime
+        .read_run_state(run_id)?
+        .and_then(|state| state.pull_crew_preflight);
+    let preflight = match stored {
+        Some(preflight) => preflight,
+        None => {
+            let preflight = crew_preflight(runtime);
+            let mut pending = Some(preflight.clone());
+            if let Err(failure) =
+                runtime
+                    .stores()
+                    .jobs()
+                    .update_run_state(run_id, &mut |_, state| {
+                        if state.pull_crew_preflight.is_none() {
+                            state.pull_crew_preflight = pending.take();
+                        }
+                        Ok(())
+                    })
+            {
+                tracing::warn!(
+                    target: "orbit.core.pull",
+                    run_id,
+                    %failure,
+                    "pull drain could not record its crew preflight; the next pass takes it again",
+                );
+            }
+            preflight
+        }
+    };
+    runtime.crew_window_from(run_id, Some(preflight))
+}
+
+/// The window's provider preflight [ORB-13941]: every configured crew this
+/// host could dispatch now, resolved the way dispatch resolves it — enabled,
+/// its provider's executor resolvable, and that executor's CLI found where a
+/// leaf would launch it. Cheap: no provider process is started. No shipped
+/// provider declares a side-effect-free authentication probe, so an
+/// unauthenticated CLI passes here and is caught by its first claimed leaf,
+/// whose typed provider failure excludes the crew for the rest of the window.
+fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
+    let registry = runtime.configured_crew_registry_projection();
+    let mut runnable = Vec::new();
+    let mut excluded = Vec::new();
+    for crew in &registry.crews {
+        let unusable = if crew.enabled {
+            match resolve_cli_executor(runtime, &crew.provider) {
+                Ok(executor) => runtime
+                    .locate_provider_launcher(&executor.command)
+                    .is_none()
+                    .then(|| {
+                        format!(
+                            "provider `{}` CLI `{}` was not found on this host",
+                            crew.provider, executor.command
+                        )
+                    }),
+                Err(failure) => Some(format!("provider `{}`: {failure}", crew.provider)),
+            }
+        } else {
+            Some(format!(
+                "disabled here (`[crews.{}] enabled = false`)",
+                crew.name
+            ))
+        };
+        match unusable {
+            None => runnable.push(crew.name.clone()),
+            Some(reason) => excluded.push(CrewExclusion {
+                crew: crew.name.clone(),
+                source: CrewExclusionSource::Preflight,
+                reason,
+            }),
+        }
+    }
+    PullCrewPreflight {
+        checked_at: chrono::Utc::now(),
+        runnable,
+        default_crew: registry.default_crew,
+        excluded,
+    }
 }
 
 /// Ask the owner whether it would admit this executor now, and for the ship

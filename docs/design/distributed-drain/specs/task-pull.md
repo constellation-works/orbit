@@ -1,14 +1,14 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-09-29
+last_validated: 2026-10-04
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941]
 ---
 
 # Spec: `orbit.task.pull`
@@ -52,9 +52,12 @@ The queue is a logical owner-side query, not a required maintained table:
   All task context read/write and status-lock paths use this non-pruning rule. A truly empty
   declaration requires operator correction before admission; execution cannot expand its scope.
 
-V1 has no caller-selected crew or platform filter. Each participant must meet all workspace
-execution requirements and resolve configured crews equivalently. This is a v1 restriction;
-future owner-evaluated eligibility can preserve the same ordering authority.
+V1 has no platform filter. Each participant must meet all workspace execution requirements.
+Crews are the one owner-evaluated eligibility rule [ORB-13941]: a request declares the crews its
+executor can run (`crews`, below), and the owner skips a ready candidate whose crew the executor
+cannot run — its own `task.crew`, or the executor's `default_crew` for a task naming none. The
+skipped task keeps its place in the owner's order for the owner or another follower. The owner
+still orders every admission; the declaration only narrows what this executor is offered.
 
 ## Class and routing
 
@@ -79,9 +82,14 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `caller_schema` | integer | Caller distributed-drain wire-protocol schema version |
 | `caller_review_policy` | enum | Executor's effective review policy; only `none` is supported |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
+| `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
 
 The caller persists the request before sending it. One drain run uses many request IDs. There is
-no count, slot declaration, crew filter, or caller scan bound. Completion authorization is resolved
+no count, slot declaration, or caller scan bound. The crew capability is part of the immutable
+request, so a replay is judged by the capability it was first sent with. Adding it did not raise
+`caller_schema`: the field is optional and absent from every earlier request and receipt, an
+older owner refuses it as an unknown field rather than ignoring it, and binary parity is already
+required. Completion authorization is resolved
 from durable owner-side grants; the input does not grant merge rights.
 
 ## Idempotency and admission
@@ -105,7 +113,9 @@ from durable owner-side grants; the input does not grant merge rights.
    owner-local delivery run carries in its `input.task_ids` (any job declaring
    `spec.task_delivery`, such as a local drain's wrapper and its gate). A gate waiting for
    context locks has not yet moved the task out of `backlog` or reserved its footprint, so
-   status and reservations alone would hand it out a second time [ORB-13918].
+   status and reservations alone would hand it out a second time [ORB-13918]. Skip a candidate
+   whose crew the request's `crews` says the executor cannot run and record it in
+   `crew_unavailable` [ORB-13941]. A malformed capability (a blank crew name) is `invalid_input`.
 4. For the first valid non-conflicting task, allocate an immutable claim ID. Reserve its own
    canonical non-pruned footprint with an explicit default TTL of 14,400 seconds (four hours),
    record its execution machine and drain context, transition `backlog → in-progress`, append a
@@ -160,6 +170,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
 | `ship` | Owner-resolved mode, base/landing branches, `review_policy: none`, completion policy and optional durable authorization reference |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
+| `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `invalid_candidates[]` | Invalid dependency or lock-surface exclusions with reasons |
 | `idle` | No claim created by this request |
 | `queue_depth` | Remaining ready entries at original admission, diagnostic only |
@@ -208,6 +219,7 @@ store schema are implementation choices; their atomic behavior is required:
 | Approve handoff | Owner operator only: deduplicate mutation ID, verify current review handoff and exact candidate/base, persist scoped authorization with approver/revocation state, and record landing-start request atomically; agent access cannot approve |
 | Revoke completion authorization | Owner operator only: invalidate pending landing permission atomically; reconcile any uncertain merge intent before reassignment |
 | Fail/cancel | Persist failure evidence, block the task, invalidate execution authority, release only this reservation atomically |
+| Release | Executor gives back unfinished work it did not fail — never launched, stopped on purpose, or its provider was unusable (`provider_unavailable`); revoke the claim, return the task to `backlog`, release only this reservation atomically |
 | Deliberate recovery | Reconcile any uncertain landing intent; revoke old claim, invalidate pending handoff, release reservation, and apply an authorized task transition atomically |
 
 `stale_claim` rejects obsolete attempt mutations even when the task has since returned to
@@ -232,7 +244,8 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
   carries, and a local gate whose task came under a live claim while it waited skips dispatch as
   a `claimed_elsewhere` no-op.
 - Transactional admission never admits an unsatisfied dependency or overlapping protected footprint.
-- The owner alone orders work; only invalid or conflicting candidates are skipped in v1.
+- The owner alone orders work; only invalid or conflicting candidates, and candidates whose crew
+  the executor declares it cannot run, are skipped in v1.
 - A refusal creates no claim. Idle persists only its receipt and diagnostics.
 - Trusted invocation context fences execution machine and bound run; host labels confer no rights.
 - Reassignment invalidates former attempt writes and landing authority before a new admission.
@@ -256,7 +269,8 @@ claude authored the initial contract under [ORB-12488]; codex revised it after d
 2026-09-18; claude reconciled it with the authorization decision and the shipped read-only surface
 under [ORB-12495], 2026-09-19; claude recorded the executable owner-local claimed leaf under
 [ORB-12616], 2026-09-20; claude recorded the owner's published-delivery acceptance and the retained
-entry points' shared admission decision under [ORB-12500], 2026-09-20. claude reconciled the stale status wording under the live follower drain, 2026-09-29. The feature remains Draft while it is live (the same status as [2_design.md](../2_design.md)).
+entry points' shared admission decision under [ORB-12500], 2026-09-20. claude reconciled the stale status wording under the live follower drain, 2026-09-29. claude added
+executor crew capability and provider-unavailable release under [ORB-13941], 2026-10-04. The feature remains Draft while it is live (the same status as [2_design.md](../2_design.md)).
 
 ## Internal storage accounting
 
@@ -396,7 +410,8 @@ existing verifier.
 [ORB-13625] delivered the follower half. The owner's `orbit.task.pull` input is
 the caller's durable `AdmissionRequest` (request ID, caller version and schema,
 review policy, run context, and the ship contract its probe reported); it
-answers `{receipt, claim_state}`. `orbit.drain.claim.bind` takes `claim_id`,
+answers `{receipt, claim_state}`. A follower drain also sends its window's crew capability as `crews` [ORB-13941].
+`orbit.drain.claim.bind` takes `claim_id`,
 `run_id` and the receipt's `ship`; `orbit.drain.claim.settle` takes `claim_id`,
 an optional `run_id`, and the executor's durable settlement (`AcceptHandoff` or
 `Fail`, nothing else). Each resolves the caller machine from the trusted

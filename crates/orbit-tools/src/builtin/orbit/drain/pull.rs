@@ -57,6 +57,17 @@ impl Tool for OrbitTaskPullTool {
                  it. A new request carrying anything else is refused as \
                  `ship_contract_mismatch`, because the receipt freezes it.",
             ),
+            ToolParam {
+                required: false,
+                ..param(
+                    "crews",
+                    "object",
+                    "The crews the executor can run: `runnable` (its window preflight's crew \
+                     names), `default_crew` (what a task naming no crew runs as there) and \
+                     `excluded` (crews it cannot run, with why). A task whose crew it cannot \
+                     run is skipped and stays in the backlog. Omitted: every crew is admissible.",
+                )
+            },
         ];
         ToolSchema {
             name: "orbit.task.pull".to_string(),

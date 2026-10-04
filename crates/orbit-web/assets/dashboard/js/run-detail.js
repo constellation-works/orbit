@@ -279,6 +279,8 @@ export function renderRunDetailMeta() {
   wrap.appendChild(grid);
   const leaves = buildClaimedLeaves(run, Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : []);
   if (leaves) wrap.appendChild(leaves);
+  const crews = buildCrewWindow(detail.crew_window || null);
+  if (crews) wrap.appendChild(crews);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
   syncNodes(meta, [wrap]);
@@ -315,6 +317,28 @@ function buildClaimedLeaves(run, leaves) {
         el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
       ]));
     }
+  }
+  return panel;
+}
+
+// A pull drain's crew window: the crews its provider preflight found
+// runnable, and each crew it excluded for the window with the source and
+// reason. Mirrors the `Crews:` lines of `orbit run show`.
+function buildCrewWindow(window) {
+  if (!window) return null;
+  const excluded = Array.isArray(window.excluded) ? window.excluded : [];
+  const runnable = Array.isArray(window.runnable) ? window.runnable : null;
+  if (!runnable && excluded.length === 0) return null;
+  const panel = el("div", { class: "child-dispatch-panel crew-window" });
+  const summary = runnable
+    ? `crews runnable: ${runnable.length > 0 ? runnable.join(", ") : "none"}`
+    : "crews: no preflight recorded";
+  panel.appendChild(el("div", { class: "label", text: summary }));
+  for (const exclusion of excluded) {
+    const source = exclusion.source === "provider_unavailable" ? "provider unavailable" : "preflight";
+    panel.appendChild(el("div", { class: "child-dispatch-row crew-exclusion" }, [
+      el("span", { class: "child-dispatch-meta", text: `excluded ${exclusion.crew} (${source}): ${exclusion.reason}` }),
+    ]));
   }
   return panel;
 }

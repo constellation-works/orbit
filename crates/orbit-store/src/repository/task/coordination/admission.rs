@@ -282,6 +282,7 @@ impl TaskCommitBoundary {
             task: None,
             invalid_candidates: Vec::new(),
             deferred_conflicts: Vec::new(),
+            crew_unavailable: Vec::new(),
             queue_depth: tasks
                 .iter()
                 .filter(|task| {
@@ -314,6 +315,19 @@ impl TaskCommitBoundary {
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: format!("live local delivery run {run_id} is carrying it"),
+                });
+                continue;
+            }
+            // A task the executor cannot run stays for the owner or another
+            // follower; claiming it would only burn the claim [ORB-13941].
+            if let Some(reason) = request
+                .crews
+                .as_ref()
+                .and_then(|crews| crews.unrunnable_reason(task.crew.as_deref()))
+            {
+                receipt.crew_unavailable.push(AdmissionDiagnostic {
+                    task_id: task.id.clone(),
+                    reason,
                 });
                 continue;
             }
@@ -519,6 +533,7 @@ pub fn admission_refusal(
     ]
     .iter()
     .any(|v| v.trim().is_empty())
+        || request.crews_malformed()
     {
         return Some(AdmissionRefusal::InvalidInput);
     }

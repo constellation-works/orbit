@@ -273,6 +273,43 @@ pub(super) fn consecutive_failed_settlements(
     })
 }
 
+/// Every claimed admission `run_id` made, any phase, in admission order.
+/// `claim_id IS NOT NULL` skips the idle polls and refused requests without
+/// parsing their JSON, as [`consecutive_failed_settlements`] does.
+pub(super) fn claims_admitted_by(
+    store: &Store,
+    workspace: &str,
+    run_id: &str,
+) -> Result<Vec<LocalPullAdmission>, OrbitError> {
+    store.with_read_connection(|conn| {
+        if !admissions_table_exists(conn)? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = conn
+            .prepare(
+                "SELECT record_json FROM local_pull_admissions \
+                 WHERE workspace_id=?1 AND claim_id IS NOT NULL \
+                 AND json_extract(record_json,'$.request.run_context.run_id')=?2 \
+                 ORDER BY rowid",
+            )
+            .map_err(db_error)?;
+        let raw = stmt
+            .query_map(params![workspace, run_id], |r| r.get::<_, String>(0))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        let mut claims = Vec::with_capacity(raw.len());
+        for record in raw.into_iter().map(decode) {
+            let record = record?;
+            // SQL only narrows; the record stays the authority.
+            if record.request.run_context.run_id == run_id {
+                claims.push(record);
+            }
+        }
+        Ok(claims)
+    })
+}
+
 /// How far the wrapper lineage walk follows dispatch records. A loop guard for
 /// a malformed or cyclic dispatch chain, not a tuning knob.
 const MAX_WRAPPER_LINEAGE_DEPTH: usize = 64;

@@ -72,8 +72,9 @@ Move tasks with `orbit task export` /
 
 ## 2. Match binaries, crews, and review policy
 
-Every participant must run the same Orbit version, resolve the same crews and
-toolchains, and use review policy `none`:
+Every participant must run the same Orbit version and toolchains, and use
+review policy `none`. Crews may differ between hosts. A replica only receives
+tasks whose crew it can run, so name shared crews the same on every host:
 
 ```bash
 orbit --version
@@ -156,8 +157,20 @@ runs as a local leaf that implements, validates, pushes and opens a pull
 request, then hands off; the owner reads the pull request itself and moves the
 task to `review`. Approve it on the owner's dashboard to land it.
 
-A leaf that fails before its handoff moves its task to `blocked` on the owner,
-with a summary naming the leaf run, the failed step and its error. The full
+The drain checks which crews this host can run when it starts: each crew must
+be enabled, and its provider's CLI must be installed where a leaf would
+launch it. Every pull request declares the result, and the owner skips tasks
+on any other crew. Those tasks stay in the backlog for the owner or another
+replica. The check doesn't sign in to providers. A provider that fails to
+authenticate is caught by the first leaf that uses it: that leaf's task goes
+back to `backlog` rather than `blocked`, and the drain stops offering that crew
+until it ends. `orbit run show <drain-run>` lists the runnable crews and each
+excluded crew with its reason on `Crews:` lines (`crew_window` in `--json`,
+and on the dashboard's run detail). After you install or sign in a provider,
+start a new drain.
+
+Any other leaf that fails before its handoff moves its task to `blocked` on
+the owner, with a summary naming the leaf run, the failed step and its error. The full
 diagnostic stays on the replica: `orbit run show <leaf-run>`, whose `Claim:`
 line names the owner task and claim the leaf works for and whether its outcome
 has reached the owner (`pull_claim` in `--json`). After three

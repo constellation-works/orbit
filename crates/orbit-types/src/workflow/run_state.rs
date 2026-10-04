@@ -24,6 +24,61 @@ pub struct DrainAdmissionsStop {
     pub stopped_at: DateTime<Utc>,
 }
 
+/// Token a provider failure diagnostic carries when the provider itself could
+/// not be used on this host — its CLI refused authentication, say — as
+/// opposed to the agent failing the work [ORB-13941].
+///
+/// The CLI runner stamps it, bracketed, into the step's failure message; a
+/// pull drain reads it back off the terminal leaf to release the claim and
+/// exclude the crew for its window instead of failing the owner's task.
+pub const PROVIDER_UNAVAILABLE_ERROR_CODE: &str = "provider_unavailable";
+
+/// The bracketed marker form of [`PROVIDER_UNAVAILABLE_ERROR_CODE`].
+pub const PROVIDER_UNAVAILABLE_MARKER: &str = "[provider_unavailable]";
+
+/// Whether a step failure says its provider could not be used on this host.
+#[must_use]
+pub fn is_provider_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(PROVIDER_UNAVAILABLE_ERROR_CODE)
+        || message.is_some_and(|message| message.contains(PROVIDER_UNAVAILABLE_MARKER))
+}
+
+/// Why a follower cannot run a crew for the rest of its pull drain window.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum CrewExclusionSource {
+    /// The window's provider preflight: the crew is disabled, or its
+    /// provider CLI cannot be found or resolved here.
+    Preflight,
+    /// A claimed leaf on this crew failed because the provider could not be
+    /// used (an authentication failure, for instance).
+    ProviderUnavailable,
+}
+
+/// One crew a follower will not run, and why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CrewExclusion {
+    pub crew: String,
+    pub source: CrewExclusionSource,
+    pub reason: String,
+}
+
+/// The crews a pull drain's window can run, from the provider preflight it
+/// took when the window opened [ORB-13941]. Cached for the window: a fixed
+/// credential or newly installed CLI takes effect with the next drain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullCrewPreflight {
+    pub checked_at: DateTime<Utc>,
+    /// Configured crews this host can run, by registry name.
+    pub runnable: Vec<String>,
+    /// The crew a task naming none runs as here (`workflow.default_crew`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_crew: Option<String>,
+    /// Configured crews the preflight excluded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded: Vec<CrewExclusion>,
+}
+
 /// A graceful cancel of a pull drain that is waiting for its launched leaves.
 ///
 /// The drain stops admitting at once and hands its unlaunched claims back to
@@ -211,6 +266,11 @@ pub struct PipelineState {
     /// waits for its launched leaves, and kept once it ends `cancelled`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_cancel: Option<DrainCancelRequest>,
+    /// The provider preflight a pull drain took when its window opened.
+    /// Survives terminalization: it is how `run show` reports which crews
+    /// the drain could not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_crew_preflight: Option<PullCrewPreflight>,
     /// What this drain's last admission pass left waiting. Survives
     /// terminalization: it is how `run show` reports the backlog a finished
     /// drain never started.
@@ -267,6 +327,7 @@ impl PipelineState {
             drain_worker_limit: None,
             drain_admissions_stop: None,
             drain_cancel: None,
+            pull_crew_preflight: None,
             drain_last_pass: None,
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
