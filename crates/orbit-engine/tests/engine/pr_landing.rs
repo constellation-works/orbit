@@ -344,7 +344,13 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             assert_eq!(failed["exit_code"], 3);
             assert_eq!(failed["tested_head"], fx.candidate.as_str());
             assert_eq!(failed["base_sha"], fx.base_sha.as_str());
-            assert_eq!(failed["output"], "src/feature.txt: not formatted");
+            assert_eq!(
+                failed["output"],
+                format!(
+                    "src/feature.txt: not formatted\nRequired validation PATH={}",
+                    std::env::var("PATH").unwrap()
+                )
+            );
             assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
 
             fs::write(fx.repo.join("src/feature.txt"), "formatted\n").unwrap();
@@ -372,6 +378,30 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
             assert_eq!(log["exit_code"], 0, "the retry replaces the failing log");
             assert_eq!(log["tested_head"], repaired.as_str());
+        },
+    );
+}
+
+/// A missing validation tool is refused with the actual allowlisted PATH,
+/// both in the action error and the durable command log [ORB-13963].
+#[test]
+fn missing_required_validation_tool_reports_its_search_path() {
+    isolated(
+        "missing_required_validation_tool_reports_its_search_path",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&["orbit_missing_validation_tool_13963"]);
+            let error = action(&host, "candidate_validate", &fx.validate_input())
+                .expect_err("a missing required tool must refuse publication");
+            let diagnostic = format!(
+                "Required validation PATH={}",
+                std::env::var("PATH").unwrap()
+            );
+            assert!(error.to_string().contains(&diagnostic), "{error}");
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["exit_code"], 127);
+            assert!(log["output"].as_str().unwrap().contains(&diagnostic));
         },
     );
 }
