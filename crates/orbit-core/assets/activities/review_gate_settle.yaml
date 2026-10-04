@@ -10,8 +10,11 @@ spec:
     repair commits, cross-check the claimed verdict against the repository,
     validation records, task meaning, and the lineage budget, then issue the
     certificate and settle the ledger. A pass returns the reviewed head and
-    base the PR steps recheck; any other verdict fails the step so the
-    failure handoff preserves the candidate without publishing a PR.
+    base the PR steps recheck. With `rework_allowed`, a changes_required
+    verdict the lineage can still afford returns `gate: rework_required` and
+    the open findings for the implementer to rework, charging one repair
+    cycle. Any other verdict fails the step so the failure handoff preserves
+    the candidate without publishing a PR.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids, workspace_path, admission]
@@ -32,13 +35,18 @@ spec:
       admission:
         type: object
         description: The review_gate_admit output for this run.
+      rework_allowed:
+        type: boolean
+        description: >
+          Whether a changes_required verdict may be sent back to the
+          implementer within this run instead of stopping delivery.
   output_schema_json:
     type: object
     required: [gate, reviewed_head_sha, reviewed_base_sha]
     properties:
       gate:
         type: string
-        enum: [passed, not_required]
+        enum: [passed, not_required, rework_required]
       verdict:
         type: string
       assurance:
@@ -51,5 +59,11 @@ spec:
         type: string
       final_candidate_tree:
         type: string
+      rework:
+        type: object
+        description: >
+          Present with `gate: rework_required`: the attempt, the head and base
+          the findings were raised on, the open findings, the escalation, and
+          the remaining repair cycles and reviewer starts.
   action: review_gate_settle
   config: {}

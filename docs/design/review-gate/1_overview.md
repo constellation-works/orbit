@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Overview
 owner: codex
-last_updated: 2026-09-21
+last_updated: 2026-10-04
 last_validated: 2026-09-21
 status: Accepted
 feature: review-gate
@@ -11,7 +11,7 @@ summary: Independent automatic code review — before-PR gating with a fresh rev
 tags: [review-gate, review-policy, automation, delivery]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13891]
 ---
 
 # Review Gate — Overview
@@ -20,7 +20,9 @@ related_artifacts: [ORB-11333, ORB-11528, ORB-11545]
 independent of who implemented the work. Before-PR review admits a fresh,
 separately configured reviewer that checks the implementation, makes bounded
 scoped repairs committed under its own identity, and validates the final
-candidate before the PR opens. Passed certificates exclude exactly reproduced
+candidate before the PR opens. A `changes_required` verdict goes back to the
+implementer, whose rework a fresh reviewer examines in the same run, until
+the lineage budget runs out [ORB-13891]. Passed certificates exclude exactly reproduced
 landings from redundant after-landing review while QA stays independent.
 Neither review timing nor a reviewer verdict grants merge permission.
 
@@ -48,8 +50,13 @@ anything else stays an ordinary review obligation.
 - **Reviewer:** a fresh invocation with its own instruction, tool allowlist
   and wall clock, resolved from `operation.review_crew`. It never becomes the
   implementer and never merges.
-- **Lineage budget:** reviewer starts, repair cycles, and wall-time minutes
-  bounding one delivery candidate lineage (workspace, task set, base branch).
+- **Lineage budget:** reviewer starts, repair cycles, and reviewer minutes
+  bounding one delivery run lineage (workspace, task set, base branch, and
+  the run with its resumes). A rework takes a repair cycle, and its
+  re-review a reviewer start.
+- **Rework:** the implementer addressing a `changes_required` verdict's open
+  findings in the same worktree; the pipeline commits and validates it and
+  the gate reviews the new head.
 - **Certificate:** the durable record binding verdict, reviewer identity,
   base/reviewed/final candidate, commits, findings, validation and consumed
   budget. Indexed by final candidate tree when passed.
@@ -66,6 +73,7 @@ a second time.
 | Concern | File | Task |
 | --- | --- | --- |
 | Shipped contract: gate, evidence rules, budgets, coverage, surfaces, rollback | [Design](./2_design.md) | [ORB-11333] |
+| Sending `changes_required` back for rework and re-review | [Design §3.1](./2_design.md#31-rework-orb-13891) | [ORB-13891] |
 | What a validation record establishes | [Design §4](./2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545) | [ORB-11528], [ORB-11545] |
 | After-landing scheduling and coverage consumers | [Delivery automation operations](../automation-triggers/5_operations.md) | [ORB-11331] |
 | `[operation]` key reference | [CONFIG.md](../../CONFIG.md) | [ORB-11333] |
@@ -76,5 +84,6 @@ a second time.
 - [ORB-11528] — adds validation-record roles to the certificate contract.
 - [ORB-11545] — tightens what a superseded validation record may claim.
 - [ORB-11331] — owns the delivery automation consumers that spend certificates.
+- [ORB-13891] — sends `changes_required` findings back to the implementer for rework and re-review within the run.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

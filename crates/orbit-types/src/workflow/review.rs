@@ -625,6 +625,12 @@ pub struct ReviewCertificate {
     /// issued before this field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selectors_widened: Vec<String>,
+    /// Whether a `changes_required` verdict sent its open findings back to
+    /// the implementer for rework within the same delivery run, charging one
+    /// repair cycle, instead of stopping delivery [ORB-13891]. Absent on
+    /// certificates issued before rework existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rework_requested: bool,
     pub issued_at: DateTime<Utc>,
 }
 

@@ -212,12 +212,21 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
 
 /// Refuse to publish when the checked-out head or the pinned base differ from
 /// the candidate the review gate settled. An empty `reviewed_head_sha` means
-/// no gate applied to this run.
+/// no gate applied to this run, unless the gate's last settlement still asked
+/// for rework: a review loop that stopped there never reviewed the head.
 pub(in crate::executor::automation::vcs) fn ensure_reviewed_candidate(
     workspace_path: &std::path::Path,
     input: &Value,
     base_sha: &str,
 ) -> Result<(), OrbitError> {
+    if input_string_field(input, "review_gate").as_deref() == Some("rework_required") {
+        return Err(OrbitError::Execution(
+            "review_gate_stale: the review gate's last settlement asked for rework and no \
+             review of the reworked head passed; the gate must settle the current candidate \
+             before a PR is opened"
+                .to_string(),
+        ));
+    }
     let Some(reviewed_head) = input_string_field(input, "reviewed_head_sha")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

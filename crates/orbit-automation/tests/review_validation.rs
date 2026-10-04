@@ -293,6 +293,7 @@ fn certificate(validation: Vec<ReviewValidation>) -> ReviewCertificate {
         budget: ReviewBudget::default(),
         escalation: None,
         selectors_widened: Vec::new(),
+        rework_requested: false,
         issued_at: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).unwrap(),
     }
 }

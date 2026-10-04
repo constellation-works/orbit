@@ -154,6 +154,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/agent_review_repair.yaml"),
     ),
     (
+        "agent_rework",
+        include_str!("../../assets/activities/agent_rework.yaml"),
+    ),
+    (
         "review_gate_settle",
         include_str!("../../assets/activities/review_gate_settle.yaml"),
     ),

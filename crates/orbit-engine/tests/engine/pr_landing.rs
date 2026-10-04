@@ -231,8 +231,9 @@ fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review() {
 // ---------------------------------------------------------------------------
 
 /// `pr_open` publishes only the candidate the review gate settled. A
-/// checkout that gained an unreviewed commit, or a candidate rebased onto a
-/// base other than the reviewed one, is refused before the forge is asked
+/// checkout that gained an unreviewed commit, a candidate rebased onto a
+/// base other than the reviewed one, or a review loop whose last settlement
+/// still asked for rework [ORB-13891] is refused before the forge is asked
 /// anything. The refusal is recorded on the task. Opening the same fixture with
 /// the current head and base as the reviewed pair then succeeds, so each
 /// refusal is caused by the mismatch alone.
@@ -241,7 +242,11 @@ fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate() {
     isolated(
         "pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate",
         |sandbox| {
-            for case in ["unreviewed commit on the head", "rebased onto another base"] {
+            for case in [
+                "unreviewed commit on the head",
+                "rebased onto another base",
+                "review loop still asks for rework",
+            ] {
                 let fx = Fixture::new(sandbox);
                 let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
                 let (reviewed_head, reviewed_base) = match case {
@@ -249,16 +254,25 @@ fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate() {
                         fx.commit("src/unreviewed.txt", "later edit\n");
                         (fx.candidate.clone(), fx.base_sha.clone())
                     }
-                    _ => {
+                    "rebased onto another base" => {
                         let reviewed_base = fx.base_sha.clone();
                         fx.advance_base_and_rebase();
                         (fx.head(), reviewed_base)
+                    }
+                    // A rework request names no reviewed head, which would
+                    // otherwise read as "no gate applied".
+                    _ => {
+                        fx.commit("src/feature.txt", "reworked change\n");
+                        (String::new(), String::new())
                     }
                 };
                 let base_sha = fx.local_tip(BASE);
 
                 let mut input = fx.open_input(&reviewed_head, &reviewed_base);
                 input["base_sha"] = json!(base_sha);
+                if case == "review loop still asks for rework" {
+                    input["review_gate"] = json!("rework_required");
+                }
                 let error = action(&host, "pr_open", &input)
                     .expect_err("a candidate other than the reviewed one must not publish");
 
@@ -538,7 +552,7 @@ fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
                 &host,
                 "pr_failure_handoff",
                 &json!({
-                    "failed_step_id": "review",
+                    "failed_step_id": "review_gate",
                     "error_code": "pipeline_step_failed",
                     "error_message": "reviewer exceeded its wall clock",
                     "run_id": "jrun-bundle",
@@ -554,6 +568,68 @@ fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
                 Some("rvw-bundle-1"),
                 "the bundle's failed reviewer step still closed its attempt"
             );
+        },
+    );
+}
+
+/// [ORB-13891] A review loop that stops after its settlement asked for rework
+/// but before the rework was committed — the implementer declined every
+/// finding, or its run died — still preserves the candidate. The edits left
+/// in the worktree are the implementer's rework, so they are committed as
+/// implementation work, never as a repair by the reviewer the gate admitted.
+/// The candidate branch is pushed, the task is blocked, and no PR is opened.
+#[test]
+fn a_review_gate_stopped_mid_rework_preserves_the_rework_as_implementer_work() {
+    isolated(
+        "a_review_gate_stopped_mid_rework_preserves_the_rework_as_implementer_work",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            fs::write(fx.repo.join("src/feature.txt"), "partly reworked\n").unwrap();
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "review_gate",
+                    "error_code": "pipeline_step_failed",
+                    "error_message": "agent_rework failed: rework_declined",
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                        "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
+                        "review_gate_admit": {
+                            "applies": true,
+                            "lineage_key": "ws/T-LANDING/agent-main/jrun-landing",
+                            "attempt_id": "rvw-rework-1",
+                            "reviewer": {"provider": "codex", "model": "review-model"},
+                        },
+                        "review_gate_settle": {
+                            "gate": "rework_required",
+                            "reviewed_head_sha": "",
+                            "rework": {"attempt_id": "rvw-rework-1", "head_sha": fx.candidate},
+                        },
+                    },
+                }),
+            )
+            .expect("hand off the stopped review loop");
+
+            assert_eq!(handoff["decision"], "blocked_review_gate", "{handoff}");
+            assert_eq!(handoff["partial_repair_commit"], Value::Null, "{handoff}");
+            let rework = handoff["partial_rework_commit"]
+                .as_str()
+                .unwrap_or_else(|| panic!("the rework was committed: {handoff}"));
+            assert_eq!(fx.head(), rework);
+            assert_eq!(git(&fx.repo, &["rev-parse", "HEAD^"]), fx.candidate);
+            let author = git(&fx.repo, &["log", "-1", "--format=%an <%ae>"]);
+            assert!(
+                !author.contains("review-model"),
+                "rework is never attributed to the reviewer: {author}"
+            );
+            assert_eq!(fx.remote_tip(BRANCH), rework, "the candidate is preserved");
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
         },
     );
 }

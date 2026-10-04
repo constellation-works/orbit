@@ -32,9 +32,10 @@ const FOREIGN_REBASE_EVENT: &str = "pr_foreign_rebase_refused";
 /// A before-PR review gate stopped delivery [ORB-11333].
 const REVIEW_GATE_EVENT: &str = "review_gate_escalation";
 
-/// The pipeline steps that belong to the before-PR review gate.
-pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] =
-    &["review_gate_admit", "review", "review_gate_settle"];
+/// The pipeline steps that belong to the before-PR review gate: the loop
+/// that admits, reviews, settles and reworks [ORB-13891]. A failure inside
+/// it surfaces as the loop's own step id.
+pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] = &["review_gate"];
 
 /// Completion-stage steps: merging the published PR, and re-reviewing and
 /// republishing it after completion rebased a conflicting reviewed head.
@@ -279,9 +280,10 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
 /// Preserve a candidate the before-PR review gate refused to publish.
 ///
 /// Uncommitted reviewer changes are committed under the reviewer identity the
-/// gate admitted, never as implementer work; the branch is pushed so partial
-/// repairs and evidence are recoverable; the task is blocked with the gate's
-/// escalation. No PR is opened.
+/// gate admitted, never as implementer work, and an interrupted rework's
+/// changes as implementer work, never as the reviewer's; the branch is pushed
+/// so partial repairs and evidence are recoverable; the task is blocked with
+/// the gate's escalation. No PR is opened.
 #[allow(clippy::too_many_arguments)]
 fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -302,7 +304,16 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         let model = reviewer.get("model")?.as_str()?.trim();
         (!provider.is_empty() && !model.is_empty()).then(|| format!("{provider} / {model}"))
     });
+    // [ORB-13891] After a settlement asked for rework and before the rework
+    // commit landed, the worktree's edits are the implementer's.
+    let partial_rework = if rework_uncommitted(input) {
+        let (head_sha, files) = commit_failure_candidate(host, run_id, workspace_path, task)?;
+        (!files.is_empty()).then_some(head_sha)
+    } else {
+        None
+    };
     let partial_repair = match &reviewer_model {
+        Some(_) if partial_rework.is_some() => None,
         Some(model) => super::review_gate::commit_reviewer_repairs(
             workspace_path,
             model,
@@ -340,13 +351,20 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
          reviewer repairs, and the review evidence remain inspectable; nothing was merged or \
          published as a PR.\n\n- Task: `{}`\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n\
          - Error code: `{error_code}`\n- Candidate branch: `{head}`\n- Candidate head: `{head_sha}`\n\
-         - Partial reviewer repair commit: {}\n- Uncommitted paths left in the worktree: {}\n\n\
-         Resuming delivery needs a recorded decision: repair or re-scope, then run the gate again \
-         within the lineage's remaining review budget.\n\n## Failure\n\n```text\n{error_message}\n```",
+         - Partial reviewer repair commit: {}\n- Partial rework commit: {}\n\
+         - Uncommitted paths left in the worktree: {}\n\n\
+         Every review cycle's verdict, findings and candidate head are recorded in the gate's \
+         settlement comments on the task. Resuming delivery needs a recorded decision: repair or \
+         re-scope, then run the gate again within the lineage's remaining review budget.\n\n\
+         ## Failure\n\n```text\n{error_message}\n```",
         task.id,
         partial_repair
             .as_ref()
             .map(|commit| format!("`{}` ({})", commit.commit, commit.author))
+            .unwrap_or_else(|| "none".to_string()),
+        partial_rework
+            .as_deref()
+            .map(|commit| format!("`{commit}`"))
             .unwrap_or_else(|| "none".to_string()),
         if leftover.is_empty() {
             "none".to_string()
@@ -378,11 +396,30 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "branch": head,
         "head_sha": head_sha,
         "partial_repair_commit": partial_repair.map(|commit| commit.commit),
+        "partial_rework_commit": partial_rework,
         "uncommitted_paths": leftover,
         "push": pushed,
         "pr_created": false,
         "task_status": "blocked",
     }))
+}
+
+/// Whether the review gate's last settlement asked for rework that was not
+/// committed yet: the rework commit, pinned to the settled head, has not
+/// recorded that head as its base.
+fn rework_uncommitted(input: &Value) -> bool {
+    if pipeline_checkpoint_string(input, "review_gate_settle", "gate").as_deref()
+        != Some("rework_required")
+    {
+        return false;
+    }
+    let settled_head = input
+        .get("pipeline")
+        .and_then(|pipeline| pipeline.get("review_gate_settle"))
+        .and_then(|settle| settle.get("rework"))
+        .and_then(|rework| input_string_field(rework, "head_sha"));
+    settled_head.is_some()
+        && pipeline_checkpoint_string(input, "rework_commit", "base_sha") != settled_head
 }
 
 /// Push input for a review-gate preservation.

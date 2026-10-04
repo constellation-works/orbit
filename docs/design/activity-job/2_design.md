@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-09-24
+last_updated: 2026-10-04
 last_validated: 2026-10-04
 status: Draft
 feature: activity-job
@@ -508,9 +508,10 @@ requirements are normalized in the task store and freeze once the task enters
 
 [ORB-13315] gives an `agent_loop` activity one of two tool policies.
 
-The six seeded agent loops (`agent_implement`, `agent_invoke`,
+The seeded agent loops (`agent_implement`, `agent_invoke`,
 `agent_review_repair`, `pr_conflict_recovery`, `step_failure_recovery`, and
-`task_pilot`) now declare `tool_disallow_list`. They refuse registered
+`task_pilot`, and since [ORB-13891] `agent_rework`) declare
+`tool_disallow_list`. They refuse registered
 control-plane mutations and `orbit.agent.invoke`; the read-only
 `agent_invoke` and `task_pilot` also refuse task and friction writes. Their
 `proc.spawn` program lists now use `proc_disallowed_programs`. The tool registry currently has
