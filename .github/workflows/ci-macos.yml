@@ -136,9 +136,11 @@ jobs:
       # [ORB-12553] Generation admission turns on Darwin descriptor and flock
       # behavior. The orbit-common unit tests that drove it directly were
       # retired by ORB-13833; these CLI boundary tests pin, hold and refuse
-      # generations through the real binary on Darwin.
+      # generations through the real binary on Darwin. A block scalar keeps
+      # the trailing `::` out of YAML's mapping syntax.
       - name: Run executable-generation admission tests
-        run: cargo test --no-fail-fast -p orbit-cli --locked generation_root::
+        run: |
+          cargo test --no-fail-fast -p orbit-cli --locked generation_root::
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
