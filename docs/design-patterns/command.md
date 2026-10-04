@@ -1,11 +1,11 @@
 ---
 type: pattern
 summary: "Command Pattern"
-last_validated: 2026-09-12
+last_validated: 2026-10-04
 ---
 # Command Pattern
 
-In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/lib.rs:286`:
+In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/lib.rs:414`:
 
 ```rust
 pub trait Tool: Send + Sync {
@@ -14,7 +14,7 @@ pub trait Tool: Send + Sync {
 }
 ```
 
-The registry at `crates/orbit-tools/src/registry.rs:32` stores `Arc<dyn Tool>` keyed by `ToolSchema::name`. Adding a tool means: writing a struct, `impl Tool`, registering in `builtin::register_builtins`. The dispatcher never changes.
+The registry at `crates/orbit-tools/src/registry.rs:37` stores `Arc<dyn Tool>` keyed by `ToolSchema::name`. Adding a tool means: writing a struct, `impl Tool`, registering in `builtin::register_builtins`. The dispatcher never changes.
 
 ## Destructive CLI confirmation
 
@@ -44,7 +44,7 @@ impl Tool for OrbitPipelineInvokeTool {
 }
 ```
 
-`execute_host_action` (`orbit/dispatch.rs:33`) resolves the caller's identity, requires a host on the context, and forwards the action, input, identity, and reservation metadata into the runtime.
+`execute_host_action` (`crates/orbit-tools/src/builtin/orbit/dispatch.rs:33`) resolves the caller's identity, requires a host on the context, and forwards the action, input, identity, and reservation metadata into the runtime.
 
 Patterns to copy:
 
