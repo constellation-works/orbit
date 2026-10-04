@@ -1,7 +1,8 @@
 //! Crew settings resolver (ADR-0330).
 //!
-//! A rendered activity input that carries `crew` selects that crew. Otherwise
-//! the run input is used, so dispatch inherits the run's already-resolved crew.
+//! A rendered activity input that carries `crew` or `crew_config_key` selects
+//! an activity-specific crew. Otherwise the run input is used, so dispatch
+//! inherits the run's already-resolved crew.
 //! The host returns the selected assignment and this module applies it over the
 //! inline activity baseline field by field.
 

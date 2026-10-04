@@ -41,7 +41,7 @@ pub enum AssetLoadError {
     #[error("schemaVersion 2 parse failed: {0}")]
     Parse(serde_yaml::Error),
     #[error(
-        "{asset_kind} `{asset}` declares retired `role`; remove it and pass `crew` in the activity input to select a non-default crew (activities without `crew` use the run's resolved crew)"
+        "{asset_kind} `{asset}` declares retired `role`; remove it and pass `crew` or `crew_config_key` in the activity input to select a non-default crew (activities without either use the run's resolved crew)"
     )]
     RetiredRole {
         asset_kind: &'static str,
