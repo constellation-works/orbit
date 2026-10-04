@@ -1060,17 +1060,26 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         consecutive_pass_failures: 0,
         degraded: false,
         resource_throttle: Some(orbit_types::workflow::ResourceThrottle {
-            resources: vec![orbit_types::workflow::ResourcePressure {
-                resource: "memory".into(),
-                percent: 93.2,
-                high_percent: 90,
-                resume_percent: 80,
-                since,
-            }],
+            resources: vec![
+                orbit_types::workflow::ResourcePressure {
+                    resource: "memory".into(),
+                    percent: 93.2,
+                    high_percent: 90,
+                    resume_percent: 80,
+                    since,
+                },
+                orbit_types::workflow::ResourcePressure {
+                    resource: "cpu".into(),
+                    percent: 89.0,
+                    high_percent: 90,
+                    resume_percent: 75,
+                    since,
+                },
+            ],
         }),
     });
     runtime.write_run_state(id, &state).unwrap();
-    let held = "Admissions throttled: memory 93% \u{2265} 90% since 2026-10-04 08:41Z";
+    let held = "Admissions throttled: memory 93% (throttled at \u{2265} 90% since 2026-10-04 08:41Z; resumes below 80%); cpu 89% (throttled at \u{2265} 90% since 2026-10-04 08:41Z; resumes below 75%)";
 
     let readiness = fixture.json(&["run", "readiness", "--json"]);
     assert_eq!(readiness["capacity"]["free_slots"], 0, "{readiness:#}");
@@ -1078,9 +1087,17 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         readiness["capacity"]["resource_throttle"]["resources"][0]["percent"],
         93.2
     );
+    assert_eq!(
+        readiness["capacity"]["resource_throttle"]["resources"][1]["percent"],
+        89.0
+    );
     let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
     let text = String::from_utf8_lossy(&text.stdout);
     assert!(text.contains(held), "{text}");
+    assert!(
+        !text.contains("89% \u{2265}"),
+        "reading inside hysteresis band must not print a false comparison: {text}"
+    );
 
     let shown = fixture
         .orbit()

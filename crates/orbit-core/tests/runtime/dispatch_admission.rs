@@ -1094,9 +1094,9 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
     let waiting = readiness_task(&readiness, &queued.id);
     assert_eq!(waiting["reason"], "resource_throttled", "{waiting}");
     assert!(
-        waiting["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.starts_with("memory 95% \u{2265} 90% since ")),
+        waiting["detail"].as_str().is_some_and(
+            |detail| detail.starts_with("memory 95% (throttled at \u{2265} 90% since ")
+        ),
         "{waiting}"
     );
     let operator = ToolContext {

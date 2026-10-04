@@ -1882,7 +1882,7 @@ function autoDrainThrottleNote(capacity) {
   const resources = capacity?.resource_throttle?.resources;
   if (!Array.isArray(resources) || resources.length === 0) return null;
   const held = resources
-    .map(item => `${item.resource} ${Math.round(Number(item.percent))}% ≥ ${item.high_percent}% since ${time(item.since)}`)
+    .map(item => `${item.resource} ${Math.round(Number(item.percent))}% (throttled at ≥ ${item.high_percent}% since ${time(item.since)}; resumes below ${item.resume_percent}%)`)
     .join("; ");
   const note = el("p", { class: "operation-control-note drain-throttle-note", text: `Admissions throttled: ${held}. Running tasks are not touched.` });
   note.setAttribute("role", "status");

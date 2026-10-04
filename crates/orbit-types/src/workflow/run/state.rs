@@ -213,18 +213,19 @@ pub struct ResourceThrottle {
 }
 
 impl ResourceThrottle {
-    /// `memory 93% ≥ 90% since 08:41Z; cpu 97% ≥ 90% since 08:40Z`.
+    /// `memory 93% (throttled at ≥ 90% since 2026-10-04 08:41Z; resumes below 80%); cpu 97% (throttled at ≥ 90% since 2026-10-04 08:40Z; resumes below 75%)`.
     #[must_use]
     pub fn describe(&self) -> String {
         self.resources
             .iter()
             .map(|pressure| {
                 format!(
-                    "{} {:.0}% \u{2265} {}% since {}",
+                    "{} {:.0}% (throttled at \u{2265} {}% since {}; resumes below {}%)",
                     pressure.resource,
                     pressure.percent,
                     pressure.high_percent,
                     pressure.since.format("%Y-%m-%d %H:%MZ"),
+                    pressure.resume_percent,
                 )
             })
             .collect::<Vec<_>>()
@@ -234,15 +235,8 @@ impl ResourceThrottle {
     /// The operator-facing hold sentence every surface prints.
     #[must_use]
     pub fn hold_reason(&self) -> String {
-        let resume = self
-            .resources
-            .iter()
-            .map(|pressure| format!("{} below {}%", pressure.resource, pressure.resume_percent))
-            .collect::<Vec<_>>()
-            .join(", ");
         format!(
-            "Admissions throttled: {}. New tasks start again once {resume}; running work is not \
-             touched.",
+            "Admissions throttled: {}. Running work is not touched.",
             self.describe()
         )
     }
