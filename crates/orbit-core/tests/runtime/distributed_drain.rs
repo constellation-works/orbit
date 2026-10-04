@@ -197,13 +197,13 @@ impl DrainOwnerTransport for Wire {
                 ..ToolContext::default()
             },
         )?;
-        if name == "orbit.drain.probe" {
-            if let Some(revision) = *self.protocol.lock().unwrap() {
-                answer["protocol_schema"] = json!(revision);
-                answer["admits"] = json!(false);
-                answer["refusal"] = json!("version_mismatch");
-                answer["diagnostics"] = json!(["older owner requires protocol revision 1"]);
-            }
+        if name == "orbit.drain.probe"
+            && let Some(revision) = *self.protocol.lock().unwrap()
+        {
+            answer["protocol_schema"] = json!(revision);
+            answer["admits"] = json!(false);
+            answer["refusal"] = json!("version_mismatch");
+            answer["diagnostics"] = json!(["older owner requires protocol revision 1"]);
         }
         let mut lose = self.lose.lock().unwrap();
         if let Some(at) = lose.iter().position(|tool| *tool == name) {
