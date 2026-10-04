@@ -314,7 +314,14 @@ Use proposed defaults of a two-minute quiet period, ten-minute maximum wait and
 50 tasks per batch, preserving partitions of at most five. Coalesce repeated
 changes to a pending task into its newest fingerprint. One in-flight assessment
 per task/fingerprint; changes during execution remain pending and do not mutate
-the captured snapshot. At pilot apply, a companion status-neutral fingerprint
+the captured snapshot. Successful preparation checkpoints in any active pilot
+run also hold their tasks across consumers: observation and admission withhold
+them as `already_preparing: <run id>` until that run becomes terminal. This
+prevents a routine from duplicating a targeted CI-sweep or manual pilot, even
+when the task's material changes while held. Explicit pilot selections report
+held tasks as `already_preparing` exclusions with `prepared_by_run_ids` and
+prepare the free tasks; an all-held selection succeeds without agent work.
+At pilot apply, a companion status-neutral fingerprint
 allows one fresh read and retry when only the task's status or a dependency's
 status changed. A dependency-only status change may then apply; a task that
 entered in-progress remains unwritable and is reported as `status_changed`.

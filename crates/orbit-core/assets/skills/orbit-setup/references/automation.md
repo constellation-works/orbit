@@ -199,6 +199,14 @@ under the old one; the default predicate keeps the fingerprints a workspace
 accepted before the block existed. Explicit runs (`orbit run task-pilot <id>`)
 ignore the block.
 
+An active pilot's successful preparation checkpoint temporarily holds its tasks
+across routines, manual runs and targeted CI-sweep pilots. The state trigger
+withholds those tasks as `already_preparing: <run id>` until the holder ends;
+editing a held task does not start another pilot. An explicit run skips held
+tasks, records `already_preparing` exclusions with `prepared_by_run_ids`, and
+prepares the free tasks. An all-held run succeeds without agent work. Inspect
+`orbit run show <RUN_ID> -s prepare --json` to find the holder.
+
 Which edits make an assessed task due again is `[workflow.task_pilot_freshness]`
 in `config.toml`. By default only a change to the title, description,
 acceptance criteria, plan or selectors does; retagging, reassigning crew, and

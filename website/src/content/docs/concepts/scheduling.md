@@ -103,6 +103,13 @@ settled for `debounce_minutes` or waited `max_wait_minutes`, up to `batch_size`
 per run. An unchanged backlog fires nothing; a material edit to a task makes it
 eligible again. It is still evaluated by the tick, not pushed by an event.
 
+Tasks already prepared by an active pilot are withheld until that run ends,
+including pilots started manually or by a CI sweep. An explicit
+`orbit run task-pilot <TASK_ID>` also skips held tasks and prepares any free
+tasks in the same selection. If every task is held, the run succeeds without
+starting a pilot agent. Inspect `orbit run show <RUN_ID> -s prepare --json` for
+`already_preparing` exclusions and their `prepared_by_run_ids`.
+
 Invariants that shape how routines behave:
 
 - **No host field.** A cron definition is evaluated by every machine with a

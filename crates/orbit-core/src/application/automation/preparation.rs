@@ -9,13 +9,16 @@ use orbit_common::OrbitError;
 use orbit_common::fs::selector::Selector;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::RegisteredTaskResolution;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::Task;
+use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::automation::members::{
     MaterialField, MemberAttempt, PreparationEligibility, PreparationPolicy, SourceSensitivity,
     StateTrigger,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 /// Repository instructions captured from one immutable source revision.
 ///
@@ -427,4 +430,72 @@ fn assignment_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, Aut
     let assignment = runtime.lookup_crew_for_task(None, task.crew.as_deref())?;
     Ok(json!({"effective_assignment": {"crew": assignment.name,
         "model": assignment.assignment.model, "provider": assignment.assignment.provider}}))
+}
+
+/// Tasks held by successful preparation checkpoints of active pilot runs.
+/// Reconcile stale owners before treating their checkpoints as holds; a
+/// terminal run no longer prevents another pilot from preparing its tasks.
+pub(crate) fn active_task_pilot_preparations(
+    runtime: &OrbitRuntime,
+) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+    let workspace_root = runtime.paths().repo_root.canonicalize()?;
+    let mut prepared_by_task = BTreeMap::<String, BTreeSet<String>>::new();
+    for state in [
+        JobRunState::Pending,
+        JobRunState::Running,
+        JobRunState::Retrying,
+    ] {
+        let runs = runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some("task_pilot_pipeline".to_string()),
+                state: Some(state),
+                terminal_only: false,
+                created_since: None,
+                limit: None,
+                ..Default::default()
+            })?;
+        for run in runs {
+            let run = runtime.show_job_run(&run.run_id)?;
+            if run.state.is_terminal() {
+                continue;
+            }
+            let Some(state) = runtime.read_run_state(&run.run_id)? else {
+                continue;
+            };
+            let Some(task_ids) = state.step_outputs.iter().find_map(|(step_index, output)| {
+                (state.step_states.get(step_index) == Some(&JobRunState::Success))
+                    .then(|| prepared_task_ids(output, &workspace_root))
+                    .flatten()
+            }) else {
+                continue;
+            };
+            for task_id in task_ids {
+                prepared_by_task
+                    .entry(task_id)
+                    .or_default()
+                    .insert(run.run_id.clone());
+            }
+        }
+    }
+    Ok(prepared_by_task)
+}
+
+fn prepared_task_ids(output: &Value, workspace_root: &Path) -> Option<Vec<String>> {
+    let object = output.as_object()?;
+    let prepared_workspace = object.get("workspace_path")?.as_str()?;
+    if Path::new(prepared_workspace) != workspace_root
+        || !object.get("partitions")?.is_array()
+        || !object.get("tasks")?.is_array()
+        || !matches!(object.get("mode")?.as_str(), Some("automatic" | "explicit"))
+    {
+        return None;
+    }
+    object
+        .get("task_ids")?
+        .as_array()?
+        .iter()
+        .map(|task_id| task_id.as_str().map(ToOwned::to_owned))
+        .collect()
 }

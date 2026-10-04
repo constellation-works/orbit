@@ -218,6 +218,13 @@ impl MemberHost for Host<'_> {
         let mut incident_inventory = None;
         let mut withheld = BTreeMap::new();
 
+        let active_preparations = match self.trigger.kind {
+            StateTriggerKind::PreparationEligible => {
+                preparation::active_task_pilot_preparations(self.runtime)?
+            }
+            StateTriggerKind::ExecutionFailed => BTreeMap::new(),
+        };
+
         for envelope in tasks.items {
             let task = self.runtime.get_task(&envelope.id)?;
 
@@ -226,6 +233,10 @@ impl MemberHost for Host<'_> {
                     if !orbit_automation::members::preparation::eligible(&task, self.eligibility())
                     {
                         withheld.insert(task.id, "task_ineligible".into());
+                        continue;
+                    }
+                    if let Some(run_ids) = active_preparations.get(&task.id) {
+                        withheld.insert(task.id, already_preparing(run_ids));
                         continue;
                     }
                     let fingerprint = match self.fingerprint(&task, &source.commit) {
@@ -341,10 +352,16 @@ impl MemberHost for Host<'_> {
         // per task_id (each Source::head is several git spawns).
         if self.trigger.kind == StateTriggerKind::PreparationEligible {
             let (_, source) = self.head(&self.trigger.branch)?;
+            // Retained pending members may be off the current observation
+            // page, or another pilot may have prepared them since observation.
+            let active_preparations = preparation::active_task_pilot_preparations(self.runtime)?;
             for id in &member.task_ids {
                 let task = self.runtime.get_task(id)?;
                 if !orbit_automation::members::preparation::eligible(&task, self.eligibility()) {
                     return Ok(MemberAdmission::Retire("task_ineligible".into()));
+                }
+                if let Some(run_ids) = active_preparations.get(id) {
+                    return Ok(MemberAdmission::Withhold(already_preparing(run_ids)));
                 }
                 if self.fingerprint(&task, &source.commit)? != member.fingerprint {
                     return Ok(MemberAdmission::Retire("material_changed".into()));
@@ -587,6 +604,14 @@ impl MemberHost for Host<'_> {
             failed,
         }))
     }
+}
+
+/// A temporary hold diagnostic names every durable run the operator can inspect.
+fn already_preparing(run_ids: &BTreeSet<String>) -> String {
+    format!(
+        "already_preparing: {}",
+        run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
+    )
 }
 
 /// The stored `task.crew` shared by every id in an incident's `task_ids`,

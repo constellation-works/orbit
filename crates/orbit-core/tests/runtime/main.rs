@@ -14,3 +14,5 @@ mod relation_auto_close;
 mod sandbox_off;
 
 mod host_resources;
+
+mod task_pilot;
