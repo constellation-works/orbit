@@ -539,6 +539,12 @@ three are safe; none strands a claim, and none fails a task that never ran.
   running. It touches only what that drain carries: the leaves it admitted
   and, while it was live, those an ended drain for the same owner left
   behind. Never a leaf another live drain admitted.
+- If the pull drain worker cannot be confirmed stopped, `--force` fails
+  naming the drain and the signal outcome before finalizing the drain,
+  stopping leaves, or releasing carried claims. This includes workers in
+  another PID namespace or with an unverifiable identity. Stop the drain
+  on its host and retry once its exit can be confirmed. A worker confirmed
+  already exited permits forced leaf cancellation and claim release.
 - A leaf `--force` cannot stop and see gone keeps its claim on the owner.
   Its worker might run in another PID namespace, or have an identity that
   cannot be verified. The cancel lists it under `unstopped_leaves` (the

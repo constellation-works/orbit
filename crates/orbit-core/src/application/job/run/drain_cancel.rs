@@ -15,7 +15,9 @@
 //!   stopped, and every claim goes back to the owner's backlog with a comment
 //!   naming the drain and the reason. Only the drain's own work is touched,
 //!   never a leaf another live drain carries. A leaf whose stop cannot be
-//!   confirmed keeps its claim (`unstopped_leaves`). A local auto drain's
+//!   confirmed keeps its claim (`unstopped_leaves`). If the drain worker
+//!   itself cannot be confirmed stopped, cancellation fails before finalizing
+//!   the drain or changing its carried claims. A local auto drain's
 //!   `--force` also stops the children its cancel would otherwise detach.
 //!
 //! A drain that is queued, or whose worker is conclusively gone, has nothing
@@ -36,7 +38,6 @@ use serde_json::json;
 use super::actions::cancellation_result;
 use super::owner::{
     RunOwnerLiveness, run_owner_liveness, run_owner_unstoppable_reason, signal_run_owner_confirmed,
-    signal_run_owner_process,
 };
 use super::types::{JobRunCancelResult, UnstoppedLeaf};
 use crate::OrbitRuntime;
@@ -225,7 +226,9 @@ impl OrbitRuntime {
     /// Only the drain's own work is touched ([`Self::pull_drain_admissions`],
     /// read before the drain stops): never a leaf another live drain carries.
     /// A leaf whose stop cannot be confirmed keeps its claim on the owner and
-    /// is reported in `unstopped_leaves`.
+    /// is reported in `unstopped_leaves`. If the drain worker cannot be
+    /// confirmed stopped, the request fails before finalizing the drain or
+    /// releasing any carried claim.
     fn force_cancel_pull_drain(
         &self,
         run: &JobRun,
@@ -238,13 +241,14 @@ impl OrbitRuntime {
             .into_iter()
             .map(|record| (record.destination, record.request.request_id))
             .collect::<Vec<_>>();
-        // The drain goes first, so nothing launches while its leaves stop.
+        // Confirm the drain stopped before finalizing it or releasing claims:
+        // a non-stopping signal outcome must not let it keep admitting work.
         let mut result = self.cancel_job_run_cascading(
             &run.run_id,
             actor,
             source,
             reason,
-            signal_run_owner_process,
+            signal_run_owner_confirmed,
             0,
         )?;
         let cause = match reason {
