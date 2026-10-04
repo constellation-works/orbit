@@ -43,6 +43,7 @@ fn changes_required_is_reworked_and_the_reworked_head_is_reviewed_and_completed(
         host.actions(),
         [
             "worktree_setup",
+            "review_gate_admit",
             "agent_implement",
             "git_commit",
             "pr_prepare",
@@ -131,7 +132,22 @@ fn an_exhausted_rework_budget_stops_delivery_at_the_review_gate() {
             format!("rvw-{}", cycle + 1)
         );
     }
-    assert_eq!(host.inputs("review_gate_admit").len(), 3);
+    let admissions = host.inputs("review_gate_admit");
+    assert_eq!(
+        admissions
+            .iter()
+            .filter(|input| input["preflight"] != true)
+            .count(),
+        3,
+        "the read-only preflight does not consume a reviewer start"
+    );
+    assert_eq!(
+        admissions
+            .iter()
+            .filter(|input| input["preflight"] == true)
+            .count(),
+        1
+    );
     for step in ["git_push", "pr_open", "pr_promote", "pr_complete"] {
         assert!(host.inputs(step).is_empty(), "{step} ran after a refusal");
     }
@@ -409,6 +425,9 @@ impl RuntimeHost for ScriptedHost {
                 "rewritten": false,
             }),
             "candidate_validate" => json!({ "passed": true }),
+            "review_gate_admit" if input["preflight"] == true => {
+                json!({ "applies": true, "decision": "preflight_passed" })
+            }
             "review_gate_admit" if input.get("re_review_after").is_some() => {
                 json!({ "applies": false, "reason": "re_review_not_required" })
             }
