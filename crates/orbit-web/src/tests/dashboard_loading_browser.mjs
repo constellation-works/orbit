@@ -118,6 +118,42 @@ async function assertRunStepLayout(page) {
   }
 }
 
+// A pull drain's run detail names the crews its window runs and each crew it
+// excluded, with the source and reason, readable inside the panel at desktop
+// and narrow widths.
+async function assertCrewWindow(page) {
+  await page.evaluate(async () => {
+    const detail = await import('/js/run-detail.js');
+    detail.setActiveRunDetail({
+      run: { run_id: 'jrun-pull', job_id: 'workspace_pull_pipeline', state: 'running' },
+      steps: [],
+      crew_window: {
+        checked_at: '2026-10-04T13:06:00Z',
+        runnable: ['luna'],
+        default_crew: 'luna',
+        excluded: [
+          { crew: 'gemini-flash', source: 'provider_unavailable', reason: 'ORB-1 failed: Antigravity terminal error: authentication failed or timed out' },
+          { crew: 'opus', source: 'preflight', reason: 'provider `claude` CLI `claude` was not found on this host' },
+        ],
+      },
+    });
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'run-detail');
+    detail.renderRunDetailMeta();
+  });
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const panel = page.locator('#run-detail-meta .crew-window');
+    await panel.scrollIntoViewIfNeeded();
+    if (!(await panel.isVisible())) throw new Error(`Crew window invisible at ${width}px`);
+    const text = await panel.textContent();
+    for (const expected of ['crews runnable: luna', 'excluded gemini-flash (provider unavailable): ORB-1 failed', 'excluded opus (preflight)']) {
+      if (!text.includes(expected)) throw new Error(`Crew window missing "${expected}" at ${width}px: ${text}`);
+    }
+    if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error(`Crew window overflows the page at ${width}px`);
+    await page.screenshot({ path: path.join(evidence, `run-crew-window-${width}.png`) });
+  }
+}
+
 // Every scoreboard metric cell must paint its bar and value inside its own
 // agent column, and each value must be reachable by scrolling the matrix's
 // own wrapper: a fixed-layout table squeezed below its content width paints
@@ -288,6 +324,7 @@ try {
   }
   await assertScoreboardLayout(page);
   await assertRunStepLayout(page);
+  await assertCrewWindow(page);
   await new Promise(resolve => server.close(resolve));
   await page.evaluate(() => {
     globalThis.fetch = globalThis.nativeFetch;
@@ -295,7 +332,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();

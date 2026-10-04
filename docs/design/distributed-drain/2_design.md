@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-29
-last_validated: 2026-09-29
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941]
 ---
 
 # Distributed Drain — Design
@@ -94,8 +94,25 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   (`application/task/context_repair.rs`, via `orbit task lint --restore-pruned`) or reported for
   operator repair, never guessed.
 
-**Eligibility.** Pull has no crew or platform filter in v1: every participant must execute every
-eligible task, with task and fallback crews resolving equivalently.
+**Eligibility.** Pull has no platform filter in v1. It has one crew filter [ORB-13941]: each
+request carries the executor's crew capability (`AdmissionRequest::crews`), and the owner skips a
+ready candidate whose crew the executor cannot run — its own `task.crew`, or the executor's
+`default_crew` for a task naming none — recording it in the receipt's `crew_unavailable`
+diagnostics. A skipped task stays in the backlog for the owner or another follower; the owner's
+order is otherwise unchanged. The capability comes from two sources, both scoped to the drain's
+window (one `workspace_pull_pipeline` run):
+
+- *Window preflight.* The first refill pass resolves every configured crew the way dispatch would
+  — enabled, its provider's executor resolvable, and that executor's CLI found where a leaf would
+  launch it — and stores the result on the drain's run state (`pull_crew_preflight`). It starts no
+  provider process. No shipped provider has a side-effect-free authentication probe, so an
+  unauthenticated CLI passes the preflight and is caught by its first claimed leaf (below).
+- *Provider-unavailable exclusions.* A crew whose claimed leaf could not use its provider is
+  excluded for the rest of the window. The exclusions are derived each pass from this drain's own
+  admission records, so they survive a follower restart and end with the drain.
+
+A request without `crews` (owner-local admission) is unrestricted, as before. Crews are matched
+by registry name, so a crew both sides configure must use the same name.
 
 ## 3. Pull-mode drain and the pulled leaf pipeline
 
@@ -362,6 +379,12 @@ owns delivery:
   `claimed` or `running`: the owner revokes the claim, releases its reservation, returns the task
   to `backlog` with the reason as its status note, and adds the comment to the task. Only a
   launched leaf that ended without its handoff settles as `Fail`; the breaker counts only those.
+  The exception is a provider that could not be used [ORB-13941]: the CLI runner stamps a failure
+  whose own stderr or terminal error reports an authentication failure with the typed
+  `[provider_unavailable]` marker, and a launched leaf that ended on such a step settles as a
+  `Release` carrying `provider_unavailable { crew, reason }`. The task returns to `backlog`, the
+  breaker does not count it, and the drain excludes that crew for the rest of its window, so the
+  same task is not pulled straight back. The crew is the one the leaf resolved at start.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.
@@ -524,7 +547,7 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 
 | Check | Source of truth |
 |---|---|
-| Required crews and providers available and authenticated | Resolved workspace/task execution requirements and provider-specific probes |
+| Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); an unauthenticated provider is excluded by its first typed `provider_unavailable` leaf |
 | Binary version and orchestration schema match the owner | Owner read-only capability/version response; pull enforces parity again |
 | Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
 | Review policy is `none` on owner and executor | Owner policy captured at admission; executor verifies the same policy before binding |
@@ -533,7 +556,8 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 
 The owner resolves ship mode, base/landing branches and completion authority. Follower execution
 always stops at handoff; local ship mode is refused for followers. Equal binary/schema versions do
-not imply equal crew, policy or toolchain configuration; v1 requires both.
+not imply equal crew, policy or toolchain configuration. Crews may differ: a follower declares
+what it can run and the owner admits only that. Policy and toolchain must still match.
 
 ### 4.1 Read-only admission probe
 

@@ -512,10 +512,20 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "claimed leaves",
     );
 
+    // A pull drain's crew window: the crews it runs and those it excluded for
+    // its window, with why [ORB-13941]. Null for every other run.
+    let crew_window = runtime
+        .pull_drain_crew_window(run_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(run_id, %error, "pull drain crew window unreadable; run detail shown without it");
+            None
+        });
+
     json!({
         "run": full,
         "pull_claim": pull_claim,
         "claimed_leaves": claimed_leaves,
+        "crew_window": crew_window,
         "steps": steps,
         "provider_processes": provider_processes
             .iter()

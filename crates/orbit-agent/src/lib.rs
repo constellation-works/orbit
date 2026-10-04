@@ -68,4 +68,7 @@ pub use providers::{
     latest_assistant_message, normalize_cli_stdout, project_cli_response,
 };
 pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
-pub use types::{DeclaredResponseFailure, ParsedStdout, provider_invocation_diagnostic};
+pub use types::{
+    DeclaredResponseFailure, ParsedStdout, provider_authentication_failure,
+    provider_invocation_diagnostic,
+};

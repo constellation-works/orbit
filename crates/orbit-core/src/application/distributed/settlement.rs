@@ -1,5 +1,5 @@
 //! What a follower's settle-only pass did with each pull admission
-//! [ORB-13663].
+//! [ORB-13663], and the crews a pull drain's window can run [ORB-13941].
 //!
 //! Settlement no longer belongs to the drain that admitted a claim. The
 //! admission record is the outbox: the leaf's own worker records and delivers
@@ -10,6 +10,8 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_store::contracts::{AdmissionCrewCapability, ClaimMutation};
+use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullCrewPreflight};
 use serde::Serialize;
 
 /// One admission carried by a settle-only pass.
@@ -205,6 +207,68 @@ impl DrainClaimedLeaf {
     }
 }
 
+/// The crews a pull drain's window can run, and those it will not [ORB-13941].
+///
+/// The window's provider preflight, taken once when it opened, minus every
+/// crew a claimed leaf of this drain found unusable since — a provider that
+/// refused to authenticate, say. Derived from the drain's own admission
+/// records, so it survives a follower restart and ends with the drain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PullCrewWindow {
+    /// When the preflight ran; `None` while the drain has not taken one.
+    pub checked_at: Option<DateTime<Utc>>,
+    /// Crews the window can run. `None` without a preflight: then every crew
+    /// not excluded is offered to the owner.
+    pub runnable: Option<Vec<String>>,
+    /// The crew a task naming none runs as on this host.
+    pub default_crew: Option<String>,
+    /// Crews excluded for the rest of the window, with why.
+    pub excluded: Vec<CrewExclusion>,
+}
+
+impl PullCrewWindow {
+    /// What the drain declares to the owner on each request.
+    #[must_use]
+    pub fn capability(&self) -> AdmissionCrewCapability {
+        AdmissionCrewCapability {
+            runnable: self.runnable.clone(),
+            default_crew: self.default_crew.clone(),
+            excluded: self.excluded.clone(),
+        }
+    }
+
+    /// Whether the window can run nothing at all: every configured crew is
+    /// excluded, so requesting work would only collect idle receipts.
+    #[must_use]
+    pub fn runs_nothing(&self) -> bool {
+        self.runnable.as_ref().is_some_and(Vec::is_empty)
+    }
+
+    /// One line per excluded crew, for a terminal report.
+    #[must_use]
+    pub fn describe(&self) -> Vec<String> {
+        let mut lines = Vec::with_capacity(self.excluded.len() + 1);
+        if let Some(runnable) = &self.runnable {
+            lines.push(if runnable.is_empty() {
+                "runnable: none".to_string()
+            } else {
+                format!("runnable: {}", runnable.join(", "))
+            });
+        }
+        lines.extend(self.excluded.iter().map(|exclusion| {
+            let source = match exclusion.source {
+                CrewExclusionSource::Preflight => "preflight",
+                CrewExclusionSource::ProviderUnavailable => "provider_unavailable",
+            };
+            format!(
+                "excluded {} ({source}): {}",
+                exclusion.crew, exclusion.reason
+            )
+        }));
+        lines
+    }
+}
+
 fn phase_guidance(phase: orbit_store::contracts::LocalPullPhase, refusal: Option<&str>) -> String {
     use orbit_store::contracts::LocalPullPhase as Phase;
     match (phase, refusal) {
@@ -311,6 +375,85 @@ impl crate::OrbitRuntime {
             });
         }
         Ok(leaves)
+    }
+
+    /// The crew window of a pull drain run; `None` for every other run.
+    pub fn pull_drain_crew_window(
+        &self,
+        drain_run_id: &str,
+    ) -> Result<Option<PullCrewWindow>, OrbitError> {
+        let jobs = self.stores().jobs();
+        match jobs.get_job_run(drain_run_id)? {
+            Some(run) if run.job_id == super::PULL_DRAIN_JOB => {}
+            _ => return Ok(None),
+        }
+        let preflight = self
+            .read_run_state(drain_run_id)?
+            .and_then(|state| state.pull_crew_preflight);
+        self.crew_window_from(drain_run_id, preflight).map(Some)
+    }
+
+    /// [`Self::pull_drain_crew_window`] over a preflight the caller holds,
+    /// for a pass that could not persist the one it just took.
+    pub(crate) fn crew_window_from(
+        &self,
+        drain_run_id: &str,
+        preflight: Option<PullCrewPreflight>,
+    ) -> Result<PullCrewWindow, OrbitError> {
+        let mut excluded = preflight
+            .as_ref()
+            .map(|preflight| preflight.excluded.clone())
+            .unwrap_or_default();
+        for record in self
+            .stores()
+            .jobs()
+            .local_pull_claims_admitted_by(drain_run_id)?
+        {
+            let Some(ClaimMutation::Release(evidence)) = &record.settlement else {
+                continue;
+            };
+            let Some(unavailable) = &evidence.provider_unavailable else {
+                continue;
+            };
+            let Some(crew) = unavailable.crew.as_deref() else {
+                continue;
+            };
+            if excluded.iter().any(|exclusion| exclusion.crew == crew) {
+                continue;
+            }
+            let task = record
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.claim.as_ref())
+                .map(|claim| claim.task_id.as_str())
+                .unwrap_or("a claimed task");
+            excluded.push(CrewExclusion {
+                crew: crew.to_string(),
+                source: CrewExclusionSource::ProviderUnavailable,
+                reason: format!("{task} failed: {}", unavailable.reason),
+            });
+        }
+        let runnable = preflight.as_ref().map(|preflight| {
+            preflight
+                .runnable
+                .iter()
+                .filter(|crew| !excluded.iter().any(|exclusion| &exclusion.crew == *crew))
+                .cloned()
+                .collect()
+        });
+        Ok(PullCrewWindow {
+            checked_at: preflight.as_ref().map(|preflight| preflight.checked_at),
+            runnable,
+            default_crew: match preflight {
+                Some(preflight) => preflight.default_crew,
+                None => self
+                    .context
+                    .settings()
+                    .default_crew()
+                    .map(ToOwned::to_owned),
+            },
+            excluded,
+        })
     }
 
     /// The pull admission a local run executes, when it is a claimed leaf.

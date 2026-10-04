@@ -6,8 +6,10 @@ use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimEvidence, ClaimMutation,
-    JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
+    JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, ProviderUnavailable,
+    PullDestination,
 };
+use orbit_types::workflow::{PROVIDER_UNAVAILABLE_MARKER, is_provider_unavailable};
 
 use crate::application::distributed::{is_owner_refusal, is_owner_transport_failure};
 
@@ -162,10 +164,14 @@ impl PullDrain<'_> {
     /// The count of claims admitted survives an error that ends the pass
     /// later: those leaves are already running, and the caller's next wait
     /// depends on it.
+    ///
+    /// `template` is built after reconciliation, so what this pass just
+    /// settled — a leaf whose provider proved unusable, say — already shapes
+    /// the requests it sends [ORB-13941]. `None` requests nothing.
     pub(crate) fn refill_pass(
         &self,
         destination: &PullDestination,
-        template: &AdmissionRequest,
+        template: &dyn Fn() -> Result<Option<AdmissionRequest>, OrbitError>,
         ceiling: usize,
     ) -> RefillPass {
         let mut admitted = 0;
@@ -184,7 +190,7 @@ impl PullDrain<'_> {
         template: &AdmissionRequest,
         ceiling: usize,
     ) -> Result<usize, OrbitError> {
-        let pass = self.refill_pass(destination, template, ceiling);
+        let pass = self.refill_pass(destination, &|| Ok(Some(template.clone())), ceiling);
         match pass.error {
             Some(error) => Err(error),
             None => Ok(pass.admitted),
@@ -194,13 +200,16 @@ impl PullDrain<'_> {
     fn refill_into(
         &self,
         destination: &PullDestination,
-        template: &AdmissionRequest,
+        template: &dyn Fn() -> Result<Option<AdmissionRequest>, OrbitError>,
         ceiling: usize,
         admitted: &mut usize,
     ) -> Result<(), OrbitError> {
         if !self.reconcile_pending(destination)? {
             return Ok(());
         }
+        let Some(template) = template()? else {
+            return Ok(());
+        };
         if self.consecutive_failed_settlements(destination, &template.run_context.run_id)?
             >= CONSECUTIVE_FAILURE_BREAKER
         {
@@ -766,8 +775,10 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 
 /// The settlement a terminal leaf implies, by how far its admission got: a
 /// leaf that never launched was cancelled while queued, so nothing ran and
-/// its claim is released back to the owner's backlog; a launched one ended
-/// without the typed handoff success records, and fails.
+/// its claim is released back to the owner's backlog; a launched one whose
+/// provider could not be used on this host is released too, typed so the
+/// drain excludes its crew for the window [ORB-13941]; any other launched
+/// leaf ended without the typed handoff success records, and fails.
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
 /// the leaf's own worker, a cancel and a drain pass agree on the value.
@@ -790,9 +801,68 @@ pub(crate) fn leaf_failure_settlement(
             ),
         );
     }
+    if let Some(unavailable) = provider_unavailable(record, run, diagnostic) {
+        let crew = unavailable.crew.as_deref().unwrap_or("its crew");
+        let mut evidence = release_evidence(
+            record,
+            &format!(
+                "leaf {} could not use the provider of crew `{crew}` on this host ({}); the \
+                 work was not attempted, and this drain runs no more `{crew}` tasks in its window",
+                run.run_id, unavailable.reason
+            ),
+        );
+        evidence.provider_unavailable = Some(unavailable);
+        return ClaimMutation::Release(evidence);
+    }
     ClaimMutation::Fail(ClaimEvidence {
         summary: Some(terminal_failure_summary_with(run, diagnostic)),
         ..Default::default()
+    })
+}
+
+/// Largest provider diagnostic a provider-unavailable release carries.
+const MAX_PROVIDER_REASON_BYTES: usize = 1024;
+
+/// The provider failure a terminal leaf ended on, when its provider could not
+/// be used on this host: a failed step, or the terminalizing caller's own
+/// diagnostic, carrying the typed provider-unavailable marker the CLI runner
+/// stamps. The crew is the one the leaf resolved at start, else the owner
+/// task's own.
+fn provider_unavailable(
+    record: &LocalPullAdmission,
+    run: &orbit_types::workflow::JobRun,
+    diagnostic: Option<(&str, &str)>,
+) -> Option<ProviderUnavailable> {
+    let message = run
+        .steps
+        .iter()
+        .rev()
+        .find(|step| {
+            is_provider_unavailable(step.error_code.as_deref(), step.error_message.as_deref())
+        })
+        .map(|step| step.error_message.clone().unwrap_or_default())
+        .or_else(|| {
+            diagnostic
+                .filter(|(code, message)| is_provider_unavailable(Some(code), Some(message)))
+                .map(|(_, message)| message.to_string())
+        })?;
+    let message = message.replace(PROVIDER_UNAVAILABLE_MARKER, "");
+    let message = message.trim();
+    let cut = floor_char_boundary(message, MAX_PROVIDER_REASON_BYTES);
+    let crew = run
+        .resolved_crew
+        .clone()
+        .filter(|crew| !crew.trim().is_empty())
+        .or_else(|| {
+            record
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.task.as_ref())
+                .and_then(|task| task.crew.clone())
+        });
+    Some(ProviderUnavailable {
+        crew,
+        reason: message[..cut].to_string(),
     })
 }
 
@@ -801,16 +871,20 @@ pub(crate) fn leaf_failure_settlement(
 /// back. Nothing is recorded as a failure — the work either never ran or was
 /// stopped on purpose.
 pub(crate) fn release_settlement(record: &LocalPullAdmission, why: &str) -> ClaimMutation {
+    ClaimMutation::Release(release_evidence(record, why))
+}
+
+fn release_evidence(record: &LocalPullAdmission, why: &str) -> ClaimEvidence {
     let drain = &record.request.run_context.run_id;
     let machine = &record.destination.execution_machine_id;
-    ClaimMutation::Release(ClaimEvidence {
+    ClaimEvidence {
         summary: Some(format!("released by follower drain {drain}: {why}")),
         comment: Some(format!(
             "Follower drain {drain} on {machine} released this claim: {why}. The task is back \
              in the backlog and can be pulled again."
         )),
         ..Default::default()
-    })
+    }
 }
 
 fn terminal_failure_summary_with(

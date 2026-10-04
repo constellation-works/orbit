@@ -187,6 +187,12 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             run_id,
         )
     }
+    fn local_pull_claims_admitted_by(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<crate::contracts::LocalPullAdmission>, OrbitError> {
+        super::pull::claims_admitted_by(&self.store, &self.workspace_id, run_id)
+    }
     fn unsettled_local_pull_admissions(
         &self,
     ) -> Result<Vec<crate::contracts::LocalPullAdmission>, OrbitError> {

@@ -8,8 +8,8 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
-last_validated: 2026-09-29
+related_artifacts: [ORB-13941, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+last_validated: 2026-10-04
 ---
 
 # Set Up and Recover a Single-Owner Distributed Drain
@@ -89,14 +89,15 @@ v1 admits only `none`. `before-pr` and `after-landing` are refusals, not silent
 downgrades. A workspace that still ships those policies through its **legacy**
 leaf is not ready for distributed pull.
 
-Match crews and toolchains the same way you would for a second owner-local
-executor: every participant must resolve the workspace default crew, explicit
-task crews, and required validation commands. Heterogeneous eligibility is not
-supported. A follower runs a pulled task on the crew the owner's task names. It
-uses its own `workflow.default_crew` only when the task names no crew. If the
-follower doesn't configure the task's crew, the leaf fails with an error naming
-that crew instead of running the default. Empty `workflow.required_validation_commands` is fail-closed for a
-claimed handoff.
+Match toolchains and required validation commands the same way you would for
+a second owner-local executor. Crews may differ: a follower only receives
+tasks whose crew it can run. A follower runs a pulled task on the crew the
+owner's task names, and uses its own `workflow.default_crew` only when the
+task names no crew. Each drain declares the crews its host can run (see step
+8), and the owner skips a task whose crew is not among them, leaving it in
+the backlog for the owner or another follower. Use the same crew names on
+both sides: crews are matched by name. Empty
+`workflow.required_validation_commands` is fail-closed for a claimed handoff.
 
 Per-host compiler capacity is independent. Keep the shared build-budget
 defaults (two heavy slots, four Cargo jobs) unless you deliberately raise them;
@@ -307,6 +308,16 @@ submitted, the command refuses unless:
 
 The drain is an ordinary durable run of `workspace_pull_pipeline`:
 
+- On its first iteration the drain runs a provider preflight over every crew
+  this host configures. A crew is runnable when it is enabled, its provider's
+  executor resolves, and that executor's CLI is found where a leaf would
+  launch it. The preflight starts no provider and checks no login; a provider
+  with no signed-in user is caught by its first claimed leaf (below). The
+  result is kept for the drain's window. Every pull request declares the
+  runnable crews, and the owner admits only tasks this host can run. If no
+  crew is runnable, the drain requests nothing and reports
+  `no_runnable_crew`. After you install a CLI or sign a provider in, start a
+  new drain to pick it up.
 - Each iteration first carries earlier admissions forward — retries an
   unanswered request under the **same** ID, binds, launches, and delivers a
   finished leaf's settlement — then, while the window is open, tops free slots
@@ -343,11 +354,24 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   goes back to `backlog` on the owner with a comment naming the drain. A leaf
   that fails before its handoff moves its task to `blocked` on
   the owner with a summary naming the leaf run, its failed step and that
-  step's error. The full diagnostic stays in the follower's run
+  step's error. The exception is a leaf whose provider could not be used, such
+  as a CLI that failed authentication. Its claim is released instead: the
+  task goes back to `backlog` on the owner with a comment naming the crew and
+  the provider's error. The failure breaker does not count it, and the drain
+  stops offering that crew for the rest of its window, so the task is not
+  pulled straight back. The full diagnostic stays in the follower's run
   (`orbit run show <leaf-run>`, and `.orbit/state/logs/<leaf-run>.worker.log`
   on the follower). That run page carries a `Claim:` line (`pull_claim` in
   `--json`): the owner task, claim, owner selector and admitting drain, and
   whether the leaf's outcome has reached the owner.
+- `orbit run show <drain-run>` lists the crew window as `Crews:` lines
+  (`crew_window` in `--json`; the dashboard's run detail shows the same
+  panel). The first line names the runnable crews. Each excluded crew is
+  listed with its source and the reason: `preflight` (disabled, executor
+  unresolved, or CLI not found) or `provider_unavailable` (a claimed leaf's
+  provider failed, with the task and error). Each iteration's output carries
+  the same window as `crews`. To use an excluded crew again, fix the provider
+  on this host (for example, sign the CLI in), then start a new drain.
 - After three consecutive claims settle as failures, the drain stops
   requesting work (`circuit_open` in the iteration output) and only keeps
   settling. Inspect the blocked tasks and their leaf logs, fix the cause,

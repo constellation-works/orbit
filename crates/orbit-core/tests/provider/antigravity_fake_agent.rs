@@ -12,8 +12,8 @@ use std::sync::Arc;
 use orbit_core::OrbitRuntime;
 use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
-use orbit_types::workflow::ExecutorDef;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::{ExecutorDef, is_provider_unavailable};
 
 const PROMPT_SECRET: &str = "agy-tenant-42-authorization-bearer-zzz";
 const SUCCESS_ENVELOPE: &str =
@@ -315,11 +315,39 @@ exit 1"#
     );
     assert!(!message.contains(PROMPT_SECRET));
     assert!(!message.contains("edited"));
+    assert!(
+        !is_provider_unavailable(None, Some(&message)),
+        "a provider that answered and timed out is not unusable: {message}"
+    );
     let rendered = serde_json::to_string(&outcome.output).expect("serialize output");
     assert!(
         !rendered.contains(PROMPT_SECRET),
         "prompt must not appear in durable diagnostics"
     );
+}
+
+/// [ORB-13941] The on-call failure: `agy` was not signed in on the follower.
+/// Its terminal error is typed as provider-unavailable, so a pull drain
+/// releases the claim and excludes the crew instead of blocking the task.
+#[test]
+fn authentication_terminal_error_is_typed_provider_unavailable() {
+    let body = format!(
+        r#"printf '%s\n' '{{"event":"result","result":{{"status":"ERROR","response":"{SUCCESS_ENVELOPE}","error":"authentication failed or timed out"}}}}'
+exit 1"#
+    );
+    let harness = Harness::new(&body);
+    let outcome = dispatch(&harness, spec(60));
+    assert!(!outcome.success);
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        is_provider_unavailable(None, Some(&message)),
+        "an unauthenticated provider must be typed unavailable: {message}"
+    );
+    assert!(
+        message.contains("authentication failed or timed out"),
+        "{message}"
+    );
+    assert!(!message.contains(PROMPT_SECRET));
 }
 
 #[test]

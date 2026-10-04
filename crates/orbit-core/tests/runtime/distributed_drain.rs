@@ -31,7 +31,8 @@ use orbit_core::application::routines::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
-    ClaimMutation, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation,
+    ClaimMutation, JobRunStepParams, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation,
+    LocalPullPhase,
 };
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
 use orbit_types::policy::Role;
@@ -40,7 +41,9 @@ use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{
     HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition, TaskHandoff,
 };
-use orbit_types::workflow::{JobRunState, PipelineState, ReviewTiming};
+use orbit_types::workflow::{
+    ExecutorDef, ExecutorType, JobRunState, JobTargetType, PipelineState, ReviewTiming,
+};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -253,25 +256,25 @@ fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
     (runtime, repo)
 }
 
-/// An approved owner task scoped to `file`, ready for admission.
-fn backlog_task(owner: &OrbitRuntime, repo: &Path, file: &str) -> String {
+/// An approved owner task scoped to `file`, ready for admission, on `crew`
+/// when one is named.
+fn backlog_task(owner: &OrbitRuntime, repo: &Path, file: &str, crew: Option<&str>) -> String {
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join(file), "fn work() {}\n").unwrap();
-    let task = owner
-        .run_tool(
-            "orbit.task.add",
-            json!({
-                "title": format!("Change {file}"),
-                "description": "Distributed drain fixture task.",
-                "acceptance_criteria": ["Changed."],
-                "complexity": "low",
-                "workspace": repo.to_string_lossy(),
-                "type": "chore",
-                "context_files": [format!("file:{file}")],
-                "model": "codex"
-            }),
-        )
-        .expect("add task");
+    let mut input = json!({
+        "title": format!("Change {file}"),
+        "description": "Distributed drain fixture task.",
+        "acceptance_criteria": ["Changed."],
+        "complexity": "low",
+        "workspace": repo.to_string_lossy(),
+        "type": "chore",
+        "context_files": [format!("file:{file}")],
+        "model": "codex"
+    });
+    if let Some(crew) = crew {
+        input["crew"] = json!(crew);
+    }
+    let task = owner.run_tool("orbit.task.add", input).expect("add task");
     let id = task["id"].as_str().unwrap().to_string();
     for update in [
         json!({"id": id, "plan": "1. Change it.", "model": "codex"}),
@@ -288,10 +291,20 @@ impl Pair {
     /// An owner with `tasks` backlog tasks, each on its own file, and a
     /// replica follower routed to it.
     fn new(tasks: usize) -> Self {
+        Self::with_crews(&vec![None; tasks])
+    }
+
+    /// An owner with one backlog task per entry of `crews`, in that order,
+    /// each on its own file and on the named crew, and a replica follower
+    /// routed to it. The follower can launch every provider it configures,
+    /// so its window preflight runs every crew until a test says otherwise.
+    fn with_crews(crews: &[Option<&str>]) -> Self {
         let root = TempDir::new().unwrap();
         let (owner, owner_repo) = open_runtime(root.path(), OWNER);
-        let tasks = (0..tasks)
-            .map(|n| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs")))
+        let tasks = crews
+            .iter()
+            .enumerate()
+            .map(|(n, crew)| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs"), *crew))
             .collect();
         let workspace_id = owner.workspace_id().unwrap();
         let wire = Arc::new(Wire {
@@ -311,6 +324,15 @@ impl Pair {
             follower.sqlite_store().unwrap(),
             follower.workspace_id().unwrap(),
         );
+        let providers = follower
+            .configured_crew_registry_projection()
+            .crews
+            .into_iter()
+            .map(|crew| crew.provider)
+            .collect::<BTreeSet<_>>();
+        for provider in providers {
+            follower_cli(&follower, &provider, "sh");
+        }
         Self {
             _root: root,
             wire,
@@ -325,6 +347,39 @@ impl Pair {
             }),
             tasks,
         }
+    }
+
+    /// Point the follower's `provider` at `command`, as an operator's
+    /// executor definition does.
+    fn follower_cli(&self, provider: &str, command: &str) {
+        follower_cli(&self.follower, provider, command);
+    }
+
+    /// The leaf ends the way a leaf whose step failed ends: the step's error
+    /// recorded, then the run terminal, with no settlement of its own.
+    fn leaf_fails_with(&self, leaf: &str, error: &str) {
+        let now = Utc::now();
+        self.follower_jobs
+            .complete_job_run_step(
+                leaf,
+                &JobRunStepParams {
+                    step_index: 0,
+                    target_type: JobTargetType::Activity,
+                    target_id: "implement_one".into(),
+                    started_at: now,
+                    finished_at: now,
+                    duration_ms: None,
+                    exit_code: Some(1),
+                    agent_response_json: None,
+                    state: JobRunState::Failed,
+                    error_code: None,
+                    error_message: Some(error.into()),
+                },
+            )
+            .expect("failed step");
+        self.follower_jobs
+            .finalize_job_run(leaf, JobRunState::Failed, now, None)
+            .expect("leaf failed");
     }
 
     /// A live follower drain run, as `orbit run auto --pull` leaves it once
@@ -508,6 +563,27 @@ impl Pair {
             .map(|run| run.run_id)
             .collect()
     }
+}
+
+/// Register `provider`'s executor on `runtime` as launching `command`.
+fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
+    runtime
+        .upsert_executor_def(&ExecutorDef {
+            name: provider.to_string(),
+            executor_type: ExecutorType::DirectAgent,
+            command: Some(command.to_string()),
+            args: vec![],
+            stdout_format: None,
+            model_pair_override: None,
+            model_flag: None,
+            timeout_seconds: None,
+            env: Default::default(),
+            sandbox: None,
+            allow_fallback: false,
+            created_at: None,
+            updated_at: None,
+        })
+        .expect("executor");
 }
 
 /// A stand-in leaf worker: a process leading its own group, reaped the
@@ -698,6 +774,164 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 4);
     assert_eq!(backlog(&pair), 0);
     assert_eq!(pair.owner_claims().len(), 4);
+}
+
+fn excluded(pass: &Value, crew: &str) -> Value {
+    pass["crews"]["excluded"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|exclusion| exclusion["crew"] == crew)
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// A follower whose window preflight cannot find crew `antigravity`'s CLI is
+/// never handed an `antigravity` task [ORB-13941]. The owner admits the next
+/// task it can run instead and, once only the unrunnable one is left, answers
+/// idle and names it, so the task stays in the backlog for the owner or
+/// another follower rather than being claimed and failed here.
+#[test]
+fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
+    if !isolated("a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run") {
+        return;
+    }
+    let pair = Pair::with_crews(&[Some("antigravity"), Some("sol")]);
+    pair.follower_cli("antigravity", "orbit-test-no-such-provider-cli");
+    let (unrunnable, runnable) = (&pair.tasks[0], &pair.tasks[1]);
+    let drain = pair.start_drain();
+
+    let first = pair.pass(&drain);
+    assert!(launch_refused(&first), "{first}");
+    let exclusion = excluded(&first, "antigravity");
+    assert_eq!(exclusion["source"], "preflight", "{first}");
+    assert!(
+        exclusion["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("orbit-test-no-such-provider-cli")),
+        "{first}"
+    );
+    let idle = pair.pass(&drain);
+    assert_eq!(idle["admitted"], 0, "{idle}");
+
+    let claims = pair.owner_claims();
+    assert_eq!(claims.len(), 1, "{claims:#?}");
+    assert_eq!(claims[0]["claim"]["task_id"], runnable.as_str());
+    assert_eq!(pair.owner_status(unrunnable), "backlog");
+    let pulls = pair.wire.calls("orbit.task.pull");
+    assert_eq!(pulls.len(), 2, "{pulls:?}");
+    for pull in &pulls {
+        let runnable = pull["crews"]["runnable"]
+            .as_array()
+            .expect("declared crews");
+        assert!(runnable.iter().any(|crew| crew == "sol"), "{pull}");
+        assert!(runnable.iter().all(|crew| crew != "antigravity"), "{pull}");
+    }
+    let idle_receipt = pair
+        .follower_jobs
+        .local_pull_admissions()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.phase == LocalPullPhase::Idle)
+        .and_then(|record| record.receipt)
+        .expect("the owner answered idle");
+    assert!(
+        idle_receipt
+            .crew_unavailable
+            .iter()
+            .any(|skipped| &skipped.task_id == unrunnable && skipped.reason.contains("antigravity")),
+        "{idle_receipt:#?}"
+    );
+
+    let window = pair
+        .follower
+        .pull_drain_crew_window(&drain)
+        .unwrap()
+        .expect("a pull drain has a crew window");
+    assert!(window.checked_at.is_some());
+    assert!(
+        window
+            .excluded
+            .iter()
+            .any(|exclusion| exclusion.crew == "antigravity"),
+        "{window:#?}"
+    );
+}
+
+/// A claimed leaf whose provider refused to authenticate gives its claim
+/// back [ORB-13941]: the owner's task returns to the backlog rather than
+/// `blocked`, the failure breaker does not count it, and the drain offers
+/// that crew no more for the rest of its window, so the same task is not
+/// pulled straight back to fail the same way.
+#[test]
+fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window() {
+    if !isolated("a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window")
+    {
+        return;
+    }
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_fails_with(
+        &leaf,
+        "[provider_unavailable] cli subprocess exited with code 1 Antigravity terminal error: \
+         authentication failed or timed out",
+    );
+
+    let pass = pair.pass(&drain);
+    assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
+    assert_eq!(pass["consecutive_failures"], 0, "{pass}");
+    assert_eq!(pass["admitted"], 0, "{pass}");
+    let exclusion = excluded(&pass, "sol");
+    assert_eq!(exclusion["source"], "provider_unavailable", "{pass}");
+    assert!(
+        exclusion["reason"].as_str().is_some_and(
+            |reason| reason.contains(task.as_str()) && reason.contains("authentication failed")
+        ),
+        "{pass}"
+    );
+
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    let release = &settles[0]["settlement"]["Release"];
+    assert_eq!(
+        release["provider_unavailable"]["crew"], "sol",
+        "{settles:?}"
+    );
+    let claims = pair.owner_claims();
+    assert_eq!(
+        claims.len(),
+        1,
+        "the released task is not pulled back: {claims:#?}"
+    );
+    assert_eq!(claims[0]["claim"]["phase"], "revoked");
+    assert!(
+        comments_of(&pair.owner_task(&task)).contains("could not use the provider of crew `sol`"),
+        "{}",
+        pair.owner_task(&task)
+    );
+    let pulls = pair.wire.calls("orbit.task.pull");
+    let last = pulls.last().expect("the pass asked again");
+    assert!(
+        last["crews"]["excluded"]
+            .as_array()
+            .is_some_and(|excluded| excluded.iter().any(|exclusion| exclusion["crew"] == "sol")),
+        "{last}"
+    );
+
+    let window = pair
+        .follower
+        .pull_drain_crew_window(&drain)
+        .unwrap()
+        .expect("a pull drain has a crew window");
+    assert!(
+        window
+            .runnable
+            .as_ref()
+            .is_some_and(|runnable| !runnable.iter().any(|crew| crew == "sol")),
+        "{window:#?}"
+    );
 }
 
 /// A settlement whose reply is lost stays recorded and is delivered again;

@@ -54,6 +54,17 @@ pub trait JobRunStoreBackend: Send + Sync {
         ))
     }
 
+    /// Every admission the drain `run_id` made that holds or held a claim, in
+    /// admission order, whatever its phase. Read without creating the feature
+    /// schema and without decoding claimless polls, so a pull drain can derive
+    /// its window's crew exclusions every pass [ORB-13941].
+    fn local_pull_claims_admitted_by(
+        &self,
+        _run_id: &str,
+    ) -> Result<Vec<LocalPullAdmission>, OrbitError> {
+        Ok(Vec::new())
+    }
+
     /// Admissions that still hold a slot — not idle, refused or settled — in
     /// admission order, read without creating the feature schema, so a
     /// workspace that never pulled reads none [ORB-13663]. Any follower

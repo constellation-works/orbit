@@ -85,6 +85,7 @@ pub(super) fn pull(
             "caller_review_policy",
             "run_context",
             "ship",
+            "crews",
             "workspace",
             "agent",
             "model",
@@ -99,6 +100,7 @@ pub(super) fn pull(
             "caller_review_policy",
             "run_context",
             "ship",
+            "crews",
         ],
     )?;
     let response = runtime.serve_task_pull(session, &request)?;

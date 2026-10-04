@@ -220,6 +220,70 @@ impl AdmissionRefusal {
     }
 }
 
+/// The crews a pulling executor can run, declared on each request [ORB-13941].
+///
+/// The owner admits a candidate only when the crew it would run as on this
+/// executor — its own `task.crew`, or `default_crew` for a task naming none —
+/// is runnable here. A task the executor cannot run is skipped, not refused:
+/// it stays in the backlog for the owner or another follower.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionCrewCapability {
+    /// Crews the executor's window preflight found runnable, by registry
+    /// name. `None` when the window took no preflight: then any crew not in
+    /// `excluded` is admissible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runnable: Option<Vec<String>>,
+    /// The crew a task naming none runs as on the executor. `None` admits no
+    /// crew-less task, since its leaf would have no crew to run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_crew: Option<String>,
+    /// Crews never admitted to this executor for the rest of its window.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded: Vec<orbit_types::workflow::CrewExclusion>,
+}
+
+impl AdmissionCrewCapability {
+    /// Why a task whose own crew is `task_crew` cannot run on this executor,
+    /// or `None` when it can.
+    #[must_use]
+    pub fn unrunnable_reason(&self, task_crew: Option<&str>) -> Option<String> {
+        let named = task_crew.map(str::trim).filter(|crew| !crew.is_empty());
+        let Some(crew) = named.or(self.default_crew.as_deref()) else {
+            return Some(
+                "names no crew and the executor has no default crew to run it as".to_string(),
+            );
+        };
+        let via = if named.is_some() {
+            String::new()
+        } else {
+            " (the executor's default crew)".to_string()
+        };
+        if let Some(exclusion) = self
+            .excluded
+            .iter()
+            .find(|exclusion| exclusion.crew == crew)
+        {
+            return Some(format!(
+                "crew `{crew}`{via} is excluded on the executor: {}",
+                exclusion.reason
+            ));
+        }
+        match &self.runnable {
+            Some(runnable) if !runnable.iter().any(|name| name == crew) => Some(format!(
+                "crew `{crew}`{via} is not runnable on the executor"
+            )),
+            _ => None,
+        }
+    }
+
+    fn malformed(&self) -> bool {
+        let blank = |name: &str| name.trim().is_empty();
+        self.runnable.iter().flatten().any(|name| blank(name))
+            || self.default_crew.as_deref().is_some_and(blank)
+            || self.excluded.iter().any(|exclusion| blank(&exclusion.crew))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdmissionRequest {
     pub request_id: String,
@@ -228,6 +292,21 @@ pub struct AdmissionRequest {
     pub caller_review_policy: String,
     pub run_context: AdmissionRunContext,
     pub ship: AdmissionShipContract,
+    /// What the executor can run. Absent for an owner-local admission and
+    /// for callers that place no crew restriction: then every crew is
+    /// admissible, as before [ORB-13941].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crews: Option<AdmissionCrewCapability>,
+}
+
+impl AdmissionRequest {
+    /// Whether the declared crew capability is malformed (a blank name).
+    #[must_use]
+    pub fn crews_malformed(&self) -> bool {
+        self.crews
+            .as_ref()
+            .is_some_and(AdmissionCrewCapability::malformed)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,6 +368,9 @@ pub struct AdmissionReceipt {
     pub task: Option<AdmissionTaskSummary>,
     pub invalid_candidates: Vec<AdmissionDiagnostic>,
     pub deferred_conflicts: Vec<AdmissionDiagnostic>,
+    /// Ready candidates skipped because the executor cannot run their crew.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crew_unavailable: Vec<AdmissionDiagnostic>,
     pub queue_depth: usize,
 }
 
@@ -369,6 +451,21 @@ pub struct ClaimEvidence {
     pub summary: Option<String>,
     pub comment: Option<String>,
     pub artifacts: Vec<orbit_types::task::TaskArtifact>,
+    /// Set on a release whose leaf could not use its provider [ORB-13941].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_unavailable: Option<ProviderUnavailable>,
+}
+
+/// A claimed leaf ended because its crew's provider could not be used on the
+/// executing host (an authentication failure, for instance), not because the
+/// work failed. Its claim is released to the backlog and the crew is excluded
+/// for the rest of the executor's drain window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUnavailable {
+    /// The crew the leaf ran as.
+    pub crew: Option<String>,
+    /// The provider's own diagnostic, bounded.
+    pub reason: String,
 }
 
 /// Worker-owned documents and coordination metadata. Lifecycle transitions

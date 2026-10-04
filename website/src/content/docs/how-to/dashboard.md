@@ -236,7 +236,9 @@ machine warns before you cancel it: the confirmation says cancelling fails the
 claim on the owner machine, blocks the owner's task, and names that task. The
 run detail carries the claim (`pull_claim`, the same field `orbit run show
 --json` prints); a row in the runs list has none, so cancelling one of these
-rows reads the run detail once to find it.
+rows reads the run detail once to find it. A follower's pull drain run detail
+also lists the crews its window can run and each crew it excluded, with the
+reason (`crew_window`, the `Crews:` lines of `orbit run show`).
 
 A failed, timed-out, or interrupted run's detail opens with the step it
 stopped at and the error it recorded.
