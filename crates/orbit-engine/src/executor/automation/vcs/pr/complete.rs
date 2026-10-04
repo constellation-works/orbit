@@ -30,6 +30,15 @@
 //! state reported without a merge commit all refuse completion instead of
 //! reaching the transition. See [`super::delivery`].
 //!
+//! [ORB-13890] A `DIRTY` PR whose head a before-PR review certified cannot be
+//! merged as rebased, unreviewed content. With `re_review_on_conflict` and the
+//! same checkpoints, completion rebases the branch locally through the same
+//! pinned `git_rebase` (a real conflict still reaches conflict recovery),
+//! publishes nothing, and returns `re_review_required` with the rebase
+//! checkpoint; the pipeline then reviews, republishes and completes the new
+//! head. Without the flag, or on a second conflict, it stays
+//! `review_gate_stale`.
+//!
 //! [ORB-13444] Ungated completion is held to that same candidate. The
 //! published head is checked before any merge or auto-merge request, and that
 //! SHA is what the synchronous provider mutation requires. Pending work that
@@ -109,7 +118,25 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     } else {
         let workspace_path = context.workspace_path.to_string_lossy().into_owned();
         let pr_number = resolve_pr_number(input, &context.tasks)?;
-        let delivered = drive_pr_to_merged(host, input, &workspace_path, &pr_number)?;
+        let delivered = match drive_pr_to_merged(host, input, &workspace_path, &pr_number)? {
+            Delivery::Merged(delivered) => delivered,
+            Delivery::RebasedForReview(rebased) => {
+                return Ok(json!({
+                    "phase": "complete",
+                    "no_diff_expected": false,
+                    "re_review_required": true,
+                    "rebased": rebased,
+                    "merge": {
+                        "merged": false,
+                        "reason": "reviewed_head_conflicted",
+                        "pr_number": pr_number,
+                        "reviewed_head_sha": reviewed_head_sha(input),
+                    },
+                    "completed_task_ids": [],
+                    "skipped_task_ids": [],
+                }));
+            }
+        };
         // [ORB-11333] The certificate only carries into coverage when the
         // landing that actually happened is verified against it.
         if let Some(reviewed_head_sha) = reviewed_head_sha(input) {
@@ -149,6 +176,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     Ok(json!({
         "phase": "complete",
         "no_diff_expected": no_diff_expected,
+        "re_review_required": false,
         "merge": merge_outcome,
         "completed_task_ids": completion["completed_task_ids"],
         "skipped_task_ids": completion["skipped_task_ids"],
@@ -163,6 +191,14 @@ struct DeliveredMerge {
     evidence: DeliveryEvidence,
 }
 
+/// How driving the PR ended without an error.
+enum Delivery {
+    Merged(DeliveredMerge),
+    /// The reviewed head conflicted with its base and was rebased locally;
+    /// the rebase checkpoint must be reviewed before it is published.
+    RebasedForReview(Value),
+}
+
 /// Poll GitHub until the PR is verifiably merged, requesting the merge (or
 /// auto-merge) as its reported state allows.
 fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
@@ -170,7 +206,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
-) -> Result<DeliveredMerge, OrbitError> {
+) -> Result<Delivery, OrbitError> {
     let max_wait_seconds = bounded_u64(
         input,
         "max_wait_seconds",
@@ -206,7 +242,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 let managed_merge = requested_landed_commit
                     .as_deref()
                     .is_some_and(|requested| Some(requested) == landed_commit);
-                return Ok(DeliveredMerge {
+                return Ok(Delivery::Merged(DeliveredMerge {
                     outcome: json!({
                         "merged": true,
                         "pr_number": pr_number,
@@ -221,7 +257,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         "delivery_evidence": evidence.as_json(),
                     }),
                     evidence,
-                });
+                }));
             }
             PrMergeState::Closed => {
                 return Err(OrbitError::Execution(format!(
@@ -249,12 +285,24 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             PrMergeState::Conflict => {
                 // [ORB-11333] Repairing a conflict rewrites the candidate; a
                 // reviewed head cannot be merged as unreviewed content.
+                // [ORB-13890] The pipeline may ask for the rebase so it can
+                // review the new head before republishing it.
                 if reviewed_head_sha.is_some() {
-                    return Err(OrbitError::Execution(format!(
-                        "review_gate_stale: pull request #{pr_number} has merge conflicts and its \
-                         head is bound to a before-PR review; a conflict repair needs a fresh \
-                         review before managed completion, so the task stays in review"
-                    )));
+                    if !re_review_on_conflict(input) || !has_completion_recovery_checkpoint(input) {
+                        return Err(OrbitError::Execution(format!(
+                            "review_gate_stale: pull request #{pr_number} has merge conflicts and \
+                             its head is bound to a before-PR review; a conflict repair needs a \
+                             fresh review before managed completion, so the task stays in review"
+                        )));
+                    }
+                    let rebased = rebase_conflicting_pr_branch(
+                        host,
+                        input,
+                        workspace_path,
+                        pr_number,
+                        &status,
+                    )?;
+                    return Ok(Delivery::RebasedForReview(rebased));
                 }
                 if conflict_refresh_attempted || !has_completion_recovery_checkpoint(input) {
                     return Err(completion_conflict_error(pr_number));
@@ -415,6 +463,13 @@ fn ensure_pr_head_is_reviewed(
     Ok(())
 }
 
+fn re_review_on_conflict(input: &Value) -> bool {
+    input
+        .get("re_review_on_conflict")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 fn has_completion_recovery_checkpoint(input: &Value) -> bool {
     input.get("completion").and_then(Value::as_str) == Some("done")
         && ["head", "published_head_sha", "base"]
@@ -447,6 +502,34 @@ fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
     pr_number: &str,
     pull_request: &Value,
 ) -> Result<Option<String>, OrbitError> {
+    let synced =
+        rebase_conflicting_pr_branch(host, input, workspace_path, pr_number, pull_request)?;
+    let push_input = json!({
+        "job_run_id": input.get("job_run_id").cloned().unwrap_or(Value::Null),
+        "completed_task_ids": input.get("completed_task_ids").cloned().unwrap_or(Value::Null),
+        "workspace_path": workspace_path,
+        "branch": synced["head"],
+        "rewrite_performed": synced["rewritten"],
+        "rewrite_head_before": synced["head_sha_before"],
+        "expected_remote_sha": synced["remote_sha_before"],
+    });
+    push_batch_changes(host, &push_input)?;
+    Ok(synced
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned))
+}
+
+/// Rebase the published candidate onto the base GitHub currently sees,
+/// locally, returning the `git_rebase` checkpoint a lease-checked push of the
+/// rewritten branch needs.
+fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &str,
+    pr_number: &str,
+    pull_request: &Value,
+) -> Result<Value, OrbitError> {
     let head =
         input_string_field(input, "head").ok_or_else(|| completion_conflict_error(pr_number))?;
     let published_head_sha = input_string_field(input, "published_head_sha")
@@ -506,21 +589,7 @@ fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         "commits_behind": published_freshness.commits_behind,
         "sync_required": true,
     });
-    let synced = rebase_pr_branch(host, &rebase_input)?;
-    let push_input = json!({
-        "job_run_id": input.get("job_run_id").cloned().unwrap_or(Value::Null),
-        "completed_task_ids": input.get("completed_task_ids").cloned().unwrap_or(Value::Null),
-        "workspace_path": workspace_path,
-        "branch": synced["head"],
-        "rewrite_performed": synced["rewritten"],
-        "rewrite_head_before": synced["head_sha_before"],
-        "expected_remote_sha": synced["remote_sha_before"],
-    });
-    push_batch_changes(host, &push_input)?;
-    Ok(synced
-        .get("head_sha")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned))
+    rebase_pr_branch(host, &rebase_input)
 }
 
 fn read_pr_status<H: RuntimeHost + ?Sized>(

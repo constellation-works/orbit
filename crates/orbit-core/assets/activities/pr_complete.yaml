@@ -9,7 +9,10 @@ spec:
     PR to merge through GitHub's own gates, verify it is actually merged, then
     apply the guarded review -> done transition. Branch protections and required
     checks are respected; no administrative bypass is available. A no-diff
-    bundle completes without a PR.
+    bundle completes without a PR. A reviewed head that conflicts with its
+    base is never merged as rebased content: with re_review_on_conflict the
+    branch is rebased locally, nothing is published, and the output asks for
+    a re-review; otherwise completion refuses as review_gate_stale.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids]
@@ -31,6 +34,16 @@ spec:
         type: string
       published_head_sha:
         type: string
+      reviewed_head_sha:
+        type: string
+        description: >
+          The head a before-PR review certified. Completion merges only this
+          exact head; empty when the run carried no review.
+      re_review_on_conflict:
+        type: boolean
+        description: >
+          On a conflicting reviewed head, rebase locally and return
+          re_review_required with the rebase checkpoint instead of refusing.
       base:
         type: string
       base_sync:
@@ -54,6 +67,17 @@ spec:
         type: string
       no_diff_expected:
         type: boolean
+      re_review_required:
+        type: boolean
+        description: >
+          True when the reviewed head was rebased for a conflict and must be
+          reviewed and republished before completion; no task was completed.
+      rebased:
+        type: object
+        description: >
+          The git_rebase checkpoint of the local rebase when
+          re_review_required; a lease-checked push of the rewritten branch
+          reads it.
       merge:
         type: object
         description: >

@@ -37,6 +37,10 @@ fn dispatch_error_retryability_classification_table() {
             task_id: "T1".into(),
             run_id: "jrun-live".into(),
         },
+        DispatchError::DeterministicActionRefused {
+            action: "review_gate_settle".into(),
+            message: "review_gate_blocked: verdict changes_required".into(),
+        },
     ];
     for err in &permanent {
         assert!(err.is_non_retryable(), "expected non-retryable: {err:?}");

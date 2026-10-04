@@ -145,9 +145,17 @@ spec:
     # synchronization and before push/PR creation. `review_gate_admit` and
     # `review_gate_settle` always run so later steps can read their output;
     # they report `applies: false` under `none`, `after-landing`, and a
-    # checked no-diff exemption. A non-pass verdict fails `review_gate_settle`
-    # and the failure handoff preserves the candidate without opening a PR.
+    # checked no-diff exemption. A non-pass verdict refuses `review_gate_settle`
+    # (no retry) and the failure handoff closes the attempt and preserves the
+    # candidate without opening a PR. Transient gate and reviewer failures
+    # retry, then get one diagnosed recovery before the run fails.
     - id: review_gate_admit
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
       target: activity:review_gate_admit
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
@@ -160,6 +168,12 @@ spec:
 
     - id: review
       when: "{{ steps.review_gate_admit.output.applies }} == true"
+      retry:
+        max_attempts: 2
+        initial_backoff_ms: 5000
+        backoff_cap_ms: 5000
+        backoff_strategy: linear
+      recovery_activity: step_failure_recovery
       target: activity:agent_review_repair
       default_input:
         task_id: "{{ steps.review_gate_admit.output.first_task_id }}"
@@ -167,12 +181,18 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         repo_root: "{{ steps.worktree.output.workspace_path }}"
         attempt_id: "{{ steps.review_gate_admit.output.attempt_id }}"
+        lineage_key: "{{ steps.review_gate_admit.output.lineage_key }}"
         manifest_artifact: "{{ steps.review_gate_admit.output.manifest_artifact }}"
         report_artifact: "{{ steps.review_gate_admit.output.report_artifact }}"
         crew: "{{ steps.review_gate_admit.output.reviewer.crew }}"
-        remaining_seconds: "{{ steps.review_gate_admit.output.remaining.seconds }}"
 
     - id: review_gate_settle
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
       target: activity:review_gate_settle
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
@@ -249,6 +269,9 @@ spec:
       # A DIRTY PR is repaired only after pr_complete reuses git_rebase to
       # prove real unmerged entries. Protection, review, check, auth, stale
       # ownership, and lease failures remain ineligible for agent recovery.
+      # ORB-13890: a DIRTY PR whose head the gate reviewed is rebased locally
+      # but not published; `re_review_required` routes it through the steps
+      # below instead of leaving the task in review as review_gate_stale.
       recovery_activity: pr_conflict_recovery
       target: activity:pr_complete
       default_input:
@@ -260,6 +283,98 @@ spec:
         head: "{{ steps.sync_base.output.head }}"
         published_head_sha: "{{ steps.push.output.local_sha }}"
         reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
+        re_review_on_conflict: true
+        base: "{{ steps.sync_base.output.base }}"
+        base_sync: "{{ input.base_sync }}"
+
+    # ORB-13890: review the rebased head with a fresh reviewer start from the
+    # same lineage, republish it under the rebase lease, then complete it.
+    # A second conflict is review_gate_stale; any failure here keeps the
+    # published PR and the task in review. `complete_pr` may be skipped, so no
+    # `when:` reads its output: `re_review_gate_admit` always runs, reads the
+    # run's recorded `complete_pr` checkpoint itself, and its `applies` gates
+    # the rest.
+    - id: re_review_gate_admit
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        mode: pr
+        completion: "{{ input.completion }}"
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+        re_review_after: complete_pr
+
+    - id: re_review
+      when: "{{ steps.re_review_gate_admit.output.applies }} == true"
+      retry:
+        max_attempts: 2
+        initial_backoff_ms: 5000
+        backoff_cap_ms: 5000
+        backoff_strategy: linear
+      recovery_activity: step_failure_recovery
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.re_review_gate_admit.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.re_review_gate_admit.output.attempt_id }}"
+        lineage_key: "{{ steps.re_review_gate_admit.output.lineage_key }}"
+        manifest_artifact: "{{ steps.re_review_gate_admit.output.manifest_artifact }}"
+        report_artifact: "{{ steps.re_review_gate_admit.output.report_artifact }}"
+        crew: "{{ steps.re_review_gate_admit.output.reviewer.crew }}"
+
+    - id: re_review_gate_settle
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        admission: "{{ steps.re_review_gate_admit.output }}"
+
+    - id: re_push
+      when: "{{ steps.re_review_gate_admit.output.applies }} == true"
+      target: activity:git_push
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        branch: "{{ steps.complete_pr.output.rebased.head }}"
+        base: "{{ steps.complete_pr.output.rebased.base }}"
+        base_ref: "{{ steps.complete_pr.output.rebased.base_ref }}"
+        rewrite_performed: "{{ steps.complete_pr.output.rebased.rewritten }}"
+        rewrite_head_before: "{{ steps.complete_pr.output.rebased.head_sha_before }}"
+        expected_remote_sha: "{{ steps.complete_pr.output.rebased.remote_sha_before }}"
+
+    - id: complete_reviewed_pr
+      when: "{{ steps.re_review_gate_admit.output.applies }} == true"
+      target: activity:pr_complete
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        pr_number: "{{ steps.pr_open.output.pr_number }}"
+        completion: "{{ input.completion }}"
+        head: "{{ steps.complete_pr.output.rebased.head }}"
+        published_head_sha: "{{ steps.re_push.output.local_sha }}"
+        reviewed_head_sha: "{{ steps.re_review_gate_settle.output.reviewed_head_sha }}"
         base: "{{ steps.sync_base.output.base }}"
         base_sync: "{{ input.base_sync }}"
 

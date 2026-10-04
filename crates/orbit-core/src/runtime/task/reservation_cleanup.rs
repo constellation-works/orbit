@@ -320,6 +320,9 @@ impl OrbitRuntime {
             // Not gated on `Finalized`: recording and delivery are idempotent,
             // and a replay retries a delivery an earlier attempt lost.
             self.best_effort_settle_terminal_claimed_leaf(run_id, diagnostic);
+            // [ORB-13890] A run never ends holding a review attempt open.
+            // Idempotent, so not gated on `Finalized` either.
+            self.best_effort_release_run_review_attempts(run_id, finished_at);
         }
         Ok(outcome != JobRunFinalization::Missing)
     }
