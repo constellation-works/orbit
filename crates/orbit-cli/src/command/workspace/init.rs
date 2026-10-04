@@ -25,7 +25,7 @@ use crate::command::init::config_seed_from_detection;
 use super::role::CliCheckoutRole;
 use super::support::{
     detect_git_remote, dir_name_or_fallback, ensure_orbit_gitignore_entry,
-    manages_checkout_local_orbit_files,
+    manages_checkout_local_orbit_files, orbit_gitignore_path,
 };
 use crate::command::{CommandOut, Payload};
 
@@ -723,13 +723,8 @@ fn collect_init_report(
 ) -> Result<WorkspaceInitReport, OrbitError> {
     let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
     let mut checkout_files = BTreeSet::new();
-    if manages_checkout_local_orbit_files(&init_result.root, &init_result.orbit_dir)
-        && let Some(gitignore_root) = init_result.orbit_dir.parent()
-    {
-        checkout_files.insert(checkout_file_label(
-            &init_result.root,
-            &gitignore_root.join(".gitignore"),
-        ));
+    if let Some(gitignore) = orbit_gitignore_path(&init_result.root, &init_result.orbit_dir) {
+        checkout_files.insert(checkout_file_label(&init_result.root, &gitignore));
     }
 
     let allocator = match task_id_start {

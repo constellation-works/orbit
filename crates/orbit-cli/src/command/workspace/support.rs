@@ -121,23 +121,38 @@ pub(super) fn ensure_orbit_gitignore_entry(
     workspace_root: &Path,
     orbit_dir: &Path,
 ) -> Result<(), OrbitError> {
-    let Some(gitignore_root) = orbit_gitignore_root(workspace_root, orbit_dir) else {
+    let Some(gitignore_path) = orbit_gitignore_path(workspace_root, orbit_dir) else {
         return Ok(());
     };
-    let gitignore_path = gitignore_root.join(".gitignore");
     write_orbit_gitignore_entry(&gitignore_path)
 }
 
-/// Whether workspace initialization manages checkout-local Orbit definitions.
+/// The `.gitignore` that carries the managed `.orbit/` block, if any.
 ///
-/// This is the same condition that determines whether initialization writes
-/// the managed `.gitignore` entry, so onboarding guidance can describe only
-/// files that were actually created in the checkout.
-pub(super) fn manages_checkout_local_orbit_files(workspace_root: &Path, orbit_dir: &Path) -> bool {
-    orbit_gitignore_root(workspace_root, orbit_dir).is_some()
+/// A checkout-local Orbit data directory is ignored at its repository root.
+/// A checkout at a Git repository root is ignored even when `--root` keeps
+/// Orbit's data directory elsewhere: delivery worktrees are still created
+/// under `<checkout>/.orbit/state/worktrees/`, and left unignored each one is
+/// an untracked nested checkout that breaks the primary-checkout Git snapshot.
+pub(super) fn orbit_gitignore_path(workspace_root: &Path, orbit_dir: &Path) -> Option<PathBuf> {
+    checkout_local_orbit_root(workspace_root, orbit_dir)
+        .or_else(|| is_git_repo_root(workspace_root).then_some(workspace_root))
+        .map(|root| root.join(".gitignore"))
 }
 
-fn orbit_gitignore_root<'a>(workspace_root: &'a Path, orbit_dir: &'a Path) -> Option<&'a Path> {
+/// Whether workspace initialization writes Orbit definitions into the checkout.
+///
+/// False when `--root` relocates the data directory, so onboarding guidance
+/// can point at the files that were actually created.
+pub(super) fn manages_checkout_local_orbit_files(workspace_root: &Path, orbit_dir: &Path) -> bool {
+    checkout_local_orbit_root(workspace_root, orbit_dir).is_some()
+}
+
+/// The repository root whose `.orbit` is the Orbit data directory itself.
+fn checkout_local_orbit_root<'a>(
+    workspace_root: &'a Path,
+    orbit_dir: &'a Path,
+) -> Option<&'a Path> {
     // Legacy: walking up from a subdir, orbit_dir is `<repo>/.orbit` whose
     // parent is a git repo root.
     if orbit_dir.file_name().and_then(|name| name.to_str()) == Some(".orbit")
@@ -148,9 +163,6 @@ fn orbit_gitignore_root<'a>(workspace_root: &'a Path, orbit_dir: &'a Path) -> Op
     }
 
     // Default: orbit_dir lives directly inside workspace_root as `.orbit`.
-    // If the user passed `--root` to relocate Orbit data outside the workspace
-    // (or to a non-`.orbit` basename), skip the gitignore write — there is no
-    // `<workspace>/.orbit` directory to ignore.
     if is_git_repo_root(workspace_root) && orbit_dir == workspace_root.join(".orbit") {
         return Some(workspace_root);
     }
