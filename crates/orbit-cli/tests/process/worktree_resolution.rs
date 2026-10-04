@@ -911,6 +911,11 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     write_machine_identity(&home);
+    // The pre-written global config seeds no crews, so routing falls back to
+    // the built-in claude-backed `opus` and `system` crews. Without their CLI
+    // every `doctor` run fails its provider checks, and the refusal asserted
+    // below would hold for the wrong reason.
+    plant_agent_cli_stub(&home, "claude");
     let partitions = home.join(".orbit/tasks/workspaces");
     let deleted_volume = temp.path().join("deleted-volume");
     let file_volume = temp.path().join("file-volume");

@@ -25,11 +25,11 @@ on:
       # policy-evaluation changes can alter what the macOS sandbox enforces.
       - "crates/orbit-policy/**"
       - "crates/orbit-common/src/fs/**"
+      - "crates/orbit-cli/tests/workspace/generation_root.rs"
       - "crates/orbit-types/src/policy/**"
       # [ORB-11067] Managed-child logging must use the registry root authorized
       # by the macOS sandbox rather than the provider-specific HOME.
       - "crates/orbit-common/src/observability/logging.rs"
-      - "crates/orbit-common/src/observability/tests/logging.rs"
       # [ORB-10682] Darwin owner/cancellation liveness uses native libproc
       # state so unreaped zombies do not look like surviving work.
       - "crates/orbit-common/src/process/**"
@@ -113,7 +113,7 @@ jobs:
 
       - name: Run macOS proc.spawn regressions
         run: |
-          /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools scoped_proc_spawn_inherits_parent_read_view_for_direct_and_indirect_reads -- --nocapture
+          /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools restrictive_fs_profile_does_not_narrow_the_parent_read_view -- --nocapture
           cargo test --locked -p orbit-tools a_git_shell_alias -- --nocapture
 
       # [ORB-13237] A plugin backend the host spawns on an agent's behalf must
@@ -133,17 +133,17 @@ jobs:
         run: cargo test --no-fail-fast -p orbit-core --locked runtime::plugin::broker
 
       # [ORB-12553] Generation admission turns on Darwin descriptor and flock
-      # behavior: a sandboxed child joins the recorded generation through a
-      # read-only descriptor and must refuse, not write, a takeover it cannot
-      # record. Linux alone cannot evidence that.
+      # behavior. The orbit-common unit tests that drove it directly were
+      # retired by ORB-13833; these CLI boundary tests pin, hold and refuse
+      # generations through the real binary on Darwin.
       - name: Run executable-generation admission tests
-        run: cargo test --no-fail-fast -p orbit-common --locked fs::tests::generation
+        run: cargo test --no-fail-fast -p orbit-cli --locked generation_root::
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
       - name: Run process identity and job-run owner tests
         run: |
-          cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture
+          cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture # check-ci-macos: darwin-only
           cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
           cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture
 

@@ -62,7 +62,7 @@ fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
     append_macos_subpath_mask(&mut profile_text, &[masked.clone(), secrets.clone()]);
 
     let script = r#"
-probe() { if eval "$2" >/dev/null 2>&1; then echo "$1:allowed"; else echo "$1:denied"; fi; }
+probe() { if (eval "$2") >/dev/null 2>&1; then echo "$1:allowed"; else echo "$1:denied"; fi; }
 probe read-masked 'cat "$MASKED/state.json"'
 probe list-masked 'ls "$MASKED"'
 probe write-masked ': > "$MASKED/planted"'
