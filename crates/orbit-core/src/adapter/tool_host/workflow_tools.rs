@@ -91,6 +91,19 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         progress.provider_processes.last(),
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
+    // The parsed answer already contains the useful result fields. Its raw
+    // final message repeats the provider envelope, and preview repeats the
+    // beginning of that same captured stream. Keep the durable blob refs for
+    // callers that need the complete output.
+    if let Some(invocation) = value["agent_invocation"].as_object_mut()
+        && invocation.get("answer").is_some_and(Value::is_object)
+    {
+        invocation.remove("preview");
+        invocation.remove("preview_truncated");
+        if let Some(answer) = invocation.get_mut("answer").and_then(Value::as_object_mut) {
+            answer.remove("final_message");
+        }
+    }
     value["execution_progress"] = execution_progress_json(&progress);
     Ok(value)
 }

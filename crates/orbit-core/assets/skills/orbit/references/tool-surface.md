@@ -131,14 +131,17 @@ Orbit logs the same at WARN: the provider may use host integrations (browser,
 computer use, …) beyond the working directory.
 
 Track it with the ordinary run surfaces — `orbit_workflow_run_show`, or
-`orbit run show|logs|cancel <RUN_ID>`. Both read the same `agent_invocation`
-object (top level over MCP, `.run.agent_invocation` in `orbit run show --json`):
+`orbit run show|logs|cancel <RUN_ID>`. The full MCP response puts
+`agent_invocation` at the top level; `view: "bounded"` and
+`orbit run show --json` put it at `.run.agent_invocation`:
 
 - `answer` is the result: `summary`, `findings`, `next_steps`, every other
   field the agent put in its envelope `result` under `extra` (a
-  `report_markdown`, for instance), and its `final_message`, bounded to 64 KiB.
-  When that message was cut, `final_message_blob_ref` names the complete
-  captured output, which `orbit run logs <RUN_ID>` prints.
+  `report_markdown`, for instance), and a bounded `final_message` where the
+  surface includes it. The full MCP response omits `answer.final_message` and
+  the raw `preview` once an answer exists, while retaining
+  `final_message_blob_ref` and `stdout_blob_ref`; use `orbit run logs <RUN_ID>`
+  to read the complete captured output.
 - `progress` is what the agent is doing while it runs: its newest
   `latest_message` and `last_activity_at`, sampled about every ten seconds
   while it writes output. A provider that prints nothing until it exits shows

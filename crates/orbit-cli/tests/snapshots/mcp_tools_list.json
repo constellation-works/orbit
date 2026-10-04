@@ -1955,7 +1955,7 @@
   },
   {
     "name": "orbit_workflow_run_show",
-    "description": "Fetch one durable workflow run by ID.",
+    "description": "Fetch one durable workflow run by ID. The full response puts agent invocation outcome, failure reason, and any parsed answer under top-level `agent_invocation`; with `view: bounded`, find them at `run.agent_invocation`. The answer contains summary, findings, next steps, and extra result fields; stdout blob references retain the complete provider output.",
     "inputSchema": {
       "type": "object",
       "properties": {

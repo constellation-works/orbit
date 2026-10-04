@@ -1308,12 +1308,11 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
     assert_eq!(terminal["state"], "success", "{terminal}");
     assert_eq!(submitted["state"], "success", "{submitted}");
     assert_eq!(submitted["waited"], true);
-    assert_eq!(submitted["answer"], terminal["agent_invocation"]["answer"]);
     assert_eq!(submitted["agent_invocation"]["completed_envelope"], true);
     assert_eq!(terminal["agent_invocation"]["completed_envelope"], true);
 
-    // [ORB-13899] The answer is readable where an MCP caller already looks,
-    // with no log parsing: every result field and the agent's final message.
+    // The full run response keeps the parsed result fields and blob refs while
+    // dropping the duplicate raw final message and captured-stream preview.
     let answer = &terminal["agent_invocation"]["answer"];
     assert_eq!(answer["summary"], "remote probe complete", "{terminal}");
     assert_eq!(answer["findings"], json!(["the clock restarts on reload"]));
@@ -1323,8 +1322,34 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
         json!({ "report_markdown": "# Probe\n\nAll clear." }),
         "only the agent's own extra fields, never Orbit's metadata"
     );
-    assert_eq!(answer["final_message"], AGENT_ANSWER_ENVELOPE);
-    assert_eq!(answer["final_message_truncated"], false);
+    assert!(answer.get("final_message").is_none(), "{terminal}");
+    assert!(
+        terminal["agent_invocation"].get("preview").is_none(),
+        "{terminal}"
+    );
+    assert!(terminal["agent_invocation"]["stdout_blob_ref"].is_string());
+
+    let bounded = client.call_tool_ok(
+        "orbit_workflow_run_show",
+        json!({ "workspace": "ws_mcp-roundtrip", "view": "bounded", "id": run_id }),
+    );
+    let bounded_invocation = &bounded["run"]["agent_invocation"];
+    assert_eq!(bounded_invocation["outcome"], "success", "{bounded}");
+    assert_eq!(
+        bounded_invocation["failure_reason"],
+        Value::Null,
+        "{bounded}"
+    );
+    assert_eq!(
+        bounded_invocation["answer"]["summary"],
+        "remote probe complete"
+    );
+    assert_eq!(bounded_invocation["answer"]["findings"], answer["findings"]);
+    assert_eq!(
+        bounded_invocation["answer"]["next_steps"],
+        answer["next_steps"]
+    );
+    assert_eq!(bounded_invocation["answer"]["extra"], answer["extra"]);
 
     // The CLI reads the same answer, as JSON and as text.
     let shown = orbit_ok(
@@ -1332,7 +1357,14 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
             .args(["run", "show", &run_id, "--json"]),
     );
     let shown: Value = serde_json::from_slice(&shown.stdout).expect("run show JSON");
-    assert_eq!(shown["run"]["agent_invocation"]["answer"], *answer);
+    assert_eq!(
+        shown["run"]["agent_invocation"]["answer"]["summary"],
+        answer["summary"]
+    );
+    assert_eq!(
+        shown["run"]["agent_invocation"]["answer"]["final_message"],
+        AGENT_ANSWER_ENVELOPE
+    );
     let text = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
             .args(["run", "show", &run_id]),
@@ -1416,6 +1448,23 @@ fn an_invocation_without_a_response_envelope_fails_with_its_reason() {
         "the raw output must stay reachable: {terminal}"
     );
     assert_eq!(invocation["answer"], Value::Null, "{terminal}");
+
+    let bounded = client.call_tool_ok(
+        "orbit_workflow_run_show",
+        json!({ "workspace": "ws_mcp-roundtrip", "view": "bounded", "id": run_id }),
+    );
+    let bounded_invocation = &bounded["run"]["agent_invocation"];
+    assert_eq!(bounded_invocation["outcome"], "failed", "{bounded}");
+    assert!(
+        bounded_invocation["failure_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("response envelope")),
+        "failed bounded invocation keeps its reason: {bounded}"
+    );
+    assert!(
+        bounded_invocation["stdout_blob_ref"].as_str().is_some(),
+        "failed bounded invocation keeps the output reference: {bounded}"
+    );
 
     let logs = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
