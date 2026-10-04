@@ -55,55 +55,50 @@ impl Store {
         rows.map_err(|e| OrbitError::Store(e.to_string()))
     }
 
-    /// Returns `(operation, denied_count)` for `command = 'authorization'`
-    /// audit events with `status = 'denied'` and `timestamp >= since`,
-    /// ordered desc by count.
+    /// Capability and policy decisions, counted once per invocation and operation.
     ///
-    /// Restricted to `command = 'authorization'` because that is the one row
-    /// every denial chokepoint writes exactly once per refusal
-    /// (`OrbitRuntime::record_authorization_event`, see its module doc); a
-    /// tool-surface denial also gets a second, entry-point row from
-    /// `execute_tool_dispatch_with_audit_store`, and counting both would
-    /// double every tool-surface operation's total. `target_id` is that row's
-    /// operation ID for every surface — unlike `tool_name`, which the
-    /// authorization row deliberately leaves unset for `Tool`-surface
-    /// operations to avoid colliding with the entry-point row's own
-    /// `tool_name`.
+    /// Authorization rows are the canonical capability decisions. Legacy tool
+    /// wrappers repeat their message without a shared invocation ID, so those
+    /// wrappers are evidence only. Other denied tool rows are policy decisions,
+    /// except lock contention and owner-side claim-settlement protocol refusals.
+    /// Raw audit status counts and listings intentionally retain every row.
     pub fn get_audit_denials_by_operation(
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<(String, i64)>, OrbitError> {
         let conn = self.read()?;
-
-        let sql = if since.is_some() {
-            "SELECT COALESCE(target_id, 'unknown'), COUNT(*) FROM audit_events \
-             WHERE command = 'authorization' AND status = 'denied' AND timestamp >= ?1 \
-             GROUP BY COALESCE(target_id, 'unknown') ORDER BY COUNT(*) DESC"
-        } else {
-            "SELECT COALESCE(target_id, 'unknown'), COUNT(*) FROM audit_events \
-             WHERE command = 'authorization' AND status = 'denied' \
-             GROUP BY COALESCE(target_id, 'unknown') ORDER BY COUNT(*) DESC"
-        };
-
+        let sql = "WITH decisions AS (
+            SELECT COALESCE(tool_name, target_id, 'unknown') AS operation,
+                   CASE
+                     WHEN NULLIF(trace_id, '') IS NOT NULL THEN 'trace:' || trace_id
+                     WHEN NULLIF(mcp_call_id, '') IS NOT NULL THEN 'mcp:' ||
+                       json_array(caller_machine_id, origin_session_id, session_id, mcp_call_id)
+                     WHEN NULLIF(execution_id, '') IS NOT NULL THEN 'exec:' || execution_id
+                     ELSE 'row:' || id
+                   END AS attempt
+            FROM audit_events
+            WHERE status = 'denied' AND (?1 IS NULL OR timestamp >= ?1)
+              AND (command = 'authorization' OR (
+                command = 'tool'
+                AND COALESCE(tool_name, '') NOT IN (
+                  'orbit.task.locks.reserve', 'orbit.workspace.claim.acquire',
+                  'orbit.workspace.claim.release', 'orbit.drain.claim.settle'
+                )
+                AND COALESCE(error_message, '') NOT GLOB
+                  'operation * requires the `*` capability (*)*'
+              ))
+        )
+        SELECT operation, COUNT(DISTINCT attempt) FROM decisions
+        GROUP BY operation ORDER BY COUNT(DISTINCT attempt) DESC, operation ASC";
         let mut stmt = conn
             .prepare(sql)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-
-        let rows = if let Some(s) = since {
-            stmt.query_map(params![s.to_rfc3339()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .map_err(|e| OrbitError::Store(e.to_string()))?
-            .collect::<Result<Vec<_>, _>>()
-        } else {
-            stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .map_err(|e| OrbitError::Store(e.to_string()))?
-            .collect::<Result<Vec<_>, _>>()
-        };
-
-        rows.map_err(|e| OrbitError::Store(e.to_string()))
+        stmt.query_map(params![since.map(DateTime::to_rfc3339)], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| OrbitError::Store(e.to_string()))
     }
 
     pub fn get_audit_tool_call_counts_by_role(

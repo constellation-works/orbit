@@ -279,3 +279,66 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
         },
     );
 }
+
+#[path = "../../../orbit-store/tests/fixtures/policy_denials.rs"]
+mod policy_denials_fixture;
+
+#[test]
+fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
+    isolated(
+        "projections::policy_kpi_counts_decisions_and_preserves_refusal_evidence",
+        || {
+            use policy_denials_fixture::{RAW_DENIED_COUNT, SQL_POLICY_COUNT, V2_POLICY_COUNT};
+            let fixture = Fixture::new();
+            policy_denials_fixture::seed(&fixture.runtime);
+            let stats = fixture.runtime.audit_policy_denial_stats(None).unwrap();
+            assert_eq!(stats.sql_denied, SQL_POLICY_COUNT);
+            assert_eq!(stats.v2_denied, V2_POLICY_COUNT);
+            let counts: std::collections::BTreeMap<_, _> = stats.by_operation.into_iter().collect();
+            assert_eq!(
+                counts["orbit.workflow.run.show"], 1,
+                "legacy authorization/tool pair is one attempt"
+            );
+            assert_eq!(
+                counts["orbit.command.exec"], 2,
+                "MCP request IDs are scoped to sessions"
+            );
+            assert_eq!(
+                counts["orbit.task.locks.reserve"], 1,
+                "only the capability refusal counts, not contention"
+            );
+            assert_eq!(
+                counts["orbit.drain.claim.settle"], 1,
+                "only the capability refusal counts, not owner configuration"
+            );
+            assert_eq!(counts["fs.read"], 1);
+            assert_eq!(counts["proc.spawn"], 1);
+            let server = fixture.server(false);
+            let summary =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            assert_eq!(summary["denials_sql"], SQL_POLICY_COUNT);
+            assert_eq!(summary["denials_v2"], V2_POLICY_COUNT);
+            assert_eq!(summary["denials"], SQL_POLICY_COUNT + V2_POLICY_COUNT);
+            let policy =
+                json_ok(server.get("/api/diagnostics/denials?since=24h&workspace=ws_http_fixture"));
+            assert_eq!(policy["total"], RAW_DENIED_COUNT + V2_POLICY_COUNT);
+            let tool_policy = json_ok(
+                server
+                    .get("/api/diagnostics/denials?kind=tool&since=24h&workspace=ws_http_fixture"),
+            );
+            let recent = tool_policy["recent_denials"].as_array().unwrap();
+            assert!(
+                recent
+                    .iter()
+                    .any(|row| row["denial_kind"] == "claim_settlement_refusal")
+            );
+            assert!(
+                recent
+                    .iter()
+                    .any(|row| row["denial_kind"] == "task_lock_reserve")
+            );
+            let raw = json_ok(server.get("/api/audit?status=denied&workspace=ws_http_fixture"));
+            assert_eq!(raw.as_array().unwrap().len(), RAW_DENIED_COUNT as usize);
+        },
+    );
+}
