@@ -307,6 +307,82 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/ci-guardrails.sh
 
+      # [ORB-13884] The ubuntu-latest image does not ship Bubblewrap, and Ubuntu
+      # 24.04 restricts unprivileged user namespaces through AppArmor, so the
+      # live boundary tests below need the prerequisite prepared the way
+      # docs/runbooks/linux-sandbox.md prepares a host: distro `bubblewrap`,
+      # and only if the real probe still fails with the AppArmor UID-map
+      # denial, the packaged narrow `bwrap-userns-restrict` profile. The
+      # global `kernel.apparmor_restrict_unprivileged_userns` control is never
+      # touched. The step ends with the exact namespace-and-mount probe Orbit
+      # runs, as the unprivileged runner user, and fails with a diagnostic when
+      # it does not pass; the tests' own assertions are unchanged. The profile
+      # lives on this ephemeral runner only.
+      - name: Prepare and probe Bubblewrap for the Linux boundary tests
+        run: |
+          set -euo pipefail
+          profile_src=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          profile_dst=/etc/apparmor.d/bwrap-userns-restrict
+          probe_err="$(mktemp)"
+
+          fail() {
+            echo "::error title=Bubblewrap unavailable::$1"
+            echo "--- diagnostics ---"
+            echo "user: $(id)"
+            echo "kernel.apparmor_restrict_unprivileged_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>&1 || true)"
+            echo "kernel.unprivileged_userns_clone=$(sysctl -n kernel.unprivileged_userns_clone 2>&1 || true)"
+            echo "user.max_user_namespaces=$(sysctl -n user.max_user_namespaces 2>&1 || true)"
+            ls -l /usr/bin/bwrap 2>&1 || true
+            /usr/bin/bwrap --version 2>&1 || true
+            echo "bwrap probe stderr: $(cat "$probe_err" 2>/dev/null || true)"
+            sudo grep -E '^bwrap ' /sys/kernel/security/apparmor/profiles 2>&1 || echo "no bwrap AppArmor profile loaded (or the profile list is unreadable)"
+            exit 1
+          }
+
+          # The same checks Orbit's capability probe makes: the trusted path,
+          # the --bind-fd feature, then a real user+mount namespace.
+          probe() {
+            local help
+            : >"$probe_err"
+            if [ ! -x /usr/bin/bwrap ]; then
+              echo "trusted Bubblewrap not available at /usr/bin/bwrap" >"$probe_err"
+              return 1
+            fi
+            help="$(/usr/bin/bwrap --help 2>&1)" || true
+            if ! grep -Fq -- '--bind-fd' <<<"$help"; then
+              echo "Bubblewrap does not support the required --bind-fd" >"$probe_err"
+              return 1
+            fi
+            /usr/bin/bwrap --die-with-parent --new-session --unshare-all --share-net \
+              --ro-bind / / -- /bin/true 2>"$probe_err"
+          }
+
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles
+
+          if probe; then
+            echo "Bubblewrap probe passed without an AppArmor profile"
+          else
+            detail="$(cat "$probe_err")"
+            echo "Bubblewrap probe failed: ${detail}"
+            case "$detail" in
+              *"setting up uid map: Permission denied"*) ;;
+              *) fail "probe failed for a reason the packaged AppArmor profile does not address: ${detail}" ;;
+            esac
+            [ -f "$profile_src" ] || fail "apparmor-profiles did not provide $profile_src"
+            if sudo grep -Eq '^bwrap ' /sys/kernel/security/apparmor/profiles; then
+              fail "a bwrap AppArmor profile is already loaded but the probe fails; refusing to replace it"
+            fi
+            [ ! -e "$profile_dst" ] || fail "$profile_dst already exists; refusing to overwrite it"
+            sudo install -m 0644 "$profile_src" "$profile_dst"
+            sudo /usr/sbin/apparmor_parser -r "$profile_dst"
+            sudo grep -Eq '^bwrap ' /sys/kernel/security/apparmor/profiles \
+              || fail "AppArmor did not report the packaged bwrap profile as loaded"
+            probe || fail "probe still fails after loading the packaged bwrap profile: $(cat "$probe_err")"
+            echo "Bubblewrap probe passed after loading the packaged bwrap-userns-restrict profile"
+          fi
+
       # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg: an
       # explicit, named gate for orbit-policy's evaluation matrix (incl. the
       # ORB-00418 symlink-resolution tests), orbit-tools' runtime
