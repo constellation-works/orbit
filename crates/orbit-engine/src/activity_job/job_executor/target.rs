@@ -1,3 +1,4 @@
+use super::reviewer::ReviewerInvocation;
 use super::*;
 
 pub(super) fn run_target(
@@ -42,6 +43,7 @@ pub(super) fn run_target(
         .as_ref()
         .map(|spec| ActivityV2Spec::AgentLoop(spec.clone()));
     let dispatched_spec = dispatched_spec_storage.as_ref().unwrap_or(&t.spec);
+    let reviewer = ReviewerInvocation::start(ctx, t, dispatched_spec, &rendered_input);
     let dispatch = dispatch_v2_activity(V2DispatchInput {
         activity_name: &step.id,
         spec: dispatched_spec,
@@ -50,7 +52,11 @@ pub(super) fn run_target(
         audit: ctx.audit.clone(),
         run_id: &ctx.run_id,
         host: Some(ctx.host),
-    })?;
+    });
+    if let Some(reviewer) = reviewer {
+        reviewer.finish(ctx);
+    }
+    let dispatch = dispatch?;
     persist_dispatch_invocation(ctx, &step.id, &rendered_input, &dispatch);
     record_pipeline(ctx, &step.id, dispatch.output.clone());
     Ok(StepOutcome {

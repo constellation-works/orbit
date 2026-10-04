@@ -94,7 +94,7 @@ impl ValidationDefect {
 /// declared negative control must have failed; an excluded action must have
 /// stayed unperformed; a superseded attempt must be followed by the required
 /// check that replaced it — the same command, or the same non-empty `check`
-/// identity. Every classification other than `required` must explain itself,
+/// identity, whichever the two records share. Every classification other than `required` must explain itself,
 /// so an unexplained reclassification is refused rather than trusted. Records
 /// carrying no classification are required checks, which keeps evidence
 /// written before this contract conservative.
@@ -180,45 +180,50 @@ fn explained(record: &ReviewValidation) -> bool {
 
 /// Whether a later record is the required check the superseded attempt was
 /// replaced by. Order carries the meaning: a supersession must be resolved
-/// after it, never by a check recorded before it. The later record must
-/// name the same check: the same command when both records have no `check`,
-/// or the same non-empty `check` identity when both records provide one and
-/// the command or environment was corrected. Check identities and commands
-/// are separate namespaces, so one cannot impersonate the other. Any later
-/// required pass is not enough.
+/// after it, never by a check recorded before it. The later record must be
+/// the same check: the same command (whitespace-normalized), or the same
+/// non-empty `check` identity when the command or environment was
+/// corrected. Check identities and commands are compared only with their
+/// own kind, so one cannot impersonate the other, and a `check` one record
+/// omits never stops the commands from relating them: an optional field
+/// left out of an honest record must not turn a pass into a refusal. Any
+/// later required pass is not enough.
 fn replaced_by_required_check(superseded: &ReviewValidation, later: &[ReviewValidation]) -> bool {
-    let Some(identity) = replacement_identity(superseded) else {
-        return false;
-    };
     later.iter().any(|record| {
         record.role == ValidationRole::Required
             && record.outcome == ValidationOutcome::Passed
-            && replacement_identity(record) == Some(identity)
+            && same_check(superseded, record)
     })
 }
 
-/// The namespaced identity a superseded attempt and its replacement share.
-///
-/// A present `check` is the identity when it is non-empty after trim;
-/// otherwise the command string is the identity, so a same-command rerun
-/// still binds. These forms deliberately remain distinct even when their
-/// strings are equal. An empty or whitespace-only `check` is invalid and
-/// matches nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReplacementIdentity<'a> {
-    Check(&'a str),
-    Command(&'a str),
+fn same_check(left: &ReviewValidation, right: &ReviewValidation) -> bool {
+    let same_identity = matches!(
+        (check_identity(left), check_identity(right)),
+        (Some(left), Some(right)) if left == right
+    );
+    let same_command = matches!(
+        (normalized_command(left), normalized_command(right)),
+        (Some(left), Some(right)) if left == right
+    );
+    same_identity || same_command
 }
 
-fn replacement_identity(record: &ReviewValidation) -> Option<ReplacementIdentity<'_>> {
-    match record.check.as_deref() {
-        Some(value) => {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then_some(ReplacementIdentity::Check(trimmed))
-        }
-        None => {
-            let command = record.command.as_str();
-            (!command.trim().is_empty()).then_some(ReplacementIdentity::Command(command))
-        }
-    }
+/// A present, non-empty `check` identity.
+fn check_identity(record: &ReviewValidation) -> Option<&str> {
+    record
+        .check
+        .as_deref()
+        .map(str::trim)
+        .filter(|check| !check.is_empty())
+}
+
+/// The command with whitespace runs collapsed, so `make  ci-fast` and
+/// `make ci-fast` are one check.
+fn normalized_command(record: &ReviewValidation) -> Option<String> {
+    let command = record
+        .command
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!command.is_empty()).then_some(command)
 }

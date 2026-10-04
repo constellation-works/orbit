@@ -17,6 +17,8 @@ use crate::application::automation::source::Source;
 /// Shared inputs of both gate steps.
 pub(super) struct GateContext {
     pub(super) run_id: String,
+    /// First run of the delivery run lineage `run_id` resumes.
+    lineage_root: String,
     pub(super) task_ids: Vec<String>,
     pub(super) tasks: Vec<Task>,
     pub(super) workspace_path: PathBuf,
@@ -94,11 +96,13 @@ impl GateContext {
             None => run_review_admission(runtime, &run_id)?,
         };
         let task_digests = compute_task_digests(&tasks)?;
+        let lineage_root = lineage_root(runtime, &run_id)?;
         let repository = Source::new(&runtime.paths().repo_root)
             .repository()
             .map_err(automation_error)?;
         Ok(Self {
             run_id,
+            lineage_root,
             task_ids,
             tasks,
             workspace_path,
@@ -128,13 +132,39 @@ impl GateContext {
     }
 
     pub(super) fn lineage_key(&self) -> String {
-        lineage_key(&self.workspace_id, &self.task_ids, &self.base_branch)
+        lineage_key(
+            &self.workspace_id,
+            &self.task_ids,
+            &self.base_branch,
+            &self.lineage_root,
+        )
     }
 
     pub(super) fn refresh_task_digests(&mut self) -> Result<(), OrbitError> {
         self.task_digests = compute_task_digests(&self.tasks)?;
         Ok(())
     }
+}
+
+/// Longest resume chain followed back to its first run; a longer chain keys
+/// the lineage on the oldest run reached.
+const MAX_RESUME_CHAIN: usize = 64;
+
+/// The first run of the resume chain `run_id` belongs to. A missing source
+/// run ends the chain at the last run found.
+fn lineage_root(runtime: &OrbitRuntime, run_id: &str) -> Result<String, OrbitError> {
+    let mut root = run_id.to_string();
+    for _ in 0..MAX_RESUME_CHAIN {
+        let source = runtime
+            .get_job_run_backend(&root)?
+            .and_then(|run| run.retry_source_run_id)
+            .filter(|source| !source.trim().is_empty() && *source != root);
+        match source {
+            Some(source) => root = source,
+            None => break,
+        }
+    }
+    Ok(root)
 }
 
 fn compute_task_digests(tasks: &[Task]) -> Result<(BTreeMap<String, String>, String), OrbitError> {
