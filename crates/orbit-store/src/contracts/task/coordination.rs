@@ -186,8 +186,8 @@ pub struct AdmissionShipContract {
 /// It versions the distributed-drain protocol alone, not the scoreboard's
 /// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
 /// Increment it whenever a new request field would be rejected by an older
-/// endpoint, even if optional. Revision 2 adds executor crew capabilities.
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 2;
+/// endpoint, even if optional. Revision 2 adds executor crew capabilities; revision 3 adds handoff footprint widening.
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 3;
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without
@@ -581,6 +581,8 @@ pub(crate) struct ClaimCommitEffects {
 /// scope, ancestry, delivery-marker and clean-tree checks before constructing this.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandoffObservation {
+    /// Owner-observed eligible additions outside the original footprint.
+    pub footprint_widening: Vec<String>,
     pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
     pub required_commands: Vec<String>,
     /// The completion authority the owner's configuration grants claimed

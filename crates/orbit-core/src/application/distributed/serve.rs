@@ -273,12 +273,35 @@ impl crate::OrbitRuntime {
             }
         };
         let claim = self.current_claim(&handoff.claim_id)?;
-        orbit_engine::validate_claim_new_paths(
+        let AdmissionLookup::Found { receipt, .. } = self.admission_boundary()?.lookup_admission(
+            &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
+            &claim.request_id,
+        )?
+        else {
+            return Err(refused("original claim receipt unavailable"));
+        };
+        let original = receipt
+            .claim
+            .as_ref()
+            .ok_or_else(|| refused("original claim footprint unavailable"))?;
+        let (new_paths, footprint_widening) = orbit_engine::validate_claim_new_paths(
             &self.paths().repo_root,
-            &claim.footprint,
+            &original.footprint,
             &candidate.base.commit,
             &candidate.candidate.commit,
         )?;
+        for path in &new_paths {
+            let decision = self.policy_engine().check(
+                "implementer",
+                orbit_types::policy::FsOperation::Modify,
+                path.clone(),
+            )?;
+            if !decision.allowed {
+                return Err(refused(format!(
+                    "footprint widening refused protected path: {path}"
+                )));
+            }
+        }
         let required_commands = self.workflow_required_validation_commands().to_vec();
         if required_commands.is_empty() {
             return Err(refused(
@@ -287,6 +310,7 @@ impl crate::OrbitRuntime {
             ));
         }
         Ok(HandoffObservation {
+            footprint_widening,
             candidate,
             required_commands,
             owner_completion_authority: self.owner_completion_authority(),

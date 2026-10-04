@@ -64,6 +64,10 @@ pub struct TaskHandoff {
     pub review: HandoffReview,
     pub execution_summary: String,
     pub validation: Vec<HandoffArtifactRef>,
+    /// Canonical relative additions outside the original module footprint.
+    /// Recomputed from Git by the follower and independently by the owner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint_widening: Vec<String>,
 }
 
 /// Captured command output in an owner-accessible task artifact, never an agent reply.

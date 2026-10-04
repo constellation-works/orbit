@@ -151,6 +151,8 @@ pub struct ReviewerInvocationRequest {
 /// payload against this context, it never adopts one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimExecutionContext {
+    /// Original owner-admitted selectors from the local durable receipt.
+    pub footprint: Vec<String>,
     pub workspace_id: String,
     pub task_id: String,
     pub claim_id: String,

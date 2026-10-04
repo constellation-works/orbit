@@ -328,6 +328,7 @@ impl RuntimeHost for OrbitRuntime {
         let leaf = self.current_claimed_leaf()?;
         let ship = &leaf.admission.request.ship;
         Ok(orbit_engine::ClaimExecutionContext {
+            footprint: leaf.claim.footprint.clone(),
             workspace_id: leaf.binding.owner_workspace_id.clone(),
             task_id: leaf.claim.task_id.clone(),
             claim_id: leaf.claim.claim_id.clone(),

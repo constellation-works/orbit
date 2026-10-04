@@ -594,6 +594,10 @@ impl Coordinated {
     }
 
     fn create_task(&self, title: &str) -> orbit_types::task::Task {
+        self.create_task_in(title, &["src/lib.rs"])
+    }
+
+    fn create_task_in(&self, title: &str, selectors: &[&str]) -> orbit_types::task::Task {
         self.backends
             .task
             .task
@@ -609,7 +613,7 @@ impl Coordinated {
                 required_tools: Vec::new(),
                 plan: "1. Do the work".to_string(),
                 execution_summary: String::new(),
-                context_files: vec!["src/lib.rs".to_string()],
+                context_files: selectors.iter().map(|s| (*s).to_string()).collect(),
                 repo_root: None,
                 created_by: Some("codex".to_string()),
                 planned_by: None,
@@ -777,9 +781,13 @@ struct Delivery {
 
 impl Delivery {
     fn admit(ship: AdmissionShipContract) -> Self {
+        Self::admit_in(ship, &["src/lib.rs"])
+    }
+
+    fn admit_in(ship: AdmissionShipContract, selectors: &[&str]) -> Self {
         let root = TempDir::new().unwrap();
         let owner = Coordinated::open(root.path());
-        owner.create_task("typed handoff");
+        owner.create_task_in("typed handoff", selectors);
         let mut request = owner_request("first");
         request.ship = ship.clone();
         let claim = owner.pull(&request).claim.expect("claim");
@@ -812,6 +820,7 @@ impl Delivery {
 
     fn observation(&self, policy: Option<&str>) -> HandoffObservation {
         HandoffObservation {
+            footprint_widening: self.handoff.footprint_widening.clone(),
             candidate: self.handoff.candidate.clone(),
             required_commands: vec!["build".into(), "test".into()],
             owner_completion_authority: policy.map(str::to_string),
@@ -929,6 +938,7 @@ fn handoff_with_logs(owner: &Coordinated, claim: &ExecutionClaim) -> TaskHandoff
         },
         execution_summary: "Outcome: success\nRequired checks passed for pinned candidate".into(),
         validation: vec![],
+        footprint_widening: vec![],
     };
     let artifacts = ["build", "test"]
         .iter()
@@ -1081,5 +1091,263 @@ fn replaced_handoff_evidence_blocks_approval_and_landing() {
             );
             assert!(delivery.owner.landing_starts().is_empty());
         }
+    }
+}
+
+/// Owner acceptance journals selectors, history and the enlarged review lock
+/// together; denied requests leave the running claim and task unchanged.
+#[test]
+fn handoff_widening_accepts_only_original_units_and_replays_once() {
+    if !isolated("handoff_widening_accepts_only_original_units_and_replays_once") {
+        return;
+    }
+    for (path, allowed) in [
+        ("crates/touched/src/split/new.rs", true),
+        ("crates/other/tests/test_env.rs", true),
+        ("crates/other/src/lib.rs", false),
+        ("crates/touched-other/src/lib.rs", false),
+        ("docs/new.md", false),
+        ("crates/touched/.env", false),
+        ("crates/touched/.orbit/new", false),
+        ("crates/touched/../other/src/lib.rs", false),
+    ] {
+        let mut delivery = Delivery::admit_in(
+            owner_request("template").ship,
+            &["file:crates/touched/src/lib.rs"],
+        );
+        delivery.handoff.footprint_widening = vec![path.into()];
+        let before = delivery
+            .owner
+            .backends
+            .task
+            .task
+            .get_task(&delivery.claim.task_id)
+            .unwrap()
+            .unwrap();
+        let result = delivery.accept(None);
+        if allowed {
+            result.expect("eligible widening accepted");
+            delivery.accept(None).expect("lost response replay");
+            let task = delivery
+                .owner
+                .backends
+                .task
+                .task
+                .get_task(&delivery.claim.task_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(task.status, TaskStatus::Review);
+            assert!(task.context_files.contains(&format!("file:{path}")));
+            assert!(
+                task.context_files
+                    .contains(&"file:crates/touched/src/lib.rs".into())
+            );
+            let history = delivery
+                .owner
+                .backends
+                .task
+                .history
+                .get_task_history(&delivery.claim.task_id)
+                .unwrap()
+                .unwrap();
+            let events = history
+                .iter()
+                .filter(|e| e.event == "claim_footprint_widened")
+                .collect::<Vec<_>>();
+            assert_eq!(
+                events.len(),
+                1,
+                "replay must not duplicate widening history"
+            );
+            assert_eq!(
+                serde_json::from_str::<Vec<String>>(events[0].note.as_ref().unwrap()).unwrap(),
+                vec![format!("file:{path}")]
+            );
+            let current = delivery.owner.claims().pop().unwrap();
+            assert!(current.footprint.contains(&format!("file:{path}")));
+            // Admission replay remains the immutable original receipt.
+            let mut request = owner_request("first");
+            request.ship = owner_request("template").ship;
+            assert_eq!(
+                delivery.owner.pull(&request).claim.unwrap().footprint,
+                delivery.claim.footprint
+            );
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains(path), "exact refused path: {error}");
+            assert_eq!(
+                delivery
+                    .owner
+                    .backends
+                    .task
+                    .task
+                    .get_task(&delivery.claim.task_id)
+                    .unwrap()
+                    .unwrap()
+                    .context_files,
+                before.context_files
+            );
+            assert_eq!(
+                delivery.owner.task_status(&delivery.claim.task_id),
+                TaskStatus::InProgress
+            );
+        }
+    }
+    let mut delivery = Delivery::admit_in(
+        owner_request("template").ship,
+        &["file:crates/touched/src/lib.rs"],
+    );
+    delivery.handoff.footprint_widening = vec![
+        "crates/other/tests/env.rs".into(),
+        "crates/other/src/lib.rs".into(),
+    ];
+    let error = delivery.accept(None).unwrap_err().to_string();
+    assert!(
+        error.contains("crates/other/src/lib.rs"),
+        "widening cannot chain from the tests exception into untouched source: {error}"
+    );
+}
+
+#[test]
+fn handoff_widening_refuses_competing_claim_and_owner_observation_mismatch() {
+    if !isolated("handoff_widening_refuses_competing_claim_and_owner_observation_mismatch") {
+        return;
+    }
+    let mut delivery = Delivery::admit(owner_request("template").ship);
+    let path = "src/new/nested.rs";
+    delivery
+        .owner
+        .create_task_in("competing", &["file:src/new/nested.rs"]);
+    let competitor = delivery
+        .owner
+        .pull(&owner_request("second"))
+        .claim
+        .expect("second claim");
+    delivery.handoff.footprint_widening = vec![path.into()];
+    let failure = delivery.accept(None).unwrap_err().to_string();
+    assert!(
+        failure.contains(path),
+        "competing claim refusal names the path: {failure}"
+    );
+    assert_eq!(
+        delivery.owner.task_status(&delivery.claim.task_id),
+        TaskStatus::InProgress
+    );
+    assert_eq!(delivery.owner.claims().len(), 2);
+    assert_eq!(
+        competitor.phase,
+        orbit_store::contracts::ExecutionClaimPhase::Claimed
+    );
+    let mut observed = delivery.observation(None);
+    observed.footprint_widening.clear();
+    let error = delivery
+        .owner
+        .backends
+        .commit_boundary
+        .mutate_execution_claim(
+            Some(&delivery.worker().with_handoff_observation(observed)),
+            "mismatch",
+            &ClaimMutation::AcceptHandoff(delivery.handoff.clone()),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(path),
+        "request must equal independently observed diff: {error}"
+    );
+}
+
+/// Concurrent admission and widening share the exclusive boundary. Exactly
+/// one obtains the new path, regardless of which side acquires it first.
+#[test]
+fn handoff_widening_and_competing_pull_are_serialized() {
+    if !isolated("handoff_widening_and_competing_pull_are_serialized") {
+        return;
+    }
+    let mut delivery = Delivery::admit(owner_request("template").ship);
+    let competitor = delivery
+        .owner
+        .create_task_in("competing", &["file:src/new/nested.rs"]);
+    delivery.handoff.footprint_widening = vec!["src/new/nested.rs".into()];
+    let barrier = Arc::new(Barrier::new(2));
+    let root = delivery._root.path().to_path_buf();
+    let ready = barrier.clone();
+    let pull = std::thread::spawn(move || {
+        let owner = Coordinated::open(&root);
+        ready.wait();
+        owner.pull(&owner_request("second"))
+    });
+    barrier.wait();
+    let accepted = delivery.accept(None).is_ok();
+    let admitted = pull.join().unwrap().claim.is_some();
+    assert_ne!(
+        accepted, admitted,
+        "both decisions must never hold the same path"
+    );
+    if accepted {
+        assert_eq!(
+            delivery.owner.task_status(&competitor.id),
+            TaskStatus::Backlog
+        );
+    } else {
+        assert_eq!(
+            delivery.owner.task_status(&delivery.claim.task_id),
+            TaskStatus::InProgress
+        );
+    }
+}
+
+#[test]
+fn handoff_widening_refuses_live_reservation_and_status_lock() {
+    if !isolated("handoff_widening_refuses_live_reservation_and_status_lock") {
+        return;
+    }
+    for reservation in [false, true] {
+        let mut delivery = Delivery::admit(owner_request("template").ship);
+        let path = "src/new/nested.rs";
+        let competitor = delivery
+            .owner
+            .create_task_in("competing", &["file:src/new/nested.rs"]);
+        if reservation {
+            let reserved = delivery
+                .owner
+                .backends
+                .reservation
+                .reserve_task_reservation(orbit_store::contracts::TaskReservationReserveParams {
+                    workspace_orbit_dir: delivery.owner.orbit_dir.to_string_lossy().into_owned(),
+                    workspace_id: Some(PARTITION_ID.into()),
+                    task_ids: vec![competitor.id.clone()],
+                    requested_files: vec![format!("file:{path}")],
+                    actor: "owner".into(),
+                    ttl_seconds: 600,
+                    owner_run_id: None,
+                    owner_metadata_json: None,
+                })
+                .unwrap();
+            assert!(reserved.reserved);
+        } else {
+            delivery
+                .owner
+                .backends
+                .commit_boundary
+                .commit_task_transition(&orbit_store::contracts::TaskCoordinationCommitParams {
+                    task_id: competitor.id.clone(),
+                    actor: "owner".into(),
+                    expected_status: vec![TaskStatus::Backlog],
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        delivery.handoff.footprint_widening = vec![path.into()];
+        let error = delivery.accept(None).unwrap_err().to_string();
+        assert!(
+            error.contains(path),
+            "all admission lock surfaces refuse the exact path: {error}"
+        );
+        assert_eq!(
+            delivery.owner.task_status(&delivery.claim.task_id),
+            TaskStatus::InProgress
+        );
     }
 }

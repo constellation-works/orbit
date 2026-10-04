@@ -102,22 +102,40 @@ fn scratch_under_orbit_tmp_is_never_delivered() {
     }
 }
 
-/// ORB-13919: commit admission and the owner's independently read candidate
-/// must agree on adjacent new paths without authorizing unrelated directories.
+/// Commit admission and the owner's observed candidate must agree on original
+/// module intent and eligible widening, without treating `crates/` as one unit.
 #[test]
 fn claimed_module_new_paths_match_owner_handoff_validation() {
     for (selector, new_path, allowed) in [
         ("file:a/b/x.rs", "a/b/y.rs", true),
         ("file:a/b/x.rs", "a/b/tests/x.rs", true),
         ("file:a/b/x.rs", "a/b/tests/nested/x.rs", true),
-        ("file:a/b/x.rs", "a/c/z.rs", false),
-        ("file:a/b/x.rs", "a/b/other/z.rs", false),
-        ("file:a/b/x.rs", "a/b/tests-other/z.rs", false),
+        ("file:a/b/x.rs", "a/c/z.rs", true),
+        ("file:a/b/x.rs", "a/b/other/z.rs", true),
+        ("file:a/b/x.rs", "a/b/tests-other/z.rs", true),
         ("dir:a/b", "a/b/child/z.rs", true),
-        ("dir:a/b", "a/b-other/z.rs", false),
+        ("dir:a/b", "a/b-other/z.rs", true),
         ("file:x.rs", "y.rs", true),
         ("file:x.rs", "other/y.rs", false),
         ("dir:.", "a/b/y.rs", true),
+        (
+            "file:crates/one/src/lib.rs",
+            "crates/one/new/module.rs",
+            true,
+        ),
+        ("file:crates/one/src/lib.rs", "crates/two/src/lib.rs", false),
+        (
+            "file:crates/one/src/lib.rs",
+            "crates/two/tests/env.rs",
+            true,
+        ),
+        (
+            "file:crates/one/src/lib.rs",
+            "crates/one-other/src/lib.rs",
+            false,
+        ),
+        ("file:crates/one/src/lib.rs", "crates/one/.env", false),
+        ("dir:.", ".orbit/private.json", false),
     ] {
         let temp = claimed_worktree();
         let workspace = temp.path();
@@ -145,7 +163,7 @@ fn claimed_module_new_paths_match_owner_handoff_validation() {
                     .unwrap_err()
                     .to_string()
                     .contains("task delivery refused unknown untracked paths"),
-                "ORB-13919: unrelated new paths must retain the delivery refusal"
+                "Untouched units and protected paths must retain the delivery refusal"
             );
             assert_eq!(
                 untracked_status(workspace),
@@ -160,7 +178,55 @@ fn claimed_module_new_paths_match_owner_handoff_validation() {
         assert_eq!(
             crate::validate_claim_new_paths(workspace, &task.context_files, &base, "HEAD").is_ok(),
             allowed,
-            "ORB-13919: owner validation must agree for {selector} -> {new_path}"
+            "Owner validation must agree for {selector} -> {new_path}"
+        );
+        if matches!(
+            new_path,
+            "crates/one/new/module.rs" | "crates/two/tests/env.rs" | "a/c/z.rs"
+        ) {
+            let (_, widening) =
+                crate::validate_claim_new_paths(workspace, &task.context_files, &base, "HEAD")
+                    .unwrap();
+            assert_eq!(
+                widening,
+                vec![new_path.to_string()],
+                "eligible extra files must produce an exact owner widening request"
+            );
+        }
+    }
+}
+
+/// Candidate Git modes, rather than the owner's current worktree, determine
+/// symlink safety and renamed additions.
+#[cfg(unix)]
+#[test]
+fn owner_new_path_validation_refuses_symlink_and_untouched_rename_destination() {
+    for symlink in [true, false] {
+        let temp = claimed_worktree();
+        let workspace = temp.path();
+        let base = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
+        let path = if symlink {
+            "src/new/link.rs"
+        } else {
+            "other/renamed.rs"
+        };
+        fs::create_dir_all(workspace.join(path).parent().unwrap()).unwrap();
+        if symlink {
+            std::os::unix::fs::symlink("../../outside", workspace.join(path)).unwrap();
+        } else {
+            // A rename still has an addition destination when rename detection
+            // is disabled, even when Git considers the bytes identical.
+            git_success(workspace, &["mv", "README.md", path]).unwrap();
+        }
+        git_success(workspace, &["add", "--", path]).unwrap();
+        git_success(workspace, &["commit", "-m", "untrusted candidate"]).unwrap();
+        let error =
+            crate::validate_claim_new_paths(workspace, &["file:src/lib.rs".into()], &base, "HEAD")
+                .unwrap_err()
+                .to_string();
+        assert!(
+            error.contains(path),
+            "owner refusal must name the candidate path: {error}"
         );
     }
 }
