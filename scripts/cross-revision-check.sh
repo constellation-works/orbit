@@ -55,6 +55,11 @@ Options:
   --keep-compiler-cache       do not force the compiler-cache opt-out
   -h, --help                  show this help
 
+Orbit scratch requires ORBIT_SCRATCH_DIR to name an existing Git checkout's
+canonical .orbit/tmp directory. Only descendants of that root are allowed;
+the source checkout and nested .orbit state remain protected. This contract
+applies to both --workdir and automatic workdirs under TMPDIR.
+
 When both markers are given, each arm's log must contain its own marker and must
 not contain the other arm's. That is how a stale binary or a reused fixture path
 from the sibling revision is detected rather than assumed absent.
@@ -119,6 +124,10 @@ git_ro() {
 }
 
 git_ro rev-parse --git-dir >/dev/null 2>&1 || die "not a Git repository: $REPO"
+# --repo may name a subdirectory. Protect the entire source checkout before
+# considering scratch authority, rather than only that caller-selected prefix.
+repo_root="$(git_ro rev-parse --show-toplevel)" || die "--repo must be a Git checkout: $REPO"
+REPO="$(cd "$repo_root" && pwd -P)"
 
 resolve_rev() {
   local rev="$1"
@@ -138,6 +147,10 @@ abs_path() {
     *) path="$PWD/$path" ;;
   esac
   while [[ ! -d "$path" ]]; do
+    [[ ! -e "$path" && ! -L "$path" ]] || die "not a directory: $path"
+    case "$(basename "$path")" in
+      . | ..) die "cannot resolve traversal through a missing directory: $path" ;;
+    esac
     suffix="/$(basename "$path")$suffix"
     path="$(dirname "$path")"
     [[ "$path" != "/" ]] || break
@@ -145,21 +158,47 @@ abs_path() {
   printf '%s%s\n' "$(cd "$path" && pwd -P)" "$suffix"
 }
 
-if [[ -n "$WORKDIR" ]]; then
-  WORKDIR="$(abs_path "$WORKDIR")"
-  # Writing scratch trees or build output into the checkout would mutate the
-  # very state under validation, and .orbit is canonical Orbit state.
-  case "$WORKDIR" in
+validate_workdir() {
+  local workdir="$1" scratch checkout git_root relative
+  # The source is immutable even if a caller declares its own scratch there.
+  case "$workdir" in
     "$REPO" | "$REPO"/*)
-      die "--workdir must live outside the source checkout ($WORKDIR is inside $REPO)"
+      die "--workdir must live outside the source checkout ($workdir is inside $REPO)"
       ;;
     */.orbit | */.orbit/*)
-      die "--workdir must not be inside Orbit state: $WORKDIR"
+      # A managed checkout itself has .orbit/state/worktrees ancestors. An
+      # explicit scratch root takes precedence over those ancestors, but never
+      # over state below that root. TMPDIR alone grants no state exception.
+      [[ -n "${ORBIT_SCRATCH_DIR:-}" && -d "$ORBIT_SCRATCH_DIR" ]] \
+        || die "--workdir must not be inside Orbit state without an existing ORBIT_SCRATCH_DIR: $workdir"
+      scratch="$(cd "$ORBIT_SCRATCH_DIR" && pwd -P)"
+      case "$scratch" in
+        */.orbit/tmp) checkout="${scratch%/.orbit/tmp}" ;;
+        *) die "ORBIT_SCRATCH_DIR must resolve to a checkout's .orbit/tmp: $scratch" ;;
+      esac
+      git_root="$(GIT_OPTIONAL_LOCKS=0 git -C "$checkout" rev-parse --show-toplevel 2>/dev/null)" \
+        || die "ORBIT_SCRATCH_DIR must belong to a Git checkout: $scratch"
+      [[ "$(cd "$git_root" && pwd -P)" == "$checkout" ]] \
+        || die "ORBIT_SCRATCH_DIR must belong to a Git checkout: $scratch"
+      case "$workdir" in
+        "$scratch"/*) relative="${workdir#"$scratch"/}" ;;
+        *) die "--workdir must not be inside Orbit state outside ORBIT_SCRATCH_DIR: $workdir" ;;
+      esac
+      case "/$relative/" in
+        */.orbit/*) die "--workdir must not be inside Orbit state beneath scratch: $workdir" ;;
+      esac
       ;;
   esac
+}
+
+if [[ -n "$WORKDIR" ]]; then
+  WORKDIR="$(abs_path "$WORKDIR")"
+  validate_workdir "$WORKDIR"
   mkdir -p "$WORKDIR"
 else
-  WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/orbit-cross-revision-XXXXXX")"
+  temp_root="$(abs_path "${TMPDIR:-/tmp}")"
+  validate_workdir "$temp_root/orbit-cross-revision-XXXXXX"
+  WORKDIR="$(mktemp -d "$temp_root/orbit-cross-revision-XXXXXX")"
   OWNED_WORKDIR=1
 fi
 

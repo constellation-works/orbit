@@ -227,8 +227,15 @@ symlinked ancestor that Linux CI never sees. In practice:
   directory) rather than relying on the platform's temp directory.
 - A fixture that compares paths Orbit reports with paths it spelled roots
   itself at `tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir())`,
-  or canonicalizes the path it compares against. Do not override `TMPDIR` for
-  the suite: that hides the symlinked-ancestor cases the default exercises.
+  or canonicalizes the path it compares against. On unrestricted hosts, keep
+  the platform's default `TMPDIR` so the suite exercises symlinked ancestors.
+  Managed executors must instead put scratch and validation logs beneath their
+  injected `ORBIT_SCRATCH_DIR` (the checkout's `.orbit/tmp`): create a run
+  subdirectory there and set `TMPDIR` to it. Tests that guarantee symlink
+  handling must construct that case explicitly, rather than depend on the
+  platform's default temporary path. The [cross-revision helper](runbooks/compiler-cache.md#cross-revision-beforeafter-validation)
+  requires this explicit scratch root to allow workdirs beneath `.orbit`,
+  while retaining source-checkout and live-state refusals.
 - Unix socket fixtures (the plugin broker) also need a short root, because
   `sun_path` is 104 bytes on macOS; root them under `/tmp` as the broker's own
   fixtures do.
