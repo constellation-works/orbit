@@ -12,6 +12,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_config::ReviewPolicy;
+use orbit_types::workflow::automation::CoverageClass;
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 use serde::Serialize;
 
@@ -116,11 +117,14 @@ impl AfterLandingHealth {
             (None, Some(stall)) => format!("stalled ({stall})"),
             (None, None) => "not wedged or stalled".to_string(),
         };
-        let batch = match (self.last_batch_minted_at, self.last_batch_covered_at) {
-            (Some(at), _) => format!("last batch minted {}", at.to_rfc3339()),
-            (None, Some(at)) => format!("last batch covered {}", at.to_rfc3339()),
-            (None, None) => "no batch minted yet".to_string(),
-        };
+        let minted = self
+            .last_batch_minted_at
+            .map(|at| format!("last batch minted at {}", at.to_rfc3339()))
+            .unwrap_or_else(|| "no batch minted yet".to_string());
+        let covered = self
+            .last_batch_covered_at
+            .map(|at| format!("last batch covered at {}", at.to_rfc3339()))
+            .unwrap_or_else(|| "no batch covered yet".to_string());
         let facts = [
             format!(
                 "consumer `{}` {}",
@@ -132,7 +136,8 @@ impl AfterLandingHealth {
             branch,
             format!("crew `{}`", self.crew.as_deref().unwrap_or("-")),
             format!("state {}", self.state.as_deref().unwrap_or("-")),
-            batch,
+            minted,
+            covered,
         ]
         .join(", ");
 
@@ -204,6 +209,12 @@ pub fn after_landing_health(
     health.present = true;
     health.enabled = runtime.auto_task_enabled(&definition);
     health.branch = Some(declared.branch.clone());
+    if declared.coverage != CoverageClass::LandedCodeReviewV1 {
+        health.problems.push(format!(
+            "uses `{}` coverage instead of `landed_code_review_v1`, so it does not certify code review",
+            declared.coverage
+        ));
+    }
 
     let ownership = super::ownership::resolve(runtime, declared.owner_machine.as_deref());
     health.owned_here = ownership.owned_here;
@@ -282,6 +293,15 @@ pub fn after_landing_health(
         .iter()
         .map(|receipt| receipt.accepted_at)
         .max();
+    if health.last_batch_minted_at.is_none()
+        && let Some(receipt) = diagnostic
+            .receipts
+            .iter()
+            .max_by_key(|receipt| receipt.accepted_at)
+        && let Ok(task) = runtime.get_task(&receipt.action_id)
+    {
+        health.last_batch_minted_at = Some(task.created_at);
+    }
     // Without consumer state, inspection reports the branch failure as its
     // reason; that is already a problem above, and the state is the wait.
     health.state = Some(if diagnostic.state.is_none() {

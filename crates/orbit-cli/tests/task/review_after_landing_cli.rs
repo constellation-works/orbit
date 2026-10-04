@@ -136,6 +136,23 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
     assert_eq!(shown["enabled_by_review_policy"], true);
 
     let runtime = open_runtime(&fixture);
+    let listed = runtime
+        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .unwrap();
+    let listed_consumer = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|definition| definition["name"] == CONSUMER)
+        .unwrap();
+    assert_eq!(listed_consumer["enabled"], false);
+    assert_eq!(listed_consumer["enabled_by_review_policy"], true);
+    assert_eq!(listed_consumer["effective_enabled"], true);
+    let api_show = runtime
+        .run_tool_as_human("orbit.auto_task.show", json!({"name": CONSUMER}))
+        .unwrap();
+    assert_eq!(api_show["enabled_by_review_policy"], true);
+    assert_eq!(api_show["effective_enabled"], true);
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     assert!(!definition.enabled);
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
@@ -194,6 +211,16 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
 
     let (row, _) = doctor_row(&fixture);
     assert_eq!(row["status"], "ok", "{row}");
+
+    let mut wrong_coverage = trigger();
+    wrong_coverage["coverage"] = json!("integrated_qa_v1");
+    retarget(&fixture, &wrong_coverage);
+    assert_doctor_fails(&fixture, "instead of `landed_code_review_v1`");
+    retarget(&fixture, &trigger());
+
+    set_policy(&fixture, "operation.review_crew", "missing-crew");
+    assert_doctor_fails(&fixture, "does not resolve");
+    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
     assert!(
         row["message"]
             .as_str()
@@ -204,6 +231,10 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
     let config = fixture.json(&["config", "show", "--json"]);
     assert_eq!(config["review_after_landing"]["healthy"], true, "{config}");
     assert_eq!(config["review_after_landing"]["crew"], REVIEW_CREW);
+    assert!(
+        config["review_after_landing"]["last_batch_minted_at"].is_string(),
+        "{config}"
+    );
 }
 
 #[test]

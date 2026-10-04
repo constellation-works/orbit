@@ -48,15 +48,18 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let array = runtime
         .auto_task_listing(include_inactive_plugins)?
         .iter()
-        .map(listed_json)
+        .map(|listed| listed_json(runtime, listed))
         .collect::<Result<_, _>>()?;
     Ok(Value::Array(array))
 }
 
 /// The canonical definition record, plus the inactive-plugin marker when its
 /// seeding plugin is off here. A live definition is the bare record.
-fn listed_json(listed: &ListedAutoTask) -> Result<Value, OrbitError> {
+fn listed_json(runtime: &OrbitRuntime, listed: &ListedAutoTask) -> Result<Value, OrbitError> {
     let mut value = to_json(&listed.definition)?;
+    value["enabled_by_review_policy"] =
+        json!(runtime.auto_task_enabled_by_review_policy(&listed.definition));
+    value["effective_enabled"] = json!(runtime.auto_task_enabled(&listed.definition));
     if let (Some(inactive), Some(object)) = (&listed.inactive_plugin, value.as_object_mut()) {
         object.insert("plugin_inactive".to_string(), json!(true));
         object.insert("inactive_plugin".to_string(), json!(inactive));
@@ -81,7 +84,7 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
     // A definition listings hide still resolves here, marked inactive.
     let listed = runtime.listed_auto_task(definition);
-    let mut value = listed_json(&listed)?;
+    let mut value = listed_json(runtime, &listed)?;
     let definition = listed.definition;
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         let diagnostic = if input
@@ -120,6 +123,9 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
     };
     let definition = runtime.auto_task_update(&name, params)?;
     let mut response = to_json(&definition)?;
+    response["enabled_by_review_policy"] =
+        json!(runtime.auto_task_enabled_by_review_policy(&definition));
+    response["effective_enabled"] = json!(runtime.auto_task_enabled(&definition));
     let warnings = runtime.validate_required_tools(&definition.template.required_tools)?;
     if !warnings.is_empty()
         && let Some(object) = response.as_object_mut()
