@@ -660,6 +660,96 @@ fn workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent() {
     );
 }
 
+/// Delivery creates its worktrees under `<checkout>/.orbit/state/worktrees/`
+/// even when `--root` keeps Orbit's data directory outside the checkout. If
+/// the checkout does not ignore `.orbit/`, each worktree is an untracked
+/// nested checkout that the primary-checkout Git snapshot cannot hash, and the
+/// first local ship fails in its implement step. `workspace init` must ignore
+/// it, and `workspace sync` must restore the ignore for an existing checkout.
+#[test]
+fn relocated_root_checkout_ignores_its_delivery_worktrees() {
+    let home = tempdir().expect("home tempdir");
+    let repo = home.path().join("workspace");
+    git_repo::init(&repo);
+    git(
+        &repo,
+        &["commit", "--quiet", "--allow-empty", "-m", "initial"],
+    );
+    let root = home.path().join("relocated-orbit-root");
+    std::fs::create_dir_all(&root).expect("create relocated root");
+    std::fs::write(
+        root.join("config.toml"),
+        "[machine]\nid = \"hm_relocated_root\"\nname = \"relocated\"\ntask_prefix = \"TST\"\n",
+    )
+    .expect("write machine identity");
+    let root_arg = root.to_str().expect("utf-8 root");
+
+    orbit(&repo, home.path())
+        .args([
+            "--root",
+            root_arg,
+            "workspace",
+            "init",
+            "--ship-mode",
+            "local",
+        ])
+        .assert()
+        .success();
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            ".orbit/state/worktrees/orbit-delivery",
+        ],
+    );
+    assert_snapshot_omits_orbit_dir(&repo, "after workspace init");
+
+    std::fs::remove_file(repo.join(".gitignore")).expect("drop the managed ignore");
+    orbit(&repo, home.path())
+        .args(["--root", root_arg, "workspace", "sync"])
+        .assert()
+        .success();
+    assert_snapshot_omits_orbit_dir(&repo, "after workspace sync");
+}
+
+/// The untracked set the primary-checkout snapshot reads must not reach into
+/// `.orbit/`, where Orbit keeps its own nested delivery worktrees.
+fn assert_snapshot_omits_orbit_dir(repo: &Path, when: &str) {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain=v2", "--untracked-files=all"])
+        .current_dir(repo)
+        .output()
+        .expect("run git status");
+    assert!(output.status.success(), "git status failed {when}");
+    let status = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !status.lines().any(|line| line.contains(".orbit/")),
+        "the checkout's .orbit/ must be ignored {when}:\n{status}"
+    );
+}
+
+fn git(repo: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.com",
+        ])
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("spawn git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// [ORB-12107] Without `--force`, `workspace init` refuses a second name for
 /// an initialized checkout and an existing name for a second checkout. Neither
 /// refusal writes the registry or a checkout identity.

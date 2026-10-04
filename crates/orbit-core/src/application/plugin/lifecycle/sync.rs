@@ -286,11 +286,11 @@ pub fn sync_plugins(
                     // declared, and the resolver refuses a fetched archive
                     // that carries none.
                     digest: pin.digest.clone(),
-                    // A committed pin is not grant consent. Install disabled,
+                    // A pin is not grant consent. Install disabled,
                     // then take the same reviewed enable path used above.
                     enable: false,
                     grants: Vec::new(),
-                    // §3.7: a committed pin never starts a build, and sync
+                    // §3.7: a pin never starts a build, and sync
                     // has no flag that could.
                     allow_build: false,
                     show_build_plan: None,

@@ -3,7 +3,8 @@
 //!
 //! Install is global only: a plugin lives once per host under
 //! `~/.orbit/plugins/<ns>/<version>/` and every workspace on that host shares
-//! it. The repository commits only `.orbit/plugins.yaml`.
+//! it. A checkout keeps only its `.orbit/plugins.yaml` pins, which git ignores
+//! with the rest of `.orbit/`.
 //!
 //! Beyond tools, a plugin contributes definitions, seeded schedules
 //! ([`seed`]), skills ([`skills`]), a `[plugins.<ns>]` config section,

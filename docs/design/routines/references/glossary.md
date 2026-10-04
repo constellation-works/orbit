@@ -21,7 +21,7 @@ activity-job feature (activity, job, run, catalog) are defined in
 | Local pause | A host-local, SQLite-persisted suppression of one routine (`orbit routine pause`); never versioned. See [2_design.md §4](../2_design.md). |
 | Missed-run policy | Per-routine handling of slots that elapsed while the host was down: `catch_up_once` or `skip`. See [2_design.md §1](../2_design.md). |
 | Owner checkout | A registered checkout whose logical workspace this machine owns (host-registry). The unit of scheduling: each one is an independent schedule against its own store. See [2_design.md §2](../2_design.md). |
-| Routine | A versioned YAML definition of recurring work: trigger, target, enabled flag, policy. See [2_design.md §1](../2_design.md). |
+| Routine | A per-checkout YAML definition of recurring work: trigger, target, enabled flag, policy. See [2_design.md §1](../2_design.md). |
 | Routine source | Any registered, active owner checkout on the host; where routine YAML lives. Registration is the whole opt-in. See [2_design.md §2](../2_design.md). |
 | Sweep | Compatibility alias for `orbit clock tick`. See [2_design.md §3](../2_design.md). |
 | Tick | One invocation of the pass by the clock; evaluates routines then auto-task definitions for every owner checkout on the host. See [2_design.md §3](../2_design.md). |

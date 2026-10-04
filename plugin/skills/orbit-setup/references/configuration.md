@@ -50,7 +50,7 @@ assuming a value.
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
 | `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). Shipped `crew: system` steps resolve onto it. |
 | `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. |
-| `workflow.auto_ship` | Opt-in for unattended ship dispatch via the scheduler. |
+| `workflow.auto_ship` | Opt-in for `orbit run ship-sweep` unattended ship dispatch. The seeded `ship-sweep` routine does not read it. |
 | `operation.review_policy` | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. |
 | `operation.review_crew` | Crew for before-PR automatic review. After-landing review uses the delivery auto-task's template crew. |
 | `operation.review_reviewer_starts` | Fresh reviewer starts per delivery run lineage (a run and its resumes). Retrying a failed reviewer step continues its start; reviewing a changed candidate, including a completion rebase, takes a new one (1..=10, default 3). |

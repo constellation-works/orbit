@@ -10,12 +10,13 @@ use serde_json::json;
 #[command(
     after_help = "Reads the [machine] identity from the selected Orbit root's config.toml\n\
                         (created by `orbit init`) and, with --install-clock, installs the\n\
-                        per-user OS clock unit that invokes `orbit sweep` every minute\n\
-                        (launchd on macOS, a systemd user timer on Linux). It never creates\n\
-                        or rewrites machine identity — run `orbit init` for that."
+                        per-user OS clock unit that invokes `orbit clock tick` on the clock\n\
+                        cadence, every minute by default (launchd on macOS, a systemd user\n\
+                        timer on Linux). It never creates or rewrites machine identity —\n\
+                        run `orbit init` for that. `orbit clock` controls the installed unit."
 )]
 pub struct RoutineInitArgs {
-    /// Also install and activate the OS clock unit driving `orbit sweep`.
+    /// Also install and activate the OS clock unit driving `orbit clock tick`.
     #[arg(long)]
     pub install_clock: bool,
 }
@@ -32,7 +33,7 @@ impl RoutineInitArgs {
 
         if !self.install_clock {
             text.push_str(
-                "\nclock unit not installed (pass --install-clock to set up `orbit sweep`)",
+                "\nclock unit not installed (pass --install-clock to set up `orbit clock tick`)",
             );
             return Ok(Payload::detail(
                 json!({
@@ -49,7 +50,9 @@ impl RoutineInitArgs {
             text.push_str(&format!("\nwrote {}", file.display()));
         }
         if report.activated {
-            text.push_str("\nclock unit active: `orbit sweep` runs every minute on this machine");
+            text.push_str(
+                "\nclock unit active: `orbit clock tick` runs on this machine's clock cadence (`orbit clock status`)",
+            );
         } else {
             text.push_str("\nclock unit files written but not activated; run:");
             for step in &report.manual_steps {

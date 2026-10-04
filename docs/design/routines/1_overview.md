@@ -74,8 +74,8 @@ fragmentation this feature exists to end.
 
 ## 2. Core Concepts
 
-- **Routine** — a versioned YAML definition in a registered workspace: name, trigger,
-  target, `enabled`, and policy. The durable unit of scheduling.
+- **Routine** — a YAML definition in a registered workspace's gitignored `.orbit/routines/`:
+  name, trigger, target, `enabled`, and policy. The durable unit of scheduling.
 - **Target** — what fires: a reference into the existing catalog. v1 dispatches
   `job:<name>`; `activity:<name>` is reserved (wrap the activity in a one-step job — see
   [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads)). Routines carry no inline commands; the `shell` activity variant was

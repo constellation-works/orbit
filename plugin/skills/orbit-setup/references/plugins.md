@@ -16,16 +16,18 @@ section: see [What enabling installs](#what-enabling-installs).
 Nothing here is required for task tracking or agent execution. Add a plugin
 only when the user asks for the capability it provides.
 
-## Two halves: the machine installs, the repository pins
+## Two halves: the machine installs, the checkout pins
 
 A plugin lives once per machine under `~/.orbit/plugins/<ns>/<version>/`.
 Enable state, grants, install paths and manifest digests are host-local and are
 never copied into the repository. A workspace can switch a host-enabled plugin
 off for itself (see [Switching a plugin off in one workspace](#switching-a-plugin-off-in-one-workspace)).
-A repository commits only the pin file:
+A checkout keeps only a pin file. Like the rest of `.orbit/`, it is per-user
+checkout state that git ignores, so it is not shared by committing or cloning;
+copy it to another checkout deliberately:
 
 ```yaml
-# .orbit/plugins.yaml — committed to the repository
+# .orbit/plugins.yaml — per-checkout, gitignored
 schemaVersion: 1
 plugins:
   - name: graph
@@ -34,7 +36,7 @@ plugins:
     enabled: true
 ```
 
-Cloning a repository therefore does not make its plugins available. Plugin
+Cloning a repository therefore brings neither pins nor plugins. Plugin
 trees are never vendored into a checkout, and `orbit plugin add` refuses a
 source inside the current repository for exactly that reason. A plugin root
 that contains a symbolic link is refused, naming the entry, because the install
@@ -74,7 +76,8 @@ clears its grants and prints the `plugin enable --grant …` re-consent command.
 An unchanged or narrower request keeps the existing state. Supplying
 `upgrade --grant …` is explicit re-consent and enables the new manifest.
 
-On a machine that is joining a repository someone else configured:
+On a checkout whose pin file names plugins this machine has not installed (for
+example, a pin file copied from another checkout):
 
 ```bash
 orbit plugin sync --dry-run              # what this machine is missing
@@ -88,7 +91,7 @@ the plugin off in this workspace only; it never disables the host row, so
 syncing one workspace never changes another. `enabled: true` turns a workspace
 toggle back on, and enables a host-disabled plugin only with permission review:
 a pin whose manifest requests grants remains disabled unless this invocation
-supplies the complete reviewed set with `--grant`; repository content is never
+supplies the complete reviewed set with `--grant`; pin file content is never
 consent.
 
 ## Switching a plugin off in one workspace
@@ -259,7 +262,7 @@ not set (see [Secrets](#secrets)). The four states:
 |---|---|
 | `active` | Installed, enabled, and serving its tools. |
 | `disabled` | Installed but not enabled on the host — run `orbit plugin enable <ns>`; or switched off in this workspace — `orbit plugin enable <ns> --scope workspace`. `list` and `show` print the host state and which one it is. `doctor` does not count a workspace toggle as a problem. |
-| `missing` | Pinned by the repository, not installed here — run `orbit plugin sync`. |
+| `missing` | Pinned by this checkout, not installed here — run `orbit plugin sync`. |
 | `inactive` | Enabled but refused at load: the manifest no longer loads, its `requires.orbit`/`requires.host_api` does not hold on this machine, its namespace collides, a definition it ships breaks the rules above, or its `[plugins.<ns>]` config fails its own schema. `orbit plugin show <ns>` names the reason. |
 
 A plugin fails closed on its own: one broken plugin never takes down the

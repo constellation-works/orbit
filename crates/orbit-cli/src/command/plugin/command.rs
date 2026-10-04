@@ -30,8 +30,9 @@ Examples:
 
 A plugin source keeps its plugin in a `.orbit-plugin/` directory holding
 `plugin.yaml`; that directory is the plugin root and the only tree installed.
-Plugins install once per machine under the Orbit global root; a repository
-commits only the `.orbit/plugins.yaml` pin file, never a plugin tree.
+Plugins install once per machine under the Orbit global root. A checkout only
+pins them in `.orbit/plugins.yaml`, per-checkout state that git ignores with the
+rest of `.orbit/`; a plugin tree is never vendored into a checkout.
 Golden input and output strings may use {{workspace}} and {{plugin_root}};
 expect.error.code matches a backend's structured error code.
 ";

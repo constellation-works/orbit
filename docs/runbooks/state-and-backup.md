@@ -146,6 +146,12 @@ sharing task records across owners.
 .orbit/
 ```
 
+The block is written even when `--root` keeps Orbit's data directory outside
+the checkout, because delivery worktrees are still created under
+`<checkout>/.orbit/state/worktrees/`. Unignored, each one is an untracked nested
+checkout and the run's primary-checkout snapshot fails. `orbit workspace sync`
+adds the block to a checkout that lacks it.
+
 If git still tracks files under `.orbit/` from an older block, `orbit doctor`
 reports them. Sync rewrites the ignore block but does not run git; untrack once
 with `git rm -r --cached .orbit`.

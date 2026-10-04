@@ -1,5 +1,5 @@
-//! The committed `.orbit/plugins.yaml` pin file: what a workspace declares it
-//! uses. The host installs; the repository never vendors a plugin tree.
+//! The per-checkout `.orbit/plugins.yaml` pin file: what a workspace declares it
+//! uses. The host installs; a checkout never vendors a plugin tree.
 
 use serde::{Deserialize, Serialize};
 
