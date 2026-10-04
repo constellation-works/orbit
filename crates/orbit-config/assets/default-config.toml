@@ -86,6 +86,6 @@ disk_resume_percent = 80
 # machine that owns the workspace; `orbit doctor` fails while that consumer is
 # missing, owned elsewhere, wedged, stalled or watching a branch that does not
 # exist. The lineage budget keys (review_reviewer_starts, review_repair_cycles,
-# review_minutes) bound one before-PR delivery candidate.
+# review_minutes) bound one before-PR delivery run and its resumes.
 # review_policy = "none"       # or "before-pr", "after-landing"
 # review_crew = "sol"          # reviewer crew for before-pr and after-landing

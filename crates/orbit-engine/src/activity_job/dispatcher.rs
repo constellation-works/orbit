@@ -160,6 +160,13 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
 
+    /// A deterministic action reached a decision rather than a fault — a
+    /// settled non-pass review verdict, an exhausted budget, a refused
+    /// policy. Repeating the action reaches the same decision, so neither
+    /// retry nor a recovery activity runs; the failure handoff owns it.
+    #[error("deterministic action `{action}` refused: {message}")]
+    DeterministicActionRefused { action: String, message: String },
+
     /// Completion cannot overtake a task's verified-live implementation run.
     #[error(
         "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
@@ -276,6 +283,7 @@ impl DispatchError {
                 | DispatchError::WorktreeIntegrity { .. }
                 | DispatchError::RecoverableVcsConflict { .. }
                 | DispatchError::TaskCompletionLiveRun { .. }
+                | DispatchError::DeterministicActionRefused { .. }
         )
     }
 

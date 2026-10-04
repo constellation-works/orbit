@@ -31,7 +31,9 @@ mod projection;
 
 pub(crate) use admission::install_review_admission;
 pub(crate) use coverage::exclusions;
-pub(crate) use gate::{review_gate_admit, review_gate_settle};
+pub(crate) use gate::{
+    record_reviewer_invocation, release_review_attempt, review_gate_admit, review_gate_settle,
+};
 /// The owner handoff console [ORB-12516]: what an authorized owner surface
 /// reads and the typed refusals it renders. Adapters above Core cannot reach
 /// `orbit-store`, so these are the only shapes they need.
@@ -56,12 +58,20 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
 /// as a final route.
 pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
 
-/// One candidate lineage: the task set delivered together against a base.
-pub(crate) fn lineage_key(workspace_id: &str, task_ids: &[String], base: &str) -> String {
+/// One candidate lineage: the task set one delivery run lineage delivers
+/// together against a base. `root_run_id` is the first run of the
+/// lineage — a resumed run shares its source's budget, while a fresh
+/// delivery run of the same tasks starts a new lineage with a full budget.
+pub(crate) fn lineage_key(
+    workspace_id: &str,
+    task_ids: &[String],
+    base: &str,
+    root_run_id: &str,
+) -> String {
     let mut ids = task_ids.to_vec();
     ids.sort();
     ids.dedup();
-    format!("{workspace_id}/{}/{base}", ids.join("+"))
+    format!("{workspace_id}/{}/{base}/{root_run_id}", ids.join("+"))
 }
 
 /// Translate a shared-rule failure into the Core error vocabulary.

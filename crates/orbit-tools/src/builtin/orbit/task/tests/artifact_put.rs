@@ -1,4 +1,5 @@
-//! Source-path confinement for `orbit.task.artifact.put`.
+//! Source-path confinement and review-report validation for
+//! `orbit.task.artifact.put`.
 
 use std::sync::{Arc, Mutex};
 
@@ -78,4 +79,45 @@ fn remote_agent_session_cannot_attach_a_host_secret_outside_the_workspace() {
 
     assert_invalid_input(error);
     assert_eq!(*host.calls.lock().expect("host call"), 0);
+}
+
+#[test]
+fn a_review_report_is_validated_on_attach_naming_the_mismatched_field() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let host = RecordingHost::default();
+    let ctx = ToolContext {
+        cwd: Some(workspace.path().to_string_lossy().into_owned()),
+        workspace_root: Some(workspace.path().to_path_buf()),
+        orbit_host: Some(Arc::new(host.clone())),
+        ..ToolContext::default()
+    };
+    let source = workspace.path().join("report.json");
+    let put = |report: serde_json::Value| {
+        std::fs::write(&source, report.to_string()).expect("write report");
+        OrbitTaskArtifactPutTool.execute(
+            &ctx,
+            json!({"id": "ORB-00001", "source_path": source, "path": "review-report.json"}),
+        )
+    };
+
+    let error = put(json!({
+        "schema_version": 1,
+        "attempt_id": "rvw-1",
+        "verdict": "looks_good",
+        "summary": "",
+    }))
+    .expect_err("an unknown verdict is refused");
+    assert!(error.to_string().contains("verdict"), "{error}");
+    assert_invalid_input(error);
+    assert_eq!(*host.calls.lock().expect("host call"), 0);
+
+    put(json!({
+        "attempt_id": "rvw-1",
+        "verdict": "Passed Without Repairs",
+        "summary": "Clean.",
+        "findings": null,
+        "validation": [{"command": "make ci-fast", "outcome": "pass"}],
+    }))
+    .expect("benign drift attaches");
+    assert_eq!(*host.calls.lock().expect("host call"), 1);
 }

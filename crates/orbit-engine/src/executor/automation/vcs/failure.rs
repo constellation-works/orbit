@@ -5,7 +5,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{ExternalRef, TaskComment, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
@@ -36,6 +36,20 @@ const REVIEW_GATE_EVENT: &str = "review_gate_escalation";
 pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] =
     &["review_gate_admit", "review", "review_gate_settle"];
 
+/// Completion-stage steps: merging the published PR, and re-reviewing and
+/// republishing it after completion rebased a conflicting reviewed head.
+const COMPLETION_STEPS: &[&str] = &[
+    "complete_pr",
+    "re_review_gate_admit",
+    "re_review",
+    "re_review_gate_settle",
+    "re_push",
+    "complete_reviewed_pr",
+];
+
+/// Admission checkpoints whose attempt a failing run must close.
+const REVIEW_ADMISSION_STEPS: &[&str] = &["review_gate_admit", "re_review_gate_admit"];
+
 /// Terminal hook for `task_pr_pipeline`.
 ///
 /// The original job error remains authoritative. Failures before publication
@@ -50,6 +64,9 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     let error_code = required_input_string(input, "error_code")?;
     let error_message = required_input_string(input, "error_message")?;
     let run_id = required_input_string(input, "run_id")?;
+    // Before anything that may refuse the handoff — a bundle, a missing
+    // task — so every attempt this run admitted is closed.
+    release_review_attempts(host, input, run_id);
     let job_input = input
         .get("job_input")
         .ok_or_else(|| OrbitError::InvalidInput("missing required input.job_input".to_string()))?;
@@ -75,7 +92,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     let task = host.get_task(task_id)?;
     ensure_failure_handoff_ownership(host, input, &task, run_id)?;
 
-    if failed_step_id == "complete_pr"
+    if COMPLETION_STEPS.contains(&failed_step_id)
         && let Some(pr_number) = task.github_pr_number().map(ToOwned::to_owned)
     {
         return preserve_completion_failure(
@@ -577,6 +594,42 @@ fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
         "pr_created": false,
         "task_status": "blocked",
     }))
+}
+
+/// [ORB-13890] Close every review attempt this run admitted that has no
+/// verdict yet, charging the reviewer runtime it spent, so a failed or
+/// timed-out reviewer step never leaves its attempt open for the lineage.
+/// Only the run's own admission checkpoints are read, so this needs no task
+/// ownership proof. The original failure stays authoritative: a release
+/// error is logged, not raised; the run's termination releases it again.
+fn release_review_attempts<H: RuntimeHost + ?Sized>(host: &H, input: &Value, run_id: &str) {
+    for step in REVIEW_ADMISSION_STEPS {
+        let Ok(admission) = pipeline_step(input, step) else {
+            continue;
+        };
+        if admission.get("applies").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let (Some(lineage_key), Some(attempt_id)) = (
+            input_string_field(admission, "lineage_key"),
+            input_string_field(admission, "attempt_id"),
+        ) else {
+            continue;
+        };
+        let request = ReviewReleaseRequest {
+            run_id: run_id.to_string(),
+            lineage_key,
+            attempt_id,
+        };
+        if let Err(error) = host.release_review_attempt(&request) {
+            tracing::warn!(
+                run_id = %run_id,
+                attempt_id = %request.attempt_id,
+                error = %error,
+                "pr_failure_handoff could not release the review attempt; run termination releases it"
+            );
+        }
+    }
 }
 
 fn pipeline_step<'a>(input: &'a Value, step: &str) -> Result<&'a Value, OrbitError> {

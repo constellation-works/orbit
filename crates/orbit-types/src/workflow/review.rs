@@ -38,10 +38,12 @@ pub const REVIEW_REPORT_ARTIFACT: &str = "review-report.json";
 /// Task artifact carrying the settled gate result for the latest attempt.
 pub const REVIEW_GATE_ARTIFACT: &str = "review-gate.json";
 
-/// Candidate default budgets per delivery candidate lineage.
-pub const DEFAULT_REVIEW_REVIEWER_STARTS: u32 = 2;
+/// Default budgets per delivery run lineage. One reviewer that runs the
+/// repository's full validation must fit several times over, so a retried or
+/// re-reviewed candidate is not starved by the first invocation.
+pub const DEFAULT_REVIEW_REVIEWER_STARTS: u32 = 3;
 pub const DEFAULT_REVIEW_REPAIR_CYCLES: u32 = 2;
-pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
+pub const DEFAULT_REVIEW_MINUTES: u32 = 90;
 
 /// When automatic code review applies to a managed delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,15 +68,17 @@ impl ReviewTiming {
     }
 }
 
-/// Limits captured for one candidate lineage. They cover retries,
-/// interruptions, and delivery invalidations; nothing resets them.
+/// Limits captured for one delivery run lineage: the run that first admitted
+/// the candidate and every resume of it. They cover retries, interruptions,
+/// and candidate invalidations within that lineage; a fresh delivery run
+/// starts a new lineage with a fresh budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewBudget {
     /// Fresh reviewer invocations allowed for the lineage.
     pub reviewer_starts: u32,
     /// Repair/validation cycles allowed for the lineage.
     pub repair_cycles: u32,
-    /// Aggregate reviewer, repair, and final-validation wall time.
+    /// Aggregate reviewer runtime after which no further start is admitted.
     pub minutes: u32,
 }
 
@@ -351,6 +355,192 @@ pub struct ReviewReport {
     pub escalation: Option<String>,
 }
 
+impl ReviewReport {
+    /// Read a persisted report, tolerating benign shape drift that leaves its
+    /// meaning unambiguous: a bare-string `disposition`, enum labels in other
+    /// case or with `-`/space separators, `pass`/`fail`/`skipped` outcomes,
+    /// a single path string, a numeric finding id or string `schema_version`,
+    /// a missing `schema_version`, `summary` or finding `severity`, and
+    /// `null` lists. Anything else that does not match the contract is
+    /// refused with the offending field's path named.
+    pub fn parse(content: &[u8]) -> Result<Self, String> {
+        let mut value: Value = serde_json::from_slice(content)
+            .map_err(|error| format!("review report is not JSON: {error}"))?;
+        normalize_report(&mut value);
+        serde_json::from_value(value.clone()).map_err(|error| locate_report_error(&value, error))
+    }
+}
+
+/// Name the first field of a normalized report that fails its type, so a
+/// reviewer can fix exactly that field; a missing field already names
+/// itself.
+fn locate_report_error(report: &Value, error: serde_json::Error) -> String {
+    fn check<T: serde::de::DeserializeOwned>(path: &str, value: Option<&Value>) -> Option<String> {
+        let value = value.cloned().unwrap_or(Value::Null);
+        serde_json::from_value::<T>(value)
+            .err()
+            .map(|error| format!("{path}: {error}"))
+    }
+    if let Some(located) = check::<ReviewVerdict>("verdict", report.get("verdict")) {
+        return located;
+    }
+    if let Some(Value::Array(findings)) = report.get("findings") {
+        for (index, finding) in findings.iter().enumerate() {
+            let path = format!("findings[{index}]");
+            let located = check::<FindingDisposition>(
+                &format!("{path}.disposition"),
+                finding.get("disposition"),
+            )
+            .or_else(|| check::<ReviewFinding>(&path, Some(finding)));
+            if let Some(located) = located {
+                return located;
+            }
+        }
+    }
+    if let Some(Value::Array(records)) = report.get("validation") {
+        for (index, record) in records.iter().enumerate() {
+            let path = format!("validation[{index}]");
+            let located =
+                check::<ValidationOutcome>(&format!("{path}.outcome"), record.get("outcome"))
+                    .or_else(|| {
+                        record.get("role").and_then(|role| {
+                            check::<ValidationRole>(&format!("{path}.role"), Some(role))
+                        })
+                    })
+                    .or_else(|| check::<ReviewValidation>(&path, Some(record)));
+            if let Some(located) = located {
+                return located;
+            }
+        }
+    }
+    error.to_string()
+}
+
+fn normalize_report(report: &mut Value) {
+    let Some(report) = report.as_object_mut() else {
+        return;
+    };
+    match report.get("schema_version") {
+        None | Some(Value::Null) => {
+            report.insert(
+                "schema_version".to_string(),
+                Value::from(REVIEW_CONTRACT_VERSION),
+            );
+        }
+        Some(Value::String(raw)) => {
+            if let Ok(version) = raw.trim().parse::<u32>() {
+                report.insert("schema_version".to_string(), Value::from(version));
+            }
+        }
+        Some(_) => {}
+    }
+    normalize_label_field(report, "verdict", &[]);
+    if matches!(report.get("summary"), None | Some(Value::Null)) {
+        report.insert("summary".to_string(), Value::String(String::new()));
+    }
+    for list in ["findings", "validation"] {
+        if report.get(list).is_some_and(Value::is_null) {
+            report.remove(list);
+        }
+    }
+    if let Some(Value::Array(findings)) = report.get_mut("findings") {
+        findings
+            .iter_mut()
+            .filter_map(Value::as_object_mut)
+            .for_each(normalize_finding);
+    }
+    if let Some(Value::Array(records)) = report.get_mut("validation") {
+        for record in records.iter_mut().filter_map(Value::as_object_mut) {
+            normalize_label_field(
+                record,
+                "outcome",
+                &[
+                    ("pass", "passed"),
+                    ("success", "passed"),
+                    ("fail", "failed"),
+                    ("failure", "failed"),
+                    ("skipped", "not_run"),
+                ],
+            );
+            if record.get("role").is_some_and(Value::is_null) {
+                record.remove("role");
+            }
+            normalize_label_field(record, "role", &[]);
+        }
+    }
+}
+
+fn normalize_finding(finding: &mut serde_json::Map<String, Value>) {
+    if let Some(Value::Number(id)) = finding.get("id") {
+        let id = id.to_string();
+        finding.insert("id".to_string(), Value::String(id));
+    }
+    if matches!(finding.get("severity"), None | Some(Value::Null)) {
+        finding.insert(
+            "severity".to_string(),
+            Value::String("unspecified".to_string()),
+        );
+    }
+    if matches!(finding.get("summary"), None | Some(Value::Null))
+        && let Some(title) = finding.get("title").cloned()
+    {
+        finding.insert("summary".to_string(), title);
+    }
+    match finding.get("paths") {
+        Some(Value::Null) => {
+            finding.remove("paths");
+        }
+        Some(Value::String(path)) => {
+            let paths = Value::Array(vec![Value::String(path.clone())]);
+            finding.insert("paths".to_string(), paths);
+        }
+        _ => {}
+    }
+    let disposition = match finding.remove("disposition") {
+        Some(Value::String(kind)) => {
+            let mut object = serde_json::Map::new();
+            object.insert("kind".to_string(), Value::String(kind));
+            Some(object)
+        }
+        Some(Value::Object(mut object)) => {
+            if !object.contains_key("kind")
+                && let Some(status) = object.remove("status")
+            {
+                object.insert("kind".to_string(), status);
+            }
+            Some(object)
+        }
+        Some(other) => {
+            finding.insert("disposition".to_string(), other);
+            None
+        }
+        None => None,
+    };
+    if let Some(mut disposition) = disposition {
+        normalize_label_field(&mut disposition, "kind", &[("fixed", "repaired")]);
+        finding.insert("disposition".to_string(), Value::Object(disposition));
+    }
+}
+
+/// Canonicalize an enum label: trimmed, lower case, `-` and spaces as `_`,
+/// then mapped through `aliases`. Non-string values are left for serde to
+/// refuse.
+fn normalize_label_field(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    aliases: &[(&str, &str)],
+) {
+    let Some(Value::String(raw)) = object.get(key) else {
+        return;
+    };
+    let label = raw.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    let label = aliases
+        .iter()
+        .find(|(alias, _)| *alias == label)
+        .map_or(label.clone(), |(_, canonical)| (*canonical).to_string());
+    object.insert(key.to_string(), Value::String(label));
+}
+
 /// The pinned, immutable input handed to the reviewer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewManifest {
@@ -527,20 +717,85 @@ pub struct ReviewAttempt {
     pub state: ReviewAttemptState,
     #[serde(default)]
     pub repair_cycles: u32,
+    /// Reviewer runtime charged to the lineage for this attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_seconds: Option<u64>,
+    /// Set when the attempt was closed without a reviewer verdict — its
+    /// reviewer step failed or its run ended first — and settled
+    /// `incomplete` with the reviewer runtime spent so far. A resumed run of
+    /// the same lineage may still settle it with a verdict; the charge is
+    /// then replaced by the attempt's total reviewer runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_at: Option<DateTime<Utc>>,
+    /// Runtime of the reviewer invocations that finished for this attempt,
+    /// summed across retries and resumed runs. Retry backoff, recovery
+    /// activities and time no reviewer process ran are never part of it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reviewer_seconds: u64,
+    /// The reviewer invocation running for this attempt, if one started and
+    /// has not reported its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_running: Option<ReviewerInvocation>,
+}
+
+/// A reviewer invocation that started for an attempt and has not finished.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewerInvocation {
+    /// The run executing the reviewer.
+    pub run_id: String,
+    pub started_at: DateTime<Utc>,
+    /// The invocation's own wall-clock bound; no reviewer process outlives it.
+    pub deadline: DateTime<Utc>,
+}
+
+/// A reviewer invocation starting or ending for an attempt, as the engine
+/// observes it around the reviewer step's dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewerInvocationEvent {
+    /// The reviewer process is about to start under its own wall-clock bound.
+    Started { timeout_seconds: u64 },
+    /// The reviewer process ended, successfully or not, after running this
+    /// long.
+    Finished { runtime_seconds: u64 },
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl ReviewAttempt {
-    /// Recorded elapsed time once settled, or wall time from `started_at` to
-    /// `now` while the attempt is still open. A clock behind `started_at`
-    /// counts as zero rather than wrapping.
+    /// Recorded charge once settled, otherwise the reviewer runtime so far
+    /// (see [`Self::reviewer_runtime_at`]).
     pub fn elapsed_at(&self, now: DateTime<Utc>) -> u64 {
-        if let Some(elapsed) = self.elapsed_seconds {
-            return elapsed;
-        }
-        u64::try_from(now.signed_duration_since(self.started_at).num_seconds()).unwrap_or(0)
+        self.elapsed_seconds
+            .unwrap_or_else(|| self.reviewer_runtime_at(now))
     }
+
+    /// Reviewer process runtime spent on this attempt, counting a running
+    /// invocation up to `bound` — the latest instant it can still have been
+    /// running, such as the end of a run that died with it — and never past
+    /// its own deadline.
+    pub fn reviewer_runtime_at(&self, bound: DateTime<Utc>) -> u64 {
+        let running = self.reviewer_running.as_ref().map_or(0, |running| {
+            seconds_between(running.started_at, bound.min(running.deadline))
+        });
+        self.reviewer_seconds.saturating_add(running)
+    }
+
+    /// The run that still holds this attempt: the one running its reviewer,
+    /// else the admitting run while the attempt is open.
+    pub fn holder_run_id(&self) -> Option<&str> {
+        match (&self.reviewer_running, &self.state) {
+            (Some(running), _) => Some(running.run_id.as_str()),
+            (None, ReviewAttemptState::Open) => Some(self.run_id.as_str()),
+            (None, ReviewAttemptState::Settled { .. }) => None,
+        }
+    }
+}
+
+/// Whole seconds from `start` to `end`; a clock behind `start` counts as zero.
+pub fn seconds_between(start: DateTime<Utc>, end: DateTime<Utc>) -> u64 {
+    u64::try_from(end.signed_duration_since(start).num_seconds()).unwrap_or(0)
 }
 
 /// Aggregate review consumption for one delivery candidate lineage. Retry,
@@ -586,13 +841,13 @@ impl ReviewLedger {
     }
 
     /// What the lineage may still spend after settled consumption. An open
-    /// attempt's running wall time is not included; use [`Self::remaining_at`]
+    /// attempt's reviewer runtime is not included; use [`Self::remaining_at`]
     /// for a live leftover.
     pub fn remaining(&self) -> ReviewConsumption {
         Self::remaining_from(self.budget, self.consumed())
     }
 
-    /// Remaining allowance at `now`, counting an open attempt's elapsed wall
+    /// Remaining allowance at `now`, counting an open attempt's reviewer
     /// time so a resumed invocation sees leftover seconds rather than the
     /// full captured budget.
     pub fn remaining_at(&self, now: DateTime<Utc>) -> ReviewConsumption {
@@ -645,9 +900,15 @@ impl ReviewLedger {
         let attempt = ledger.attempts.last_mut()?;
         let charged = attempt.elapsed_seconds.take().unwrap_or(0);
         attempt.state = ReviewAttemptState::Open;
+        attempt.released_at = None;
         attempt.repair_cycles = 0;
         ledger.consumed_seconds = ledger.consumed_seconds.saturating_sub(charged);
         Some(ledger)
+    }
+
+    /// The run that still holds an attempt of this lineage, if any.
+    pub fn holder_run_id(&self) -> Option<&str> {
+        self.attempts.iter().find_map(ReviewAttempt::holder_run_id)
     }
 
     /// The still-open attempt, if any.

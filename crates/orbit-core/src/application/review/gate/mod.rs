@@ -4,9 +4,11 @@
 mod admit;
 mod context;
 mod judgement;
+mod release;
 mod settle;
 
 pub(crate) use admit::review_gate_admit;
+pub(crate) use release::{record_reviewer_invocation, release_review_attempt};
 pub(crate) use settle::review_gate_settle;
 
 #[cfg(test)]
