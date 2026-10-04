@@ -6,14 +6,14 @@ use orbit_types::desktop::DesktopTaskRequest;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
-pub(super) fn read(
+pub(in crate::adapter::tool_host) fn read(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
     input: Value,
 ) -> Result<Value, OrbitError> {
-    super::desktop_read_tools::read(runtime, session, input)
+    super::read::read(runtime, session, input)
 }
-pub(super) fn snapshot(
+pub(in crate::adapter::tool_host) fn snapshot(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
     input: Value,
@@ -24,7 +24,7 @@ pub(super) fn snapshot(
     value["workspace"] = input["workspace"].clone();
     Ok(value)
 }
-pub(super) fn write(
+pub(in crate::adapter::tool_host) fn write(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
     mut input: Value,

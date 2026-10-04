@@ -18,7 +18,7 @@ pub(super) fn readiness(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
 /// Inputs only `resize` accepts.
 const RESIZE_ONLY_FIELDS: [&str; 3] = ["id", "if_revision", "reason"];
 
-pub(super) fn control(
+pub(in crate::adapter::tool_host) fn control(
     runtime: &OrbitRuntime,
     input: Value,
     trigger: JobRunTrigger,
