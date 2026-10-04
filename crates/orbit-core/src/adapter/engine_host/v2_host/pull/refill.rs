@@ -26,10 +26,12 @@
 //! each pass then requests nothing, releases every admission that never
 //! launched back to the owner's backlog, and waits for the launched leaves to
 //! finish and settle. The pass that finds nothing left unsettled ends the
-//! drain `cancelled`. If that state cannot be read, the entire pass waits and
-//! fails before probing or advancing pending requests: neither new work nor
-//! an earlier unanswered request may be admitted without knowing whether the
-//! drain is cancelling.
+//! drain `cancelled`. Cancellation is read again after orphaned leaves are
+//! reconciled, so a request recorded during that work is observed before any
+//! probe, pull request, or leaf launch in the same pass. If that state cannot
+//! be read, the entire pass waits and fails before probing or advancing
+//! pending requests: neither new work nor an earlier unanswered request may
+//! be admitted without knowing whether the drain is cancelling.
 
 use std::cell::RefCell;
 
@@ -108,19 +110,24 @@ pub(crate) fn pull_refill(
         peer: &peer,
         launcher: &launcher,
     };
-    let state = runtime.read_run_state(&run_id).map_err(|error| {
-        failed(format!(
-            "pull drain could not read cancellation and pass health: {error}"
-        ))
-    })?;
+    let read_pass_state = || {
+        runtime.read_run_state(&run_id).map_err(|error| {
+            failed(format!(
+                "pull drain could not read cancellation and pass health: {error}"
+            ))
+        })
+    };
+    let state = read_pass_state()?;
     let degraded = state
         .as_ref()
         .and_then(|state| state.drain_last_pass.as_ref())
         .is_some_and(|pass| pass.degraded);
-    let cancel = state.and_then(|state| state.drain_cancel);
     // A launched leaf whose worker died is reconciled first, so this pass
-    // records and delivers its failure rather than waiting on it.
+    // records and delivers its failure rather than waiting on it. Cancellation
+    // is read again afterwards: an operator can record it while reconciliation
+    // runs, and the value from before that work must not admit new work.
     runtime.reconcile_orphaned_claimed_leaves(&destination);
+    let cancel = read_pass_state()?.and_then(|state| state.drain_cancel);
     if let Some(cancel) = cancel {
         return cancelling_pass(runtime, &drain, &run_id, &destination, &cancel, poll)
             .map_err(|error| failed(error.to_string()));

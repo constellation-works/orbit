@@ -2,9 +2,7 @@
 //! handlers reach stores, policy, and settings through.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-#[cfg(test)]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -29,6 +27,10 @@ use super::workspace::binding::WorkspaceRuntimeBinding;
 use super::workspace::catalog;
 use super::{builder, event_bus, worker_coordination};
 use crate::context::{ActorIdentity, OrbitContext, OrbitStores};
+
+/// One-shot callback for the next orphaned-leaf reconciliation on a runtime.
+type OrphanReconcileCallback = Box<dyn FnOnce() + Send>;
+type OrphanReconcileHook = Arc<Mutex<Option<OrphanReconcileCallback>>>;
 
 #[derive(Clone)]
 pub struct OrbitRuntime {
@@ -65,6 +67,10 @@ pub struct OrbitRuntime {
     /// current). Surfaced by `orbit migrate`.
     layout_report: Arc<orbit_store::workflow::layout::LayoutUpgradeReport>,
     _temp_dir: Option<Arc<builder::TempDir>>,
+    /// One-shot hook run at the start of the next orphaned-leaf reconciliation.
+    /// The pull-refill boundary test persists a graceful cancel there. Empty
+    /// in production. Instance-scoped so concurrent tests cannot collide.
+    orphan_reconcile_hook: OrphanReconcileHook,
     /// Test-only seam for approve/start/reject: after the locked `get_task`,
     /// mutate the named task so compare-and-set can observe a lost race.
     /// Instance-scoped so concurrent `cargo test` threads cannot collide on
@@ -212,6 +218,7 @@ impl OrbitRuntime {
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(layout_report),
             _temp_dir: None,
+            orphan_reconcile_hook: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             transition_read_hook: Arc::new(Mutex::new(None)),
         })
@@ -267,9 +274,33 @@ impl OrbitRuntime {
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
             _temp_dir: Some(Arc::new(temp_dir)),
+            orphan_reconcile_hook: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             transition_read_hook: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Install a one-shot hook run at the start of the next orphaned-leaf
+    /// reconciliation on this runtime, before that call reads admissions.
+    ///
+    /// The pull-refill boundary test uses it to persist a graceful cancel
+    /// while reconciliation is in progress. Production never installs a hook.
+    pub fn install_orphan_reconcile_hook(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .orphan_reconcile_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(hook));
+    }
+
+    pub(crate) fn run_orphan_reconcile_hook(&self) {
+        let hook = self
+            .orphan_reconcile_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(hook) = hook {
+            hook();
+        }
     }
 
     /// Outcome of the workspace-layout pre-flight that ran when this runtime
