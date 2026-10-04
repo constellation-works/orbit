@@ -8,7 +8,7 @@ status: Draft
 feature: policy-sandbox
 doc_role: decisions
 tags: ["policy-sandbox"]
-last_validated: 2026-09-08
+last_validated: 2026-10-04
 ---
 
 # Policy & Sandboxing — Decisions
