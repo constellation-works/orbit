@@ -144,6 +144,26 @@ OVERBROAD_ACCESS_PATH = """extensions:
         ]
 """
 
+RELEASE_CALLABLE = "orbit_cmd::update::source::validated_release_url"
+RELEASE_OUTPUT = "ReturnValue.Field[core::result::Result::Ok(0)]"
+
+
+def model_yaml(predicate, row):
+    fields = "\n".join(f'          "{field}",' for field in row)
+    return f"""extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: {predicate}
+    data:
+      - [
+{fields}
+        ]
+"""
+
+
+def release_row(callable_path=RELEASE_CALLABLE, output=RELEASE_OUTPUT, kind="transmission"):
+    return [callable_path, output, kind, "manual"]
+
 
 class CodeqlExtensionSchemaTests(unittest.TestCase):
     def setUp(self):
@@ -230,6 +250,64 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("must end in '.yaml'", errors[0])
         self.assertIn(CHECK.GENERATED_EXTENSION_GLOB, errors[0])
+
+    def test_release_transport_transmission_barrier_passes(self):
+        self.write_pack(model_yaml("barrierModel", release_row()))
+        self.assertEqual(self.errors(), [])
+
+    def test_transmission_kind_rejected_for_unapproved_callable(self):
+        self.write_pack(
+            model_yaml("barrierModel", release_row("orbit_cmd::update::source::other_helper"))
+        )
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("'transmission' model kind is only allowed", errors[0])
+
+    def test_transmission_kind_rejected_for_broad_callable(self):
+        self.write_pack(model_yaml("barrierModel", release_row("orbit_cmd::update::source::*")))
+        errors = self.errors()
+        self.assertTrue(
+            any("expected an exact Orbit callable path" in error for error in errors), errors
+        )
+        self.assertTrue(any("only allowed for the reviewed" in error for error in errors), errors)
+
+    def test_transmission_kind_rejected_for_unapproved_access_path(self):
+        self.write_pack(model_yaml("barrierModel", release_row(output="ReturnValue")))
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("'transmission' model kind is only allowed", errors[0])
+
+    def test_transmission_kind_rejected_for_unapproved_predicate(self):
+        self.write_pack(
+            model_yaml(
+                "barrierGuardModel",
+                [RELEASE_CALLABLE, "Argument[0]", "true", "transmission", "manual"],
+            )
+        )
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("barrierGuardModel row 1", errors[0])
+        self.assertIn("'transmission' model kind is only allowed", errors[0])
+
+    def test_transmission_kind_requires_manual_provenance(self):
+        self.write_pack(
+            model_yaml("barrierModel", [RELEASE_CALLABLE, RELEASE_OUTPUT, "transmission", "generated"])
+        )
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("only 'manual' provenance is allowed", errors[0])
+
+    def test_arbitrary_model_kind_rejected_for_release_callable(self):
+        self.write_pack(model_yaml("barrierModel", release_row(kind="request-url")))
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("model kinds are allowed", errors[0])
+
+    def test_path_injection_kind_still_accepted_for_orbit_callable(self):
+        self.write_pack(
+            model_yaml("barrierModel", release_row("orbit_cmd::update::source::other", kind="path-injection"))
+        )
+        self.assertEqual(self.errors(), [])
 
     def test_current_extension_files_pass(self):
         self.assertEqual(CHECK.validate_root(REPO_ROOT), [])
