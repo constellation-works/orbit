@@ -1,67 +1,54 @@
 ---
 title: Quickstart
-description: "Install Orbit, set up this machine and one repository, connect your agent, open the dashboard, and ship a first task to a pull request."
+description: "Install Orbit, let the orbit-setup skill in your agent set up a repository, open the dashboard, and ship a first task to a pull request."
 sidebar:
   order: 1
 ---
 
-Set up Orbit in one repository, connect the agent you already use, and open
-the dashboard. Your agent files the work; the dashboard is where you approve
-it, ship it, watch it run, and review the pull request it opens.
+Install Orbit, let your agent set up the repository, and ship a first task from
+the dashboard.
 
 ## Before you begin
 
-- macOS or Linux, on x64 or arm64.
+- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside WSL2.
 - Node 18 or newer, for the npm install.
-- At least one signed-in agent CLI, such as Claude Code or Codex. `orbit doctor
-  providers` lists the ones Orbit supports and whether this machine can launch
-  each.
+- At least one signed-in agent CLI, such as Claude Code or Codex.
 - The GitHub CLI (`gh`), signed in, so Orbit can open pull requests.
-- On Ubuntu 24.04 and similar, the Linux sandbox prepared before your first run.
-  See [Prepare the sandbox](./install/#prepare-the-sandbox).
 
 ## 1. Install the CLI
 
 ```bash
 npm install -g @orbit-tools/cli
-orbit --version
-```
-
-The package downloads the matching native binary and puts `orbit` on your
-`PATH`. [Install Orbit](./install/) covers the other install methods.
-
-## 2. Set up this machine
-
-```bash
 orbit init
 ```
 
 `orbit init` asks for a machine name and a task-ID prefix of 2–5 uppercase
-letters, such as `ABC`. The prefix cannot change later on this machine; the
-machine name can be renamed. It also
-detects your agent CLIs and seeds a crew for each.
+letters, such as `ABC`. The prefix cannot change later on this machine. It also
+detects your agent CLIs, links Orbit's skills into your agents, and on Linux
+prepares the sandbox.
 
-## 3. Register a repository and connect your agent
+## 2. Let your agent set up the repository
 
-```bash
-cd your-repo
-orbit workspace init --mcp
-orbit doctor
-```
+:::tip[Recommended]
+Open your agent in the repository and ask it to **set up Orbit for this repo**.
+:::
 
-`--mcp` registers Orbit with your agent clients, so they can file and ship
-tasks. [Connect Your Agent](../how-to/mcp-integration/) explains what each
-client gets.
+The `orbit-setup` skill registers the repository, connects your agent over
+MCP, and runs `orbit doctor`, asking only for what it cannot infer, such as the
+branch pull requests should target. Start a fresh agent session when it
+finishes, so the Orbit tools load.
 
-## 4. Open the dashboard
+Rather do it yourself? Run `orbit workspace init --mcp` and `orbit doctor` in
+the repository; [Install Orbit](./install/#set-up-by-hand) explains each step.
+
+## 3. Open the dashboard
 
 ```bash
 orbit web serve
 ```
 
-The dashboard opens at `http://127.0.0.1:7878` and serves every workspace
-registered on this machine. Keep it running in its own terminal; it holds most
-of what Orbit does in one place:
+The dashboard opens at `http://127.0.0.1:7878` and serves every workspace on
+this machine. Keep it running in its own terminal:
 
 | Section | What you do there |
 |---|---|
@@ -71,11 +58,10 @@ of what Orbit does in one place:
 | **Automation** | Turn routines and auto-tasks on or off, file an auto-task now, and run a delivery window. |
 | **Settings** | Inspect and edit configuration and crews. |
 
-It listens on loopback only. To open a dashboard on another machine, use
-`orbit web connect <ssh-host>`; [Use the Dashboard](../how-to/dashboard/)
-covers both.
+It listens on loopback only; `orbit web connect <ssh-host>` opens one on
+another machine. See [Use the Dashboard](../how-to/dashboard/).
 
-## 5. Ship your first task
+## 4. Ship your first task
 
 1. **Ask your agent for a small change**, such as documenting one function. It
    files a task with acceptance criteria. The task appears in **Tasks** under
