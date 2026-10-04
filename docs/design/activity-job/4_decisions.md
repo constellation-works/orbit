@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-09-24
+last_updated: 2026-10-04
 last_validated: 2026-09-08
 status: Draft
 feature: activity-job
@@ -1536,6 +1536,40 @@ Every shipped `agent_loop` activity names the exact Orbit tools its agent may ca
 - Dispatch strips inherited deny-mode names from the child environment before stamping, so a nested allowlist run cannot pick up an outer deny list.
 - `Cost:` the deny-mode `ORBIT_ACTIVITY_TOOLS` set is computed from the dispatching registry. A tool registered only in a later MCP server process is callable under the new server but refused by an older one during a mixed-version window.
 
+## Final recovery decides; a deterministic applier acts
+
+**Recorded:** 2026-10-04 · [ORB-13897]
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-types/src/workflow/final_recovery.rs`, `crates/orbit-core/src/application/task/final_recovery.rs`, `crates/orbit-core/src/application/job/crew_pools.rs`, `crates/orbit-config/src/registry/settings.rs`, `crates/orbit-core/assets/activities/step_failure_recovery.yaml`
+
+### Context
+
+Step recovery runs once per exhausted step and is limited to small repairs. It may not finish an incomplete implementation, and many failures skip it entirely (a missing sandbox, a policy denial, a forge permission). Those tasks land in `blocked` and wait for a human, who usually forces the same few transitions: deliver work that already landed, close obsolete work, retry once the environment is fixed. The `step_failure_recovery` instructions also told the agent to use job resume, while its `tool_disallow_list` withholds `orbit.workflow.run.resume`.
+
+### Decision
+
+1. A `final_recovery` agent activity is the last automated look before a human. It may edit the run's worktree and run the repository's validation. It has no Git-write, task-lifecycle or dispatch grant: its disallow list adds `orbit.task.add`, `orbit.task.update` and `orbit.task.artifact.put` to the standard denials, which already include resume and pipeline dispatch.
+2. It returns exactly one typed decision, `orbit_types::workflow::FinalRecoveryDecision`: `resume{step_id, rationale}`, `complete_no_diff{evidence_commit, rationale}`, `reject{reason, evidence}`, `archive{reason}`, `requeue{reason}` or `escalate{diagnosis, human_action}`. The engine does not validate `output_schema_json`, so the strict serde parse is the enforcement: unknown fields, empty text and a non-hex commit fail it. A missing or malformed result becomes `escalate`.
+3. `OrbitRuntime::apply_final_recovery` applies every decision except `resume`, which belongs to the engine. Under the task write lock it:
+   - refuses, with a comment and no status change, when the task is already settled (`done`, `archived`, `rejected`) or when its status or `updated_at` differs from the revision observed at the failure — a human change wins;
+   - completes `complete_no_diff` (to `review` or `done`, as the caller's authority allows) only when the commit resolves and `git merge-base --is-ancestor` places it on the base branch; otherwise it escalates;
+   - requeues to `backlog` with a `final_recovery_requeued` history event, at most 2 per rolling 24 h (counted from that history, so no new storage), and escalates past the bound;
+   - maps `reject`, `archive` and `escalate` to `rejected`, `archived` and `blocked`.
+   Every decision, refusal included, is recorded as one system comment headed `final_recovery run_id=<run> decision=<kind> outcome=<outcome>`.
+4. The crew comes from `workflow.final_recovery_crews`, a weighted pool in the existing `name[:weight]` grammar (default `["sol:100", "opus:20"]`, filtered to the crews the registry defines; `[]` disables final recovery). The activity names the pool with `crew_config_key`; the host draws once per run, honours the run's `allowed_crews`, and freezes the draw in `PipelineState.activity_crew_draws`. Resume clones run state, so a resumed run reuses the same crew.
+5. `step_failure_recovery` keeps resume withheld. Its instructions now say to repair the worktree so a resume from the failed step succeeds, and to report that step; the `resumed_pipeline` delivery mode is gone. Resuming is an operator or final-recovery action.
+
+### Rejected alternatives
+
+- *Let the agent move the task itself.* Lifecycle writes from an agent cannot be re-checked against the base branch, the requeue bound or a concurrent human edit; one deterministic applier can.
+- *Grant `step_failure_recovery` resume.* That activity runs while the run it serves is still live, and a second resume path would race the engine's own retry.
+- *Store a requeue counter on the task.* The history events already record each requeue with a timestamp, and a separate counter could drift from them.
+
+### Consequences
+
+- This change ships the layer only: the activity, the contract, the applier and the pool. Planned: the delivery pipelines dispatch `final_recovery` once step recovery is exhausted, and a backstop covers tasks blocked outside pipelines; both call this applier.
+- An unsure agent still produces a `blocked` task, now with a diagnosis and a named human action.
+- `Cost:` a final-recovery run is a frontier-model session per terminally failed run; `[]` turns it off.
+
 ## Task References
 
 - [T20260418-2018] — add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
@@ -1631,5 +1665,6 @@ Every shipped `agent_loop` activity names the exact Orbit tools its agent may ca
 - [ORB-10464] — refuse workflow admission when a done dependency's work is not in the base the worktree would be cut from.
 - [ORB-10603] — derive the durable `execution_summary` from the delivered change when the implementing agent persisted none.
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
+- [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -21,8 +21,8 @@ pub(super) fn run_target(
     // Recovery does the same; injection is independent of target spec type.
     let rendered_input = inject_system_crew_input(ctx.host, &rendered_input)?;
 
-    // A rendered activity `crew` selects a non-default assignment; otherwise
-    // dispatch inherits the run's resolved crew.
+    // A rendered activity `crew` or `crew_config_key` selects an assignment;
+    // otherwise dispatch inherits the run's resolved crew.
     let crew_override = crew_overridden_spec(t, ctx, &rendered_input)?;
     if t.session.is_some() {
         // [ORB-10801] Cross-iteration sessions were provided only by the
@@ -91,7 +91,8 @@ pub(super) fn persist_dispatch_invocation(
 }
 
 /// Build a crew-overridden clone of an [`AgentLoopSpec`]. An explicit rendered
-/// `crew` wins; otherwise the run input supplies the resolved fallback crew.
+/// `crew` or `crew_config_key` selects the activity crew; otherwise the run
+/// input supplies the resolved fallback crew.
 pub(super) fn crew_overridden_spec(
     t: &TargetStep,
     ctx: &ExecCtx<'_>,

@@ -4,6 +4,7 @@ mod add;
 pub(crate) mod contention;
 mod context_repair;
 mod desktop;
+mod final_recovery;
 mod helpers;
 mod lifecycle;
 mod lint;
@@ -21,6 +22,10 @@ mod update;
 pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::ContextFileRestoration;
+pub use final_recovery::{
+    FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,
+    FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
+};
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
 pub use listing::{TaskCandidates, TaskListFilter, TaskListQuery, TaskPage, TaskRow};
 pub(crate) use listing::{TaskEligibilityQuery, list_task_metadata_in};

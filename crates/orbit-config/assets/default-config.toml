@@ -38,6 +38,12 @@ base_branch = "main"
 # supported agent CLI, each naming a real crew from the crew tables it seeds.
 # Without those keys Orbit uses the built-in crew registry: `opus` for tasks
 # and its built-in `system` crew for system work.
+#
+# Final recovery takes one last look at a task whose run failed after step
+# recovery, using one crew drawn per run from this weighted pool (`name` or
+# `name:weight`, all bare or all weighted). Unset, the pool below applies and
+# keeps only the crews your registry defines; `[]` turns final recovery off.
+# final_recovery_crews = ["sol:100", "opus:20"]
 
 # [workflow.task_pilot_freshness]
 # Which changes make an accepted task-pilot assessment stale, so the task is

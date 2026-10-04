@@ -98,6 +98,29 @@ pub struct FailureActivityCheckpoint {
     pub output: Value,
 }
 
+/// One weighted member of the pool an activity crew draw ran on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActivityCrewPoolMember {
+    pub name: String,
+    pub weight: u32,
+}
+
+/// A crew an activity drew from a configured pool, frozen for the run.
+///
+/// An activity whose crew comes from a weighted pool (its `crew_config_key`)
+/// draws once; every later dispatch of that key in the run, and every resume
+/// seeded from it, reuses this record instead of rerolling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActivityCrewDraw {
+    /// Canonical crew name the draw selected.
+    pub crew: String,
+    /// The configuration the pool came from (`workflow.final_recovery_crews`).
+    pub source: String,
+    /// The permitted members and weights the draw ran on, so `run show`
+    /// can explain the choice.
+    pub eligible_pool: Vec<ActivityCrewPoolMember>,
+}
+
 /// Persistent pipeline state for a job run.
 ///
 /// Stored as `state.json` in the run bundle directory. Steps read accumulated
@@ -192,6 +215,11 @@ pub struct PipelineState {
     /// evidence on its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rebase_recovery_checkpoints: BTreeMap<String, Value>,
+    /// Crews drawn from configured pools for activities, keyed by the
+    /// activity's `crew_config_key`. Written once per key; resume carries it
+    /// with the rest of the state so a resumed run keeps the same crew.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub activity_crew_draws: BTreeMap<String, ActivityCrewDraw>,
     /// How this run was submitted [ORB-12255]. Absent on runs recorded before
     /// trigger provenance existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -222,6 +250,7 @@ impl PipelineState {
             drain_last_pass: None,
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
+            activity_crew_draws: BTreeMap::new(),
             trigger: None,
             updated_at: Utc::now(),
         }

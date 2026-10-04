@@ -5,6 +5,7 @@ mod auto_task;
 mod child_dispatch;
 mod error;
 mod executor_def;
+mod final_recovery;
 pub mod handoff;
 mod job;
 mod review;
@@ -53,6 +54,10 @@ pub use child_dispatch::{
 pub use executor_def::{
     ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride, StdoutFormat,
 };
+pub use final_recovery::{
+    FINAL_RECOVERY_ACTIVITY, FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision,
+    MAX_DECISION_TEXT_CHARS,
+};
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,
     JobRunTrigger, JobRunTriggerKind, JobScheduleState, JobStep, JobTargetType,
@@ -79,8 +84,8 @@ pub use run_delivery::{
 };
 pub use run_id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use run_state::{
-    DrainAdmissionPass, DrainAdmissionsStop, DrainWaitingTask, DrainWorkerLimit,
-    FailureActivityCheckpoint, PipelineState,
+    ActivityCrewDraw, ActivityCrewPoolMember, DrainAdmissionPass, DrainAdmissionsStop,
+    DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint, PipelineState,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

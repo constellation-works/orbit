@@ -1,7 +1,8 @@
 //! Crew settings resolver (ADR-0330).
 //!
-//! A rendered activity input that carries `crew` selects that crew. Otherwise
-//! the run input is used, so dispatch inherits the run's already-resolved crew.
+//! A rendered activity input that carries `crew` or `crew_config_key` selects
+//! an activity-specific crew. Otherwise the run input is used, so dispatch
+//! inherits the run's already-resolved crew.
 //! The host returns the selected assignment and this module applies it over the
 //! inline activity baseline field by field.
 
@@ -25,16 +26,22 @@ pub struct ResolvedAgentSettings {
 /// key travels on the *run* input, so the restriction survives whichever input
 /// selects the crew for a given activity.
 const ALLOWED_CREWS_KEY: &str = "allowed_crews";
+/// Activity input naming the configuration the host resolves the crew from
+/// (`workflow.system_crew`, `workflow.final_recovery_crews`).
+const CREW_CONFIG_KEY: &str = "crew_config_key";
 
-/// Resolve one crew assignment for an activity. Explicit activity input wins;
-/// absent that, the run input preserves the run's resolved crew selection.
+/// Resolve one crew assignment for an activity. Explicit activity input wins —
+/// a named `crew` or a `crew_config_key` the host resolves from configuration;
+/// absent both, the run input preserves the run's resolved crew selection.
 pub fn resolve_crew_settings(
     host: &dyn RuntimeHost,
     inline: &AgentLoopSpec,
     activity_input: &Value,
     run_input: &Value,
 ) -> Result<Option<ResolvedAgentSettings>, DispatchError> {
-    let selected = if explicit_crew(activity_input).is_some() {
+    let selected = if explicit_crew(activity_input).is_some()
+        || non_empty_str(activity_input, CREW_CONFIG_KEY).is_some()
+    {
         activity_input
     } else {
         run_input
@@ -89,15 +96,19 @@ pub fn inject_system_crew_input(
     })?;
     object.insert("crew".to_string(), Value::String(crew));
     object.insert(
-        "crew_config_key".to_string(),
+        CREW_CONFIG_KEY.to_string(),
         Value::String("workflow.system_crew".to_string()),
     );
     Ok(input)
 }
 
 fn explicit_crew(input: &Value) -> Option<&str> {
+    non_empty_str(input, "crew")
+}
+
+fn non_empty_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     input
-        .get("crew")
+        .get(key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

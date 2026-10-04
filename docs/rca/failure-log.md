@@ -23,6 +23,8 @@ Each entry records:
 - **Cause**: the actual mechanism.
 - **Fix**: the task or PR that closed it, or `open`.
 - **Tasks**: the tasks that hit it.
+- **Final recovery**: the decision final recovery returned and its run id, whether the applier
+  applied or refused it, or `none` when final recovery did not run.
 
 Newest entries go first. When you rescue a blocked task, add its cause here before
 you close it out.

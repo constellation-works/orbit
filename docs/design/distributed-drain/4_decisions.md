@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-09-28
+last_updated: 2026-10-04
 last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
@@ -234,6 +234,13 @@ transition.
   authorization and recovery budget. Retirement does not disable that separate mechanism.
 - Environmental failures accumulate in `blocked` until someone looks.
 - Cost: the 30-second-read diagnosis triage attached is gone; the reader gets the raw failure.
+
+**Amended by [ORB-13897].** Final recovery now reads a terminally failed task before a human
+does. It is not a classifier that re-backlogs: an agent proposes one typed decision, and a
+deterministic applier re-checks it against the base branch, a 2-per-24 h requeue bound, and any
+human change since the failure. A requeue needs evidence the environment changed, and anything
+uncertain still parks the task in `blocked`, now with a diagnosis and a named human action. See
+[Final recovery decides; a deterministic applier acts](../activity-job/4_decisions.md#final-recovery-decides-a-deterministic-applier-acts).
 
 ## Requests identify admissions and claims identify attempts
 

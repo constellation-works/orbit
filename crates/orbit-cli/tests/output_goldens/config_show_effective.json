@@ -257,6 +257,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.final_recovery_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.hard_complexity_crews": {
       "scope": "built-in",
       "state": "default",

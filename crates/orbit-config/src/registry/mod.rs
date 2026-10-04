@@ -16,8 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
-    Crew, CrewAssignment, resolve_crew, validate_machine_id, validate_machine_name,
-    validate_stored_task_prefix,
+    Crew, resolve_crew, validate_machine_id, validate_machine_name, validate_stored_task_prefix,
 };
 use orbit_types::workflow::automation::members::{
     MaterialField, PreparationFreshness, SourceSensitivity,
