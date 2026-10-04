@@ -218,6 +218,46 @@ impl AutomationStoreBackend for Store {
         })
     }
 
+    fn automation_states_page(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AutomationState>, OrbitError> {
+        if limit == 0 {
+            return Err(OrbitError::InvalidInput(
+                "automation state page limit must be nonzero".into(),
+            ));
+        }
+        self.with_read_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT consumer,state_json FROM automation_consumers \
+                     WHERE consumer >= ?1 AND consumer > ?2 \
+                     AND substr(consumer,1,length(?1)) = ?1 \
+                     ORDER BY consumer LIMIT ?3",
+                )
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let rows = stmt
+                .query_map(
+                    params![prefix, after.unwrap_or(""), limit.min(100)],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            rows.map(|row| {
+                let (consumer, raw) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+                let state: AutomationState = decode(&raw)?;
+                if state.consumer != consumer {
+                    return Err(OrbitError::Store(
+                        "persisted automation consumer key does not match its state".into(),
+                    ));
+                }
+                Ok(state)
+            })
+            .collect()
+        })
+    }
+
     fn automation_receipts(
         &self,
         consumer: &str,
