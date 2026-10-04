@@ -109,7 +109,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         }
     }
 
-    let branch_name = branch_name_for_tasks(&identity.branch_prefix, task_ids);
+    let branch_name = branch_name_for_tasks(&identity.branch_prefix, task_ids, worktree_run_id);
 
     let worktree_path = identity.path(repo_root)?;
 
@@ -520,16 +520,12 @@ fn is_empty_dir(path: &Path) -> Result<bool, OrbitError> {
     Ok(entries.next().is_none())
 }
 
-fn branch_name_for_tasks(branch_prefix: &str, task_ids: &[String]) -> String {
+fn branch_name_for_tasks(branch_prefix: &str, task_ids: &[String], run_id: &str) -> String {
     if task_ids.len() == 1 {
-        let short_ts = format!(
-            "{:08x}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        return format!("{branch_prefix}/{}-{short_ts}", task_ids[0]);
+        // A retry for the same run must address the same ref even after the
+        // checkout has been removed and only its candidate branch remains.
+        let run_hash = format!("{:x}", Sha256::digest(run_id.as_bytes()));
+        return format!("{branch_prefix}/{}-{}", task_ids[0], &run_hash[..8]);
     }
 
     let mut sorted_ids = task_ids.to_vec();

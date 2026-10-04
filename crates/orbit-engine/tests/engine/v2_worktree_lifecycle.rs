@@ -243,6 +243,9 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
                 &fixture.repo,
                 &["worktree", "remove", "--force", path_str(&checkout.path)],
             );
+            // A run keeps one branch identity across retries, even when the
+            // retry happens later and only the orphaned branch remains.
+            std::thread::sleep(Duration::from_secs(1));
             let error = action(&host, "worktree_setup", &input)
                 .expect_err("an orphan branch behind the new base is refused");
             assert_stale_refusal(&error, &checkout.branch, &retained, &second_base);
