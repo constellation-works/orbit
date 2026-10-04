@@ -15,6 +15,9 @@
 //! fixture also keeps the retired `ORBIT_PLUGIN_CALLBACK` variable set to
 //! show it changes nothing.
 
+// The callback credential reaches the child on an inherited descriptor,
+// which only Unix supports.
+#![cfg(unix)]
 #![allow(missing_docs)]
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]

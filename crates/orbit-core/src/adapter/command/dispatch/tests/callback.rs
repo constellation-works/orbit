@@ -1,4 +1,8 @@
 //! The plugin callback boundary: allowlists, sessions, and ceilings.
+//!
+//! Callback credentials travel on an inherited descriptor, which only Unix
+//! supports.
+#![cfg(unix)]
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::PluginCallbackSession;

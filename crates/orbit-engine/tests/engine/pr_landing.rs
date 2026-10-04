@@ -1,3 +1,5 @@
+// Drives a `#!/bin/sh` substitute `gh` from every test.
+#![cfg(unix)]
 #![allow(missing_docs)]
 // Integration fixtures exercise public behavior and unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]

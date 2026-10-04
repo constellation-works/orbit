@@ -23,6 +23,7 @@
 
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,6 +47,7 @@ use orbit_types::workflow::activity_job::{
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[cfg(unix)]
 #[test]
 fn cli_agent_dispatch_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_a_cli_dispatch_emits_envelope_events()?;
@@ -63,6 +65,7 @@ fn cli_agent_dispatch_regressions() -> Result<(), Box<dyn std::error::Error>> {
 /// A: `backend: cli` against a fake `claude` binary produces
 /// `tool_allowlist.harness_delegated`, `cli.invocation.started`, and
 /// `cli.invocation.finished` envelope events.
+#[cfg(unix)]
 fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::error::Error>> {
     println!("  A) cli dispatch emits §6 + §7.6 envelope events");
     let tmp_audit = tempfile::tempdir()?;
@@ -105,6 +108,7 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
 
 /// B: argv carrying an `sk-...` token (via the `--model` flag set by
 /// `claude_cli.rs`) is redacted in the persisted envelope event.
+#[cfg(unix)]
 fn scenario_b_argv_redaction() -> Result<(), Box<dyn std::error::Error>> {
     println!("  B) argv redaction scrubs sk-... from --model arg");
     let tmp_audit = tempfile::tempdir()?;
@@ -150,6 +154,7 @@ fn scenario_b_argv_redaction() -> Result<(), Box<dyn std::error::Error>> {
 
 /// C: 2s timeout against a 10s `sleep` — finishes within 5s with
 /// `timed_out: true`.
+#[cfg(unix)]
 fn scenario_c_wall_clock_timeout() -> Result<(), Box<dyn std::error::Error>> {
     println!("  C) wall_clock_timeout kills long-running subprocess");
     let tmp_audit = tempfile::tempdir()?;
@@ -244,6 +249,7 @@ fn scenario_f_loader_rejection_retired_backend_value() -> Result<(), Box<dyn std
 /// Proves the YAML parses with the new `backend:` / `provider:` /
 /// `wall_clock_timeout_seconds:` fields and routes correctly to the CLI
 /// runner.
+#[cfg(unix)]
 fn scenario_h_cli_reference_asset_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     println!("  H) agent_loop_cli_reference.yaml round-trips + dispatches");
     let repo_root = repo_root();
@@ -308,6 +314,7 @@ fn scenario_i_existing_agent_loop_assets_still_deserialize()
 
 /// J: static args from the resolved executor are prepended before per-provider
 /// runtime args and appear in the persisted invocation argv.
+#[cfg(unix)]
 fn scenario_j_cli_executor_static_args_are_audited() -> Result<(), Box<dyn std::error::Error>> {
     println!("  J) cli executor static args are included in audited argv");
     let tmp_audit = tempfile::tempdir()?;
@@ -629,16 +636,19 @@ fn events_snapshot(
 /// so `AgentConfig::from_cli_config` resolves it to the matching factory.
 /// The struct retains ownership of the `TempDir` so the file lives for the
 /// whole scenario.
+#[cfg(unix)]
 struct FakeCli {
     _tempdir: TempDir,
     path: PathBuf,
 }
+#[cfg(unix)]
 impl FakeCli {
     fn cli_path(&self) -> &Path {
         &self.path
     }
 }
 
+#[cfg(unix)]
 fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn std::error::Error>> {
     let tempdir = tempfile::tempdir()?;
     let path = tempdir.path().join(basename);
