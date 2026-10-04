@@ -27,7 +27,7 @@ use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
 };
 use orbit_types::plugin::{
-    MANIFEST_FILE_NAME, PLUGIN_DIR_NAME, parse_archive_digest, plugin_root_in,
+    MANIFEST_FILE_NAME, PLUGIN_DIR_NAME, is_full_commit_id, parse_archive_digest, plugin_root_in,
     remote_archive_source,
 };
 
@@ -41,7 +41,7 @@ pub(super) const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 /// Largest tree an archive may unpack to. This, not the download bound, is
 /// what makes a compression bomb harmless: a few compressed kilobytes say
 /// nothing about how many bytes they inflate to.
-const MAX_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
+pub(super) const MAX_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Most members one archive may carry, so an archive of millions of empty
 /// files cannot exhaust inodes before the size bound ever trips.
@@ -85,6 +85,23 @@ pub struct ResolvedSource {
     /// source was an `https://` archive. `None` for every source Orbit did
     /// not download.
     pub archive_digest: Option<String>,
+    /// The verified commit, when the source was `git+<url>#<full commit id>`:
+    /// the only form that may build (design
+    /// `docs/design/plugins/3_install_time_build.md` §3.1).
+    pub commit: Option<ResolvedCommit>,
+}
+
+/// A `git+` source fetched at a full commit id and checked to be it.
+#[derive(Debug, Clone)]
+pub struct ResolvedCommit {
+    /// The verified object id, lowercase.
+    pub id: String,
+    /// Committer time of the commit, seconds since the epoch: the build's
+    /// `SOURCE_DATE_EPOCH`.
+    pub committed_at: i64,
+    /// The whole checkout, without `.git`: what a build copies into its
+    /// `src/`. The plugin root is its `.orbit-plugin/`.
+    pub checkout: PathBuf,
 }
 
 /// What to resolve, plus the digest a fetched archive has to hash to.
@@ -142,6 +159,7 @@ fn resolve_plugin_source_unverified(
             root: resolve_plugin_root(path)?,
             scratch: None,
             archive_digest: None,
+            commit: None,
         });
     }
     if path.is_file() {
@@ -178,6 +196,10 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
     let checkout = scratch.path().join("checkout");
     let checkout_arg = checkout.to_string_lossy().into_owned();
 
+    if let Some(commit) = reference.filter(|value| is_full_commit_id(value)) {
+        return fetch_git_commit(url, &commit.to_ascii_lowercase(), scratch, checkout);
+    }
+
     let mut args = vec!["clone".to_string(), "--depth".to_string(), "1".to_string()];
     if let Some(reference) = reference.filter(|value| !value.trim().is_empty()) {
         args.push("--branch".to_string());
@@ -187,7 +209,101 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
     args.push(url.to_string());
     args.push(checkout_arg);
     run_git(args, None)?;
+    drop_clone_metadata(&checkout)?;
 
+    Ok(ResolvedSource {
+        root: resolve_plugin_root(&checkout)?,
+        scratch: Some(scratch),
+        archive_digest: None,
+        commit: None,
+    })
+}
+
+/// Fetch exactly one commit into a fresh repository and check that `HEAD` is
+/// that object before anything reads the tree (§3.1). `clone --branch`
+/// cannot name a commit, and a ref resolved by the server could be moved
+/// between the operator reading the plan and the fetch.
+fn fetch_git_commit(
+    url: &str,
+    commit: &str,
+    scratch: tempfile::TempDir,
+    checkout: PathBuf,
+) -> Result<ResolvedSource, OrbitError> {
+    let checkout_arg = checkout.to_string_lossy().into_owned();
+    run_git(
+        vec![
+            "init".to_string(),
+            "--quiet".to_string(),
+            "--".to_string(),
+            checkout_arg.clone(),
+        ],
+        None,
+    )?;
+    let inside = Some(checkout_arg);
+    run_git(
+        vec![
+            "fetch".to_string(),
+            "--quiet".to_string(),
+            "--depth".to_string(),
+            "1".to_string(),
+            "--no-tags".to_string(),
+            "--".to_string(),
+            url.to_string(),
+            commit.to_string(),
+        ],
+        inside.clone(),
+    )?;
+    run_git(
+        vec![
+            "-c".to_string(),
+            "advice.detachedHead=false".to_string(),
+            "checkout".to_string(),
+            "--quiet".to_string(),
+            "--detach".to_string(),
+            "FETCH_HEAD".to_string(),
+        ],
+        inside.clone(),
+    )?;
+    let head = run_git(
+        vec!["rev-parse".to_string(), "HEAD".to_string()],
+        inside.clone(),
+    )?;
+    let head = head.trim().to_ascii_lowercase();
+    if head != commit {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin source 'git+{url}#{commit}' fetched commit {head}, not the requested one; \
+             nothing was installed"
+        )));
+    }
+    let committed_at = run_git(
+        vec![
+            "show".to_string(),
+            "--no-patch".to_string(),
+            "--format=%ct".to_string(),
+            "HEAD".to_string(),
+        ],
+        inside,
+    )?;
+    let committed_at = committed_at.trim().parse::<i64>().map_err(|error| {
+        OrbitError::Execution(format!(
+            "read the committer time of {commit}: '{}' ({error})",
+            committed_at.trim()
+        ))
+    })?;
+    drop_clone_metadata(&checkout)?;
+    Ok(ResolvedSource {
+        root: resolve_plugin_root(&checkout)?,
+        scratch: Some(scratch),
+        archive_digest: None,
+        commit: Some(ResolvedCommit {
+            id: commit.to_string(),
+            committed_at,
+            checkout,
+        }),
+    })
+}
+
+fn drop_clone_metadata(checkout: &Path) -> Result<(), OrbitError> {
     // `git clone` writes the source URL (credentials included, when the URL
     // carried them) into `.git/config`. Only `.orbit-plugin/` is installed,
     // but drop the clone's VCS metadata anyway so no later change to what is
@@ -197,12 +313,7 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
         std::fs::remove_dir_all(&git_dir)
             .map_err(|error| OrbitError::Io(format!("remove clone metadata: {error}")))?;
     }
-
-    Ok(ResolvedSource {
-        root: resolve_plugin_root(&checkout)?,
-        scratch: Some(scratch),
-        archive_digest: None,
-    })
+    Ok(())
 }
 
 fn allowed_git_url(url: &str) -> bool {
@@ -224,8 +335,12 @@ fn allowed_git_url(url: &str) -> bool {
         && !host.chars().any(char::is_whitespace)
 }
 
-fn run_git(args: Vec<String>, current_dir: Option<String>) -> Result<(), OrbitError> {
+fn run_git(args: Vec<String>, current_dir: Option<String>) -> Result<String, OrbitError> {
     let mut args_with_protocol_policy = vec![
+        // No hook from the operator's configuration runs on a checkout of
+        // code nobody has reviewed yet.
+        "-c".to_string(),
+        "core.hooksPath=/dev/null".to_string(),
         "-c".to_string(),
         "protocol.allow=never".to_string(),
         "-c".to_string(),
@@ -252,7 +367,7 @@ fn run_git(args: Vec<String>, current_dir: Option<String>) -> Result<(), OrbitEr
         &NoSandbox,
     )?;
     if result.success {
-        return Ok(());
+        return Ok(result.stdout);
     }
     Err(OrbitError::Execution(format!(
         "cannot fetch the plugin source: {}",
@@ -305,6 +420,7 @@ fn fetch_remote_archive(
         root,
         scratch: Some(scratch),
         archive_digest: Some(actual),
+        commit: None,
     })
 }
 
@@ -489,6 +605,7 @@ fn unpack_local_archive(path: &Path) -> Result<ResolvedSource, OrbitError> {
         root,
         scratch: Some(scratch),
         archive_digest: None,
+        commit: None,
     })
 }
 

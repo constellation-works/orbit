@@ -191,6 +191,15 @@ pub enum OrbitError {
          enable it on the host first with `orbit plugin enable {plugin} --grant …`"
     )]
     PluginDisabledOnHost { plugin: String },
+    /// A plugin declares `spec.build` and the operator did not consent to
+    /// running it. The message carries the build plan the consent would
+    /// approve.
+    #[error("{0}")]
+    PluginBuildConsentRequired(String),
+    /// A build was asked for where no operator can consent: a managed run, an
+    /// agent sandbox, or a plugin backend.
+    #[error("{0}")]
+    PluginBuildConsentUnavailable(String),
     #[error("Invalid ADR status transition: {0}")]
     AdrInvalidTransition(String),
     #[error("{kind} artifact unavailable for {id}")]

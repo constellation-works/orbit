@@ -59,6 +59,7 @@ const ACCESS_NET_CONNECT_TCP: u64 = 1 << 1;
 
 const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1 << 0;
 const LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
+const LANDLOCK_RULE_NET_PORT: u32 = 2;
 
 /// `struct landlock_ruleset_attr` as of ABI 4. A kernel that predates the
 /// network field accepts the longer struct as long as the extra bytes are
@@ -69,6 +70,13 @@ struct RulesetAttr {
     handled_access_net: u64,
 }
 
+/// `struct landlock_net_port_attr` (ABI 4).
+#[repr(C, packed)]
+struct NetPortAttr {
+    allowed_access: u64,
+    port: u64,
+}
+
 #[repr(C, packed)]
 struct PathBeneathAttr {
     allowed_access: u64,
@@ -77,7 +85,7 @@ struct PathBeneathAttr {
 
 /// Ask the kernel which Landlock ABI it implements. A negative result means
 /// Landlock is absent or disabled.
-pub(super) fn abi_version() -> i64 {
+pub(crate) fn abi_version() -> i64 {
     // SAFETY: the version probe is defined as a null attribute pointer and a
     // zero size; it reads nothing from user space.
     unsafe {
@@ -130,6 +138,73 @@ fn spawn_with_ruleset(
     command.spawn().map_err(|error| {
         OrbitError::Execution(format!("failed to spawn `{}`: {error}", req.program))
     })
+}
+
+/// Confine `command`'s child, and everything it later spawns, to outbound TCP
+/// `connect` to `port`: the ruleset handles TCP bind and connect and grants
+/// only that one connect. It handles no filesystem right, which is what lets
+/// it sit under a Bubblewrap launcher: a domain without filesystem rights does
+/// not refuse the mounts Bubblewrap makes.
+///
+/// The returned descriptor must outlive `spawn`; the child applies it between
+/// `fork` and `exec`. Requires [`super::NETWORK_LANDLOCK_ABI`].
+pub(crate) fn restrict_child_tcp_connect_to_port(
+    command: &mut std::process::Command,
+    port: u16,
+) -> Result<OwnedFd, OrbitError> {
+    let abi = abi_version();
+    if abi < super::NETWORK_LANDLOCK_ABI {
+        return Err(OrbitError::PolicyDenied(format!(
+            "Landlock ABI {abi} cannot confine TCP; ABI {} is required",
+            super::NETWORK_LANDLOCK_ABI
+        )));
+    }
+    let attr = RulesetAttr {
+        handled_access_fs: 0,
+        handled_access_net: ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP,
+    };
+    // SAFETY: `attr` is a well-formed `landlock_ruleset_attr` and its size
+    // is passed alongside it.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            std::ptr::addr_of!(attr),
+            std::mem::size_of::<RulesetAttr>(),
+            0u32,
+        )
+    };
+    if fd < 0 {
+        return Err(OrbitError::PolicyDenied(format!(
+            "landlock_create_ruleset failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    // SAFETY: `fd` is a freshly created ruleset descriptor this scope owns.
+    let ruleset = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+    set_cloexec(ruleset.as_raw_fd())?;
+    let rule = NetPortAttr {
+        allowed_access: ACCESS_NET_CONNECT_TCP,
+        port: u64::from(port),
+    };
+    // SAFETY: `rule` is a well-formed `landlock_net_port_attr` whose access
+    // mask is a subset of the handled set.
+    let added = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_add_rule,
+            ruleset.as_raw_fd() as libc::c_long,
+            LANDLOCK_RULE_NET_PORT as libc::c_long,
+            std::ptr::addr_of!(rule),
+            0u32,
+        )
+    };
+    if added != 0 {
+        return Err(OrbitError::PolicyDenied(format!(
+            "landlock_add_rule failed for TCP port {port}: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    restrict_child(command, ruleset.as_raw_fd());
+    Ok(ruleset)
 }
 
 /// Apply the ruleset in the child, between `fork` and `exec`, so the confined

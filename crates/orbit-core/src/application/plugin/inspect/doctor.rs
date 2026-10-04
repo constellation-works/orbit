@@ -6,16 +6,20 @@ use std::path::{Path, PathBuf};
 use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
 use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
+use orbit_tools::plugin::{
+    PLUGIN_BUILD_DIR_PREFIX, installed_artifact_digest, is_live_plugin_build_dir,
+};
 use orbit_types::plugin::{
-    PluginDisabledLayer, PluginStatus, SemverRange, Version, parse_archive_digest,
-    remote_archive_source,
+    PluginBuildRecord, PluginDisabledLayer, PluginStatus, SemverRange, Version,
+    parse_archive_digest, remote_archive_source,
 };
 
 use super::summary::{PluginSummary, list_plugins};
 
 use crate::OrbitRuntime;
+use crate::application::plugin::lifecycle::build_pin_drift;
 use crate::runtime::plugin::backend::plugin_backend;
-use crate::runtime::plugin::paths::read_pin_file;
+use crate::runtime::plugin::paths::{plugin_install_root, read_pin_file};
 use crate::runtime::plugin::requirements::host_api_deprecation;
 use crate::runtime::plugin::sandbox_mask::plugin_trees_masked;
 
@@ -26,8 +30,8 @@ pub struct PluginDoctorResult {
     /// The step an operator has to take, or empty when there is none.
     pub message: String,
     /// The row reports an operator's deliberate choice — a plugin switched
-    /// off in this workspace — not a problem. It carries a message so the
-    /// state stays visible, but is not a finding.
+    /// off in this workspace, or a build they consented to — not a problem.
+    /// It carries a message so the state stays visible, but is not a finding.
     pub intentional: bool,
 }
 
@@ -45,6 +49,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         });
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     let archive_drift = archive_digest_drift_rows(runtime, &summaries)?;
+    let builds = build_rows(runtime, &summaries)?;
     let scoped_out = scoped_out_fs_root_rows(runtime)?;
     let ungranted_programs = ungranted_program_rows(&summaries);
     let host_api_deprecated = host_api_deprecation_rows(runtime);
@@ -138,6 +143,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     rows.extend(dangling);
     rows.extend(stale_seeded);
     rows.extend(archive_drift);
+    rows.extend(builds);
     rows.extend(scoped_out);
     rows.extend(ungranted_programs);
     rows.extend(host_api_deprecated);
@@ -315,6 +321,157 @@ fn archive_digest_drift_rows(
         });
     }
     Ok(rows)
+}
+
+/// The source-built plugin rows alone, for the plugin section of
+/// `orbit doctor`.
+pub fn plugin_build_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, OrbitError> {
+    build_rows(runtime, &list_plugins(runtime)?)
+}
+
+/// One informational row per plugin built on this host, and the findings
+/// about those builds (`docs/design/plugins/3_install_time_build.md` §3.9).
+/// Offline: nothing here runs a build, contacts a source or re-fetches.
+///
+/// A build record that disagrees with its witness is not repeated here: the
+/// row registers inactive at load, and its plugin row already says why.
+fn build_rows(
+    runtime: &OrbitRuntime,
+    summaries: &[PluginSummary],
+) -> Result<Vec<PluginDoctorResult>, OrbitError> {
+    // A pin file that does not parse is already its own doctor row.
+    let pins = read_pin_file(&runtime.shared_root())
+        .ok()
+        .flatten()
+        .map(|file| file.plugins)
+        .unwrap_or_default();
+    let mut rows = Vec::new();
+    for summary in summaries {
+        let name = &summary.name;
+        let row = |intentional: bool, message: String| PluginDoctorResult {
+            plugin: name.clone(),
+            status: summary.status,
+            message,
+            intentional,
+        };
+        if let Some(build) = &summary.build {
+            rows.push(row(true, describe_build(build)));
+            if let Err(detail) =
+                installed_artifact_digest(Path::new(&summary.install_path), &build.outputs)
+                    .and_then(|current| {
+                        if current == build.artifact_digest {
+                            Ok(())
+                        } else {
+                            Err(format!(
+                                "the installed outputs now hash to {current}, not the recorded {}",
+                                build.artifact_digest
+                            ))
+                        }
+                    })
+            {
+                rows.push(row(
+                    false,
+                    format!(
+                        "plugin '{name}' was modified after its build: {detail}; reinstall it \
+                         with `orbit plugin upgrade {name} {} --allow-build`",
+                        build.source
+                    ),
+                ));
+            }
+            let gone = build
+                .programs
+                .iter()
+                .map(|program| program.path.as_str())
+                .chain(build.toolchain_roots.iter().map(String::as_str))
+                .filter(|path| !Path::new(path).exists())
+                .collect::<Vec<_>>();
+            if !gone.is_empty() {
+                rows.push(row(
+                    true,
+                    format!(
+                        "plugin '{name}' was built with {}, which no longer exist; the installed \
+                         plugin is unaffected, but its next build will be refused until they do",
+                        gone.join(", ")
+                    ),
+                ));
+            }
+        }
+        if let Some(pin) = pins.iter().find(|pin| pin.name == *name)
+            && let Some(installed) = runtime.stores().plugins().get_plugin(name)?
+            && let Some(drift) = build_pin_drift(pin, &installed)
+        {
+            rows.push(row(false, format!("plugin '{name}': {drift}")));
+        }
+    }
+    rows.extend(leftover_build_dir_rows(&runtime.global_root()));
+    Ok(rows)
+}
+
+/// The consent and provenance of one build, in one line.
+fn describe_build(build: &PluginBuildRecord) -> String {
+    let fetch = build
+        .fetch
+        .as_ref()
+        .map(|argv| format!("fetch `{}`, ", argv.join(" ")))
+        .unwrap_or_default();
+    let landlock = build
+        .landlock_abi
+        .map(|abi| format!(", Landlock ABI {abi}"))
+        .unwrap_or_default();
+    format!(
+        "built on this host from {} at commit {}: {fetch}command `{}`; profile {}{landlock}; \
+         consented with {} at {} by {} (Orbit {}); artifact digest {}",
+        build.source,
+        build.commit,
+        build.command.join(" "),
+        build.profile,
+        build.consent.flag,
+        build.consent.at,
+        build.consent.os_user,
+        build.consent.orbit_version,
+        build.artifact_digest
+    )
+}
+
+/// A `.build-*` directory under a plugin namespace that no live build owns:
+/// what a killed `orbit plugin add --allow-build` left behind.
+fn leftover_build_dir_rows(global_root: &Path) -> Vec<PluginDoctorResult> {
+    let Ok(namespaces) = std::fs::read_dir(plugin_install_root(global_root)) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for namespace in namespaces.flatten() {
+        let name = namespace.file_name();
+        if name.to_string_lossy().starts_with('.')
+            || !namespace.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(namespace.path()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let entry_name = entry.file_name();
+            if !entry_name
+                .to_string_lossy()
+                .starts_with(PLUGIN_BUILD_DIR_PREFIX)
+                || is_live_plugin_build_dir(&entry_name)
+            {
+                continue;
+            }
+            rows.push(PluginDoctorResult {
+                plugin: name.to_string_lossy().into_owned(),
+                status: PluginStatus::Inactive,
+                message: format!(
+                    "'{}' is a build directory no running build owns; the next install or \
+                     upgrade of this plugin removes it, or delete it by hand",
+                    entry.path().display()
+                ),
+                intentional: false,
+            });
+        }
+    }
+    rows
 }
 
 /// Findings for workspace files seeded by an older installed plugin version.

@@ -247,6 +247,12 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             plugin: redact_all(&plugin),
         },
         OrbitError::CapabilityRefused(m) => OrbitError::CapabilityRefused(redact_all(&m)),
+        OrbitError::PluginBuildConsentRequired(m) => {
+            OrbitError::PluginBuildConsentRequired(redact_all(&m))
+        }
+        OrbitError::PluginBuildConsentUnavailable(m) => {
+            OrbitError::PluginBuildConsentUnavailable(redact_all(&m))
+        }
         OrbitError::AdrInvalidTransition(m) => OrbitError::AdrInvalidTransition(redact_all(&m)),
         OrbitError::RemoteArtifactUnavailable {
             kind,

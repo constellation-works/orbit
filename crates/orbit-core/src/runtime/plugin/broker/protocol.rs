@@ -205,6 +205,8 @@ pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
         | OrbitError::CapabilityRefused(_)
         | OrbitError::PluginDisabledInWorkspace { .. }
         | OrbitError::PluginDisabledOnHost { .. }
+        | OrbitError::PluginBuildConsentRequired(_)
+        | OrbitError::PluginBuildConsentUnavailable(_)
         | OrbitError::NotFound {
             kind: NotFoundKind::Tool,
             ..

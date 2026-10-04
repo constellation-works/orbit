@@ -3,9 +3,9 @@ type: design
 title: "Threat model: install-time spec.build for source-built plugins"
 summary: "Threat model and binding decisions for an opt-in spec.build that builds a git+ plugin source at install time: sandbox profile, network, environment, write scope, artifact digest, consent, pin files, doctor and abuse cases"
 owner: claude
-status: Draft
+status: Accepted
 tags: [plugins, security, sandbox, supply-chain, install]
-paths: ["crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install.rs", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build.rs", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install.rs", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 last_updated: 2026-10-04
@@ -14,9 +14,9 @@ last_validated: 2026-10-04
 
 # Threat model: install-time spec.build for source-built plugins
 
-Status: decided, not implemented. No `spec.build` exists in the manifest schema today. This
-document fixes the contract the implementation must follow. A change to any decision below is a
-security decision and needs a change to this document in the same PR.
+Status: implemented. §6 maps each decision to the code and records where the implementation
+refines it. A change to any decision below is a security decision and needs a change to this
+document in the same PR.
 
 Builds on [1_scope.md](./1_scope.md) §3 (plugin sources, pin file, staged install) and §4.1–§4.3
 (grants, execution protocol, backend sandbox).
@@ -396,23 +396,41 @@ deterministic, matching the archive-digest finding that already exists.
   consented and timed out, so it is not required for the first implementation.
 - **No Windows.** Plugins already declare `platforms: [linux, macos]`.
 
-## 6. Implementation checklist
+## 6. Implementation
 
-The implementation task delivers, with boundary tests for each refusal:
+| Decision | Where |
+|---|---|
+| `spec.build` schema and validation (§1) | `orbit-types` `plugin/build.rs`; `PluginSpec.build` |
+| Commit fetch and `HEAD` check (§3.1) | `orbit-tools` `plugin/source.rs` (`fetch_git_commit`) |
+| Profiles, probes, supervision (§3.2–§3.4) | `orbit-exec` `build_sandbox/` (`linux.rs`, `macos.rs`, `supervise.rs`); goldens `plugin_build_{fetch,offline}` |
+| Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build.rs` |
+| Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `install.rs` |
+| Build record on the row (schema v35 `build_json`) and witness (§3.6) | `orbit-store` `plugin_store.rs`; `orbit-core` `runtime/plugin/build_witness.rs`, checked in the load pass |
+| Sync never builds; pin drift (§3.7) | `orbit-core` `application/plugin/lifecycle/sync.rs` |
+| Doctor and `plugin show` (§3.9) | `orbit-core` `application/plugin/inspect/doctor.rs`; the `plugin-builds` row of `orbit doctor` |
 
-1. `spec.build` in the manifest schema (`deny_unknown_fields`, argv arrays, `outputs` shape)
-   and its `orbit plugin validate` checks.
-2. Commit-pinned `git+` fetch with a `HEAD` check (§3.1).
-3. The two build profiles and their probes, with refusal when either profile is unavailable
-   (§3.2–§3.3), plus profile goldens in `make goldens`.
-4. Build directory lifecycle, output copy and caps (§3.4), environment construction and the
-   denylist test (§3.5).
-5. Artifact digest, build record and witness (§3.6). Load refuses a missing or mismatched record.
-6. Pin `artifact_digest` parsing and sync's refusal to build (§3.7).
-7. `--allow-build` on `add` and `upgrade`, the plan output, and the managed-context refusal
-   (§3.8).
-8. Doctor and `plugin show` rows (§3.9), and updates to [1_scope.md](./1_scope.md) §3,
-   `docs/CONFIG.md` (pin fields) and CLI goldens in the same PR.
+Where the implementation makes a decision above more precise:
+
+- **The source fetch** is `git init`, then `git fetch --depth 1 --no-tags -- <url> <commit>`,
+  then a detached checkout of `FETCH_HEAD`, rather than `git clone`, because a clone cannot
+  name an arbitrary commit. It runs with the same protocol policy plus `core.hooksPath=/dev/null`.
+- **The build directory** is `~/.orbit/plugins/<ns>/.build-<pid>-<nonce>/`. The pid lets install
+  pruning and doctor tell a live build from a leftover one with `kill(pid, 0)`.
+- **The Linux `fetch` Landlock ruleset** handles only TCP `bind` and `connect`, and no
+  filesystem access. It is applied to the `bwrap` process just before `exec`, so the sandboxed
+  build inherits it. A network-only domain does not restrict the mounts `bwrap` makes.
+- **Toolchain locators.** When a program is a rustup proxy, Orbit derives `RUSTUP_HOME` from the
+  proxy's install, adds `RUSTUP_HOME/toolchains` and `settings.toml` to the readable set, and
+  puts the default toolchain's `bin` on `PATH` after the programs' directories.
+  `RUSTUP_TOOLCHAIN` is passed only alongside it.
+- **A build manifest loads before its build.** A backend command that is a declared output and
+  is not yet present does not refuse the load. The install refuses a build that does not produce
+  it.
+- **A record that disagrees with its witness** is reported by the plugin's own doctor row. The
+  load pass registers it inactive with that diagnostic; doctor does not add a second row.
+- **Sync and drift.** A pin whose commit or `artifact_digest` differs from the installed build
+  gets the drift message, and sync neither enables, toggles on nor seeds that plugin. The
+  reported status is the plugin's effective status, because a pin cannot disable the host row.
 
 ## Task References
 

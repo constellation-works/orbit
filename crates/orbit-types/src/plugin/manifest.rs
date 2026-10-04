@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::build::PluginBuildSpec;
 use super::namespace::{is_valid_namespace, is_valid_verb};
 use super::template::validate_template;
 use super::version::{SemverRange, Version};
@@ -234,6 +235,12 @@ pub struct PluginSpec {
     /// Only names are declared here; values live in the host's secret store.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<PluginSecretSpec>,
+    /// How a `git+` source pinned to a commit builds the files its backend
+    /// needs (`docs/design/plugins/3_install_time_build.md`). Runs only with
+    /// the operator's per-install consent; every other source must already
+    /// carry the declared outputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<PluginBuildSpec>,
 }
 
 /// One `spec.secrets` entry. The name is namespaced to the plugin: two
@@ -753,6 +760,9 @@ impl PluginManifest {
         self.validate_definition_paths()?;
         self.validate_web()?;
         self.validate_secrets()?;
+        if let Some(build) = &self.spec.build {
+            build.validate()?;
+        }
         Ok(())
     }
 

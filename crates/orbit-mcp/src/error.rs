@@ -98,6 +98,8 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::CapabilityRefused(_) => "capability_refused",
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
+        OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
+        OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
         OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",

@@ -65,7 +65,10 @@ pub use boundary::{
     LandlockBoundary, linux_landlock_boundary_grants, linux_landlock_read_boundary,
 };
 pub use grants::{LandlockPathGrant, grants_read};
+pub(crate) use host::{RESOLVER_FILES, RUNTIME_DIRS, RUNTIME_FILES, TRUST_DIRS};
 pub use probe::{NETWORK_LANDLOCK_ABI, WRITE_LANDLOCK_ABI, probe_landlock};
+#[cfg(target_os = "linux")]
+pub(crate) use ruleset::{abi_version, restrict_child_tcp_connect_to_port};
 pub use spawn::{spawn_under_linux_landlock, spawn_under_linux_landlock_boundary};
 
 #[cfg(test)]

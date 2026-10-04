@@ -1,4 +1,5 @@
 use orbit_core::OrbitRuntime;
+use orbit_types::plugin::PluginStatus;
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};
@@ -20,10 +21,13 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
     let mut issues = 0;
     let mut switched_off = 0;
     for result in &results {
-        // A plugin switched off in this workspace is the operator's choice:
-        // shown, so the state stays visible, but not counted as a finding.
+        // A plugin switched off in this workspace, or a build the operator
+        // consented to, is their choice: shown, so the state stays visible,
+        // but not counted as a finding.
         if result.intentional {
-            switched_off += 1;
+            if result.status == PluginStatus::Disabled {
+                switched_off += 1;
+            }
         } else if !result.message.is_empty() {
             issues += 1;
         }

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-pub(super) fn sbpl_escape(value: &str) -> String {
+pub(crate) fn sbpl_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 

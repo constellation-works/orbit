@@ -5,6 +5,8 @@ use orbit_types::plugin::is_valid_namespace;
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
+use crate::application::plugin::build::build_log_path;
+use crate::runtime::plugin::build_witness::forget_build_witness;
 use crate::runtime::plugin::grants::forget_authorized_grants;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir};
 use crate::runtime::plugin::sandbox_mask::{not_visible, plugin_trees_masked};
@@ -143,6 +145,7 @@ pub fn remove_plugin(
     // The authority goes with the install: a later reinstall of this namespace
     // starts from no authorized grants rather than inheriting these.
     forget_authorized_grants(&runtime.global_root(), name);
+    forget_build_witness(&runtime.global_root(), name);
 
     // Everything below deletes files, so it runs only for a verified install.
     if !owns_install {
@@ -163,6 +166,13 @@ pub fn remove_plugin(
         std::fs::remove_dir_all(&namespace_dir).map_err(|error| {
             OrbitError::Io(format!("remove {}: {error}", namespace_dir.display()))
         })?;
+    }
+    // The build log describes a tree that no longer exists.
+    if let Some(log_dir) = build_log_path(&runtime.global_root(), name).parent()
+        && log_dir.exists()
+    {
+        std::fs::remove_dir_all(log_dir)
+            .map_err(|error| OrbitError::Io(format!("remove {}: {error}", log_dir.display())))?;
     }
     Ok(())
 }

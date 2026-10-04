@@ -58,7 +58,10 @@ own. When the manifest asks for an unconfined backend, an absolute write root,
 `network: any`, or `env_pass`, it stops and prints the requested grants instead
 of running them. See [Certifying a plugin](#certifying-a-plugin-for-this-orbit).
 
-`add` also accepts `git+<url>#<ref>` and a `.tar.gz` archive. `--enable`
+`add` also accepts `git+<url>#<ref>` and a `.tar.gz` archive. A
+`git+<url>#<full commit id>` source whose manifest declares `spec.build` builds
+its backend at install time and needs `--allow-build` (see
+[Backends built from source](#backends-built-from-source)). `--enable`
 installs and enables in one step. The tool registry is built when an Orbit
 command starts, so an enable takes effect on the next command — restart a
 long-lived `orbit mcp serve` to pick it up in that session.
@@ -480,6 +483,132 @@ the plugin's grants. Review the lock diff
 before upgrading, because it is new code even though it is not a new
 permission. `orbit plugin remove --purge-state` deletes the environment and
 cache with the rest of the plugin's state.
+
+## Backends built from source
+
+A prebuilt archive pinned by digest is the recommended way to ship a compiled
+backend. A plugin that cannot publish one per platform can declare
+`spec.build`, and Orbit builds it on the installing host:
+
+```yaml
+spec:
+  backend:
+    type: exec
+    command: bin/orbit-graph            # produced by the build
+  build:
+    programs: [cargo]                   # resolved from PATH and shown at consent
+    fetch: [cargo, fetch, --locked]     # optional; the only phase with network
+    command: [cargo, build, --release, --offline, --locked, --target-dir, "{{build_dir}}/target"]
+    outputs:
+      - from: target/release/orbit-graph   # relative to {{build_dir}}
+        to: bin/orbit-graph                # relative to the plugin root
+    timeout_ms: 1200000                    # per phase; at most 3600000
+```
+
+`fetch` and `command` are argv arrays and never pass through a shell.
+`{{build_dir}}` is the only template, and `fetch[0]` and `command[0]` must be
+listed in `programs`.
+
+**Which sources build.** Only `git+<url>#<full commit id>` (40 or 64 hex
+characters). Orbit fetches that one commit, verifies it, and drops `.git`
+before anything runs. Any other source with `spec.build` (a directory, a
+branch or tag, an archive) installs only when every declared output is already
+in the tree. That lets a release archive carry the same manifest with its
+outputs prebuilt.
+
+**Consent.** `orbit plugin add <git+url#commit> --allow-build` or
+`orbit plugin upgrade <ns> <git+url#commit> --allow-build`. Without the flag
+the install is refused with `build_consent_required`, and the refusal prints the
+build plan:
+
+- the source and commit;
+- the `fetch` and `command` argv;
+- the resolved programs and toolchain roots;
+- each phase's network policy;
+- the limits and outputs.
+
+With the flag Orbit prints the same plan to stderr, then builds. Consent covers
+one command. Every upgrade and every `--force` reinstall needs the flag again.
+It never comes from a pin, a config key, an environment variable or an MCP
+tool. A managed run (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`), a plugin
+backend child, or an Orbit agent sandbox that passes the flag is refused with
+`build_consent_unavailable`. Routines, auto-tasks and jobs cannot start a
+build.
+
+**The sandbox.** Each phase runs under a deny-by-default build profile.
+
+| | Linux: `linux-bwrap-build-v1` | macOS: `macos-sandbox-build-v1` |
+|---|---|---|
+| Mechanism | Bubblewrap with a constructed root | `sandbox-exec`, `(deny default)` |
+| Readable | the system runtime, the declared programs and their toolchain roots, the build directory | same |
+| Writable | the build directory only | same |
+| Network | none in `command`; in `fetch`, TCP to port 443 only, through Landlock (ABI 4 or later) | none in `command`; in `fetch`, outbound TCP to `*:443` |
+
+On both platforms, credential paths under a toolchain root stay unreadable.
+
+The environment starts empty. The build receives:
+
+- `PATH`: the programs' directories and a consented toolchain's `bin`, then
+  `/usr/bin:/bin`;
+- `HOME` and `TMPDIR` inside the build directory;
+- `LANG=C.UTF-8`, `TZ=UTC`;
+- `SOURCE_DATE_EPOCH`, set to the commit time;
+- `ORBIT_BUILD_DIR`, `ORBIT_BUILD_SRC`, `ORBIT_BUILD_PHASE`;
+- toolchain locators such as `RUSTUP_HOME`, only when they point inside a
+  consented root.
+
+Tokens and agent sockets (`GH_TOKEN`, `SSH_AUTH_SOCK`, `AWS_*` and similar)
+are never passed.
+
+Limits:
+
+- each phase is killed with its whole process group at `timeout_ms`;
+- the build directory is capped at 8 GiB;
+- the log is capped at 1 MiB, keeping the head and the tail, and is kept at
+  `~/.orbit/state/plugin-builds/<ns>/build.log`;
+- core dumps are off.
+
+The build fails, and nothing is installed, when either of these is missing:
+
+- Bubblewrap, or Landlock ABI 4 for a `fetch` phase, on Linux;
+- `sandbox-exec` on macOS.
+
+**What is installed.** Only the declared outputs, copied from the build
+directory into the tree from the verified commit. Each output must be a
+regular file with no symbolic link on its path and a single hard link. It must
+not replace a file the commit ships, and its mode becomes 0755 or 0644. The
+install records:
+
+- an artifact digest (`sha256:…` over each output's path, mode and hash);
+- the consent, meaning when, which OS user and which Orbit version;
+- the profile and the argv that ran.
+
+A copy of this record sits beside the plugin's grant witness. A row whose build
+record and witness disagree registers inactive at load.
+
+**Pins never build.** A pin may name `source: git+<url>#<commit>` and
+`artifact_digest: sha256:<hex>`; `artifact_digest` is allowed only on such a
+source. `orbit plugin sync` never builds. For a missing plugin whose source
+would build, sync reports the pin unsatisfied and names
+`orbit plugin add <source> --allow-build`. An installed build whose commit or
+artifact digest differs from the pin is reported, never rebuilt. At
+`add|upgrade --allow-build`, when this workspace pins an `artifact_digest`, a
+build that produces a different digest is refused, showing both. Use a
+reproducible build, or a prebuilt archive, for a pin that more than one host
+must satisfy.
+
+**Inspecting a built plugin.** `orbit plugin show <ns>` prints the build
+source, commit, argv, profile, consent and artifact digest. `orbit plugin
+doctor` gives each built plugin an informational row, and `orbit doctor` has a
+`plugin-builds` row. Both report these findings:
+
+- installed outputs that no longer match the recorded digest;
+- a pin naming another commit or digest;
+- a program or toolchain root that has gone, which blocks only the next build;
+- a `.build-*` directory no running build owns.
+
+Doctor never runs a build or contacts the source. `orbit plugin remove`
+deletes the build record, its witness and the build log.
 
 ## Migrating an existing external tool
 

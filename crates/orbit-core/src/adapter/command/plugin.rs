@@ -156,6 +156,11 @@ impl OrbitRuntime {
         plugin::plugin_doctor(self)
     }
 
+    /// The source-built plugin rows of [`Self::plugin_doctor`] alone.
+    pub fn plugin_build_doctor(&self) -> Result<Vec<PluginDoctorResult>, OrbitError> {
+        plugin::plugin_build_doctor(self)
+    }
+
     /// Refuse, naming why, when this process runs inside an agent sandbox
     /// that masks plugin state and the plugin secret store.
     pub fn ensure_plugin_state_visible(&self) -> Result<(), OrbitError> {
