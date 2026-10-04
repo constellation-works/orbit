@@ -1,19 +1,35 @@
 // These live chips always observe the HTTP serving host, independently of workspace scope.
 import { el } from './common.js';
 
-export function renderHostResources(payload, host = document.getElementById('host-resource-chips')) {
-  if (!host) return;
+/// The throttle verdict as the topbar chips and the Settings System tab both
+/// state it: `held`, `open`, `disabled`, or `unknown` (stale or no payload).
+export function hostVerdict(payload) {
   const age = Number.isFinite(payload?.sample_age_seconds) ? `${Math.floor(payload.sample_age_seconds)}s ago` : 'age unknown';
   const verdictUnknown = !payload || payload.stale || payload.verdict_unknown;
   const status = verdictUnknown ? 'unknown' : payload.throttle ? 'held' : payload.thresholds?.enabled === false ? 'disabled' : 'open';
   const reason = payload?.reason || 'Resource API unavailable';
-  const chip = (resource, reading) => {
-    const known = Number.isFinite(reading?.percent) && !payload?.stale;
-    const severity = known ? reading.severity : 'unknown';
-    const held = !verdictUnknown && payload.throttle && payload.pressures?.some(pressure =>
-      resource === 'disk' ? pressure.resource.startsWith('disk ') : pressure.resource === resource);
+  return { age, verdictUnknown, status, reason };
+}
+
+/// One resource's live reading: `known`, its `severity`, whether the verdict
+/// holds on it, and the `pressures` entries (with `since`) that hold it.
+export function hostReading(payload, resource) {
+  const reading = payload?.[resource];
+  const { verdictUnknown } = hostVerdict(payload);
+  const known = Number.isFinite(reading?.percent) && !payload?.stale;
+  const severity = known ? reading.severity : 'unknown';
+  const pressures = verdictUnknown || !payload.throttle ? [] : (payload.pressures || []).filter(pressure =>
+    resource === 'disk' ? pressure.resource.startsWith('disk ') : pressure.resource === resource);
+  const note = known ? severity : payload?.stale ? 'stale' : reading?.unknown_reason || 'unavailable';
+  return { reading, known, severity, held: pressures.length > 0, pressures, note };
+}
+
+export function renderHostResources(payload, host = document.getElementById('host-resource-chips')) {
+  if (!host) return;
+  const { age, status, reason } = hostVerdict(payload);
+  const chip = resource => {
+    const { reading, known, severity, held, note } = hostReading(payload, resource);
     const path = resource === 'disk' && reading?.path ? ` · ${reading.path}` : '';
-    const note = known ? severity : payload?.stale ? 'stale' : reading?.unknown_reason || 'unavailable';
     const node = el('span', {
       class: `kpi host-resource ${severity}${held ? ' throttled' : ''}`,
       title: `${resource}${path} · ${note} · sampled ${age} · Throttle verdict: ${status} · ${reason}`,
@@ -25,7 +41,14 @@ export function renderHostResources(payload, host = document.getElementById('hos
     node.tabIndex = 0;
     return node;
   };
-  host.replaceChildren(chip('cpu', payload?.cpu), chip('memory', payload?.memory), chip('disk', payload?.disk));
+  host.replaceChildren(chip('cpu'), chip('memory'), chip('disk'));
+}
+
+const listeners = new Set();
+/// Called with each fresh payload (or null when the poll failed).
+export function onHostResources(listener) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 let sequence = 0;
@@ -42,9 +65,14 @@ export async function fetchAndRenderHostResources() {
       lastPayload = payload;
       receivedAt = Date.now();
       renderHostResources(payload);
+      for (const listener of listeners) listener(payload);
     }
   } catch (error) {
-    if (current === sequence) { lastPayload = null; renderHostResources(null); }
+    if (current === sequence) {
+      lastPayload = null;
+      renderHostResources(null);
+      for (const listener of listeners) listener(null);
+    }
     throw error;
   }
 }

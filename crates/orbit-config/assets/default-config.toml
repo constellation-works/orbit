@@ -62,11 +62,11 @@ base_branch = "main"
 # below resume. Unknown/stale readings fail open and are shown distinctly.
 enabled = true
 cpu_high_percent = 90
-cpu_resume_percent = 75
+cpu_resume_percent = 85
 memory_high_percent = 90
-memory_resume_percent = 80
-disk_high_percent = 85
-disk_resume_percent = 80
+memory_resume_percent = 85
+disk_high_percent = 90
+disk_resume_percent = 85
 
 [runtime]
 # Rotation + retention for the global JSONL log (~/.orbit/state/logs/orbit.jsonl).

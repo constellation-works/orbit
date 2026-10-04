@@ -339,7 +339,7 @@ pub(super) fn serve_fixture() {
                         .map(|(index, path)| DiskSample {
                             path: path.clone(),
                             used_percent: (phase != 3).then_some(if index == 0 {
-                                88.0
+                                92.0
                             } else {
                                 40.0
                             }),

@@ -11,6 +11,7 @@
 // after the write is the server's answer, never a local guess.
 
 import { captureFocus, el, fetchJson, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { hostReading, hostVerdict, onHostResources } from './host-resources.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -19,14 +20,20 @@ const NO_VALUE = "–";
 
 /// Which file a sub-view reads and writes. `effective` never writes global:
 /// the layered view's edits go to the workspace file, which is the per-user,
-/// git-ignored one.
+/// git-ignored one. `system` is the exception: the topbar chips and admission
+/// read the serving machine's global settings, so that is what it edits.
 const SUBTAB_SOURCES = {
   effective: { path: "/api/config/effective", scope: "workspace" },
   "workspace-file": { path: "/api/config/file?scope=workspace", scope: "workspace" },
   "global-file": { path: "/api/config/file?scope=global", scope: "global" },
   crews: { path: "/api/config/effective", scope: "workspace" },
   keys: { path: "/api/config/keys", scope: null },
+  system: { path: "/api/config/file?scope=global", scope: "global" },
 };
+
+/// The System tab is the resource throttle only: its keys, in display order.
+const THROTTLE_PREFIX = "workflow.resource_throttle.";
+const THROTTLE_RESOURCES = ["cpu", "memory", "disk"];
 
 let activeSubtab = "effective";
 let lastPayload = null;
@@ -45,6 +52,13 @@ export function initConfig() {
     lastPayload = null;
     editing = null;
     expandedSections.clear();
+  });
+  // Live readings follow the topbar's poll. A rebuild would discard an open
+  // editor's focus, so it waits until nothing is being edited.
+  onHostResources((host) => {
+    if (activeSubtab !== "system" || !lastPayload || editing) return;
+    lastPayload = { ...lastPayload, host };
+    render(lastPayload);
   });
 }
 
@@ -71,7 +85,7 @@ export async function fetchAndRenderConfig() {
   await requestPanel(
     "config-body",
     `${activeSubtab}:${getWorkspace() || ""}`,
-    () => fetchJson(source.path),
+    () => (activeSubtab === "system" ? fetchSystem(source) : fetchJson(source.path)),
     (payload) => {
       lastPayload = payload;
       render(payload);
@@ -98,6 +112,11 @@ function renderPanels(payload, body) {
   renderControls(payload);
   if (activeSubtab === "keys") {
     renderKeyReference(body, payload);
+    return;
+  }
+  if (activeSubtab === "system") {
+    body.appendChild(systemPanel(payload));
+    $("config-count").textContent = `${THROTTLE_RESOURCES.length} resources`;
     return;
   }
   if (activeSubtab === "crews") {
@@ -136,6 +155,11 @@ function renderControls(payload) {
   controls.replaceChildren();
   if (activeSubtab === "crews") return;
 
+  if (activeSubtab === "system") {
+    controls.appendChild(reloadButton());
+    return;
+  }
+
   const filter = el("input", { class: "config-filter" });
   filter.type = "search";
   filter.placeholder = "Filter keys…";
@@ -155,13 +179,7 @@ function renderControls(payload) {
     controls.appendChild(chips);
   }
 
-  const reload = el("button", { class: "config-action", text: "Reload" });
-  reload.type = "button";
-  reload.addEventListener("click", () => {
-    editing = null;
-    fetchAndRenderConfig().catch((error) => console.error("Failed to reload config", error));
-  });
-  controls.appendChild(reload);
+  controls.appendChild(reloadButton());
 
   const workspaceFile = payload?.layers?.workspace?.path;
   if (workspaceFile) {
@@ -177,6 +195,16 @@ function renderControls(payload) {
     });
     controls.appendChild(reveal);
   }
+}
+
+function reloadButton() {
+  const reload = el("button", { class: "config-action", text: "Reload" });
+  reload.type = "button";
+  reload.addEventListener("click", () => {
+    editing = null;
+    fetchAndRenderConfig().catch((error) => console.error("Failed to reload config", error));
+  });
+  return reload;
 }
 
 function setShowAll(next) {
@@ -442,7 +470,7 @@ function cancelEdit() {
 function focusEditAffordance(session) {
   if (!session) return;
   const key = session.kind === "crew" ? `crews.${session.name}` : session.key;
-  const rows = $("config-body")?.querySelectorAll(".config-row") || [];
+  const rows = $("config-body")?.querySelectorAll("[data-key]") || [];
   for (const row of rows) {
     if (row.dataset.key !== key) continue;
     row.querySelector(".config-pencil")?.focus();
@@ -703,6 +731,176 @@ async function submit(request) {
     session.error = error.message || String(error);
     if (editing === session && lastPayload) render(lastPayload);
   }
+}
+
+// ------------------------------------------------------------------ system
+
+/// The System tab reads three things: the global file (the values being
+/// edited and their default/global provenance), the effective view (to see a
+/// workspace file overriding a key), and the serving host's live resources.
+/// The host read is best effort — a throttle panel with no readings is still
+/// an editable panel.
+async function fetchSystem(source) {
+  const [file, effective, host] = await Promise.all([
+    fetchJson(source.path),
+    fetchJson(SUBTAB_SOURCES.effective.path),
+    fetchHostResources(),
+  ]);
+  return { ...file, workspace_overrides: workspaceOverrides(effective), host };
+}
+
+async function fetchHostResources() {
+  try {
+    // The host is the serving machine, whatever workspace is selected, so this
+    // read deliberately skips the workspace parameter the other reads carry.
+    const response = await fetch("/api/host/resources");
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/// Throttle keys whose effective value comes from the workspace file, by key.
+function workspaceOverrides(effective) {
+  const overrides = {};
+  for (const section of effective?.sections || []) {
+    for (const row of section.keys || []) {
+      if (row.key?.startsWith(THROTTLE_PREFIX) && row.state === "set" && row.source?.layer === "workspace") {
+        overrides[row.key] = row;
+      }
+    }
+  }
+  return overrides;
+}
+
+function throttleRows(payload) {
+  const rows = {};
+  for (const section of payload.sections || []) {
+    for (const row of section.keys || []) {
+      if (row.key?.startsWith(THROTTLE_PREFIX)) rows[row.key] = row;
+    }
+  }
+  return rows;
+}
+
+function systemPanel(payload) {
+  const rows = throttleRows(payload);
+  const host = payload.host;
+  const verdict = hostVerdict(host);
+  const panel = el("section", { class: "panel config-section config-system" });
+  panel.appendChild(
+    el("header", {}, [
+      el("span", {}, [
+        el("span", { class: "config-section-title", text: "Resource throttle" }),
+        el("span", { class: "config-section-prefix mono", text: `${THROTTLE_PREFIX}*` }),
+        el("span", { class: "config-section-blurb", text: "new work is held while a resource stays at its throttle-at mark" }),
+      ]),
+      el("span", { class: "config-header-right" }, [
+        el("span", { class: `config-verdict ${verdict.status}`, text: verdict.status }),
+      ]),
+    ]),
+  );
+  const body = el("div", { class: "config-section-body" });
+  body.appendChild(el("div", { class: "config-strip" }, [
+    el("div", { class: "config-note", text: `Edits write the global file${payload.layers?.global?.path ? ` (${payload.layers.global.path})` : ""}: the topbar readings and admission on this host read it.` }),
+    ...Object.keys(payload.workspace_overrides || {}).length
+      ? [el("div", { class: "config-warning", text: "The workspace file overrides some of these keys; its value wins for this workspace's runtimes." })]
+      : [],
+  ]));
+  body.appendChild(systemVerdict(host, verdict, rows, payload));
+  const head = el("div", { class: "config-sys-grid config-sys-head" }, [
+    el("span", { text: "resource" }),
+    el("span", { text: "live reading" }),
+    el("span", { text: "throttle at" }),
+    el("span", { text: "resume below" }),
+  ]);
+  body.appendChild(head);
+  for (const resource of THROTTLE_RESOURCES) body.appendChild(systemResource(resource, rows, payload, host));
+  panel.appendChild(body);
+  return panel;
+}
+
+function systemVerdict(host, verdict, rows, payload) {
+  const node = el("div", { class: "config-sys-verdict" });
+  const enabledKey = `${THROTTLE_PREFIX}enabled`;
+  node.appendChild(el("div", { class: "config-sys-enabled" }, [
+    el("span", { class: "config-key mono", text: "enabled" }),
+    rows[enabledKey] ? systemValueCell(rows[enabledKey], payload) : el("span", { class: "config-value mono", text: NO_VALUE }),
+  ]));
+  const pressures = THROTTLE_RESOURCES.flatMap((resource) => hostReading(host, resource).pressures);
+  let text;
+  if (verdict.status === "held") {
+    text = `Holding new admissions: ${pressures.map(describePressure).join("; ")}`;
+  } else if (verdict.status === "disabled") {
+    text = "Throttle disabled — pressure is still reported but holds nothing.";
+  } else if (verdict.status === "open") {
+    text = "Open — no resource is held.";
+  } else {
+    text = `Verdict unknown — ${verdict.reason}`;
+  }
+  node.appendChild(el("div", { class: `config-sys-verdict-text ${verdict.status}`, text }));
+  const editor = openEditor(rows[enabledKey], payload);
+  if (editor) node.appendChild(editor);
+  return node;
+}
+
+/// The open editor for `row`, or null; it sits under the row it belongs to.
+function openEditor(row, payload) {
+  if (!row || !editing || editing.kind !== "key" || editing.key !== row.key) return null;
+  const node = el("div", { class: "config-row editing" });
+  node.dataset.key = row.key;
+  node.appendChild(keyEditor(row, payload, node));
+  return node;
+}
+
+function describePressure(pressure) {
+  const since = new Date(pressure.since);
+  const when = Number.isNaN(since.getTime()) ? pressure.since : `${since.toISOString().slice(0, 16).replace("T", " ")}Z`;
+  return `${pressure.resource} ${Math.round(pressure.percent)}% ≥ ${pressure.high_percent}% since ${when}`;
+}
+
+function systemResource(resource, rows, payload, host) {
+  const reading = hostReading(host, resource);
+  const high = rows[`${THROTTLE_PREFIX}${resource}_high_percent`];
+  const resume = rows[`${THROTTLE_PREFIX}${resource}_resume_percent`];
+  const node = el("div", { class: "config-sys-resource" });
+  node.dataset.resource = resource;
+  const live = el("span", { class: `config-sys-reading ${reading.severity}${reading.held ? " throttled" : ""}` }, [
+    el("span", { class: "mono", text: reading.known ? `${reading.reading.percent.toFixed(1)}%` : NO_VALUE }),
+    el("span", { class: "config-sys-severity", text: reading.known ? reading.severity : reading.note }),
+    ...(reading.held ? [el("span", { class: "host-resource-held", text: "held" })] : []),
+  ]);
+  node.appendChild(el("div", { class: "config-sys-grid" }, [
+    el("span", { class: "config-key mono", text: resource }),
+    live,
+    high ? systemValueCell(high, payload) : el("span", { class: "config-value mono", text: NO_VALUE }),
+    resume ? systemValueCell(resume, payload) : el("span", { class: "config-value mono", text: NO_VALUE }),
+  ]));
+  for (const row of [high, resume]) {
+    const editor = openEditor(row, payload);
+    if (editor) node.appendChild(editor);
+  }
+  return node;
+}
+
+/// One key's value, its default/global source, a marker when the workspace
+/// file overrides it, and the edit pencil.
+function systemValueCell(row, payload) {
+  const override = payload.workspace_overrides?.[row.key];
+  const cell = el("span", { class: `config-sys-cell${override ? " overridden" : ""}` }, [
+    el("span", { class: "config-value mono", text: displayValue(row.value) }),
+    sourceChip(row),
+    override
+      ? el("span", {
+          class: "config-source workspace",
+          text: `workspace ${displayValue(override.value)}`,
+          title: `The workspace file sets ${row.key} to ${displayValue(override.value)}; that value wins for this workspace's runtimes. The global value shown here applies to this host's topbar and admission.`,
+        })
+      : null,
+    editable(payload) ? editButton(() => startEdit({ kind: "key", key: row.key }), `Edit ${row.key}`) : null,
+  ]);
+  cell.dataset.key = row.key;
+  return cell;
 }
 
 // ------------------------------------------------------------------- crews
