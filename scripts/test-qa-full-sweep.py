@@ -528,6 +528,11 @@ def add_result(results, scenario, evidence):
 
 
 def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id: str):
+    """Run the local built-in scenarios; return (results, halt_reason).
+
+    A prerequisite step that fails stops the run with a reason, which the caller
+    records on every scenario that was not reached.
+    """
     results = []
     root = temp / "home/.orbit"
     work = temp / "workspace"
@@ -560,9 +565,12 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
         if evidence["exit_code"] != 0:
             raise ValueError(f"command exited {evidence['exit_code']}")
 
-    checked("isolated-cli-lifecycle",
-            [orbit_bin, "init", "--non-interactive", "--machine-name", "qa-machine", "--task-prefix", "QAF"],
+    initialized = checked("isolated-cli-lifecycle",
+            [orbit_bin, "init", "--non-interactive", "--skip-host-prerequisites",
+             "--machine-name", "qa-machine", "--task-prefix", "QAF"],
             temp, ["global-init-persists-isolated-root"], succeeds)
+    if initialized is None:
+        return results, "disposable global init failed; later built-in scenarios depend on its isolated root"
     checked("isolated-cli-lifecycle", [orbit_bin, "workspace", "init", "--name", "qa-primary"],
             work, ["workspace-init-registers-primary"], succeeds)
     checked("workspace-boundary", [orbit_bin, "workspace", "init", "--name", "qa-other"],
@@ -615,7 +623,7 @@ updated_at: 2026-01-01T00:00:00Z
                     "--acceptance-criteria", "fixture round trip", "--json"], work,
                    ["task-add-returns-requested-fields"], task_added)
     if task is None:
-        return results
+        return results, "disposable task add failed; later built-in scenarios depend on the fixture task"
     task_id = json.loads(task["stdout"])["id"]
     payload = work / "qa-artifact.txt"
     payload.write_text("qa evidence payload\n")
@@ -667,7 +675,7 @@ updated_at: 2026-01-01T00:00:00Z
                           "workflow.base_branch", "qa-candidate", "--fresh"], work,
                          ["supported-setting-persists"], succeeds)
     if config_set is None:
-        return results
+        return results, "disposable config set failed; later built-in scenarios depend on the persisted setting"
 
     def config_readback(evidence):
         body = parse_json(evidence, "config get")
@@ -851,11 +859,11 @@ spec:
     migration_init = checked(
         "migration-lifecycle",
         [orbit_bin, "--root", str(migration_root), "init", "--non-interactive",
-         "--machine-name", "qa-migration", "--task-prefix", "QAM"],
+         "--skip-host-prerequisites", "--machine-name", "qa-migration", "--task-prefix", "QAM"],
         temp, ["disposable-migration-fixture-initialized"], succeeds,
     )
     if migration_init is None:
-        return results
+        return results, "disposable migration-root init failed; later built-in scenarios depend on it"
     migration_marker = migration_root / "state/layout.version"
     migration_marker.parent.mkdir(parents=True, exist_ok=True)
     migration_marker.write_text("1\n")
@@ -1108,7 +1116,7 @@ spec:
         add_result(results, "dashboard-api-boundary",
                    finalize_result(evidence, web_assertions, candidate_id,
                                    "loopback listener unavailable"))
-        return results
+        return results, None
     web = subprocess.Popen([orbit_bin, "--root", str(root), "web", "serve", "--host", "127.0.0.1", "--port", str(port), "--no-open"],
                            cwd=work, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     web_evidence = {"command":["GET","/healthz","GET","/api/workspaces","GET","/api/tasks"],
@@ -1143,7 +1151,7 @@ spec:
     add_result(results, "dashboard-api-boundary", finalize_result(web_evidence,
         web_assertions,
         candidate_id, failure))
-    return results
+    return results, None
 
 
 def validate_hosted_macos_evidence(body, scenario, candidate, repo):
@@ -1279,8 +1287,39 @@ def process_self_test():
                 owner.wait(timeout=5)
 
 
+def builtin_init_self_test():
+    """Disposable init must skip host preparation; an init failure must halt with a reason."""
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-builtin-self-test-") as directory:
+        temp = Path(directory)
+        repo = temp / "repo"
+        repo.mkdir()
+        env = isolated_environment(temp)
+        log = temp / "argv.log"
+        stub = temp / "orbit"
+        stub.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+            "sys.stderr.write('Linux sandbox preparation does not support this distribution')\n"
+            "raise SystemExit(1)\n")
+        stub.chmod(0o755)
+        results, halt = run_builtins(repo, str(stub), temp, env, "self-test-candidate")
+        invocations = log.read_text().splitlines()
+        init_lines = [line for line in invocations if " init " in f" {line} "]
+        if not init_lines or any("--skip-host-prerequisites" not in line for line in init_lines):
+            raise AssertionError(f"disposable init did not skip host preparation: {init_lines}")
+        init_results = [row for row in results if row["scenario"] == "isolated-cli-lifecycle"]
+        if len(init_results) != 1 or init_results[0]["outcome"] != "FAIL":
+            raise AssertionError("failed disposable init was not reported as a single explicit failure")
+        if len(results) != 1 or not halt or "global init failed" not in halt:
+            raise AssertionError("failed disposable init did not halt with an explanatory reason")
+        if any(" workspace " in f" {line} " for line in invocations):
+            raise AssertionError("dependent scenarios ran after a failed disposable init")
+
+
 def self_test():
     process_self_test()
+    builtin_init_self_test()
     grouped = "Usage: orbit task <COMMAND>\n\nTasks:\n  add  Create task\nHealth:\n  recheck-blocked\n               Requeue\nOptions:\n  --json\nExamples:\n  orbit task add\n"
     if cli_help_children(grouped) != ["add", "recheck-blocked"]:
         raise AssertionError("grouped CLI help omitted commands or admitted examples")
@@ -1586,6 +1625,7 @@ def main():
                 "assertions":["all-source-surfaces-explicitly-covered-or-gapped"],
                 "candidate_id":candidate_id}]
 
+    builtin_halt = None
     binary = None if args.build_candidate else (Path(args.orbit_bin).resolve() if args.orbit_bin else None)
     browser_inputs_valid = bool(args.playwright_module and args.playwright_module.is_file()
                                 and args.playwright_browsers_path and args.playwright_browsers_path.is_dir()
@@ -1639,7 +1679,8 @@ def main():
             binary_record = {"path":"<disposable-candidate-build>",
                              "version":run([str(binary), "--version"], cwd=repo, env=env)["stdout"].strip(),
                              "sha256":hashlib.sha256(binary.read_bytes()).hexdigest()}
-            results.extend(run_builtins(repo, str(binary), temp, env, candidate_id))
+            builtin_results, builtin_halt = run_builtins(repo, str(binary), temp, env, candidate_id)
+            results.extend(builtin_results)
         for scenario in inventory["scenarios"]:
             if scenario["kind"] == "builtin" or scenario["id"] == "source-binary-provenance":
                 continue
@@ -1698,7 +1739,7 @@ def main():
     for scenario in inventory["scenarios"]:
         if scenario["id"] not in covered:
             results.append({"scenario":scenario["id"], "command":scenario.get("command", []),
-                            "exit_code":None, "stdout":"", "stderr":"builtin did not reach scenario",
+                            "exit_code":None, "stdout":"", "stderr":builtin_halt or "builtin did not reach scenario",
                             "outcome":"NOT_RUN", "assertions":[], "candidate_id":candidate_id})
     full_pass, decision_failures = scenario_decision(inventory, results, candidate_id)
     full_pass = full_pass and not errors
