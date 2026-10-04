@@ -13,6 +13,7 @@
   const groupOrder=['proposed','review','blocked','in-progress','backlog','someday','done','rejected','archived'];
   const groupLabels={proposed:'Awaiting approval',review:'Ready for review',blocked:'Blocked','in-progress':'In progress',backlog:'Backlog',someday:'Someday',done:'Done',rejected:'Rejected',archived:'Archived',other:'Other'};
   let taskStatusFilter=activeStatuses.join(',');
+  const crewsByWorkspace=new Map(), shipments=new Map();
   const pending = new Map(), drafts = new Map(), annotations = new Map(), destinations = new Set();
   let rpcId=0, generation=0, ready=false, disposed=false, capabilities={
   }, workspace='', view='tasks', offset=0, selected=null, snapshot=null, fresh=false, poll=null, failures=0, sentContext=false, acceptedReceipt=null, uncertain=null, busy=false, editMode=false, editorRevision=null, editorTarget=null, restoredOutcomes=new Map(), appliedFilters={
@@ -60,6 +61,9 @@
       el(id).disabled=!fresh||busy||!!uncertain||!a[key]?.enabled;
       el(id).title=a[key]?.reason||(!fresh?'Refresh authoritative state before writing':'');
     }
+    for(const control of [...el('list').querySelectorAll('select'),...el('list').querySelectorAll('button')]){
+      if(control.dataset.rowControl)control.disabled=busy||!!uncertain||control.dataset.unavailable==='true';
+    }
     el('send').disabled=!fresh||!snapshot;
     el('create').disabled=!ready||!destinations.has(workspace)||busy||!!uncertain;
     const editedRevisionChanged=editMode&&(editorRevision!==snapshot?.revision||editorTarget?.workspace!==workspace||editorTarget?.id!==selected?.id);
@@ -75,6 +79,9 @@
   }
   function stale(message){
     fresh=false;
+    for(const c of [...el('list').querySelectorAll('select'),...el('list').querySelectorAll('button')]){
+      if(c.dataset.rowControl){c.dataset.unavailable='true';c.title='Refresh current task actions';}
+    }
     el('reference').textContent='';
     el('copy').hidden=true;
     el('panel').classList.add('stale');
@@ -125,14 +132,14 @@
     el('task-status-filter').hidden=view!=='tasks';
     el('status-filter').hidden=view==='tasks';
     el('status').replaceChildren();
-    for(const value of (view==='runs'?['','pending','running','success','failed','timeout','retrying','cancelled','interrupted']:['review'])){
+    for(const value of ['','pending','running','success','failed','timeout','retrying','cancelled','interrupted']){
       const option=document.createElement('option');
       option.value=value;
       option.textContent=value?value[0].toUpperCase()+value.slice(1).replaceAll('_',' '):'All';
       el('status').append(option);
     }
-    el('status').value=view==='review'?'review':'';
-    el('status').disabled=view==='review';
+    el('status').value='';
+    el('status').disabled=false;
     el('task-status-options').replaceChildren();
     for(const value of taskStatuses){
       const label=document.createElement('label');
@@ -168,6 +175,8 @@
   function renderList(data){
     if(data.schema_version!==1||data.workspace!==workspace)throw new Error('Incompatible list or destination identity');
     const focusedEntity=document.activeElement?.dataset?.entityKey;
+    const focusedControl=document.activeElement?.dataset?.rowField;
+    const focusedTask=document.activeElement?.dataset?.rowTask;
     el('list').replaceChildren();
     const items=rows(data).slice(0,50);
     const groups=new Map();
@@ -204,11 +213,20 @@
         ui.row(b,row,kind,id);
         b.className='entity-row';
         b.addEventListener('click',()=>void open(kind,id));
-        el('list').append(b);
+        if(kind==='task'){
+          const rowBox=ui.node('div',null,'task-row');
+          rowBox.append(b);
+          rowBox.append(taskRowControls({...row,status:row.status?.replaceAll('_','-')},id));
+          el('list').append(rowBox);
+        }else el('list').append(b);
         if(focusedEntity===id)b.focus();
+        if(focusedTask===id&&focusedControl){
+          const c=[...el('list').querySelectorAll('select')].find(c=>c.dataset.rowTask===id&&c.dataset.rowField===focusedControl);
+          c?.focus();
+        }
       }
     }
-    if(!items.length)fieldList(view==='review'?'Nothing waiting for review.':appliedFilters.search||appliedFilters.status||appliedFilters.priority?'No matches. Try changing the filters.':view==='runs'?'No runs yet.':'No tasks yet. Create a task to get started.');
+    if(!items.length)fieldList(appliedFilters.search||appliedFilters.status||appliedFilters.priority?'No matches. Try changing the filters.':view==='runs'?'No runs yet.':'No tasks yet. Create a task to get started.');
     const p=data.pagination||{
     };
     const total=p.total??data.total;
@@ -217,6 +235,130 @@
     el('previous').disabled=offset===0;
     el('next').disabled=!hasMore;
     el('pagination').textContent=`Showing ${items.length?offset+1:0}–${offset+items.length}${total!==undefined?' of '+total:''}. ${hasMore?'More available.':''}`;
+    controls();
+  }
+  async function rowSnapshot(destination,id){
+    const data=await tool('orbit_task_show',{workspace:destination,id,snapshot:true});
+    if(data.workspace!==destination||data.schema_version!==1||publicId(data.task||{})!==id||!data.revision||!data.actions)
+      throw new Error('Fresh task actions unavailable for this destination');
+    return {...data,task:{...data.task,status:data.task.status?.replaceAll('_','-')},
+      actions:{...data.actions,status:data.actions.status?.map(a=>({...a,status:a.status.replaceAll('_','-')}))}};
+  }
+  function taskRowControls(row,id){
+    const destination=workspace,g=generation;
+    const box=ui.node('div',null,'task-row-controls');
+    let observed=null,loading=false;
+    const current=()=>destination===workspace&&g===generation&&!disposed;
+    const label=(text,control)=>{const l=ui.node('label',text);l.append(control);box.append(l);};
+    const status=document.createElement('select'),crew=document.createElement('select');
+    const note=ui.node('span','Focus a control to load current choices.','row-action-reason');
+    note.setAttribute('role','status');
+    function option(select,value,text,disabled=false){
+      const o=ui.node('option',text);o.value=value;o.disabled=disabled;select.append(o);
+    }
+    option(status,row.status||'',ui.label(row.status||'Unknown'));
+    option(crew,row.crew||'',row.crew||'Default crew');
+    for(const [name,control]of [['Status',status],['Crew',crew]]){
+      control.setAttribute('aria-label',`${name} for ${row.title||'task'}`);
+      control.dataset.rowControl='true';control.dataset.rowTask=id;control.dataset.rowField=name;
+      control.addEventListener('focus',()=>void hydrate());
+      label(name,control);
+    }
+    function unavailable(control,reason){
+      control.dataset.unavailable=String(!!reason);control.disabled=!!reason||busy||!!uncertain;control.title=reason||'';
+    }
+    function display(data){
+      observed=data;
+      status.replaceChildren();
+      option(status,data.task.status,ui.label(data.task.status));
+      for(const action of data.actions.status||[])option(status,action.status,ui.label(action.status)+(action.reason?` · ${action.reason}`:''),!action.enabled);
+      status.value=data.task.status;
+      unavailable(status,!data.actions.edit?.enabled?data.actions.edit?.reason||'Editing unavailable':!data.actions.status?.length?'No governed transitions available':null);
+      crew.replaceChildren();
+      option(crew,'','Default crew');
+      const registry=crewsByWorkspace.get(destination);
+      for(const c of registry?.crews||[])option(crew,c.name,c.name+(c.enabled===false?' · Disabled':''),c.enabled===false);
+      if(data.task.crew&&![...crew.options].some(o=>o.value===data.task.crew))option(crew,data.task.crew,`${data.task.crew} · Unavailable`,true);
+      crew.value=data.task.crew||'';
+      unavailable(crew,!data.actions.edit?.enabled?data.actions.edit?.reason||'Editing unavailable':!registry?.crews?'Configured crews unavailable':null);
+      note.textContent=status.title||crew.title||'';
+      if(data.task.status==='in-progress'&&!data.actions.view_run?.enabled)note.textContent=data.actions.view_run?.reason||'Run navigation unavailable';
+      if(primary&&row.status!=='review'){
+        const action=data.task.status==='proposed'?data.actions.status?.find(a=>a.status==='backlog'):data.task.status==='backlog'?data.actions.ship:data.task.status==='in-progress'?data.actions.view_run:null;
+        unavailable(primary,data.task.status!==row.status?'Task changed; refresh the list':action?.enabled?null:action?.reason||'Action unavailable');
+        if(primary.title)note.textContent=primary.title;
+      }
+    }
+    async function hydrate(){
+      if(loading||!current()||busy||uncertain)return;
+      loading=true;
+      try{const data=await rowSnapshot(destination,id);if(current())display(data);}
+      catch(error){if(current()){note.textContent=bound(error.message,500);unavailable(status,note.textContent);unavailable(crew,note.textContent);}}
+      finally{loading=false;}
+    }
+    async function change(fields){
+      if(!current()||busy||uncertain)return;
+      const revision=observed?.revision;
+      try{
+        const data=await rowSnapshot(destination,id);
+        if(!current())return;
+        display(data);
+        if(!revision||data.revision!==revision)throw new Error('Task changed. Review refreshed choices before submitting again.');
+        if(!data.actions.edit?.enabled||fields.status&&!data.actions.status?.some(a=>a.status===fields.status&&a.enabled))throw new Error('Action is no longer available.');
+        await write({kind:'edit',id,expected_revision:data.revision,fields},true);
+      }catch(error){if(current())state(bound(error.message,1000));}
+    }
+    status.addEventListener('change',()=>void change({status:status.value}));
+    crew.addEventListener('change',()=>void change({crew:crew.value}));
+    let primary=null;
+    const remote=row.status==='in-progress'&&row.job_run_navigable===false;
+    if(remote)note.textContent=row.job_run_machine?`Execution on ${row.job_run_machine.machine_name||row.job_run_machine.machine_id}`:'No execution run linked';
+    const names={proposed:'Approve',backlog:'Ship','in-progress':'View run',review:'Review task'};
+    if(names[row.status]&&!remote){
+      primary=ui.node('button',names[row.status]);primary.type='button';
+      primary.dataset.rowControl='true';
+      primary.addEventListener('click',async()=>{
+        if(!current()||busy||uncertain)return;
+        if(row.status==='review'){void open('task',id);return;}
+        try{
+          const data=await rowSnapshot(destination,id);
+          if(!current())return;
+          display(data);
+          if(primary.disabled)return;
+          if(row.status==='proposed')await write({kind:'edit',id,expected_revision:data.revision,fields:{status:'backlog'}},true);
+          else if(row.status==='backlog')await shipTask(destination,id,data);
+          else if(data.actions.view_run?.enabled&&data.task.job_run_id)void open('run',data.task.job_run_id);
+        }catch(error){if(current())state(bound(error.message,1000));}
+      });
+      if(row.status==='review')primary.dataset.rowControl='';
+      box.append(primary);
+    }
+    box.append(note);
+    return box;
+  }
+  async function shipTask(destination,id,data){
+    const key=`${destination}|${id}`;
+    if(shipments.has(key)){
+      // A missing task link does not prove that a queued shipment was rejected.
+      // Read authoritative task/run state, but never resubmit an uncertain ship.
+      const receipt=shipments.get(key);
+      const run=receipt.run_id||data.task.job_run_id;
+      if(run&&data.actions.view_run?.enabled){
+        await tool('orbit_workflow_run_show',{workspace:destination,id:run,view:'bounded'});
+        state('Shipment found. Open Runs to inspect execution.');
+      }else state('Shipment outcome remains uncertain. Inspect Runs on the execution host before any new shipment.');
+      return;
+    }
+    if(!data.actions.ship?.enabled)return;
+    shipments.set(key,{});
+    busy=true;controls();
+    try{
+      const receipt=await tool('orbit_workflow_ship',{workspace:destination,task_ids:[id]});
+      if(!receipt.run_id)throw new Error('Shipment receipt unavailable');
+      shipments.set(key,receipt);
+      state('Shipment submitted. Open Runs to inspect execution.');
+    }catch(error){state(`Shipment outcome uncertain. ${bound(error.message,500)} Refresh reads current task state; this panel will not resubmit it.`);}
+    finally{busy=false;controls();}
   }
   function fieldList(t){
     const p=document.createElement('p');
@@ -314,8 +456,7 @@
     const args={
       workspace,view:'bounded',offset,limit:50
     };
-    if(view==='review')args.status='review';
-    else if(appliedFilters.status)args.status=appliedFilters.status;
+    if(appliedFilters.status)args.status=appliedFilters.status;
     if(appliedFilters.priority&&view!=='runs')args.priority=appliedFilters.priority;
     if(view!=='runs'&&appliedFilters.search)args.search=appliedFilters.search;
     const data=await tool(view==='runs'?'orbit_workflow_run_list':'orbit_task_list',args);
@@ -403,7 +544,7 @@
       kind,id
     };
     el('main').hidden=false;
-    for(const row of el('list').querySelectorAll('button'))row.setAttribute('aria-expanded',String(row.dataset.entityKey===id));
+    for(const row of [...el('list').querySelectorAll('button')].filter(b=>b.dataset.entityKey))row.setAttribute('aria-expanded',String(row.dataset.entityKey===id));
     restoreAnnotations();
     clearSelectedDetail();
     commentsOffset=logsOffset=historyOffset=artifactsOffset=0;
@@ -457,13 +598,14 @@
     if(!window.crypto?.randomUUID)throw new Error('Secure request identity unavailable; mutation disabled');
     return window.crypto.randomUUID();
   }
-  async function write(operation){
+  async function write(operation,rowWrite=false){
+    rowWrite=uncertain?.rowWrite??rowWrite;
     if(busy||!ready||disposed||(!uncertain&&!destinations.has(workspace)))return;
-    if(!uncertain&&operation.kind!=='create'&&!fresh){
+    if(!uncertain&&!rowWrite&&operation.kind!=='create'&&!fresh){
       state('Refresh current authoritative state before submitting.');
       return;
     }
-    if(!uncertain&&operation.kind==='edit'&&el('save').disabled)return;
+    if(!uncertain&&!rowWrite&&operation.kind==='edit'&&el('save').disabled)return;
     if(!uncertain&&operation.kind==='review'&&el(operation.complete?'accept':operation.verdict.decision==='accept'?'record-accept':'changes').disabled)return;
     let payload;
     if(uncertain){
@@ -473,7 +615,7 @@
     else{
       try {
         payload={
-          workspace,request_id:requestId(),operation
+          workspace,request_id:requestId(),operation,rowWrite
         };
       }
       catch(error) {
@@ -516,7 +658,8 @@
       }
       if(result.conflict){
         uncertain=null;
-        if(payload.workspace===workspace&&submittedGeneration===generation&&result.snapshot){
+        if(rowWrite&&payload.workspace===workspace&&submittedGeneration===generation)stale('Task changed. Refresh row actions before writing again.');
+        if(payload.workspace===workspace&&submittedGeneration===generation&&!rowWrite&&result.snapshot){
           try{
             renderDetail({
               ...result.snapshot,workspace:result.workspace||payload.workspace
@@ -536,7 +679,7 @@
       el('write-state').textContent=`${payload.workspace} · ${publicId(result.snapshot.task)}: ${result.replayed?'Write reconciled; one accepted effect.':'Write succeeded.'}`;
       state(result.replayed?'Request reconciled; one accepted effect.':'Write succeeded.');
       const same=payload.workspace===workspace&&submittedGeneration===generation;
-      if(same&&result.snapshot?.task){
+      if(same&&!rowWrite&&result.snapshot?.task){
         selected={
           kind:'task',id:publicId(result.snapshot.task)
         };
@@ -544,7 +687,7 @@
           ...result.snapshot,workspace:payload.workspace
         });
       }
-      if(same&&(operation.kind==='create'||operation.kind==='edit')){
+      if(same&&!rowWrite&&(operation.kind==='create'||operation.kind==='edit')){
         const fields=operation.fields||operation;
         const untouched=el('draft-title').value===fields.title&&el('draft-description').value===fields.description&&JSON.stringify(lines('draft-criteria'))===JSON.stringify(fields.acceptance_criteria)&&el('draft-priority').value===fields.priority&&el('draft-crew').value===(fields.crew||'');
         if(untouched){
@@ -634,7 +777,7 @@
     el('reference').textContent='';
     void refresh();
   });
-  for(const tab of ['tasks','runs','review','drain','automation'])el(tab).addEventListener('click',()=>{
+  for(const tab of ['tasks','runs','drain','automation'])el(tab).addEventListener('click',()=>{
     saveDraft();
     saveAnnotations();
     selected=null;
@@ -667,7 +810,7 @@
     appliedFilters={
       search:el('query').value,status:view==='tasks'?taskStatusFilter:el('status').value,priority:el('priority').value
     };
-    for(const name of ['tasks','runs','review','drain','automation'])el(name).setAttribute('aria-pressed',String(name===view));
+    for(const name of ['tasks','runs','drain','automation'])el(name).setAttribute('aria-pressed',String(name===view));
     el('list-title').textContent=tab==='drain'?'Auto-drain':tab[0].toUpperCase()+tab.slice(1);
     void refresh();
   });
@@ -710,7 +853,7 @@
     snapshot=null;
     el('panel').hidden=true;
     el('main').hidden=view==='drain'||view==='automation';
-    for(const row of el('list').querySelectorAll('button'))row.setAttribute('aria-expanded','false');
+    for(const row of [...el('list').querySelectorAll('button')].filter(b=>b.dataset.entityKey))row.setAttribute('aria-expanded','false');
     el(view).focus();
     schedule();
   });
@@ -877,8 +1020,7 @@
     }
   });
   async function discover(){
-    const data=await tool('orbit_workspace_list',{
-    });
+    const data=await tool('orbit_workspace_list',{include:['crews']});
     const entries=Array.isArray(data)?data:(data.workspaces||data.items||[]);
     el('workspace').replaceChildren();
     destinations.clear();
@@ -895,6 +1037,7 @@
       o.value=selector;
       o.disabled=item.reachability==='unreachable'||item.checkout_health==='invalid'||item.status==='invalid';
       if(!o.disabled)destinations.add(selector);
+      crewsByWorkspace.set(selector,item.crews);
       o.textContent=`${item.machine_name||item.machine_id||data.machine_name||data.machine_id||'Connected host'} · ${item.name||selector}`;
       el('workspace').append(o);
     }

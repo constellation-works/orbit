@@ -151,6 +151,29 @@ Markdown. It adapts from a sidebar at desktop widths to horizontal navigation in
 narrow hosts. Editing uses a keyboard-contained dialog, preserving drafts on Escape,
 view changes and refresh. Technical evidence remains expandable.
 
+Tasks is the single entry for review work; the Review rail tab is removed. Each
+row has independent keyboard-accessible Status and Crew selects, with fresh
+workspace-qualified action metadata loaded when focused. Status options come
+from the lifecycle table; unavailable options explain why they are disabled.
+Completion stays in evidence-bound review, and execution starts through Ship.
+Proposed Approve performs a guarded status-only approval. Crew discovery uses
+`orbit_workspace_list` with `include: ["crews"]`; Default crew uses the existing
+crew selection policy. Configuration failures disable the crew control.
+
+Row edits re-read the task before submission and refuse a changed revision.
+They use the same durable request identity and reconciliation as detail edits,
+without opening or changing the selected detail. Status is optional in the
+shared edit contract; omitting it preserves existing receipt digests. The
+ordinary update contract remains unchanged. Identified agents may edit statuses;
+completion and shipment retain their operator requirements.
+
+Backlog rows offer Ship subject to a fresh eligibility/authority check; the
+shipment tool remains authoritative for admission. In-progress rows link to
+navigable runs or show their execution host. A lost shipment reply stays
+uncertain: repeated interaction reads task/run state, and never repeats the
+shipment in that panel session. Reopening the panel does not establish whether
+an earlier shipment succeeded; inspect authoritative Runs before resubmission.
+
 ### Isolated rendered preview
 
 ```sh
@@ -160,7 +183,7 @@ node crates/orbit-mcp/src/adapter/tests/panel-preview.mjs
 
 This loopback fixture serves the same embedded asset assembly with a simulated
 MCP Apps parent bridge. It never calls Orbit or modifies a real workspace. Exercise
-Tasks/Review/Runs navigation, edit and Escape, dark/light themes, 375/560/880/1440px
+Tasks/Runs navigation and review task detail, edit and Escape, dark/light themes, 375/560/880/1440px
 widths, Markdown including hostile HTML, drain start/stop, automation tabs,
 confirmation/cancel and workspace changes. Browser rendering is distinct from
 installed-plugin acceptance; a candidate binary still needs a plugin-host restart

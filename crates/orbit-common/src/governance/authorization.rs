@@ -318,6 +318,19 @@ pub const PLUGIN_TOOL_MUTATING: GovernedOperation = GovernedOperation {
     rationale: "a mutating plugin tool runs an installed backend that changes state, so it is an                 operator or sanctioned-run operation unless the task's `required_tools` or the                 activity allowlist names it",
 };
 
+/// Guarded task edits require an identified caller, as distinct from the
+/// operator-only completion and shipment operations.
+pub const DESKTOP_TASK_EDIT: GovernedOperation = GovernedOperation {
+    id: "orbit.desktop.task.edit",
+    surface: OperationSurface::Tool,
+    allowed: &[
+        McpCapability::Agent,
+        McpCapability::Operator,
+        McpCapability::Runner,
+    ],
+    rationale: "guarded task edits require an identified caller; request fields do not grant authority",
+};
+
 /// Desktop review completion is a governed suboperation of guarded task writes.
 /// A UI action or attributable agent label cannot grant this capability.
 pub const DESKTOP_TASK_COMPLETE: GovernedOperation = GovernedOperation {

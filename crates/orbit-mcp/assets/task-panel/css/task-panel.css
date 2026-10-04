@@ -259,3 +259,12 @@ body:has(#editor:not([hidden])) { overflow: hidden; }
 @media (prefers-reduced-motion:reduce) {
   * { transition: none !important; }
 }
+
+/* Independent native controls keep row selection separate from task writes. */
+.task-row { border-bottom: 1px solid var(--hair); min-width: 0; }
+.task-row > .entity-row { border-bottom: 0; }
+.task-row-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; padding: 0 16px 12px; }
+.task-row-controls label { flex: 1 1 100px; min-width: 0; font-size: 11px; color: var(--muted); }
+.task-row-controls select { display: block; width: 100%; max-width: 100%; font-size: 12px; }
+.task-row-controls button { font-size: 12px; }
+.row-action-reason { flex-basis: 100%; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }

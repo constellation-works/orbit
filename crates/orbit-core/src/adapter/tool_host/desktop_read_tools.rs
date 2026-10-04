@@ -100,7 +100,7 @@ fn tasks(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, O
                 remaining -= 1;
                 continue;
             }
-            items.push(task_list_item(&task));
+            items.push(task_list_item(&task, runtime.automation_machine_identity()));
         }
         if items.len() == limit {
             break;
@@ -113,7 +113,7 @@ fn tasks(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, O
     )
 }
 
-fn task_list_item(task: &TaskEnvelopeV2) -> Value {
+fn task_list_item(task: &TaskEnvelopeV2, local_machine: Option<&str>) -> Value {
     let (title, title_truncated) = bounded_text(&task.title, 512);
     let (crew, crew_truncated) = task
         .crew
@@ -147,6 +147,11 @@ fn task_list_item(task: &TaskEnvelopeV2) -> Value {
         "status":task.status,"priority":task.priority,"crew":crew,"crew_truncated":crew_truncated,
         "relations":relations,"relations_total":task.relations.len(),"relations_truncated":relations_truncated,
         "dependencies":dependencies,"dependencies_total":dependencies_total,"dependencies_truncated":dependencies.len() < dependencies_total,
+        "job_run_machine":task.job_run_machine.as_ref().map(|host| json!({
+            "machine_id":bounded_text(&host.machine_id,512).0,
+            "machine_name":host.machine_name.as_deref().map(|name| bounded_text(name,128).0),
+        })),
+        "job_run_navigable":job_run_id.is_some() && task.job_run_machine.as_ref().is_none_or(|host| local_machine == Some(host.machine_id.as_str())),
         "job_run_id":job_run_id,"job_run_id_omitted":task.job_run_id.is_some() && job_run_id.is_none(),
         "created_at":task.created_at,"updated_at":task.updated_at,
     })

@@ -1,5 +1,5 @@
 //! Guarded desktop task contracts. Caller JSON never supplies actor authority.
-use crate::task::{Task, TaskComment, TaskHistoryEntry, TaskPriority};
+use crate::task::{Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +41,9 @@ pub enum DesktopTaskOperation {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DesktopTaskFields {
+    // Omit absent status to preserve digests of receipts from older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub acceptance_criteria: Option<Vec<String>>,
@@ -92,10 +95,22 @@ pub struct DesktopTaskSnapshot {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopTaskActions {
+    #[serde(default)]
+    pub status: Vec<DesktopStatusAction>,
+    #[serde(default)]
+    pub ship: Option<DesktopAction>,
+    #[serde(default)]
+    pub view_run: Option<DesktopAction>,
     pub edit: DesktopAction,
     pub comment: DesktopAction,
     pub review: DesktopAction,
     pub complete: DesktopAction,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopStatusAction {
+    pub status: TaskStatus,
+    #[serde(flatten)]
+    pub action: DesktopAction,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopAction {

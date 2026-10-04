@@ -1,12 +1,14 @@
 //! Guarded desktop authoring and evidence-bound review.
 use super::{
-    TaskAddParams, TaskUpdateParams, helpers::effective_actor_label,
-    lifecycle::ensure_status_change_allowed,
+    TaskAddParams, TaskUpdateParams,
+    helpers::effective_actor_label,
+    lifecycle::{ensure_status_change_allowed, task_status_transition_allowed},
 };
 use crate::OrbitRuntime;
 use chrono::Utc;
 use orbit_common::governance::authorization::{
-    CallerCapabilities, CallerEnvelope, DESKTOP_TASK_COMPLETE, authorize,
+    CallerCapabilities, CallerEnvelope, DESKTOP_TASK_COMPLETE, DESKTOP_TASK_EDIT, authorize,
+    governed_tool,
 };
 use orbit_common::{
     OrbitError,
@@ -31,7 +33,7 @@ fn action(result: Result<(), OrbitError>) -> DesktopAction {
         },
         Err(e) => DesktopAction {
             enabled: false,
-            reason: Some(e.to_string()),
+            reason: Some(redact_all(&e.to_string()).chars().take(2048).collect()),
         },
     }
 }
@@ -233,6 +235,7 @@ impl OrbitRuntime {
         let history_total = history.len();
         let artifacts_total = artifacts.len();
         let limit = limit.clamp(1, 100);
+        let view_run = action(self.desktop_run_allowed(&task, session));
         let mut truncated_fields = Vec::new();
         truncate_task(&mut task, &mut truncated_fields);
         let content_truncated = !truncated_fields.is_empty();
@@ -328,8 +331,15 @@ impl OrbitRuntime {
             .err()
             .map(|e| e.to_string())
             .or(write_disabled_reason);
-        let editable =
-            !content_truncated && !matches!(task.status, TaskStatus::Done | TaskStatus::Archived);
+        let edit_authority = authorize(
+            &DESKTOP_TASK_EDIT,
+            &CallerCapabilities::resolve(&CallerEnvelope::mcp_session(session)),
+        )
+        .err()
+        .map(|denial| denial.to_string());
+        let editable = edit_authority.is_none()
+            && !content_truncated
+            && !matches!(task.status, TaskStatus::Done | TaskStatus::Archived);
         let review = !content_truncated && task.status == TaskStatus::Review;
         let completion = if let Some(reason) = &reason {
             Err(invalid(reason))
@@ -340,16 +350,56 @@ impl OrbitRuntime {
         } else {
             self.desktop_completion_allowed(&task, session)
         };
+        let status_actions = [
+            TaskStatus::Proposed,
+            TaskStatus::Backlog,
+            TaskStatus::InProgress,
+            TaskStatus::Review,
+            TaskStatus::Blocked,
+            TaskStatus::Done,
+            TaskStatus::Rejected,
+            TaskStatus::Archived,
+            TaskStatus::Someday,
+        ]
+        .into_iter()
+        .filter(|target| {
+            *target != task.status && task_status_transition_allowed(task.status, *target)
+        })
+        .map(|target| DesktopStatusAction {
+            status: target,
+            action: action(if let Some(reason) = &reason {
+                Err(invalid(reason))
+            } else if !editable {
+                Err(invalid("task content unavailable or terminal"))
+            } else {
+                self.desktop_status_allowed(&task, target, session)
+            }),
+        })
+        .collect();
         let mut snapshot = DesktopTaskSnapshot {
             schema_version: 1,
             observed_at: Utc::now().to_rfc3339(),
             revision,
-            task,
+            task: task.clone(),
             actions: DesktopTaskActions {
+                status: status_actions,
+                ship: Some(action(self.desktop_ship_allowed(&task, session).and_then(
+                    |()| {
+                        if let Some(reason) = &reason {
+                            Err(invalid(reason))
+                        } else if !editable {
+                            Err(invalid("task content unavailable or terminal"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                ))),
+                view_run: Some(view_run),
                 edit: DesktopAction {
                     enabled: editable && reason.is_none(),
                     reason: reason
                         .clone()
+                        .or(edit_authority)
                         .or_else(|| {
                             content_truncated.then(|| {
                                 "task content is truncated; use the full authoritative task".into()
@@ -448,6 +498,68 @@ impl OrbitRuntime {
         }
         Ok(snapshot)
     }
+    fn desktop_tool_allowed(session: &ToolSessionContext, name: &str) -> Result<(), OrbitError> {
+        let operation = governed_tool(name).ok_or_else(|| invalid("unknown governed operation"))?;
+        authorize(
+            operation,
+            &CallerCapabilities::resolve(&CallerEnvelope::mcp_session(session)),
+        )
+        .map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))
+    }
+    fn desktop_run_allowed(
+        &self,
+        task: &Task,
+        session: &ToolSessionContext,
+    ) -> Result<(), OrbitError> {
+        Self::desktop_tool_allowed(session, "orbit.workflow.run.show")?;
+        if task.job_run_id.is_none() {
+            return Err(invalid("no execution run is linked"));
+        }
+        if let Some(host) = &task.job_run_machine
+            && self.automation_machine_identity() != Some(host.machine_id.as_str())
+        {
+            return Err(invalid(&format!(
+                "Execution on {}",
+                host.machine_name.as_deref().unwrap_or(&host.machine_id)
+            )));
+        }
+        Ok(())
+    }
+    fn desktop_ship_allowed(
+        &self,
+        task: &Task,
+        session: &ToolSessionContext,
+    ) -> Result<(), OrbitError> {
+        Self::desktop_tool_allowed(session, "orbit.workflow.ship")?;
+        if task.status != TaskStatus::Backlog {
+            return Err(invalid("shipment requires backlog"));
+        }
+        self.resolve_crew_for_task(None, task.crew.as_deref())?;
+        let statuses = self.dependency_status_index([task])?;
+        if !orbit_types::task::unmet_task_dependencies(task, &statuses).is_empty() {
+            return Err(invalid("task dependencies are not complete"));
+        }
+        Ok(())
+    }
+    fn desktop_status_allowed(
+        &self,
+        task: &Task,
+        target: TaskStatus,
+        session: &ToolSessionContext,
+    ) -> Result<(), OrbitError> {
+        authorize(
+            &DESKTOP_TASK_EDIT,
+            &CallerCapabilities::resolve(&CallerEnvelope::mcp_session(session)),
+        )
+        .map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))?;
+        if target == TaskStatus::Done {
+            return Err(invalid("use evidence-bound review to complete a task"));
+        }
+        if target == TaskStatus::InProgress {
+            return Err(invalid("use Ship to start execution"));
+        }
+        ensure_status_change_allowed(self, task, &TaskUpdateParams::default(), target)
+    }
     fn desktop_completion_allowed(
         &self,
         task: &Task,
@@ -514,6 +626,13 @@ impl OrbitRuntime {
             return Err(invalid(
                 "request_id must contain 1 to 128 ASCII letters, digits, dots, underscores or hyphens",
             ));
+        }
+        if matches!(&request.operation, DesktopTaskOperation::Edit { .. }) {
+            authorize(
+                &DESKTOP_TASK_EDIT,
+                &CallerCapabilities::resolve(&CallerEnvelope::mcp_session(session)),
+            )
+            .map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))?;
         }
         // Redact before digesting and durably writing; retries bind to the safe persisted payload.
         match &mut request.operation {
@@ -653,6 +772,22 @@ impl OrbitRuntime {
                     if matches!(task.status, TaskStatus::Done | TaskStatus::Archived) {
                         return Err(invalid("terminal tasks cannot be edited through desktop"));
                     }
+                    if let Some(target) = f.status {
+                        self.desktop_status_allowed(&task, target, session)?;
+                        if task.status == TaskStatus::Proposed
+                            && target == TaskStatus::Backlog
+                            && (f.title.is_some()
+                                || f.description.is_some()
+                                || f.acceptance_criteria.is_some()
+                                || f.priority.is_some()
+                                || f.crew.is_some())
+                        {
+                            return Err(invalid(
+                                "proposal approval cannot be combined with field edits",
+                            ));
+                        }
+                        status = Some(target);
+                    }
                     if let Some(v) = &f.title {
                         bounded_text(v, true)?;
                     }
@@ -677,11 +812,12 @@ impl OrbitRuntime {
                         )?
                         .params;
                     fields = DesktopTaskFields {
+                        status: None,
                         title: v.title,
                         description: v.description,
                         acceptance_criteria: v.acceptance_criteria,
                         priority: v.priority,
-                        crew: v.crew.flatten(),
+                        crew: v.crew.map(|crew| crew.unwrap_or_default()),
                     };
                 }
                 DesktopTaskOperation::Comment { comment: c, .. } => {
@@ -725,7 +861,16 @@ impl OrbitRuntime {
                         status,
                     },
                 )?;
-                Ok((result, OrbitEvent::TaskUpdated { id: id.clone() }))
+                let event =
+                    if task.status == TaskStatus::Proposed && status == Some(TaskStatus::Backlog) {
+                        OrbitEvent::TaskProposalApproved {
+                            id: id.clone(),
+                            approved_by: actor.clone(),
+                        }
+                    } else {
+                        OrbitEvent::TaskUpdated { id: id.clone() }
+                    };
+                Ok((result, event))
             })?);
             Ok(())
         })?;

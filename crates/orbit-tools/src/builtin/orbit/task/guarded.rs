@@ -52,6 +52,7 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
         } else {
             operation.insert("kind".into(), json!("edit"));
             &[
+                "status",
                 "title",
                 "description",
                 "acceptance_criteria",
@@ -110,7 +111,7 @@ pub(super) fn input_schema(schema: &orbit_types::tool::ToolSchema, create: bool)
             "then":{"required":["workspace","request_id","expected_revision"],"oneOf":[
                 {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","verdict","complete"]}},
                 {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","comment"]}},
-                {"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
+                {"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
             ]}
         }]);
     }
