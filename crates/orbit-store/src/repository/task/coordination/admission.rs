@@ -134,6 +134,51 @@ impl TaskCommitBoundary {
             .collect())
     }
 
+    /// Recheck every competing lock surface while holding the exclusive admission
+    /// section. Widening and handoff publication therefore cannot race a pull.
+    pub(super) fn widening_conflicts(
+        &self,
+        task_id: &str,
+        reservation_id: &str,
+        files: &[String],
+        root: &Path,
+        orbit_dir: &Path,
+    ) -> Result<Vec<String>, OrbitError> {
+        let claims = self.execution_claims()?;
+        let bundles = self.bundle_store.list_bundles()?;
+        let reservations = self.store.inspect_active_task_reservations(
+            &orbit_dir.to_string_lossy(),
+            Some(&self.workspace_id),
+        )?;
+        let mut conflicts = BTreeSet::new();
+        for file in files {
+            let requested = std::slice::from_ref(file);
+            let held_claim = claims.iter().any(|c| {
+                c.task_id != task_id
+                    && c.phase.protects_footprint()
+                    && overlaps(requested, &c.footprint)
+            });
+            let held_task = bundles.iter().any(|b| {
+                b.envelope.id != task_id
+                    && matches!(
+                        b.envelope.status,
+                        TaskStatus::InProgress | TaskStatus::Review
+                    )
+                    && b.envelope.context_files.iter().any(|s| {
+                        canonical_selector_in_workspace(s, root)
+                            .is_ok_and(|s| overlaps(requested, &[s]))
+                    })
+            });
+            let held_reservation = reservations
+                .iter()
+                .any(|r| r.reservation_id != reservation_id && overlaps(requested, &r.files));
+            if held_claim || held_task || held_reservation {
+                conflicts.insert(file.clone());
+            }
+        }
+        Ok(conflicts.into_iter().collect())
+    }
+
     fn receipt_row(
         &self,
         machine: &str,

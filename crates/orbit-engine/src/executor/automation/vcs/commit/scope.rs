@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::selector::anchor_path;
+use orbit_common::fs::selector::{anchor_path, claim_new_path_is_safe, claim_widening_allowed};
 use orbit_types::task::Task;
 
 use super::super::git::git_output_paths;
@@ -35,10 +35,9 @@ pub(super) enum NewPathIntent {
     /// appends one after creating the file; directory selectors are ownership
     /// boundaries, not new-file intent.
     ExactFile,
-    /// The frozen selectors, including file siblings and their `tests/` child. A
-    /// claimed worker cannot write owner task state or stage on a writable
-    /// index, so the footprint the owner admitted is the only intent it can
-    /// carry (distributed-drain design §3).
+    /// The original selectors and eligible unit additions. A claimed worker
+    /// carries these to the owner as a widening request, not durable intent;
+    /// only atomic owner handoff acceptance widens the live claim.
     AdmittedFootprint,
 }
 
@@ -75,7 +74,7 @@ pub(super) fn task_candidate_paths(
         NewPathIntent::ExactFile => exact_scopes.contains(path),
         NewPathIntent::AdmittedFootprint => tasks
             .iter()
-            .any(|task| claimed_new_path_matches(path, &task.context_files, workspace_path)),
+            .any(|task| claimed_new_path_eligible(path, &task.context_files, workspace_path)),
     };
     let unknown = untracked
         .iter()
@@ -89,9 +88,8 @@ pub(super) fn task_candidate_paths(
                  stage it explicitly on a writable index)"
             }
             NewPathIntent::AdmittedFootprint => {
-                "A claimed run delivers new paths only inside the claim's frozen footprint; keep \
-                 new source under an admitted `file:` or `dir:` selector, or ask the owner to \
-                 widen the task before a fresh claim"
+                "A claimed run may request new paths only in an already-touched crate or \
+                 top-level directory, or a crate tests/ directory"
             }
         };
         return Err(OrbitError::Execution(format!(
@@ -111,15 +109,14 @@ pub(super) fn task_candidate_paths(
     Ok(candidates)
 }
 
-/// Verify new paths from the owner's observed Git candidate against the frozen
-/// selectors. Neither reported selector additions nor the worker's path list
-/// can widen this decision. Rename detection is disabled to check destinations.
+/// Independently read additions (rename detection off) and recompute the exact
+/// widening request from the original admission selectors.
 pub fn validate_claim_new_paths(
     workspace_path: &Path,
     selectors: &[String],
     base: &str,
     candidate: &str,
-) -> Result<(), OrbitError> {
+) -> Result<(Vec<String>, Vec<String>), OrbitError> {
     let new_paths = git_output_paths(
         workspace_path,
         &[
@@ -133,21 +130,42 @@ pub fn validate_claim_new_paths(
             "--",
         ],
     )?;
-    let unknown = new_paths
-        .into_iter()
-        .filter(|path| {
-            path_matches_scope(path, SCRATCH_DIR)
-                || !claimed_new_path_matches(path, selectors, workspace_path)
-        })
-        .collect::<Vec<_>>();
-    if unknown.is_empty() {
-        return Ok(());
+    let mut unknown = Vec::new();
+    let mut widening = Vec::new();
+    for path in new_paths.iter().cloned() {
+        // Refuse candidate symlinks even when the owner's worktree has not
+        // checked out this commit. Inspect the immutable Git tree mode.
+        let entry = super::super::git::git_output(
+            workspace_path,
+            &["--literal-pathspecs", "ls-tree", candidate, "--", &path],
+        )?;
+        if !claimed_new_path_eligible(&path, selectors, workspace_path)
+            || !entry.starts_with("100644 ") && !entry.starts_with("100755 ")
+        {
+            unknown.push(path);
+        } else if !claimed_new_path_matches(&path, selectors, workspace_path) {
+            widening.push(path);
+        }
     }
-    Err(OrbitError::Execution(format!(
-        "task delivery refused unknown untracked paths: {unknown:?}. Owner handoff validation \
-         requires new paths under an admitted directory or beside an admitted file, including \
-         its module's tests/ child"
-    )))
+    if !unknown.is_empty() {
+        return Err(OrbitError::Execution(format!(
+            "task delivery refused unknown untracked paths: {unknown:?}. \
+             Owner footprint widening requires an already-touched crate or top-level \
+             directory, or a crate tests/ directory; protected paths and symlinks are refused"
+        )));
+    }
+    widening.sort();
+    Ok((new_paths, widening))
+}
+
+fn claimed_new_path_eligible(path: &str, selectors: &[String], workspace: &Path) -> bool {
+    let anchors = selectors
+        .iter()
+        .filter_map(|s| normalize_task_scope(s, workspace))
+        .collect::<Vec<_>>();
+    claim_new_path_is_safe(path)
+        && (claimed_new_path_matches(path, selectors, workspace)
+            || claim_widening_allowed(path, &anchors))
 }
 
 fn claimed_new_path_matches(path: &str, selectors: &[String], workspace: &Path) -> bool {

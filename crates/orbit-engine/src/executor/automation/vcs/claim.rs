@@ -627,6 +627,13 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         },
         execution_summary,
         validation,
+        footprint_widening: super::commit::validate_claim_new_paths(
+            &workspace_path,
+            &context.footprint,
+            &candidate.base.commit,
+            &candidate.candidate.commit,
+        )?
+        .1,
     };
     host.record_claim_handoff(&handoff)?;
 
@@ -662,9 +669,8 @@ const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
 /// 3. a generic delivery statement.
 ///
 /// An implementer summary keeps its own words, gains the implementer's
-/// `comment` and any `context_files_added` it reported (a claim's footprint
-/// is frozen, so they are recorded for the owner's reader rather than
-/// applied), and ends with a delivery line naming the candidate. One whose
+/// `comment` and any `context_files_added` it reported (recorded as prose;
+/// typed widening is recomputed from the candidate rather than this output), and ends with a delivery line naming the candidate. One whose
 /// first line reports `Outcome: failed` is refused here, as the owner would
 /// refuse it, so a failed implementation is never handed off as delivered
 /// work.
@@ -706,8 +712,8 @@ pub(super) fn handoff_execution_summary(
         .unwrap_or_default();
     if !added.is_empty() {
         composed.push_str(
-            "\n\nContext selectors the implementer reported (not applied: a claim's footprint \
-             is frozen):",
+            "\n\nContext selectors the implementer reported (advisory; owner-validated widening \
+             is derived from Git):",
         );
         for selector in added {
             composed.push_str("\n- ");

@@ -60,7 +60,7 @@ serialization boundary. Pre-checking outside the transaction is insufficient.
 task transition, its history, a reservation and dependent coordination rows as one durable
 decision ([task_commit_boundary.md](../../design-patterns/task_commit_boundary.md)). Every runtime
 constructor uses `compose::workspace_coordinated_backends`. The internal owner admission API builds
-immutable receipts and frozen claims on that journal and shares its ordering with readiness
+immutable receipts and claim lock surfaces on that journal and shares its ordering with readiness
 reporting; a host admission lock serializes cross-workspace dependency checks.
 
 **Request identity.** A caller durably allocates a `request_id` before each pull, scoped to the
@@ -88,8 +88,9 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   repository boundaries, but selectors for not-yet-created files and symbols are preserved;
   `allow_missing_context` governs explicit operator existence checks only. Admission, reservation,
   status locks and task reads share `runtime/task/mod.rs::declared_context_files` [ORB-12490].
-- The full canonical footprint is frozen on the claim and used through execution and review,
-  including after reservation expiry; checkout contents cannot shrink it.
+- The original canonical footprint is immutable in the admission receipt. The live claim
+  protects it through execution and review, including after reservation expiry; only owner-validated
+  widening at handoff may add selectors, and checkout contents cannot shrink it.
 - Previously pruned declarations are restored from task history where possible
   (`application/task/context_repair.rs`, via `orbit task lint --restore-pruned`) or reported for
   operator repair, never guessed.
@@ -171,34 +172,26 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   one iteration, since a claim binds exactly one task). `claim_handoff` composes the handoff's
   summary from it: an explicit `execution_summary` input, else the output's `execution_summary`,
   else its short `summary`, else a generic delivery statement. The implementer's comment and
-  reported selectors are appended (the footprint is frozen, so selectors are recorded, not
-  applied), then a line naming the delivered candidate. Each part is bounded, and a summary whose
+  reported selectors are appended as prose; typed widening requests are independently derived
+  from the final candidate rather than trusted from the implementer output, then a line naming the delivered candidate. Each part is bounded, and a summary whose
   first line is `Outcome: failed` is refused before it becomes a settlement. Acceptance writes it
   as the owner's `execution_summary`.
-- New files are delivered inside the frozen footprint ([ORB-13756]). Local delivery accepts an
-  untracked path only when an exact `file:` selector or a writable-index stage declares it. A
-  claimed worker can do neither: its reported selectors are never applied and its index is not
-  writable, so every module split whose file names the implementer picks was refused at
-  `commit`. Under the trusted worker binding, for the claim's own task, the claimed `git_commit`
-  therefore accepts new paths inside admitted `dir:` selectors, beside an admitted `file:`
-  selector, or beneath that file's module `tests/` child as new-path intent
-  (`NewPathIntent::AdmittedFootprint` in `vcs/commit/scope.rs`). An untracked path outside every
-  admitted directory or file module boundary is still refused by exact name before any index
-  change. The owner independently checks additions from its observed Git candidate with the
-  same matcher (rename destinations included). The lock footprint is not widened. Files
-  outside these delivery boundaries still go through the owner and a fresh claim. Any
-  run's untracked scratch under `.orbit/tmp/` is never a candidate and is never refused, whatever
-  a selector covers. Local delivery keeps the exact-`file:` rule, because its worker can append
-  selectors. The rule therefore stays a deliberate local intent check rather than inferring
-  intent from ownership boundaries. The rejected alternative, letting the claimed leaf stage
-  selector-covered paths itself, would admit the same set through an index the worker cannot
-  write. Callers of `task_candidate_paths`:
-  - The `all` scope (`commit_batch_changes`) is the only one either claimed pipeline runs. It
-    picks footprint intent from the binding and exact-file intent otherwise.
-  - The `per_task` and `per_task_finalize` scopes run only in local pipelines and keep exact-file
-    intent.
-  - `commit_failure_candidate` is reached only from `pr_failure_handoff`, which no claimed
-    pipeline runs. It keeps exact-file intent.
+- New files in a claimed candidate use owner-validated footprint widening. Paths under an admitted
+  directory or beside an admitted file (including its module's `tests/` child) keep the existing
+  admission rule. Other additions may request an exact `file:` selector within a crate or top-level
+  directory already named by the ORIGINAL admission selectors. `crates/<crate>` is the unit,
+  never the shared `crates/` parent. A crate's `tests/` directory is also eligible without a selector
+  in that crate. The follower recomputes `TaskHandoff.footprint_widening` from the final Git diff
+  with rename detection disabled. Old payloads decode with an empty request; protocol revision 3
+  prevents newer peers sending the additive field to older endpoints.
+  The owner independently reads the published candidate, refuses protected paths, symlinks and
+  malformed paths, and requires the request to equal its observed additions. Under the exclusive
+  admission lock, acceptance rechecks other live claims, in-progress/review task selectors and
+  active reservations. It journals task selector additions, `claim_footprint_widened` history, the
+  enlarged live claim and handoff acceptance as one decision. The admission receipt remains
+  unchanged, so widening cannot chain authority into another unit. Refusals name exact paths and
+  leave the task and claim unchanged. Scratch under `.orbit/tmp/` is never delivered. Owner-path
+  runs still require exact new-file selectors; implementer-reported selectors alone grant nothing.
 - The delivery gate judges this attempt ([ORB-13755]). Until acceptance, the owner's stored
   summary is whatever an earlier attempt left, and after a failed attempt that is its
   `Outcome: failed` failure settlement. The `Outcome: failed` gate in `git_commit` and in the
@@ -457,7 +450,7 @@ authorized and audited.
 **Manual reclamation only**: no heartbeat or failure inference. The claim listing shows age,
 phase, reservation expiry, execution machine/run and last event; none of these proves death.
 `scan_unresolved_work` is not a remote-claim detector. Status locks on `in-progress` and `review`
-tasks survive reservation expiry using the frozen footprint.
+tasks survive reservation expiry using the live claim footprint.
 
 **Recovery** preserves branch, PR and failure evidence; an authorized operator or supervised
 orchestrator revokes the claim and picks the transition (usually `blocked` or `backlog`).
@@ -547,7 +540,7 @@ distributed tab or route; the panel appears on a task detail only when this work
 claim for it, and a replica says the owner holds that state.
 
 - **Read:** one owner projection (`application::review::handoff`) of execution machine, claim
-  phase and bound run, frozen footprint, reservation expiry, the accepted handoff and its
+  phase and bound run, current lock footprint, reservation expiry, the accepted handoff and its
   authority and landing state. Wording is load-bearing: an elapsed reservation is *not*
   revocation or death; `review` awaits authority, not a passed code review; merged means into the
   landing branch, not deployed; a remote run names the host to inspect; absent provenance is
@@ -796,7 +789,7 @@ Acceptance criteria, not reported as passing.
 | Forced release while the owner is unreachable | The release stays recorded; the clock sweep delivers it once the owner answers, with no drain running ([ORB-13892]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
 | Claimed implementer with no route to the owner (agent sandbox) | Claimed mode denies it the owner task tools; its output summary reaches `claim_handoff` and becomes the owner's `execution_summary` |
-| Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; an untracked path outside the footprint is refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
+| Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
 | Handoff commits, response lost | Exactly one handoff and review transition |

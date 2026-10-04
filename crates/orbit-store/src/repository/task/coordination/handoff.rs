@@ -198,7 +198,8 @@ impl TaskCommitBoundary {
         state: &ClaimInspection,
         handoff: &TaskHandoff,
         params: &mut TaskCoordinationCommitParams,
-    ) -> Result<(), OrbitError> {
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<Vec<String>, OrbitError> {
         let observation = self.observe_handoff(auth, &handoff.candidate)?;
         let bound = state
             .bound_run
@@ -254,6 +255,86 @@ impl TaskCommitBoundary {
         else {
             return Err(invalid("claim receipt unavailable"));
         };
+        let original = receipt
+            .claim
+            .as_ref()
+            .ok_or_else(|| invalid("claim receipt unavailable"))?;
+        if handoff.footprint_widening != observation.footprint_widening {
+            return Err(invalid(&format!(
+                "footprint widening differs from owner-observed diff: requested={:?}, observed={:?}",
+                handoff.footprint_widening, observation.footprint_widening
+            )));
+        }
+        let mut footprint = state.claim.footprint.clone();
+        if !handoff.footprint_widening.is_empty() {
+            let checkout = self
+                .registry
+                .find_workspace_checkout(&self.workspace_id)?
+                .ok_or_else(|| invalid("claimed workspace checkout unavailable"))?;
+            let anchors = original
+                .footprint
+                .iter()
+                .filter_map(|s| orbit_common::fs::selector::anchor_path(s).ok())
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let mut additions = BTreeSet::new();
+            for path in &handoff.footprint_widening {
+                if !orbit_common::fs::selector::claim_widening_allowed(path, &anchors)
+                    || !additions.insert(format!("file:{path}"))
+                {
+                    return Err(invalid(&format!("footprint widening refused path: {path}")));
+                }
+                // Missing owner worktree files are normal for published candidates;
+                // existing symlink ancestors must not redirect selector identity.
+                let canonical = orbit_common::fs::selector::canonical_selector_in_workspace(
+                    &format!("file:{path}"),
+                    &checkout.repo_root,
+                )
+                .map_err(|e| invalid(&format!("footprint widening refused path {path}: {e}")))?;
+                if canonical != format!("file:{path}") {
+                    return Err(invalid(&format!(
+                        "footprint widening refused redirected path: {path}"
+                    )));
+                }
+            }
+            let additions = additions.into_iter().collect::<Vec<_>>();
+            let conflicts = self.widening_conflicts(
+                &auth.task_id,
+                &state.claim.reservation_id,
+                &additions,
+                &checkout.repo_root,
+                &checkout.orbit_dir,
+            )?;
+            if !conflicts.is_empty() {
+                return Err(invalid(&format!(
+                    "footprint widening overlaps live lock paths: {conflicts:?}"
+                )));
+            }
+            let bundle = self.bundle_store.read_bundle_lightweight(&auth.task_id)?;
+            let mut context = bundle.envelope.context_files;
+            for selector in &additions {
+                if !context.contains(selector) {
+                    context.push(selector.clone());
+                }
+                if !footprint.contains(selector) {
+                    footprint.push(selector.clone());
+                }
+            }
+            effects.worker_update = Some(ClaimWorkerUpdate {
+                context_files: Some(context),
+                ..Default::default()
+            });
+            params
+                .append_history
+                .push(orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: params.actor.clone(),
+                    event: "claim_footprint_widened".into(),
+                    note: Some(encode(&additions)?),
+                    from_status: None,
+                    to_status: None,
+                });
+        }
         let ship = receipt.request.ship;
         if ship.review_policy != "none"
             || receipt.request.caller_review_policy != "none"
@@ -295,7 +376,7 @@ impl TaskCommitBoundary {
                 params,
             )?;
         }
-        Ok(())
+        Ok(footprint)
     }
 
     fn add_handoff_authorization(

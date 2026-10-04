@@ -117,6 +117,7 @@ impl OrbitRuntime {
             )));
         }
         Ok(HandoffObservation {
+            footprint_widening: accepted.handoff.footprint_widening.clone(),
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
             owner_completion_authority: self.owner_completion_authority(),

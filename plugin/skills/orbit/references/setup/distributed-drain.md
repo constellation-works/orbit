@@ -49,7 +49,7 @@ orbit config get operation.review_policy
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `2`, equivalent crew and toolchain resolution, and
+protocol schema `3`, equivalent crew and toolchain resolution, and
 `operation.review_policy = none`. Empty
 `workflow.required_validation_commands` is fail-closed for a claimed handoff.
 A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
@@ -98,6 +98,15 @@ orbit task lint <task-id> --restore-pruned
 Missing files are valid declarations. `--restore-pruned` never guesses.
 Reservation TTL on a pulled claim is 14,400 seconds and does not revoke the
 claim or shrink the frozen footprint.
+
+Claimed leaves can request footprint widening for new files within an already-touched crate or
+top-level directory, or in a crate's `tests/` directory. The final Git candidate determines the
+request, not the implementer's reported selectors. The owner independently checks the diff and
+policy, then under its admission lock rejects overlap with other live claims, in-progress/review
+selectors or active reservations. Acceptance records exact file selectors and widening history
+with the enlarged live claim; the original receipt stays immutable. Protected paths, symlinks
+and untouched source crates are refused with exact paths. Both peers require protocol revision 3.
+
 
 ## Start a follower's drain
 
@@ -168,7 +177,7 @@ destination refuses them. They need an identified caller (`agent` or
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 2,
+  "caller_schema": 3,
   "caller_review_policy": "none"
 }'
 ```

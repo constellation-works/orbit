@@ -197,6 +197,15 @@ Reservation TTL on a pulled claim is 14,400 seconds (four hours). Expiry does
 non-pruned footprint. Status-derived locks on `in-progress` and `review` tasks
 keep the declared selectors, including files that do not exist yet.
 
+Claimed leaves can request footprint widening for new files within an already-touched crate or
+top-level directory, or in a crate's `tests/` directory. The final Git candidate determines the
+request, not the implementer's reported selectors. The owner independently checks the diff and
+policy, then under its admission lock rejects overlap with other live claims, in-progress/review
+selectors or active reservations. Acceptance records exact file selectors and widening history
+with the enlarged live claim; the original receipt stays immutable. Protected paths, symlinks
+and untouched source crates are refused with exact paths. Both peers require protocol revision 3.
+
+
 ### 5. Establish SSH owner access (no destination callers file)
 
 SSH login to the owner **is** owner access. There is no
@@ -228,7 +237,7 @@ agent envelope or `ORBIT_OPERATOR=1`.
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 2,
+  "caller_schema": 3,
   "caller_review_policy": "none"
 }'
 ```
@@ -806,7 +815,7 @@ orbit doctor
 orbit config get operation.review_policy
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<owner-version>",
-  "caller_schema": 2,
+  "caller_schema": 3,
   "caller_review_policy": "none"
 }'
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'

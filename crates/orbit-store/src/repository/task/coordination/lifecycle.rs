@@ -382,7 +382,13 @@ impl TaskCommitBoundary {
             }
             ClaimMutation::Handoff(_) => return Err(invalid("typed handoff required")),
             ClaimMutation::AcceptHandoff(handoff) => {
-                self.accept_typed_handoff(auth, &state, handoff, &mut params)?;
+                state.claim.footprint = self.accept_typed_handoff(
+                    auth,
+                    &state,
+                    handoff,
+                    &mut params,
+                    &mut handoff_effects,
+                )?;
                 evidence.summary = Some(handoff.execution_summary.clone());
                 state.claim.phase = ExecutionClaimPhase::HandedOff;
                 params.status = Some(TaskStatus::Review);

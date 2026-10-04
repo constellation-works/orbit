@@ -691,6 +691,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         },
         execution_summary: "Outcome: success".into(),
         validation: vec![],
+        footprint_widening: vec![],
     }
 }
 
@@ -778,7 +779,7 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     let refusal = pass["refusal"].as_str().unwrap();
     assert!(refusal.starts_with("protocol_mismatch:"), "{pass}");
     assert!(
-        refusal.contains("caller revision 2; owner revision 1"),
+        refusal.contains("caller revision 3; owner revision 1"),
         "{pass}"
     );
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
@@ -802,7 +803,7 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     assert!(
         probe["diagnostics"]
             .to_string()
-            .contains("caller revision 1; owner revision 2")
+            .contains("caller revision 1; owner revision 3")
     );
     let request = json!({"request_id": "old-request", "caller_version": probe["binary_version"],
         "caller_schema": 1, "caller_review_policy": "none", "ship": probe["ship"],
@@ -811,7 +812,7 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     assert!(
         failure
             .to_string()
-            .contains("protocol_mismatch: caller revision 1; owner revision 2"),
+            .contains("protocol_mismatch: caller revision 1; owner revision 3"),
         "{failure}"
     );
     assert!(pair.owner_claims().is_empty());

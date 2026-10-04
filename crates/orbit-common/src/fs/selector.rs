@@ -685,3 +685,44 @@ pub(super) fn root_ancestor(path: &str) -> Option<&'static str> {
     let root = if path.starts_with('/') { "/" } else { "." };
     is_path_ancestor(root, path).then_some(root)
 }
+
+/// Whether a canonical relative new path can request widening from the original
+/// admission anchors. Crates are separate units, never the shared `crates/`
+/// parent. A crate's tests directory is an explicit handoff exception.
+pub fn claim_widening_allowed(path: &str, anchors: &[String]) -> bool {
+    let parts = path.split('/').collect::<Vec<_>>();
+    if !claim_new_path_is_safe(path) {
+        return false;
+    }
+    if parts.first() == Some(&"crates") {
+        if parts.len() < 3 {
+            return false;
+        }
+        let unit = format!("crates/{}/", parts[1]);
+        parts.get(2) == Some(&"tests")
+            || anchors
+                .iter()
+                .any(|anchor| anchor.starts_with(&unit) || anchor == unit.trim_end_matches('/'))
+    } else {
+        parts.len() > 1
+            && anchors
+                .iter()
+                .any(|anchor| anchor.split('/').next() == parts.first().copied())
+    }
+}
+
+/// Reject traversal, metadata and environment-secret paths before considering
+/// either original selector intent or a widening request.
+pub fn claim_new_path_is_safe(path: &str) -> bool {
+    let parts = path.split('/').collect::<Vec<_>>();
+    !parts.iter().any(|part| {
+        part.is_empty()
+            || matches!(*part, "." | ".." | ".git" | ".orbit")
+            || part.contains('\\')
+            || part.contains(':')
+            || *part == ".env"
+            || part.starts_with(".env.")
+            || part.ends_with(".env")
+            || part.contains(".env.")
+    })
+}
