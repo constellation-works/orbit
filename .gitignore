@@ -28,6 +28,8 @@ agentspace
 # Claude/Codex manifests and generated-from-canonical skill mirror.
 !plugin/.mcp.json
 !plugin/.claude-plugin/
+# Claude Code writes its API typings beside a mod it loads from a checkout.
+plugin/.claude-plugin/types/
 !plugin/.codex-plugin/
 !plugin/skills/
 # OS / editor

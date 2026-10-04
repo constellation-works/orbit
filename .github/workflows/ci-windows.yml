@@ -1,11 +1,11 @@
 name: Windows Compile Check
 
 # Windows is supported through WSL2, where the Linux workflow applies. Native
-# Windows is compile-checked only, so the workspace's library and binary
-# targets keep building for x86_64-pc-windows-msvc. Non-Unix code paths are
-# explicit "unsupported"/`Unknown` stubs, so nothing here runs or tests
-# Windows behaviour, and test targets are not checked. This job is advisory:
-# do not make it a required status check.
+# Windows is compile-checked only, so every workspace target (libraries,
+# binaries and tests) keeps building for x86_64-pc-windows-msvc. Non-Unix code
+# paths are explicit "unsupported"/`Unknown` stubs, and POSIX-only tests are
+# gated `cfg(unix)`, so nothing here runs or tests Windows behaviour. This job
+# is advisory: do not make it a required status check.
 
 on:
   push:
@@ -66,7 +66,5 @@ jobs:
             ${{ runner.os }}-cargo-windows-check-
             ${{ runner.os }}-cargo-
 
-      # Library and binary targets only; `--all-targets` (tests, benches,
-      # examples) is out of scope until the test sources compile here too.
-      - name: cargo check (lib + bin)
-        run: cargo check --workspace --locked --target x86_64-pc-windows-msvc
+      - name: cargo check (all targets)
+        run: cargo check --workspace --locked --all-targets --target x86_64-pc-windows-msvc

@@ -157,6 +157,8 @@ mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/lo
 
 Want to be walked through setup? Ask your agent to *"set up Orbit for this repo"*, and the bundled `orbit-setup` skill takes it from there.
 
+In Claude Code the plugin also brings the Orbit mod: a band above the prompt with the workspace's running, blocked, and review counts, and an Orbit pane with a task board, a ship view that preflights and tracks `orbit run ship`, and an orbital map. Open them with `/orbit-board`, `/orbit-ship`, and `/orbit-map`. When the checkout is a replica, set the plugin's `ownerHost` option to the owner's SSH host. See [plugin/hooks/mod](plugin/hooks/mod/README.md).
+
 ### Codex desktop
 
 You need Node.js 18+ (including `npx`) and the Codex CLI on `PATH`.
