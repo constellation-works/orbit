@@ -3,6 +3,8 @@
 
 #[path = "http_api/guards.rs"]
 mod guards;
+#[path = "http_api/host.rs"]
+mod host;
 #[path = "http_api/log.rs"]
 mod log;
 #[path = "http_api/plugins.rs"]

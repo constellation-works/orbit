@@ -307,6 +307,7 @@ pub(crate) fn build_context_from_roots(
             pr_config,
             workflow_base_branch,
             workflow_auto_ship,
+            runtime_config.resource_throttle.clone(),
             workflow_required_validation_commands,
             workflow_distributed_completion,
             runtime_config.snapshot.task_pilot_freshness(),

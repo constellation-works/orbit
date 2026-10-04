@@ -13,6 +13,7 @@ mod diagnostics;
 mod distributed;
 mod frictions;
 mod helpers;
+mod host;
 mod incidents;
 mod jobs;
 mod log;

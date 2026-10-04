@@ -14,9 +14,10 @@ struct CachedRuntime {
 
 pub(super) struct StateInner {
     /// The served Orbit root: an explicit `--root`, else `~/.orbit`. Passed as
-    /// `global_root` when building per-workspace runtimes. Unused in single
-    /// mode.
+    /// `global_root` when building per-workspace runtimes and observing host resources.
     global_root: PathBuf,
+    host_resources: Mutex<Option<Arc<orbit_core::runtime::host_resource::HostResourceMonitor>>>,
+    host_disk_paths: Vec<PathBuf>,
     /// Atomically-swapped registered workspace set + default selection.
     snapshot: Mutex<Arc<Snapshot>>,
     /// Lazily-built, cached runtimes keyed by workspace id.
@@ -278,6 +279,8 @@ impl DashboardState {
             }),
             active: true,
         };
+        let monitor = runtime.host_resource_monitor();
+        let global_root = runtime.global_root();
         let mut runtimes = HashMap::new();
         runtimes.insert(
             SINGLE_WORKSPACE_ID.to_string(),
@@ -295,8 +298,8 @@ impl DashboardState {
                 runtime,
             },
         );
-        Self::from_parts(
-            PathBuf::new(),
+        let state = Self::from_parts(
+            global_root,
             SnapshotData {
                 entries: vec![entry],
                 default_workspace: Some(SINGLE_WORKSPACE_ID.to_string()),
@@ -304,7 +307,13 @@ impl DashboardState {
             runtimes,
             None,
             None,
-        )
+        );
+        *state
+            .inner
+            .host_resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(monitor);
+        state
     }
 
     /// Registry-backed global mode: the servable workspace set is (re)loaded
@@ -338,6 +347,15 @@ impl DashboardState {
         source: Option<RegistrySource>,
         last_fingerprint: Option<RegistryFingerprint>,
     ) -> Self {
+        let host_disk_paths = runtimes
+            .values()
+            .flat_map(|cached| {
+                [
+                    cached.runtime.paths().repo_root.clone(),
+                    cached.runtime.shared_root().join("state/worktrees"),
+                ]
+            })
+            .collect();
         let checkout_fingerprints = checkout_fingerprints(&snapshot.entries);
         let initial = Snapshot {
             generation: INITIAL_GENERATION,
@@ -347,6 +365,8 @@ impl DashboardState {
         Self {
             inner: Arc::new(StateInner {
                 global_root,
+                host_resources: Mutex::new(None),
+                host_disk_paths,
                 snapshot: Mutex::new(Arc::new(initial)),
                 runtimes: Mutex::new(runtimes),
                 source,
@@ -365,12 +385,48 @@ impl DashboardState {
         }
     }
 
-    /// Global orbit root (`~/.orbit`) this server was launched against. Empty
-    /// in single mode ([`DashboardState::single`]). Host-level views (routine
+    /// Global orbit root (`~/.orbit`) this server was launched against.
+    /// In single mode, the supplied runtime's global root. Host-level views (routine
     /// scheduler health) read from here rather than any one workspace runtime,
     /// because routine fires live in the global store.
     pub(crate) fn global_root(&self) -> &std::path::Path {
         &self.inner.global_root
+    }
+
+    /// Sample the serving host independently of the request's workspace selector.
+    /// This performs file/kernel reads and must be called through `blocking`.
+    pub(crate) fn host_resource_status(
+        &self,
+    ) -> Result<orbit_core::runtime::host_resource::HostResourceStatus, OrbitError> {
+        let pinned = self.pin();
+        let mut paths = self.inner.host_disk_paths.clone();
+        paths.push(self.inner.global_root.clone());
+        for entry in &pinned.snapshot.entries {
+            if entry.active && !entry.repo_root.as_os_str().is_empty() {
+                paths.push(entry.repo_root.clone());
+                paths.push(entry.orbit_dir.join("state/worktrees"));
+            }
+        }
+        paths.retain(|path| !path.as_os_str().is_empty());
+        paths.sort();
+        paths.dedup();
+        let monitor = {
+            let mut guard = self
+                .inner
+                .host_resources
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if guard.is_none() {
+                *guard = Some(Arc::new(orbit_core::composition::host_resource_monitor(
+                    &self.inner.global_root,
+                )?));
+            }
+            guard
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| OrbitError::Execution("host resource monitor unavailable".into()))?
+        };
+        Ok(monitor.snapshot(&paths))
     }
 
     /// Process-local `/api/audit/summary` memo for this server instance.

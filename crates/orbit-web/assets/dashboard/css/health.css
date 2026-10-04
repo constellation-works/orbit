@@ -201,3 +201,17 @@ td .rel-rate { font-size: 12px; }
   .incident-surface { flex: 1 1 100%; }
   .incident-actions > * { flex: 1 1 100%; }
 }
+
+
+/* Host observations remain visible across workspace and tab selections. */
+.host-resources { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.host-resource-heading { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; }
+.host-resource-heading span, .host-resource-note, .host-resource-verdict { color: var(--fg-dim); }
+.host-resource-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.host-resource-tile { flex: 1 1 160px; min-width: 0; border-left: 3px solid var(--border); padding-left: 8px; display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; }
+.host-resource-label { flex-basis: 100%; overflow-wrap: anywhere; }
+.host-resource-tile.ok { border-color: var(--state-success); }
+.host-resource-tile.elevated { border-color: var(--state-pending); }
+.host-resource-tile.critical { border-color: var(--state-failed); }
+.host-resource-tile.unknown { border-style: dashed; color: var(--fg-dim); }
+.host-resource-verdict { font-size: 11px; overflow-wrap: anywhere; }

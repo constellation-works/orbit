@@ -278,6 +278,48 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 60,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_resource_throttle_cpu_high_percent: u8 => u8 {
+        key: "workflow.resource_throttle.cpu_high_percent", value_type: "integer",
+        description: "Host cpu high-water percentage (1..=100, default 90).",
+        section: ConfigSection::Delivery, order: 130,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 90, "workflow.resource_throttle.cpu_high_percent"),
+    },
+    workflow_resource_throttle_cpu_resume_percent: u8 => u8 {
+        key: "workflow.resource_throttle.cpu_resume_percent", value_type: "integer",
+        description: "Host cpu resume percentage (1..=100, default 75).",
+        section: ConfigSection::Delivery, order: 131,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 75, "workflow.resource_throttle.cpu_resume_percent"),
+    },
+    workflow_resource_throttle_disk_high_percent: u8 => u8 {
+        key: "workflow.resource_throttle.disk_high_percent", value_type: "integer",
+        description: "Host disk high-water percentage (1..=100, default 85).",
+        section: ConfigSection::Delivery, order: 132,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 85, "workflow.resource_throttle.disk_high_percent"),
+    },
+    workflow_resource_throttle_disk_resume_percent: u8 => u8 {
+        key: "workflow.resource_throttle.disk_resume_percent", value_type: "integer",
+        description: "Host disk resume percentage (1..=100, default 80).",
+        section: ConfigSection::Delivery, order: 133,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 80, "workflow.resource_throttle.disk_resume_percent"),
+    },
+    workflow_resource_throttle_enabled: bool => bool {
+        key: "workflow.resource_throttle.enabled", value_type: "bool",
+        description: "Enable the host resource throttle verdict; disabled still reports pressure.",
+        section: ConfigSection::Delivery, order: 134,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    workflow_resource_throttle_memory_high_percent: u8 => u8 {
+        key: "workflow.resource_throttle.memory_high_percent", value_type: "integer",
+        description: "Host memory high-water percentage (1..=100, default 90).",
+        section: ConfigSection::Delivery, order: 135,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 90, "workflow.resource_throttle.memory_high_percent"),
+    },
+    workflow_resource_throttle_memory_resume_percent: u8 => u8 {
+        key: "workflow.resource_throttle.memory_resume_percent", value_type: "integer",
+        description: "Host memory resume percentage (1..=100, default 80).",
+        section: ConfigSection::Delivery, order: 136,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 80, "workflow.resource_throttle.memory_resume_percent"),
+    },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",
         description: "Named crew used by system activities such as step-failure recovery and the task pilot.",
@@ -342,6 +384,30 @@ impl ConfigSnapshot {
                 "machine.worker_containment_strict=true requires machine.worker_containment=true"
                     .to_string(),
             ));
+        }
+        let resources = self.resource_throttle();
+        for (resource, high, resume) in [
+            (
+                "cpu",
+                resources.cpu_high_percent,
+                resources.cpu_resume_percent,
+            ),
+            (
+                "memory",
+                resources.memory_high_percent,
+                resources.memory_resume_percent,
+            ),
+            (
+                "disk",
+                resources.disk_high_percent,
+                resources.disk_resume_percent,
+            ),
+        ] {
+            if resume >= high {
+                return Err(OrbitError::InvalidInput(format!(
+                    "workflow.resource_throttle.{resource}_resume_percent must be less than {resource}_high_percent"
+                )));
+            }
         }
         self.machine().check_complete()?;
         Ok(())
@@ -771,4 +837,49 @@ fn normalize_pass_list(pass: Vec<String>) -> Result<Vec<String>, OrbitError> {
         normalized.insert(value.to_string());
     }
     Ok(normalized.into_iter().collect())
+}
+
+/// High-water and recovery thresholds for the host resource verdict.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ResourceThrottleSettings {
+    /// Evaluate a throttle verdict while always retaining pressure telemetry.
+    pub enabled: bool,
+    /// CPU high-water percentage.
+    pub cpu_high_percent: u8,
+    /// CPU recovery percentage, strictly below the high-water mark.
+    pub cpu_resume_percent: u8,
+    /// Memory high-water percentage.
+    pub memory_high_percent: u8,
+    /// Memory recovery percentage.
+    pub memory_resume_percent: u8,
+    /// Disk high-water percentage.
+    pub disk_high_percent: u8,
+    /// Disk recovery percentage.
+    pub disk_resume_percent: u8,
+}
+
+impl ConfigSnapshot {
+    /// Admitted host resource thresholds, shared by dashboard and admission consumers.
+    pub fn resource_throttle(&self) -> ResourceThrottleSettings {
+        ResourceThrottleSettings {
+            enabled: self.workflow_resource_throttle_enabled,
+            cpu_high_percent: self.workflow_resource_throttle_cpu_high_percent,
+            cpu_resume_percent: self.workflow_resource_throttle_cpu_resume_percent,
+            memory_high_percent: self.workflow_resource_throttle_memory_high_percent,
+            memory_resume_percent: self.workflow_resource_throttle_memory_resume_percent,
+            disk_high_percent: self.workflow_resource_throttle_disk_high_percent,
+            disk_resume_percent: self.workflow_resource_throttle_disk_resume_percent,
+        }
+    }
+}
+
+fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
+    let value = raw.unwrap_or(default);
+    if (1..=100).contains(&value) {
+        Ok(value)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{key} must be in 1..=100"
+        )))
+    }
 }
