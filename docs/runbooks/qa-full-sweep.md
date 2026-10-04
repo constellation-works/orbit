@@ -69,6 +69,12 @@ scenario, and binds every result to the resulting candidate ID. Supplying an
 installed binary without that build attestation intentionally makes provenance
 FAIL, even when `--version` exits zero. The harness constructs a clean child
 environment and disposable Orbit root and Git repositories for mutations.
+Its disposable `orbit init` calls pass `--skip-host-prerequisites`, so they
+never install packages or change security policy and need no supported Linux
+distribution; the built-in scenarios do not exercise native sandbox dispatch,
+which stays fail-closed until `orbit doctor providers` reports it ready. If a
+disposable init or another prerequisite step fails, the report keeps that FAIL
+and marks every scenario it blocked `NOT_RUN` with the reason in `stderr`.
 
 For the browser leg, pass all three prepared capability inputs from the
 worker's own disposable namespace. The harness forwards only these browser
