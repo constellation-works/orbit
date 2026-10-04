@@ -223,10 +223,21 @@ extensions:
         ]
       # Recovery run ids are refused unless they are non-empty ASCII
       # alphanumerics, `-` and `_`, so the checkout is one leaf directly under
-      # the state dir's recovery-checkouts directory.
+      # the state dir's recovery-checkouts directory. Invalid ids return an
+      # error without a filesystem path; model the call result before `?`
+      # extracts the admitted path from this source-defined validator.
       - [
           "orbit_core::application::task::blocked_recovery::recovery_checkout_path",
-          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
+      # The final diagnostic lookup path is refused when any component,
+      # including one supplied by cwd, traverses a parent directory. None
+      # carries no path; Some contains the complete admitted lookup path.
+      - [
+          "orbit_engine::activity_job::cli_runner::launcher::validated_launcher_lookup_path",
+          "ReturnValue",
           "path-injection",
           "manual",
         ]

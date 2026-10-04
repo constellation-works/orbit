@@ -41,13 +41,15 @@ pub(crate) fn resolve_provider_launcher(
 /// Where dispatch would launch `program` from, or `None` when it would fail
 /// to find a launchable file. Read-only view of [`resolve_provider_launcher`]
 /// for `orbit doctor providers`, so the diagnostic and dispatch share one
-/// lookup policy.
+/// lookup policy. A final lookup path containing parent-directory traversal,
+/// including traversal supplied by `cwd`, is refused before probing it.
 pub fn locate_provider_launcher(program: &str, cwd: Option<&Path>) -> Option<PathBuf> {
     let resolved = PathBuf::from(resolve_provider_launcher(program, program, cwd).ok()?);
     let resolved = match cwd {
         Some(cwd) if resolved.is_relative() => cwd.join(resolved),
         _ => resolved,
     };
+    let resolved = validated_launcher_lookup_path(resolved)?;
     is_launchable_file(&resolved).then_some(resolved)
 }
 
@@ -159,6 +161,15 @@ fn launcher_program_is_plain(program: &str) -> bool {
     Path::new(program)
         .components()
         .all(|component| !matches!(component, Component::ParentDir))
+}
+
+/// Admit the complete lookup path after resolving a relative launcher against
+/// its working directory. Refusing parent components here also covers `cwd`,
+/// which the configured program's earlier traversal guard cannot inspect.
+fn validated_launcher_lookup_path(path: PathBuf) -> Option<PathBuf> {
+    path.components()
+        .all(|component| !matches!(component, Component::ParentDir))
+        .then_some(path)
 }
 
 fn is_launchable_file(path: &Path) -> bool {

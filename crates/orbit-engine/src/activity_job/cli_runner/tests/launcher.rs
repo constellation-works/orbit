@@ -25,6 +25,17 @@ fn launcher_lookup_refuses_parent_directory_traversal() {
         Some(launcher.clone()),
         "a relative explicit launcher still resolves against the dispatch cwd"
     );
+    let traversing_cwd = bin.join("..");
+    assert_eq!(
+        locate_provider_launcher("bin/fake-agent", Some(&traversing_cwd)),
+        None,
+        "the final lookup must refuse traversal supplied by cwd"
+    );
+    assert_eq!(
+        locate_provider_launcher(&explicit, Some(&traversing_cwd)),
+        Some(launcher.clone()),
+        "an absolute launcher does not depend on cwd"
+    );
 
     let traversal = bin.join("..").join("bin").join("fake-agent");
     let traversal = traversal.to_string_lossy().into_owned();
