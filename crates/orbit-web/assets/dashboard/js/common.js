@@ -358,9 +358,9 @@ export function el(tag, opts = {}, children = []) {
   if (opts.text != null) node.textContent = opts.text;
   if (opts.title != null) node.title = opts.title;
   if (opts.style) Object.assign(node.style, opts.style);
+  // `append` inserts a string child as a text node, never as markup.
   for (const child of children) {
-    if (child == null) continue;
-    node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
+    if (child != null) node.append(child);
   }
   return node;
 }
