@@ -111,6 +111,60 @@ pub(super) fn signal_run_owner_process(_run: &JobRun) -> Result<String, OrbitErr
     Ok("unsupported_platform".to_string())
 }
 
+/// Why a running run's worker cannot be stopped and seen gone from here, or
+/// `None` when it can — or is already gone. Asked before anything is decided
+/// on the strength of the stop, such as releasing the claim the run works
+/// for.
+#[cfg(unix)]
+pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str> {
+    let pid = run.pid?;
+    if pid == std::process::id() {
+        return Some("its worker is this process");
+    }
+    match classify_run_owner(run) {
+        OwnerIdentity::Missing | OwnerIdentity::Mismatch => None,
+        OwnerIdentity::Verified => match owner_process_group_id(pid) {
+            Some(pgid) if pgid == unsafe { libc::getpgrp() } => {
+                Some("its worker shares this process's group")
+            }
+            _ => None,
+        },
+        OwnerIdentity::LegacyLiveUnverified | OwnerIdentity::ProbeUnavailable => {
+            Some("its worker's process identity cannot be verified")
+        }
+        OwnerIdentity::ForeignPidNamespace => Some("its worker runs in another PID namespace"),
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str> {
+    run.pid.map(|_| "this platform cannot stop a run's worker")
+}
+
+/// [`signal_run_owner_process`], failing unless the worker is seen gone
+/// afterwards: an outcome that signalled nothing it could verify (another
+/// PID namespace, an unverifiable identity, this process) is an error, so
+/// the cancellation stops before the run is finalized.
+pub(super) fn signal_run_owner_confirmed(run: &JobRun) -> Result<String, OrbitError> {
+    let outcome = signal_run_owner_process(run)?;
+    let stopped = matches!(
+        outcome.as_str(),
+        "terminated_process_group"
+            | "killed_process_group"
+            | "terminated_owner"
+            | "killed_owner"
+            | "already_exited"
+            | "no_pid"
+    );
+    if stopped || run_owner_liveness(run) == RunOwnerLiveness::Stopped {
+        return Ok(outcome);
+    }
+    Err(OrbitError::Execution(format!(
+        "could not confirm that the worker of run {} stopped (signal outcome {outcome})",
+        run.run_id
+    )))
+}
+
 /// What became of one provider child a cancellation went looking for.
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

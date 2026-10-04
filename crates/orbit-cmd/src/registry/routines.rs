@@ -60,9 +60,11 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
 /// Discover the checkouts this machine evaluates schedules for, optionally
 /// restricted to one registered workspace id: every active **owner** checkout
 /// with a `.orbit/` directory. Registration is the whole opt-in [ORB-12236];
-/// a replica is skipped because it cannot write the owner's coordination
-/// store. The provider delegates here so this production path can be
-/// exercised with an explicit global root.
+/// a replica fires no schedule because it cannot write the owner's
+/// coordination store, and is opened apart only so the sweep can deliver the
+/// pull settlements its follower drains recorded [ORB-13892]. The provider
+/// delegates here so this production path can be exercised with an explicit
+/// global root.
 pub(crate) fn discover_registered_workspaces(
     global_root: &Path,
     workspace_filter: Option<&str>,
@@ -80,10 +82,25 @@ pub(crate) fn discover_registered_workspaces(
         if workspace.status != WorkspaceStatus::Active || !checkout.orbit_dir.exists() {
             continue;
         }
-        if checkout.role == Some(WorkspaceCheckoutRole::Replica) {
+        if workspace_filter.is_some_and(|selected| selected != workspace.id) {
             continue;
         }
-        if workspace_filter.is_some_and(|selected| selected != workspace.id) {
+        if checkout.role == Some(WorkspaceCheckoutRole::Replica) {
+            // Delivery is best-effort: a replica that cannot be opened is not
+            // a schedule source, so it never reads as a broken workspace.
+            match RegisteredRuntimeFactory::open_registered_checkout(
+                global_root,
+                workspace,
+                checkout,
+            ) {
+                Ok(runtime) => discovered.replicas.push((workspace.clone(), runtime)),
+                Err(error) => tracing::warn!(
+                    target: "orbit.cmd.sweep",
+                    workspace = %workspace.name,
+                    %error,
+                    "replica checkout could not be opened; its pull settlements wait",
+                ),
+            }
             continue;
         }
         match RegisteredRuntimeFactory::open_registered_checkout(global_root, workspace, checkout) {

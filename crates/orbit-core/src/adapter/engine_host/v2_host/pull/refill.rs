@@ -13,13 +13,20 @@
 //! is zero, so a leaf that finishes after the window still has its handoff
 //! delivered: by the leaf's own bound worker as it ends, by any later settle
 //! pass, or by this drain's next iteration, whichever gets there first.
+//!
+//! A graceful `orbit run cancel` puts the drain into its cancelling mode:
+//! each pass then requests nothing, releases every admission that never
+//! launched back to the owner's backlog, and waits for the launched leaves to
+//! finish and settle. The pass that finds nothing left unsettled ends the
+//! drain `cancelled`.
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, PullDestination,
+    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, LocalPullAdmission, PullDestination,
 };
+use orbit_types::workflow::DrainCancelRequest;
 use serde_json::{Value, json};
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
@@ -85,6 +92,25 @@ pub(crate) fn pull_refill(
         peer: &peer,
         launcher: &launcher,
     };
+    // A launched leaf whose worker died is reconciled first, so this pass
+    // records and delivers its failure rather than waiting on it.
+    runtime.reconcile_orphaned_claimed_leaves(&destination);
+
+    let cancel = runtime
+        .read_run_state(&run_id)
+        .ok()
+        .flatten()
+        .and_then(|state| state.drain_cancel);
+    if let Some(cancel) = cancel {
+        return Ok(cancelling_pass(
+            runtime,
+            &drain,
+            &run_id,
+            &destination,
+            &cancel,
+            poll,
+        ));
+    }
 
     // Stop admitting while a host shutdown is pending: anything started now
     // would be killed by it [ORB-12968]. Settlement still runs.
@@ -208,10 +234,94 @@ pub(crate) fn pull_refill(
         "reclaimed_build_bytes": reclaimed_build_bytes,
         "error": error,
         "host_shutdown": host_shutdown.map(|shutdown| shutdown.describe()),
+        "cancelling": false,
         "done": done,
         "wait": !done && sleep_seconds > 0,
         "sleep_seconds": sleep_seconds,
     }))
+}
+
+/// One pass of a gracefully cancelled drain: release what never launched,
+/// settle what ended, wait for live leaves, and end the drain `cancelled`
+/// once nothing it carries is unsettled.
+fn cancelling_pass(
+    runtime: &OrbitRuntime,
+    drain: &PullDrain<'_>,
+    run_id: &str,
+    destination: &PullDestination,
+    cancel: &DrainCancelRequest,
+    poll: u64,
+) -> Value {
+    let cause = match cancel.reason.as_deref() {
+        Some(reason) => format!("the drain was cancelled by {}: {reason}", cancel.actor),
+        None => format!("the drain was cancelled by {}", cancel.actor),
+    };
+    // Only what this drain carries: another live drain's work is its own.
+    let mut error = None;
+    let carried = runtime
+        .pull_drain_admissions(run_id)
+        .map(|records| {
+            records
+                .into_iter()
+                .map(|record| (record.destination, record.request.request_id))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|failure| {
+            error = Some(failure.to_string());
+            Vec::new()
+        });
+    let carries = |record: &LocalPullAdmission| {
+        carried
+            .iter()
+            .any(|(to, id)| *to == record.destination && *id == record.request.request_id)
+    };
+    if let Err(failure) = drain.release_pending(&carries, &cause) {
+        error.get_or_insert(failure.to_string());
+    }
+    let reclaimed_build_bytes = runtime.reclaim_settled_leaf_build_output();
+    let unsettled = match runtime.pull_drain_admissions(run_id) {
+        Ok(records) => Some(records.len()),
+        Err(failure) => {
+            error.get_or_insert(failure.to_string());
+            None
+        }
+    };
+    let waiting_leaves = match runtime.pull_drain_claimed_leaves(run_id) {
+        Ok(leaves) => leaves,
+        Err(failure) => {
+            error.get_or_insert(failure.to_string());
+            Vec::new()
+        }
+    };
+    let mut done = unsettled == Some(0);
+    if done && let Err(failure) = runtime.complete_graceful_drain_cancel(run_id) {
+        // The drain stays running and the next pass tries again.
+        error.get_or_insert(failure.to_string());
+        done = false;
+    }
+    if let Some(message) = error.as_deref() {
+        tracing::warn!(
+            target: "orbit.core.pull",
+            selector = %destination.selector,
+            %message,
+            "cancelling pull drain pass did not complete; retrying next iteration",
+        );
+    }
+    json!({
+        "admitted": 0,
+        "unsettled": unsettled,
+        "admitting": false,
+        "refusal": Value::Null,
+        "consecutive_failures": 0,
+        "reclaimed_build_bytes": reclaimed_build_bytes,
+        "error": error,
+        "host_shutdown": Value::Null,
+        "cancelling": true,
+        "waiting_leaves": waiting_leaves,
+        "done": done,
+        "wait": !done,
+        "sleep_seconds": if done { 0 } else { poll },
+    })
 }
 
 /// Ask the owner whether it would admit this executor now, and for the ship

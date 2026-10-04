@@ -27,6 +27,11 @@ pub(super) fn control(
     let action = required_string(&input, &["action"], "action")?;
     let claim = optional_string(&input, "claim_token")?;
     let workspace = input["workspace"].clone();
+    if action != "stop" && input.get("force").is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "`force` is a stop setting; {action} does not accept it"
+        )));
+    }
     if action != "resize"
         && let Some(field) = RESIZE_ONLY_FIELDS
             .iter()
@@ -96,15 +101,43 @@ pub(super) fn control(
                     "stop accepts no start settings".into(),
                 ));
             }
+            let force = match input.get("force") {
+                None | Some(Value::Null) => false,
+                Some(value) => value
+                    .as_bool()
+                    .ok_or_else(|| OrbitError::InvalidInput("force must be a boolean".into()))?,
+            };
             let stopped = runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
                 actor: "desktop",
                 source: "desktop",
-                reason: Some("Stopped from Orbit Control Center"),
+                reason: Some(if force {
+                    "Stopped with force from Orbit Control Center"
+                } else {
+                    "Stopped from Orbit Control Center"
+                }),
                 claim_token: claim.as_deref(),
+                force,
             })?;
+            // A forced stop that left a leaf running is not a success: the
+            // drain is cancelled, but those claims stay with the owner.
+            let unstopped = stopped
+                .coordinators
+                .iter()
+                .flat_map(|change| &change.unstopped_leaves)
+                .map(|leaf| leaf.describe())
+                .collect::<Vec<_>>();
+            if !unstopped.is_empty() {
+                return Err(OrbitError::Execution(format!(
+                    "forced stop incomplete: {} claimed leaf(s) could not be confirmed stopped \
+                     and keep their claims on the owner: {}",
+                    unstopped.len(),
+                    unstopped.join("; ")
+                )));
+            }
             let coordinators = stopped.coordinators.iter().map(|change| json!({
                 "run_id":change.run_id,"outcome":change.outcome,
-                "remaining_children":change.remaining_children.iter().map(|child| json!({"run_id":child.run_id,"phase":child.phase})).collect::<Vec<_>>()
+                "remaining_children":change.remaining_children.iter().map(|child| json!({"run_id":child.run_id,"phase":child.phase})).collect::<Vec<_>>(),
+                "forced_runs":change.forced_runs,
             })).collect::<Vec<_>>();
             json!({"action":"stop","outcome":stopped.outcome,"coordinators":coordinators,"pull_settlements":stopped.pull_settlements})
         }

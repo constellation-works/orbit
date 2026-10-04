@@ -16,11 +16,22 @@ the run as `cancelled`. The primary remediation \
 for a stuck `pending` run with no live worker (orphan reconciliation also \
 clears those on workspace open). A run that already finished returns a stable \
 `already_terminal` result without replacing its outcome.\n\n\
-Cancelling a follower pull drain (`workspace_pull_pipeline`) also settles what \
-it was carrying with the owner: recorded handoffs and failures are delivered, \
-claims it had not launched yet are ended as failures, and leaves already \
-running keep running and settle themselves when they finish. Cancelling a \
-drain that already ended delivers whatever it left behind.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
+A running follower pull drain (`workspace_pull_pipeline`) is cancelled \
+gracefully: it stops requesting work at once, returns the claims it had not \
+launched to the owner's backlog, and keeps running — reported as \
+`cancelling`, with the leaves it is waiting for — until every launched leaf \
+has finished and its outcome reached the owner; then it ends `cancelled`. \
+The command returns immediately; `orbit run show <run_id>` follows the wait. \
+`--force` does not wait: it stops the drain and each of its running leaves, \
+and returns every claim to the owner's backlog with a comment naming the \
+drain and the reason. It touches only the leaves that drain carries. A leaf \
+whose stop cannot be confirmed keeps its claim on the owner, is listed, and \
+makes the command exit 1. A queued drain, or one whose worker is gone, is \
+cancelled at once. Cancelling a drain that already ended delivers whatever it \
+left behind, and `--force` also stops leaves it left running.\n\n\
+`--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the \
+task runs it started, which a plain cancel leaves running. For any other run \
+it changes nothing.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
     /// Job run ID to cancel
@@ -37,16 +48,22 @@ pub struct RunCancelArgs {
     /// Optional reason recorded with the cancellation audit event
     #[arg(long)]
     pub reason: Option<String>,
+
+    /// Do not wait for a drain's in-flight leaves: stop them too, returning a
+    /// pull drain's claims to the owner's backlog
+    #[arg(long)]
+    pub force: bool,
 }
 
 impl Execute for RunCancelArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         require_confirmation(self.confirm, "run cancellation")?;
-        let result = runtime.cancel_job_run_with_reason(
+        let result = runtime.cancel_job_run_with_options(
             &self.run_id,
             "cli",
             "run_cancel",
             self.reason.as_deref(),
+            self.force,
         )?;
         let doc = json!({
             "run_id": result.run_id,
@@ -57,9 +74,25 @@ impl Execute for RunCancelArgs {
             "signal_outcome": result.signal_outcome,
             "provider_processes_stopped": result.provider_processes_stopped,
             "pull_settlements": super::support::pull_settlements_json(&result.pull_settlements),
+            "waiting_leaves": result.waiting_leaves,
+            "forced_runs": result.forced_runs,
+            "unstopped_leaves": result.unstopped_leaves,
         });
         let mut lines = Vec::new();
-        if result.outcome == "already_terminal" {
+        if result.outcome == "cancelling" {
+            lines.push(format!(
+                "cancelling job run {}: waiting for {} leaves; it ends `cancelled` once they \
+                 finish and settle (`--force` stops them instead)",
+                result.run_id,
+                result.waiting_leaves.len()
+            ));
+            lines.extend(
+                result
+                    .waiting_leaves
+                    .iter()
+                    .map(|leaf| format!("  {}", leaf.describe())),
+            );
+        } else if result.outcome == "already_terminal" {
             lines.push(format!(
                 "job run {} was already terminal ({})",
                 result.run_id, result.final_state
@@ -73,6 +106,12 @@ impl Execute for RunCancelArgs {
         if let Some(outcome) = &result.signal_outcome {
             lines.push(format!("owner process signal outcome: {outcome}"));
         }
+        if !result.forced_runs.is_empty() {
+            lines.push(format!(
+                "stopped with --force: {}",
+                result.forced_runs.join(", ")
+            ));
+        }
         if result.provider_processes_stopped > 0 {
             lines.push(format!(
                 "provider processes stopped: {}",
@@ -82,6 +121,23 @@ impl Execute for RunCancelArgs {
         lines.extend(super::support::pull_settlement_lines(
             &result.pull_settlements,
         ));
-        Ok(Payload::detail(doc, lines.join("\n")).into())
+        if result.unstopped_leaves.is_empty() {
+            return Ok(Payload::detail(doc, lines.join("\n")).into());
+        }
+        // The drain is cancelled, but these leaves may still be running and
+        // their owners still hold the claims: the forced cancel failed.
+        lines.push(format!(
+            "not stopped with --force ({} leaves; their claims stay with the owner):",
+            result.unstopped_leaves.len()
+        ));
+        lines.extend(
+            result
+                .unstopped_leaves
+                .iter()
+                .map(|leaf| format!("  {}", leaf.describe())),
+        );
+        Ok(Payload::detail(doc, lines.join("\n"))
+            .with_exit_code(1)
+            .into())
     }
 }

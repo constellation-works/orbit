@@ -409,6 +409,10 @@ pub enum ClaimMutation {
         reason: String,
     },
     Fail(ClaimEvidence),
+    /// The executor gives an unfinished claim back: the task returns to the
+    /// backlog and the claim is revoked. The summary is the reason and is
+    /// required; the comment, when present, is posted on the task.
+    Release(ClaimEvidence),
     Recover {
         status: TaskStatus,
         reason: String,

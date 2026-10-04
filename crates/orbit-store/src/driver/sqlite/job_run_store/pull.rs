@@ -213,7 +213,8 @@ pub(super) fn unsettled(
 /// not decode the whole table: SQL narrows to this drain's settled claims,
 /// newest first, and the walk stops at the first one that did not fail. A claim
 /// closed obsolete (settled with an owner refusal) says nothing about this
-/// executor, so it neither extends nor resets the streak.
+/// executor, so it neither extends nor resets the streak; nor does a claim a
+/// cancel released back to the owner.
 ///
 /// `claim_id IS NOT NULL` is the cheap column test that lets SQLite skip the
 /// idle polls and refused requests, the rows that pile up unbounded, without
@@ -261,10 +262,12 @@ pub(super) fn consecutive_failed_settlements(
             {
                 continue;
             }
-            if !matches!(record.settlement, Some(ClaimMutation::Fail(_))) {
-                break;
+            match record.settlement {
+                Some(ClaimMutation::Fail(_)) => streak += 1,
+                // A claim handed back by a cancel says nothing about the owner.
+                Some(ClaimMutation::Release(_)) => continue,
+                _ => break,
             }
-            streak += 1;
         }
         Ok(streak)
     })
@@ -572,7 +575,7 @@ pub(super) fn mutate(
                 }
             },
             LocalPullMutation::Settle(settlement) => {
-                if !matches!(settlement.as_ref(), ClaimMutation::Fail(_) | ClaimMutation::AcceptHandoff(_)) { return Err(invalid("invalid leaf settlement")); }
+                if !matches!(settlement.as_ref(), ClaimMutation::Fail(_) | ClaimMutation::Release(_) | ClaimMutation::AcceptHandoff(_)) { return Err(invalid("invalid leaf settlement")); }
                 if let Some(old) = &record.settlement {
                     if old != settlement.as_ref() { return Err(invalid("pending settlement is immutable")); }
                     return Ok(record);
@@ -590,12 +593,21 @@ pub(super) fn mutate(
                     record.refusal = Some(reason.clone());
                 }
                 advance(&mut record, LocalPullPhase::Settling, LocalPullPhase::Settled)?;
-                if matches!(record.settlement, Some(ClaimMutation::Fail(_)))
+                // A settled claim closes a leaf that never started. A leaf that
+                // is running is left alone: it finishes, or a forced cancel
+                // stops its process first; failing it here would orphan a live
+                // worker.
+                let closed = match record.settlement {
+                    Some(ClaimMutation::Fail(_)) => Some(JobRunState::Failed),
+                    Some(ClaimMutation::Release(_)) => Some(JobRunState::Cancelled),
+                    _ => None,
+                };
+                if let Some(closed) = closed
                     && let Some(id) = &record.leaf_run_id {
                         let mut run = get_job_run_for_workspace_conn(conn, workspace, id)?
                             .ok_or_else(|| invalid("bound leaf disappeared before settlement"))?;
-                        if !run.state.is_terminal() {
-                            run.state = JobRunState::Failed;
+                        if run.state == JobRunState::Pending {
+                            run.state = closed;
                             run.finished_at = Some(Utc::now());
                             upsert_job_run_for_workspace_conn(conn, workspace, &run, None)?;
                         }

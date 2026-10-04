@@ -277,9 +277,46 @@ export function renderRunDetailMeta() {
   const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
   if (failure) wrap.appendChild(failure);
   wrap.appendChild(grid);
+  const leaves = buildClaimedLeaves(run, Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : []);
+  if (leaves) wrap.appendChild(leaves);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
   syncNodes(meta, [wrap]);
+}
+
+// A pull drain's launched leaves that are still running, and whether a
+// graceful cancel is waiting for them (`run.drain_cancel`). Mirrors the
+// `Cancelling:` and `Claimed leaves:` lines of `orbit run show`.
+function buildClaimedLeaves(run, leaves) {
+  const cancel = run.drain_cancel || null;
+  if (leaves.length === 0 && !cancel) return null;
+  const panel = el("div", { class: "child-dispatch-panel" });
+  if (cancel) {
+    const by = cancel.actor ? ` (requested by ${cancel.actor}${cancel.reason ? `: ${cancel.reason}` : ""})` : "";
+    const text = run.state === "running"
+      ? `Cancelling: waiting for ${leaves.length} leaves to finish and settle${by}. Cancel again and choose to stop them to end it now.`
+      : `Cancelled gracefully${by}.`;
+    panel.appendChild(el("div", { class: "label", text }));
+  }
+  if (leaves.length > 0) {
+    panel.appendChild(el("div", { class: "label", text: `claimed leaves (${leaves.length} running)` }));
+    for (const leaf of leaves) {
+      const parts = [`task ${leaf.task_id || "?"}`, `owner ${leaf.owner || "?"}`];
+      if (leaf.leaf_state) parts.push(`state ${leaf.leaf_state}`);
+      if (leaf.settlement_phase) parts.push(`claim ${leaf.settlement_phase}`);
+      const link = el("button", {
+        class: "back-action",
+        text: leaf.leaf_run_id,
+        title: `Open ${leaf.leaf_run_id}`,
+      });
+      link.addEventListener("click", () => navigateToRun(leaf.leaf_run_id));
+      panel.appendChild(el("div", { class: "child-dispatch-row" }, [
+        link,
+        el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
+      ]));
+    }
+  }
+  return panel;
 }
 
 const FAILED_RUN_STATES = new Set(["failed", "timeout", "interrupted"]);

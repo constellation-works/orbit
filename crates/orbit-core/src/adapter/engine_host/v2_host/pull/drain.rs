@@ -37,9 +37,9 @@ pub(crate) trait PullPeer {
 pub(crate) trait PullLauncher {
     fn launch(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError>;
     /// Cancel a bound leaf that was never launched, so it can never start.
-    /// Only a settle-only pass abandoning an admission no live drain will
-    /// carry calls this ([`SettleScope::Abandon`]); the leaf's pending run has
-    /// no process.
+    /// Only a pass releasing an admission no drain will launch calls this
+    /// ([`SettleScope::Abandon`], [`SettleScope::Cancel`]); the leaf's
+    /// pending run has no process, and one that has started is refused.
     fn cancel_queued(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError>;
 }
 
@@ -56,11 +56,19 @@ pub(crate) enum SettleScope {
     /// implies. Admissions still waiting on their drain are left to it.
     Deliver,
     /// No live drain will carry this admission forward — its own drain ended
-    /// and none pulls from its owner: end what was never launched, cancelling
-    /// a queued leaf, and settle the claim as a failure, so the owner is never
-    /// left holding a claim no follower process is responsible for. Live
-    /// leaves are left running; they settle themselves when they terminalize.
+    /// and none pulls from its owner: release what was never launched back to
+    /// the owner, cancelling a queued leaf, so the task returns to the backlog
+    /// and the owner is never left holding a claim no follower process is
+    /// responsible for. Nothing ran, so nothing is failed. Live leaves are
+    /// left running; they settle themselves when they terminalize.
     Abandon,
+    /// The pass of a drain that is being cancelled gracefully, over its own
+    /// owner's admissions: release everything unlaunched as
+    /// [`Self::Abandon`] does, without asking whether a drain is live (this
+    /// one is, and it is the one giving the work back), and withdraw a
+    /// request the owner holds no receipt for, so the drain can finish. Live
+    /// leaves are waited for.
+    Cancel,
 }
 
 /// A [`PullPeer`] that stops calling the owner after its first transport
@@ -270,6 +278,43 @@ impl PullDrain<'_> {
         }
     }
 
+    /// The pass of a gracefully cancelled drain over the admissions it
+    /// `carries`: carry each as far as it goes under [`SettleScope::Cancel`]
+    /// — deliver what is recorded, settle what ended, release what never
+    /// launched — and leave live leaves running. Never requests new work.
+    /// Fenced like [`Self::reconcile_pending`], and one stuck admission does
+    /// not hold the others back; the first error is returned afterwards.
+    pub(crate) fn release_pending(
+        &self,
+        carries: &dyn Fn(&LocalPullAdmission) -> bool,
+        cause: &str,
+    ) -> Result<(), OrbitError> {
+        let fenced = FencedPeer {
+            inner: self.peer,
+            failed: RefCell::new(None),
+        };
+        let pass = PullDrain {
+            jobs: self.jobs,
+            peer: &fenced,
+            launcher: self.launcher,
+        };
+        let mut first_error = None;
+        for mut record in self.jobs.unsettled_local_pull_admissions()? {
+            if !carries(&record) {
+                continue;
+            }
+            if let Err(error) =
+                pass.carry_settlement(&mut record, SettleScope::Cancel, &|_| true, cause)
+            {
+                first_error.get_or_insert(error);
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// Admissions for `destination` that still hold a slot: not idle, refused
     /// or settled. The drain keeps running past its window until this is zero.
     pub(crate) fn unsettled(&self, destination: &PullDestination) -> Result<usize, OrbitError> {
@@ -389,6 +434,7 @@ impl PullDrain<'_> {
                     Some(settling) => settling,
                     None => return Ok(true),
                 },
+                LocalPullPhase::Settling if self.release_held(&record)? => return Ok(true),
                 LocalPullPhase::Settling => self.deliver(&record)?,
                 LocalPullPhase::Settled | LocalPullPhase::Refused => return Ok(true),
                 LocalPullPhase::Idle => return Ok(false),
@@ -410,19 +456,27 @@ impl PullDrain<'_> {
     /// each step that would end unlaunched work. Delivery can block for the
     /// routed timeout, so a drain that started since the pass read the live
     /// drains must not have a queued leaf cancelled under it.
+    ///
+    /// `cause` says why unlaunched work is released; it is the reason the
+    /// owner's task carries back to the backlog.
     pub(crate) fn carry_settlement(
         &self,
         record: &mut LocalPullAdmission,
         scope: SettleScope,
         no_live_drain: &dyn Fn(&LocalPullAdmission) -> bool,
+        cause: &str,
     ) -> Result<(), OrbitError> {
-        let abandon =
-            |record: &LocalPullAdmission| scope == SettleScope::Abandon && no_live_drain(record);
+        let abandon = |record: &LocalPullAdmission| match scope {
+            SettleScope::Deliver => false,
+            SettleScope::Abandon => no_live_drain(record),
+            SettleScope::Cancel => true,
+        };
         loop {
             let next = match record.phase {
                 LocalPullPhase::Idle | LocalPullPhase::Settled | LocalPullPhase::Refused => {
                     return Ok(());
                 }
+                LocalPullPhase::Settling if self.release_held(record)? => return Ok(()),
                 LocalPullPhase::Settling => self.deliver(record)?,
                 LocalPullPhase::Launched | LocalPullPhase::Launching => {
                     match self.settle_terminal_leaf(record)? {
@@ -434,7 +488,7 @@ impl PullDrain<'_> {
                     match self.settle_terminal_leaf(record)? {
                         Some(settling) => settling,
                         None if abandon(record) => {
-                            match self.abandon_queued_leaf(record, &abandon)? {
+                            match self.abandon_queued_leaf(record, &abandon, cause)? {
                                 Some(settling) => settling,
                                 None => return Ok(()),
                             }
@@ -444,26 +498,30 @@ impl PullDrain<'_> {
                 }
                 LocalPullPhase::Claimed if abandon(record) => self.record_settlement(
                     record,
-                    ClaimMutation::Fail(ClaimEvidence {
-                        summary: Some(format!(
-                            "Outcome: failed\nThe follower drain {} that claimed this task \
-                             ended before it created a leaf for it; nothing ran. Move the task \
-                             back to the backlog to run it again.",
-                            record.request.run_context.run_id
-                        )),
-                        ..Default::default()
-                    }),
+                    release_settlement(record, &format!("{cause}; no leaf was created")),
                 )?,
                 // An unanswered request no drain will retry: take the owner's
-                // receipt if one was committed, so its claim is ended too. With
-                // none, nothing is held on the owner; a later drain for this
-                // owner re-sends the same ID and carries whatever it finds.
+                // receipt if one was committed, so its claim is released too.
+                // With none, nothing is held on the owner; a later drain for
+                // this owner re-sends the same ID and carries whatever it
+                // finds. The cancelling drain itself withdraws it instead: it
+                // is the only sender, and it must be able to finish.
                 LocalPullPhase::Requested if abandon(record) => match self
                     .peer
                     .lookup(&record.destination, &record.request.request_id)?
                 {
                     AdmissionLookup::Found { receipt, .. } => {
                         self.update(record, LocalPullMutation::Receive(receipt))?
+                    }
+                    AdmissionLookup::Expired | AdmissionLookup::NotFound
+                        if scope == SettleScope::Cancel =>
+                    {
+                        self.update(
+                            record,
+                            LocalPullMutation::Refuse(format!(
+                                "withdrawn unanswered: {cause}; the owner holds no receipt for it"
+                            )),
+                        )?
                     }
                     AdmissionLookup::Expired | AdmissionLookup::NotFound => return Ok(()),
                 },
@@ -496,32 +554,40 @@ impl PullDrain<'_> {
             return Ok(None);
         }
         let record = self.ensure_bound(record)?;
-        let settlement = leaf_failure_settlement(record.phase, &run, None);
+        let settlement = leaf_failure_settlement(&record, &run, None);
         self.record_settlement(&record, settlement).map(Some)
     }
 
-    /// End a cancelled drain's queued leaf and settle its claim. `record` is
-    /// advanced to its bound form in place. `None` when `may_abandon` says,
-    /// after the bind that may have blocked, that a live drain now carries the
-    /// admission: its queued leaf is left alone.
+    /// Release a queued leaf's claim back to the owner and cancel the leaf,
+    /// so it can never start. `record` is advanced to its bound form in
+    /// place. `None` when `may_abandon` says, after the bind that may have
+    /// blocked, that a live drain now carries the admission: its queued leaf
+    /// is left alone.
+    ///
+    /// The release is recorded before the leaf is cancelled, so the leaf's
+    /// terminalization finds the claim's settlement already decided and the
+    /// owner's task carries this pass's `cause`.
     fn abandon_queued_leaf(
         &self,
         record: &mut LocalPullAdmission,
         may_abandon: &dyn Fn(&LocalPullAdmission) -> bool,
+        cause: &str,
     ) -> Result<Option<LocalPullAdmission>, OrbitError> {
         *record = self.ensure_bound(record)?;
         if !may_abandon(record) {
             return Ok(None);
         }
-        self.launcher.cancel_queued(record)?;
-        self.settle_terminal_leaf(record)?
-            .ok_or_else(|| {
-                OrbitError::JobValidation(
-                    "the queued leaf of a cancelled drain did not terminalize when cancelled"
-                        .into(),
-                )
-            })
-            .map(Some)
+        let leaf = record.leaf_run_id.as_deref().unwrap_or("-");
+        let settling = self.record_settlement(
+            record,
+            release_settlement(
+                record,
+                &format!("{cause}; its queued leaf {leaf} never launched"),
+            ),
+        )?;
+        self.launcher.cancel_queued(&settling)?;
+        // The cancel may already have delivered the release.
+        Ok(Some(self.reread(&settling)?.unwrap_or(settling)))
     }
 
     /// Bind a `Created` admission's leaf on the owner. Binding is idempotent:
@@ -594,7 +660,7 @@ impl PullDrain<'_> {
     /// settlement is immutable. When the write loses to one already recorded,
     /// that one is carried forward: the first recorded settlement is the one
     /// the owner receives.
-    fn record_settlement(
+    pub(crate) fn record_settlement(
         &self,
         record: &LocalPullAdmission,
         settlement: ClaimMutation,
@@ -625,6 +691,24 @@ impl PullDrain<'_> {
             }))
     }
 
+    /// Whether `record`'s settlement is a release that must wait: a forced
+    /// cancel recorded it for a leaf it then could not confirm stopped, and
+    /// the leaf still runs. Handing its task back to the backlog now could
+    /// let a second executor start it beside the first, so the owner keeps
+    /// the claim until the leaf is seen to stop. A queued leaf has no
+    /// process, so its release is never held.
+    pub(crate) fn release_held(&self, record: &LocalPullAdmission) -> Result<bool, OrbitError> {
+        if !matches!(record.settlement, Some(ClaimMutation::Release(_))) {
+            return Ok(false);
+        }
+        let Some(leaf) = record.leaf_run_id.as_deref() else {
+            return Ok(false);
+        };
+        Ok(self.jobs.get_job_run(leaf)?.is_some_and(|run| {
+            !run.state.is_terminal() && run.state != orbit_types::workflow::JobRunState::Pending
+        }))
+    }
+
     /// Deliver a persisted settlement to the owner.
     ///
     /// An owner refusal is reconciled against the owner's receipt, the way a
@@ -635,7 +719,10 @@ impl PullDrain<'_> {
     /// would report that error instead of admitting new work. A claim the
     /// owner still holds keeps its settlement pending, as does a lost or
     /// uncertain delivery.
-    fn deliver(&self, record: &LocalPullAdmission) -> Result<LocalPullAdmission, OrbitError> {
+    pub(crate) fn deliver(
+        &self,
+        record: &LocalPullAdmission,
+    ) -> Result<LocalPullAdmission, OrbitError> {
         let refusal = match self.peer.settle(record) {
             Ok(()) => return self.update(record, LocalPullMutation::Settled),
             Err(error) if is_owner_refusal(&error) => error,
@@ -677,26 +764,51 @@ impl PullDrain<'_> {
 /// the executor's run record; the owner's reader needs enough to decide.
 const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 
-/// The failure settlement a terminal leaf implies, by how far its admission
-/// got: a leaf that never launched was cancelled while queued, and a launched
-/// one ended without the typed handoff success records.
+/// The settlement a terminal leaf implies, by how far its admission got: a
+/// leaf that never launched was cancelled while queued, so nothing ran and
+/// its claim is released back to the owner's backlog; a launched one ended
+/// without the typed handoff success records, and fails.
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
 /// the leaf's own worker, a cancel and a drain pass agree on the value.
 /// `diagnostic` is the `(code, message)` the terminalizing caller knows before
 /// its diagnostic step is durable.
 pub(crate) fn leaf_failure_settlement(
-    phase: LocalPullPhase,
+    record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
     diagnostic: Option<(&str, &str)>,
 ) -> ClaimMutation {
-    let summary = if matches!(phase, LocalPullPhase::Created | LocalPullPhase::Bound) {
-        format!("queued leaf terminated as {} before launch", run.state)
-    } else {
-        terminal_failure_summary_with(run, diagnostic)
-    };
+    if matches!(
+        record.phase,
+        LocalPullPhase::Created | LocalPullPhase::Bound
+    ) {
+        return release_settlement(
+            record,
+            &format!(
+                "its queued leaf {} terminated as {} before launch",
+                run.run_id, run.state
+            ),
+        );
+    }
     ClaimMutation::Fail(ClaimEvidence {
-        summary: Some(summary),
+        summary: Some(terminal_failure_summary_with(run, diagnostic)),
+        ..Default::default()
+    })
+}
+
+/// Hand an unfinished claim back to the owner: the task returns to the
+/// backlog, and the comment names the drain that held it and why it gave it
+/// back. Nothing is recorded as a failure — the work either never ran or was
+/// stopped on purpose.
+pub(crate) fn release_settlement(record: &LocalPullAdmission, why: &str) -> ClaimMutation {
+    let drain = &record.request.run_context.run_id;
+    let machine = &record.destination.execution_machine_id;
+    ClaimMutation::Release(ClaimEvidence {
+        summary: Some(format!("released by follower drain {drain}: {why}")),
+        comment: Some(format!(
+            "Follower drain {drain} on {machine} released this claim: {why}. The task is back \
+             in the backlog and can be pulled again."
+        )),
         ..Default::default()
     })
 }

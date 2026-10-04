@@ -29,6 +29,7 @@ use orbit_store::contracts::{
 };
 use orbit_tools::DrainOwnerTransport;
 use orbit_types::tool::WorkerInvocation;
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use super::drain::{PullLauncher, PullPeer};
@@ -118,10 +119,10 @@ impl PullPeer for RoutedPullPeer {
             .ok_or_else(|| refused("settlement was not persisted before the owner call"))?;
         if !matches!(
             settlement,
-            ClaimMutation::Fail(_) | ClaimMutation::AcceptHandoff(_)
+            ClaimMutation::Fail(_) | ClaimMutation::Release(_) | ClaimMutation::AcceptHandoff(_)
         ) {
             return Err(refused(
-                "only a typed handoff or a failure settles a claimed leaf",
+                "only a typed handoff, a failure or a release settles a claimed leaf",
             ));
         }
         self.call(
@@ -246,19 +247,36 @@ impl PullLauncher for LeafPullLauncher<'_> {
         bound.spawn_claimed_leaf_worker(&run_id)
     }
 
-    /// Cancel a cancelled drain's queued leaf through the ordinary run
-    /// cancellation, so it is audited like any other and its terminalization
-    /// records the claim's failure settlement [ORB-13663].
+    /// Cancel a released admission's queued leaf through the ordinary run
+    /// cancellation, so it is audited like any other [ORB-13663]. A leaf that
+    /// has left `pending` is refused: it may be running, and only a forced
+    /// cancel stops a running leaf.
     fn cancel_queued(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
         let run_id = admission
             .leaf_run_id
             .as_deref()
             .ok_or_else(|| refused("cancelling a queued leaf requires a created leaf run"))?;
+        let state = self
+            .runtime
+            .stores()
+            .jobs()
+            .get_job_run(run_id)?
+            .map(|run| run.state);
+        match state {
+            Some(JobRunState::Pending) => {}
+            Some(state) if state.is_terminal() => return Ok(()),
+            Some(state) => {
+                return Err(OrbitError::JobValidation(format!(
+                    "leaf {run_id} is {state}, not queued; it is left to finish"
+                )));
+            }
+            None => return Ok(()),
+        }
         self.runtime.cancel_job_run_with_reason(
             run_id,
             "pull_drain",
-            "pull_drain_abandon",
-            Some("its follower drain is no longer running and never launched it"),
+            "pull_drain_release",
+            Some("its follower drain released the claim before launching it"),
         )?;
         Ok(())
     }

@@ -43,7 +43,7 @@ impl RoutineWorkspaceProvider for SelectedWorkspace {
         };
         Ok(DiscoveredWorkspaces {
             entries: vec![(workspace, runtime.clone())],
-            errors: vec![],
+            ..DiscoveredWorkspaces::default()
         })
     }
 }

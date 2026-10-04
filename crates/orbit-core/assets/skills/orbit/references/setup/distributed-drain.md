@@ -124,11 +124,17 @@ returns.
 - The drain keeps settling claims after `--for` expires, until none is left.
   `orbit run auto --stop` closes the window early; live leaves keep running.
   Each leaf also delivers its own handoff or failure when it ends, so
-  cancelling the drain (`orbit run cancel`) strands nothing: its unlaunched
-  claims end as failures and live leaves settle themselves. Prefer `--stop`,
-  which wastes nothing. `orbit run auto --stop` also flushes any settlement
-  still recorded on the follower (for example after the owner was
-  unreachable), with or without an active drain.
+  cancelling the drain (`orbit run cancel`) strands nothing. Cancel is
+  graceful: the drain stops requesting, returns unlaunched claims to the
+  owner's backlog, and ends `cancelled` once its running leaves have settled;
+  `--force` stops that drain's leaves too and returns their tasks to the
+  backlog. A leaf it cannot confirm stopped keeps its claim, is listed under
+  `unstopped_leaves`, and fails the command. The MCP stop
+  (`orbit.workflow.auto`, `action: "stop"`) takes the same `force`.
+  Prefer `--stop`, which ends nothing. The OS clock sweep retries any
+  settlement still recorded on the follower (for example after the owner was
+  unreachable) once no drain or leaf worker is left to; `orbit run auto --stop`
+  flushes it by hand, with or without an active drain.
 - An unreachable or refusing owner is reported in each iteration's output and
   retried. A request the owner refused and holds no receipt for closes as
   `Refused`; a committed one is carried forward.

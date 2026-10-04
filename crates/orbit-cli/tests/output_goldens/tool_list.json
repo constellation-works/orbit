@@ -438,7 +438,7 @@
   },
   {
     "name": "orbit.drain.claim.settle",
-    "description": "Settle an execution claim on the owner. A typed handoff is accepted only after the owner reads the pull request from the provider and resolves its candidate and base in the owner's own checkout, and only with digest-pinned validation evidence; it moves the task to `review`, which awaits owner approval — it does not merge. A failure records its evidence and blocks the task. Either releases only this claim's reservation. Retries replay the recorded outcome.",
+    "description": "Settle an execution claim on the owner. A typed handoff is accepted only after the owner reads the pull request from the provider and resolves its candidate and base in the owner's own checkout, and only with digest-pinned validation evidence; it moves the task to `review`, which awaits owner approval — it does not merge. A failure records its evidence and blocks the task. A release (a cancelled drain giving back work it will not finish) returns the task to the backlog with its reason as a comment. Each releases only this claim's reservation. Retries replay the recorded outcome.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -458,7 +458,7 @@
       },
       {
         "name": "settlement",
-        "description": "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, or `{\"Fail\": <evidence>}`. Nothing else settles a claim.",
+        "description": "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, `{\"Fail\": <evidence>}`, or `{\"Release\": <evidence>}` to hand an unfinished claim back. Nothing else settles a claim.",
         "param_type": "object",
         "required": true
       }
@@ -1517,7 +1517,7 @@
   },
   {
     "name": "orbit.workflow.auto",
-    "description": "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers, or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
+    "description": "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers (or, with force, stop those workers too), or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1562,6 +1562,12 @@
       {
         "name": "complete",
         "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "force",
+        "description": "Stop only: also cancel each live drain and stop its in-flight work. A pull drain's claimed leaves are stopped and their tasks return to the owner's backlog with a comment; a local drain's task runs are cancelled. A leaf that cannot be confirmed stopped keeps its claim and fails the call. Default false stops admissions only",
         "param_type": "boolean",
         "required": false
       },
