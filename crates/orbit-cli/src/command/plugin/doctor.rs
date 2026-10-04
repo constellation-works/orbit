@@ -1,4 +1,5 @@
 use orbit_core::OrbitRuntime;
+use orbit_types::plugin::PluginStatus;
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};
@@ -18,12 +19,15 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
     ])
     .empty_message("no plugins installed or pinned");
     let mut issues = 0;
-    let mut switched_off = 0;
+    let mut switched_off = std::collections::BTreeSet::new();
     for result in &results {
-        // A plugin switched off in this workspace is the operator's choice:
-        // shown, so the state stays visible, but not counted as a finding.
+        // A plugin switched off in this workspace, or a build the operator
+        // consented to, is their choice: shown, so the state stays visible,
+        // but not counted as a finding.
         if result.intentional {
-            switched_off += 1;
+            if result.status == PluginStatus::Disabled {
+                switched_off.insert(&result.plugin);
+            }
         } else if !result.message.is_empty() {
             issues += 1;
         }
@@ -86,12 +90,13 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
 
     let mut blocks = vec![Block::table(table)];
     if issues == 0 {
-        let summary = if switched_off == 0 {
+        let summary = if switched_off.is_empty() {
             "Every plugin is serving its tools.".to_string()
         } else {
             format!(
-                "Every plugin enabled in this workspace is serving its tools ({switched_off} \
-                 switched off here)."
+                "Every plugin enabled in this workspace is serving its tools ({} \
+                 switched off here).",
+                switched_off.len()
             )
         };
         // The blank line separates the summary from the table; with no rows

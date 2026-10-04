@@ -10,9 +10,9 @@ use orbit_common::fs::io::{
     FileLockGuard, FileLockOptions, acquire_exclusive_file_lock, try_acquire_exclusive_file_lock,
 };
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginSourceRequest, PluginValidationPolicy, first_party_source, load_plugin_dir,
-    manifest_refusal, plugin_symlink_refusal, refuse_plugin_tree_symlinks, resolve_plugin_source,
-    validate_loaded_plugin,
+    LoadedPlugin, PluginSourceRequest, PluginValidationPolicy, first_party_source,
+    is_live_plugin_build_dir, load_plugin_dir, manifest_refusal, plugin_symlink_refusal,
+    refuse_plugin_tree_symlinks, resolve_plugin_source, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginGrant, PluginManifest, PluginNetworkPermission, PluginStatus,
@@ -21,6 +21,7 @@ use orbit_types::plugin::{
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
+use crate::runtime::plugin::build_witness::record_build_witness;
 use crate::runtime::plugin::grants::{
     plugin_grant_witness_path, record_authorization, record_authorized_grants, verify_install_path,
 };
@@ -44,6 +45,12 @@ pub struct PluginAddOptions {
     pub enable: bool,
     /// Grants recorded when `enable` is set.
     pub grants: Vec<String>,
+    /// The operator's `--allow-build`: consent to run this source's
+    /// `spec.build` (design `docs/design/plugins/3_install_time_build.md`
+    /// §3.8). Never set from a pin, config or any unattended caller.
+    pub allow_build: bool,
+    /// Shows the build plan before a consented build runs.
+    pub show_build_plan: Option<fn(&str)>,
 }
 
 /// One requested-permission change between the installed and candidate
@@ -67,6 +74,11 @@ pub struct PluginUpgradeOptions {
     /// Without it, a safe upgrade preserves the existing row; a widening
     /// disables the plugin and clears its grants.
     pub grants: Vec<String>,
+    /// As [`PluginAddOptions::allow_build`]: consent never carries over from
+    /// the previous install.
+    pub allow_build: bool,
+    /// As [`PluginAddOptions::show_build_plan`].
+    pub show_build_plan: Option<fn(&str)>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +189,8 @@ pub fn upgrade_plugin(
         digest: options.digest.clone(),
         enable: !options.grants.is_empty(),
         grants: options.grants.clone(),
+        allow_build: options.allow_build,
+        show_build_plan: options.show_build_plan,
     };
     let outcome = install_plugin_inner(
         runtime,
@@ -255,6 +269,25 @@ fn install_plugin_inner(
         }
     }
     let global_root = runtime.global_root();
+    if plugin.manifest.spec.build.is_some()
+        && !options.force
+        && plugin_install_path(&global_root, &name, &version).exists()
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin '{name}' v{version} is already installed; pass --force to rebuild and \
+             replace it"
+        )));
+    }
+    // A build runs before the namespace lock, as source resolution does, so
+    // a long build never blocks another lifecycle operation on the namespace.
+    let prepared_build = super::build::prepare_build(
+        runtime,
+        &plugin,
+        &resolved,
+        source,
+        options.allow_build,
+        options.show_build_plan,
+    )?;
     // Everything from reading the row to the last witness write is one
     // namespace transition. Declared before `staged`, so a rollback in its
     // `Drop` also runs under the lock.
@@ -306,6 +339,9 @@ fn install_plugin_inner(
     }
     let mut staged = StagedInstall::begin(&global_root, &name, &version)?;
     copy_tree(&source_root, staged.staging())?;
+    let build = prepared_build
+        .map(|prepared| super::build::finish_build(runtime, &name, prepared, staged.staging()))
+        .transpose()?;
     staged.publish()?;
 
     let enabled =
@@ -337,6 +373,7 @@ fn install_plugin_inner(
         install_path: install_path.to_string_lossy().into_owned(),
         manifest_digest: plugin.manifest_digest.clone(),
         archive_digest: resolved.archive_digest.clone(),
+        build,
         enabled,
         grants,
         first_party,
@@ -353,6 +390,9 @@ fn install_plugin_inner(
     if grants_reset {
         record_authorized_grants(&global_root, &name, false, &[])?;
     }
+    // Likewise the build witness: written first, so a failed row write leaves
+    // the old row disagreeing with it and refused at load.
+    record_build_witness(&global_root, &name, record.build.as_ref())?;
     runtime.with_mutation(|| {
         runtime.stores().plugins().upsert_plugin(&record)?;
         Ok((
@@ -863,7 +903,8 @@ fn prune_namespace(global_root: &Path, name: &str, keep: &Path) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path != keep {
+        // Another install of this namespace may be building beside us.
+        if path != keep && !is_live_plugin_build_dir(&entry.file_name()) {
             remove_install_scratch(&path);
         }
     }

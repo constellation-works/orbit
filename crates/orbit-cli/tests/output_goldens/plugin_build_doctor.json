@@ -1,0 +1,22 @@
+{
+  "plugin_doctor": [
+    {
+      "plugin": "demo",
+      "status": "active",
+      "message": "",
+      "intentional": false
+    },
+    {
+      "plugin": "demo",
+      "status": "active",
+      "message": "built on this host from \"git+https://example.test/demo.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" at commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: command [\"compiler\", \"--offline\"]; profile linux-bwrap-build-v1; consented with --allow-build at 2026-10-04T00:00:00Z by \"operator\" (Orbit fixture-version); artifact digest sha256:beeaaf73a0fd4d833a9371c3faa21a34fa187741bc1196209a265f72305ec6b5",
+      "intentional": true
+    }
+  ],
+  "doctor": {
+    "check": "plugin-builds",
+    "status": "ok",
+    "message": "demo: built on this host from \"git+https://example.test/demo.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" at commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: command [\"compiler\", \"--offline\"]; profile linux-bwrap-build-v1; consented with --allow-build at 2026-10-04T00:00:00Z by \"operator\" (Orbit fixture-version); artifact digest sha256:beeaaf73a0fd4d833a9371c3faa21a34fa187741bc1196209a265f72305ec6b5",
+    "remediation": null
+  }
+}

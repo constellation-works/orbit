@@ -6,6 +6,7 @@
 //! validation only; reading a plugin directory, resolving `$ref` targets, and
 //! computing digests belong to `orbit-tools`.
 
+mod build;
 mod conformance;
 mod grant;
 mod manifest;
@@ -18,6 +19,14 @@ mod version;
 #[cfg(test)]
 mod tests;
 
+pub use build::{
+    BUILD_DIR_TEMPLATE, DEFAULT_PLUGIN_BUILD_TIMEOUT_MS, PLUGIN_BUILD_CONSENT_FLAG,
+    PLUGIN_BUILD_DIGEST_DOMAIN, PLUGIN_BUILD_PROFILE_LINUX, PLUGIN_BUILD_PROFILE_MACOS,
+    PLUGIN_BUILD_TIMEOUT_CEILING_MS, PluginBuildConsent, PluginBuildOutput,
+    PluginBuildOutputRecord, PluginBuildProgram, PluginBuildRecord, PluginBuildSpec,
+    artifact_digest_preimage, format_plugin_build_argv, git_commit_source, is_full_commit_id,
+    render_build_argv,
+};
 pub use conformance::{
     FIXTURE_SECRET_VERSION, PluginTestCase, PluginTestErrorExpectation, PluginTestExpectation,
     PluginTestFile, TEST_FILE_KIND, TEST_FILE_SCHEMA_VERSION,

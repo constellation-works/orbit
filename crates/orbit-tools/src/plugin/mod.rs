@@ -9,6 +9,7 @@
 //! store.
 
 mod backend;
+mod build;
 mod callback;
 mod envelope;
 mod lifecycle;
@@ -28,6 +29,14 @@ pub use backend::{
     PluginProgramStatus, PluginSandboxProfile, PluginSecretDelivery, PluginSecretRotation,
     PluginSecretSource, RenderedFsRoots, plugin_grant_witness_relative, program_statuses,
     render_fs_roots, resolve_declared_programs,
+};
+pub use build::{
+    PLUGIN_BUILD_DENIED_ENV, PLUGIN_BUILD_DENIED_ENV_PREFIXES, PLUGIN_BUILD_DIR_PREFIX,
+    PLUGIN_BUILD_TOOLCHAIN_LOCATORS, PluginBuildDir, PluginBuildHostEnv, PluginBuildPhase,
+    PluginBuildPlan, PluginBuildResult, PluginBuildRun, ResolvedBuildProgram,
+    install_plugin_build_outputs, installed_artifact_digest, is_denied_build_env,
+    is_live_plugin_build_dir, plan_plugin_build, plugin_artifact_digest, plugin_build_environment,
+    prebuilt_outputs_present, run_plugin_build,
 };
 pub use callback::{
     CallbackResolution, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV, ORBIT_PLUGIN_ENV,
@@ -50,5 +59,7 @@ pub use loader::{
 pub use mcp::{McpBackend, McpExpectedTool};
 pub use migrate::{SidecarManifest, load_sidecar_manifest, migrate_sidecars};
 pub use schema::{CompiledSchema, input_schema_from_params, params_from_input_schema};
-pub use source::{PluginSourceRequest, ResolvedSource, resolve_plugin_root, resolve_plugin_source};
+pub use source::{
+    PluginSourceRequest, ResolvedCommit, ResolvedSource, resolve_plugin_root, resolve_plugin_source,
+};
 pub use tool::{PluginBackend, PluginTool, PluginToolBinding};

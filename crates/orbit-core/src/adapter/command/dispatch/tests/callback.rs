@@ -34,6 +34,7 @@ fn record_callback_plugin(runtime: &OrbitRuntime, orbit_tools: &[&str]) {
             grants: vec!["orbit_tools".to_string()],
             first_party: false,
             certified_orbit_version: None,
+            build: None,
             installed_at: String::new(),
             updated_at: String::new(),
         })

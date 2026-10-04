@@ -5,7 +5,7 @@ mod profile;
 mod summary;
 mod validate;
 
-pub use doctor::{PluginDoctorResult, plugin_doctor};
+pub use doctor::{PluginDoctorResult, plugin_build_doctor, plugin_doctor};
 pub use profile::{PluginRenderedEnvironment, PluginRenderedProfile};
 pub(super) use summary::summary_for_installed;
 pub use summary::{
