@@ -6,6 +6,22 @@ use orbit_common::fs::generation::executable_generation;
 #[cfg(target_os = "linux")]
 use std::collections::BTreeMap;
 
+/// Spawn an `orbit` binary that this fixture just copied into place.
+///
+/// On Linux this absorbs the parallel-fork `ETXTBSY` race described in
+/// [`orbit_common::test_process`]. Any other spawn error returns on the first
+/// attempt. Other platforms spawn once.
+fn spawn_copied_orbit(command: &mut Command) -> std::io::Result<Child> {
+    #[cfg(target_os = "linux")]
+    {
+        orbit_common::test_process::retry_executable_busy(|| command.spawn())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        command.spawn()
+    }
+}
+
 fn preflight(workspace: &McpWorkspace) -> std::process::Output {
     McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args(["update", "--preflight", "--json"])
@@ -123,7 +139,8 @@ fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() 
     let old = install.join("orbit");
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &old).expect("copy installed executable");
     let old_digest = executable_generation(&old).expect("old digest");
-    let child = McpWorkspace::orbit_program_command(&old, &workspace.work, &workspace.home)
+    let mut command = McpWorkspace::orbit_program_command(&old, &workspace.work, &workspace.home);
+    command
         .args([
             "mcp",
             "serve",
@@ -133,9 +150,8 @@ fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() 
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("old server");
+        .stderr(Stdio::piped());
+    let child = spawn_copied_orbit(&mut command).expect("old server");
     let pid = child.id();
     let mut client = McpClient::new(child);
     workspace.initialize(&mut client);
@@ -830,7 +846,9 @@ fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
     let installed = install.join("orbit");
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
     let old_digest = executable_generation(&installed).expect("old digest");
-    let child = McpWorkspace::orbit_program_command(&installed, &workspace.work, &workspace.home)
+    let mut command =
+        McpWorkspace::orbit_program_command(&installed, &workspace.work, &workspace.home);
+    command
         .args([
             "mcp",
             "serve",
@@ -840,9 +858,8 @@ fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("old server");
+        .stderr(Stdio::piped());
+    let child = spawn_copied_orbit(&mut command).expect("old server");
     let pid = child.id();
     let mut client = McpClient::new(child);
     workspace.initialize(&mut client);

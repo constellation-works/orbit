@@ -111,8 +111,10 @@ fn spawn_dashboard(program: &Path, home: &Path, port: u16) -> Child {
         .env("USERPROFILE", home)
         .args(["web", "serve", "--port", &port.to_string(), "--no-open"])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    // The copy was just written. Retry only ExecutableFileBusy; every other
+    // spawn error still fails on the first attempt.
+    orbit_common::test_process::retry_executable_busy(|| command.spawn())
         .expect("spawn orbit web serve")
 }
 

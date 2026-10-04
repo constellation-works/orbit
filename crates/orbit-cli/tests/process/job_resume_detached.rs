@@ -13,12 +13,29 @@ mod unix {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    use assert_cmd::assert::OutputAssertExt;
     use assert_cmd::cargo::cargo_bin_cmd;
     use orbit_common::test_env;
     use serde_json::Value;
     use tempfile::{TempDir, tempdir};
 
     use super::fixture_crew;
+
+    /// Run a freshly copied test binary, absorbing the parallel-fork `ETXTBSY`
+    /// race described in [`orbit_common::test_process`]. Other errors return
+    /// immediately. Non-Linux launches stay direct, matching `update::output_of`.
+    fn installed_output(
+        command: &mut assert_cmd::Command,
+    ) -> std::io::Result<std::process::Output> {
+        #[cfg(target_os = "linux")]
+        {
+            orbit_common::test_process::retry_executable_busy(|| command.output())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            command.output()
+        }
+    }
 
     struct Fixture {
         _temp: TempDir,
@@ -100,17 +117,18 @@ mod unix {
             test_env::clear_inherited_authority(|name| {
                 command.env_remove(name);
             });
-            let output = command
+            command
                 .current_dir(&self.repo)
                 .env("HOME", &self.home)
                 .env("USERPROFILE", &self.home)
-                .args(args)
-                .assert()
-                .success()
-                .get_output()
-                .stdout
-                .clone();
-            serde_json::from_slice(&output).expect("installed CLI JSON")
+                .args(args);
+            // Same bounded launch as `update::output_of`: only ExecutableFileBusy
+            // is retried. A started process still has to exit successfully.
+            let output = installed_output(&mut command).unwrap_or_else(|error| {
+                panic!("Failed to spawn {command:?}: {error}");
+            });
+            let stdout = output.assert().success().get_output().stdout.clone();
+            serde_json::from_slice(&stdout).expect("installed CLI JSON")
         }
 
         fn interrupted_source(&self) -> String {
