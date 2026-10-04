@@ -1087,8 +1087,8 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
     let task = pair.claimed_task(&leaf);
     pair.leaf_fails_with(
         &leaf,
-        "[provider_unavailable] cli subprocess exited with code 1 Antigravity terminal error: \
-         authentication failed or timed out",
+        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
+         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
     );
 
     let pass = pair.pass(&drain);
@@ -1099,7 +1099,7 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
     assert_eq!(exclusion["source"], "provider_unavailable", "{pass}");
     assert!(
         exclusion["reason"].as_str().is_some_and(
-            |reason| reason.contains(task.as_str()) && reason.contains("authentication failed")
+            |reason| reason.contains(task.as_str()) && reason.contains("OAuth token revoked")
         ),
         "{pass}"
     );

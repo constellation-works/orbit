@@ -31,21 +31,239 @@ use std::time::{Duration, Instant};
 
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_engine::activity_job::{
-    AssetLoadError, CatalogError, V2ActivityCatalog, load_activity_asset,
+    AssetLoadError, CatalogError, V2ActivityCatalog, load_activity_asset, load_job_asset,
 };
 use orbit_engine::{
     DispatchError, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
-    dispatch_v2_activity,
+    dispatch_v2_activity, execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_store::{Store, V2AuditEventFilter};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
-    ActivityV2Spec, AgentLoopSpec, JobKind, JobV2, JobV2Step, JobV2StepBody, LoopBlock, OnDenial,
-    Provider, RetiredFeatureError, TargetStep, ToolAllowlistError, V2AuditEvent,
-    validate_job_retired_sessions,
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobKind, JobV2, JobV2Step,
+    JobV2StepBody, LoopBlock, OnDenial, Provider, RetiredFeatureError, TargetStep,
+    ToolAllowlistError, V2AuditEvent, validate_job_retired_sessions,
 };
 use serde_json::Value;
 use tempfile::TempDir;
+
+const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"result":"Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."}"#;
+
+/// Provider failures are control-plane evidence; transcripts and Orbit work
+/// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
+#[cfg(unix)]
+#[test]
+fn provider_authentication_results_are_typed_without_reading_transcripts() {
+    let cases = [
+        (Provider::Claude, "claude", CLAUDE_REVOKED_TOKEN, true),
+        (
+            Provider::Claude,
+            "claude",
+            r#"{"is_error":true,"api_error_status":403,"result":"Access denied"}"#,
+            true,
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            r#"{"type":"result","is_error":true,"result":"Failed to authenticate"}"#,
+            true,
+        ),
+        (
+            Provider::Codex,
+            "codex",
+            r#"{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized"}}"#,
+            true,
+        ),
+        (
+            Provider::Codex,
+            "codex",
+            r#"{"type":"error","status_code":403,"message":"Access denied"}"#,
+            true,
+        ),
+        (
+            Provider::Grok,
+            "grok",
+            r#"{"error":{"status":401,"message":"Access denied"}}"#,
+            true,
+        ),
+        (
+            Provider::Grok,
+            "grok",
+            r#"{"error":"Invalid API key"}"#,
+            true,
+        ),
+        (
+            Provider::Grok,
+            "grok",
+            r#"{"status_code":"403","error":"Forbidden"}"#,
+            true,
+        ),
+        (
+            Provider::Gemini,
+            "gemini",
+            r#"{"error":{"code":403,"message":"Access denied"}}"#,
+            true,
+        ),
+        (
+            Provider::Gemini,
+            "gemini",
+            r#"{"type":"error","error":{"type":"authentication_error","message":"Sign in"}}"#,
+            true,
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            r#"{"type":"result","is_error":true,"api_error_status":500,"result":"Server error"}"#,
+            false,
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            r#"{"type":"result","is_error":false,"result":"Failed to authenticate to a tool"}"#,
+            false,
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_result","is_error":true,"api_error_status":401,"content":"Failed to authenticate"}]}}"#,
+            false,
+        ),
+        (
+            Provider::Codex,
+            "codex",
+            r#"{"type":"item.completed","item":{"type":"command_execution","output":"401 Unauthorized"}}"#,
+            false,
+        ),
+        (
+            Provider::Grok,
+            "grok",
+            r#"{"text":"Failed to authenticate","stopReason":"end_turn"}"#,
+            false,
+        ),
+        (
+            Provider::Gemini,
+            "gemini",
+            r#"{"type":"tool_result","error":{"code":401,"message":"Failed to authenticate"}}"#,
+            false,
+        ),
+        (
+            Provider::Gemini,
+            "gemini",
+            r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":401,"message":"Failed to authenticate to a tool"}}"#,
+            false,
+        ),
+    ];
+    for (index, (provider, binary, payload, unavailable)) in cases.into_iter().enumerate() {
+        // Test both CLI conventions: nonzero failure and an exit-0 wrapper.
+        for exit_code in [0, 1] {
+            let run = format!("auth-{index}-{exit_code}");
+            let audit = tempfile::tempdir().unwrap();
+            let (writer, _) = build_writer(audit.path(), &run).unwrap();
+            let fake = fake_cli(binary, &format!("#!/bin/sh\ncat > /dev/null\ncat <<'PAYLOAD'\n{payload}\nPAYLOAD\nexit {exit_code}\n")).unwrap();
+            let mut spec = cli_agent_loop_spec(Some(provider));
+            spec.model = None;
+            spec.require_completion_envelope = false;
+            let host = ScriptHost::new(fake.cli_path());
+            let outcome = dispatch_v2_activity(V2DispatchInput {
+                activity_name: "auth_fixture",
+                spec: &ActivityV2Spec::AgentLoop(spec),
+                fs_profile: None,
+                input: serde_json::json!({"prompt":"test"}),
+                audit: writer,
+                run_id: &run,
+                host: Some(&host),
+            })
+            .unwrap();
+            assert_eq!(
+                orbit_types::workflow::is_provider_unavailable(None, outcome.message.as_deref()),
+                unavailable,
+                "{binary} exit {exit_code}: {payload}: {outcome:?}"
+            );
+            if unavailable {
+                assert!(
+                    !outcome.success,
+                    "a provider auth failure cannot complete the step"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_revoked_token_preserves_the_release_marker_without_step_recovery() {
+    let audit = tempfile::tempdir().unwrap();
+    let (writer, store) = build_writer(audit.path(), "auth-no-recovery").unwrap();
+    let fake = fake_cli(
+        "claude",
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\ncat <<'PAYLOAD'\n{CLAUDE_REVOKED_TOKEN}\nPAYLOAD\nexit 1\n"
+        ),
+    )
+    .unwrap();
+    let host = ScriptHost::new(fake.cli_path());
+    let mut job = load_job_asset(
+        &serde_json::json!({
+            "schemaVersion":2, "kind":"Job", "metadata":{"name":"auth_fixture"},
+            "spec":{"state":"enabled", "kind":"workflow", "steps":[{
+                "id":"implement_one", "spec":ActivityV2Spec::AgentLoop(cli_agent_loop_spec(None)),
+                "recovery_activity":"auth_recovery"
+            }]}
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .spec;
+    let mut catalog = V2ActivityCatalog::new();
+    catalog.insert(
+        "auth_recovery",
+        ActivityV2 {
+            description: String::new(),
+            input_schema_json: Value::Null,
+            output_schema_json: Value::Null,
+            fs_profile: None,
+            spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                action: "unexpected_recovery".into(),
+                config: Value::Null,
+            }),
+        },
+    );
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+    let outcome = execute_job_with_resume(
+        &job,
+        serde_json::json!({"prompt":"test"}),
+        "auth-no-recovery",
+        writer.clone(),
+        &host,
+        None,
+    )
+    .unwrap();
+    assert!(!outcome.success);
+    assert!(
+        orbit_types::workflow::is_provider_unavailable(None, outcome.message.as_deref()),
+        "{outcome:?}"
+    );
+    let events = events_snapshot(&store, "auth-no-recovery").unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.envelope.event_type == "cli.invocation.started")
+            .count(),
+        1,
+        "revoked credentials consume only one provider invocation"
+    );
+    assert!(
+        !writer
+            .events_snapshot()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(
+                event.kind,
+                orbit_types::workflow::activity_job::V2AuditEventKind::StepRecoveryAttempted { .. }
+            )),
+        "provider_unavailable must bypass recovery admission and dispatch"
+    );
+}
 
 #[cfg(unix)]
 #[test]
