@@ -23,7 +23,7 @@ orbit init
 ```
 
 `orbit init` asks for a machine name and a task-ID prefix of 2–5 uppercase
-letters, such as `ABC`. The prefix cannot change later on this machine. It also
+letters, such as `ABC`. The prefix is permanent on this machine. It also
 detects your agent CLIs, links Orbit's skills into your agents, and on Linux
 prepares the sandbox.
 
@@ -34,12 +34,12 @@ Open your agent in the repository and ask it to **set up Orbit for this repo**.
 :::
 
 The `orbit-setup` skill registers the repository, connects your agent over
-MCP, and runs `orbit doctor`, asking only for what it cannot infer, such as the
-branch pull requests should target. Start a fresh agent session when it
-finishes, so the Orbit tools load.
+MCP, and runs `orbit doctor`. It asks only for what it cannot infer, such as
+the branch pull requests should target. When it finishes, start a fresh agent
+session so the Orbit tools load.
 
-Rather do it yourself? Run `orbit workspace init --mcp` and `orbit doctor` in
-the repository; [Install Orbit](./install/#set-up-by-hand) explains each step.
+To do it yourself, run `orbit workspace init --mcp` and `orbit doctor` in the
+repository. [Install Orbit](./install/#set-up-by-hand) explains each step.
 
 ## 3. Open the dashboard
 
@@ -48,7 +48,9 @@ orbit web serve
 ```
 
 The dashboard opens at `http://127.0.0.1:7878` and serves every workspace on
-this machine. Keep it running in its own terminal:
+this machine. Keep it running in its own terminal.
+
+![The dashboard's Tasks view: tasks grouped by status, with Approve and Ship buttons, and the Drain card on the right.](../../../assets/dashboard/dashboard-tasks.png)
 
 | Section | What you do there |
 |---|---|
@@ -58,8 +60,9 @@ this machine. Keep it running in its own terminal:
 | **Automation** | Turn routines and auto-tasks on or off, file an auto-task now, and run a delivery window. |
 | **Settings** | Inspect and edit configuration and crews. |
 
-It listens on loopback only; `orbit web connect <ssh-host>` opens one on
-another machine. See [Use the Dashboard](../how-to/dashboard/).
+It listens on loopback only. To reach the dashboard on another machine over
+SSH, run `orbit web connect <ssh-host>`. See
+[Use the Dashboard](../how-to/dashboard/).
 
 ## 4. Ship your first task
 
@@ -67,14 +70,14 @@ another machine. See [Use the Dashboard](../how-to/dashboard/).
    files a task with acceptance criteria. The task appears in **Tasks** under
    **Awaiting approval**.
 2. **Click Approve.** The task moves to the backlog.
-3. **Click Ship.** Orbit reserves the task's files, runs the agent in an
-   isolated worktree, and plans, executes, and reviews the change. Follow it
-   from **View run**.
-4. **Review the pull request.** The run stops with the task in review and the
-   pull request open. Merge it on GitHub, then click **Approve** on the task to
-   close it.
+3. **Click Ship.** Orbit reserves the task's files and runs an agent in an
+   isolated worktree to plan, execute, and review the change. Follow it from
+   **View run**.
+4. **Review the pull request.** The run stops with the task in `review` and
+   the pull request open. Merge it on GitHub, then click **Approve** on the
+   task to close it.
 
-Your agent can do steps 2 and 3 for you when you tell it to. The dashboard
+Your agent can approve and ship for you when you tell it to. The dashboard
 shows the same task either way.
 
 :::note[Two gates stay yours]
@@ -86,14 +89,14 @@ task are separate decisions.
 Prefer the terminal? [First Task](./first-task/) walks through the same flow
 with `orbit task add`, `orbit task update --approve`, and `orbit run ship`.
 
-## Then what
+## Next steps
 
-Once one task has shipped, choose how much Orbit runs without you. Each of
-these also has a home in the dashboard.
+Once one task has shipped, choose how much runs without you. Each option below
+also has a home in the dashboard.
 
 For more than a task or two, hand your agent a spec and ask it to orchestrate.
 The `orbit-orchestrate` skill files the tasks, queues them once you approve,
-runs a delivery window, and chases any run that fails.
+runs a delivery window, and diagnoses any run that fails.
 
 <div class="orbit-card-grid orbit-card-grid-3">
   <a class="orbit-card" href="../how-to/dashboard/">

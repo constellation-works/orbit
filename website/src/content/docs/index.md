@@ -10,9 +10,9 @@ next: false
 
 <section class="orbit-hero">
   <div class="orbit-hero-copy">
-    <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>See what shipped in the latest release</span><span aria-hidden="true">→</span></a>
+    <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>What shipped in the latest release</span><span aria-hidden="true">→</span></a>
     <h1 id="_top" class="orbit-hero-headline">Agents write. Orbit delivers.</h1>
-    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask for a change in the agent you already use; Orbit turns it into a scoped task, runs it in an isolated worktree, and hands back a pull request with every step on the record.</p>
+    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask the agent you already use for a change: it files a scoped task, Orbit runs it in an isolated worktree, and you get back a pull request with every step on the record.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Get started →</a>
       <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
@@ -27,7 +27,7 @@ next: false
     </div>
     <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
     <div class="orbit-hero-providers">
-      <div class="orbit-hero-providers-label">Drives the agent CLI you already sign in to</div>
+      <div class="orbit-hero-providers-label">Runs the agent CLI you already sign in to</div>
       <ul class="orbit-hero-providers-list">
         <li>Claude Code</li>
         <li>Codex</li>
@@ -88,15 +88,15 @@ next: false
 <section class="orbit-guarantees" aria-label="What Orbit guarantees">
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
-    <div><h2>Nothing runs until you approve</h2><p>New tasks land in <code>proposed</code>. Your agent can file all it likes; work enters the backlog only on your say-so.</p></div>
+    <div><h2>Nothing runs until you approve</h2><p>New tasks land in <code>proposed</code>. Your agent can file as many as it likes; only your approval moves one into the backlog.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M8.5 6H12a3.5 3.5 0 0 1 3.5 3.5"/></svg></div>
-    <div><h2>Nothing merges unless you ask</h2><p>By default a run stops at <code>review</code> with the pull request open. Merging takes an explicit <code>--complete</code>, and still waits for your branch protection.</p></div>
+    <div><h2>Nothing merges unless you ask</h2><p>By default a run stops at <code>review</code> with the pull request open. Merging it takes an explicit <code>--complete</code>, and still waits for your branch protection.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11"/><path d="M4 12h11"/><path d="M4 19h7"/><path d="m16 18 2 2 4-4"/></svg></div>
-    <div><h2>Every step is on the record</h2><p>Task changes, workflow events, agent turns, and tool calls land in one audit record, redacted as it is written.</p></div>
+    <div><h2>Every step is on the record</h2><p>Task changes, workflow events, agent turns, and tool calls land in one audit record, with secrets redacted as it is written.</p></div>
   </div>
 </section>
 
@@ -106,7 +106,7 @@ next: false
       <p class="orbit-section-eyebrow">How it works</p>
       <h2 class="orbit-section-heading">From a spec to merged code. You set the direction and judge the result.</h2>
     </div>
-    <p class="orbit-section-lede">Hand a spec to the agent you already use, and the <code>orbit-orchestrate</code> skill makes it your orchestrator. It splits the work into tasks and queues them on your say-so. Orbit ships them in parallel and merges each one as soon as your branch protection allows, so you come back to results, not a queue of pull requests.</p>
+    <p class="orbit-section-lede">Hand a spec to the agent you already use; the <code>orbit-orchestrate</code> skill makes it your orchestrator. It splits the work into tasks and queues them once you approve. Orbit ships them in parallel and, when you authorize it, merges each one as soon as branch protection allows. You come back to results, not a queue of pull requests.</p>
   </div>
 
   <ol class="orbit-rail" aria-label="Task lifecycle">
@@ -125,7 +125,7 @@ next: false
     </a>
     <a class="orbit-card" data-tag="02 · Plan" href="/concepts/tasks/">
       <h3>Your orchestrator files the tasks</h3>
-      <p>With the <code>orbit-orchestrate</code> skill, it splits the spec into scoped tasks, each with acceptance criteria, queues them in the backlog on your say-so, and starts the drain.</p>
+      <p>With the <code>orbit-orchestrate</code> skill, it splits the spec into scoped tasks with acceptance criteria, queues them in the backlog once you approve, and starts a drain.</p>
       <div class="orbit-card-cmd">orbit.task.add</div>
     </a>
     <a class="orbit-card" data-tag="03 · Deliver" href="/how-to/continuous-delivery/">
@@ -140,7 +140,7 @@ next: false
     </a>
   </div>
 
-  <p class="orbit-walk-next">Turn on second-agent review with <code>operation.review_policy</code> in your <a href="/reference/config/#settable-keys">workspace config</a>. Rather merge yourself? Leave off <code>--complete</code> and every run stops at <code>review</code> with the pull request open, or <a href="/getting-started/first-task/">ship your first task by hand</a>.</p>
+  <p class="orbit-walk-next">Turn on second-agent review with <code>operation.review_policy</code> in your <a href="/reference/config/#settable-keys">workspace config</a>. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="/getting-started/first-task/">ship your first task by hand</a>.</p>
 </section>
 
 <section class="orbit-section">
@@ -172,7 +172,7 @@ next: false
       <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11"/><path d="M4 12h11"/><path d="M4 19h7"/><path d="m16 18 2 2 4-4"/></svg></div>
       <div class="orbit-card-body">
         <h3>Auditable end to end</h3>
-        <p>One record joins task changes, workflow events, provider turns, and tool calls, redacted at write time.</p>
+        <p>One record joins task changes, workflow events, agent turns, and tool calls, with secrets redacted at write time.</p>
         <div class="orbit-card-cmd">orbit task show "$TASK_ID"</div>
       </div>
     </div>
@@ -193,7 +193,7 @@ next: false
       <p class="orbit-section-eyebrow">When you step away</p>
       <h2 class="orbit-section-heading">The same pipeline, unattended. You choose where it stops.</h2>
     </div>
-    <p class="orbit-section-lede">Every <code>orbit run</code> prints a durable run ID and returns before the outcome is known. Finishing delivery always takes an explicit <code>--complete</code> on the command.</p>
+    <p class="orbit-section-lede">Every <code>orbit run</code> prints a durable run ID and returns at once; the run carries on without you. Finishing delivery always takes an explicit <code>--complete</code>.</p>
   </div>
 
   <div class="orbit-card-grid orbit-card-grid-4 orbit-mode-grid">
@@ -226,7 +226,7 @@ next: false
       <div class="orbit-card-cmd">orbit run ship-sweep --dry-run</div>
       <dl>
         <div><dt>Stops at</dt><dd><em>review</em>, in each workspace with <code>auto_ship</code> on</dd></div>
-        <div><dt>With <code>--complete</code></dt><dd>never: nothing can turn it on for a sweep</dd></div>
+        <div><dt>With <code>--complete</code></dt><dd>never; a sweep cannot be granted completion</dd></div>
       </dl>
     </a>
   </div>
@@ -239,10 +239,10 @@ next: false
     <a class="orbit-section-link" href="/reference/cli/">Browse the CLI reference →</a>
   </div>
   <ul class="orbit-further-list">
-    <li><a href="/how-to/continuous-delivery/"><span class="orbit-further-title">Continuous delivery</span><span class="orbit-further-desc">Check readiness, drain an approved backlog in a bounded window, and recover it cleanly.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
-    <li><a href="/how-to/recurring-work/"><span class="orbit-further-title">Recurring work</span><span class="orbit-further-desc">Run jobs on a schedule and let auto-tasks file routine chores for you.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
-    <li><a href="/how-to/distributed-drain/"><span class="orbit-further-title">Multi-machine drains</span><span class="orbit-further-desc">Prepare one owner and replica checkouts to share a workspace's backlog.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
-    <li><a href="/how-to/task-publication/"><span class="orbit-further-title">Back up and restore</span><span class="orbit-further-desc">Publish a validated snapshot of your tasks to a Git repository you control, and restore from it.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
+    <li><a href="/how-to/continuous-delivery/"><span class="orbit-further-title">Continuous delivery</span><span class="orbit-further-desc">Check readiness, drain an approved backlog for a set window, and recover failed deliveries.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
+    <li><a href="/how-to/recurring-work/"><span class="orbit-further-title">Recurring work</span><span class="orbit-further-desc">Run jobs on a schedule, and let auto-tasks file routine chores.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
+    <li><a href="/how-to/distributed-drain/"><span class="orbit-further-title">Multi-machine drains</span><span class="orbit-further-desc">Let other machines pull work from the one that owns your backlog.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
+    <li><a href="/how-to/task-publication/"><span class="orbit-further-title">Back up and restore</span><span class="orbit-further-desc">Publish a validated snapshot of your tasks to a Git repository you control, and restore it.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
     <li><a href="/how-to/dashboard/"><span class="orbit-further-title">The dashboard</span><span class="orbit-further-desc">See tasks, runs, and errors in a browser, locally or over SSH.</span><span class="orbit-further-arrow" aria-hidden="true">→</span></a></li>
   </ul>
 </section>
@@ -250,7 +250,7 @@ next: false
 <section class="orbit-quickstart" aria-labelledby="orbit-quickstart-title">
   <div class="orbit-quickstart-copy">
     <h2 id="orbit-quickstart-title">Ship your first task.</h2>
-    <p>Three commands install Orbit, set up this machine, and connect your agent to a repository. The fourth opens the dashboard, where you approve, ship, and review what your agent files.</p>
+    <p>Three commands install Orbit, set up this machine, and connect your agent to a repository; your agent's <code>orbit-setup</code> skill can run the third for you. The fourth opens the dashboard, where you approve, ship, and review what your agent files.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Read the guide</a>
       <a class="orbit-button" href="https://github.com/constellation-works/orbit">View on GitHub</a>

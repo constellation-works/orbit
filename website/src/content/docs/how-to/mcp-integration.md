@@ -25,8 +25,9 @@ This registers Orbit with every agent client it finds, with **operator**
 authority, so your agent can ship tasks and run drains as well as file them.
 Start a fresh agent session afterwards so the tools load.
 
-To pick clients, or to give an agent the narrower **agent-only** authority (it
-can file and update tasks but cannot dispatch runs), use `orbit mcp init`:
+`orbit mcp init` registers Orbit with the narrower **agent-only** authority:
+the agent can file and update tasks but cannot dispatch runs. Use it to pick
+clients or to limit an agent:
 
 ```bash
 orbit mcp init --auto                   # every detected client
@@ -40,9 +41,11 @@ config into the repository; `--scope home` writes it for your user.
 
 Grok Build reads the shared `.mcp.json` (or `~/.claude.json` with
 `--scope home`); when its shared reader is off, Orbit writes
-`.grok/config.toml` instead. If the workspace's Orbit data lives outside the
-repository, pass the same `--root <dir>` (or `ORBIT_ROOT`) to `orbit mcp init`
-that you used for `orbit workspace init`.
+`.grok/config.toml` instead.
+
+If the workspace's Orbit data lives outside the repository, pass
+`orbit mcp init` the same `--root <dir>` (or `ORBIT_ROOT`) you used for
+`orbit workspace init`.
 
 ## Register the federated mux
 
@@ -101,13 +104,15 @@ authenticate clients, so it binds loopback unless you pass
 (`readOnlyHint`, `destructiveHint`, and so on) so a client can decide what to
 auto-approve; Orbit still enforces authority on every call.
 
-`orbit_task_list` and `orbit_task_eligible` return `{ tasks, total, truncated }`.
-Task records are full by default, so pass `fields` (for example
-`["id", "title", "status"]`) to keep a listing small. Each eligible task is a
-`backlog` or `proposed` task whose files overlap no running or in-review task,
-in dispatch order. With `explain: true`, `conflicting` also lists held-back
-tasks, each with the overlapping file and the task holding it. The task-write
-tools leave out `comments` and `history` unless you ask for them in `fields`.
+- `orbit_task_list` and `orbit_task_eligible` return
+  `{ tasks, total, truncated }`. Task records are full by default; pass
+  `fields` (for example `["id", "title", "status"]`) to keep a listing small.
+- `orbit_task_eligible` lists, in dispatch order, the `backlog` and `proposed`
+  tasks whose files overlap no running or in-review task. With
+  `explain: true`, `conflicting` also lists the held-back tasks, each with the
+  overlapping file and the task holding it.
+- The task-write tools leave out `comments` and `history` unless you name them
+  in `fields`.
 
 ## Remove
 

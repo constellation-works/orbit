@@ -1642,3 +1642,14 @@ a.orbit-card:focus-visible :is(h2, h3) {
     transform: none;
   }
 }
+
+/* Dashboard screenshots (src/assets/dashboard, from scripts/dashboard-shots):
+   a hairline frame so the dark captures sit on either theme. They are captured
+   at 2x, so the narrow drain card is held to its 1x width. */
+.sl-markdown-content img[src*="dashboard-"] {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+}
+.sl-markdown-content img[src*="dashboard-drain-card"] {
+  width: 382px;
+}

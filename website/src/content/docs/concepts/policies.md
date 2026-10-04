@@ -1,24 +1,28 @@
 ---
 title: Policies
-description: "How Orbit uses filesystem profiles and global deny rules to scope execution."
+description: "How Orbit scopes what a run can read and modify: filesystem profiles plus global deny rules."
 sidebar:
   order: 5
 ---
 
 ## Definition
 
-Policy is a filesystem-scoping surface. It controls what an activity can read or modify, then applies global deny rules on top.
+A policy scopes the filesystem. A filesystem profile sets what an activity can
+read and modify, and global deny rules apply on top.
 
-Activity tool inclusion is a separate admission boundary: a task's
-`required_tools` (fixed at creation, see
-[Transition rules](../tasks/#transition-rules)) extends the activity's baseline
-allowlist but does not bypass caller-role or host-capability checks,
-tool-specific policy, filesystem profiles, subprocess allowlists, or external
-authentication, any of which may still deny an included tool at execution time.
+An activity selects a named profile with `fsProfile`. If it names none, Orbit
+resolves an implicit unrestricted profile, and the global denies still apply.
 
-An activity can select a named profile with `fsProfile`. If it omits the field, Orbit resolves an implicit unrestricted profile before global denies are applied.
+> **Platform support.** Spawned agent CLIs run inside an OS sandbox scoped by
+> the resolved `fsProfile`: `sandbox-exec` on macOS, Bubblewrap on Linux. See
+> [Platform support](../agents/#platform-support) for what each one enforces.
 
-> **Platform support.** Spawned agent CLIs run under an OS boundary scoped by the resolved `fsProfile` — `sandbox-exec` on macOS, Bubblewrap on Linux; see [Platform Support](../agents/#platform-support).
+Tool access is a separate check. A task's `required_tools` (fixed at creation;
+see [Transition rules](../tasks/#transition-rules)) extend the activity's
+tools, but never bypass caller-role or host-capability checks, tool-specific
+policy, filesystem profiles, subprocess allowlists, or external
+authentication. Any of these can still deny an included tool at execution
+time.
 
 ## Shape
 
@@ -39,7 +43,9 @@ spec:
       modify: []
 ```
 
+The full format is in [Policy Format](../../reference/policy-format/).
+
 ## Use
 
-Use narrow profiles for review and summarization. Use broader profiles only when
-an agent is expected to edit code.
+Use narrow profiles for review and summarization. Use broader profiles only
+when an agent is expected to edit code.

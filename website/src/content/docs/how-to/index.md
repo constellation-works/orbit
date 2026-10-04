@@ -6,9 +6,9 @@ sidebar:
 ---
 
 New to Orbit? [Start Here](../getting-started/) sets it up and walks one task
-from request to merge. These guides pick up from there, one job each. Most of
-them are also something your agent can do for you with the bundled
-`orbit-orchestrate` or `orbit-setup` skill.
+from request to merge. These guides pick up from there, one job each. Your
+agent can do most of them for you with the bundled `orbit-setup` or
+`orbit-orchestrate` skill.
 
 ## Day to day
 
@@ -23,7 +23,7 @@ them are also something your agent can do for you with the bundled
   </a>
   <a class="orbit-card" href="./recurring-work/">
     <h3>Schedule Recurring Work</h3>
-    <p>Drive Orbit unattended with the sweep clock, routines, and auto-tasks.</p>
+    <p>Run jobs and file recurring chores on a schedule with the sweep clock, routines, and auto-tasks.</p>
   </a>
 </div>
 
@@ -32,7 +32,7 @@ them are also something your agent can do for you with the bundled
 <div class="orbit-card-grid">
   <a class="orbit-card" href="./scoping-rules/">
     <h3>Choose Scopes</h3>
-    <p>Select artifact scopes and filesystem profiles.</p>
+    <p>Decide where state lives and what an activity may read or modify.</p>
   </a>
   <a class="orbit-card" href="./write-activity/">
     <h3>Write an Activity</h3>

@@ -118,10 +118,12 @@ that is due. A new chore is a new definition, never new code.
 ## What scheduling never does
 
 Scheduling changes when work starts, not what it may do. Nothing scheduled
-approves a `proposed` task into the backlog. Nothing scheduled completes a task
-out of `review` either: that takes
+completes a task out of `review`: that takes
 [`--complete`](../../getting-started/workflows/#completing-work-with---complete)
-on a run you start yourself.
+on a run you start yourself. Nothing scheduled approves a `proposed` task into
+the backlog either, with one exception you opt into: once you enable the CI
+failure sweep routine, it promotes the repair tasks it files after its pilot
+validates them.
 
 [Schedule Recurring Work](../../how-to/recurring-work/) covers installing the
 clock, enabling routines, and writing definitions.

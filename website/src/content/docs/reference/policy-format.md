@@ -18,9 +18,10 @@ spec:
   fsProfiles: {}
 ```
 
-## Global Denies
+## Global denies
 
-`denyRead` blocks reads. `denyModify` blocks writes. These rules accumulate globally and apply after the selected filesystem profile is resolved.
+`denyRead` blocks reads and `denyModify` blocks writes. Deny rules accumulate
+globally and apply after the selected filesystem profile is resolved.
 
 ```yaml
 denyRead:
@@ -30,9 +31,9 @@ denyModify:
   - "**/*.env"
 ```
 
-## Filesystem Profiles
+## Filesystem profiles
 
-Profiles describe allowed read and modify globs.
+A profile lists the globs an activity may read and modify.
 
 ```yaml
 fsProfiles:
@@ -46,7 +47,7 @@ fsProfiles:
       - docs/**
 ```
 
-An activity selects a profile with `fsProfile`.
+An activity selects a profile with `fsProfile`:
 
 ```yaml
 spec:
@@ -54,4 +55,6 @@ spec:
   fsProfile: implementer
 ```
 
-Which OS-level sandbox enforces the profile on each platform, and what happens where none is available, is covered in [Platform Support](../../concepts/agents/#platform-support).
+To test a path against a profile, run `orbit doctor fs-access <profile> <path>`.
+For which OS sandbox enforces a profile on each platform, and what happens
+where none is available, see [Platform Support](../../concepts/agents/#platform-support).

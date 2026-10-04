@@ -6,7 +6,7 @@ sidebar:
 ---
 
 Every delivery runs the same gated pipeline: an isolated worktree, a lock on
-the task's files, a sandboxed agent, then a pull request. You can start it in
+the task's files, a sandboxed agent, then a pull request. You can start it from
 three places, and they are interchangeable:
 
 - **Your agent.** Ask in plain words. The `orbit-orchestrate` skill handles
@@ -16,12 +16,12 @@ three places, and they are interchangeable:
 - **The CLI.** `orbit run …`, for scripts and schedulers.
 
 Runs are durable and asynchronous. Starting one returns a run ID at once, and
-the run keeps going whether or not you watch it.
+the run keeps going whether or not you watch.
 
 ## Hand a spec to your orchestrator
 
-The shortest path from an idea to merged code. Give your agent the outcome you
-want and ask it to orchestrate:
+This is the shortest path from an idea to merged code. Give your agent the
+outcome you want and ask it to orchestrate:
 
 > Here's the spec for retry support in the sync client: … Break it into Orbit
 > tasks, and once I approve them, ship them and merge what passes.
@@ -32,14 +32,13 @@ With the `orbit-orchestrate` skill, the agent:
    `proposed`.
 2. Prepares them: checks for duplicates, pins each task's files, and assigns
    crews.
-3. Queues them in the backlog once you approve, whether in the dashboard or by
-   telling it.
+3. Queues them in the backlog once you approve, in the dashboard or by telling
+   it.
 4. Starts a delivery window and follows it, diagnosing any run that fails and
    filing a repair task when the code needs one.
 
-You come back to merged work and a record of every step. Merging happens only
-when you ask for it; see
-[Let runs merge](#completing-work-with---complete).
+You come back to merged work and a record of every step. Pull requests merge
+only when you ask; see [Completing work with `--complete`](#completing-work-with---complete).
 
 ## Ship one task
 
@@ -49,17 +48,21 @@ when you ask for it; see
 | Agent | "Ship ABC-12." |
 | CLI | `orbit run ship ABC-12` |
 
-A ship run uses the workspace's ship mode. In `pr` mode (the default), the run
-opens or updates a pull request and stops with the task in `review`. In
-`local` mode, it commits and merges into the base branch before the task
-reaches `review`, so `review` is not a pre-merge stop there. Set the mode with
-`orbit workspace init --ship-mode`; the CLI also takes `--mode` and `--base`
-per run.
+A ship run uses the workspace's ship mode:
+
+- **`pr`** (the default) opens or updates a pull request and stops with the
+  task in `review`.
+- **`local`** commits and merges into the base branch before the task reaches
+  `review`, so `review` is not a pre-merge stop.
+
+Set the mode with `orbit workspace init --ship-mode`. On the CLI, `--mode` and
+`--base` override it for one run.
 
 ## Drain the backlog
 
-A drain keeps several tasks in flight for a set time, starting the next ready
-task as each one finishes. Overlapping tasks wait their turn on file locks.
+A drain keeps several tasks in flight for a set time and starts the next ready
+task as each one finishes. Tasks that touch the same files wait their turn on
+file locks.
 
 | From | Do |
 |---|---|
@@ -67,21 +70,24 @@ task as each one finishes. Overlapping tasks wait their turn on file locks.
 | Agent | "Drain the backlog for four hours, eight at a time." |
 | CLI | `orbit run auto --for 4h --concurrency 8` |
 
-The window bounds only when new work starts: a task already running when it
+![The Drain card: running and free slots, eligible and blocked tasks, window length, parallel tasks, Stop at review or Mark done, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
+
+The window bounds only when new work starts; a task already running when it
 closes still finishes. The drain card's **Eligible now** and **Blocked by
-running** counts show what a window would start; `orbit run readiness` gives
-the same answer with reasons. [Run a Delivery Window](../../how-to/continuous-delivery/)
-covers preparing work, retuning, and stopping a window.
+running** counts show what a window would start, and `orbit run readiness`
+gives the same answer with reasons.
+[Run a Delivery Window](../../how-to/continuous-delivery/) covers preparing
+work, retuning, and stopping a window.
 
 ## Completing work with `--complete`
 
 By default a run stops at `review`, and you close the task after merging. To
-let runs finish delivery themselves, authorize completion:
+let a run finish delivery itself, authorize completion:
 
 | From | Do |
 |---|---|
 | Dashboard | On the drain card, set **When a task finishes** to **Mark done** before **Start**. |
-| Agent | Ask it to merge what passes. Only a drain can carry this authorization, so the agent starts one. |
+| Agent | Ask it to merge what passes. Over MCP only a drain can carry this authorization, so the agent starts one. |
 | CLI | `orbit run auto --for 4h --complete`, or `orbit run ship ABC-12 --complete` |
 
 With completion, a `pr` run merges its pull request through GitHub as soon as
@@ -91,7 +97,7 @@ only after it has committed, merged, and pushed. A closed or blocked pull
 request, or a failed merge or push, fails the run and leaves the task in
 `review`.
 
-Completion is off unless you grant it on that one run. No workspace setting,
+Completion is off unless you grant it on that run. No workspace setting,
 environment variable, or scheduled sweep turns it on. Two limits:
 
 - **A drain's completion covers its whole window**, including tasks that reach
@@ -110,7 +116,7 @@ step, or **Replay run** to start it again.
 
 Or ask your agent what happened. The `orbit-orchestrate` skill reads the run's
 evidence, matches it to a known failure, and fixes the cause or files a repair
-task, rather than re-running blindly.
+task instead of re-running blindly.
 
 From the terminal:
 

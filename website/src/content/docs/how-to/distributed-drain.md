@@ -57,7 +57,7 @@ orbit config get operation.review_policy   # must be none
 orbit doctor
 ```
 
-Then probe the owner. Run this on the owner; it is read-only and reports the
+Then probe the owner. On the owner, run this read-only check; it reports the
 first reason a real pull would be refused:
 
 ```bash
