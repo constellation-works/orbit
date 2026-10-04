@@ -221,15 +221,16 @@ impl WorktreeBoundaryGuard {
     }
 
     /// Compare both monitored checkouts after the provider reaches any
-    /// terminal outcome. Primary working-copy and index movement is observed
-    /// but never attributed to the provider from before/after snapshots alone.
-    /// A stationary primary HEAD is therefore benign regardless of path class
-    /// or overlap with the candidate. A proven same-branch fast-forward is also
-    /// benign: linked worktrees retain their own HEAD, and the later fetched-base
-    /// rebase is the authority for candidate-versus-target integration. Primary
-    /// rewrites, primary branch switches, and unapproved history changes in the
-    /// assigned worktree remain typed, fail-closed violations. Only completion
-    /// of an explicitly admitted stopped rebase permits assigned history changes.
+    /// terminal outcome. A stationary primary delta is benign only for
+    /// `.orbit/` record-store dirt that does not intersect paths this run
+    /// changed. A proven same-branch fast-forward is also benign: linked
+    /// worktrees retain their own HEAD, and the later fetched-base rebase is
+    /// the authority for candidate-versus-target integration. Primary source
+    /// edits, overlapping record-store dirt, primary rewrites, primary branch
+    /// switches, and unapproved history changes in the assigned worktree remain
+    /// typed, fail-closed violations. The guard does not clean or copy either
+    /// checkout. Only completion of an explicitly admitted stopped rebase
+    /// permits assigned history changes.
     pub(crate) fn verify_after_provider(
         self,
         host: &dyn RuntimeHost,
@@ -301,6 +302,7 @@ impl WorktreeBoundaryGuard {
             &self.primary_before,
             &primary_after,
             &primary_dirt_paths,
+            &conflicting_paths,
         ) {
             tracing::info!(
                 target: "orbit.engine.cli_runner",
@@ -308,7 +310,7 @@ impl WorktreeBoundaryGuard {
                 run_id = %self.run_id,
                 primary_head = %primary_after.head,
                 ignored_primary_paths = ?primary_dirt_paths,
-                "accepted concurrent primary working-state movement; primary HEAD and branch never moved, and fetched-target integration remains authoritative"
+                "accepted stationary primary record-store dirt disjoint from the run; primary HEAD and branch never moved"
             );
             return Ok(());
         }
@@ -422,26 +424,42 @@ fn fingerprint_summary(fingerprint: &GitWorktreeFingerprint) -> Value {
     })
 }
 
-/// Accept a primary checkout whose HEAD and branch stayed stationary while its
-/// working copy or index changed.
+/// Record-store paths rewritten by the engine and by out-of-run curation.
+/// They are not part of a run's code candidate.
+const ORBIT_RECORD_STORE_PREFIX: &str = ".orbit/";
+
+/// Accept stationary primary record-store dirt that does not touch the run.
 ///
-/// `primary_fast_forward_is_benign` covers the case where the primary branch
-/// advanced; it rejects `before.head == after.head` on its first clause, which
-/// previously left source dirt reported as `primary_checkout_drift` after a
-/// complete implementation.
+/// HEAD and branch are unchanged. Every dirt path is under `.orbit/`, and none
+/// of those paths intersect the run's changed paths. That is concurrent
+/// record-store movement — a curation pass re-serializing a tracked record, or
+/// an untracked record file — and it is not the candidate.
 ///
-/// The snapshots prove only that primary state moved during the invocation;
-/// they cannot identify the writer. The primary is outside the candidate and
-/// is never staged, committed, reset, or cleaned here. Candidate integration
-/// is decided later in the assigned worktree against the fetched remote target,
-/// where Git can distinguish a clean merge from a real conflict. The nonempty
-/// dirt-path condition keeps unexplained fingerprint changes fail closed.
+/// Snapshots still cannot name the writer. An unrestricted provider can edit
+/// the primary checkout directly, and that edit is indistinguishable from
+/// concurrent source work. Source paths, deletions, and staged index entries
+/// therefore stay `primary_checkout_drift`, including edits disjoint from the
+/// candidate. Overlapping record-store dirt is the same failure; the
+/// intersection is `conflicting_paths`.
+///
+/// `primary_fast_forward_is_benign` covers a primary branch that advanced. It
+/// rejects `before.head == after.head` on its first clause, so this function
+/// is what keeps a stationary record-store delta from being reported as drift.
+/// The nonempty dirt-path condition keeps an unexplained fingerprint change
+/// fail closed. Neither checkout is staged, committed, reset, or cleaned here.
 fn primary_stationary_dirt_delta_is_benign(
     before: &GitWorktreeFingerprint,
     after: &GitWorktreeFingerprint,
     primary_dirt_paths: &[String],
+    conflicting_paths: &[String],
 ) -> bool {
-    before.head == after.head && before.branch == after.branch && !primary_dirt_paths.is_empty()
+    before.head == after.head
+        && before.branch == after.branch
+        && !primary_dirt_paths.is_empty()
+        && conflicting_paths.is_empty()
+        && primary_dirt_paths
+            .iter()
+            .all(|path| path.starts_with(ORBIT_RECORD_STORE_PREFIX))
 }
 
 fn primary_fast_forward_is_benign(

@@ -16,13 +16,14 @@
 //! `ORBIT_*` / `GIT_*` variables, and a bounded wait that kills and reaps the
 //! child on timeout or panic.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -611,6 +612,213 @@ fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
     );
 }
 
+/// A provider that writes the primary checkout fails the boundary, and both
+/// trees keep the bytes the provider left. Disjoint source dirt is enough:
+/// overlap with the candidate is not what makes the edit fatal.
+#[cfg(unix)]
+#[test]
+fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
+    isolated(
+        "provider_primary_source_edit_fails_closed_and_preserves_both_checkouts",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-ESCAPE", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-ESCAPE"], "jrun-primary-escape"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let primary_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+            let assigned_head = git(&checkout.path, &["rev-parse", "HEAD"]);
+
+            let provider = fixture.root.path().join("codex");
+            let primary = fixture.repo.display().to_string();
+            write_executable(
+                &provider,
+                &format!(
+                    "#!/bin/sh\nset -eu\ncat > /dev/null\nprintf 'assigned stays\\n' > assigned-stays.txt\nprintf 'primary readme\\n' > '{primary}/README.md'\nprintf 'escaped\\n' > '{primary}/escaped.txt'\ngit -C '{primary}' add -- README.md escaped.txt\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                    primary = primary,
+                ),
+            );
+            let host = host.with_provider(&provider);
+            let error =
+                dispatch_linked_provider(&host, "jrun-primary-escape", "T-ESCAPE", &checkout.path)
+                    .expect_err("a primary source edit is a worktree-boundary failure");
+
+            let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+            assert!(
+                error.is_non_retryable(),
+                "primary drift must not be retried as a transient spawn failure"
+            );
+            assert_eq!(
+                diagnostic["conflicting_paths"],
+                json!([]),
+                "disjoint source dirt is fatal on its path class"
+            );
+            assert_eq!(
+                diagnostic["primary_dirt_paths"],
+                json!(["README.md", "escaped.txt"]),
+                "the diagnostic names the stationary primary source edits"
+            );
+            assert_eq!(git(&fixture.repo, &["rev-parse", "HEAD"]), primary_head);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), assigned_head);
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("README.md")).unwrap(),
+                "primary readme\n"
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("escaped.txt")).unwrap(),
+                "escaped\n"
+            );
+            assert_eq!(
+                staged_paths(&fixture.repo),
+                BTreeSet::from(["README.md".to_string(), "escaped.txt".to_string()]),
+                "the guard must not reset the provider-mutated primary index"
+            );
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("assigned-stays.txt")).unwrap(),
+                "assigned stays\n"
+            );
+            assert!(
+                !checkout.path.join("escaped.txt").exists(),
+                "the guard must not copy the primary edit into the assigned checkout"
+            );
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("README.md")).unwrap(),
+                "base\n",
+                "the assigned candidate keeps the bytes it had"
+            );
+        },
+    );
+}
+
+/// Record-store dirt on a path the run also changed is still drift. The
+/// `.orbit/` prefix alone must not excuse an intersection with the candidate.
+#[cfg(unix)]
+#[test]
+fn stationary_record_store_dirt_overlapping_the_run_fails_closed() {
+    isolated(
+        "stationary_record_store_dirt_overlapping_the_run_fails_closed",
+        || {
+            let fixture = Fixture::new();
+            let record = ".orbit/auto_tasks/nightly.yaml";
+            commit_tracked_record(&fixture.repo, record, "name: nightly\n");
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-OVERLAP", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-OVERLAP"], "jrun-record-overlap"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let primary_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+
+            let provider = fixture.root.path().join("codex");
+            let primary = fixture.repo.display().to_string();
+            write_executable(
+                &provider,
+                &format!(
+                    "#!/bin/sh\nset -eu\ncat > /dev/null\nmkdir -p .orbit/auto_tasks\nprintf 'name: from-run\\n' > '{record}'\nprintf 'name: from-primary\\n' > '{primary}/{record}'\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                    record = record,
+                    primary = primary,
+                ),
+            );
+            let host = host.with_provider(&provider);
+            let error =
+                dispatch_linked_provider(&host, "jrun-record-overlap", "T-OVERLAP", &checkout.path)
+                    .expect_err("record-store dirt on a run path is a boundary failure");
+
+            let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+            assert_eq!(diagnostic["conflicting_paths"], json!([record]));
+            assert_eq!(git(&fixture.repo, &["rev-parse", "HEAD"]), primary_head);
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join(record)).unwrap(),
+                "name: from-primary\n"
+            );
+            assert_eq!(
+                fs::read_to_string(checkout.path.join(record)).unwrap(),
+                "name: from-run\n"
+            );
+        },
+    );
+}
+
+/// Concurrent record-store dirt that does not touch the run stays on the
+/// primary and does not fail the provider. The provider itself only edits
+/// the assigned checkout.
+#[cfg(unix)]
+#[test]
+fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
+    isolated(
+        "stationary_record_store_dirt_disjoint_from_the_run_stays_benign",
+        || {
+            let fixture = Fixture::new();
+            let record = ".orbit/auto_tasks/nightly.yaml";
+            commit_tracked_record(&fixture.repo, record, "name: nightly\n");
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-RECORD", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-RECORD"], "jrun-record-dirt"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let primary_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+            let ready = fixture.root.path().join("record-ready");
+            let go = fixture.root.path().join("record-go");
+            let primary_record = fixture.repo.join(record);
+
+            let provider = fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                &format!(
+                    "#!/bin/sh\nset -eu\ncat > /dev/null\n: > '{}'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\nprintf 'candidate\\n' > candidate.txt\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                    ready.display(),
+                    go.display(),
+                ),
+            );
+            let host = host.with_provider(&provider);
+            let curator = thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !ready.exists() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "provider never signaled that the primary snapshot was taken"
+                    );
+                    thread::sleep(Duration::from_millis(20));
+                }
+                fs::write(&primary_record, "name: nightly\nenabled: true\n").unwrap();
+                fs::write(&go, "go\n").unwrap();
+            });
+
+            let outcome =
+                dispatch_linked_provider(&host, "jrun-record-dirt", "T-RECORD", &checkout.path)
+                    .expect("disjoint record-store dirt is not primary drift");
+            curator.join().expect("curator thread");
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert_eq!(git(&fixture.repo, &["rev-parse", "HEAD"]), primary_head);
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join(record)).unwrap(),
+                "name: nightly\nenabled: true\n",
+                "the guard must leave concurrent record-store dirt in place"
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("README.md")).unwrap(),
+                "base\n"
+            );
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("candidate.txt")).unwrap(),
+                "candidate\n"
+            );
+        },
+    );
+}
+
 fn recover(
     host: &LifecycleHost,
     run_id: &str,
@@ -648,6 +856,66 @@ fn recover(
         run_id,
         host: Some(host),
     })
+}
+
+/// Dispatch a substitute provider in a linked worktree whose registered
+/// primary is the host repository.
+fn dispatch_linked_provider(
+    host: &LifecycleHost,
+    run_id: &str,
+    task_id: &str,
+    workspace: &Path,
+) -> Result<orbit_engine::DispatchOutcome, DispatchError> {
+    let blobs = TempDir::new().unwrap();
+    let audit = Arc::new(V2AuditWriter::new(
+        run_id,
+        "codex:test-model",
+        Arc::new(InMemorySink::new(blobs.path().to_path_buf())),
+    ));
+    let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
+        tool_disallow_list: None,
+        instruction: "Edit the assigned checkout.".to_string(),
+        tools: Vec::new(),
+        on_denial: OnDenial::Terminate,
+        model: None,
+        reasoning_effort: None,
+        max_iterations: 1,
+        backend: None,
+        provider: Provider::Codex,
+        wall_clock_timeout_seconds: 30,
+        require_response_envelope: false,
+        require_completion_envelope: true,
+        proc_allowed_programs: None,
+        proc_disallowed_programs: None,
+        trusted_host_execution: false,
+    });
+    dispatch_v2_activity(V2DispatchInput {
+        activity_name: "agent_implement",
+        spec: &spec,
+        fs_profile: None,
+        input: json!({
+            "prompt": "implement",
+            "task_id": task_id,
+            "workspace_path": workspace,
+            "repo_root": workspace,
+            "run_id": run_id,
+        }),
+        audit,
+        run_id,
+        host: Some(host),
+    })
+}
+
+fn integrity_diagnostic(error: &DispatchError, code: &str) -> Value {
+    let DispatchError::WorktreeIntegrity {
+        code: actual,
+        diagnostic,
+    } = error
+    else {
+        panic!("expected a worktree integrity error, got {error:?}");
+    };
+    assert_eq!(*actual, code, "{error}");
+    serde_json::from_str(diagnostic).expect("integrity diagnostic is json")
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,6 +1362,23 @@ fn commit_file(repo: &Path, file: &str, contents: &str) -> String {
     git(repo, &["add", file]);
     git(repo, &["commit", "-m", &format!("write {file}")]);
     git(repo, &["rev-parse", "HEAD"])
+}
+
+/// Commit `file` even when `.gitignore` would hide it, creating parents first.
+fn commit_tracked_record(repo: &Path, file: &str, contents: &str) {
+    let target = repo.join(file);
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, contents).unwrap();
+    git(repo, &["add", "-f", "--", file]);
+    git(repo, &["commit", "-m", &format!("track {file}")]);
+}
+
+fn staged_paths(repo: &Path) -> BTreeSet<String> {
+    git(repo, &["diff", "--cached", "--name-only"])
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn registered_worktrees(repo: &Path) -> Vec<PathBuf> {

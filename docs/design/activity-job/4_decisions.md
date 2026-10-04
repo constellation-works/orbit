@@ -1128,6 +1128,7 @@ No separate narrative body survives; the title, date, and [ORB-10471] task refer
 
 **Recorded:** 2026-09-13 · [ORB-12443]
 **Supersedes in part:** [Primary fast-forward acceptance is decided by interference with the run, not primary dirty-state byte-identity](#primary-fast-forward-acceptance-is-decided-by-interference-with-the-run-not-primary-dirty-state-byte-identity)
+**Amended in part by:** [Stationary primary source edits stay a worktree-boundary failure](#stationary-primary-source-edits-stay-a-worktree-boundary-failure)
 **Paths:** `crates/orbit-engine/src/activity_job/workspace.rs`, `crates/orbit-engine/src/activity_job/cli_runner/tests/orchestrator.rs`, `docs/design/activity-job/*`
 
 **Context.** Managed implementations repeatedly completed successfully in their assigned worktrees and then failed `primary_checkout_drift` because unrelated processes changed tracked, deleted, or untracked source paths in the primary checkout while its HEAD remained stationary. The guard's before/after fingerprints established that primary state changed during the invocation, but did not establish who changed it. Restricting acceptance to `.orbit/` paths or to dirt disjoint from the candidate treated pathname class and overlap as writer attribution. It also confused local primary state with the fetched remote target that delivery actually integrates.
@@ -1141,6 +1142,26 @@ Candidate integration stays isolated in the assigned worktree. The ordinary deli
 - Primary tracked modifications, deletions, untracked files, and staged index entries remain byte-for-byte owned by their external writer and cannot enter the task candidate through this boundary.
 - Snapshot comparison remains useful for diagnosing primary movement, but no longer claims provider authorship. Managed sandbox and assigned-root enforcement continue to prevent unauthorized writes directly.
 - Merge authority is unchanged: `completion: done`, normal validation and review, fresh delivery evidence, push leases, and verified remote merge state remain required.
+
+The stationary-acceptance paragraph above is amended by [ORB-13933](#stationary-primary-source-edits-stay-a-worktree-boundary-failure). Fast-forward acceptance is unchanged.
+
+---
+
+## Stationary primary source edits stay a worktree-boundary failure
+
+**Recorded:** 2026-10-04 · [ORB-13933]
+**Supersedes in part:** [Primary dirt is isolated from candidate integration](#primary-dirt-is-isolated-from-candidate-integration)
+**Paths:** `crates/orbit-engine/src/activity_job/workspace/boundary_guard.rs`, `crates/orbit-engine/tests/engine/v2_worktree_lifecycle.rs`, `docs/design/activity-job/*`
+
+**Context.** [ORB-12443] accepted every stationary primary dirt delta because before/after snapshots cannot name the writer. An unrestricted provider can write the primary checkout directly. That edit has the same shape as concurrent curation, so the guard let delivery proceed with the primary tree modified. The fetched-target rebase never sees those primary bytes, so the escape is not caught later.
+
+**Decision.** A stationary primary HEAD and branch still accepts dirt only when every changed path is under `.orbit/` and none of those paths intersect the run's changed paths. That is the concurrent record-store shape, and it stays outside the candidate. Any other stationary primary mutation — source edits, deletions, untracked files, or staged index entries, including edits that do not overlap the candidate — is `primary_checkout_drift`. Overlapping `.orbit/` dirt is the same failure, and the diagnostic names `conflicting_paths`. The guard still does not stage, commit, reset, clean, or copy either checkout. A proven same-branch primary fast-forward remains admissible even when its working dirt overlaps candidate paths; shipment rebase owns that integration.
+
+**Consequences.**
+- A provider that edits the primary checkout fails the boundary and leaves both checkouts as they were after the write.
+- Concurrent `.orbit/` record-store dirt that does not touch the run's paths still does not fail delivery.
+- Concurrent primary source edits during an unconfined provider are indistinguishable from an escape and fail closed. Sandbox confinement remains a separate control; this guard does not treat it as proof of authorship.
+- Fast-forward acceptance is unchanged.
 
 ---
 
