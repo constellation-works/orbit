@@ -262,7 +262,7 @@ The MCP surface is a different case and is not reopened here: `orbit mcp serve -
 ## A governed row may be an identification floor, not only an operator gate
 
 **Recorded:** 2026-09-20 · [ORB-12582] · **Implemented** in [ORB-12582]
-**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/application/distributed/probe.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, `crates/orbit-cli/tests/tool_list.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/application/distributed/probe.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, `crates/orbit-cli/tests/tool/tool_list.rs`
 
 ### Context
 
@@ -278,7 +278,7 @@ That read is only correct on one surface. An MCP session's capabilities are stam
 
 3. **A handler that needs one more distinction asks for the resolved set.** The receipt lookup's cross-attempt rule (naming another machine's receipt namespace requires `operator`) is input-dependent and cannot be a tool-name-keyed row, so it calls `runtime::authorization::resolved_caller_capabilities`, which applies the shared resolution rather than reading the session. The probe's reported `session.capabilities` come from the same place, so its diagnostics name what the chokepoint actually resolved instead of an empty set.
 
-4. **The owner-local CLI route is covered by the binary, not by a synthesized session.** `crates/orbit-cli/tests/tool_list.rs` spawns `orbit tool run` for both tools against a temp workspace, beside the equivalent coverage [ORB-12581] added for `orbit.drain.claims`.
+4. **The owner-local CLI route is covered by the binary, not by a synthesized session.** `crates/orbit-cli/tests/tool/tool_list.rs` spawns `orbit tool run` for both tools against a temp workspace, beside the equivalent coverage [ORB-12581] added for `orbit.drain.claims`.
 
 ### Rejected alternatives
 

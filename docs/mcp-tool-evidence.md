@@ -7,36 +7,36 @@ This matrix covers the exact 25 modern advertised names in `crates/orbit-cli/tes
 | Advertised tool | Function | Refusal | Persistence | Workspace / authority | Limit |
 | --- | --- | --- | --- | --- | --- |
 | orbit_agent_invoke | S-agent | S-agent-denial | — | S-agent-denial | Synthetic CLI response; real providers untested |
-| orbit_auto_task_add | S-auto-crud | — | S-auto-crud | — | Definition creation read back after server restart; unknown `required_tools` and owner routing untested |
-| orbit_auto_task_list | S-auto-crud | S-replica | S-auto-crud | — | Ordinary list read after restart |
-| orbit_auto_task_mint | S-auto-crud | — | S-auto-crud | — | Creates a proposed task without dispatch; scheduler cursor and persisted-requirement recheck untested |
-| orbit_auto_task_update | S-auto-crud | S-auto-crud | S-auto-crud | S-auto-crud | Updated description and `enabled` read after restart; wrong workspace preserves bytes; stale checked toggle refused |
-| orbit_command_exec | I-command | I-command-denial | I-command-audit | I-command-denial | Local safe argv fixtures; claim-holder refusal and remote command effects untested |
+| orbit_auto_task_add | S-auto-crud, I-auto-crud | I-auto-policy | S-auto-crud, I-owner | I-owner | Definition creation read back after server restart |
+| orbit_auto_task_list | S-auto-crud, I-auto-list | S-replica | S-auto-crud, I-auto-crud | I-owner | Ordinary list read after restart; bounded extension also I-domain |
+| orbit_auto_task_mint | S-auto-crud, I-auto-mint | I-auto-policy | S-auto-crud, I-auto-mint | I-domain | Creates a proposed task without dispatch; scheduler cursor proof I-auto-mint |
+| orbit_auto_task_update | S-auto-crud, I-auto-crud, I-domain | S-auto-crud, I-auto-policy, I-domain | S-auto-crud, I-owner | S-auto-crud, I-owner | Updated description and `enabled` read after restart; wrong workspace preserves bytes; checked stale toggle I-domain |
+| orbit_command_exec | I-command | I-command-denial | I-command-audit | I-command-denial | Local safe argv fixtures; remote command effects untested |
 | orbit_friction_add | S-records | S-replica | S-records | S-replica | Disposable records |
-| orbit_friction_update | S-records, S-rehome | S-rehome | S-records, S-rehome | S-selector, S-rehome | `rehome_to` move across two registered disposable checkouts; missing-record refusal untested |
-| orbit_pipeline_invoke | — | S-domain | — | S-domain | Refusals only; default-input submission, explicit-input and provider completion untested |
+| orbit_friction_update | S-records, S-rehome | I-friction-update, S-rehome | S-records, S-rehome | S-selector, S-rehome | Runtime missing-record refusal; `rehome_to` move across two registered disposable checkouts |
+| orbit_pipeline_invoke | I-domain | S-domain | I-domain | S-domain | Durable default-input submission uses synthetic worker; public explicit-input/provider completion untested |
 | orbit_routine_control | S-domain | S-domain | S-domain | S-domain | List/toggle/restart; host scheduler not fired |
-| orbit_search | S-search | S-search-denial | S-search | S-replica | Lexical consistency; no-query friction listing (A-friction-listing) and external semantic provider untested |
+| orbit_search | S-search, A-friction-listing | S-search-denial, A-friction-listing | S-search | S-replica | Lexical consistency; no-query friction listing proved at the application layer only; external semantic provider untested |
 | orbit_task_add | S-records, S-guarded | S-context | S-guarded | S-replica, S-selector | Guarded proposed create and ordinary authoring |
-| orbit_task_artifact_get | S-artifact | I-artifact-denial | S-artifact-write | S-artifact | Text/raster fixtures; no external download |
+| orbit_task_artifact_get | S-artifact | I-artifact-denial | I-artifact | S-artifact | Text/raster fixtures; no external download |
 | orbit_task_artifact_put | S-artifact-write | S-artifact-write, I-artifact-authority | S-artifact-write | S-artifact-write, I-artifact-authority | Exact UTF-8 bytes after server restart; path and workspace refusals |
 | orbit_task_list | S-records | S-selector | S-guarded | S-selector | Field projections, bounded pages |
-| orbit_task_show | S-records, S-guarded, S-delivery | S-selector, S-delivery | S-guarded | S-selector, S-delivery | Global ID and explicit workspace filter; `field: "delivery"` reads bounded delivery evidence without run access |
+| orbit_task_show | S-records, S-guarded, S-delivery | S-selector, S-delivery, I-delivery | S-guarded | S-selector, S-delivery | Global ID and explicit workspace filter; `field: "delivery"` reads bounded delivery evidence without run access |
 | orbit_task_update | S-records, S-guarded | S-context, S-guarded | S-guarded | S-selector | Restart receipts and stale revision refusal |
 | orbit_ui_inspect | S-presentation, W-presentation | W-presentation | — | S-presentation, W-presentation | Presentation read, native launcher untested |
 | orbit_ui_open | S-presentation, W-presentation | — | — | S-presentation, W-presentation | Same data selection; native launcher untested |
-| orbit_workflow_auto | S-domain, S-workers | S-domain, S-workers, I-workers | S-workers | S-domain, S-workers | Stdio status; `resize` on a disposable running record, no worker dispatched; drain start/stop untested |
+| orbit_workflow_auto | S-domain, I-drain, S-workers, I-resize | S-domain, I-drain, S-workers, I-workers, I-resize | I-drain, S-workers | S-domain, S-workers | Stdio status; start/stop runtime fixture, no provider delivery; `resize` on a disposable running record, no worker dispatched |
 | orbit_workflow_run_list | S-domain, I-runs | I-runs | S-domain | I-runs | Combined catalog observed over stdio |
 | orbit_workflow_run_resume | S-resume | S-resume, I-runs | S-resume | S-resume, I-runs | Deterministic sleep-only job; retained successful checkpoint and retry lineage |
 | orbit_workflow_run_show | S-resume, I-runs | I-runs | S-resume, I-runs | I-runs | Retry lineage read after server restart; unavailable evidence fixtures |
-| orbit_workflow_ship | — | S-governed, I-runs | — | S-governed, I-runs | Refusals only; dispatch, in-flight guard and provider/GitHub delivery untested |
+| orbit_workflow_ship | I-ship | I-ship, S-governed | I-ship | I-ship | Synthetic dispatch; actual provider/GitHub delivery untested |
 | orbit_workspace_list | S-federated, W-crews | S-selector, W-crews | — | S-federated, S-replica | Local machine-qualified routing and `include: ["crews"]` rows; live SSH destinations untested |
 
 Named proofs are below. Suite totals are supporting execution evidence; the named assertion determines what each row claims. Schema snapshots and parser tests do not count as a successful business operation.
 
 ## Production stdio proofs
 
-All `S` proofs are in `crates/orbit-cli/tests/mcp_roundtrip.rs` or its indicated submodule.
+All `S` proofs are in `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs` or its indicated submodule.
 
 - **S-records**: `mcp_serve_round_trips_records_against_a_temp_workspace` creates, updates and reads task/friction records through production serialization and stores.
 - **S-guarded**: `desktop::desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations` proves create/comment receipt replay after process restart, stale revision refusal and explicit destination requirements; it also proves cached advertised and canonical retired aliases return `tool_not_found`.
@@ -87,25 +87,34 @@ native-client integration, or successful remote candidate handoff/landing.
 
 ## Runtime and application proofs
 
-The registered tool-host proofs are in `crates/orbit-core/src/adapter/tool_host/tests/`. They cross runtime authorization/dispatch and real temporary storage; they do not cross production stdio. Only refusals and secret-handling guards remain at this layer; positive behavior is proved over stdio above.
+The registered tool-host proofs are in `crates/orbit-core/src/adapter/tool_host/tests/` and passed together in the 227-test tool-host run. They cross runtime authorization/dispatch and real temporary storage; they do not cross production stdio.
 
-- **A-friction-listing**: no current proof that a queryless friction search lists every status oldest first, or of its list shape.
+- **I-auto-crud** (`auto_task_tools.rs`): `explicit_template_complexity_roundtrips_through_tools_and_minting`.
+- **I-auto-list / I-auto-mint** (`auto_task_tools.rs`): `list_returns_every_definition_through_the_tool_surface` / `mint_returns_the_minted_task_with_its_provenance_tag` (also asserts the scheduler cursor is untouched).
+- **I-auto-policy** (`auto_task_tools.rs`): `auto_task_add_rejects_unknown_required_tools_with_suggestions`, `auto_task_update_rejects_unknown_required_tools_with_suggestions`, `auto_task_mint_rechecks_persisted_template_requirements`.
+- **I-owner** (`runtime/tests/worker_coordination.rs`): `owner_routing_fences_generic_writes_across_separate_stores` asserts host-brokered add/update (including `enabled`) land on the owner and wrong-workspace/shadow definitions cannot change it.
+- **I-domain / I-drain** (`desktop_tools.rs`): `domain_automation_scopes_definitions_checks_conflicts_and_mints_without_dispatch` / `desktop_drain_readiness_and_idle_stop_reuse_runtime_without_dispatch`, `desktop_drain_persists_bounded_window_and_explicit_completion_policy`, and `desktop_drain_requires_operator_and_validates_before_dispatch`. Pipeline default submission is a persisted run whose worker is replaced with a bounded shell fixture; it is not provider completion evidence.
+- **I-friction-update** (`friction_tools.rs`): `update_of_a_missing_record_is_not_found_and_invalid_input_is_preserved`, `update_rehome_to_moves_a_friction_into_the_registered_owner`, `update_applies_its_edits_before_the_move`, `update_refuses_a_move_that_contradicts_itself`, and `update_with_move_false_records_and_clears_the_rehome_disposition`.
+- **I-delivery** (`workflow_tools.rs`): `an_agent_session_reaches_the_task_delivery_read_but_not_the_run_view`; the newest-run default is read over stdio by `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs::an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run`, which seeds a single delivery run, so skipping newer non-delivery runs is not proven.
+- **I-resize** (`desktop_tools.rs`): `desktop_drain_resize_targets_the_one_live_drain_without_replacing_it` refuses with no live drain or several, and retunes the one live drain in place.
+- **A-friction-listing**: no current proof that a queryless friction search lists every status oldest first; `friction_tools.rs` covers only the list shape (`list_default_is_always_the_legacy_array`, `list_with_notes_is_one_stable_envelope_for_hits_and_misses`).
 - **W-crews** (`orbit-mcp` `federated/tests/host.rs`, `remote/tests/discovery.rs`): `each_row_carries_the_crews_its_own_destination_resolved` and `include_accepts_crews_and_refuses_anything_else`.
-- **I-command / I-command-audit / I-command-denial** (`command_tools.rs`): `secret_argv_reaches_child_but_is_redacted_in_the_audit_record` executes as the claim holder, returns stdout and records a redacted argv in the audit row; `auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output`; refusals `managed_run_environment_denies_command_exec`, `working_directory_in_a_sibling_checkout_is_refused` and `working_directory_symlink_that_escapes_is_refused`. Refusal of an operator without the claim has no current test.
-- **I-artifact-denial / I-artifact-authority** (`task_tools.rs`): `artifact_get::traversal_and_absolute_paths_are_refused_before_any_read` and `task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution`.
-- **I-runs** (`workflow_tools.rs`): `managed_run_environment_denies_ship_and_resume_end_to_end` and `mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace`. The page limit and the enriched list projection have no current test.
-- **I-workers** (`crates/orbit-cli/tests/run_observation.rs`): `run_concurrency_updates_persisted_revision_and_refuses_stale_writes` raises the ceiling of a running run, records actor and reason, and refuses a stale revision without writing; `orbit-types` `workflow/tests/run_state.rs` (`setting_the_ceiling_records_what_it_replaced_and_advances_the_revision`, `a_stale_expected_revision_changes_nothing`) pins the record. The over-limit and zero-ceiling refusals have no current test.
-- **I-resume**: `orbit-web` `api/tests/runs.rs::resume_job_run_endpoint_rejects_non_terminal_run_with_guard_reason` refuses a non-terminal source; `orbit-web` `tests/http_api/workflows.rs::ship_and_resume_refuse_in_flight_duplicates_without_persisting_runs` refuses an in-flight duplicate. The store-level retry-lineage fence (one live run per source, including concurrent resume inserts) and resume reconciliation idempotency have no current test.
+- **I-command / I-command-audit / I-command-denial** (`command_tools.rs`): `claim_holder_executes_and_receives_stdout_stderr_and_exit_status`, `audit_record_carries_argv_working_directory_caller_and_workspace`, `operator_without_the_claim_is_refused`, `managed_run_environment_denies_command_exec`, `working_directory_in_a_sibling_checkout_is_refused`, and `working_directory_symlink_that_escapes_is_refused`, and `auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output`.
+- **I-artifact / I-artifact-denial / I-artifact-authority** (`task_tools.rs`): `artifact_get::raster_images_survive_attach_list_and_read_with_intact_bytes`, `artifact_get::text_artifacts_are_returned_as_utf8_rather_than_base64`, `artifact_get::traversal_and_absolute_paths_are_refused_before_any_read`, `artifact_get::an_unknown_task_fails_closed_before_any_artifact_lookup`, and `task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution`.
+- **I-runs** (`workflow_tools.rs`): `operator_can_observe_runs_and_agent_denial_is_audited`, `managed_run_environment_denies_ship_and_resume_end_to_end`, `run_list_refuses_a_limit_above_200`, `mcp_run_show_projects_bounded_recovery_evidence_without_replacing_run_error`, and `mcp_run_list_preserves_enriched_default_projection_across_a_mixed_page`, and `mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace`.
+- **I-ship** (`workflow_tools.rs`): `ship_tool_inherits_the_shared_in_flight_guard`, `ship_tool_records_mcp_provenance_only_for_an_mcp_session`, and `ship_tool_parses_and_rejects_an_unknown_crew_allowlist_before_dispatch`.
+- **I-workers** (`crates/orbit-cli/tests/process/run_observation.rs`): `run_concurrency_updates_persisted_revision_and_refuses_stale_writes` raises the ceiling of a running run, records actor and reason, and refuses a stale revision without writing; `orbit-types` `workflow/tests/run_state.rs` (`setting_the_ceiling_records_what_it_replaced_and_advances_the_revision`, `a_stale_expected_revision_changes_nothing`) pins the record. The over-limit and zero-ceiling refusals have no current test.
+- **I-resume**: `orbit-web` `api/tests/runs.rs::resume_job_run_endpoint_rejects_non_terminal_run_with_guard_reason` refuses a non-terminal source; `orbit-web` `tests/http_api/workflows.rs::ship_and_resume_refuse_in_flight_duplicates_without_persisting_runs` refuses an in-flight duplicate; `orbit-store` `driver/sqlite/job_run_store/tests/backend.rs` (`resume_insert_refuses_a_live_lineage_run_and_reopens_once_it_is_terminal`, `concurrent_resume_inserts_of_one_source_admit_exactly_one_run`) fences the retry lineage. Resume reconciliation idempotency has no current test.
 
 The distributed admission proofs use isolated stores and in-process transports. No SSH or live owner was contacted.
 
-- **I-pull / I-bind-settle / I-settle**: `crates/orbit-core/tests/distributed_drain.rs` drives a follower's drain against a real owner runtime: `lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once`, `three_failed_claims_open_the_breaker_and_a_new_drain_resets_it`, and `a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once`.
+- **I-pull / I-bind-settle / I-settle**: `crates/orbit-core/tests/runtime/distributed_drain.rs` drives a follower's drain against a real owner runtime: `lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once`, `three_failed_claims_open_the_breaker_and_a_new_drain_resets_it`, and `a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once`.
 - **I-receipt / I-pull-denial** (store level, `crates/orbit-store/tests/allocation_admission.rs`): `simultaneous_retries_of_one_request_create_one_claim`, `distinct_concurrent_requests_never_claim_overlapping_tasks`, and `handoff_authorization_follows_the_owner_policy_at_admission`. Session refusal is the `internal_drain` stdio proof above.
 - **I-probe** and upgraded or incompatible receipt lookups have no current test.
 
 ## Wire and remaining gaps
 
-**W-presentation** comprises `presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mismatched_reads` and `desktop_wire_preserves_explicit_destination_and_run_inspector_authority` in `crates/orbit-mcp/tests/mcp_wire_roundtrip.rs`. `client_handshake_does_not_advertise_retired_desktop_tools` proves that a client handshake cannot expand discovery with retired desktop tools and that current snapshot calls still dispatch.
+**W-presentation** comprises `presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mismatched_reads` and `desktop_wire_preserves_explicit_destination_and_run_inspector_authority` in `crates/orbit-mcp/tests/boundary/mcp_wire_roundtrip.rs`. `client_handshake_does_not_advertise_retired_desktop_tools` proves that a client handshake cannot expand discovery with retired desktop tools and that current snapshot calls still dispatch.
 
 `federated::tests::route::retired_desktop_calls_and_alias_only_destinations_are_refused_without_dispatch` checks that retired calls and destinations advertising only retired aliases are refused before delivery. `old_same_name_peer_without_extension_schema_refuses_before_dispatch` retains schema preflight for guarded fields. `guarded_domain_write_keeps_unknown_outcome_without_resubmission` checks that a lost reply is never resubmitted or translated into another operation.
 

@@ -1052,7 +1052,7 @@ After [ORB-10313], the VCS handoff seam uses one shared durable predicate (`reje
 
 Executor invariants are tested at the crate boundary, following
 [the test strategy](../../design-patterns/test_strategy.md).
-`crates/orbit-engine/tests/v2_runtime.rs` runs job assets with `parallel:`,
+`crates/orbit-engine/tests/engine/v2_runtime.rs` runs job assets with `parallel:`,
 `fan_out:` and `loop:` blocks through `execute_job_with_resume`. It pins the
 `JoinMode` decision for branches and fan-in workers, spawn-index output
 ordering under the `max_workers` cap, and loop exit on break, failure or an

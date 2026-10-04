@@ -98,11 +98,11 @@ unknown_tool_calls:
 
 validation:
   exact_tool_snapshot: crates/orbit-cli/tests/snapshots/mcp_tools_list.json
-  protocol_roundtrip: crates/orbit-mcp/tests/mcp_wire_roundtrip.rs
-  production_roundtrip: crates/orbit-cli/tests/mcp_roundtrip.rs
+  protocol_roundtrip: crates/orbit-mcp/tests/boundary/mcp_wire_roundtrip.rs
+  production_roundtrip: crates/orbit-cli/tests/mcp/mcp_roundtrip.rs
   remote_proxy: crates/orbit-mcp/src/remote/tests/proxy.rs
   listener_bind_policy: crates/orbit-mcp/src/tests/listener.rs
-  listener_roundtrip: crates/orbit-mcp/tests/mcp_wire_roundtrip.rs
+  listener_roundtrip: crates/orbit-mcp/tests/boundary/mcp_wire_roundtrip.rs
   server_identity: crates/orbit-mcp/src/remote/tests/identity.rs
   discovery: crates/orbit-mcp/src/remote/tests/discovery.rs
-  unknown_call_audit: crates/orbit-cli/tests/mcp_roundtrip.rs
+  unknown_call_audit: crates/orbit-cli/tests/mcp/mcp_roundtrip.rs

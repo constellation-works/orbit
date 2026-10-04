@@ -49,11 +49,10 @@ unset ORBIT_LOG_GOLDEN_CASE
 cargo="${CARGO:-cargo}"
 
 "$cargo" test -p orbit-core --test ci_failure_goldens
-"$cargo" test -p orbit-tools --test public_tool_surface github_log_goldens
-"$cargo" test -p orbit-tools --test mcp_definitions
-"$cargo" test -p orbit-cli --test help_goldens
-"$cargo" test -p orbit-cli --test output_goldens
-"$cargo" test -p orbit-cli --test mcp_roundtrip \
-  mcp_serve_tools_list_matches_production_snapshot -- --exact
+"$cargo" test -p orbit-tools --test tools -- \
+  public_tool_surface::github_log_goldens:: mcp_definitions::
+"$cargo" test -p orbit-cli --test output -- help_goldens:: output_goldens::
+"$cargo" test -p orbit-cli --test mcp \
+  mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot -- --exact
 "$cargo" test -p orbit-exec --test sandbox_profile_goldens
 "$cargo" test -p orbit-core --test sandbox_profile_goldens

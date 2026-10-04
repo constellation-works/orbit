@@ -82,7 +82,7 @@ core's mutable libtest fixtures use the shared
 with this isolation and verify one test passed in the child.
 
 The pattern above is already used by
-[`crates/orbit-cli/tests/tool_list.rs`](../crates/orbit-cli/tests/tool_list.rs).
+[`crates/orbit-cli/tests/tool/tool_list.rs`](../crates/orbit-cli/tests/tool/tool_list.rs).
 For a complete disposable fixture, create absolute temporary paths, initialize
 the fixture workspace through that helper, then perform a read-only routing
 check before adding tasks or starting runs:
@@ -126,7 +126,7 @@ managed child can inherit `ORBIT_MANAGED_RUN_CONTEXT` and the
 `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair, which carries durable authority
 and takes precedence over home discovery. Never use bare mutable fixture CLI
 commands against ambient authority in a managed worker. See
-[`crates/orbit-cli/tests/ambient_authority_isolation.rs`](../crates/orbit-cli/tests/ambient_authority_isolation.rs)
+[`crates/orbit-cli/tests/workspace/ambient_authority_isolation.rs`](../crates/orbit-cli/tests/workspace/ambient_authority_isolation.rs)
 for the regression coverage.
 
 Live `bwrap` spawn is not available from inside an agent-executor or job-run
@@ -137,11 +137,11 @@ environment, not a missing AppArmor profile or a product defect. Replay live
 spawn checks (`spawn_under_linux_bwrap`, `--run-ignored`) on the owning Linux
 host. Do not disable `linux-bwrap` or try to make bwrap nest from a fixture.
 
-The `plugin_secrets` integration binary also runs
+The `plugin_secrets` module of the CLI `tool` integration binary also runs
 `secret_sinks::seeded_secrets_stay_out_of_persistence_logs_and_children`:
 
 ```bash
-cargo test -p orbit-cli --test plugin_secrets seeded_secrets_stay_out
+cargo test -p orbit-cli --test tool plugin_secrets::secret_sinks::seeded_secrets_stay_out
 ```
 
 One isolated child seeds fake provider, SCM, cloud and database credentials
@@ -161,16 +161,17 @@ composition without nesting an OS sandbox.
 
 Authorization coverage is generated from the live governed-operation and
 builtin tool registries by `authorization_matrix_matches_live_registry` in the
-CLI `output_goldens` integration binary. `make goldens UPDATE=1` regenerates
+CLI `output` integration binary (module `output_goldens`). `make goldens UPDATE=1` regenerates
 its operation/capability/caller verdict table; review every capability diff.
-The `public_tool_surface` integration binary dispatches invalid arguments to
+The `public_tool_surface` module of the `orbit-tools` `tools` integration
+binary dispatches invalid arguments to
 every registered `orbit.task.*` tool, including inactive tools, and checks each
 declared parameter. Task dispatch refuses unknown fields and incompatible
 types before domain execution. Transport wrappers remain supported, as do
 existing optional nulls, numeric strings, string booleans and string/list
 forms. Handler-specific required fields and guarded modes are still validated
 by their handlers. `agent_task_deletion_is_denied_through_every_dispatch_path`
-in `mcp_roundtrip` exercises runtime, CLI/MCP dispatch and local/remote MCP
+in the CLI `mcp` binary's `mcp_roundtrip` module exercises runtime, CLI/MCP dispatch and local/remote MCP
 sessions in a disposable child process with a 120-second deadline.
 
 CI collects workspace test coverage with

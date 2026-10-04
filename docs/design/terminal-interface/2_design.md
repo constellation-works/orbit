@@ -78,7 +78,7 @@ A closed stdout is not an error. `output/pipe.rs` installs a panic hook that tur
 
 Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover the plain and JSON forms of tool, task, and skill lists; they also cover a plain task detail view and the layer provenance of `config show --json`. CLI long-help goldens live under `crates/orbit-cli/tests/help_goldens/` and are compared against the binary's `--help`. `tests/snapshots/` holds the MCP tool listing. The list-command integration goldens capture piped output; the table form needs a terminal, so no golden covers it.
 
-The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
+The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/output/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
 
 `crates/orbit-cli/src/output/tests/sink.rs` asserts that a non-terminal sink has zero width and refuses color however the environment insists [ORB-10570]. Its sink is built with `OutputSink::resolve`, never `from_process`, because `make ci` runs without a TTY.
 

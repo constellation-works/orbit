@@ -149,7 +149,7 @@ A backend the host spawns on an agent's behalf ([plugins agent call broker §5](
 
 Granted write roots are created before the child spawns, because a rule binds to an inode: a grant naming a directory that does not exist yet would otherwise silently grant nothing. `/dev/null` and the other write-side character devices are always granted, so an ordinary `>/dev/null` in a backend script is not a denial. The full manifest-to-profile mapping, including the macOS half, is in [plugins §4.3](../plugins/1_scope.md#43-sandboxing). [ORB-12736]
 
-**Evidence.** `crates/orbit-exec/tests/linux_landlock.rs` exercises the retained Landlock read primitive against the real kernel, although `proc.spawn` no longer calls it. The same file tests the active plugin boundary: an outside-root write does not reach disk, a granted one does, and a `deny_tcp` child cannot connect to a live loopback listener. These kernel tests report a skip where the required ABI is unavailable; `crates/orbit-exec/src/linux_landlock/tests/` covers grant compilation deterministically on any platform.
+**Evidence.** `crates/orbit-exec/tests/sandbox/linux_landlock.rs` exercises the retained Landlock read primitive against the real kernel, although `proc.spawn` no longer calls it. The same file tests the active plugin boundary: an outside-root write does not reach disk, a granted one does, and a `deny_tcp` child cannot connect to a live loopback listener. These kernel tests report a skip where the required ABI is unavailable; `crates/orbit-exec/src/linux_landlock/tests/` covers grant compilation deterministically on any platform.
 
 `ExecutionResult { success, stdout, stderr, exit_code, duration_ms, output }` is defined in `orbit-common`. Captured bytes use `String::from_utf8_lossy`, so non-UTF-8 output becomes replacement characters instead of failing the call.
 
@@ -397,7 +397,7 @@ not establish database integrity.
 The required live integrity fixture is explicit and fails on namespace denial:
 
 ```sh
-cargo test -p orbit-exec --test linux_sandbox kernel_git_metadata_integrity_through_original_and_build_aliases -- --ignored --exact --nocapture
+cargo test -p orbit-exec --test sandbox linux_sandbox::kernel_git_metadata_integrity_through_original_and_build_aliases -- --ignored --exact --nocapture
 ```
 
 Run it on an authorized Linux host where `/usr/bin/bwrap` can create user and
@@ -444,14 +444,14 @@ Risk-weighted regression tests sit beside the implementations they guard
   exceptions intersect profile authority, workspace exceptions cannot exceed
   the host surface, and later workspace denies still win ([ORB-10560]).
 - `crates/orbit-exec/src/linux_landlock/tests/` and
-  `crates/orbit-exec/tests/linux_landlock.rs` — grant compilation decides the
+  `crates/orbit-exec/tests/sandbox/linux_landlock.rs` — grant compilation decides the
   workspace and host tables without applying a ruleset, while the integration
   suite applies the real ruleset to real children: a host sentinel and a
   `denyRead` match are withheld from a `git` shell alias, a denied file survives
   neither an in-place rename nor a move into a readable directory, a generated
   file stays readable, another process's `environ` is not, declared tool state
   is readable while its publish token is not, and `git` / `rg` / `cargo` /
-  `make` / `gh` still run. `crates/orbit-tools/tests/proc_spawn_lockdown.rs`
+  `make` / `gh` still run. `crates/orbit-tools/tests/tools/proc_spawn_lockdown.rs`
   reproduces the same alias bypass through the tool itself and pins the
   request-time `/etc` denial ([ORB-11514]).
 - `crates/orbit-exec/src/macos_sandbox/compile.rs#tests` and

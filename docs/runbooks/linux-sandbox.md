@@ -219,8 +219,8 @@ that do not advertise this option. Run the explicit kernel regression on an
 authorized Linux host after building the candidate revision:
 
 ```sh
-cargo test -p orbit-exec --test linux_sandbox \
-  kernel_descriptor_mount_never_writes_the_replacement_object -- --ignored --exact
+cargo test -p orbit-exec --test sandbox \
+  linux_sandbox::kernel_descriptor_mount_never_writes_the_replacement_object -- --ignored --exact
 ```
 
 The test deliberately replaces a regular sidecar name after its descriptor is

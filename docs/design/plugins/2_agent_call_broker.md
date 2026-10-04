@@ -326,7 +326,7 @@ service side regardless.
   are killed and reaped when the pool drops; no reference is retained in the host runtime's
   ordinary MCP backend. A response already received still applies its secret rotation
   before the broker tries to deliver it to the client.
-- `crates/orbit-cli/tests/plugin_broker_sandbox.rs` exercises both `orbit tool run` and
+- `crates/orbit-cli/tests/tool/plugin_broker_sandbox.rs` exercises both `orbit tool run` and
   MCP `tools/call` from a real Bubblewrap PID namespace against exec and MCP fixture
   backends. It checks the host-worker parent PID, shared session and host-owned task/run
   identity despite spoofed environment variables, then verifies teardown. It reports a

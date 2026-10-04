@@ -2,7 +2,7 @@
 //!
 //! `main` refuses a recognized plugin child every command that does not
 //! declare itself a callback entry point, so this table *is* the boundary.
-//! `tests/plugin_child_cli_surface.rs` proves the refusal end to end against
+//! `tests/tool/plugin_child_cli_surface.rs` proves the refusal end to end against
 //! the real binary; these assertions pin the two entry points that test
 //! cannot reach — `orbit mcp serve`, which would block waiting on stdio — and
 //! the neighbours they must not be confused with.

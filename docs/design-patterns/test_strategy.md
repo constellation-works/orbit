@@ -57,10 +57,11 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 
 ## Integration-test cost
 
-Each top-level `crates/<crate>/tests/<name>.rs` file is its own binary, and every binary pays the link cost. To keep that cost down:
+Cargo links each top-level `crates/<crate>/tests/<name>.rs` file and each `crates/<crate>/tests/<area>/main.rs` as its own binary, and every binary pays the link cost. Integration tests are therefore grouped by area: `tests/<area>/main.rs` declares one module per surface, `tests/<area>/<surface>.rs` (for example `orbit-cli`'s `output`, `mcp`, `tool`, `task`, `workspace` and `process` binaries). To keep that cost down:
 
-- Add a new case to an existing integration binary when one covers the same area.
-- Start a new top-level file only for a genuinely separate surface.
+- Add a new case to an existing area binary, or a new module to it for a new surface.
+- Start a new binary only for a genuinely separate area, or for a test that must own its process because it installs signal handlers or mutates the environment outside `orbit_common::test_env`'s lock. Say why in its header.
+- A test that re-runs itself as a child (`current_exe()` with `--exact <name>`) must pass the module-qualified name. A name that matches nothing runs zero tests and exits successfully.
 - Fixtures that mutate Orbit state still run in an isolated child process ([DEVELOPMENT.md](../DEVELOPMENT.md#safe-mutable-cli-fixtures)).
 - Waits and process guards follow STD-03 §R17 to §R20.
 

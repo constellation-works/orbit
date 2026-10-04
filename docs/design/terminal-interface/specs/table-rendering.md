@@ -75,6 +75,6 @@ Step 3 uses the sink contract in [./output-modes.md](./output-modes.md) §1. Ste
 
 The piped form now follows §1: `auto` on a non-terminal sink selects plain output, which suppresses the header and carries full values separated by tabs without ANSI or truncation. `--format table` explicitly requests the header-bearing table; a non-terminal sink still has no width, so it does not truncate values.
 
-There was no output snapshot suite to update — see [../2_design.md §8](../2_design.md#8-test-coverage-of-output) — so the migration added fixtures rather than adjusting them: unit rendering assertions at pinned widths (since retired for boundary tests), and an end-to-end *N*-records-is-*N*-lines assertion for `orbit tool list` and `orbit task list` in `crates/orbit-cli/tests/table_rendering.rs`.
+There was no output snapshot suite to update — see [../2_design.md §8](../2_design.md#8-test-coverage-of-output) — so the migration added fixtures rather than adjusting them: unit rendering assertions at pinned widths (since retired for boundary tests), and an end-to-end *N*-records-is-*N*-lines assertion for `orbit tool list` and `orbit task list` in `crates/orbit-cli/tests/output/table_rendering.rs`.
 
 Which truncatable column has a detail command, and which four views still lack one, is recorded in [../references/detail-commands.md](../references/detail-commands.md).
