@@ -2,9 +2,9 @@
 //!
 //! [`ConfigStore`] wraps a single `config.toml` file as a `toml_edit::DocumentMut`
 //! so `orbit config set` can edit one key without disturbing any other part of
-//! the file's formatting or hand-written comments. Validation goes through the
-//! same single-document admission pipeline used after runtime layers have been
-//! merged, so a `set` cannot produce a malformed value for its target file.
+//! the file's formatting or hand-written comments. Global edits validate their
+//! document directly; workspace edits validate the staged document over the
+//! global layer, matching the effective configuration load path.
 
 use std::fs;
 use std::io::Read;
@@ -19,7 +19,10 @@ use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
-use crate::layering::{reject_workspace_machine_table, validate_staged_workspace_document};
+use crate::layering::{
+    reject_workspace_machine_table, resolve_staged_workspace_document,
+    validate_staged_workspace_document,
+};
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     PLUGIN_ENABLEMENT_TABLE, reject_global_plugin_enablement, workspace_config_sets_policy,
@@ -439,14 +442,46 @@ impl ConfigStore {
         }
     }
 
-    /// Admission plus a write-time refusal for `orbit config set`.
+    /// Validate this document and apply the write-specific checks for `key`.
     ///
     /// Load ignores an invalid optional crew property so the workspace stays
     /// usable. A deliberate `set` of that same key still fails closed: the
     /// operator asked to persist a value that admission would drop.
+    /// Workspace writes should use [`Self::validate_workspace_for_set`] so
+    /// validation includes crews defined only in the global layer.
     pub fn validate_for_set(&self, key: &str) -> Result<(), OrbitError> {
         self.reject_workspace_machine_table()?;
         let resolved = self.resolved()?;
+        self.validate_set_against_resolved(key, &resolved)
+    }
+
+    /// Admit a staged workspace edit using the effective configuration formed
+    /// from the global and workspace files, then apply the write-specific
+    /// crew-property and plugin-schema checks for `key`.
+    pub fn validate_workspace_for_set(
+        &self,
+        key: &str,
+        global_root: &Path,
+    ) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Workspace {
+            return Err(OrbitError::InvalidInput(
+                "layered workspace validation requires a workspace config store".to_string(),
+            ));
+        }
+        let workspace_root = self.path.parent().ok_or_else(|| {
+            OrbitError::InvalidInput("workspace config path has no parent directory".to_string())
+        })?;
+        let roots = ConfigRoots::new(global_root, workspace_root);
+        let resolved =
+            resolve_staged_workspace_document(&roots, &self.path, &self.doc.to_string())?;
+        self.validate_set_against_resolved(key, &resolved)
+    }
+
+    fn validate_set_against_resolved(
+        &self,
+        key: &str,
+        resolved: &ResolvedConfig,
+    ) -> Result<(), OrbitError> {
         if let Some(ignored) = resolved
             .ignored_crew_properties
             .iter()

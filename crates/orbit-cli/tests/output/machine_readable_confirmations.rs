@@ -253,6 +253,60 @@ fn config_set_rejections_leave_config_files_byte_identical() {
 }
 
 #[test]
+fn config_set_validates_workspace_pools_against_global_crews() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+
+    let global_config = fixture.home.join(".orbit/config.toml");
+    let mut global = fs::read_to_string(&global_config).expect("read global config");
+    global.push_str(
+        "\n[crews.gemini-flash]\nenabled = true\nprovider = \"codex\"\nmodel = \"gpt-test\"\nbackend = \"cli\"\n",
+    );
+    fs::write(&global_config, global).expect("define global crew");
+
+    let workspace_config = fixture.work.join(".orbit/config.toml");
+    fs::write(
+        &workspace_config,
+        "[workflow]\nlow_complexity_crews = [\"gemini-flash:20\"]\n",
+    )
+    .expect("configure workspace pool");
+
+    fixture
+        .orbit()
+        .args(["config", "set", "operation.review_minutes", "120"])
+        .assert()
+        .success();
+    let value = fixture.json(&[
+        "config",
+        "get",
+        "operation.review_minutes",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(value["value"], 120);
+
+    fs::write(
+        &workspace_config,
+        "[workflow]\nlow_complexity_crews = [\"missing-crew:20\"]\n",
+    )
+    .expect("configure undefined workspace pool");
+    let before = fs::read(&workspace_config).expect("snapshot workspace config");
+    fixture
+        .orbit()
+        .args(["config", "set", "operation.review_minutes", "121"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "crew 'missing-crew' is not defined in [crews.*]",
+        ));
+    assert_eq!(
+        fs::read(&workspace_config).expect("read workspace config after refusal"),
+        before,
+        "an undefined crew must refuse the unrelated edit without writing"
+    );
+}
+
+#[test]
 fn tool_toggles_and_mcp_registration_print_json_documents() {
     let fixture = Fixture::new();
     fixture.init_machine_and_workspace();

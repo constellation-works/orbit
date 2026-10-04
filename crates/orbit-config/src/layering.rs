@@ -270,12 +270,23 @@ pub(crate) fn validate_staged_workspace_document(
     workspace_path: &Path,
     raw: &str,
 ) -> Result<(), OrbitError> {
+    resolve_staged_workspace_document(roots, workspace_path, raw).map(|_| ())
+}
+
+/// Resolve an in-memory workspace edit against the current global layer,
+/// returning the same admitted configuration a normal layered load produces.
+pub(crate) fn resolve_staged_workspace_document(
+    roots: &ConfigRoots,
+    workspace_path: &Path,
+    raw: &str,
+) -> Result<ResolvedConfig, OrbitError> {
     if !roots.has_workspace_layer() {
         return Err(OrbitError::InvalidInput(
             "workspace validation requires a distinct workspace root".to_string(),
         ));
     }
-    load_layered_resolved_with_workspace(roots, Some((workspace_path, raw))).map(|_| ())
+    load_layered_resolved_with_workspace(roots, Some((workspace_path, raw)))
+        .map(|loaded| loaded.resolved)
 }
 
 fn load_layered_resolved_with_workspace(
