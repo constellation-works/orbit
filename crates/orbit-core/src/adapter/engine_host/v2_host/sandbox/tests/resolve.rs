@@ -421,3 +421,103 @@ fn a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target() {
         "sandbox preparation must not create runtime stores at a redirect target"
     );
 }
+
+/// Seed Orbit's shipped executors as `orbit init` would on `target_os`.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn seed_shipped_executors(runtime: &crate::OrbitRuntime, target_os: &str) {
+    crate::application::executor::seed_default_executors_for_platform(
+        runtime.stores().executors(),
+        false,
+        target_os,
+    )
+    .expect("seed shipped executors");
+}
+
+/// [ORB-13857] A shipped agent executor on an OS with no sandbox backend used
+/// to lose its declared kind and spawn bare. Sandbox availability is a host
+/// precondition, so dispatch must refuse it — both on a fresh seed and on an
+/// install whose earlier seed dropped the kind — before any child exists.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn shipped_agent_executor_without_a_host_backend_is_refused_with_remedies() {
+    use orbit_engine::DispatchError;
+
+    use crate::adapter::engine_host::v2_host::sandbox::resolve::resolve_executor_sandbox_on;
+
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    // An install seeded before the refusal existed carries no sandbox.
+    seed_executor(&runtime, "claude", None);
+    seed_shipped_executors(&runtime, "windows");
+
+    for provider in ["claude", "codex"] {
+        let error =
+            resolve_executor_sandbox_on(&runtime, provider, Some("implementer"), None, "windows")
+                .expect_err("an unavailable declared sandbox must not resolve to a bare spawn");
+        let DispatchError::CliInvocationPermanent(message) = error else {
+            panic!("refusal must be permanent so retries do not re-attempt it: {error:?}");
+        };
+        for remedy in [
+            format!("`{provider}`"),
+            "`windows`".to_string(),
+            "spec.sandbox: off".to_string(),
+            "WSL2".to_string(),
+        ] {
+            assert!(
+                message.contains(&remedy),
+                "refusal must name {remedy}: {message}"
+            );
+        }
+    }
+}
+
+/// [ORB-13857] The audited operator opt-out stays available where no backend
+/// exists: re-seeding preserves it and resolution hands the runner the same
+/// `off` descriptor it audits as `write_unrestricted` on every OS.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn explicit_off_still_resolves_on_a_host_without_a_backend() {
+    use orbit_types::workflow::ExecutorSandboxKind;
+
+    use crate::adapter::engine_host::v2_host::sandbox::resolve::resolve_executor_sandbox_on;
+
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    seed_executor(&runtime, "claude", Some(ExecutorSandboxKind::Off));
+    seed_shipped_executors(&runtime, "windows");
+
+    let resolved =
+        resolve_executor_sandbox_on(&runtime, "claude", Some("implementer"), None, "windows")
+            .expect("explicit off resolves")
+            .expect("explicit off is carried to the runner for auditing");
+    assert_eq!(resolved.kind, ExecutorSandboxKind::Off);
+    assert_eq!(
+        resolved.fs_profile.name,
+        orbit_types::policy::UNRESTRICTED_FS_PROFILE
+    );
+    assert!(resolved.fs_profile.modify.is_empty());
+    assert!(!resolved.allow_fallback);
+}
+
+/// [ORB-13857] Executors that never declared a sandbox — `local-shell` and
+/// user-authored ones — keep resolving to no sandbox on every OS.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn undeclared_sandbox_still_resolves_to_none_on_every_os() {
+    use crate::adapter::engine_host::v2_host::sandbox::resolve::resolve_executor_sandbox_on;
+
+    for target_os in ["windows", "freebsd", "linux", "macos"] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        seed_executor(&runtime, "custom-agent", None);
+        seed_shipped_executors(&runtime, target_os);
+
+        for provider in ["local-shell", "custom-agent"] {
+            let resolved = resolve_executor_sandbox_on(&runtime, provider, None, None, target_os)
+                .unwrap_or_else(|error| {
+                    panic!("{provider} on {target_os} must keep resolving: {error}")
+                });
+            assert!(
+                resolved.is_none(),
+                "{provider} on {target_os} declared no sandbox: {resolved:?}"
+            );
+        }
+    }
+}

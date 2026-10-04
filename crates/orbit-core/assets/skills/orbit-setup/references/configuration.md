@@ -166,8 +166,10 @@ explicitly — silence is not a safe default here.
 
 The operating-system boundary matters: macOS uses `sandbox-exec`; Linux uses
 Bubblewrap to enforce allowed writes while leaving host reads and network
-available. Unsupported platforms have only in-process filesystem guards. A
-read-only profile is not a claim of network isolation or private host reads.
+available. Other platforms have no backend: dispatch refuses a shipped agent
+executor there unless its `spec.sandbox` is `off`, and Windows runs Orbit
+inside WSL2. A read-only profile is not a claim of network isolation or
+private host reads.
 See [first-run.md](first-run.md) for the Linux prerequisite.
 
 ## Crew selection and actual execution

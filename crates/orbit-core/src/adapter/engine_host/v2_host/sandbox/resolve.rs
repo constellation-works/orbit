@@ -23,6 +23,24 @@ pub(crate) fn resolve_executor_sandbox(
     fs_profile: Option<&str>,
     subprocess_cwd: Option<&Path>,
 ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+    resolve_executor_sandbox_on(
+        runtime,
+        provider,
+        fs_profile,
+        subprocess_cwd,
+        std::env::consts::OS,
+    )
+}
+
+/// [`resolve_executor_sandbox`] with the host OS injected, so the refusal of a
+/// sandbox kind the OS has no backend for can be exercised on any CI host.
+pub(super) fn resolve_executor_sandbox_on(
+    runtime: &OrbitRuntime,
+    provider: &str,
+    fs_profile: Option<&str>,
+    subprocess_cwd: Option<&Path>,
+    host_os: &str,
+) -> Result<Option<ResolvedSandbox>, DispatchError> {
     let executor = runtime.get_executor_def(provider).map_err(|err| {
         DispatchError::CliInvocationFailed(format!(
             "load executor `{provider}` for sandbox resolution: {err}"
@@ -34,6 +52,13 @@ pub(crate) fn resolve_executor_sandbox(
     let Some(kind) = executor.sandbox else {
         return Ok(None);
     };
+    // A declared sandbox is a host precondition, never a runtime fallback:
+    // refuse before any provider argv is built or child spawned.
+    if !kind.is_available_on(host_os) {
+        return Err(DispatchError::CliInvocationPermanent(
+            sandbox_unavailable_message(provider, kind, host_os),
+        ));
+    }
     match kind {
         // Carry explicit off through preparation so the runner can suppress
         // provider-inner sandboxing and audit the choice without probing an OS
@@ -53,10 +78,9 @@ pub(crate) fn resolve_executor_sandbox(
         ExecutorSandboxKind::MacosSandboxExec => {
             #[cfg(not(target_os = "macos"))]
             {
-                Err(DispatchError::CliInvocationFailed(format!(
-                    "executor `{provider}` declares sandbox `macos-sandbox-exec` but current platform is `{}`",
-                    std::env::consts::OS
-                )))
+                Err(DispatchError::CliInvocationPermanent(
+                    sandbox_unavailable_message(provider, kind, std::env::consts::OS),
+                ))
             }
             #[cfg(target_os = "macos")]
             {
@@ -111,10 +135,9 @@ pub(crate) fn resolve_executor_sandbox(
         ExecutorSandboxKind::LinuxBwrap => {
             #[cfg(not(target_os = "linux"))]
             {
-                Err(DispatchError::CliInvocationFailed(format!(
-                    "executor `{provider}` declares sandbox `linux-bwrap` but current platform is `{}`",
-                    std::env::consts::OS
-                )))
+                Err(DispatchError::CliInvocationPermanent(
+                    sandbox_unavailable_message(provider, kind, std::env::consts::OS),
+                ))
             }
             #[cfg(target_os = "linux")]
             {
@@ -173,6 +196,31 @@ pub(crate) fn resolve_executor_sandbox(
             }
         }
     }
+}
+
+/// Refusal for an executor whose declared sandbox has no backend on `host_os`.
+///
+/// Names both remedies: the platform's native backend where one exists, and
+/// otherwise WSL2 (the supported Windows runtime). The explicit, audited
+/// `spec.sandbox: off` opt-out applies everywhere.
+fn sandbox_unavailable_message(provider: &str, kind: ExecutorSandboxKind, host_os: &str) -> String {
+    let native = [
+        ExecutorSandboxKind::MacosSandboxExec,
+        ExecutorSandboxKind::LinuxBwrap,
+    ]
+    .into_iter()
+    .find(|candidate| candidate.target_os() == Some(host_os));
+    let remedy = match native {
+        Some(native) => format!(
+            "set `spec.sandbox: {native}` on the executor, or `spec.sandbox: off` to run it explicitly without an OS sandbox"
+        ),
+        None => format!(
+            "Orbit has no sandbox backend for `{host_os}`; on Windows run Orbit inside WSL2, or set `spec.sandbox: off` on the executor to run it explicitly without an OS sandbox"
+        ),
+    };
+    format!(
+        "executor `{provider}` declares sandbox `{kind}` but current platform is `{host_os}`; {remedy}"
+    )
 }
 
 /// Hide plugin state and the plugin secret store from the sandboxed process
