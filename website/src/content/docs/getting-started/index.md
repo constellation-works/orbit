@@ -91,6 +91,10 @@ with `orbit task add`, `orbit task update --approve`, and `orbit run ship`.
 Once one task has shipped, choose how much Orbit runs without you. Each of
 these also has a home in the dashboard.
 
+For more than a task or two, hand your agent a spec and ask it to orchestrate.
+The `orbit-orchestrate` skill files the tasks, queues them once you approve,
+runs a delivery window, and chases any run that fails.
+
 <div class="orbit-card-grid orbit-card-grid-3">
   <a class="orbit-card" href="../how-to/dashboard/">
     <h3>Get more from the dashboard</h3>

@@ -106,7 +106,7 @@ next: false
       <p class="orbit-section-eyebrow">How it works</p>
       <h2 class="orbit-section-heading">From a spec to merged code. You set the direction and judge the result.</h2>
     </div>
-    <p class="orbit-section-lede">Hand a spec to an orchestrator agent in the session you already use. It splits the work into tasks and queues them on your say-so. Orbit ships them in parallel and merges each one as soon as your branch protection allows, so you come back to results, not a queue of pull requests.</p>
+    <p class="orbit-section-lede">Hand a spec to the agent you already use, and the <code>orbit-orchestrate</code> skill makes it your orchestrator. It splits the work into tasks and queues them on your say-so. Orbit ships them in parallel and merges each one as soon as your branch protection allows, so you come back to results, not a queue of pull requests.</p>
   </div>
 
   <ol class="orbit-rail" aria-label="Task lifecycle">
@@ -125,7 +125,7 @@ next: false
     </a>
     <a class="orbit-card" data-tag="02 · Plan" href="/concepts/tasks/">
       <h3>Your orchestrator files the tasks</h3>
-      <p>It splits the spec into scoped tasks, each with acceptance criteria, and queues them in the backlog on your say-so.</p>
+      <p>With the <code>orbit-orchestrate</code> skill, it splits the spec into scoped tasks, each with acceptance criteria, queues them in the backlog on your say-so, and starts the drain.</p>
       <div class="orbit-card-cmd">orbit.task.add</div>
     </a>
     <a class="orbit-card" data-tag="03 · Deliver" href="/how-to/continuous-delivery/">

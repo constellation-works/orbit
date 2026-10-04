@@ -50,6 +50,8 @@ $ orbit task update ORB-1042 --approve       # after you merge: review → done
 
 <sub>Illustrative session. The tool names are real, and the IDs are placeholders.</sub>
 
+For more than one task, hand your agent a spec and ask it to orchestrate. The bundled `orbit-orchestrate` skill splits the spec into tasks, queues them once you approve, runs them in parallel with `orbit run auto`, and diagnoses any run that fails.
+
 1. **Nothing starts without you.** New tasks land in `proposed`, and only your approval moves them to `backlog`.
 2. **Every run ends at a pull request.** Orbit never merges on its own. Merging the PR and completing the task are separate decisions, unless you explicitly pass `--complete`.
 3. **Everything is on the record.** `orbit task show ORB-1042` reconstructs the prompt, plan, execution trace, and review thread, even months later.
@@ -127,7 +129,7 @@ orbit task update "$TASK_ID" --approve   # after merging the PR: review → done
 - **Nine agent CLIs, routed by crews.** Claude Code, Codex, Cursor, Copilot, Grok, Gemini, Antigravity, OpenCode, and Pi. Crews pin a provider, model, and effort level. Complexity-tiered, weighted crew pools spread the work across them.
 
 ### Run unattended
-- **Bounded drains.** `orbit run auto --for 4h --concurrency 8` ships the backlog until the time window closes. `orbit run readiness` previews what would run without starting anything.
+- **Bounded drains.** `orbit run auto --for 4h --concurrency 8` ships the backlog until the time window closes. `orbit run readiness` previews what would run without starting anything. Or ask your agent to run one: the `orbit-orchestrate` skill prepares the backlog, starts the drain, and works through failed runs.
 - **Opt-in completion.** `--complete` merges PRs once GitHub allows it and closes tasks after the merge is verified. Nothing else turns this on.
 - **Continuous review.** The shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks read everything that landed since their last run, verify findings against live code, and file confirmed ones as tasks with `file:line` evidence.
 - **Recurring work as data.** Scheduled task templates live in `.orbit/auto_tasks/*.yaml`, and one machine scheduler (`orbit clock`) runs routines and auto-tasks.
