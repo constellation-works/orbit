@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.26.0
+
+### Breaking Changes
+
+- **Public MCP tool surface consolidated**: `orbit_crew_list`, `orbit_friction_list`, `orbit_friction_rehome`, `orbit_auto_task_toggle`, `orbit_auto_task_delete`, and `orbit_workflow_run_workers` are gone. Use `orbit_workspace_list` with `include: ["crews"]`, `orbit_search` with `kind: "friction"`, `rehome_to` on `orbit_friction_update`, `enabled` on `orbit_auto_task_update`, and `orbit_workflow_auto` with `action: "resize"`. ([ORB-13809])
+- **Distributed-drain tools removed from MCP**: `orbit_task_pull` and the `orbit_drain_*` probe, receipt, bind, and settle tools are no longer public, and calls to them are refused. `orbit run auto --pull` is unchanged. ([ORB-13806])
+- **Older-client desktop compatibility removed**: the desktop MCP server no longer answers MCP peers that predate the guarded desktop contracts. Upgrade the desktop client to this release.
+- **Desktop controls moved to guarded domain contracts**: desktop task, auto-task, and drain controls go through guarded MCP contracts, and guarded `orbit_task_*` fields are refused on older MCP peers. Upgrade MCP peers with the server.
+
+### Highlights
+
+- **Orbit mod for Claude Code**: the Claude Code plugin adds a band above the prompt, a status line, and an Orbit pane with Board, Ship, and Map tabs, so you can act on tasks and watch a ship without leaving the session. ([ORB-13862])
+- **Desktop control center**: the desktop app gains a control center with guarded task review, and its Tasks list groups tasks by status, defaults to active ones, and carries the task controls. ([ORB-13843])
+- **No bare agent spawns**: dispatch now refuses when a shipped agent executor has no sandbox backend for the host OS instead of running it unsandboxed. ([ORB-13857])
+- **Disabled external tools stay manageable**: a disabled external tool remains listed and inspectable, and can be re-enabled.
+- **Workspace-safe dashboard**: task edits, approvals, run actions, friction results, and plugin toggles made around a workspace switch no longer land on, or display under, the wrong workspace.
+
 ## 0.25.1
 
 ### Highlights
