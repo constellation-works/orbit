@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use orbit_engine::{WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees};
-use orbit_store::contracts::{JobRunQuery, LocalPullPhase};
+use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
@@ -138,12 +138,11 @@ impl OrbitRuntime {
     /// The settled claim behind a claimed leaf's worktree, if it has one
     /// [ORB-13920].
     ///
-    /// The local admission record is the follower's durable account of the
-    /// claim: once it is `Settled` the owner has accepted the leaf's outcome
-    /// (or had already ended the claim), so the owner holds whatever the leaf
-    /// delivered and nothing on this machine is still owed to it. Read
-    /// without creating the pull schema, so a workspace that never pulled
-    /// reads nothing.
+    /// Only a settled, accepted handoff proves the owner holds the leaf's
+    /// delivery. A release returns unfinished work to the backlog, and an
+    /// obsolete settlement was never accepted; both still need the owner's
+    /// task status to decide eligibility. Read without creating the pull
+    /// schema, so a workspace that never pulled reads nothing.
     pub(crate) fn worktree_gc_settled_claim(&self, run_id: &str) -> Option<String> {
         let record = match self.stores().jobs().local_pull_for_run(run_id) {
             Ok(record) => record?,
@@ -152,14 +151,14 @@ impl OrbitRuntime {
                 return None;
             }
         };
-        if record.phase != LocalPullPhase::Settled {
+        if record.phase != LocalPullPhase::Settled
+            || !matches!(record.settlement, Some(ClaimMutation::AcceptHandoff(_)))
+            || record.refusal.is_some()
+        {
             return None;
         }
         let owner = &record.destination.selector;
-        Some(match &record.refusal {
-            Some(refusal) => format!("claim closed by its owner {owner}: {refusal}"),
-            None => format!("claim settled with its owner {owner}"),
-        })
+        Some(format!("claim settled with its owner {owner}"))
     }
 
     /// Reclaim the `target/` build output of one terminal run's worktree,
