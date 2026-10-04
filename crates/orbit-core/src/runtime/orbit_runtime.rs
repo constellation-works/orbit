@@ -194,6 +194,7 @@ impl OrbitRuntime {
                 default_host_resource_probe(),
                 context.settings().resource_throttle().clone(),
             )
+            .with_shared_history(global_root)
             .sampled_in_background(),
         );
         Ok(Self {
@@ -247,6 +248,7 @@ impl OrbitRuntime {
                 default_host_resource_probe(),
                 context.settings().resource_throttle().clone(),
             )
+            .with_shared_history(data_root)
             .sampled_in_background(),
         );
         Ok(Self {
@@ -365,14 +367,14 @@ impl OrbitRuntime {
 
     /// Replace the resource probe for deterministic pressure/unknown fixtures.
     pub fn with_host_resource_probe(mut self, probe: Arc<dyn HostResourceProbe>) -> Self {
-        self.host_resources = Arc::new(HostResourceMonitor::new(
-            probe,
-            self.context.settings().resource_throttle().clone(),
-        ));
+        self.host_resources = Arc::new(
+            HostResourceMonitor::new(probe, self.context.settings().resource_throttle().clone())
+                .with_shared_history(&self.global_root()),
+        );
         self
     }
 
-    /// Shared sampler/evaluator for this runtime; cloning preserves hysteresis.
+    /// Shared sampler/evaluator; fresh runtimes recover recent host history too.
     pub fn host_resource_monitor(&self) -> Arc<HostResourceMonitor> {
         Arc::clone(&self.host_resources)
     }

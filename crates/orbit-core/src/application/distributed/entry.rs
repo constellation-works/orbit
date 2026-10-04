@@ -267,11 +267,9 @@ impl crate::OrbitRuntime {
         Ok(decision)
     }
 
-    /// Host pressure as admission sees it [ORB-13901]: this process's own
-    /// verdict, or else the throttle a live auto or pull drain recorded on its
-    /// latest pass. Sustained pressure takes a run of samples a short-lived
-    /// CLI process never collects, so a drain that has been sampling speaks for
-    /// the host while one runs. Disabled settings report nothing.
+    /// Host pressure as admission sees it: a fresh sample evaluated against
+    /// recent host-wide history, or the throttle a live auto or pull drain
+    /// recorded on its latest pass. Disabled settings report nothing.
     pub fn admission_resource_throttle(&self) -> ResourceAdmission {
         let mut admission = self.resource_admission();
         if admission.throttle.is_none() && self.context.settings().resource_throttle().enabled {

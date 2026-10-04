@@ -1,6 +1,7 @@
-//! Cheap host observations and a process-local pressure verdict. No admission side effects.
+//! Cheap host observations and shared pressure history. No admission side effects.
 
 use std::collections::BTreeMap;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
@@ -9,7 +10,12 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use orbit_config::ResourceThrottleSettings;
 use orbit_types::workflow::{ResourcePressure, ResourceThrottle};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use orbit_common::fs::io::{
+    FileLockOptions, atomic_write_text_volatile, open_read_only_no_follow,
+    with_exclusive_file_lock_options,
+};
 
 mod platform;
 
@@ -128,15 +134,17 @@ pub struct HostResourceStatus {
     pub thresholds: ResourceThrottleSettings,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct PressureState {
     last_sample: Option<DateTime<Utc>>,
     high_since: Option<DateTime<Utc>>,
     held: bool,
+    high_percent: u8,
+    resume_percent: u8,
 }
 
 /// Stateful hysteresis with a deterministic timestamp seam for fixture-driven checks.
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct ResourcePressureEvaluator {
     states: BTreeMap<String, PressureState>,
 }
@@ -166,6 +174,10 @@ impl ResourcePressureEvaluator {
                 }
             };
             let state = self.states.entry(key.clone()).or_default();
+            // History from another workspace is evidence only for the same thresholds.
+            if state.high_percent != high || state.resume_percent != resume {
+                *state = PressureState::default();
+            }
             if unknown_reason.is_some() {
                 *state = PressureState::default();
                 return ResourceReading {
@@ -187,6 +199,8 @@ impl ResourcePressureEvaluator {
                 *state = PressureState::default();
             }
             state.last_sample = Some(sample.sampled_at);
+            state.high_percent = high;
+            state.resume_percent = resume;
             let severity = if value >= f64::from(high) {
                 ResourceSeverity::Critical
             } else if value >= f64::from(resume) {
@@ -259,7 +273,16 @@ impl ResourcePressureEvaluator {
                 path: disk.path,
             })
             .collect();
-        self.states.retain(|key, _| seen.contains(key));
+        // Keep recent disk history for other workspaces sharing the host root.
+        // It is never included in this verdict unless this probe observes it.
+        self.states.retain(|key, state| {
+            seen.contains(key)
+                || state.last_sample.is_some_and(|at| {
+                    now.signed_duration_since(at)
+                        .to_std()
+                        .is_ok_and(|age| age <= RESOURCE_MAX_AGE)
+                })
+        });
         let severities: Vec<_> = [cpu.severity, memory.severity]
             .into_iter()
             .chain(disks.iter().map(|disk| disk.reading.severity))
@@ -339,6 +362,7 @@ pub struct HostResourceMonitor {
     probe: Arc<dyn HostResourceProbe>,
     settings: ResourceThrottleSettings,
     evaluator: Mutex<ResourcePressureEvaluator>,
+    history_path: Option<PathBuf>,
     /// Whether admission checks keep the evaluator fed between drain passes.
     /// Off for injected probes, whose fixtures drive every sample themselves.
     background: bool,
@@ -355,11 +379,18 @@ impl HostResourceMonitor {
             probe,
             settings,
             evaluator: Mutex::new(ResourcePressureEvaluator::default()),
+            history_path: None,
             background: false,
             demand: Mutex::new(None),
             sampling: AtomicBool::new(false),
             reported: Mutex::new(ResourceAdmission::default()),
         }
+    }
+
+    /// Share bounded, freshness-checked hysteresis across processes on this host.
+    pub(crate) fn with_shared_history(mut self, global_root: &std::path::Path) -> Self {
+        self.history_path = Some(global_root.join("cache/host-resource-pressure.json"));
+        self
     }
 
     /// Keep sampling in the background while admission is being consulted.
@@ -458,6 +489,74 @@ impl HostResourceMonitor {
             .evaluator
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        if self.settings.enabled
+            && let Some(path) = &self.history_path
+        {
+            // Serialize read/sample/evaluate/write across processes too. The bounded
+            // lock prevents resource telemetry from stalling a dispatch indefinitely.
+            let result = with_exclusive_file_lock_options(
+                path,
+                "host resource pressure",
+                FileLockOptions {
+                    timeout: Duration::from_millis(100),
+                    warn_after: Duration::from_millis(100),
+                },
+                || -> io::Result<HostResourceStatus> {
+                    match read_history(path) {
+                        Ok(history) => *evaluator = history,
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            tracing::debug!(%error, "shared resource history unavailable");
+                        }
+                    }
+                    let status =
+                        evaluator.evaluate(self.probe.sample(paths), &self.settings, Utc::now());
+                    let history = PressureHistory {
+                        schema_version: 1,
+                        evaluator: &evaluator,
+                    };
+                    let encoded = serde_json::to_string(&history).map_err(io::Error::other)?;
+                    if let Err(error) = atomic_write_text_volatile(path, &encoded) {
+                        tracing::debug!(%error, "shared resource history could not be saved");
+                    }
+                    Ok(status)
+                },
+            );
+            match result {
+                Ok(status) => return status,
+                Err(error) => {
+                    tracing::debug!(%error, "using local resource history");
+                }
+            }
+        }
         evaluator.evaluate(self.probe.sample(paths), &self.settings, Utc::now())
     }
+}
+
+#[derive(Serialize)]
+struct PressureHistory<'a> {
+    schema_version: u8,
+    evaluator: &'a ResourcePressureEvaluator,
+}
+
+fn read_history(path: &std::path::Path) -> io::Result<ResourcePressureEvaluator> {
+    #[derive(Deserialize)]
+    struct History {
+        schema_version: u8,
+        evaluator: ResourcePressureEvaluator,
+    }
+    let file = open_read_only_no_follow(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("resource history is not a regular file"));
+    }
+    let mut encoded = String::new();
+    file.take(64 * 1024 + 1).read_to_string(&mut encoded)?;
+    if encoded.len() > 64 * 1024 {
+        return Err(io::Error::other("resource history exceeds size limit"));
+    }
+    let history: History = serde_json::from_str(&encoded).map_err(io::Error::other)?;
+    if history.schema_version != 1 {
+        return Err(io::Error::other("unsupported resource history version"));
+    }
+    Ok(history.evaluator)
 }
