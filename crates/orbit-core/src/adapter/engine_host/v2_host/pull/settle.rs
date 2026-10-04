@@ -41,6 +41,12 @@
 //! ID per claim, receipt reconciliation of a refusal, `stale_claim` closing a
 //! settlement the owner already ended — so two processes settling the same
 //! admission deliver it once.
+//!
+//! A settlement the owner refuses while it still holds the claim is recorded
+//! as refused and backs off [ORB-13979]: the drain's passes, the clock sweep
+//! and the leaf's worker deliver it again only once its backoff has elapsed
+//! (doubling to at most 15 minutes), while an operator's settle-only pass
+//! delivers it at once ([`RefusedDelivery::Now`]).
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -52,11 +58,16 @@ use orbit_store::contracts::{
 };
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
-use super::drain::{PullDrain, SettleScope, leaf_failure_settlement, release_settlement};
+use super::drain::{
+    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, release_settlement,
+};
 use crate::OrbitRuntime;
 use crate::application::distributed::{
     PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, is_owner_transport_failure,
 };
+
+/// Why a settle-only pass releases unlaunched work no live drain carries.
+const DRAIN_ENDED_CAUSE: &str = "the drain ended before launching this task";
 
 /// How long a leaf's own worker waits between delivery attempts when its
 /// settlement did not reach the owner and no drain will retry it. Bounded: a
@@ -161,7 +172,9 @@ impl OrbitRuntime {
     /// or did not answer), retry with a bounded backoff while no live drain
     /// carries its owner — a drain retries on every pass. Runs after
     /// finalization, so the wait never delays the run's terminal state.
-    /// Whatever is still pending afterwards stays in the outbox.
+    /// Whatever is still pending afterwards stays in the outbox. A settlement
+    /// the owner refused is not the worker's to wait on: the owner answered,
+    /// and its backoff belongs to the drain and the clock sweep.
     pub(crate) fn retry_own_claimed_leaf_settlement(&self, run_id: &str) {
         if self
             .worker_invocation()
@@ -173,6 +186,7 @@ impl OrbitRuntime {
             let undelivered = matches!(
                 self.stores().jobs().local_pull_for_run(run_id),
                 Ok(Some(record)) if record.phase == LocalPullPhase::Settling
+                    && record.settlement_refusal.is_none()
             );
             if !undelivered || self.drain_carries_leaf(run_id) {
                 return;
@@ -284,7 +298,13 @@ impl OrbitRuntime {
                 return None;
             }
         };
-        self.carry_settlements(vec![record]).pop()
+        self.carry_settlements_scoped(
+            vec![record],
+            DRAIN_ENDED_CAUSE,
+            true,
+            RefusedDelivery::WhenDue,
+        )
+        .pop()
     }
 
     /// One settle-only pass over every admission in this workspace that still
@@ -297,9 +317,12 @@ impl OrbitRuntime {
     /// requests new work and never launches a leaf, so it is safe beside a
     /// live drain. A workspace that never pulled reads nothing and does
     /// nothing.
+    ///
+    /// Only an operator runs this pass, so a settlement the owner refused is
+    /// delivered again at once rather than when its backoff elapses.
     pub(crate) fn settle_pending_pulls(&self) -> Vec<PullSettlementEntry> {
         match self.stores().jobs().unsettled_local_pull_admissions() {
-            Ok(records) => self.carry_settlements(records),
+            Ok(records) => self.carry_settlements_for(records, DRAIN_ENDED_CAUSE),
             Err(error) => {
                 tracing::warn!(target: "orbit.core.pull", %error, "pull admissions unreadable; nothing settled");
                 Vec::new()
@@ -336,10 +359,6 @@ impl OrbitRuntime {
         Ok(summary)
     }
 
-    fn carry_settlements(&self, records: Vec<LocalPullAdmission>) -> Vec<PullSettlementEntry> {
-        self.carry_settlements_for(records, "the drain ended before launching this task")
-    }
-
     /// The clock sweep's pass [ORB-13892], for every owner: deliver what is
     /// recorded and record what a leaf that ended implies, without ending
     /// anything unlaunched — only a drain, a cancel or a stop decides that.
@@ -349,7 +368,9 @@ impl OrbitRuntime {
     /// pulled reads one empty table.
     pub fn deliver_recorded_pull_settlements(&self) -> Vec<PullSettlementEntry> {
         match self.stores().jobs().unsettled_local_pull_admissions() {
-            Ok(records) => self.carry_settlements_scoped(records, "", false),
+            Ok(records) => {
+                self.carry_settlements_scoped(records, "", false, RefusedDelivery::WhenDue)
+            }
             Err(error) => {
                 tracing::warn!(target: "orbit.core.pull", %error, "pull admissions unreadable; nothing delivered");
                 Vec::new()
@@ -357,24 +378,28 @@ impl OrbitRuntime {
         }
     }
 
-    /// A settle-only pass over `records` whose releases carry `cause` — a
-    /// forced cancel names itself to the owner. `records` should belong to a
-    /// drain that is no longer live, or nothing unlaunched is released.
+    /// An operator's settle-only pass over `records` whose releases carry
+    /// `cause` — a forced cancel names itself to the owner. `records` should
+    /// belong to a drain that is no longer live, or nothing unlaunched is
+    /// released. A settlement the owner refused is delivered again at once.
     pub(crate) fn carry_settlements_for(
         &self,
         records: Vec<LocalPullAdmission>,
         cause: &str,
     ) -> Vec<PullSettlementEntry> {
-        self.carry_settlements_scoped(records, cause, true)
+        self.carry_settlements_scoped(records, cause, true, RefusedDelivery::Now)
     }
 
     /// [`Self::carry_settlements_for`]; with `may_abandon` false, nothing
-    /// unlaunched is ever ended, whether or not a drain carries it.
+    /// unlaunched is ever ended, whether or not a drain carries it, and
+    /// `refused_delivery` says whether a refused settlement waits out its
+    /// backoff.
     fn carry_settlements_scoped(
         &self,
         records: Vec<LocalPullAdmission>,
         cause: &str,
         may_abandon: bool,
+        refused_delivery: RefusedDelivery,
     ) -> Vec<PullSettlementEntry> {
         if records.is_empty() {
             return Vec::new();
@@ -401,6 +426,7 @@ impl OrbitRuntime {
             jobs: self.stores().jobs(),
             peer: &peer,
             launcher: &launcher,
+            refused_delivery,
         };
         // One unreachable owner costs one delivery timeout per pass, not one
         // per admission. Only a transport failure says the owner is
@@ -575,6 +601,9 @@ fn classify(
     let outcome = match record.phase {
         LocalPullPhase::Settled if record.refusal.is_some() => "closed_obsolete",
         LocalPullPhase::Settled => "settled",
+        LocalPullPhase::Settling if error.is_none() && record.settlement_refusal.is_some() => {
+            "settlement_refused"
+        }
         LocalPullPhase::Settling => "pending_delivery",
         LocalPullPhase::Launched if error.is_none() => "leaf_running",
         LocalPullPhase::Launching => "launch_uncertain",
@@ -584,11 +613,20 @@ fn classify(
         _ if drain_live && error.is_none() => "awaiting_drain",
         _ => "pending",
     };
-    let detail = error.map(|error| error.to_string()).or_else(|| {
-        (record.phase == LocalPullPhase::Settled)
-            .then(|| record.refusal.clone())
-            .flatten()
-    });
+    let detail = error
+        .map(|error| error.to_string())
+        .or_else(|| match record.phase {
+            LocalPullPhase::Settled => record.refusal.clone(),
+            LocalPullPhase::Settling => record.settlement_refusal.as_ref().map(|refusal| {
+                format!(
+                    "{}; refused {} time(s), next automatic attempt after {}",
+                    refusal.reason,
+                    refusal.refusals,
+                    refusal.retry_after.to_rfc3339()
+                )
+            }),
+            _ => None,
+        });
     entry(record, outcome, detail)
 }
 

@@ -10,7 +10,9 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AdmissionCrewCapability, ClaimMutation};
+use orbit_store::contracts::{
+    AdmissionCrewCapability, ClaimMutation, LocalPullAdmission, LocalPullPhase,
+};
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullCrewPreflight};
 use serde::Serialize;
 
@@ -32,6 +34,9 @@ pub struct PullSettlementEntry {
     /// - `leaf_running` — its leaf is live and settles itself when it ends;
     /// - `pending_delivery` — a settlement is recorded but did not reach the
     ///   owner; any later pass retries it;
+    /// - `settlement_refused` — the owner refused the recorded settlement while
+    ///   it still holds the claim; delivery backs off until the owner accepts
+    ///   it ([ORB-13979]);
     /// - `release_held` — a forced cancel released the claim but could not
     ///   confirm its leaf stopped; the owner keeps the claim until it does;
     /// - `owner_unreachable` — skipped after an earlier delivery to the same
@@ -90,6 +95,7 @@ fn outcome_guidance(outcome: &str) -> Option<&'static str> {
              `orbit run auto --stop` once it is reachable",
         ),
         "pending" => Some("stopped by an error; any later pass retries it"),
+        "settlement_refused" => Some(SETTLEMENT_REFUSAL_REMEDY),
         "release_held" => Some(
             "its leaf may still be running, so the owner keeps the claim; the release is \
              delivered once the leaf is seen to stop",
@@ -102,6 +108,102 @@ fn outcome_guidance(outcome: &str) -> Option<&'static str> {
         ),
         "no_owner_route" => Some("add the owner to ~/.orbit/mcp-destinations.toml"),
         _ => None,
+    }
+}
+
+/// The first wait after the owner refuses a pending settlement while it still
+/// holds the claim [ORB-13979]. Each further refusal doubles it, up to
+/// [`SETTLEMENT_REFUSAL_MAX_BACKOFF`].
+pub(crate) const SETTLEMENT_REFUSAL_FIRST_BACKOFF: std::time::Duration =
+    std::time::Duration::from_secs(60);
+
+/// The longest an automatic pass waits between deliveries of a settlement
+/// the owner keeps refusing, so a fixed owner still settles it within this.
+pub(crate) const SETTLEMENT_REFUSAL_MAX_BACKOFF: std::time::Duration =
+    std::time::Duration::from_secs(15 * 60);
+
+/// How long automatic passes wait after the owner refused a settlement
+/// `refusals` times in a row.
+pub(crate) fn settlement_refusal_backoff(refusals: u32) -> std::time::Duration {
+    let doublings = refusals.saturating_sub(1).min(16);
+    SETTLEMENT_REFUSAL_FIRST_BACKOFF
+        .saturating_mul(1 << doublings)
+        .min(SETTLEMENT_REFUSAL_MAX_BACKOFF)
+}
+
+/// What an operator does about a settlement the owner keeps refusing.
+const SETTLEMENT_REFUSAL_REMEDY: &str = "the owner refuses this recorded outcome while it \
+     holds the claim; fix the condition its reason names on the owner. Automatic passes \
+     retry with backoff, at most every 15 minutes, and settle it once the owner accepts; \
+     `orbit run auto --stop` retries it at once. Recovering the claim on the owner's \
+     dashboard closes it instead";
+
+/// A settlement the owner refused while it still holds the claim
+/// [ORB-13979]: the record stays `settling`, its outcome kept, and delivery
+/// backs off rather than asking again on every pass. `orbit run show` lists
+/// these for the drain carrying them, and the drain's passes admit nothing new
+/// while any is held for their owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RefusedPullSettlement {
+    /// The owner's task the settlement is for.
+    pub task_id: Option<String>,
+    pub leaf_run_id: Option<String>,
+    /// The owner's host-qualified selector.
+    pub owner: String,
+    /// The drain run that admitted the claim.
+    pub drain_run_id: String,
+    /// The owner's refusal, as it answered.
+    pub reason: String,
+    /// Consecutive refused deliveries.
+    pub refusals: u32,
+    pub first_refused_at: DateTime<Utc>,
+    pub last_refused_at: DateTime<Utc>,
+    /// No automatic pass delivers it before this.
+    pub retry_after: DateTime<Utc>,
+    /// What the operator does about it.
+    pub remedy: String,
+}
+
+impl RefusedPullSettlement {
+    /// The refusal `record` is held on, when it is a `settling` admission
+    /// the owner refused.
+    pub(crate) fn of(record: &LocalPullAdmission) -> Option<Self> {
+        if record.phase != LocalPullPhase::Settling {
+            return None;
+        }
+        let refusal = record.settlement_refusal.as_ref()?;
+        Some(Self {
+            task_id: record
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.claim.as_ref())
+                .map(|claim| claim.task_id.clone()),
+            leaf_run_id: record.leaf_run_id.clone(),
+            owner: record.destination.selector.clone(),
+            drain_run_id: record.request.run_context.run_id.clone(),
+            reason: refusal.reason.clone(),
+            refusals: refusal.refusals,
+            first_refused_at: refusal.first_refused_at,
+            last_refused_at: refusal.last_refused_at,
+            retry_after: refusal.retry_after,
+            remedy: SETTLEMENT_REFUSAL_REMEDY.to_string(),
+        })
+    }
+
+    /// One line for a terminal report.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "{} (leaf {}) owner {} refused it {} time(s) since {}: {}; next attempt after {} — {}",
+            self.task_id.as_deref().unwrap_or("-"),
+            self.leaf_run_id.as_deref().unwrap_or("-"),
+            self.owner,
+            self.refusals,
+            self.first_refused_at.to_rfc3339(),
+            self.reason,
+            self.retry_after.to_rfc3339(),
+            self.remedy
+        )
     }
 }
 
@@ -152,6 +254,9 @@ pub struct PullLeafClaim {
     /// Why the owner refused the settlement, once it had already ended the
     /// claim.
     pub refusal: Option<String>,
+    /// The owner's refusal of the pending settlement while it still holds
+    /// the claim, and when delivery is next attempted.
+    pub settlement_refusal: Option<RefusedPullSettlement>,
     /// What the phase means for the operator.
     pub guidance: String,
 }
@@ -269,8 +374,18 @@ impl PullCrewWindow {
     }
 }
 
-fn phase_guidance(phase: orbit_store::contracts::LocalPullPhase, refusal: Option<&str>) -> String {
-    use orbit_store::contracts::LocalPullPhase as Phase;
+fn phase_guidance(
+    phase: LocalPullPhase,
+    refusal: Option<&str>,
+    refused: Option<&RefusedPullSettlement>,
+) -> String {
+    use LocalPullPhase as Phase;
+    if let Some(refused) = refused {
+        return format!(
+            "refused by the owner ({}); {}",
+            refused.reason, refused.remedy
+        );
+    }
     match (phase, refusal) {
         (Phase::Settled, Some(refusal)) => format!(
             "the owner had already ended this claim ({refusal}); decide the task's status on \
@@ -341,7 +456,7 @@ impl crate::OrbitRuntime {
         &self,
         drain_run_id: &str,
     ) -> Result<Vec<DrainClaimedLeaf>, OrbitError> {
-        use orbit_store::contracts::LocalPullPhase as Phase;
+        use LocalPullPhase as Phase;
         let jobs = self.stores().jobs();
         let mut leaves = Vec::new();
         for record in self.pull_drain_admissions(drain_run_id)? {
@@ -375,6 +490,19 @@ impl crate::OrbitRuntime {
             });
         }
         Ok(leaves)
+    }
+
+    /// The settlements a pull drain carries that its owner refused while
+    /// still holding their claims [ORB-13979]. Empty for every other run.
+    pub fn pull_drain_refused_settlements(
+        &self,
+        drain_run_id: &str,
+    ) -> Result<Vec<RefusedPullSettlement>, OrbitError> {
+        Ok(self
+            .pull_drain_admissions(drain_run_id)?
+            .iter()
+            .filter_map(RefusedPullSettlement::of)
+            .collect())
     }
 
     /// The crew window of a pull drain run; `None` for every other run.
@@ -470,6 +598,7 @@ impl crate::OrbitRuntime {
             .as_ref()
             .and_then(|receipt| receipt.claim.as_ref());
         let settlement_phase = phase_name(admission.phase);
+        let settlement_refusal = RefusedPullSettlement::of(&admission);
         Ok(Some(PullLeafClaim {
             task_id: claim.map(|claim| claim.task_id.clone()),
             claim_id: claim.map(|claim| claim.claim_id.clone()),
@@ -477,12 +606,17 @@ impl crate::OrbitRuntime {
             drain_run_id: admission.request.run_context.run_id.clone(),
             settlement_phase,
             refusal: admission.refusal.clone(),
-            guidance: phase_guidance(admission.phase, admission.refusal.as_deref()),
+            guidance: phase_guidance(
+                admission.phase,
+                admission.refusal.as_deref(),
+                settlement_refusal.as_ref(),
+            ),
+            settlement_refusal,
         }))
     }
 }
 
-fn phase_name(phase: orbit_store::contracts::LocalPullPhase) -> String {
+fn phase_name(phase: LocalPullPhase) -> String {
     serde_json::to_value(phase)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))

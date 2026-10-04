@@ -639,16 +639,32 @@ deliver their settlements. The owner refuses each one as `stale_claim`. The
 pass then looks up the claim on the owner, sees it has ended, and closes the
 record locally (`closed_obsolete`). Its `refusal` records why. Those tasks still need an owner-side
 status decision: set a task to `done` if its pull request merged, otherwise
-move it back to `backlog`. A refused settlement for a claim the owner still
-holds stays pending and blocks new admissions until it is delivered.
+move it back to `backlog`.
 
-The same applies to a handoff the owner will deterministically never accept:
-for example, the owner refuses the leaf's bind or its settlement while it still
-holds the claim as `claimed` or `running`. Every pass reports the refusal, the
-record stays `settling` and keeps its slot, and `orbit run auto --stop` does not
-clear it. The escape is on the owner: revoke or recover the claim from the
-owner's dashboard (**Recover claim → blocked** or **→ backlog**). The next pass
-on the follower, whether a drain iteration or `orbit run auto --stop`, looks the
+**A settlement the owner refuses while it still holds the claim**
+([ORB-13979]) — for example, an owner that declares no
+`workflow.required_validation_commands` refuses every handoff — is an answer,
+not a lost delivery, and repeats until an operator changes the owner. The
+follower records the refusal on the admission (`settlement_refusal`), logs it
+once, and keeps the record `settling` with its outcome unchanged; nothing is
+lost. It is not a failed pass, so it does not degrade the drain, but the
+drain requests no new claim while one is held (pass output
+`refusal: settlement_refused: …` and `settlement_refused: <count>`). Drain
+passes, the clock sweep and the leaf's worker deliver it again only after a
+backoff that starts at one minute and doubles to at most 15 minutes, instead
+of on every pass. `orbit run show <drain-run>` lists each one on a
+`Settlement refused:` line (`.refused_settlements` in JSON) with the owner's
+reason, the refusal count, the next attempt and the remedy, and a leaf's
+`orbit run show` carries it on its `Claim:` line (`.pull_claim.settlement_refusal`).
+Fix the condition the reason names on the owner. The next due attempt then
+settles the recorded outcome and the drain resumes requesting. To retry at
+once, run `orbit run auto --stop` in the replica checkout: an operator's
+settle-only pass ignores the backoff, though it also closes the drain's
+window.
+
+To give the claim up instead, revoke or recover it from the owner's dashboard
+(**Recover claim → blocked** or **→ backlog**). The next delivery on the
+follower, whether a drain iteration or `orbit run auto --stop`, looks the
 claim up, sees it has ended, and closes the record `closed_obsolete`, which
 frees the slot. A claim whose bind the owner refuses before the leaf ever
 launched closes the same way: the leaf is failed and never starts.

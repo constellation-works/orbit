@@ -34,7 +34,7 @@ use orbit_core::application::routines::{
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
     ClaimMutation, JobRunStepParams, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation,
-    LocalPullPhase,
+    LocalPullPhase, SettlementRefusal,
 };
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
 use orbit_types::policy::Role;
@@ -145,6 +145,10 @@ struct Wire {
     unreachable: Mutex<bool>,
     /// An older owner fixture: revision 1 rejects the new crews field.
     protocol: Mutex<Option<u32>>,
+    /// When set, the owner refuses every settlement with this policy denial
+    /// while it keeps the claim, as an owner whose configuration cannot
+    /// accept a handoff does.
+    refuse_settle: Mutex<Option<String>>,
 }
 
 impl Wire {
@@ -175,6 +179,15 @@ impl DrainOwnerTransport for Wire {
             return Err(OrbitError::UnreachableDestination(
                 "ssh: connect to host owner port 22: Connection timed out".into(),
             ));
+        }
+        if name == "orbit.drain.claim.settle"
+            && let Some(message) = self.refuse_settle.lock().unwrap().clone()
+        {
+            return Err(OrbitError::RemoteTool {
+                code: "policy_denied".into(),
+                message: message.clone(),
+                payload: json!({"code": "policy_denied", "message": message}),
+            });
         }
         // The owner verifies a handoff against its published pull request,
         // which no test here has; the wire answers as an owner that did.
@@ -329,6 +342,7 @@ impl Pair {
             task_reads_remote_error: Mutex::default(),
             unreachable: Mutex::default(),
             protocol: Mutex::default(),
+            refuse_settle: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), FOLLOWER);
         let follower = follower
@@ -1416,6 +1430,174 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .filter(|event| event["to_status"] == "blocked")
         .count();
     assert_eq!(blocked, 1, "{after:#}");
+}
+
+/// The refusal an owner without `workflow.required_validation_commands`
+/// answers every handoff with.
+const NO_VALIDATION_COMMANDS: &str = "this owner declares no required validation commands \
+     (`workflow.required_validation_commands`), so no handoff can be accepted";
+
+impl Pair {
+    /// Let `leaf`'s settlement backoff elapse, as the clock passing it would.
+    fn elapse_settlement_backoff(&self, leaf: &str) -> SettlementRefusal {
+        let refused = self
+            .admission(leaf)
+            .settlement_refusal
+            .expect("a refused settlement");
+        self.advance(
+            leaf,
+            LocalPullMutation::DeferSettlement(SettlementRefusal {
+                retry_after: Utc::now() - chrono::Duration::seconds(1),
+                ..refused.clone()
+            }),
+        );
+        refused
+    }
+}
+
+/// [ORB-13979] An owner that refuses a handoff while it keeps the claim is
+/// answering, not unreachable, and answers the same until an operator changes
+/// it. The follower records the refusal once, requests no new claim, and
+/// backs off — doubling to a 15 minute cap — instead of asking on every pass.
+/// Once the owner accepts, the same recorded handoff settles and requests
+/// resume.
+#[test]
+fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_accepts() {
+    if !isolated(
+        "a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_accepts",
+    ) {
+        return;
+    }
+    let pair = Pair::new(2);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    pair.leaf_hands_off(&leaf);
+    *pair.wire.refuse_settle.lock().unwrap() = Some(NO_VALIDATION_COMMANDS.into());
+    let pulls = pair.wire.calls("orbit.task.pull").len();
+
+    for _ in 0..5 {
+        let pass = pair.pass(&drain);
+        assert!(
+            pass["error"].is_null(),
+            "a refusal is not a failed pass: {pass}"
+        );
+        assert_eq!(pass["admitting"], false, "{pass}");
+        assert_eq!(pass["settlement_refused"], 1, "{pass}");
+        assert_eq!(pass["degraded"], false, "{pass}");
+        assert!(
+            error_of(&pass).is_empty()
+                && pass["refusal"]
+                    .as_str()
+                    .is_some_and(|refusal| refusal.starts_with("settlement_refused:")),
+            "{pass}"
+        );
+    }
+    pair.follower.deliver_recorded_pull_settlements();
+    assert_eq!(
+        pair.wire.calls("orbit.drain.claim.settle").len(),
+        1,
+        "neither the drain's passes nor the clock sweep ask again before the backoff"
+    );
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        pulls,
+        "no new claim is requested while the owner refuses what is owed"
+    );
+    let refused = pair
+        .follower
+        .pull_drain_refused_settlements(&drain)
+        .unwrap();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(
+        refused[0].reason.contains("required validation commands"),
+        "{refused:?}"
+    );
+    assert!(!refused[0].remedy.is_empty());
+    let claim = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
+    assert_eq!(claim.settlement_phase, "settling");
+    assert_eq!(claim.settlement_refusal.as_ref(), Some(&refused[0]));
+
+    // Each refusal after the backoff elapses doubles it, up to the cap.
+    let mut waits = Vec::new();
+    for _ in 0..6 {
+        let refused = pair.elapse_settlement_backoff(&leaf);
+        waits.push((refused.retry_after - refused.last_refused_at).num_seconds());
+        let pass = pair.pass(&drain);
+        assert!(pass["error"].is_null(), "{pass}");
+    }
+    assert_eq!(waits, [60, 120, 240, 480, 900, 900]);
+    assert_eq!(pair.wire.calls("orbit.drain.claim.settle").len(), 7);
+
+    *pair.wire.refuse_settle.lock().unwrap() = None;
+    pair.elapse_settlement_backoff(&leaf);
+    let accepted = pair.pass(&drain);
+    assert!(accepted["error"].is_null(), "{accepted}");
+    assert_eq!(accepted["settlement_refused"], 0, "{accepted}");
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 8);
+    assert!(
+        settles.iter().all(|settle| *settle == settles[0]),
+        "the recorded handoff is re-sent unchanged"
+    );
+    assert!(settles[0]["settlement"].get("AcceptHandoff").is_some());
+    let claim = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
+    assert_eq!(claim.settlement_phase, "settled");
+    assert_eq!(claim.settlement_refusal, None);
+    assert!(
+        pair.follower
+            .pull_drain_refused_settlements(&drain)
+            .unwrap()
+            .is_empty()
+    );
+    pair.pass(&drain);
+    assert!(
+        pair.wire.calls("orbit.task.pull").len() > pulls,
+        "requests resume once nothing owed is refused"
+    );
+}
+
+/// [ORB-13979] An operator who fixed the owner need not wait out the
+/// backoff: `orbit run auto --stop` delivers a refused settlement at once.
+#[test]
+fn an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff() {
+    if !isolated("an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    pair.leaf_hands_off(&leaf);
+    *pair.wire.refuse_settle.lock().unwrap() = Some(NO_VALIDATION_COMMANDS.into());
+    pair.pass(&drain);
+    assert_eq!(pair.wire.calls("orbit.drain.claim.settle").len(), 1);
+
+    *pair.wire.refuse_settle.lock().unwrap() = None;
+    let stopped = pair
+        .follower
+        .run_tool_with_context_and_role(
+            "orbit.workflow.auto",
+            json!({
+                "workspace": pair.follower.workspace_id().unwrap(),
+                "action": "stop",
+            }),
+            Role::Admin,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    transport: Some(McpTransport::Local),
+                    effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                    ..ToolSessionContext::default()
+                },
+                ..ToolContext::default()
+            },
+        )
+        .expect("stop");
+    assert_eq!(
+        pair.wire.calls("orbit.drain.claim.settle").len(),
+        2,
+        "{stopped:#}"
+    );
+    let claim = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
+    assert_eq!(claim.settlement_phase, "settled", "{stopped:#}");
 }
 
 /// [ORB-13901] While sustained host pressure throttles the follower, its

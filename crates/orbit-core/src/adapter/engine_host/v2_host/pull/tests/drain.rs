@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::*;
 use orbit_types::workflow::PipelineState;
 
-use super::super::drain::{PullDrain, PullLauncher, PullPeer};
+use super::super::drain::{PullDrain, PullLauncher, PullPeer, RefusedDelivery};
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
 
 #[derive(Default)]
@@ -258,6 +258,7 @@ fn pull_lost_request_and_binding_responses_recover_the_same_leaf() {
         jobs,
         peer: &peer,
         launcher: &launcher,
+        refused_delivery: RefusedDelivery::WhenDue,
     };
     peer.lose_request.set(true);
     assert!(drain.refill(&destination, &template, 1).is_err());
