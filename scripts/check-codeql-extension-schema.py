@@ -32,6 +32,20 @@ EXTENSIONS_ROOT = Path(".github/codeql/extensions")
 PACK_FILENAME = "codeql-pack.yml"
 GENERATED_EXTENSION_GLOB = "extensions/**/*.yaml"
 CANONICAL_CALLABLE = re.compile(r"^orbit_[a-z0-9_]+(?:::[A-Za-z_][A-Za-z0-9_]*)+$")
+# CodeQL's rust/cleartext-transmission query reads barrier kind "transmission"
+# (CleartextTransmissionExtensions.qll, ModelsAsDataBarrier in rust-all 0.2.21).
+# The kind is far broader than path validation, so only the exact model rows
+# that were reviewed for the HTTPS release transport are accepted. Every other
+# kind, callable, output or predicate must be reviewed and added here.
+PATH_INJECTION_KIND = "path-injection"
+TRANSMISSION_KIND = "transmission"
+APPROVED_TRANSMISSION_MODELS = {
+    (
+        "barrierModel",
+        "orbit_cmd::update::source::validated_release_url",
+        "ReturnValue.Field[core::result::Result::Ok(0)]",
+    ),
+}
 ACCESS_PATH = re.compile(
     r"^(?:ReturnValue|Argument\[(?:self|[0-9]+)\])"
     r"(?:\.(?:Future|Field\[[A-Za-z0-9_:()]+\]))*$"
@@ -437,8 +451,25 @@ def _validate_repository_model_scope(
                 )
             )
 
-    if values.get("kind") != "path-injection":
-        errors.append(_error(path, f"{location}: only the 'path-injection' model kind is allowed"))
+    kind = values.get("kind")
+    if kind == TRANSMISSION_KIND:
+        model = (predicate, callable_path, values.get("output"))
+        if model not in APPROVED_TRANSMISSION_MODELS:
+            errors.append(
+                _error(
+                    path,
+                    f"{location}: the '{TRANSMISSION_KIND}' model kind is only allowed for "
+                    "the reviewed release-transport barrier models",
+                )
+            )
+    elif kind != PATH_INJECTION_KIND:
+        errors.append(
+            _error(
+                path,
+                f"{location}: only the '{PATH_INJECTION_KIND}' and "
+                f"'{TRANSMISSION_KIND}' model kinds are allowed",
+            )
+        )
     if values.get("provenance") != "manual":
         errors.append(_error(path, f"{location}: only 'manual' provenance is allowed"))
     if predicate == "barrierGuardModel" and values.get("acceptingValue") not in {"true", "false"}:
