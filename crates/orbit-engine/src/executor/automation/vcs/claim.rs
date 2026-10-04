@@ -811,6 +811,13 @@ fn run_required_command<H: RuntimeHost + ?Sized>(
             "owner required validation contains an empty command".to_string(),
         ));
     }
+    let environment = host.agent_subprocess_environment(&[]);
+    let validation_path = environment
+        .iter()
+        .find(|(name, _)| name == "PATH")
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("<unset; /bin/sh uses its default search path>")
+        .to_string();
     let outcome = run_process(
         &ExecRequest {
             program: "/bin/sh".to_string(),
@@ -818,11 +825,17 @@ fn run_required_command<H: RuntimeHost + ?Sized>(
             current_dir: Some(workspace_path.to_string_lossy().into_owned()),
             timeout_ms: Some(VALIDATION_TIMEOUT_MS),
             stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(host.agent_subprocess_environment(&[])),
+            environment_mode: EnvironmentMode::ClearAndSet(environment),
             debug: false,
         },
         &NoSandbox,
     )?;
+    let mut output = capture(&outcome.stdout, &outcome.stderr);
+    // Include failures below a build script too (e.g. make exits 2 when a
+    // guardrail cannot resolve rg), rather than relying on shell exit 127.
+    if !outcome.success {
+        output.push_str(&format!("\nRequired validation PATH={validation_path}"));
+    }
     Ok(RequiredCommandRun {
         command: command.to_string(),
         exit_code: outcome
@@ -830,7 +843,7 @@ fn run_required_command<H: RuntimeHost + ?Sized>(
             .unwrap_or(if outcome.success { 0 } else { -1 }),
         timed_out: outcome.timed_out,
         passed: outcome.success && !outcome.timed_out,
-        output: capture(&outcome.stdout, &outcome.stderr),
+        output,
     })
 }
 

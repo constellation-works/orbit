@@ -123,6 +123,16 @@ own transient scope, `orbit-worker-<run_id>-<nonce>.scope`, under the user
 manager's `app.slice`. One runaway run is throttled or OOM-killed inside that
 scope; the dashboard, the sweep clock, SSH, and sibling runs keep working.
 
+Scope launches explicitly carry the launching process's allow-listed child
+variables (including `PATH`), plus deliberate worker environment edits, through
+`systemd-run --setenv`. Required validation runs `/bin/sh` with a cleared,
+allow-listed environment; it does not load a login profile. Keep `rg`, `cargo`,
+and other required tools on the launching service's `PATH`. Failed validation
+logs include `Required validation PATH=…`, including failures from nested build
+scripts. Compare that value with the service's `Environment=PATH=…` when a tool
+cannot be found. Restart the launching service between runs after changing its
+environment, then confirm a new box delivery passes `candidate_validate`.
+
 The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
 
 | Key | Default | Scope property |

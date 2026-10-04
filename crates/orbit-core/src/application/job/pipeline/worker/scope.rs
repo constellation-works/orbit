@@ -23,12 +23,15 @@
 //! `--strict-worker-containment` refuses an unavailable scope before spawning
 //! the worker. Strict mode requires `machine.worker_containment=true`.
 
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Once;
 
+use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_config::{MemoryLimit, WorkerContainmentSettings};
 
 /// Error code on the diagnostic step of a run that failed after its worker
@@ -168,7 +171,9 @@ pub(crate) fn scope_unit_name(run_id: &str) -> String {
 }
 
 /// `systemd-run --user --scope … -- <base argv>`, carrying over `base`'s
-/// working directory and environment edits. `--scope` execs the program in
+/// working directory and environment edits over the shared child allowlist.
+/// Explicit `--setenv` values keep the launching service's toolchain PATH
+/// across the user-manager boundary. `--scope` execs the program in
 /// the same process, so stdio and `pre_exec` set on the result later still
 /// apply to the worker.
 pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerLimits) -> Command {
@@ -179,18 +184,44 @@ pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerL
     for property in limits.properties() {
         command.arg(format!("--property={property}"));
     }
+    // Only admitted values cross the launch boundary explicitly. The trusted
+    // worker's wrapper retains its existing inheritance (including user bus
+    // locators and operator-configured provider credentials); agent and
+    // validation subprocesses still clear their environments at dispatch.
+    // Deliberate worker edits take precedence over the ambient allowlist.
+    let mut environment: BTreeMap<OsString, OsString> = allowlisted_child_env(&[], &[])
+        .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect();
+    for (key, value) in base.get_envs() {
+        match value {
+            Some(value) => {
+                environment.insert(key.into(), value.into());
+            }
+            None => {
+                environment.remove(key);
+            }
+        }
+    }
+    command.envs(&environment);
+    for (key, value) in base.get_envs() {
+        if value.is_none() {
+            command.env_remove(key);
+        }
+    }
+    for (key, value) in &environment {
+        let mut argument = OsString::from("--setenv=");
+        argument.push(key);
+        argument.push("=");
+        argument.push(value);
+        command.arg(argument);
+    }
     command
         .arg("--")
         .arg(base.get_program())
         .args(base.get_args());
     if let Some(directory) = base.get_current_dir() {
         command.current_dir(directory);
-    }
-    for (key, value) in base.get_envs() {
-        match value {
-            Some(value) => command.env(key, value),
-            None => command.env_remove(key),
-        };
     }
     command.stdin(Stdio::null());
     command
