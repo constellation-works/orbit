@@ -270,6 +270,16 @@ pinned toolchain). If a change genuinely needs a newer compiler or a
 dependency bump raises the floor, bump `rust-version` and the workflow's
 `MSRV` env var together in the same PR, and call it out in the CHANGELOG.
 
+## Windows compile check
+
+Windows is supported through WSL2. Native Windows is compile-checked only:
+`.github/workflows/ci-windows.yml` runs `cargo check --workspace --locked
+--target x86_64-pc-windows-msvc` (library and binary targets, not tests) on
+`windows-latest`. It is advisory, not a required status check. Code that needs
+Unix-only APIs (`libc`, `std::os::fd`, `std::os::unix`) must sit behind
+`#[cfg(unix)]`. Its `#[cfg(not(unix))]` counterpart must return an explicit
+unsupported error or `Unknown`; it must not invent Windows semantics.
+
 ## Supply-chain (cargo-deny)
 
 Dependencies are gated by [`cargo-deny`](https://embarkstudios.github.io/cargo-deny/)

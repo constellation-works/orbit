@@ -73,7 +73,11 @@ impl PluginSandboxProfile {
     #[must_use]
     pub fn with_callback_session(mut self, session: &PluginCallbackSession) -> Self {
         self.read.push(session.path().to_path_buf());
-        self.callback_fd = Some(session.credential_fd());
+        // Sessions are minted only on Unix, where descriptors are inherited.
+        #[cfg(unix)]
+        {
+            self.callback_fd = Some(session.credential_fd());
+        }
         self
     }
 

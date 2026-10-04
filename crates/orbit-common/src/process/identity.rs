@@ -495,8 +495,10 @@ pub fn probe_process_group_liveness(pgid: libc::pid_t) -> KernelLiveness {
     }
 }
 
+/// Process groups are a Unix concept; `i32` mirrors `libc::pid_t`, which is
+/// not available off Unix.
 #[cfg(not(unix))]
-pub fn probe_process_group_liveness(_pgid: libc::pid_t) -> KernelLiveness {
+pub fn probe_process_group_liveness(_pgid: i32) -> KernelLiveness {
     KernelLiveness::Unknown
 }
 

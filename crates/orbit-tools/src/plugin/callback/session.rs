@@ -62,6 +62,7 @@ pub struct PluginCallbackSession {
     /// handed to the child as [`PLUGIN_CALLBACK_FD`]. Held for the session's
     /// life because that is the child's life: the `mcp` backend keeps one per
     /// live server, and the `exec` backend one per call.
+    #[cfg_attr(not(unix), allow(dead_code))]
     credential: File,
 }
 
@@ -183,7 +184,8 @@ impl PluginCallbackSession {
     /// The host descriptor the child must receive as [`PLUGIN_CALLBACK_FD`].
     ///
     /// Borrowed, not transferred: this session owns it and has to outlive the
-    /// spawn that maps it.
+    /// spawn that maps it. Unix-only: no session is minted elsewhere.
+    #[cfg(unix)]
     pub fn credential_fd(&self) -> i32 {
         use std::os::fd::AsRawFd;
 
