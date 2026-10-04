@@ -319,7 +319,10 @@ allows one fresh read and retry when only the task's status or a dependency's
 status changed. A dependency-only status change may then apply; a task that
 entered in-progress remains unwritable and is reported as `status_changed`.
 Any other material change, or a second mismatch on that retry, still refuses
-the assessment. Stable ordering by oldest pending time then task ID
+the assessment. That `material_changed` refusal names the freshness component
+that drifted — title, description, criteria, plan, selectors, or an opted-in
+field such as dependencies, crew, instructions or source — when preparation
+recorded the component. Stable ordering by oldest pending time then task ID
 prevents repeatedly edited work from starving other tasks.
 
 The prepare/apply domain boundary recomputes fingerprints and eligibility under

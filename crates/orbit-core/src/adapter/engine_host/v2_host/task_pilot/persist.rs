@@ -1,5 +1,7 @@
 //! Locked, retried, idempotent persistence of one validated task-pilot assessment.
 
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
@@ -17,7 +19,7 @@ const STORAGE_APPLY_ATTEMPTS: usize = 3;
 pub(super) enum ApplyTaskOutcome {
     Applied(Option<String>),
     AlreadyApplied(Option<String>),
-    Stale(&'static str, &'static str),
+    Stale(&'static str, String),
 }
 
 pub(super) fn apply_task(
@@ -30,7 +32,7 @@ pub(super) fn apply_task(
     if !matches!(snapshot.status, TaskStatus::Proposed | TaskStatus::Backlog) {
         return Ok(ApplyTaskOutcome::Stale(
             "status_not_mutable",
-            "task-pilot does not rewrite in-progress, review, or terminal work",
+            "task-pilot does not rewrite in-progress, review, or terminal work".to_string(),
         ));
     }
     let mut snapshot = snapshot.clone();
@@ -68,7 +70,7 @@ pub(super) fn apply_task(
                 Err(OrbitError::NotFound { .. }) => {
                     outcome = Some(ApplyTaskOutcome::Stale(
                         "task_deleted",
-                        "task no longer exists at the write boundary",
+                        "task no longer exists at the write boundary".to_string(),
                     ));
                     return Ok(());
                 }
@@ -81,7 +83,12 @@ pub(super) fn apply_task(
                             .map(|fingerprint| (fingerprint, current.status));
                 }
                 if retry_fingerprint.is_none() {
-                    outcome = Some(ApplyTaskOutcome::Stale(reason.0, reason.1));
+                    let detail = if reason.0 == "material_changed" {
+                        material_change_detail(runtime, &current, &snapshot, policy)
+                    } else {
+                        reason.1.to_string()
+                    };
+                    outcome = Some(ApplyTaskOutcome::Stale(reason.0, detail));
                 }
                 return Ok(());
             }
@@ -89,7 +96,8 @@ pub(super) fn apply_task(
             {
                 outcome = Some(ApplyTaskOutcome::Stale(
                     "status_changed",
-                    "task status changed after preparation; task-pilot does not rewrite active work",
+                    "task status changed after preparation; task-pilot does not rewrite active work"
+                        .to_string(),
                 ));
                 return Ok(());
             }
@@ -169,7 +177,7 @@ pub(super) fn apply_task(
                 AtomicTaskMutationOutcome::Stale => {
                     outcome = Some(ApplyTaskOutcome::Stale(
                         "write_boundary_changed",
-                        "task changed between validation and the atomic write boundary",
+                        "task changed between validation and the atomic write boundary".to_string(),
                     ));
                 }
             }
@@ -234,14 +242,58 @@ fn status_only_fingerprint(
 ) -> Option<String> {
     let (_, revision) = snapshot.material.as_ref()?;
     let neutral = snapshot.status_neutral_fingerprint.as_ref()?;
-    let (fresh, fresh_neutral) = crate::application::automation::preparation::fingerprints(
+    let fresh = crate::application::automation::preparation::fingerprints(
         runtime, current, revision, policy,
     )
     .ok()?;
-    if &fresh_neutral != neutral {
+    if &fresh.status_neutral != neutral {
         return None;
     }
-    Some(fresh)
+    Some(fresh.material)
+}
+
+const MATERIAL_CHANGED_DETAIL: &str =
+    "task meaning or dependency evidence changed after preparation";
+
+/// Name the freshness components whose digests moved. An empty diff stays
+/// unnamed: eligibility can change the material hash without any configured
+/// component moving, and that is not a status change either. A missing
+/// component map is an older prepared payload and keeps the same sentence.
+fn material_change_detail(
+    runtime: &OrbitRuntime,
+    current: &Task,
+    snapshot: &PreparedTaskSnapshot,
+    policy: &PreparationPolicy,
+) -> String {
+    let Some(stored) = snapshot.material_components.as_ref() else {
+        return MATERIAL_CHANGED_DETAIL.to_string();
+    };
+    let Some((_, revision)) = snapshot.material.as_ref() else {
+        return MATERIAL_CHANGED_DETAIL.to_string();
+    };
+    let Ok(fresh) = crate::application::automation::preparation::component_digests(
+        runtime, current, revision, policy,
+    ) else {
+        return MATERIAL_CHANGED_DETAIL.to_string();
+    };
+    let mut drifted = BTreeSet::new();
+    for (key, expected) in stored {
+        if fresh.get(key) != Some(expected) {
+            drifted.insert(key.as_str());
+        }
+    }
+    for key in fresh.keys() {
+        if !stored.contains_key(key) {
+            drifted.insert(key.as_str());
+        }
+    }
+    if drifted.is_empty() {
+        return MATERIAL_CHANGED_DETAIL.to_string();
+    }
+    format!(
+        "{MATERIAL_CHANGED_DETAIL}: {}",
+        drifted.into_iter().collect::<Vec<_>>().join(", ")
+    )
 }
 
 fn apply_atomic_with_retries(
@@ -351,10 +403,7 @@ fn task_snapshot_drift(
             .map_or(true, |fingerprint| &fingerprint != expected)
         })
     {
-        Some((
-            "material_changed",
-            "task meaning or dependency evidence changed after preparation",
-        ))
+        Some(("material_changed", MATERIAL_CHANGED_DETAIL))
     } else if current.context_files != snapshot.context_files {
         Some((
             "context_files_changed",

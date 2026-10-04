@@ -171,25 +171,55 @@ pub(crate) fn fingerprint_with_instructions(
     preparation::fingerprint(task, &evidence, policy)
 }
 
-/// Capture both task-pilot hashes from one instruction and dependency read.
-/// This keeps their only difference the normalized status fields even when a
-/// dependency is updated concurrently with preparation.
+/// Both task-pilot hashes and the per-field digests behind a `material_changed`
+/// refusal, from one instruction and dependency read. The hashes differ only
+/// in the normalized status fields even when a dependency is updated
+/// concurrently with preparation.
+pub(crate) struct PilotFingerprints {
+    pub(crate) material: String,
+    pub(crate) status_neutral: String,
+    pub(crate) components: BTreeMap<String, String>,
+}
+
 pub(crate) fn fingerprints(
     runtime: &OrbitRuntime,
     task: &Task,
     revision: &str,
     policy: &PreparationPolicy,
-) -> Result<(String, String), AutomationError> {
-    let evidence = evidence(
+) -> Result<PilotFingerprints, AutomationError> {
+    let evidence = read_evidence(runtime, task, revision, policy)?;
+    Ok(PilotFingerprints {
+        material: preparation::fingerprint(task, &evidence, policy)?,
+        status_neutral: preparation::fingerprint_ignoring_status(task, &evidence, policy)?,
+        components: preparation::component_digests(task, &evidence, policy)?,
+    })
+}
+
+/// Re-read the freshness components at refusal time. Apply uses this only
+/// when the status-neutral retry cannot absorb a material drift.
+pub(crate) fn component_digests(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    revision: &str,
+    policy: &PreparationPolicy,
+) -> Result<BTreeMap<String, String>, AutomationError> {
+    let evidence = read_evidence(runtime, task, revision, policy)?;
+    preparation::component_digests(task, &evidence, policy)
+}
+
+fn read_evidence(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    revision: &str,
+    policy: &PreparationPolicy,
+) -> Result<MaterialEvidence, AutomationError> {
+    evidence(
         runtime,
         task,
         Some(revision),
         &|revision| instructions(runtime, revision),
         policy,
-    )?;
-    let material = preparation::fingerprint(task, &evidence, policy)?;
-    let neutral = preparation::fingerprint_ignoring_status(task, &evidence, policy)?;
-    Ok((material, neutral))
+    )
 }
 
 /// The `material_v1` fingerprint of `task` as an assessment pinned at

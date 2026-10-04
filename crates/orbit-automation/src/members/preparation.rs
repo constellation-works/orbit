@@ -1,5 +1,7 @@
 //! One material fingerprint used by scheduling, apply and readiness consumers.
 
+use std::collections::BTreeMap;
+
 use crate::{AutomationError, delivery::json_definition_epoch};
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::members::{
@@ -56,24 +58,7 @@ pub fn fingerprint(
         "eligible": eligible(task, &policy.eligibility),
     });
     for field in &freshness.material_fields {
-        let (key, value) = match field {
-            MaterialField::Title => ("title", json!(task.title.trim())),
-            MaterialField::Description => ("description", json!(task.description.trim())),
-            MaterialField::Criteria => ("criteria", json!(task.acceptance_criteria)),
-            MaterialField::Plan => ("plan", json!(task.plan.trim())),
-            MaterialField::Selectors => ("selectors", json!(sorted(&task.context_files))),
-            MaterialField::Tags => ("tags", json!(sorted(&task.tags))),
-            MaterialField::Crew => (
-                "crew",
-                json!({"crew": task.crew, "assignment": evidence.assignment}),
-            ),
-            MaterialField::Tools => ("tools", json!(sorted(&task.required_tools))),
-            MaterialField::Type => ("type", json!(task.task_type)),
-            MaterialField::Complexity => ("complexity", json!(task.complexity)),
-            MaterialField::Relations => ("relations", json!(task.relations)),
-            MaterialField::Dependencies => ("dependencies", evidence.dependencies.clone()),
-            MaterialField::Instructions => ("instructions", evidence.instructions.clone()),
-        };
+        let (key, value) = field_value(field, task, evidence);
         material[key] = value;
     }
     match freshness.source_sensitivity {
@@ -107,14 +92,76 @@ pub fn fingerprint_ignoring_status(
     let mut task = task.clone();
     task.status = TaskStatus::Proposed;
     let mut evidence = evidence.clone();
-    if let Some(entries) = evidence.dependencies.as_array_mut() {
+    evidence.dependencies = without_dependency_status(evidence.dependencies);
+    fingerprint(&task, &evidence, policy)
+}
+
+/// Per-field digests of the inputs `policy.freshness` names.
+///
+/// Each digest is the field value `fingerprint` hashes, so a named component
+/// is one of those inputs and not a second definition of it. Eligibility is
+/// not a component. Dependency status is not either: the status-neutral retry
+/// treats a dependency status change as non-material, and naming it here
+/// would report that retry as a dependency edit.
+pub fn component_digests(
+    task: &Task,
+    evidence: &MaterialEvidence,
+    policy: &PreparationPolicy,
+) -> Result<BTreeMap<String, String>, AutomationError> {
+    let freshness = policy.freshness.normalized();
+    let mut components = BTreeMap::new();
+    for field in &freshness.material_fields {
+        let (key, value) = field_value(field, task, evidence);
+        let value = if *field == MaterialField::Dependencies {
+            without_dependency_status(value)
+        } else {
+            value
+        };
+        components.insert(key.to_string(), json_definition_epoch(value)?);
+    }
+    if freshness.source_sensitivity != SourceSensitivity::Ignore {
+        components.insert(
+            "source".to_string(),
+            json_definition_epoch(evidence.source.clone())?,
+        );
+    }
+    Ok(components)
+}
+
+fn field_value(
+    field: &MaterialField,
+    task: &Task,
+    evidence: &MaterialEvidence,
+) -> (&'static str, Value) {
+    match field {
+        MaterialField::Title => ("title", json!(task.title.trim())),
+        MaterialField::Description => ("description", json!(task.description.trim())),
+        MaterialField::Criteria => ("criteria", json!(task.acceptance_criteria)),
+        MaterialField::Plan => ("plan", json!(task.plan.trim())),
+        MaterialField::Selectors => ("selectors", json!(sorted(&task.context_files))),
+        MaterialField::Tags => ("tags", json!(sorted(&task.tags))),
+        MaterialField::Crew => (
+            "crew",
+            json!({"crew": task.crew, "assignment": evidence.assignment}),
+        ),
+        MaterialField::Tools => ("tools", json!(sorted(&task.required_tools))),
+        MaterialField::Type => ("type", json!(task.task_type)),
+        MaterialField::Complexity => ("complexity", json!(task.complexity)),
+        MaterialField::Relations => ("relations", json!(task.relations)),
+        MaterialField::Dependencies => ("dependencies", evidence.dependencies.clone()),
+        MaterialField::Instructions => ("instructions", evidence.instructions.clone()),
+    }
+}
+
+fn without_dependency_status(mut value: Value) -> Value {
+    if let Some(entries) = value.as_array_mut() {
         for entry in entries {
             if let Some(status) = entry.get_mut("status") {
                 *status = Value::Null;
             }
         }
     }
-    fingerprint(&task, &evidence, policy)
+    value
 }
 
 /// The exact `material_v1` hash: every task field, the eligibility verdict,

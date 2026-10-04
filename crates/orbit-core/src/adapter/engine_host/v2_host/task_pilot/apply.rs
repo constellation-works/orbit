@@ -34,6 +34,10 @@ pub(super) struct PreparedTaskSnapshot {
     pub(super) tags: Vec<String>,
     pub(super) material: Option<(String, String)>,
     pub(super) status_neutral_fingerprint: Option<String>,
+    /// Freshness-component digests captured with the fingerprint. Absent on a
+    /// payload prepared before components were recorded; malformed input fails
+    /// the apply instead of dropping the names.
+    pub(super) material_components: Option<BTreeMap<String, String>>,
     /// Deterministic feasibility findings for the tools this task's acceptance
     /// criteria require, computed at preparation [ORB-11980].
     validation_tool_warnings: Vec<String>,
@@ -47,6 +51,35 @@ pub(super) struct ValidatedTask {
     pub(super) promote: bool,
     pub(super) complexity: TaskComplexity,
     pub(super) operation_id: String,
+}
+
+fn material_components(
+    entry: &Value,
+    action: &str,
+) -> Result<Option<BTreeMap<String, String>>, DispatchError> {
+    let Some(value) = entry.get("material_components") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(object) = value.as_object() else {
+        return Err(action_failed(
+            action,
+            "prepared task material_components must be an object of component digests",
+        ));
+    };
+    let mut components = BTreeMap::new();
+    for (key, digest) in object {
+        let Some(digest) = digest.as_str() else {
+            return Err(action_failed(
+                action,
+                format!("prepared task material_components.{key} must be a string digest"),
+            ));
+        };
+        components.insert(key.clone(), digest.to_string());
+    }
+    Ok(Some(components))
 }
 
 pub(in super::super) fn apply(
@@ -164,6 +197,7 @@ pub(in super::super) fn apply(
                         .get("status_neutral_fingerprint")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
+                    material_components: material_components(entry, action)?,
                 },
             ))
         })
@@ -521,7 +555,7 @@ pub(in super::super) fn apply(
                     );
                 }
                 Ok(ApplyTaskOutcome::Stale(reason, detail)) => {
-                    outcomes.push(stale_task(task_id, reason, detail));
+                    outcomes.push(stale_task(task_id, reason, &detail));
                 }
                 Err(error) => outcomes.push(task_outcome(
                     task_id,
