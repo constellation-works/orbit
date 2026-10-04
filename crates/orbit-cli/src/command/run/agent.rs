@@ -6,6 +6,7 @@
 //! this command cannot drift from the tool's behavior or relax its checks.
 
 use clap::Args;
+use orbit_common::security::redaction::redact_all;
 use orbit_core::{AgentInvokeRequest, OrbitRuntime};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::json;
@@ -113,6 +114,13 @@ impl Execute for RunAgentArgs {
             session_context: &session_context,
         })?;
 
+        // Submission data can carry sensitive values. Scrub warnings once so
+        // progress on stderr and both output projections share the same boundary.
+        let warnings: Vec<String> = submission
+            .warnings
+            .iter()
+            .map(|warning| redact_all(warning))
+            .collect();
         let mut doc = json!({
             "run_id": submission.run_id,
             "job_id": submission.job_id,
@@ -129,7 +137,7 @@ impl Execute for RunAgentArgs {
             "cwd": submission.admission.cwd,
             "sandboxed": false,
             "provider_sandbox": submission.provider_sandbox,
-            "warnings": submission.warnings,
+            "warnings": warnings,
         });
         let mut lines = Vec::new();
         if submission.deduplicated {
@@ -156,9 +164,9 @@ impl Execute for RunAgentArgs {
             ));
             lines.push(format!("provider sandbox: {}", submission.provider_sandbox));
         }
-        lines.extend(submission.warnings.iter().cloned());
+        lines.extend(warnings.iter().cloned());
         if self.wait {
-            for warning in &submission.warnings {
+            for warning in &warnings {
                 eprintln!("{warning}");
             }
             let result = runtime.wait_agent_invoke_run(&submission.run_id, None)?;

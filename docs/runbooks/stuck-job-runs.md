@@ -231,6 +231,11 @@ Read the outcome with `orbit run show <run_id>` — its `Invocation:` line disti
 completed answer from a mid-turn stop, a timeout, and a cancellation — and
 `orbit run logs <run_id>` for the full captured output.
 
+Submission warnings in `orbit run agent` are scrubbed with the shared secret
+redactor before appearing in wait progress, human output, or the JSON `warnings`
+array. Queue and provider sandbox warnings remain visible with sensitive values
+replaced by redaction markers.
+
 ## Resume from checkpoints
 
 The v2 executor checkpoints every completed top-level step into
