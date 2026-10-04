@@ -66,6 +66,14 @@ fn set_policy(fixture: &Fixture, key: &str, value: &str) {
         .success();
 }
 
+/// Provider discovery at `orbit init` is host-dependent; these tests need a
+/// configured review crew regardless of which provider CLIs are installed.
+fn enable_review_crew(fixture: &Fixture) {
+    set_policy(fixture, "crews.sonnet.enabled", "true");
+    set_policy(fixture, "workflow.default_crew", REVIEW_CREW);
+    set_policy(fixture, "workflow.system_crew", REVIEW_CREW);
+}
+
 /// Point the shipped consumer at `trigger` without touching its `enabled`.
 fn retarget(fixture: &Fixture, trigger: &Value) {
     fixture.json(&[
@@ -125,6 +133,7 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
     }
 
     let fixture = Fixture::new();
+    enable_review_crew(&fixture);
     git(&fixture, &["checkout", "-b", "fixture-delivery"]);
     let baseline = commit(&fixture, "baseline\n");
     retarget(&fixture, &trigger());
@@ -245,6 +254,7 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     }
 
     let fixture = Fixture::new();
+    enable_review_crew(&fixture);
     assert_eq!(doctor_row(&fixture).0["status"], "skipped");
     set_policy(&fixture, "operation.review_policy", "after-landing");
 
