@@ -310,3 +310,146 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
     }
     assert_eq!(std::fs::read(&routine_path).unwrap(), after_toggle);
 }
+
+#[test]
+fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates() {
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let mut client = workspace.serve();
+    let created = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"workspace":selector,"model":"codex",
+        "request_id":"status-create","title":"Row controls","description":"Governed writes",
+        "acceptance_criteria":["No duplicate approval"]}),
+    );
+    let id = created["snapshot"]["task"]["id"].as_str().unwrap();
+    let revision = &created["snapshot"]["revision"];
+    let approval = json!({"workspace":selector,"model":"codex","id":id,
+        "request_id":"approve","expected_revision":revision,"status":"backlog"});
+    for patch in [
+        json!({"status":"done"}),
+        json!({"status":"review"}),
+        json!({"title":"Combined approval"}),
+        json!({"crew":""}),
+    ] {
+        let mut refused = approval.clone();
+        refused
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let result = client.call_tool_ok("orbit_task_update", refused);
+        assert_eq!(result["mutation_applied"], false, "{result}");
+    }
+    let mut implicit = approval.clone();
+    implicit.as_object_mut().unwrap().remove("workspace");
+    assert_eq!(
+        client.call_tool_err("orbit_task_update", implicit)["code"],
+        "invalid_input"
+    );
+    let mut wrong = approval.clone();
+    wrong["workspace"] = json!("unknown-destination");
+    client.call_tool_err("orbit_task_update", wrong);
+    let first = client.call_tool_ok("orbit_task_update", approval.clone());
+    assert_eq!(first["snapshot"]["task"]["status"], "backlog");
+    assert_eq!(
+        first["snapshot"]["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|h| h["event"] == "proposal_approved")
+            .count(),
+        1
+    );
+    // Throw away the receipt and restart the transport; resubmission still has
+    // the old observed revision and must recover the durable accepted write.
+    drop(client);
+    let mut client = workspace.serve();
+    let replay = client.call_tool_ok("orbit_task_update", approval.clone());
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(
+        replay["snapshot"]["revision"],
+        first["snapshot"]["revision"]
+    );
+    let mut changed = approval.clone();
+    changed["status"] = json!("blocked");
+    assert_eq!(
+        client.call_tool_ok("orbit_task_update", changed)["mutation_applied"],
+        false
+    );
+    let mut stale = approval;
+    stale["request_id"] = json!("stale");
+    stale["status"] = json!("blocked");
+    assert_eq!(
+        client.call_tool_ok("orbit_task_update", stale)["conflict"]["code"],
+        "revision_conflict"
+    );
+    // A long-lived client mixes ordinary and guarded calls on the same session.
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({"workspace":selector,"id":id,"model":"codex","title":"Ordinary caller"}),
+    );
+    let snap = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true}),
+    );
+    let crew = snap["task"]["crew"].as_str().unwrap().to_string();
+    let edited = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"workspace":selector,"id":id,"model":"codex",
+        "request_id":"crew","expected_revision":snap["revision"],"crew":crew,"status":"blocked"}),
+    );
+    assert_eq!(edited["snapshot"]["task"]["status"], "blocked");
+    assert_eq!(edited["snapshot"]["task"]["title"], "Ordinary caller");
+    let defaulted = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"workspace":selector,"id":id,"model":"codex",
+        "request_id":"default-crew","expected_revision":edited["snapshot"]["revision"],"crew":""}),
+    );
+    assert!(defaulted["snapshot"].is_object(), "{defaulted}");
+    orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["task", "update", id, "--status", "review", "--force"]),
+    );
+    let snap = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true}),
+    );
+    assert!(
+        snap["actions"]["status"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["status"] == "done" && a["enabled"] == false)
+    );
+    assert_eq!(
+        snap["actions"]["complete"]["enabled"], false,
+        "an ordinary client has no completion authority"
+    );
+    let done = json!({"workspace":selector,"id":id,"model":"codex","request_id":"bypass",
+        "expected_revision":snap["revision"],"status":"done"});
+    assert_eq!(
+        client.call_tool_ok("orbit_task_update", done.clone())["mutation_applied"],
+        false
+    );
+    let mut operator = workspace.serve_with_args(&["--operator"]);
+    assert_eq!(
+        operator.call_tool_ok("orbit_task_update", done)["mutation_applied"],
+        false,
+        "operator authority also cannot bypass the evidence-bound review operation"
+    );
+    let mut forced = json!({"workspace":selector,"id":id,"model":"codex","request_id":"force",
+        "expected_revision":snap["revision"],"status":"proposed","force":true});
+    client.call_tool_err("orbit_task_update", forced.clone());
+    forced.as_object_mut().unwrap().remove("force");
+    assert_eq!(
+        client.call_tool_ok("orbit_task_update", forced)["mutation_applied"],
+        false
+    );
+    assert_eq!(
+        client.call_tool_ok(
+            "orbit_task_show",
+            json!({"workspace":selector,"id":id,"snapshot":true})
+        )["revision"],
+        snap["revision"]
+    );
+}

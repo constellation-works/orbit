@@ -1603,6 +1603,7 @@
                     "model",
                     "id",
                     "expected_revision",
+                    "status",
                     "title",
                     "description",
                     "acceptance_criteria",

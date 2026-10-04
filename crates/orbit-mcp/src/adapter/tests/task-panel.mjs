@@ -123,7 +123,7 @@ function fixture(){
     assert.equal(last().params.name,'orbit_workspace_list');
     answer(last(),{
       workspaces:[{
-        selector:'host-a/ws_shared',name:'shared',host:'A'
+        selector:'host-a/ws_shared',name:'shared',host:'A',crews:{crews:[{name:'alpha',enabled:true},{name:'disabled',enabled:false}]}
       },{
         selector:'host-b/ws_shared',name:'shared',host:'B'
       }]
@@ -418,7 +418,7 @@ test('filter coverage is explicit and full history uses the history tool',async(
   await f.init();
   f.get('query').value='needle';
   f.get('priority').value='high';
-  f.click('review');
+  assert.equal(f.get('review').handlers.click,undefined);
   f.get('filters').handlers.submit({
     preventDefault(){
     }
@@ -426,7 +426,7 @@ test('filter coverage is explicit and full history uses the history tool',async(
   const args=f.last().params.arguments;
   assert.equal(args.search,'needle');
   assert.equal(args.priority,'high');
-  assert.equal(args.status,'review');
+  assert.equal(args.status,'in-progress,review,blocked,backlog');
   f.click('history');
   assert.equal(f.last().params.name,'orbit_search');
   assert.equal(f.last().params.arguments.workspace,'host-a/ws_shared');
@@ -1319,7 +1319,7 @@ test('task status selection covers active work, expanded sets and All before gro
     const items=matches.slice(a.offset,a.offset+a.limit);
     f.answer(request,{...f.list(items),total:matches.length,pagination:{total:matches.length,offset:a.offset,limit:a.limit,next_offset:a.offset+items.length<matches.length?a.offset+items.length:null}});
     await flush();
-    assert.equal(f.get('list').querySelectorAll('button').length,items.length);
+    assert.equal(f.get('list').querySelectorAll('button').filter(b=>b.dataset.entityKey).length,items.length);
     return {a,items,total:matches.length};
   };
   assert.deepEqual(f.last().params.arguments.status.split(',').sort(),active.slice().sort(),'The explicit desktop default excludes proposed and terminal tasks');
@@ -1330,7 +1330,7 @@ test('task status selection covers active work, expanded sets and All before gro
   assert.deepEqual(headings(),['review','blocked','in-progress','backlog']);
   const firstGroup=f.get('list').querySelectorAll('h3')[0];
   assert.equal(firstGroup.children[1].textContent,'13');
-  assert.ok(f.get('list').querySelectorAll('button').every(row=>row.dataset.entityKey.startsWith('active-')));
+  assert.ok(f.get('list').querySelectorAll('button').filter(b=>b.dataset.entityKey).every(row=>row.dataset.entityKey.startsWith('active-')));
   f.get('query').value='needle'; f.get('priority').value='high';
   f.get('filters').handlers.submit({preventDefault(){}});
   let page=await answerList();
@@ -1350,7 +1350,7 @@ test('task status selection covers active work, expanded sets and All before gro
   assert.equal(page.total,87);
   assert.deepEqual(included(),[...active,'proposed','done'].sort());
   assert.deepEqual(headings(),['proposed','review','blocked','in-progress','backlog','done']);
-  const order=f.get('list').querySelectorAll('button').map(row=>row.dataset.entityKey);
+  const order=f.get('list').querySelectorAll('button').filter(b=>b.dataset.entityKey).map(row=>row.dataset.entityKey);
   assert.deepEqual(order.slice(0,13),Array.from({length:13},(_,i)=>`closed-${i*5}`),'Grouping preserves server order within each status');
   f.click('refresh'); page=await answerList();
   assert.equal(page.total,87); assert.equal(page.a.search,'needle'); assert.equal(page.a.priority,'high');
@@ -1360,9 +1360,7 @@ test('task status selection covers active work, expanded sets and All before gro
   assert.equal(f.get('all-statuses')['aria-pressed'],'true');
   assert.deepEqual(included(),[...active,...excluded].sort());
   assert.deepEqual(headings(),['proposed','someday','done','rejected','archived']);
-  f.click('review'); assert.equal(f.last().params.arguments.status,'review');
-  f.answer(f.last(),f.list()); await flush();
-  assert.equal(f.get('task-status-filter').hidden,true);
+  assert.equal(f.get('review').handlers.click,undefined,'Review navigation is removed; review remains in Tasks');
   f.click('runs'); assert.equal(f.last().params.name,'orbit_workflow_run_list');
   assert.ok(!('status' in f.last().params.arguments));
   f.answer(f.last(),f.list()); await flush();
@@ -1379,7 +1377,7 @@ test('task status selection covers active work, expanded sets and All before gro
   f.answer(f.last(),f.detail(row.dataset.entityKey)); await flush();
   assert.equal(f.get('panel').hidden,false); assert.equal(f.get('title').focused,true);
   f.click('close');
-  assert.ok(f.get('list').querySelectorAll('button').every(row=>row['aria-expanded']==='false'));
+  assert.ok(f.get('list').querySelectorAll('button').filter(b=>b.dataset.entityKey).every(row=>row['aria-expanded']==='false'));
   f.get('query').value='no such task'; f.get('filters').handlers.submit({preventDefault(){}});
   page=await answerList(); assert.equal(page.total,0);
   assert.deepEqual(headings(),[]); assert.equal(f.get('next').disabled,true);
@@ -1535,4 +1533,98 @@ test('automation selection and confirmation keep keyboard focus without passive 
  f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[job]));await flush();
  assert.ok(!f.get('automation-list').children[0].focused,'passive refresh does not move focus into the list');
  assert.ok(!actionButton(f,'Run job…').focused,'passive refresh does not move focus into detail actions');
+});
+
+const rowData=(status='backlog',revision='row-1')=>({schema_version:1,workspace:'host-a/ws_shared',revision,
+  task:{id:'row-task',title:'Row task',status,crew:'alpha',job_run_id:status.replaceAll('_','-')==='in-progress'?'row-run':null},
+  actions:{edit:{enabled:true},status:[{status:'backlog',enabled:true},{status:'blocked',enabled:true},{status:'done',enabled:false,reason:'Use evidence-bound review'}],ship:{enabled:true},view_run:{enabled:true}}});
+async function rowFixture(status){
+  const f=fixture();await f.init();f.click('refresh');f.answer(f.last(),f.list([rowData(status).task]));await flush();
+  f.statusControl=f.get('list').querySelectorAll('select')[0];f.crewControl=f.get('list').querySelectorAll('select')[1];
+  f.primary=f.get('list').querySelectorAll('button').find(b=>!b.dataset.entityKey);
+  return f;
+}
+async function focusRow(f,status='backlog',revision='row-1'){
+  f.statusControl.handlers.focus();assert.equal(f.last().params.name,'orbit_task_show');
+  assert.equal(f.last().params.arguments.workspace,'host-a/ws_shared');assert.equal(f.last().params.arguments.snapshot,true);
+  f.answer(f.last(),rowData(status,revision));await flush();
+}
+test('row status and crew controls use fresh guarded snapshots without selecting the task',async()=>{
+  for(const field of ['status','crew']){
+    const f=await rowFixture('backlog');await focusRow(f);
+    assert.equal(f.statusControl.options.find(o=>o.value==='done').disabled,true);
+    assert.equal(f.crewControl.options.find(o=>o.value==='disabled').disabled,true);
+    assert.ok(f.statusControl['aria-label']);assert.ok(f.crewControl['aria-label']);
+    const control=field==='status'?f.statusControl:f.crewControl;
+    control.value=field==='status'?'blocked':'';control.handlers.change();
+    assert.equal(f.last().params.name,'orbit_task_show');f.answer(f.last(),rowData());await flush();
+    const mutation=f.last();assert.equal(mutation.params.name,'orbit_task_update');
+    assert.equal(mutation.params.arguments.expected_revision,'row-1');assert.equal(mutation.params.arguments[field],field==='status'?'blocked':'');
+    assert.ok(mutation.params.arguments.request_id);assert.equal(f.get('title').textContent,'');
+    f.answer(mutation,{snapshot:rowData(field==='status'?'blocked':'backlog','row-2')});await flush();
+    assert.equal(f.get('title').textContent,'','operating a row control must not select or open detail');
+  }
+});
+test('row approval reconciles identical lost-reply requests and preserves selection',async()=>{
+  const f=await rowFixture('proposed');f.primary.handlers.click();
+  f.answer(f.last(),rowData('proposed'));await flush();
+  const mutation=f.last();assert.equal(mutation.params.name,'orbit_task_update');assert.equal(mutation.params.arguments.status,'backlog');
+  f.answer(mutation,{message:'reply lost'},true);await flush();
+  f.click('refresh');assert.deepEqual(f.last().params,mutation.params);
+  f.answer(f.last(),{replayed:true,snapshot:rowData('backlog','row-2')});await flush();
+  assert.equal(f.get('title').textContent,'');assert.match(f.get('write-state').textContent,/reconciled/);
+});
+test('row writes refuse changed snapshots, governed refusals and malformed destinations',async()=>{
+  const f=await rowFixture('backlog');await focusRow(f);
+  f.statusControl.value='blocked';f.statusControl.handlers.change();
+  f.answer(f.last(),rowData('backlog','changed'));await flush();
+  assert.equal(f.posted.filter(p=>p.params?.name==='orbit_task_update').length,0);assert.match(f.get('state').textContent,/Task changed/);
+  f.statusControl.value='blocked';f.statusControl.handlers.change();f.answer(f.last(),rowData('backlog','changed'));await flush();
+  f.answer(f.last(),{mutation_applied:false,refusal:{message:'authority unavailable'}});await flush();
+  assert.match(f.get('state').textContent,/refused/);
+  f.statusControl.handlers.focus();f.answer(f.last(),{...rowData(),workspace:'wrong-host'});await flush();
+  assert.equal(f.statusControl.disabled,true);assert.match(f.statusControl.title,/destination/);
+});
+test('ship is explicit and uncertain outcomes only reconcile task/run state without resubmission',async()=>{
+  const f=await rowFixture('backlog');f.primary.handlers.click();f.answer(f.last(),rowData());await flush();
+  assert.equal(f.last().params.name,'orbit_workflow_ship');assert.equal(f.last().params.arguments.task_ids[0],'row-task');
+  f.answer(f.last(),{message:'lost shipment reply'},true);await flush();
+  f.primary.handlers.click();assert.equal(f.last().params.name,'orbit_task_show');
+  const linked=rowData();linked.task.job_run_id='accepted-run';f.answer(f.last(),linked);await flush();
+  assert.equal(f.last().params.name,'orbit_workflow_run_show');assert.equal(f.last().params.arguments.id,'accepted-run');
+  f.answer(f.last(),{run:{id:'accepted-run'}});await flush();
+  assert.equal(f.posted.filter(p=>p.params?.name==='orbit_workflow_ship').length,1);
+  assert.match(f.get('state').textContent,/Shipment found/);
+});
+test('row primary actions respect shipment eligibility, run locality and review detail',async()=>{
+  const blocked=await rowFixture('backlog');blocked.primary.handlers.click();
+  const denied=rowData();denied.actions.ship={enabled:false,reason:'Dependencies not complete'};
+  blocked.answer(blocked.last(),denied);await flush();assert.equal(blocked.primary.disabled,true);
+  assert.equal(blocked.posted.filter(p=>p.params?.name==='orbit_workflow_ship').length,0);
+  const remote=await rowFixture('in-progress');remote.primary.handlers.click();
+  const elsewhere=rowData('in-progress');elsewhere.actions.view_run={enabled:false,reason:'Execution on other-host'};
+  remote.answer(remote.last(),elsewhere);await flush();assert.equal(remote.primary.disabled,true);assert.match(remote.primary.title,/other-host/);
+  const local=await rowFixture('in-progress');local.primary.handlers.click();local.answer(local.last(),rowData('in_progress'));await flush();
+  assert.equal(local.last().params.name,'orbit_workflow_run_show');assert.equal(local.last().params.arguments.id,'row-run');
+  const review=await rowFixture('review');review.primary.handlers.click();review.answer(review.last(),review.detail('row-task'));await flush();
+  assert.equal(review.get('review-form').hidden,false);assert.equal(review.get('record-accept').disabled,false);
+});
+
+test('successful Ship retains its receipt and a second click does not dispatch again',async()=>{
+  const f=await rowFixture('backlog');f.primary.handlers.click();f.answer(f.last(),rowData());await flush();
+  f.answer(f.last(),{run_id:'submitted-run',state:'submitted'});await flush();
+  assert.match(f.get('state').textContent,/submitted/);assert.equal(f.get('title').textContent,'');
+  f.primary.handlers.click();f.answer(f.last(),rowData());await flush();
+  assert.equal(f.last().params.name,'orbit_workflow_run_show');assert.equal(f.last().params.arguments.id,'submitted-run');
+  f.answer(f.last(),{run:{id:'submitted-run'}});await flush();
+  assert.equal(f.posted.filter(p=>p.params?.name==='orbit_workflow_ship').length,1);
+});
+test('row selection and control focus survive refresh; remote rows show execution context immediately',async()=>{
+  const f=await rowFixture('backlog');f.document.activeElement=f.crewControl;
+  f.click('refresh');f.answer(f.last(),f.list([rowData().task]));await flush();
+  assert.equal(f.get('list').querySelectorAll('select')[1].focused,true);
+  f.click('refresh');
+  f.answer(f.last(),f.list([{...rowData('in_progress').task,job_run_navigable:false,job_run_machine:{machine_id:'remote',machine_name:'Execution host'}}]));await flush();
+  assert.match(f.get('list').textContent,/Execution host/);
+  assert.equal(f.get('list').querySelectorAll('button').length,1,'a remote run has task detail selection but no misleading local run link');
 });

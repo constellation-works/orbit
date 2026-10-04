@@ -148,3 +148,76 @@ fn transition_event(bundle: &TaskBundleV2) -> TaskEventRowV2 {
         to_status: Some(TaskStatus::InProgress),
     }
 }
+
+/// Force two guarded writers to share one revision; only one can commit its
+/// status and receipt. Reopening the store simulates a lost response/restart.
+#[test]
+fn desktop_concurrent_status_receipts_are_atomic_and_durable() {
+    use crate::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    let id = store
+        .create_task(create_params("Guarded race", TaskStatus::Proposed))
+        .unwrap()
+        .id;
+    let revision = store.desktop_task_revision(&id).unwrap();
+    let request = DesktopTaskMutationParams {
+        actor: "codex".into(),
+        request_id: "approval".into(),
+        payload_digest: "a".repeat(64),
+        expected_revision: revision,
+        fields: Default::default(),
+        comment: None,
+        status: Some(TaskStatus::Backlog),
+    };
+    let mut competing = request.clone();
+    competing.request_id = "competing".into();
+    competing.payload_digest = "b".repeat(64);
+    competing.status = Some(TaskStatus::Blocked);
+    let barrier = Barrier::new(2);
+    let outcomes = std::thread::scope(|scope| {
+        let a = scope.spawn(|| {
+            barrier.wait();
+            store.apply_desktop_task_mutation(&id, &request).unwrap()
+        });
+        let b = scope.spawn(|| {
+            barrier.wait();
+            store.apply_desktop_task_mutation(&id, &competing).unwrap()
+        });
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    assert!(matches!(
+        outcomes,
+        (
+            AtomicTaskMutationOutcome::Applied,
+            AtomicTaskMutationOutcome::Stale
+        ) | (
+            AtomicTaskMutationOutcome::Stale,
+            AtomicTaskMutationOutcome::Applied
+        )
+    ));
+    let winner = if outcomes.0 == AtomicTaskMutationOutcome::Applied {
+        request
+    } else {
+        competing
+    };
+    drop(store);
+    let reopened = super::store(&temp);
+    let committed = reopened.read_desktop_task(&id).unwrap();
+    assert_eq!(committed.task.status, winner.status.unwrap());
+    assert_eq!(
+        reopened.apply_desktop_task_mutation(&id, &winner).unwrap(),
+        AtomicTaskMutationOutcome::AlreadyApplied
+    );
+    assert_eq!(
+        reopened.desktop_task_revision(&id).unwrap(),
+        committed.revision
+    );
+    let mut changed = winner;
+    changed.payload_digest = "c".repeat(64);
+    assert!(reopened.apply_desktop_task_mutation(&id, &changed).is_err());
+    assert_eq!(
+        reopened.desktop_task_revision(&id).unwrap(),
+        committed.revision
+    );
+}

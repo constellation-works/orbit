@@ -131,7 +131,7 @@ impl TaskV2Store {
                 b.envelope.priority = v;
             }
             if let Some(v) = &p.fields.crew {
-                b.envelope.crew = Some(v.clone());
+                b.envelope.crew = (!v.is_empty()).then(|| v.clone());
             }
             if let Some(v) = p.status {
                 b.envelope.status = v;
@@ -164,6 +164,22 @@ impl TaskV2Store {
                     },
                 )?;
             }
+            let approval =
+                old_status == TaskStatus::Proposed && b.envelope.status == TaskStatus::Backlog;
+            if approval {
+                let approval = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: next_event_id(&b.events),
+                    at: now,
+                    by: p.actor.clone(),
+                    event_type: "proposal_approved".into(),
+                    note: None,
+                    from_status: Some(old_status),
+                    to_status: Some(b.envelope.status),
+                };
+                self.bundle_store.append_event(id, &approval)?;
+                b.events.push(approval);
+            }
             self.bundle_store.append_event(
                 id,
                 &TaskEventRowV2 {
@@ -173,8 +189,10 @@ impl TaskV2Store {
                     by: p.actor.clone(),
                     event_type: "desktop_mutation".into(),
                     note: Some(receipt),
-                    from_status: (old_status != b.envelope.status).then_some(old_status),
-                    to_status: (old_status != b.envelope.status).then_some(b.envelope.status),
+                    from_status: (!approval && old_status != b.envelope.status)
+                        .then_some(old_status),
+                    to_status: (!approval && old_status != b.envelope.status)
+                        .then_some(b.envelope.status),
                 },
             )?;
             b.envelope.updated_at = now;
