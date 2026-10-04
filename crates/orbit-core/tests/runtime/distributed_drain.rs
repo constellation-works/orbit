@@ -1041,6 +1041,49 @@ fn repeated_pass_failures_degrade_the_drain_and_a_new_drain_resets_it() {
     assert_eq!(fresh["consecutive_pass_failures"], 0);
 }
 
+/// A graceful cancel persisted while orphan reconciliation runs is observed
+/// before this pass probes, requests, or launches anything.
+#[test]
+fn cancel_recorded_during_orphan_reconciliation_admits_nothing() {
+    if !isolated("cancel_recorded_during_orphan_reconciliation_admits_nothing") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    assert!(
+        !pair
+            .follower
+            .read_run_state(&drain)
+            .unwrap()
+            .unwrap()
+            .drain_cancelling()
+    );
+    let follower = pair.follower.clone();
+    let drain_id = drain.clone();
+    pair.follower.install_orphan_reconcile_hook(move || {
+        follower
+            .cancel_job_run_with_options(&drain_id, "operator", "cli", None, false)
+            .expect("persist graceful cancellation during reconciliation");
+    });
+
+    let pass = pair.pass(&drain);
+    assert_eq!(pass["cancelling"], true, "{pass}");
+    assert_eq!(pass["admitted"], 0, "{pass}");
+    assert!(pass["error"].is_null(), "{pass}");
+    assert!(pair.wire.calls("orbit.drain.probe").is_empty(), "{pass}");
+    assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
+    assert!(pair.owner_claims().is_empty());
+    assert!(pair.leaf_runs().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    assert!(
+        pair.follower
+            .read_run_state(&drain)
+            .unwrap()
+            .unwrap()
+            .drain_cancelling()
+    );
+}
+
 /// A readable run state with no cancellation still probes and admits work.
 #[test]
 fn readable_state_without_cancel_permits_refill() {

@@ -233,6 +233,9 @@ impl OrbitRuntime {
     /// their failure instead of waiting on a run nothing will finish. A leaf
     /// whose owner is alive, or cannot be judged, is left alone.
     pub(crate) fn reconcile_orphaned_claimed_leaves(&self, destination: &PullDestination) {
+        // Before any admission read, so a cancel persisted on this call is
+        // visible to the refill's post-reconciliation read.
+        self.run_orphan_reconcile_hook();
         let jobs = self.stores().jobs();
         let records = match jobs.unsettled_local_pull_admissions() {
             Ok(records) => records,
