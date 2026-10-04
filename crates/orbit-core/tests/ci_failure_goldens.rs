@@ -57,11 +57,11 @@ fn isolated() -> bool {
         assert!(Instant::now() < deadline, "CI fixture child exceeded 120s");
         std::thread::sleep(Duration::from_millis(20));
     };
-    assert!(
-        status.success(),
-        "CI fixture child failed:\n{}\n{}",
-        std::fs::read_to_string(stdout).unwrap(),
-        std::fs::read_to_string(stderr).unwrap()
+    orbit_common::test_env::assert_child_test_passed(
+        "ci_failure_fixture_goldens",
+        status,
+        std::fs::read(stdout).unwrap(),
+        std::fs::read(stderr).unwrap(),
     );
     false
 }

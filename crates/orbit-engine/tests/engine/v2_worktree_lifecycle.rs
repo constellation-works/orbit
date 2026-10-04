@@ -964,10 +964,11 @@ fn isolated(test: &str, body: impl FnOnce()) {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    assert!(
-        status.success(),
-        "{test} failed in its isolated child ({status}):\n{}",
-        fs::read_to_string(&log_path).unwrap_or_default()
+    orbit_common::test_env::assert_child_test_passed(
+        &qualified,
+        status,
+        fs::read(&log_path).unwrap(),
+        [],
     );
 }
 

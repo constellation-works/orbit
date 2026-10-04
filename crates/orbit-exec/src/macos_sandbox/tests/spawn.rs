@@ -136,7 +136,7 @@ fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
 /// smoke test would hit. Never run directly by `cargo test`; spawned by
 /// [`pty_allocation_is_allowed_under_compiled_profile`] as a sandboxed child
 /// via its `--exact` module path, so renaming this test without updating that
-/// caller silently breaks the probe.
+/// caller fails the parent's child-test execution guard.
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "spawned under sandbox-exec by pty_allocation_is_allowed_under_compiled_profile"]
@@ -199,10 +199,11 @@ fn pty_allocation_is_allowed_under_compiled_profile() {
     .expect("spawn sandboxed pty probe");
     let output = child.wait_with_output().expect("wait for pty probe");
 
-    assert!(
-        output.status.success(),
-        "openpty probe failed under the compiled sandbox profile; stderr={}",
-        String::from_utf8_lossy(&output.stderr)
+    orbit_common::test_env::assert_child_test_passed(
+        "macos_sandbox::tests::spawn::pty_probe_process",
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
 }
 

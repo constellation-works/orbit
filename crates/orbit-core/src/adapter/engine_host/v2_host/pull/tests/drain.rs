@@ -297,7 +297,7 @@ pub(super) fn isolated_pull_test(name: &str) -> bool {
     assert!(output.status.success(), "{name}: {stdout}\n{stderr}");
     assert!(
         stdout.contains("test result: ok. 1 passed;"),
-        "child did not execute exact test: {stdout}"
+        "child did not execute exact test `{name}`: {stdout}"
     );
     true
 }

@@ -107,6 +107,9 @@ fn start_fifo_reader(
     stage_path: &std::path::Path,
     use_unsafe_blocking_open: bool,
 ) -> std::process::Child {
+    crate::test_env::assert_child_test_exists(
+        "fs::tests::io::read_file_lock_holder_fifo_reader_child",
+    );
     let test_binary = std::env::current_exe().expect("locate test binary");
     let mut command = std::process::Command::new(test_binary);
     command

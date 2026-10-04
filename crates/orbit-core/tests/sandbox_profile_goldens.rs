@@ -147,11 +147,7 @@ fn run_child(root: &Path, output: &Path) {
     let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
     let status = status
         .unwrap_or_else(|| panic!("renderer ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    assert!(status.success(), "renderer failed:\n{stdout}\n{stderr}");
-    assert!(
-        stdout.contains("test result: ok. 1 passed;"),
-        "the child must run the renderer itself:\n{stdout}"
-    );
+    orbit_common::test_env::assert_child_test_passed(CHILD_TEST, status, stdout, stderr);
 }
 
 /// Kills and reaps the renderer however the parent leaves.

@@ -11,14 +11,17 @@ fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
 
     const ISOLATED_CHILD: &str = "ORBIT_DESCRIPTOR_EXEC_ERROR_CHILD";
     if std::env::var_os(ISOLATED_CHILD).is_none() {
-        let status = Command::new(std::env::current_exe().expect("current test executable"))
-            .arg("descriptor_inheritance_preserves_the_command_exec_error_pipe")
+        const TEST: &str = "linux_sandbox::tests::descriptor::descriptor_inheritance_preserves_the_command_exec_error_pipe";
+        let output = Command::new(std::env::current_exe().expect("current test executable"))
+            .args(["--exact", TEST])
             .env(ISOLATED_CHILD, "1")
-            .status()
+            .output()
             .expect("spawn isolated descriptor test");
-        assert!(
-            status.success(),
-            "isolated descriptor test failed: {status}"
+        orbit_common::test_env::assert_child_test_passed(
+            TEST,
+            output.status,
+            &output.stdout,
+            &output.stderr,
         );
         return;
     }

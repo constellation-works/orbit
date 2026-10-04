@@ -75,11 +75,11 @@ fn commit_child_environment_excludes_parent_secrets() {
         .env("PATH", std::env::join_paths(paths).expect("observer PATH"))
         .output()
         .expect("isolated environment test");
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    orbit_common::test_env::assert_child_test_passed(
+        exact_test,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
 
     let observed = fs::read(observed_path).expect("production commit ran the observer");
