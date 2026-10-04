@@ -1,6 +1,6 @@
 ---
 title: Agents and Crews
-description: "How Orbit invokes coding agents through provider CLIs, which executors ship today, and how to write a crew for one."
+description: "How Orbit runs coding agents through provider CLIs, which executors ship, and how to write a crew."
 sidebar:
   order: 6
 head:
@@ -171,25 +171,25 @@ head:
       }
 ---
 
-## Runtime Paths
+## Runtime path
 
-Orbit spawns official provider CLIs as supervised subprocesses under an
-`FsProfile` and policy guardrails. The agent CLI is responsible for talking to
-its provider.
+Orbit runs each agent by spawning its official provider CLI as a supervised
+subprocess, bounded by the activity's filesystem profile (`fsProfile`) and
+policy. The CLI talks to its provider.
 
-This is the only agent execution path; the `backend: http | cli | auto`
-selector was retired — see
+This is the only execution path. The `backend: http | cli | auto` selector is
+retired; see
 [Retired backend selection](../../reference/config/#retired-backend-selection).
 
 ## Providers
 
-A **provider** is a canonical agent family id. An **executor** is the shipped
-spawn recipe — command, static flags, output format, sandbox backend — that
-Orbit uses to run that family. The two are separate: a provider id can be
-recognized by Orbit without a CLI executor existing for it, and one executor
-(`local-shell`) runs no agent at all.
+A **provider** is an agent family id, such as `claude` or `codex`. An
+**executor** is the shipped recipe Orbit uses to spawn that family's CLI: its
+command, static flags, output format, and sandbox backend. The two are
+separate. Orbit recognizes some provider ids that have no executor, and one
+executor (`local-shell`) runs no agent at all.
 
-Every canonical provider id, and what it can actually execute today:
+Every provider id, and what it can run today:
 
 | Provider | Executor command | Reasoning `effort` | Status |
 |---|---|---|---|
@@ -205,24 +205,21 @@ Every canonical provider id, and what it can actually execute today:
 | `ollama` | — | Not supported | No shipped crew or executor |
 | `openai_compat` | — | Not supported | No CLI runtime; dispatch fails |
 
-`openai_compat` has no CLI runtime, so dispatching to it fails structurally
-instead of falling back to another family. `ollama` is a recognized provider
-id, but Orbit ships no `ollama` executor definition and no `ollama` crew, and
-`orbit init` never seeds one — nothing gives it a headless agent contract.
-Neither id is rewritten: a crew naming one loads, and the refusal comes at
-dispatch rather than the run being quietly re-pointed at a family that does
-have an executor.
+`openai_compat` has no CLI runtime. `ollama` has no shipped executor or crew,
+and `orbit init` never seeds one. A crew that names either id still loads, but
+dispatch refuses it. Orbit never re-points the run at a family that has an
+executor.
 
 Orbit ships one more executor, **`local-shell`**, which is not a provider. It
-runs deterministic local commands for `local_shell` steps and carries no model,
-prompt, or agent tool authority, so it is never named by a crew. Unlike the
-agent executors it declares no sandbox by default; see
-[Platform Support](#platform-support).
+runs deterministic local commands for `local_shell` steps. It carries no model,
+prompt, or agent tool authority, so no crew names it. Unlike the agent
+executors, it declares no sandbox by default; see
+[Platform support](#platform-support).
 
 ### Deprecated aliases
 
-Five legacy vendor spellings still resolve, and keep resolving so persisted
-identities are never broken — but they are deprecated and emit a warning:
+Five legacy vendor spellings still resolve, so persisted identities keep
+working. Each is deprecated and emits a warning:
 
 | Alias | Resolves to |
 |---|---|
@@ -231,20 +228,26 @@ identities are never broken — but they are deprecated and emit a warning:
 | `google` | `gemini` |
 | `xai` | `grok` |
 
-`openai-compat` is an accepted, non-deprecated spelling of `openai_compat`. The
-alias table is closed: any other string is an unknown provider and is rejected
-rather than guessed at. In particular, the model vendor named *inside* a Pi or
-OpenCode run (`pi --provider anthropic`, `opencode --model anthropic/...`) is
-not an Orbit provider id and never re-points the run at another execution lane.
+`openai-compat` is an accepted, non-deprecated spelling of `openai_compat`.
+Any other string is an unknown provider and is rejected, not guessed at. The
+model vendor named *inside* a Pi or OpenCode run (`pi --provider anthropic`,
+`opencode --model anthropic/...`) is not an Orbit provider id and never moves
+the run to another lane.
 
 ## Set up an executor
 
-Pick an executor to see what it needs and a starter crew you can paste into
-`config.toml`. Every snippet below is a complete example file and is selectable
-whether or not JavaScript is enabled; the Copy button is an enhancement.
+:::tip[Let your agent set it up]
+Ask your agent to add a provider or crew. The `orbit-setup` skill handles
+provider and crew configuration. Use the picker below to see what a crew looks
+like, or to write one by hand.
+:::
+
+Pick an executor to see what it needs and a starter crew for `config.toml`.
+Each snippet is a complete example you can select and copy, with or without
+JavaScript.
 
 <div class="orbit-setup-explorer not-content">
-<p class="ose-lede">These are <strong>examples</strong>, not availability guarantees. Orbit passes the <code>model</code> string to the provider CLI verbatim — whether your account can actually run it is between you and that provider. Orbit does not read, store, or send credentials; authenticate each CLI with its own vendor instructions first.</p>
+<p class="ose-lede">These are <strong>examples</strong>, not availability guarantees. Orbit passes <code>model</code> to the provider CLI verbatim; whether your account can run it is up to that provider. Orbit does not read, store, or send credentials. Sign in to each CLI with its vendor's instructions first.</p>
 <fieldset class="ose-field">
 <legend>1. Executor</legend>
 <div class="ose-choices">
@@ -293,7 +296,7 @@ model = "opus"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>Omitting <code>effort</code> leaves the model's own default alone — Orbit passes no effort argument at all.</p></div>
+<div class="ose-note"><p>Omit <code>effort</code> to keep the model's default. Orbit then passes no effort argument.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-codex">
 <dl class="ose-facts">
@@ -361,7 +364,7 @@ model = "gemini-3.8-flash-high"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p><code>xhigh</code> and <code>max</code> are deliberately absent: <code>agy --effort</code> does not define them, and Orbit ignores those values with a warning rather than quietly downgrading to <code>high</code>.</p><p>Antigravity model ids carry their own effort suffix and must come from <code>agy models</code>. A bare Gemini CLI id such as <code>gemini-3.8-flash</code> is rejected at config load — it is not rewritten into a suffixed slug.</p></div>
+<div class="ose-note"><p><code>xhigh</code> and <code>max</code> are absent because <code>agy --effort</code> does not define them. Orbit ignores them with a warning instead of downgrading to <code>high</code>.</p><p>Antigravity model ids carry their own effort suffix and must come from <code>agy models</code>. A bare Gemini CLI id such as <code>gemini-3.8-flash</code> is rejected at config load, not rewritten into a suffixed id.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-grok">
 <dl class="ose-facts">
@@ -395,7 +398,7 @@ model = "grok-4.7"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>Grok effort is the one model-specific case. This picker shows the <code>grok-4.7</code> set; <code>grok-4.6</code> accepts the same four values, while <code>grok-4.5</code> accepts <code>low</code>, <code>medium</code>, <code>high</code> and ignores <code>xhigh</code> with a warning.</p><p>Effort is verified only for those three models. Setting <code>effort</code> alongside any other Grok model — or alongside no model at all — is ignored with a warning instead of being sent to a CLI that might reinterpret it.</p></div>
+<div class="ose-note"><p>Grok is the one provider whose effort values depend on the model. This picker shows the <code>grok-4.7</code> set. <code>grok-4.6</code> accepts the same four values; <code>grok-4.5</code> accepts <code>low</code>, <code>medium</code>, and <code>high</code>, and ignores <code>xhigh</code> with a warning.</p><p>Effort is verified only for those three models. With any other Grok model, or no model, <code>effort</code> is ignored with a warning instead of being sent to a CLI that might reinterpret it.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-copilot">
 <dl class="ose-facts">
@@ -415,7 +418,7 @@ model = "claude-sonnet-5"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>No effort picker is shown because Orbit has no verified Copilot effort contract. Adding <code>effort</code> to this crew is ignored with a warning (<em>provider 'copilot' does not support configured reasoning effort</em>) rather than taking the workspace down or remapping the key.</p><p>The retired <code>gh-copilot</code> gh extension is a different tool and is not an Orbit executor.</p></div>
+<div class="ose-note"><p>Orbit has no verified Copilot effort contract, so there is no effort picker. An <code>effort</code> on this crew is ignored with a warning (<em>provider 'copilot' does not support configured reasoning effort</em>). It does not take the workspace down or get remapped.</p><p>The retired <code>gh-copilot</code> gh extension is a different tool and is not an Orbit executor.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-cursor">
 <dl class="ose-facts">
@@ -435,7 +438,7 @@ model = "gpt-5"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>Adding <code>effort</code> to this crew is ignored with a warning rather than remapped onto a nearby value.</p><p>Orbit dispatches to the standalone headless <code>cursor-agent</code> binary. Having the Cursor editor installed is not evidence that this executable is on <code>PATH</code>.</p></div>
+<div class="ose-note"><p>An <code>effort</code> on this crew is ignored with a warning, not remapped to a nearby value.</p><p>Orbit runs the standalone headless <code>cursor-agent</code> binary. Having the Cursor editor installed does not mean this binary is on <code>PATH</code>.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-pi">
 <dl class="ose-facts">
@@ -471,7 +474,7 @@ model = "sonnet"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>Pi's <code>--thinking</code> vocabulary is model-independent and a strict superset of Orbit's, so the whole crew set is accepted here.</p><p>Pi's own <code>--provider</code> flag names the model vendor <em>inside</em> a Pi run. It is not an Orbit provider: <code>provider = "pi"</code> is what selects this lane.</p></div>
+<div class="ose-note"><p>Pi's <code>--thinking</code> values are model-independent and include every crew value, so all of them are accepted.</p><p>Pi's own <code>--provider</code> flag names the model vendor <em>inside</em> a Pi run. It is not an Orbit provider: <code>provider = "pi"</code> selects this lane.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-opencode">
 <dl class="ose-facts">
@@ -501,7 +504,7 @@ model = "anthropic/claude-sonnet-4-5"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p><code>low</code>, <code>medium</code>, and <code>xhigh</code> are missing because <code>opencode run --variant</code> forwards the value straight to whichever model provider <code>--model</code> selected, and OpenCode publishes no provider-independent vocabulary. Only the two spellings its own help text names are accepted; the rest are rejected rather than remapped onto <code>minimal</code> or <code>high</code>.</p><p>The vendor prefix in <code>anthropic/claude-sonnet-4-5</code> is OpenCode's own model addressing. It does not make this an Anthropic lane — <code>provider = "opencode"</code> is what Orbit dispatches through.</p></div>
+<div class="ose-note"><p><code>low</code>, <code>medium</code>, and <code>xhigh</code> are missing because <code>opencode run --variant</code> forwards the value to whichever model provider <code>--model</code> selected, and OpenCode publishes no provider-independent vocabulary. Orbit accepts only the two values OpenCode's help text names, and rejects the rest instead of remapping them to <code>minimal</code> or <code>high</code>.</p><p>The vendor prefix in <code>anthropic/claude-sonnet-4-5</code> is OpenCode's own model addressing. It does not make this an Anthropic lane: Orbit dispatches through <code>provider = "opencode"</code>.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-gemini">
 <dl class="ose-facts">
@@ -521,7 +524,7 @@ model = "gemini-3.8-flash"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p><strong>This is the legacy Google lane.</strong> Individual Gemini CLI accounts stopped on 2026-06-18; enterprise Gemini Code Assist and API-key authentication remain available on it. New setups should prefer the <code>antigravity</code> executor, which is what <code>orbit init</code> now picks when <code>agy</code> is installed.</p><p>Adding <code>effort</code> to this crew is ignored with a warning rather than remapped onto a nearby value.</p></div>
+<div class="ose-note"><p><strong>This is the legacy Google lane.</strong> Individual Gemini CLI accounts stopped on 2026-06-18; enterprise Gemini Code Assist and API-key authentication still work on it. For new setups, use the <code>antigravity</code> executor, which <code>orbit init</code> picks when <code>agy</code> is installed.</p><p>An <code>effort</code> on this crew is ignored with a warning, not remapped to a nearby value.</p></div>
 </div>
 </div>
 
@@ -583,13 +586,18 @@ model = "gemini-3.8-flash"
   })();
 </script>
 
-Before a first dispatch you also need an authenticated provider CLI and, on
-Linux, a working sandbox. Both are covered in
+Before your first dispatch, you also need a signed-in provider CLI and, on
+Linux, a working sandbox. See
 [Install Orbit](../../getting-started/install/#prerequisites).
 
-## Tool Allowlists
+## Tool policy
 
-Agent-loop activities declare the tool names an agent may call. Empty means no tools are allowed.
+An `agent_loop` activity sets which Orbit tools its agent may call, in one of
+two modes:
+
+- **Allowlist** (`tools`): only the listed tools are callable.
+- **Deny** (`tool_disallow_list`): every registered agent-facing tool is
+  callable except the listed ones. The shipped agent activities use this mode.
 
 ```yaml
 spec:
@@ -599,16 +607,19 @@ spec:
     - orbit.search
 ```
 
-`on_denial` controls whether a denied tool call terminates the loop or returns a
-structured error for the agent to handle. Under agent dispatch, tool allowlist
-enforcement is delegated to the harness and recorded in the audit trail.
+An empty `tools:` with no `tool_disallow_list` is deprecated and loads with a
+warning. Declare one or the other.
+
+Orbit's MCP server and `orbit tool run` refuse a call outside the policy, and
+each run records its effective tool list in the audit trail. The provider
+CLI's own built-in tools stay with that CLI's harness, inside the OS sandbox.
 
 ## Crews
 
-A **crew** is one named provider-model assignment. Activities do not carry a
-model-selection role: a task names a crew, and a run resolves it at dispatch —
-an explicit crew on the activity input first, then the task's `crew` field, then
-`[workflow] default_crew`.
+A **crew** is a named provider and model, with an optional reasoning `effort`.
+Activities don't choose a model. A task names a crew, and the run resolves it
+at dispatch: an explicit crew on the activity input first, then the task's
+`crew` field, then `[workflow] default_crew`.
 
 ```toml
 [crews.sol]
@@ -617,37 +628,41 @@ model = "gpt-6-sol"
 effort = "high"
 ```
 
-`effort` is an optional reasoning-budget request, forwarded through each
-provider's own argument and validated against the provider **and** model at
-config load. An invalid or unsupported combination is ignored for that crew
-with a warning, and `orbit doctor` lists it — Orbit never downgrades a value to
-the nearest supported one. `orbit config set` refuses to persist a value that
-load would drop. The per-provider sets are in
+A task created without a crew gets one at creation: a draw from the pool for
+its complexity (`workflow.<complexity>_complexity_crews`), else
+`default_crew`. The task's history records which.
+
+`effort` is passed through each provider's own argument and validated against
+the provider **and** model at config load. An invalid or unsupported value is
+ignored for that crew with a warning, and `orbit doctor` lists it. Orbit never
+downgrades it to the nearest supported value, and `orbit config set` refuses
+to save a value that load would drop. The per-provider sets are in
 [Configuration](../../reference/config/#reasoning-effort).
 
-`[workflow] system_crew` is a separate assignment used for system activities
-synthesized at runtime, such as step-failure recovery. It never inherits a
-failed task's crew or the workspace default.
+`[workflow] system_crew` is a separate crew for system activities Orbit
+creates at runtime, such as step-failure recovery. It never inherits a failed
+task's crew or the workspace default.
 
-Reassigning work between providers is always explicit — `orbit task update <id>
---crew <name>`. Nothing in Orbit silently moves a task to a different provider.
+Moving work to another provider is always explicit: `orbit task update <id>
+--crew <name>`. Orbit never moves a task to a different provider on its own.
 
-## Platform Support
+## Platform support
 
-Orbit wraps the spawned agent subprocess in an OS-level sandbox scoped by the
-activity's resolved `FsProfile`. `orbit init` persists the host-appropriate
-backend into the shipped executor assets:
+Orbit wraps each spawned agent CLI in an OS sandbox scoped by the activity's
+resolved filesystem profile. `orbit init` writes the right backend for your
+host into the shipped executors:
 
-- **macOS** — `sandbox-exec`, with the profile compiled to SBPL.
-- **Linux** — Bubblewrap via a trusted `/usr/bin/bwrap`. Writes are confined to
-  the resolved profile; host filesystem reads and host network access remain
-  available, so read rules and network egress stay delegated. Dispatch **fails
-  closed** if `bwrap` is missing or its namespace-and-mount probe fails, unless
-  the executor explicitly sets `allow_fallback: true`.
-- **Other platforms** — Orbit ships release binaries for macOS and Linux only
-  (x64 and arm64). A source build on any other OS seeds its executors with no
-  OS-level wrapper; process supervision, tool allowlists, and in-process guards
-  for Orbit's own built-in tools still apply.
+- **macOS**: `sandbox-exec`, with the profile compiled to SBPL.
+- **Linux**: Bubblewrap, from a trusted `/usr/bin/bwrap`. It confines writes to
+  the resolved profile and hides well-known credential locations such as
+  `~/.ssh` and `~/.aws`. Other host reads and network access stay open, so it
+  is not a read-rule or network boundary. Dispatch **fails closed** if `bwrap`
+  is missing or its namespace-and-mount probe fails, unless the executor sets
+  `allow_fallback: true`.
+- **Other platforms**: release binaries ship for macOS and Linux only (x64 and
+  arm64). A source build on any other OS seeds its executors with no OS
+  sandbox. Process supervision, tool policy, and Orbit's in-process guards for
+  its own built-in tools still apply.
 
 The bundled `local-shell` executor declares no sandbox on any platform, by
 design. See [Install Orbit](../../getting-started/install/#prepare-the-sandbox)

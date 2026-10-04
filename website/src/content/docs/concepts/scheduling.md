@@ -5,9 +5,9 @@ sidebar:
   order: 4
 ---
 
-Tasks describe work and jobs execute it, but neither says *when*. That is the
-scheduling layer's job. Every scheduled fire, whether it ships a backlog or
-mints a weekly chore, follows the same path:
+Tasks describe work and jobs run it; scheduling decides *when*. Every
+scheduled fire, whether it ships a backlog or files a weekly chore, follows the
+same path:
 
 <ol class="orbit-pipeline" aria-label="How a scheduled fire flows through Orbit">
   <li>
@@ -32,34 +32,29 @@ mints a weekly chore, follows the same path:
   </li>
 </ol>
 
+:::tip[Let your agent set it up]
+Ask your agent to **schedule a weekly QA sweep** or **ship the backlog every
+20 minutes**. The `orbit-setup` skill installs the clock, then enables the
+routine or auto-task you asked for. Everything ships disabled until then.
+:::
+
 ## The sweep clock
 
-`orbit clock tick` is the scheduler pass. It is stateless in and durable out: it
-loads every routine definition from the registered workspaces that opt in,
-filters them for the current host, fires whatever is due, records what it did,
-and exits. Nothing in Orbit is scheduled unless that pass runs.
+`orbit clock tick` is the scheduler: one pass that fires whatever is due,
+records it, and exits. The operating system runs it once a minute, through a
+launchd agent on macOS or a systemd user timer on Linux. There is no resident
+daemon, so a stuck pass costs one minute, and nothing is scheduled unless the
+clock runs.
 
-The pass is invoked by the operating system, not by a resident daemon. A
-per-user launchd agent (macOS) or systemd user timer (Linux) calls it once a
-minute by default. That is a deliberate trade: minute granularity is a floor
-and event triggers are not possible, but there is no long-lived process to
-supervise, and a wedged pass costs one minute, not the scheduler.
-
-The clock is host infrastructure, configured per machine, not per repository.
-Pausing it stops scheduled ticks; a manual `orbit clock tick` still works, and no
-individual routine's state changes.
-
-The unit names the orbit binary by absolute path, so moving or replacing that
-binary is what breaks unattended scheduling — the unit keeps its cadence and
-fails every wake-up. `orbit update` repairs the unit as its last convergence
-step, and `orbit clock repair` does it on demand for an install some other
-package manager made.
+The clock belongs to the machine, not the repository. Pausing it stops
+scheduled ticks without changing any routine. If the Orbit binary moves, the
+clock keeps waking a path that no longer exists; `orbit update` repairs it, and
+`orbit clock repair` does so on demand.
 
 ## Routine
 
-A routine is a **declarative trigger**. It is one YAML file under
-`.orbit/routines/` (per-user state, git-ignored with the rest of `.orbit/`) that
-says which job fires and on what cadence:
+A routine says **which job fires, and when**. It is one YAML file under
+`.orbit/routines/`:
 
 ```yaml
 schemaVersion: 1
@@ -74,135 +69,61 @@ policy:
   overlap: forbid
 ```
 
-The definition is the whole contract. There is no routine registry, no
-in-memory schedule, and no inline command payload: a target is always a catalog
-reference (`job:<name>`), so what a routine can do is exactly what a reviewed
-job can do. To fire a single activity on a schedule, wrap it in a one-step job.
+The target is always a catalog job, so a routine can do exactly what a
+reviewed job can. Instead of `cron`, a routine can watch the backlog: the
+seeded task-pilot routine uses a `state` trigger that prepares new or edited
+tasks once they settle, and fires nothing while the backlog is unchanged.
 
-A routine can instead fire on backlog state. The seeded task-pilot routine uses
-a `state` trigger in place of `cron`:
+- **Runs on every owner machine.** A cron routine runs on each machine that
+  has the checkout registered and its clock on. To keep it off one machine,
+  `orbit routine pause` it there; `enabled: false` in the file retires it. A
+  `state` trigger runs only on the machine it names in `owner_machine`.
+- **Missed slots collapse.** After a sleep, `missed_run: skip` waits for the
+  next slot and `catch_up_once` fires one make-up run.
+- **No overlap.** A fire is skipped while the previous one is still running,
+  for up to `timeout_minutes`.
+- **Seeded disabled.** `orbit workspace init` writes task pilot, ship sweep,
+  worktree GC, and CI and dependency-alert sweeps, all with `enabled: false`.
 
-```yaml
-trigger:
-  state:
-    kind: preparation_eligible
-    owner_machine: <machine-id>
-    branch: main
-    debounce_minutes: 2
-    max_wait_minutes: 10
-    max_items: 50
-    batch_size: 5
-    retries: 1
-    deadline_minutes: 90
-target: job:task_pilot_pipeline
-```
-
-Each tick fingerprints eligible tasks (by default `proposed` or `backlog`)
-against the branch head and admits those with no fresh assessment, once each has
-settled for `debounce_minutes` or waited `max_wait_minutes`, up to `batch_size`
-per run. An unchanged backlog fires nothing; a material edit to a task makes it
-eligible again. It is still evaluated by the tick, not pushed by an event.
-
-Tasks already prepared by an active pilot are withheld until that run ends,
-including pilots started manually or by a CI sweep. An explicit
-`orbit run task-pilot <TASK_ID>` also skips held tasks and prepares any free
-tasks in the same selection. If every task is held, the run succeeds without
-starting a pilot agent. Inspect `orbit run show <RUN_ID> -s prepare --json` for
-`already_preparing` exclusions and their `prepared_by_run_ids`.
-
-Invariants that shape how routines behave:
-
-- **No host field.** A cron definition is evaluated by every machine with a
-  registered owner checkout and an enabled clock, each against its own store.
-  Registration is the opt-in; to keep a routine off a machine, pause it there.
-  A `state` trigger is the exception: only its `owner_machine` evaluates it.
-- **Enable in the file, pause per host.** `enabled` lives in the definition
-  file, so turning a routine on is a deliberate edit; `orbit routine pause` is a
-  host-local override that survives reboots. Use pause for "not on this machine
-  right now", and `enabled: false` to retire a routine.
-- **Missed slots collapse.** When a host was asleep through several due slots,
-  `missed_run: skip` waits for the next natural slot and `catch_up_once` fires a
-  single make-up run. Neither replays every missed tick.
-- **Overlap is forbidden by default.** A due fire is skipped while the previous
-  one is in flight; `timeout_minutes` is also the staleness horizon after which
-  a stuck fire stops blocking the next.
-- **Seeded disabled.** `orbit workspace init` writes a default set — task
-  pilot, ship sweep, worktree GC, CI and dependency alert
-  sweeps — every one `enabled: false`, and `orbit workspace sync` refreshes
-  them. Enabling unattended agent work is an explicit decision.
-
-All scheduler state — last fire, cursor, pause, run history — is host-local, and
-so are the definition files under `.orbit/`: two hosts sharing a repository do
-not share them through git.
+Routine files and scheduler state are per machine; git does not share them.
 
 ## Auto-task
 
-An auto-task is a **task template with a schedule**. Where a routine answers
-"which job fires, and when", an auto-task answers "which recurring chore should
-become a task". It is one YAML file under `.orbit/auto_tasks/`, managed through
-`orbit auto-task`, carrying a cadence, an `enabled` toggle, a dedupe policy, and
-the task it should produce: title, body, acceptance criteria, type, priority,
-tags, crew, required tools.
+An auto-task says **which recurring chore becomes a task**. It is one YAML
+file under `.orbit/auto_tasks/`, managed with `orbit auto-task`: a cadence, an
+`enabled` toggle, and the task to file, with its title, body, acceptance
+criteria, and crew. Each clock tick files a task from every enabled definition
+that is due. A new chore is a new definition, never new code.
 
-The mechanism that turns definitions into tasks is deliberately generic. The
-host tick reads every enabled definition in each registered owner checkout and
-mints a task from each one that is due, in-process and without creating a job
-run. Because each definition carries its own schedule, adding a recurring chore
-is a new definition — never new code and never a new routine.
+- **A filed task is an ordinary task.** It enters `backlog` by default, or
+  `proposed` if you want to approve each one, and carries an
+  `auto-task:<name>` tag.
+- **No pile-up.** By default a fire is skipped while the previous task is
+  still open.
+- **Mint now to try one.** `orbit auto-task mint`, or **Mint now** in the
+  dashboard, files a task immediately and leaves the schedule untouched.
+- **Seeded disabled.** The built-in catalog covers QA sweeps, code and
+  security reviews, friction curation, backlog hygiene, doc duties, and
+  run-failure patterns, all off until you enable them.
 
-Invariants that shape how auto-tasks behave:
-
-- **A minted task is an ordinary task.** It enters at the status the definition
-  declares — `backlog` by default, or `proposed` when each instance should be
-  approved by a human — and then follows the normal lifecycle. It carries an
-  `auto-task:<name>` provenance tag.
-- **Dedupe by default.** `skip-if-open` skips a fire while a previous instance
-  is still open, which is what keeps a stalled backlog from accumulating twenty
-  identical chores. `always` opts out per definition.
-- **Manual mint is unconditional and cursor-inert.** `orbit auto-task mint`
-  ignores the schedule, the dedupe policy, and `enabled`, and never moves the
-  scheduler's cursor — so trying a definition never shifts its next fire.
-- **Catch-up collapses.** A downtime gap mints one make-up task, not one per
-  missed slot.
-- **Seeded disabled.** Orbit embeds a small default catalog — QA sweep,
-  friction curation, security review, code review, full code review, delivery
-  code review, delivery QA, backlog hygiene, doc duties, and run-failure patterns —
-  materialized by `orbit workspace init` with `enabled: false`
-  and refreshed by `orbit workspace sync`. Seeding never mints a task.
-
-## Why both exist
-
-Routines and auto-tasks sit at different heights of the same stack, and it is
-tempting to collapse them. They stay separate because they schedule different
-kinds of thing.
+## Which to use
 
 | | Routine | Auto-task |
 |---|---|---|
 | Schedules | A job | A task |
-| Question | Which job, when? | Which chore becomes a task? |
-| Fires through | `orbit clock tick` | `orbit clock tick` in-process |
+| Good for | Fixed pipelines: ship what's ready, collect worktrees, sweep CI | Chores an agent should reason about: a weekly audit, a friction pass |
+| Output | A run in job history | A task in the backlog, with approval, review, and history |
 | Lives in | `.orbit/routines/*.yaml` | `.orbit/auto_tasks/*.yaml` |
-| Adding one means | A new trigger file | A new definition, no new trigger |
-| Output | A run in job history | A task in the backlog |
 
-A routine is the right tool when the work is a fixed pipeline — ship what is
-ready, collect worktrees, sweep CI failures — that should just run. An auto-task
-is the right tool when the work is a chore an agent should *reason about* — a
-weekly dependency audit, a daily friction pass — and whose outcome a human may
-want to review as a task. The auto-task path also gets task semantics for free:
-approval gates, dedupe against open instances, review, and audit history.
+## What scheduling never does
 
-## What unattended never gets
+Scheduling changes when work starts, not what it may do. Nothing scheduled
+completes a task out of `review`: that takes
+[`--complete`](../../getting-started/workflows/#completing-work-with---complete)
+on a run you start yourself. Nothing scheduled approves a `proposed` task into
+the backlog either, with one exception you opt into: once you enable the CI
+failure sweep routine, it promotes the repair tasks it files after its pilot
+validates them.
 
-Scheduling changes *when* work starts, not *what it is allowed to do*. Two
-authorities stay with humans regardless of how a task was created or fired:
-
-- **Entry into the backlog** for a `proposed` task is always a human decision.
-  An auto-task can mint into `proposed`, but nothing scheduled approves it.
-- **Completion out of `review`** is granted only by `--complete` on an explicit
-  invocation, never by a routine — see
-  [Completing work with `--complete`](../../getting-started/workflows/#completing-work-with---complete).
-
-See [Tasks](../tasks/#approval) for the two gates, and
-[Schedule Recurring Work](../../how-to/recurring-work/) for installing the
+[Schedule Recurring Work](../../how-to/recurring-work/) covers installing the
 clock, enabling routines, and writing definitions.

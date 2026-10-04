@@ -5,96 +5,73 @@ sidebar:
   order: 4
 ---
 
-Orbit has two layers of scheduling, and they answer different questions.
+A per-machine **sweep clock** drives all scheduled work. On each tick, due
+**routines** start job runs and due **auto-tasks** file tasks. Every routine
+and auto-task Orbit seeds starts disabled. [Routines and Auto-Tasks](../../concepts/scheduling/) explains
+the model; this page is the procedure.
 
-| Layer | Question it answers | Where it lives |
-|---|---|---|
-| **Routines** | *Which job should fire, on what cadence?* | YAML in `.orbit/routines/` |
-| **Auto-tasks** | *Which recurring chore should become a task?* | YAML in `.orbit/auto_tasks/`, managed by `orbit auto-task` |
+:::tip[Let your agent set it up]
+Ask your agent to **install the Orbit clock and turn on worktree GC**, or to
+**file a dependency audit every Monday**. The `orbit-setup` skill installs the
+clock and enables the routines and auto-tasks you ask for. After that, the
+dashboard's **Automation** view toggles routines and auto-tasks, pauses,
+enables, or retunes the clock, and has **Mint now** for any auto-task; see
+[Use the Dashboard](../dashboard/). The commands below are the fallback.
+:::
 
-Both are driven by the same clock: `orbit clock tick`. Nothing is scheduled until
-that clock runs. This guide is the operating procedure; the model behind it —
-why the layers are separate and what each one guarantees — is in
-[Routines and Auto-Tasks](../../concepts/scheduling/).
-
-## 1. Start the host clock
-
-`orbit clock tick` is the scheduler pass. It loads routine and auto-task
-definitions from every registered, active owner checkout. Due routines dispatch
-normal job runs; due auto-tasks mint normal tasks in-process.
-
-Point the OS at it once per host:
+## 1. Install the clock
 
 ```bash
 orbit routine init --install-clock
 ```
 
-That installs a per-user clock unit — launchd on macOS, a systemd user timer on
-Linux — which invokes `orbit clock tick` every minute. `orbit routine init` without
-the flag just reports this host's identity; it never creates or rewrites host
-identity, which is `orbit init`'s job.
-
-Inspect and control the clock:
+This installs a per-user unit (launchd on macOS, a systemd user timer on
+Linux) that runs `orbit clock tick` every minute. Each tick reads routines and
+auto-tasks from every registered owner checkout on this machine. Nothing is
+scheduled until the clock runs.
 
 ```bash
 orbit clock status
-orbit clock set --cadence-seconds 300   # whole-minute cadence, in seconds
-orbit clock pause
+orbit clock pause                       # stop scheduled ticks
 orbit clock enable
-orbit clock repair                      # repoint the unit at this binary
+orbit clock set --cadence-seconds 300   # whole minutes only
 ```
 
-Pausing the clock stops scheduled ticks. A manual `orbit clock tick` still works,
-and it does not change any individual routine's pause state.
+A paused clock still allows a manual `orbit clock tick`, and pausing it leaves
+each routine's own pause state alone.
 
-The installed unit names the orbit binary by absolute path, so installing orbit
-somewhere else — or removing the install the unit names — stops unattended
-sweeps while `orbit clock status` still reports the clock as enabled.
-`orbit update` repairs the unit itself as its last step; `orbit clock repair` is
-the same repair for a binary another package manager installed. Repair rewrites
-and re-registers the unit; it never resumes a clock you paused.
+The unit runs Orbit by absolute path. If that binary moves or is removed,
+ticks stop while `orbit clock status` can still report the clock as enabled.
+`orbit update` repairs the unit; run `orbit clock repair` after installing
+Orbit some other way. Repair never resumes a clock you paused.
 
-You can always run the pass by hand, which is the right way to try a change:
+To try a change, run a tick by hand:
 
 ```bash
-orbit clock tick --dry-run       # report what would fire; write nothing
-orbit clock tick --verbose       # every routine and auto-task row
-orbit clock tick --json
-orbit --workspace <name> clock tick  # only that workspace's schedules
+orbit clock tick --dry-run --verbose     # what would fire; writes nothing
+orbit --workspace <name> clock tick      # only that workspace's schedules
 ```
 
-A pass visits every registered owner checkout on the host. The global
-`--workspace` selector narrows it to one — in both dry-run and live passes,
-nothing outside the selected workspace is evaluated, fired, or recorded. An
-unregistered selector fails instead of falling back to the whole host.
+## 2. Turn on routines
 
-By default the tick prints only noteworthy rows — fires, mints, retries,
-baselines, and errors — so a per-minute clock does not fill the log with
-`not_due` churn. `orbit sweep` remains a compatibility alias with identical
-arguments and output.
+`orbit workspace init` seeds five routines into `.orbit/routines/`, all
+disabled: task pilot, ship sweep, worktree GC, and the CI-failure and
+dependency-alert sweeps. `orbit workspace sync` refreshes them after an
+upgrade and keeps your edits.
 
-## 2. Enable the routines you want
+Turn one on with its switch in **Automation → Routines**, or set
+`enabled: true` in its YAML. Git ignores `.orbit/`, so the change applies to
+this checkout on this machine. Start with worktree GC, and turn on the ship
+sweep last (see [Ship unattended](#ship-unattended)).
 
-Registering the checkout is the whole opt-in — there is no config key to set,
-and every registered owner checkout's definitions are evaluated by this host's
-clock.
-
-`orbit workspace init` seeds a set of default routines into `.orbit/routines/`,
-each **disabled**, because enabling unattended agent work is a deliberate
-decision. `orbit workspace sync` refreshes that shipped set on a newer
-binary while preserving local edits. The shipped set covers task pilot preflight, ship sweeps, worktree GC, and
-CI/dependency alert sweeps.
+![Automation → Routines: the next hour's fires on a timeline, then each routine with its switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
 
 ```bash
-orbit routine list               # toggles, next-due, last fire
-orbit routine show "$ROUTINE_NAME"
+orbit routine list            # enabled, paused, next due, last fire
+orbit routine show <name>
 ```
 
-To enable one, edit its YAML in `.orbit/routines/` and set `enabled: true`.
-`.orbit/` is per-user state that git ignores, so the edit applies to this
-checkout on this machine.
-
-### Routine shape
+### Write a routine
 
 ```yaml
 schemaVersion: 1
@@ -102,7 +79,7 @@ name: ship_sweep_myrepo
 description: Ship this workspace's ready backlog through the gated pipeline.
 enabled: true
 trigger:
-  cron: "*/20 * * * *"  # 5-field cron, evaluated in host-local time
+  cron: "*/20 * * * *"  # 5-field cron, host-local time
   missed_run: skip      # or catch_up_once
 target: job:workspace_ship_pipeline
 policy:
@@ -113,193 +90,138 @@ policy:
     backoff_minutes: 15
 ```
 
-Notes that matter in practice:
+- **`target`** must be a job (`job:<name>`). To schedule one activity, wrap it
+  in a one-step job.
+- **`missed_run`** handles slots missed while the machine slept. `skip`, the
+  default, waits for the next slot. `catch_up_once` fires one make-up run.
+- **`overlap: forbid`**, the default, skips a fire while the previous one is
+  still running. After `timeout_minutes`, the stuck fire is recorded as timed
+  out and stops blocking.
+- **There is no host field.** Every machine with a registered owner checkout
+  and its clock on evaluates the routine against its own store. To keep it
+  off one machine, run `orbit routine pause <name>` there;
+  `orbit routine resume <name>` undoes it. Pauses stay on that machine, are
+  never synced, and survive reboots. To retire a routine, set
+  `enabled: false`.
 
-- **There is no host field.** Every machine with a registered owner checkout and
-  an enabled clock evaluates the definition against its own store. To keep a
-  routine off a machine, pause it there.
-- **`missed_run`** decides what happens to slots that fell in a gap while the
-  host was asleep. `skip` (the default) waits for the next natural slot;
-  `catch_up_once` fires a single make-up run no matter how many slots were
-  missed.
-- **`overlap: forbid`** (the default) skips a due fire while a previous one is
-  still in flight. `timeout_minutes` is also the staleness horizon: after it, a
-  stuck fire stops blocking the next one and is recorded as timed out.
-- **`target`** is a job (`job:<name>`). To fire a single activity on a schedule,
-  wrap it in a one-step job.
-
-### Pausing on one host
-
-Pauses are host-local, never synced, and survive reboots. Use them for
-"not on this machine right now," not to retire a routine:
-
-```bash
-orbit routine pause "$ROUTINE_NAME"
-orbit routine resume "$ROUTINE_NAME"
-```
-
-To retire a routine, set `enabled: false` in its definition instead.
+An invalid file never fires with defaults; Orbit skips it.
 
 ## 3. Define recurring chores as auto-tasks
 
-An auto-task is a **template for a task**, minted on a schedule. Adding a
-recurring chore is a new definition — never new code and never a new routine.
-
-The host tick does the minting directly. It reads each enabled definition and
-mints from the due ones without creating a scheduler job run. Enable the host
-clock and the definition; there is no scheduler routine to enable.
-
-### Create a definition
+An auto-task is a task template that the clock files on a schedule. A new
+chore is a new definition, never new code or a new routine. The tick files
+tasks itself, so there is no routine to enable.
 
 ```bash
 orbit auto-task add \
   --name weekly-dep-audit \
-  --description "Weekly check for outdated dependencies." \
   --cron "0 9 * * 1" \
   --title "Audit outdated dependencies" \
-  --body "Check the lockfile for outdated or vulnerable dependencies and open follow-up work." \
+  --body "Check the lockfile for outdated or vulnerable dependencies and file follow-up work." \
   --criterion "Every outdated direct dependency is listed with its current and latest version." \
   --criterion "Anything with a known advisory has a filed follow-up task." \
-  --type chore \
-  --priority medium \
   --tag maintenance
 ```
 
-Schedule it with exactly one trigger: `--cron` (5-field), `--every-minutes`,
-or `--deliveries-landed '<JSON>'`. The delivery trigger fires once verified
-deliveries land on a branch (`branch`, `threshold`, `max_wait_minutes`,
-`coverage`); preview one with `orbit auto-task show <name> --preview` before
-enabling it.
-
-Useful options:
+Give exactly one trigger: `--cron`, `--every-minutes`, or
+`--deliveries-landed '<JSON>'`, which fires once verified deliveries land on a
+branch. A cron or interval definition is enabled as soon as you add it. A
+delivery-triggered one starts disabled; check it with
+`orbit auto-task show <name> --preview` before you enable it.
 
 | Option | Effect |
 |---|---|
-| `--status` | Status each minted task enters. Defaults to `backlog`; use `proposed` when you want a human to approve each instance. |
-| `--dedupe` | `skip-if-open` (default) skips the fire while a previous instance is still open. `always` fires regardless. |
-| `--crew` | Crew override for minted tasks. |
-| `--priority` | `low`, `medium`, `high`, or `critical`. |
-| `--tag` | Applied to each minted task, in addition to the provenance tag. Repeatable. |
-| `--required-tools` | Exact canonical tool names copied to every minted task. |
-
-`--dedupe skip-if-open` is the setting that keeps a stalled backlog from
-accumulating twenty identical chores. Leave it alone unless you genuinely want
-overlapping instances.
-
-### Inspect, update, and disable
-
-```bash
-orbit auto-task list
-orbit auto-task list --enabled
-orbit auto-task show weekly-dep-audit
-orbit auto-task update weekly-dep-audit --cron "0 9 * * 2"
-orbit auto-task toggle weekly-dep-audit off
-```
-
-`orbit auto-task update` changes only the fields you pass. `toggle` is the
-kill-switch, not a delete — the definition and its history are preserved, so you
-can turn it back `on` later.
-
-### Delete a definition
-
-When a chore no longer applies, delete it rather than leaving it disabled:
-
-```bash
-orbit auto-task delete weekly-dep-audit --reason "moved to Renovate"
-```
-
-Delete removes the definition file and its scheduler cursor, and writes an
-audit record with the optional reason. It refuses while a task minted from the
-definition is still open, and names those tasks; `--force` deletes anyway and
-leaves the open tasks alone. For a `--deliveries-landed` definition it also
-drops the coverage ledger through the audited `reset`, together with the
-automation refs the ledger pinned, so it refuses whenever that reset would.
-
-Deleting one of the definitions `orbit workspace init` ships — for example
-`code-review` or `qa-sweep` in a repository that holds no code — also records an
-opt-out. Later `orbit workspace init --force` and `orbit workspace sync` runs
-leave it absent, and `orbit doctor` does not report it missing. To bring one
-back with its shipped content:
-
-```bash
-orbit auto-task restore code-review
-```
-
-The restored definition is disabled, as shipped, and reseeds manage it again.
-
-### Recover a delivery-triggered definition
-
-A definition scheduled with `--deliveries-landed` keeps a coverage ledger, so it
-has extra controls. `recover` and `reset` preview without `--reason` and apply
-only with it:
-
-```bash
-orbit auto-task show delivery-code-review --preview                                 # baseline and observations; admits nothing
-orbit auto-task recover delivery-code-review --adopt-settings --reason "cadence changed"  # resume after a settings change; keeps coverage debt
-orbit auto-task reset delivery-code-review --reason "re-baseline"                   # forget coverage debt; re-baseline at the branch head
-orbit auto-task update delivery-code-review --waive-batch "$BATCH_ID" --waiver-reason "flaky infra"  # waive one settled failed batch
-```
-
-`recover` also takes `--reissue-action` and `--replay-history`. `reset --force`
-abandons an executing action rather than cancelling it.
+| `--status` | Status of each filed task: `backlog` (default), or `proposed` to approve each one yourself. |
+| `--dedupe` | `skip-if-open` (default) skips a fire while the previous task is still open, so a stalled backlog never collects copies. `always` files regardless. |
+| `--crew` | Crew for filed tasks. |
+| `--priority` | `low`, `medium` (default), `high`, or `critical`. |
+| `--tag` | Extra tag on each filed task, beside the `auto-task:<name>` tag. Repeatable. |
+| `--required-tools` | Exact canonical tool names copied to each filed task. |
 
 ### Mint one now
-
-To test a definition, or to run a chore off-schedule, mint it directly:
 
 ```bash
 orbit auto-task mint weekly-dep-audit
 ```
 
-This ignores the schedule, the dedupe policy, and even `enabled`, and it leaves
-the scheduler's cursor untouched — so a manual mint never shifts the next
-scheduled fire. It is the fastest way to see exactly what a definition produces
-before you trust it unattended.
+This files one task immediately, like **Mint now** in the dashboard. It
+ignores the schedule, the dedupe policy, and `enabled`, and it does not move
+the next scheduled fire. Use it to see what a definition produces before you
+leave it running.
+
+### Change, turn off, or delete
+
+```bash
+orbit auto-task list --enabled
+orbit auto-task show weekly-dep-audit
+orbit auto-task update weekly-dep-audit --cron "0 9 * * 2"   # only the fields you pass
+orbit auto-task toggle weekly-dep-audit off                  # keeps the definition and its history
+orbit auto-task delete weekly-dep-audit --reason "moved to Renovate"
+```
+
+`delete` removes the definition and its scheduler cursor, and writes an audit
+record. It refuses while a task filed from the definition is still open and
+names those tasks; `--force` deletes anyway and leaves them alone.
+
+Deleting a shipped default, such as `code-review` in a repository with no
+code, also records an opt-out: later `orbit workspace init --force` and
+`orbit workspace sync` runs leave it out, and `orbit doctor` does not report it
+missing. `orbit auto-task restore <name>` brings it back, disabled as shipped.
+
+### Repair a delivery-triggered definition
+
+A `--deliveries-landed` definition keeps a ledger of the deliveries it still
+owes a review. `recover` and `reset` only preview until you pass `--reason`:
+
+```bash
+orbit auto-task recover <name> --adopt-settings --reason "<why>"   # resume after a settings change; keeps the debt
+orbit auto-task recover <name> --replay-history --reason "<why>"   # reconcile a rebased branch; keeps the debt
+orbit auto-task reset <name> --reason "<why>"                      # forget the debt; re-baseline at the branch head
+orbit auto-task update <name> --waive-batch <batch-id> --waiver-reason "<why>"  # waive one settled failed batch
+```
+
+`recover --reissue-action` re-files a settled action that closed without
+accepted evidence. `reset --force` abandons an executing action instead of
+cancelling it. Deleting the definition runs the same audited reset, so
+`delete` refuses whenever `reset` would. The
+[auto-task reference](https://github.com/constellation-works/orbit/blob/main/plugin/skills/orbit-setup/references/auto-tasks.md)
+covers stalls and the shipped definitions.
 
 ## 4. Watch it work
 
-A minted task is an ordinary task, and a routine fire is an ordinary run:
+A routine fire is an ordinary run, and a filed task is an ordinary task. The
+**Automation** view shows each routine's and auto-task's next fire and last
+result; `orbit routine list` and `orbit auto-task list` show the same. Find
+what got filed by its tag:
 
 ```bash
-orbit auto-task list                                   # name, enabled state, schedule
-orbit routine list                                     # toggles, next-due, last fire
-orbit clock tick --dry-run                             # scheduler decisions
-orbit task list --tag maintenance --status backlog     # what got minted
+orbit task list --tag maintenance
 ```
 
-From there the work is the normal path. Approve anything minted as `proposed`,
-then let a delivery window pick it up:
+Approve anything filed as `proposed`, then let a
+[delivery window](../continuous-delivery/) pick it up.
 
-```bash
-orbit task update "$TASK_ID" --approve
-orbit run auto --for 4h
-```
+## Ship unattended
 
-See [Run a Delivery Window](../continuous-delivery/) for the drain
-itself.
+To ship on a schedule, turn on the seeded ship-sweep routine. As seeded, it
+runs every 20 minutes and ships this workspace's ready backlog through the
+gated pipeline. It never grants `--complete`, so shipped work waits in
+`review` for you. Turn on worktree GC first.
 
-## Unattended shipping
+`orbit run ship-sweep` is the cross-workspace command for an external
+scheduler. It ships only in workspaces with `workflow.auto_ship = true`, and
+it never grants `--complete` either. That setting does not affect the
+routine.
 
-If you want scheduled *shipment* rather than scheduled task creation, that is
-the ship sweep. Opt the workspace in and enable the seeded routine:
+## If nothing fires
 
-```bash
-orbit config set workflow.auto_ship true
-```
+Check in this order:
 
-`orbit run ship-sweep` dispatches ship runs in every registered workspace with
-ready backlog tasks, skipping any workspace that has not set `auto_ship`. It
-never grants `--complete`: unattended shipment still leaves work in `review` for
-a human.
+1. The clock is enabled: `orbit clock status`.
+2. This checkout is registered as an owner: `orbit workspace list`.
+3. The definition has `enabled: true`.
+4. The routine is not paused on this machine: `orbit routine list`.
 
-## Health
-
-```bash
-orbit clock status
-orbit clock tick --dry-run --verbose
-orbit doctor
-```
-
-If routines are not firing, check in that order: the clock is enabled, this
-checkout is registered as an owner (`orbit workspace list`), the definition has
-`enabled: true`, and it is not paused on this host.
+`orbit clock tick --dry-run --verbose` shows the decision for every routine
+and auto-task, and `orbit doctor` runs the host health checks. The
+[CLI reference](../../reference/cli/#scheduler) lists every scheduler command.

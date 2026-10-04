@@ -1,188 +1,112 @@
 ---
 title: First Task
-description: "Create a proposed Orbit task, approve it into the backlog, ship it, and inspect the run and review artifact."
+description: "Ask your agent for a change, approve and ship the task from the dashboard, then review the pull request and close it."
 sidebar:
   order: 3
 ---
 
-A task is the durable unit of work. Everything else in Orbit — shipping,
-backlog drains, recurring work, the audit trail — is organized around one.
-
-This page is one sequence in a prepared disposable repository: create a
-`proposed` task, inspect it, approve it into `backlog`, ship it, then inspect
-the run and the review artifact. Later sections cover other shipment shapes.
+A task is Orbit's unit of work: a request with acceptance criteria that can be
+run, checked, and traced. This page takes one task through its whole life:
+your agent files it, you approve and ship it from the dashboard, and you
+review what comes back.
 
 ## Before you start
 
-Complete [Install Orbit](../install/) first. You need all of the following
-before you create work or dispatch a run:
+Finish the [Quickstart](../) setup: Orbit connected to your agent in this
+repository, and the dashboard open with `orbit web serve`. Use a repository
+where a throwaway change is fine.
 
-- `orbit` on your `PATH`. Confirm with `orbit --version`.
-- Global and workspace state: [`orbit init`](../install/#initialize-state),
-  then [`orbit workspace init`](../install/#initialize-state) in the
-  repository.
-- An authenticated provider CLI. Dispatch runs through it. `orbit init`
-  probes `PATH` for the executors it supports; see
-  [Prerequisites](../install/#prerequisites) and the
-  [setup explorer](../../concepts/agents/#set-up-an-executor).
-- For the default PR mode, the GitHub CLI (`gh`) authenticated in the same
-  environment. See [Prerequisites](../install/#prerequisites).
-- On Linux, a working Bubblewrap sandbox before the first dispatch. See
-  [Prepare the sandbox](../install/#prepare-the-sandbox).
+## 1. Ask for a change
 
-`orbit doctor` is the workspace health check after that setup.
+Ask your agent for something small and checkable:
 
-The commands below assume you are in a disposable git repository that already
-has `orbit workspace init` completed, so they do not touch a real project.
+> Add orbit-hello.txt at the repository root containing "hello from orbit".
+> File it as an Orbit task.
 
-## Create a task
+The agent files a task with a title, a complexity, and acceptance criteria.
+The criteria are the finish line: the run checks its work against them. The
+bundled `orbit` skill tells your agent how to write checkable criteria, so you
+describe the outcome and it fills in the rest.
 
-`orbit task add` prints the new task ID and nothing else. Capture it.
-New tasks enter `proposed` unless you pass another `--status`; the snippet
-sets that status explicitly so the rest of the sequence matches.
+The task lands in `proposed`. Nothing runs yet.
+
+## 2. Approve it
+
+In the dashboard, the task appears in **Tasks** under **Awaiting approval**.
+Open it, read the description and criteria, and click **Approve**. It moves to
+`backlog`. If the task is wrong, click **reject**, or ask your agent to fix it
+first.
+
+![The Tasks list: proposed tasks under Awaiting approval with Approve buttons, a task in progress with View run, and backlog tasks with Ship buttons.](../../../assets/dashboard/dashboard-approve-ship.png)
+
+You can also tell your agent to approve it. Either way, approval is an
+explicit step, recorded in the task's history; nothing approves a task on its
+own.
+
+## 3. Ship it
+
+Click **Ship** on the task. Orbit reserves the files the task touches, gives it
+an isolated worktree, and runs an agent in the sandbox to plan, execute, and
+review the change. Click **View run** to follow each step live.
+
+![A finished ship run: its job, state, and duration, and a step timeline from worktree through implement, validate, review gate, and push to pr_open.](../../../assets/dashboard/dashboard-run-detail.png)
+
+Asking your agent to ship it starts the same run. In the default `pr` ship
+mode, the run ends by opening a pull request.
+
+## 4. Review and close it
+
+A successful run stops with the task in `review` and the pull request open.
+The task's detail shows the plan and the execution summary, plus the
+reviewer's verdict when second-agent review is on. **Runs** holds every step
+and event behind them.
+
+Review the pull request and merge it on GitHub. Then click **Approve** on the
+task to move it from `review` to `done`.
+
+If the run fails, its detail opens on the step it stopped at and the error it
+recorded. Fix the cause, then click **Resume** to restart from that step. Or
+ask your agent what went wrong: the `orbit-orchestrate` skill reads the run's
+evidence and matches it to a known failure.
+
+:::note[Two gates stay yours]
+A new task waits in `proposed` until you approve it, and a ship run stops at
+`review` with the pull request open. Merging the pull request and closing the
+task are separate decisions, until you choose to
+[let runs merge](../workflows/#completing-work-with---complete).
+:::
+
+## From the terminal
+
+Every step has a CLI equivalent. The same task, end to end:
 
 ```bash
-TASK_ID=$(orbit task add \
-  --title "Create orbit-hello.txt" \
-  --description "Add orbit-hello.txt at the repository root containing the text 'hello from orbit'." \
+TASK_ID=$(orbit task add --title "Create orbit-hello.txt" \
   --acceptance-criteria "orbit-hello.txt exists at the repository root." \
-  --acceptance-criteria "orbit-hello.txt contains the text 'hello from orbit'." \
-  --complexity low \
-  --status proposed \
-  --workspace .)
-
-echo "$TASK_ID"
+  --acceptance-criteria "It contains the text 'hello from orbit'." \
+  --complexity low --workspace .)
+orbit task lint "$TASK_ID"               # flag vague criteria or unusable scope
+orbit task update "$TASK_ID" --approve   # proposed → backlog
+orbit run ship "$TASK_ID"                # prints a run ID and returns
+orbit run show <RUN_ID>                  # follow the run
+orbit task update "$TASK_ID" --approve   # after you merge: review → done
 ```
 
-`--title` and `--complexity` are required. Acceptance criteria are effectively
-required too: agents self-evaluate against them to decide when the work is
-actually done, and a task without them has no finish line. Repeat
-`--acceptance-criteria` for each one.
+`orbit task add` prints only the new task ID. `--title` and `--complexity` are
+required; `--context` narrows the work to the files that matter (see
+[Choose Scopes](../../how-to/scoping-rules/)). `--approve` takes the next
+approval step: `proposed` to `backlog`, then `review` to `done`.
 
-`--context` narrows the work to the files that matter, as `file:`, `dir:`, or
-`symbol:` selectors. See [Choose Scopes](../../how-to/scoping-rules/).
-
-You can also just ask an agent with Orbit's MCP tools available:
-
-```text
-create an orbit task for ...
-```
-
-## Inspect it
-
-The task should be `proposed`:
-
-```bash
-orbit task list
-orbit task show "$TASK_ID"
-orbit task lint "$TASK_ID"
-```
-
-`orbit task lint` is the quality check: it flags unusable or missing context
-declarations and vague acceptance criteria before an agent wastes a run on
-them. A declared file that does not exist yet is kept — that is scope for work
-the task will create — so the lint reports it without removing it. `orbit task
-lint "$TASK_ID" --restore-pruned` re-declares `context_files` entries that an
-earlier prune recorded in task history.
-
-## Approve it into the backlog
-
-A `proposed` task needs an explicit approval before anything will run it:
-
-```bash
-orbit task update "$TASK_ID" --approve --note "Scope reviewed."
-```
-
-`--approve` takes the task's *next* approval step from its current status:
-`proposed` becomes `backlog`, and the same flag later takes `review` to `done`.
-It cannot be combined with field edits or an explicit `--status`; see
-[Tasks](../../concepts/tasks/#approval).
-
-After this command, `orbit task show "$TASK_ID"` reports `backlog`.
-
-## Ship it
-
-```bash
-orbit run ship "$TASK_ID"
-```
-
-This submits the task through the gated shipment pipeline and prints a durable
-run identifier immediately — it does not wait for the outcome. Copy the
-`Run ID:` value:
-
-```text
-Workflow: ship
-Job ID: task_auto_pipeline
-Run ID: jrun-YYYYMMDD-HHMM-N
-State: submitted
-Inspect: orbit run history -j task_auto_pipeline | orbit run show jrun-YYYYMMDD-HHMM-N
-```
-
-```bash
-RUN_ID=jrun-YYYYMMDD-HHMM-N   # paste the printed identifier
-```
-
-`orbit run ship "$TASK_ID" --json` prints the same fields as an object. Copy
-`run_id` from that object if you prefer structured output.
-
-The default mode opens a pull request and requires `gh` as in
-[Before you start](#before-you-start).
-
-## Watch it
-
-```bash
-orbit run show "$RUN_ID"
-orbit run logs "$RUN_ID"
-orbit task show "$TASK_ID"
-```
-
-`orbit run show` with no run ID is the most recent run on this machine. Use it
-only when you know nothing else submitted in between.
-
-A successful run leaves the task in `review`, not `done`. Inspect the
-execution summary and the review artifact before you approve the result:
-
-```bash
-orbit task show "$TASK_ID" --fields status,execution_summary,artifacts
-orbit task artifact get "$TASK_ID" review-gate.json
-```
-
-`review-gate.json` is the settled review certificate when the pipeline's
-review gate completed. `orbit task show "$TASK_ID" --json` also includes a
-`review` object built from that artifact.
-
-Approve the result when you have looked at it. The task moves from `review`
-to `done`:
-
-```bash
-orbit task update "$TASK_ID" --approve
-```
-
-If you would rather authorize the run itself to finish delivery, pass
-`--complete` when you ship. That is explained in
-[Delivery Workflows](../workflows/#completing-work-with---complete).
-
-## Other shipment shapes
-
-Keep these off the first path. They are the same pipeline with different
-delivery or selection.
-
-Deliver in place instead of opening a pull request:
-
-```bash
-orbit run ship --mode local "$TASK_ID"
-```
-
-Ship several known tasks in one run, and target a specific base branch.
-`$SECOND_TASK_ID` is another identifier you captured the same way as
-`$TASK_ID` — it is not created by the commands above.
-
-```bash
-orbit run ship "$TASK_ID" "$SECOND_TASK_ID" --base main
-```
+- `orbit task show "$TASK_ID"` shows the task.
+- `orbit audit list` shows the recorded events.
+- `orbit task artifact put "$TASK_ID" <file>` attaches a report or other output
+  to the task.
 
 ## Next
 
-- [Delivery Workflows](../workflows/) — the whole `orbit run` surface.
-- [Run a Task Lifecycle](../../how-to/task-lifecycle/) — the same path in more detail, including attaching artifacts.
-- [Run a Delivery Window](../../how-to/continuous-delivery/) — drain a whole backlog instead of one task.
+- [Delivery Workflows](../workflows/): ship many tasks at once, and let runs
+  merge.
+- [Use the Dashboard](../../how-to/dashboard/): everything the dashboard can
+  do.
+- [Run a Delivery Window](../../how-to/continuous-delivery/): drain a whole
+  backlog.

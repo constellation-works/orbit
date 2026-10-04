@@ -4,3 +4,7 @@
 # `/tasks/` itself is not rewritten. A true 410 needs a zone rule, which this
 # artifact does not own.
 /tasks/:id  /tasks/?id=:id  302
+
+# Run a Task Lifecycle was folded into First Task on 2026-10-04.
+/how-to/task-lifecycle   /getting-started/first-task/  301
+/how-to/task-lifecycle/  /getting-started/first-task/  301

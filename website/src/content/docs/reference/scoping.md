@@ -7,22 +7,26 @@ sidebar:
 
 ## Strategies
 
+Each artifact type follows one of three strategies. **Workspace only** keeps
+it per repository. **Global only** keeps one copy on the machine. **Merge by
+key** combines global defaults with workspace overrides, and the workspace
+entry wins for the same key.
+
 | Artifact | Strategy | Meaning |
 |----------|----------|---------|
-| Tasks | WorkspaceOnly | Per-repository backlog and lifecycle state. |
-| Activities and jobs | MergeByKey | Global defaults merge with workspace overrides by key. |
-| Policies | MergeByKey | Profiles override by name; global deny rules accumulate. |
-| Job runs | WorkspaceOnly | Run artifacts stay local to the workspace. |
-| Skills | MergeByKey | Global defaults in `~/.orbit/skills`; workspace entries override by skill name. |
-| Audit | GlobalOnly | One authoritative event trail. |
+| Tasks | Workspace only | Each repository has its own backlog and lifecycle state. |
+| Activities and jobs | Merge by key | Workspace definitions override global defaults by name. |
+| Policies | Merge by key | Profiles override by name; global deny rules accumulate. |
+| Job runs | Workspace only | Run artifacts stay in the workspace. |
+| Skills | Merge by key | Global defaults live in `~/.orbit/skills`; workspace entries override by skill name. |
+| Audit | Global only | One authoritative event trail. |
 
-## Typical Workspace State
+## Typical workspace state
 
 ```text
 .orbit/
   auto_tasks/        # auto-task definitions
-  frictions/         # friction records, tags.yaml
-  knowledge/
+  frictions/         # friction tag taxonomy (tags.yaml)
   resources/         # activities/, executors/, jobs/, policies/ overrides
   routines/          # routine definitions
   state/
@@ -43,6 +47,8 @@ Task bundles are not under `.orbit/`. They live in the global root at
 `~/.orbit/tasks/workspaces/<workspace>/`, next to the audit database
 `~/.orbit/orbit.db`.
 
-## Rule of Thumb
+## Rule of thumb
 
-If an artifact describes this repository's work, keep it workspace-local. If it describes reusable execution defaults, use mergeable global assets and override them in the workspace when needed.
+Keep anything that describes this repository's work in the workspace. Keep
+reusable execution defaults as global assets, and override them in the
+workspace when needed.

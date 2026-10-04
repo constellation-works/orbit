@@ -83,7 +83,6 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { slug: 'how-to', label: 'Overview' },
-            { slug: 'how-to/task-lifecycle', label: 'Run a Task Lifecycle' },
             { slug: 'how-to/dashboard', label: 'Use the Dashboard' },
             { slug: 'how-to/continuous-delivery', label: 'Run a Delivery Window' },
             { slug: 'how-to/recurring-work', label: 'Schedule Recurring Work' },
