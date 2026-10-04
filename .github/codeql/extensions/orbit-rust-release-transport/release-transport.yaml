@@ -1,0 +1,15 @@
+# `orbit update` keeps the process's release signing-key set beside its release
+# source, so rust/cleartext-transmission follows the whole update environment
+# into every release request URL. `validated_release_url` only returns HTTPS
+# URLs on a GitHub release host, and the client refuses non-HTTPS redirects.
+extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierModel
+    data:
+      - [
+          "orbit_cmd::update::source::validated_release_url",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "transmission",
+          "manual",
+        ]

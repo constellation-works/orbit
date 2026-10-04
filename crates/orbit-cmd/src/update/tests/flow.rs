@@ -8,7 +8,7 @@ use orbit_common::security::release::{
 use crate::update::run_update;
 use crate::update::source::{
     HttpReleaseSource, MAX_ARCHIVE_BYTES, MAX_MANIFEST_BYTES, MAX_METADATA_BYTES,
-    MAX_SIGNATURE_BYTES, MIRROR_LATEST_FILE,
+    MAX_SIGNATURE_BYTES, MIRROR_LATEST_FILE, validated_release_url,
 };
 use crate::update::tests::fixture::{FakeBinary, Fixture, request, tar_gz_named};
 
@@ -70,6 +70,53 @@ fn http_rejects_declared_and_streamed_oversized_bodies() {
             "{error}"
         );
     }
+}
+
+#[test]
+fn release_requests_never_leave_https() {
+    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        &release_requests_never_leave_https,
+    )) {
+        return;
+    }
+
+    for url in [
+        "https://github.com/constellation-works/orbit/releases/download/v1.0.0/x.tar.gz",
+        "https://api.github.com/repos/constellation-works/orbit/releases/latest",
+    ] {
+        validated_release_url(url).expect("GitHub release URL over HTTPS");
+    }
+    for url in [
+        "http://github.com/constellation-works/orbit/releases",
+        "https://example.com/constellation-works/orbit/releases",
+    ] {
+        validated_release_url(url).expect_err("release URL off HTTPS or off GitHub");
+    }
+
+    // A release host redirecting to plain HTTP is refused, not followed.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("local test server");
+    let address = listener.local_addr().expect("server address");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("HTTP request");
+        read_request_head(&mut stream);
+        write!(
+            stream,
+            "HTTP/1.1 302 Found\r\nLocation: http://{address}/downgraded\r\nContent-Length: 0\r\n\r\n"
+        )
+        .expect("redirect response");
+    });
+    let error = HttpReleaseSource::new("unused/repo".to_string())
+        .get(
+            &format!("http://{address}/release"),
+            "metadata",
+            MAX_METADATA_BYTES,
+        )
+        .expect_err("plain-HTTP redirect");
+    server.join().expect("server completed");
+    assert!(
+        error.to_string().contains("non-HTTPS release redirect"),
+        "{error}"
+    );
 }
 
 #[test]

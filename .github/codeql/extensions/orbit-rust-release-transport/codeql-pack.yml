@@ -1,0 +1,9 @@
+name: constellation-works/orbit-rust-release-transport
+version: 0.0.1
+library: true
+
+extensionTargets:
+  codeql/rust-all: "*"
+
+dataExtensions:
+  - release-transport.yaml

@@ -66,6 +66,50 @@ pub const RELEASE_REPO_ENV: &str = "ORBIT_INSTALL_REPO";
 /// File in a mirror directory naming the newest published version.
 pub const MIRROR_LATEST_FILE: &str = "latest-version.txt";
 
+/// Hosts a release request may be addressed to. Asset downloads redirect from
+/// `github.com` to GitHub's object storage; the client's redirect policy keeps
+/// those hops on HTTPS too.
+const RELEASE_HOSTS: [&str; 2] = ["api.github.com", "github.com"];
+
+/// Most redirects one release request follows, matching reqwest's default.
+const MAX_RELEASE_REDIRECTS: usize = 10;
+
+/// Parse a release request URL, requiring HTTPS to a GitHub release host.
+///
+/// Release metadata and artifacts never travel in cleartext. The configured
+/// repository name only ever lands in the path, so this also pins the host.
+/// Code scanning treats the returned URL as a cleartext-transmission barrier
+/// (`.github/codeql/extensions/orbit-rust-release-transport`).
+pub(super) fn validated_release_url(url: &str) -> Result<reqwest::Url, OrbitError> {
+    let parsed = reqwest::Url::parse(url).map_err(|error| {
+        OrbitError::InvalidInput(format!("release URL '{url}' is not a URL: {error}"))
+    })?;
+    let host_allowed = parsed
+        .host_str()
+        .is_some_and(|host| RELEASE_HOSTS.contains(&host));
+    if parsed.scheme() != "https" || !host_allowed {
+        return Err(OrbitError::InvalidInput(format!(
+            "release URL '{url}' must be https:// on {}",
+            RELEASE_HOSTS.join(" or ")
+        )));
+    }
+    Ok(parsed)
+}
+
+/// Follow redirects only while they stay on HTTPS.
+fn https_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.url().scheme() != "https" {
+            let refused = format!("refusing a non-HTTPS release redirect to {}", attempt.url());
+            attempt.error(refused)
+        } else if attempt.previous().len() >= MAX_RELEASE_REDIRECTS {
+            attempt.error("too many release redirects")
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
 /// A source of published Orbit release artifacts.
 pub trait ReleaseSource: Debug + Send + Sync {
     /// Where these artifacts come from, for diagnostics and reports.
@@ -93,6 +137,18 @@ pub fn release_source_from_env() -> Box<dyn ReleaseSource> {
     Box::new(HttpReleaseSource::new(repo))
 }
 
+/// `error` and its causes, outermost first. reqwest's own message omits why a
+/// request failed (a refused redirect, a TLS or connect error).
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    message
+}
+
 /// GitHub Releases over HTTPS.
 #[derive(Debug, Clone)]
 pub struct HttpReleaseSource {
@@ -114,6 +170,7 @@ impl HttpReleaseSource {
             .timeout(self.timeout)
             // GitHub's REST API rejects requests without one.
             .user_agent(concat!("orbit-cli/", env!("CARGO_PKG_VERSION")))
+            .redirect(https_redirect_policy())
             .build()
             .map_err(|error| {
                 OrbitError::Execution(format!("failed to build release HTTP client: {error}"))
@@ -127,7 +184,10 @@ impl HttpReleaseSource {
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
             .map_err(|error| {
-                OrbitError::Execution(format!("failed to download {what} from {url}: {error}"))
+                OrbitError::Execution(format!(
+                    "failed to download {what} from {url}: {}",
+                    error_chain(&error)
+                ))
             })?;
         if response
             .content_length()
@@ -145,8 +205,15 @@ impl ReleaseSource for HttpReleaseSource {
     }
 
     fn latest_version(&self) -> Result<String, OrbitError> {
-        let url = format!("https://api.github.com/repos/{}/releases/latest", self.repo);
-        let body = self.get(&url, "the latest release metadata", MAX_METADATA_BYTES)?;
+        let url = validated_release_url(&format!(
+            "https://api.github.com/repos/{}/releases/latest",
+            self.repo
+        ))?;
+        let body = self.get(
+            url.as_str(),
+            "the latest release metadata",
+            MAX_METADATA_BYTES,
+        )?;
         let document: serde_json::Value = serde_json::from_slice(&body).map_err(|error| {
             OrbitError::Execution(format!("latest release metadata is not JSON: {error}"))
         })?;
@@ -163,11 +230,11 @@ impl ReleaseSource for HttpReleaseSource {
     }
 
     fn fetch(&self, version: &str, asset: &str) -> Result<Vec<u8>, OrbitError> {
-        let url = format!(
+        let url = validated_release_url(&format!(
             "https://github.com/{}/releases/download/v{version}/{asset}",
             self.repo
-        );
-        self.get(&url, asset, asset_limit(asset))
+        ))?;
+        self.get(url.as_str(), asset, asset_limit(asset))
     }
 }
 
