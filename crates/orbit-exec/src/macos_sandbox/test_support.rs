@@ -105,7 +105,7 @@ pub(super) fn can_read_under_profile(profile_text: &str, path: &Path) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn sandbox_exec_can_apply() -> bool {
+pub(crate) fn sandbox_exec_can_apply() -> bool {
     if !super::spawn::sandbox_exec_available() {
         return false;
     }

@@ -244,6 +244,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0034".to_string(),
                 "job_runs_job_created_and_retry_indexes".to_string()
             ),
+            (
+                "migration.v0035".to_string(),
+                "plugin_build_record".to_string()
+            ),
         ]
     );
 }

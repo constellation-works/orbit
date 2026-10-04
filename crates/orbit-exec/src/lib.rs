@@ -38,6 +38,10 @@
 //! - [`InheritedFd`] — an open descriptor handed to the child at a fixed
 //!   number, which is how a plugin backend receives its callback credential
 //! - [`EnvironmentMode`], [`StdinMode`] — environment and stdin control
+//! - [`run_build_phase`] — one install-time plugin build phase under the
+//!   deny-by-default build profile, with [`probe_build_sandbox`] deciding
+//!   whether this host can apply it and [`BUILD_FETCH_PHASE_SUPPORTED`]
+//!   whether it runs a network `fetch` phase at all
 //! - [`physical_with_missing_tail`] — the one resolution a granted path
 //!   gets, shared by the layer that validates it and the layer that compiles
 //!   the rule for it
@@ -45,6 +49,7 @@
 //! # Dependency direction
 //! `orbit-types` → `orbit-exec` → orbit-tools
 
+mod build_sandbox;
 mod credential_paths;
 mod linux_landlock;
 mod linux_sandbox;
@@ -56,6 +61,12 @@ mod runner;
 mod sandbox;
 mod supervision;
 
+pub use build_sandbox::{
+    BUILD_FETCH_PHASE_SUPPORTED, BuildLog, BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest,
+    BuildSandboxProbe, BuildSandboxSpec, PLUGIN_BUILD_DIR_CAP_BYTES, PLUGIN_BUILD_FETCH_PORT,
+    PLUGIN_BUILD_LOG_CAP_BYTES, compile_linux_build_argv, compile_macos_build_profile,
+    probe_build_sandbox, run_build_phase,
+};
 pub use credential_paths::default_credential_read_denies;
 pub use linux_landlock::{
     LandlockBoundary, LandlockPathGrant, NETWORK_LANDLOCK_ABI, WRITE_LANDLOCK_ABI, grants_read,

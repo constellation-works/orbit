@@ -10,6 +10,7 @@ fn archive_pin(digest: Option<&str>) -> PluginPinFile {
         version: None,
         source: Some(ARCHIVE_URL.into()),
         digest: digest.map(str::to_string),
+        artifact_digest: None,
         enabled: true,
     });
     file
@@ -55,4 +56,53 @@ fn a_malformed_or_misplaced_digest_is_refused() {
         error.starts_with("plugins[0].digest:") && error.contains("https://"),
         "only a fetched archive is digest-verified: {error}"
     );
+}
+
+const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+fn built_pin(source: &str, artifact_digest: &str) -> PluginPinFile {
+    let mut file = PluginPinFile::default();
+    file.plugins.push(PluginPin {
+        name: "graph".into(),
+        version: None,
+        source: Some(source.into()),
+        digest: None,
+        artifact_digest: Some(artifact_digest.into()),
+        enabled: true,
+    });
+    file
+}
+
+/// An artifact digest states what building one commit produces, so it is
+/// only accepted beside a source pinned to a full commit: a branch, tag or
+/// abbreviation names whatever the repository serves at fetch time.
+#[test]
+fn an_artifact_digest_requires_a_commit_pinned_git_source() {
+    built_pin(
+        &format!("git+https://example.com/graph.git#{COMMIT}"),
+        DIGEST,
+    )
+    .validate()
+    .expect("a full commit may carry an artifact digest");
+
+    for source in [
+        "git+https://example.com/graph.git#v0.4.1",
+        "git+https://example.com/graph.git#0123456",
+        "git+https://example.com/graph.git",
+        "/srv/plugins/graph",
+    ] {
+        let error = built_pin(source, DIGEST).validate().unwrap_err();
+        assert!(
+            error.starts_with("plugins[0].artifact_digest:") && error.contains("commit"),
+            "{source}: {error}"
+        );
+    }
+
+    let error = built_pin(
+        &format!("git+https://example.com/graph.git#{COMMIT}"),
+        "abc",
+    )
+    .validate()
+    .unwrap_err();
+    assert!(error.starts_with("plugins[0].artifact_digest:"), "{error}");
 }

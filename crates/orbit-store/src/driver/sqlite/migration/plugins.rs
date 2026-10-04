@@ -108,3 +108,14 @@ pub(super) fn apply_plugin_archive_digest(conn: &Connection) -> Result<(), Orbit
     }
     add_column_if_missing(conn, "ALTER TABLE plugins ADD COLUMN archive_digest TEXT")
 }
+
+/// v35 `plugin_build_record` migration: the JSON build record of a plugin
+/// built at install time (`docs/design/plugins/3_install_time_build.md`
+/// §3.6). Additive: an older binary ignores the column, and every plugin
+/// installed without a build reads NULL.
+pub(super) fn apply_plugin_build_record(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "plugins")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "ALTER TABLE plugins ADD COLUMN build_json TEXT")
+}

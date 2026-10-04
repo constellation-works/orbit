@@ -26,7 +26,16 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
     manifest.validate_structure()?;
     let manifest_digest = manifest_digest(&bytes);
 
-    let backend_command = resolve_backend_command(&root, &manifest.spec.backend.command)?;
+    let backend_command = match resolve_backend_command(&root, &manifest.spec.backend.command) {
+        Ok(command) => command,
+        // A source that builds its backend ships without it: the command is
+        // located once `spec.build` has copied it into the install tree, and
+        // the install refuses a build that does not produce it.
+        Err(_) if unbuilt_backend_output(&root, &manifest) => {
+            root.join(manifest.spec.backend.command.trim())
+        }
+        Err(error) => return Err(error),
+    };
 
     let mut tools = Vec::with_capacity(manifest.spec.tools.len());
     for (index, tool) in manifest.spec.tools.iter().enumerate() {
@@ -379,6 +388,20 @@ fn manifest_field_from_yaml_error(error: &serde_yaml::Error) -> String {
         return field.to_string();
     }
     "manifest".to_string()
+}
+
+/// The backend command is a relative path `spec.build` declares as an
+/// output, and nothing is at that path yet.
+fn unbuilt_backend_output(root: &Path, manifest: &PluginManifest) -> bool {
+    let command = manifest.spec.backend.command.trim();
+    manifest.spec.build.as_ref().is_some_and(|build| {
+        !Path::new(command).is_absolute()
+            && build
+                .outputs
+                .iter()
+                .any(|output| output.to.trim() == command)
+            && std::fs::symlink_metadata(root.join(command)).is_err()
+    })
 }
 
 fn resolve_backend_command(root: &Path, command: &str) -> Result<PathBuf, PluginLoadError> {
