@@ -18,6 +18,8 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use crate::git_repo;
+
 struct Fixture {
     _temp: TempDir,
     home: std::path::PathBuf,
@@ -34,7 +36,7 @@ impl Fixture {
         let home = temp.path().join("home");
         let work = temp.path().join("work");
         std::fs::create_dir_all(&home).expect("create home");
-        std::fs::create_dir_all(&work).expect("create work");
+        git_repo::init(&work);
         let fixture = Self {
             _temp: temp,
             home,

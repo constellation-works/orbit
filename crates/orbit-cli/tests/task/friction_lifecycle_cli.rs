@@ -1,10 +1,9 @@
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::fs;
 use std::path::PathBuf;
 
-use crate::isolated_cli_fixture;
+use crate::{git_repo, isolated_cli_fixture};
 use isolated_cli_fixture::Fixture;
 
 #[test]
@@ -108,7 +107,7 @@ fn friction_cli_triage_stats_and_rehome_preserve_workspace_ownership() {
     assert_eq!(fixture.json(&["friction", "show", id, "--json"]), triaged);
 
     let target_repo = fixture._temp.path().join("target-repo");
-    fs::create_dir_all(&target_repo).unwrap();
+    git_repo::init(&target_repo);
     fixture
         .command(&["workspace", "init", "--name", "friction-target"])
         .current_dir(&target_repo)

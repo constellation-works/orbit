@@ -12,6 +12,8 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
+use crate::git_repo;
+
 fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -55,7 +57,7 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
     for operator_edit in [false, true] {
         let home = tempdir().expect("isolated migration home");
         let repo = home.path().join("upgraded-workspace");
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        git_repo::init(&repo);
         write_machine_identity(home.path());
         orbit(&repo, home.path())
             .args(["workspace", "init", "--name", "upgraded-workspace"])
@@ -228,7 +230,7 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
 fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_idempotent() {
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
-    std::fs::create_dir_all(repo.join(".git")).expect("create workspace repo");
+    git_repo::init(&repo);
     write_machine_identity(home.path());
     orbit(&repo, home.path())
         .args(["workspace", "init"])
@@ -356,8 +358,8 @@ fn workspace_sync_outside_registered_workspace_fails_before_writing() {
     let home = parent.path().join("home");
     let repo = home.join("outside-workspace");
     let uninitialized_root = home.join("uninitialized-root");
-    std::fs::create_dir_all(parent.path().join(".git")).expect("create parent repo");
-    std::fs::create_dir_all(repo.join(".git")).expect("create outside repo");
+    git_repo::init(parent.path());
+    git_repo::init(&repo);
     std::fs::create_dir_all(&uninitialized_root).expect("create uninitialized root");
     write_machine_identity(&home);
     orbit(parent.path(), &home)
@@ -394,7 +396,7 @@ fn workspace_sync_reports_a_denied_manifest_write_without_claiming_convergence()
 
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
-    std::fs::create_dir_all(repo.join(".git")).expect("create workspace repo");
+    git_repo::init(&repo);
     write_machine_identity(home.path());
     orbit(&repo, home.path())
         .args(["workspace", "init"])
@@ -465,8 +467,7 @@ fn workspace_sync_reports_a_denied_manifest_write_without_claiming_convergence()
 fn workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent() {
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
-    std::fs::create_dir_all(&repo).expect("create workspace repo");
-    git(&repo, &["init", "--quiet"]);
+    git_repo::init(&repo);
     write_machine_identity(home.path());
     let gitignore = repo.join(".gitignore");
     std::fs::write(
@@ -544,8 +545,7 @@ fn workspace_init_refuses_checkout_and_name_collisions_without_writing() {
     let first = home.path().join("first");
     let second = home.path().join("second");
     for repo in [&first, &second] {
-        std::fs::create_dir_all(repo).expect("create repo");
-        git(repo, &["init", "--quiet"]);
+        git_repo::init(repo);
     }
     write_machine_identity(home.path());
     orbit(&first, home.path())
@@ -585,19 +585,6 @@ fn workspace_init_refuses_checkout_and_name_collisions_without_writing() {
     assert!(
         !second.join(".orbit").exists(),
         "a durable-name collision must not initialize the second checkout"
-    );
-}
-
-fn git(repo: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .status()
-        .expect("run git");
-    assert!(
-        status.success(),
-        "git {args:?} failed in {}",
-        repo.display()
     );
 }
 

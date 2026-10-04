@@ -10,6 +10,8 @@ use predicates::prelude::*;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+use crate::git_repo;
+
 const INACTIVE_TOOL_NAMES: &[&str] = &[
     // Candidate inspection remains on the CLI surface.
     "orbit.auto_task.show",
@@ -61,7 +63,7 @@ fn disabled_external_tool_remains_inspectable_without_becoming_executable() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&work).unwrap();
+    git_repo::init(&work);
     let json = |args: &[&str]| -> Value {
         let stdout = orbit_at_home(&work, &home)
             .args(args)
@@ -164,7 +166,7 @@ fn tool_list_all_shows_inactive_lock_reservation_with_required_input_shape() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    git_repo::init(&work);
 
     orbit_at_home(&work, &home)
         // `--format table` because `assert_cmd` captures through a pipe, where
@@ -188,7 +190,7 @@ fn tool_list_json_hides_inactive_tools_by_default() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    git_repo::init(&work);
 
     let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json"])
@@ -218,7 +220,7 @@ fn retired_docs_tools_are_absent_and_unknown_to_tool_run() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    git_repo::init(&work);
 
     let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json"])
@@ -250,7 +252,7 @@ fn tool_list_json_all_includes_inactive_tools_with_status() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    git_repo::init(&work);
 
     let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json", "--all"])
@@ -278,7 +280,7 @@ fn tool_list_json_all_includes_parameter_schema_for_inactive_tools() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    git_repo::init(&work);
 
     let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json", "--all"])
@@ -317,7 +319,7 @@ fn tool_list_json_excludes_removed_task_show_context_parameters() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    git_repo::init(&work);
 
     let output = orbit_at_home(&work, &home)
         .args(["tool", "list", "--json"])
@@ -356,7 +358,7 @@ fn tool_show_displays_lock_reservation_shapes() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    git_repo::init(&work);
 
     orbit_at_home(&work, &home)
         .args(["tool", "show", "orbit.task.locks.reserve"])
@@ -378,7 +380,7 @@ fn tool_run_rejects_inactive_tools() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    git_repo::init(&work);
 
     orbit_at_home(&work, &home)
         .args([
@@ -407,7 +409,7 @@ fn tool_run_reaches_the_operator_claim_listing() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(work.join(".git")).expect("create work repo");
+    git_repo::init(&work);
 
     orbit_at_home(&work, &home)
         .args(["workspace", "init", "--name", "drain-claims-test"])
@@ -464,7 +466,7 @@ fn tool_run_serves_the_owner_local_read_only_drain_surface() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(work.join(".git")).expect("create work repo");
+    git_repo::init(&work);
 
     orbit_at_home(&work, &home)
         .args(["workspace", "init", "--name", "drain-read-only-test"])

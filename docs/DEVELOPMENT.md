@@ -83,16 +83,17 @@ with this isolation and verify one test passed in the child.
 
 The pattern above is already used by
 [`crates/orbit-cli/tests/tool/tool_list.rs`](../crates/orbit-cli/tests/tool/tool_list.rs).
-For a complete disposable fixture, create absolute temporary paths, initialize
-the fixture workspace through that helper, then perform a read-only routing
-check before adding tasks or starting runs:
+For a complete disposable fixture, create absolute temporary paths, make the
+checkout a real Git repository, initialize the fixture workspace through that
+helper, then perform a read-only routing check before adding tasks or starting
+runs:
 
 ```rust
 let temp = tempfile::tempdir().expect("fixture tempdir");
 let home = temp.path().join("home");
 let work = temp.path().join("work");
 fs::create_dir_all(&home).expect("fixture home");
-fs::create_dir_all(&work).expect("fixture work");
+git_repo::init(&work); // crates/orbit-cli/tests/support/git_repo.rs
 
 let expected_work = fs::canonicalize(&work).expect("canonicalize fixture work");
 
@@ -121,6 +122,19 @@ assert_eq!(
 `workspace show` exposes the physical checkout paths resolved by the child, so
 canonicalize the fixture path before comparing it. This check catches a fixture
 routed to an ambient workspace before the fixture performs its useful mutation.
+
+Root discovery asks Git where the checkout ends, and Git walks past a plain
+directory or an empty `.git` directory. With TMPDIR inside another checkout,
+such as a managed worktree's `.orbit/tmp`, a fixture without its own repository
+resolves the enclosing checkout's Orbit root: `workspace init` then refuses
+with that checkout's identity, or, inside a managed run, fails on its read-only
+`.orbit` mount. Never answer that with `--force`. Give every fixture checkout,
+including a negative-control cwd, its own repository. Ordinary (non-bootstrap)
+lookup and the plugin's SessionStart hook still accept an initialized `.orbit`
+at any ancestor, so a control that needs "no workspace above this directory"
+must check that precondition and report a skip rather than pass under an
+enclosing workspace.
+
 A shell `export HOME=/tmp/...` is not an isolation boundary: a
 managed child can inherit `ORBIT_MANAGED_RUN_CONTEXT` and the
 `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair, which carries durable authority

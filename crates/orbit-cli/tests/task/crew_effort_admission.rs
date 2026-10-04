@@ -17,6 +17,8 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
+use crate::git_repo;
+
 fn orbit_at_home(work: &Path, home: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -79,7 +81,7 @@ fn task_list_succeeds_when_astra_effort_is_hard() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     fs::create_dir_all(&home).expect("fixture home");
-    fs::create_dir_all(work.join(".git")).expect("fixture work repo");
+    git_repo::init(&work);
 
     run_orbit(
         &work,

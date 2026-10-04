@@ -17,6 +17,8 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
+use crate::git_repo;
+
 #[cfg(unix)]
 #[path = "../support/secret_sinks.rs"]
 mod secret_sinks;
@@ -38,7 +40,7 @@ impl Fixture {
         let home = temp.path().join("home");
         let work = temp.path().join("work");
         std::fs::create_dir_all(&home).expect("create home");
-        std::fs::create_dir_all(&work).expect("create work");
+        git_repo::init(&work);
         let fixture = Self {
             _temp: temp,
             home,
