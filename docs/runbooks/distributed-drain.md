@@ -360,7 +360,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   as `skipped:owner_unreachable` carries the transport error in `detail`;
   `skipped:no_owner_route` means the follower has no route to ask (owner
   missing from `~/.orbit/mcp-destinations.toml`, or an unregistered
-  checkout), not that the owner is down.
+  checkout), not that the owner is down. A status lookup failure without a
+  transport error is `skipped:owner_lookup_failed`, with the reason in
+  `detail`; it does not establish that the owner is down.
 
 Operate it with the ordinary run commands: `orbit run show <run-id>`,
 `orbit run concurrency <run-id> --set N` (MCP: `orbit_workflow_auto` with

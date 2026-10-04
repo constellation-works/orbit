@@ -122,6 +122,8 @@ struct Wire {
     task_reads: Mutex<Vec<String>>,
     /// When set, every task read fails at the transport with this error.
     task_reads_fail: Mutex<Option<String>>,
+    /// When set, the owner answers task reads with a structured tool error.
+    task_reads_remote_error: Mutex<Option<(String, String)>>,
 }
 
 impl Wire {
@@ -179,6 +181,13 @@ impl DrainOwnerTransport for Wire {
         self.task_reads.lock().unwrap().push(selector.to_string());
         if let Some(error) = self.task_reads_fail.lock().unwrap().clone() {
             return Err(OrbitError::UnreachableDestination(error));
+        }
+        if let Some((code, message)) = self.task_reads_remote_error.lock().unwrap().clone() {
+            return Err(OrbitError::RemoteTool {
+                code: code.clone(),
+                message: message.clone(),
+                payload: json!({"code": code, "message": message}),
+            });
         }
         self.owner.run_tool("orbit.task.show", input)
     }
@@ -267,6 +276,7 @@ impl Pair {
             lose: Mutex::default(),
             task_reads: Mutex::default(),
             task_reads_fail: Mutex::default(),
+            task_reads_remote_error: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), FOLLOWER);
         let follower = follower
@@ -830,6 +840,27 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
     );
 
     *pair.wire.task_reads_fail.lock().unwrap() = None;
+    *pair.wire.task_reads_remote_error.lock().unwrap() = Some((
+        "execution_failed".into(),
+        "owner task store unavailable".into(),
+    ));
+    let owner_error = pair
+        .follower
+        .gc_worktrees(false, None, None, false, false)
+        .unwrap();
+    let report = gc_report(&owner_error, &leaf);
+    assert_eq!(
+        report["action"], "skipped:owner_lookup_failed",
+        "{report:#}"
+    );
+    assert!(
+        report["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("owner task store unavailable")),
+        "a structured owner error proves the route answered: {report:#}"
+    );
+
+    *pair.wire.task_reads_remote_error.lock().unwrap() = None;
     let answered = pair
         .follower
         .gc_worktrees(false, None, None, false, false)

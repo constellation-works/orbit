@@ -187,15 +187,14 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     })
 }
 
-/// One sweep's task lookups. Runs that retry a task, and bundles that share
-/// one, ask about each task once. Once a replica's owner proves unreachable,
-/// every later lookup in the sweep reports that without waiting on the
-/// transport again: the next sweep asks afresh. A missing route is not an
-/// outage and is not carried over: another run's claim may name a route.
+/// One sweep's task lookups. Results and transport failures are memoized by
+/// owner route and task, so a down owner is contacted once while another
+/// route can still answer. A missing route is not an outage and is not carried
+/// over: another run's claim may name a route.
 struct SweepTaskLookups<'a, H: RuntimeHost + ?Sized> {
     host: &'a H,
-    answers: RefCell<BTreeMap<String, WorktreeGcTaskLookup>>,
-    owner_unreachable: RefCell<Option<String>>,
+    answers: RefCell<BTreeMap<(String, String), WorktreeGcTaskLookup>>,
+    owner_unreachable: RefCell<BTreeMap<String, String>>,
 }
 
 impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
@@ -203,27 +202,35 @@ impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
         Self {
             host,
             answers: RefCell::new(BTreeMap::new()),
-            owner_unreachable: RefCell::new(None),
+            owner_unreachable: RefCell::new(BTreeMap::new()),
         }
     }
 
     fn lookup(&self, run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
-        if let Some(answer) = self.answers.borrow().get(task_id) {
-            return answer.clone();
-        }
-        if let Some(reason) = self.owner_unreachable.borrow().as_ref() {
-            return WorktreeGcTaskLookup::OwnerUnreachable(reason.clone());
+        let scope = self.host.worktree_gc_task_lookup_scope(run_id);
+        if let Some(scope) = scope.as_ref() {
+            let key = (scope.clone(), task_id.to_string());
+            if let Some(answer) = self.answers.borrow().get(&key) {
+                return answer.clone();
+            }
+            if let Some(reason) = self.owner_unreachable.borrow().get(scope) {
+                return WorktreeGcTaskLookup::OwnerUnreachable(reason.clone());
+            }
         }
         let answer = self.host.lookup_task_for_worktree_gc(run_id, task_id);
-        match &answer {
-            WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
-                *self.owner_unreachable.borrow_mut() = Some(reason.clone());
-            }
-            WorktreeGcTaskLookup::NoOwnerRoute(_) => {}
-            _ => {
-                self.answers
-                    .borrow_mut()
-                    .insert(task_id.to_string(), answer.clone());
+        if let Some(scope) = scope {
+            match &answer {
+                WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
+                    self.owner_unreachable
+                        .borrow_mut()
+                        .insert(scope, reason.clone());
+                }
+                WorktreeGcTaskLookup::NoOwnerRoute(_) => {}
+                _ => {
+                    self.answers
+                        .borrow_mut()
+                        .insert((scope, task_id.to_string()), answer.clone());
+                }
             }
         }
         answer
@@ -343,6 +350,9 @@ fn classify_known<H: RuntimeHost + ?Sized>(
             WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved", None),
             WorktreeGcTaskLookup::NoOwnerRoute(reason) => {
                 (None, None, "skipped:no_owner_route", Some(reason))
+            }
+            WorktreeGcTaskLookup::OwnerLookupFailed(reason) => {
+                (None, None, "skipped:owner_lookup_failed", Some(reason))
             }
             // A replica's task state lives on its owner. Not reaching the
             // owner is not evidence the task is unknown, so say which it was.

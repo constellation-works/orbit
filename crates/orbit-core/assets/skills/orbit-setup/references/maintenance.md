@@ -36,7 +36,10 @@ surface, through the claim's own route (the owner must be in
 `skipped:owner_unreachable` with the error in `detail`; run GC again once the
 owner answers. `skipped:no_owner_route` means the replica has no route to ask
 at all — the owner is missing from `mcp-destinations.toml` or the checkout is
-not a registered workspace — and `detail` says which. The pull drain also
+not a registered workspace — and `detail` says which. A status lookup that
+fails without a transport error is reported as `skipped:owner_lookup_failed`
+with the reason in `detail`; it does not establish that the owner is down.
+The pull drain also
 reclaims each settled leaf's `target/` on its next pass, so follower disk
 does not depend on this schedule.
 

@@ -257,10 +257,13 @@ pub enum WorktreeGcTaskLookup {
     /// The owning store answered but did not produce the task.
     Unresolved,
     /// This checkout is a replica with no route to ask its owner: it is not
-    /// a registered workspace, has no federated destination for the owner,
-    /// or the owner refused the route. Nothing was attempted over the wire,
-    /// so this is a configuration gap, not an outage. The string names it.
+    /// a registered workspace or has no federated destination for the owner.
+    /// Nothing was attempted over the wire, so this is a configuration gap,
+    /// not an outage. The string names it.
     NoOwnerRoute(String),
+    /// The owner route was available, but the owner answered with a failure
+    /// while reading the task. The string names the owner's response.
+    OwnerLookupFailed(String),
     /// This checkout is a replica and the transport to its owner failed. The
     /// string is the transport's error, reported beside the retained
     /// worktree.
@@ -611,6 +614,12 @@ pub trait RuntimeHost: Send + Sync {
             },
             Err(_) => WorktreeGcTaskLookup::Unresolved,
         }
+    }
+    /// Stable scope for memoizing task lookups during one GC sweep. Replica
+    /// hosts return the claim's owner selector, because one checkout may hold
+    /// claims routed to different owners. `None` disables memoization.
+    fn worktree_gc_task_lookup_scope(&self, _run_id: &str) -> Option<String> {
+        Some("local".to_string())
     }
     /// Whether `run_id` is a claimed leaf whose claim this follower has
     /// settled with its owner. The owner then holds the leaf's delivery, so

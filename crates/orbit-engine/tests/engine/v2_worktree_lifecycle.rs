@@ -238,6 +238,13 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
                 "T-CLAIM-UNREACHABLE",
                 WorktreeGcTaskLookup::OwnerUnreachable("ssh: Connection timed out".into()),
             );
+            let owner_error = setup("jrun-claim-owner-error", "T-CLAIM-OWNER-ERROR");
+            host.answer(
+                "T-CLAIM-OWNER-ERROR",
+                WorktreeGcTaskLookup::OwnerLookupFailed(
+                    "hm_owner/ws: remote tool failed (execution_failed): store busy".into(),
+                ),
+            );
             // A settled task's checkout that Git no longer lists.
             let moved = setup("jrun-claim-moved", "T-CLAIM-MOVED");
             host.set_status("T-CLAIM-MOVED", TaskStatus::Done);
@@ -263,6 +270,11 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
                     "jrun-claim-unreachable",
                     "skipped:owner_unreachable",
                     "Connection timed out",
+                ),
+                (
+                    "jrun-claim-owner-error",
+                    "skipped:owner_lookup_failed",
+                    "store busy",
                 ),
                 (
                     "jrun-claim-moved",
@@ -294,7 +306,90 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
             for kept in [&no_route, &unreachable] {
                 assert!(registered_worktrees(&fixture.repo).contains(&kept.path));
             }
+            assert!(owner_error.path.exists(), "an owner response error is kept");
             assert!(moved.path.join("notes.txt").exists(), "never removed by GC");
+        },
+    );
+}
+
+/// One failed owner route must not suppress lookups to another owner in the
+/// same worktree GC sweep.
+#[test]
+fn replica_worktree_gc_fences_unreachable_owners_by_route() {
+    isolated(
+        "replica_worktree_gc_fences_unreachable_owners_by_route",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            let setup = |run_id: &str, task_id: &str| {
+                host.add_task(task_id, TaskStatus::Backlog);
+                let input = setup_input(&[task_id], run_id);
+                let setup = action(&host, "worktree_setup", &input).expect("worktree setup");
+                host.add_run(job_run(run_id, JobRunState::Success, input));
+                Checkout::from_setup(&setup)
+            };
+            let left = setup("jrun-owner-a", "T-OWNER-A");
+            let right = setup("jrun-owner-b", "T-OWNER-B");
+            let (
+                unreachable,
+                unreachable_run,
+                unreachable_task,
+                reachable,
+                reachable_run,
+                reachable_task,
+            ) = if left.path < right.path {
+                (
+                    &left,
+                    "jrun-owner-a",
+                    "T-OWNER-A",
+                    &right,
+                    "jrun-owner-b",
+                    "T-OWNER-B",
+                )
+            } else {
+                (
+                    &right,
+                    "jrun-owner-b",
+                    "T-OWNER-B",
+                    &left,
+                    "jrun-owner-a",
+                    "T-OWNER-A",
+                )
+            };
+            host.set_lookup_scope(unreachable_run, "hm_down/ws-a");
+            host.set_lookup_scope(reachable_run, "hm_up/ws-b");
+            host.answer(
+                unreachable_task,
+                WorktreeGcTaskLookup::OwnerUnreachable("ssh: timed out".into()),
+            );
+            host.answer(
+                reachable_task,
+                WorktreeGcTaskLookup::Found {
+                    status: TaskStatus::Done,
+                    pr_status: None,
+                },
+            );
+
+            let result = action(&host, "worktree_gc", &json!({})).expect("worktree gc");
+            let reports = result["reports"].as_array().expect("reports");
+            let unreachable_report = reports
+                .iter()
+                .find(|report| report["run_id"] == unreachable_run)
+                .expect("unreachable report");
+            let reachable_report = reports
+                .iter()
+                .find(|report| report["run_id"] == reachable_run)
+                .expect("reachable report");
+            assert_eq!(
+                unreachable_report["action"], "skipped:owner_unreachable",
+                "{unreachable_report:#}"
+            );
+            assert_eq!(
+                reachable_report["action"], "removed",
+                "the reachable owner's done task is still checked: {reachable_report:#}"
+            );
+            assert!(!reachable.path.exists());
+            assert!(unreachable.path.exists());
         },
     );
 }
@@ -759,6 +854,8 @@ struct LifecycleHost {
     owner_answers: Mutex<BTreeMap<String, WorktreeGcTaskLookup>>,
     /// Claimed runs whose claim is settled, with the settlement's account.
     settled_claims: Mutex<BTreeMap<String, String>>,
+    /// The owner route of each claimed run for GC memoization tests.
+    lookup_scopes: Mutex<BTreeMap<String, String>>,
 }
 
 impl LifecycleHost {
@@ -807,6 +904,13 @@ impl LifecycleHost {
             .lock()
             .unwrap()
             .insert(run_id.to_string(), settlement.to_string());
+    }
+
+    fn set_lookup_scope(&self, run_id: &str, scope: &str) {
+        self.lookup_scopes
+            .lock()
+            .unwrap()
+            .insert(run_id.to_string(), scope.to_string());
     }
 
     fn admitted(&self) -> Vec<String> {
@@ -883,6 +987,17 @@ impl RuntimeHost for LifecycleHost {
             },
             Err(_) => WorktreeGcTaskLookup::Unresolved,
         }
+    }
+
+    fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
+        Some(
+            self.lookup_scopes
+                .lock()
+                .unwrap()
+                .get(run_id)
+                .cloned()
+                .unwrap_or_else(|| "local".to_string()),
+        )
     }
 
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {

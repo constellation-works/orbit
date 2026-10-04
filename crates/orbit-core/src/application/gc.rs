@@ -5,7 +5,6 @@ use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
 
-use crate::application::distributed::is_owner_transport_failure;
 use crate::{OrbitError, OrbitRuntime};
 
 impl OrbitRuntime {
@@ -74,22 +73,7 @@ impl OrbitRuntime {
                 Err(_) => WorktreeGcTaskLookup::Unresolved,
             };
         };
-        let claim_selector = match self.stores().jobs().local_pull_for_run(run_id) {
-            Ok(record) => record.map(|record| record.destination.selector),
-            Err(error) => {
-                tracing::warn!(
-                    run_id,
-                    %error,
-                    "worktree GC could not read the run's claim admission; asking through the \
-                     workspace route"
-                );
-                None
-            }
-        };
-        let Some(selector) = claim_selector.or_else(|| {
-            self.workspace_runtime_binding()
-                .map(|binding| format!("{owner_machine}/{}", binding.logical_workspace_id))
-        }) else {
+        let Some(selector) = self.worktree_gc_owner_selector(owner_machine, run_id) else {
             return WorktreeGcTaskLookup::NoOwnerRoute(
                 "this replica checkout is not a registered workspace and the run holds no claim \
                  naming its owner; register it with `orbit workspace init --role replica`"
@@ -113,11 +97,42 @@ impl OrbitRuntime {
             Err(OrbitError::RemoteTool { code, .. }) if code == "not_found" => {
                 WorktreeGcTaskLookup::Unresolved
             }
-            Err(error) if is_owner_transport_failure(&error) => {
+            Err(error @ (OrbitError::UnknownSelector(_) | OrbitError::AmbiguousDestination(_))) => {
+                WorktreeGcTaskLookup::NoOwnerRoute(format!("{selector}: {error}"))
+            }
+            Err(error) if is_worktree_gc_transport_failure(&error) => {
                 WorktreeGcTaskLookup::OwnerUnreachable(format!("{selector}: {error}"))
             }
-            Err(error) => WorktreeGcTaskLookup::NoOwnerRoute(format!("{selector}: {error}")),
+            Err(error) => WorktreeGcTaskLookup::OwnerLookupFailed(format!("{selector}: {error}")),
         }
+    }
+
+    /// Scope for memoizing owner lookups during one worktree GC sweep.
+    /// Different claimed leaves can belong to different owner destinations.
+    pub(crate) fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
+        let Some(owner_machine) = self.coordination_write_owner() else {
+            return Some("local".to_string());
+        };
+        self.worktree_gc_owner_selector(owner_machine, run_id)
+    }
+
+    fn worktree_gc_owner_selector(&self, owner_machine: &str, run_id: &str) -> Option<String> {
+        let claim_selector = match self.stores().jobs().local_pull_for_run(run_id) {
+            Ok(record) => record.map(|record| record.destination.selector),
+            Err(error) => {
+                tracing::warn!(
+                    run_id,
+                    %error,
+                    "worktree GC could not read the run's claim admission; asking through the \
+                     workspace route"
+                );
+                None
+            }
+        };
+        claim_selector.or_else(|| {
+            self.workspace_runtime_binding()
+                .map(|binding| format!("{owner_machine}/{}", binding.logical_workspace_id))
+        })
     }
 
     /// The settled claim behind a claimed leaf's worktree, if it has one
@@ -205,6 +220,19 @@ impl OrbitRuntime {
             },
         )
     }
+}
+
+/// Only an unreachable destination, a lost result, or a fenced unavailable
+/// owner is evidence that the owner could not be reached. Stale local routes,
+/// unhealthy checkout probes, and structured tool errors leave the owner
+/// reachable or unverified, so they do not mean `owner_unreachable`.
+fn is_worktree_gc_transport_failure(error: &OrbitError) -> bool {
+    matches!(
+        error,
+        OrbitError::UnreachableDestination(_)
+            | OrbitError::OutcomeUnknown { .. }
+            | OrbitError::OwnerUnavailable(_)
+    )
 }
 
 /// The owner's `status`/`pr_status` projection. An answer GC cannot read is

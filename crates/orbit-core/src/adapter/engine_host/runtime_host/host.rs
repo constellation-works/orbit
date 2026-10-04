@@ -480,6 +480,10 @@ impl RuntimeHost for OrbitRuntime {
         self.worktree_gc_task_lookup(run_id, task_id)
     }
 
+    fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
+        OrbitRuntime::worktree_gc_task_lookup_scope(self, run_id)
+    }
+
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
         self.worktree_gc_settled_claim(run_id)
     }
