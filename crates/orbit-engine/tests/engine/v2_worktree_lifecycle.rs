@@ -33,7 +33,9 @@ use orbit_engine::{
     DispatchError, ResolvedCliExecutor, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
     V2DispatchInput, WorktreeGcTaskLookup, dispatch_v2_activity, execute_deterministic_action,
 };
-use orbit_types::task::{ExternalRef, Task, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{
+    ContextWideningStep, ExternalRef, Task, TaskPriority, TaskStatus, TaskType,
+};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
@@ -612,6 +614,236 @@ fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
     );
 }
 
+/// A provider shell that runs `body` in the checkout and reports success.
+fn provider_script(body: &str) -> String {
+    format!(
+        "#!/bin/sh\nset -eu\ncat > /dev/null\n{body}\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n"
+    )
+}
+
+/// The recovery input for `prepared`'s stopped rebase.
+fn conflict_recovery_input(prepared: &PreparedRebase, conflict: &Value) -> Value {
+    json!({
+        "prompt": "resolve the stopped rebase",
+        "task_id": "T-REBASE",
+        "workspace_path": prepared.checkout.path,
+        "repo_root": prepared.checkout.path,
+        "run_id": prepared.run_id,
+        "failed_step_id": "sync_base",
+        "activity_name": "git_rebase",
+        "recovery_kind": "vcs_conflict",
+        "operation": conflict["operation"],
+        "original_base_sha": conflict["original_base_sha"],
+        "target_base_sha": conflict["target_base_sha"],
+        "conflicting_paths": conflict["conflicting_paths"],
+        "failed_step_input": {
+            "head": prepared.prepared["head"],
+            "head_sha": prepared.candidate,
+            "base_ref": prepared.prepared["base_ref"],
+            "base_sha": conflict["target_base_sha"],
+        },
+    })
+}
+
+/// Stop `prepared`'s rebase on its overlapping edit, as the recovery input's
+/// conflict fields.
+fn stopped_conflict(prepared: &PreparedRebase) -> Value {
+    let OrbitError::RecoverableVcsConflict(conflict) =
+        prepared.rebase().expect_err("overlapping rebase")
+    else {
+        panic!("expected a recoverable conflict");
+    };
+    json!({
+        "operation": conflict.operation,
+        "original_base_sha": conflict.original_base_sha,
+        "target_base_sha": conflict.target_base_sha,
+        "conflicting_paths": conflict.conflicting_paths,
+    })
+}
+
+/// [ORB-13990] The ORB-13906 shape: resolving an upstream export conflict
+/// needs a companion module move outside the conflict set. The host stages
+/// the resolution with every companion change (the moved file and the
+/// removed original), continues the rebase, and widens the task's selectors
+/// with recovery provenance. Scratch under `.orbit/tmp/` is never staged.
+#[cfg(unix)]
+#[test]
+fn conflict_recovery_commits_companion_edits_with_the_resolution() {
+    isolated(
+        "conflict_recovery_commits_companion_edits_with_the_resolution",
+        || {
+            let prepared = PreparedRebase::new("jrun-companion", "README.md", "README.md");
+            let target = prepared.target.clone();
+            let conflict = stopped_conflict(&prepared);
+            let provider = prepared.fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                &provider_script(
+                    "printf 'pub use moved::export;\\n' > README.md\nmkdir -p src/moved .orbit/tmp\nmv base.txt src/moved/mod.rs\nprintf 'scratch\\n' > .orbit/tmp/notes.md",
+                ),
+            );
+            let host = prepared.host.with_provider(&provider);
+
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                conflict_recovery_input(&prepared, &conflict),
+            )
+            .expect("a resolution with companion edits continues the rebase");
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert!(!rebase_in_progress(&prepared.checkout.path));
+            assert!(is_ancestor(&prepared.checkout.path, &target, "HEAD"));
+            assert_eq!(
+                git(
+                    &prepared.checkout.path,
+                    &["show", "--format=", "--name-only", "--no-renames", "HEAD"]
+                ),
+                "README.md\nbase.txt\nsrc/moved/mod.rs",
+                "the continued commit holds the resolution and both sides of the move"
+            );
+            assert_eq!(git(&prepared.checkout.path, &["status", "--porcelain"]), "");
+            assert_eq!(
+                fs::read_to_string(prepared.checkout.path.join(".orbit/tmp/notes.md")).unwrap(),
+                "scratch\n",
+                "scratch stays in place and out of the commit"
+            );
+            let checkpoints = host.checkpoints();
+            let [(_, _, checkpoint)] = checkpoints.as_slice() else {
+                panic!("expected one recovery checkpoint, got {checkpoints:#?}");
+            };
+            assert_eq!(
+                checkpoint["companion_paths"],
+                json!(["base.txt", "src/moved/mod.rs"])
+            );
+            assert_eq!(
+                host.widenings(),
+                vec![(
+                    "T-REBASE".to_string(),
+                    ContextWideningStep::Recovery,
+                    "pr_conflict_recovery".to_string(),
+                    vec!["base.txt".to_string(), "src/moved/mod.rs".to_string()],
+                )]
+            );
+        },
+    );
+}
+
+/// [ORB-13990] Companion edits never excuse the conflict itself: a conflict
+/// path left unrepaired, or repaired with markers still in it, refuses the
+/// continuation with the rebase left stopped and nothing widened. Staging
+/// stays host-owned: a provider that stages its own companion is refused.
+#[cfg(unix)]
+#[test]
+fn conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits() {
+    isolated(
+        "conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits",
+        || {
+            for (run_id, resolution, refusal) in [
+                (
+                    "jrun-unrepaired",
+                    "",
+                    "authorized conflict files were not repaired",
+                ),
+                (
+                    "jrun-markers",
+                    "printf '<<<<<<< ours\\na\\n=======\\nb\\n>>>>>>> theirs\\n' > README.md\n",
+                    "still contains conflict markers",
+                ),
+                (
+                    "jrun-staged",
+                    "printf 'resolved\\n' > README.md\nprintf 'companion\\n' > companion.txt\ngit add companion.txt\n",
+                    "changed HEAD, branch, or index",
+                ),
+            ] {
+                let prepared = PreparedRebase::new(run_id, "README.md", "README.md");
+                let conflict = stopped_conflict(&prepared);
+                let provider = prepared.fixture.root.path().join("codex");
+                write_executable(
+                    &provider,
+                    &provider_script(&format!(
+                        "{resolution}printf 'companion\\n' > companion.txt"
+                    )),
+                );
+                let host = prepared.host.with_provider(&provider);
+
+                let error = recover(
+                    &host,
+                    &prepared.run_id,
+                    conflict_recovery_input(&prepared, &conflict),
+                )
+                .expect_err("an unresolved conflict path refuses continuation");
+                assert!(error.to_string().contains(refusal), "{run_id}: {error}");
+                assert!(rebase_in_progress(&prepared.checkout.path), "{run_id}");
+                assert!(host.checkpoints().is_empty(), "{run_id}");
+                assert!(host.widenings().is_empty(), "{run_id}");
+                assert_eq!(
+                    fs::read_to_string(prepared.checkout.path.join("companion.txt")).unwrap(),
+                    "companion\n",
+                    "{run_id}: the provider's bytes stay for diagnosis"
+                );
+            }
+        },
+    );
+}
+
+/// [ORB-13990] Implementer and recovery agents may change any path the work
+/// requires. As each exits, the boundary records the paths it changed on its
+/// task, with the step that introduced them; host-owned `.orbit/` state and
+/// gitignored output are never attributed. The reviewer's changes widen at
+/// review settlement instead.
+#[cfg(unix)]
+#[test]
+fn agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits() {
+    isolated(
+        "agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits",
+        || {
+            for (index, (activity, step)) in [
+                ("agent_implement", Some(ContextWideningStep::Implement)),
+                ("step_failure_recovery", Some(ContextWideningStep::Recovery)),
+                ("final_recovery", Some(ContextWideningStep::Recovery)),
+                ("agent_review_repair", None),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let run_id = format!("jrun-widen-{index}");
+                let fixture = Fixture::new();
+                fs::write(fixture.repo.join(".gitignore"), ".orbit/\ntarget/\n").unwrap();
+                git(&fixture.repo, &["commit", "-am", "ignore build output"]);
+                let host = LifecycleHost::new(&fixture.repo);
+                host.add_task("T-WIDEN", TaskStatus::Backlog);
+                let setup = action(&host, "worktree_setup", &setup_input(&["T-WIDEN"], &run_id))
+                    .expect("worktree setup");
+                let checkout = Checkout::from_setup(&setup);
+                let provider = fixture.root.path().join("codex");
+                write_executable(
+                    &provider,
+                    &provider_script(
+                        "printf 'edited\\n' > README.md\nmkdir -p tests .orbit/tmp target\nprintf 'new\\n' > tests/new_case.rs\nprintf 'scratch\\n' > .orbit/tmp/log\nprintf 'built\\n' > target/out",
+                    ),
+                );
+                let host = host.with_provider(&provider);
+
+                let outcome =
+                    dispatch_linked_activity(&host, activity, &run_id, "T-WIDEN", &checkout.path)
+                        .unwrap_or_else(|error| panic!("{activity} may change any path: {error}"));
+                assert!(outcome.success, "{activity}: {:?}", outcome.message);
+                let expected = step
+                    .map(|step| {
+                        vec![(
+                            "T-WIDEN".to_string(),
+                            step,
+                            activity.to_string(),
+                            vec!["README.md".to_string(), "tests/new_case.rs".to_string()],
+                        )]
+                    })
+                    .unwrap_or_default();
+                assert_eq!(host.widenings(), expected, "{activity}");
+            }
+        },
+    );
+}
+
 /// A provider that writes the primary checkout fails the boundary, and both
 /// trees keep the bytes the provider left. Disjoint source dirt is enough:
 /// overlap with the candidate is not what makes the edit fatal.
@@ -866,6 +1098,17 @@ fn dispatch_linked_provider(
     task_id: &str,
     workspace: &Path,
 ) -> Result<orbit_engine::DispatchOutcome, DispatchError> {
+    dispatch_linked_activity(host, "agent_implement", run_id, task_id, workspace)
+}
+
+/// Dispatch a substitute provider as `activity_name` in a linked worktree.
+fn dispatch_linked_activity(
+    host: &LifecycleHost,
+    activity_name: &str,
+    run_id: &str,
+    task_id: &str,
+    workspace: &Path,
+) -> Result<orbit_engine::DispatchOutcome, DispatchError> {
     let blobs = TempDir::new().unwrap();
     let audit = Arc::new(V2AuditWriter::new(
         run_id,
@@ -890,7 +1133,7 @@ fn dispatch_linked_provider(
         trusted_host_execution: false,
     });
     dispatch_v2_activity(V2DispatchInput {
-        activity_name: "agent_implement",
+        activity_name,
         spec: &spec,
         fs_profile: None,
         input: json!({
@@ -1124,7 +1367,11 @@ struct LifecycleHost {
     settled_claims: Mutex<BTreeMap<String, String>>,
     /// The owner route of each claimed run for GC memoization tests.
     lookup_scopes: Mutex<BTreeMap<String, String>>,
+    /// Selector widenings requested, as (task, step, activity, paths).
+    widenings: Mutex<Vec<Widening>>,
 }
+
+type Widening = (String, ContextWideningStep, String, Vec<String>);
 
 impl LifecycleHost {
     fn new(repo: &Path) -> Self {
@@ -1187,6 +1434,10 @@ impl LifecycleHost {
 
     fn checkpoints(&self) -> Vec<(String, String, Value)> {
         self.checkpoints.lock().unwrap().clone()
+    }
+
+    fn widenings(&self) -> Vec<Widening> {
+        self.widenings.lock().unwrap().clone()
     }
 }
 
@@ -1270,6 +1521,23 @@ impl RuntimeHost for LifecycleHost {
 
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
         self.settled_claims.lock().unwrap().get(run_id).cloned()
+    }
+
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        _run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        self.widenings.lock().unwrap().push((
+            task_id.to_string(),
+            step,
+            activity.to_string(),
+            paths.to_vec(),
+        ));
+        Ok(paths.iter().map(|path| format!("file:{path}")).collect())
     }
 
     fn checkpoint_rebase_recovery(

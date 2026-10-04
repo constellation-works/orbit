@@ -18,7 +18,7 @@ use orbit_types::identity::AgentModelPair;
 use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ExternalRef, Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
+    ContextWideningStep, ExternalRef, Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState};
@@ -423,6 +423,22 @@ impl RuntimeHost for OrbitRuntime {
             )),
         )?;
         Ok(())
+    }
+
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        // A claimed leaf cannot write the owner's task; the owner widens the
+        // declaration when it accepts the handoff.
+        if self.worker_invocation().is_some() {
+            return Ok(Vec::new());
+        }
+        self.widen_context_files_for_paths(task_id, run_id, step, activity, paths)
     }
 
     fn apply_task_automation_update(

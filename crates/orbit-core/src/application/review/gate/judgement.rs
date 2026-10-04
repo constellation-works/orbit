@@ -1,7 +1,7 @@
 //! Check the reviewer's claims against the repository and the task scope,
 //! and render the findings comment and the PR's review-fixes section.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use orbit_automation::review::{
     combined_task_meaning_digest, task_meaning_digest, validation_evidence, validation_role_counts,
@@ -11,7 +11,7 @@ use orbit_common::fs::selector::overlaps;
 use orbit_engine::review_gate::{
     REVIEW_ATTEMPT_TRAILER, commit_reviewer_repairs, uncommitted_paths,
 };
-use orbit_types::task::{Task, TaskArtifact};
+use orbit_types::task::{ContextWideningStep, Task, TaskArtifact};
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
     ReviewAttempt, ReviewCertificate, ReviewReport, ReviewVerdict, ReviewerIdentity,
@@ -116,8 +116,9 @@ impl Judgement {
     }
 
     /// Task criteria, scope, or contract changes during the review
-    /// invalidate it. A reviewer may add selectors for a coupled repair
-    /// through the task API; anything else re-establishes review.
+    /// invalidate it. Selectors may grow — the reviewer through the task API,
+    /// or Orbit widening for a path it changed; anything else re-establishes
+    /// review.
     pub(super) fn check_task_meaning(
         &mut self,
         context: &GateContext,
@@ -140,11 +141,9 @@ impl Judgement {
     /// candidate's one reviewer commit, `review: <summary>`, on top of the
     /// untouched implementation commits [ORB-13989].
     ///
-    /// An out-of-selector path listed on a repaired finding is a declared
-    /// coupled repair: the gate widens `context_files` the same way the
-    /// reviewer already may, and does not abandon the review. A changed
-    /// path named by no finding stays a silent drive-by and still
-    /// downgrades.
+    /// A reviewer may change any path a fix requires: a changed path no
+    /// task selector covers widens the reviewed task's `context_files`, with
+    /// review provenance in its history, and does not abandon the review.
     pub(super) fn commit_repairs(
         &mut self,
         runtime: &OrbitRuntime,
@@ -156,9 +155,9 @@ impl Judgement {
         if changed.is_empty() {
             return Ok(None);
         }
-        let (declared_out_of_scope, undeclared) = self.classify_repairs(&changed, &context.tasks);
-        if !declared_out_of_scope.is_empty() {
-            self.widen_declared_selectors(runtime, context, &declared_out_of_scope)?;
+        let out_of_scope = out_of_scope_paths(&changed, &context.tasks);
+        if !out_of_scope.is_empty() {
+            self.widen_reviewer_selectors(runtime, context, &out_of_scope)?;
         }
         let finding_ids = self
             .findings
@@ -195,18 +194,14 @@ impl Judgement {
             &repair_author_label(reviewer),
             &message,
         )?;
-        if !undeclared.is_empty() {
-            self.downgrade(&undeclared_repair_reason(&undeclared));
-        }
         Ok(commit)
     }
 
     /// Adopt the repair commit an interrupted settlement of this attempt
-    /// already made, judging its paths exactly as [`Self::commit_repairs`]
-    /// judged them before committing: an undeclared out-of-scope path still
-    /// downgrades. The interrupted run widened selectors before committing,
-    /// so a declared repair path outside the admitted selectors is reported
-    /// as widened even though it is in scope by now.
+    /// already made, widening its paths exactly as [`Self::commit_repairs`]
+    /// did before committing. The interrupted run widened selectors before
+    /// committing, so a repair path outside the admitted selectors is
+    /// reported as widened even though it is in scope by now.
     pub(super) fn adopt_repairs(
         &mut self,
         runtime: &OrbitRuntime,
@@ -214,9 +209,9 @@ impl Judgement {
         committed: &[String],
         admitted_selectors: &BTreeMap<String, Vec<String>>,
     ) -> Result<(), OrbitError> {
-        let (declared_out_of_scope, undeclared) = self.classify_repairs(committed, &context.tasks);
-        if !declared_out_of_scope.is_empty() {
-            self.widen_declared_selectors(runtime, context, &declared_out_of_scope)?;
+        let out_of_scope = out_of_scope_paths(committed, &context.tasks);
+        if !out_of_scope.is_empty() {
+            self.widen_reviewer_selectors(runtime, context, &out_of_scope)?;
         }
         let admitted_tasks = context
             .tasks
@@ -229,81 +224,43 @@ impl Judgement {
                 admitted
             })
             .collect::<Vec<_>>();
-        let (widened_since_admission, _) = self.classify_repairs(committed, &admitted_tasks);
-        for path in widened_since_admission {
+        for path in out_of_scope_paths(committed, &admitted_tasks) {
             let selector = format!("file:{}", normalize_git_path(&path));
             if !self.selectors_widened.contains(&selector) {
                 self.selectors_widened.push(selector);
             }
         }
-        if !undeclared.is_empty() {
-            self.downgrade(&undeclared_repair_reason(&undeclared));
-        }
         Ok(())
     }
 
-    /// Split repair paths outside every task's scope into those a repaired
-    /// finding declared and those no finding named.
-    fn classify_repairs(&self, paths: &[String], tasks: &[Task]) -> (Vec<String>, Vec<String>) {
-        let declared = declared_repair_paths(&self.findings);
-        let mut declared_out_of_scope = Vec::new();
-        let mut undeclared = Vec::new();
-        for path in paths {
-            if path_in_scope(path, tasks) {
-                continue;
-            }
-            if declared.contains(&normalize_git_path(path)) {
-                declared_out_of_scope.push(path.clone());
-            } else {
-                undeclared.push(path.clone());
-            }
-        }
-        (declared_out_of_scope, undeclared)
-    }
-
-    /// Append `file:<path>` selectors for declared coupled repairs, then bind
-    /// the certificate to the post-widening task-meaning digest.
-    fn widen_declared_selectors(
+    /// Append `file:<path>` selectors for reviewer-changed paths no task
+    /// covers to the reviewed (first) task — the task whose agent changed
+    /// them — with review provenance in its history, then bind the
+    /// certificate to the post-widening task-meaning digest.
+    fn widen_reviewer_selectors(
         &mut self,
         runtime: &OrbitRuntime,
         context: &mut GateContext,
         paths: &[String],
     ) -> Result<(), OrbitError> {
-        let mut widened = Vec::new();
-        let mut updated = vec![false; context.tasks.len()];
-        for path in paths {
-            let selector = format!("file:{}", normalize_git_path(path));
-            for (index, task) in context.tasks.iter_mut().enumerate() {
-                if path_in_scope(path, std::slice::from_ref(task))
-                    || task
-                        .context_files
-                        .iter()
-                        .any(|existing| existing == &selector)
-                {
-                    continue;
-                }
-                task.context_files.push(selector.clone());
-                updated[index] = true;
-                if !widened.contains(&selector) {
-                    widened.push(selector.clone());
-                }
-            }
-        }
+        let Some(task_id) = context.tasks.first().map(|task| task.id.clone()) else {
+            return Ok(());
+        };
+        let paths = paths
+            .iter()
+            .map(|path| normalize_git_path(path))
+            .collect::<Vec<_>>();
+        let widened = runtime.widen_context_files_for_paths(
+            &task_id,
+            &context.run_id,
+            ContextWideningStep::Review,
+            "review_gate_settle",
+            &paths,
+        )?;
         if widened.is_empty() {
             return Ok(());
         }
-        for (task, updated) in context.tasks.iter().zip(updated) {
-            if updated {
-                runtime.update_task_as_system(
-                    &task.id,
-                    TaskUpdateParams {
-                        context_files: Some(task.context_files.clone()),
-                        ..TaskUpdateParams::default()
-                    },
-                    None,
-                )?;
-            }
-        }
+        context.tasks[0] = runtime.get_task(&task_id)?;
         context.refresh_task_digests()?;
         self.task_meaning_digest = context.task_digests.1.clone();
         self.selectors_widened = widened;
@@ -456,42 +413,17 @@ fn path_in_scope(path: &str, tasks: &[Task]) -> bool {
     })
 }
 
-/// Git-relative paths listed on findings the reviewer marked repaired.
-fn declared_repair_paths(findings: &[orbit_types::workflow::ReviewFinding]) -> BTreeSet<String> {
-    findings
+/// Repair paths no task's selectors cover.
+fn out_of_scope_paths(paths: &[String], tasks: &[Task]) -> Vec<String> {
+    paths
         .iter()
-        .filter(|finding| finding.disposition == FindingDisposition::Repaired)
-        .flat_map(|finding| finding.paths.iter())
-        .map(|path| normalize_finding_path(path))
-        .filter(|path| !path.is_empty())
+        .filter(|path| !path_in_scope(path, tasks))
+        .cloned()
         .collect()
 }
 
 fn normalize_git_path(path: &str) -> String {
     path.trim().trim_start_matches("./").to_string()
-}
-
-fn normalize_finding_path(path: &str) -> String {
-    let trimmed = path.trim().trim_start_matches("./");
-    trimmed
-        .strip_prefix("file:")
-        .unwrap_or(trimmed)
-        .trim()
-        .trim_start_matches("./")
-        .to_string()
-}
-
-fn undeclared_repair_reason(paths: &[String]) -> String {
-    let listed = paths
-        .iter()
-        .map(|path| normalize_git_path(path))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if paths.len() == 1 {
-        format!("repair_out_of_scope: {listed} was changed but named by no finding")
-    } else {
-        format!("repair_out_of_scope: {listed} were changed but named by no finding")
-    }
 }
 
 /// The author label a reviewer's repair commit is attributed to.

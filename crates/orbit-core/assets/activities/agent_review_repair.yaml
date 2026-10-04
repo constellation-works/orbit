@@ -62,10 +62,11 @@ spec:
       commit, `review: <summary>`, under your reviewer identity.
     - Do not change task status, acceptance criteria, plan, or description; do
       not approve, merge, dispatch, or invoke another agent.
-    - You may change any path a fix requires; there is no footprint limit.
-      List every path you changed on the finding it fixes. The gate widens
-      the task's selectors from that declaration, and owner validation then
-      reruns on the fixed head, ownership included.
+    - You may change any path a fix requires, inside or outside the task's
+      selectors; there is no footprint limit. List every path you changed on
+      the finding it fixes. The gate widens the task's selectors over every
+      changed path they do not cover, recording review provenance, and owner
+      validation then reruns on the fixed head.
     - Fix findings; do not do unrelated cleanup. Reading unrelated code does
       not authorize editing it.
     - This invocation has its own wall-clock bound, independent of what the

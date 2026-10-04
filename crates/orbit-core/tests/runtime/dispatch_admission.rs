@@ -36,6 +36,7 @@ use orbit_core::{
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
+use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
@@ -635,6 +636,8 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         let repaired = verdict == ReviewVerdict::AcceptWithFixes;
         if repaired {
             std::fs::write(repo.join("coupled.txt"), "reviewer repair\n").unwrap();
+            // ORB-13990: a repair no finding names still passes and widens.
+            std::fs::write(repo.join("undeclared.txt"), "reviewer companion\n").unwrap();
         }
         let report = json!({
             "schema_version": REVIEW_CONTRACT_VERSION,
@@ -697,7 +700,10 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         assert_eq!(
             certificate.selectors_widened,
             if repaired {
-                vec!["file:coupled.txt".to_string()]
+                vec![
+                    "file:coupled.txt".to_string(),
+                    "file:undeclared.txt".to_string(),
+                ]
             } else {
                 vec![]
             }
@@ -735,12 +741,32 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             "ORB-13916: gate is not a human intervention"
         );
         // Gate settlement does not create synthetic history stubs. Existing
-        // human creation history must survive without new human entries.
-        assert_eq!(runtime.get_task_history(&task.id).unwrap(), history_before);
+        // human creation history must survive without new human entries; a
+        // repair outside the selectors adds only the system's widening
+        // provenance.
+        let history = runtime.get_task_history(&task.id).unwrap();
+        assert_eq!(history[..history_before.len()], history_before[..]);
+        let added = &history[history_before.len()..];
+        if repaired {
+            let [widened] = added else {
+                panic!("expected one widening entry, got {added:?}");
+            };
+            assert_eq!(widened.by, "system");
+            assert_eq!(widened.event, CONTEXT_FILES_WIDENED_EVENT);
+            let widening =
+                ContextFilesWidening::from_note(widened.note.as_deref().unwrap()).unwrap();
+            assert_eq!(widening.step, ContextWideningStep::Review);
+            assert_eq!(
+                widening.selectors,
+                ["file:coupled.txt", "file:undeclared.txt"]
+            );
+        } else {
+            assert!(added.is_empty(), "{added:?}");
+        }
         if repaired {
             assert_eq!(
                 runtime.get_task(&task.id).unwrap().context_files,
-                ["file:src.txt", "file:coupled.txt"]
+                ["file:src.txt", "file:coupled.txt", "file:undeclared.txt"]
             );
         }
     }

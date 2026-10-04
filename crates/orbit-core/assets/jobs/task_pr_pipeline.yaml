@@ -9,8 +9,8 @@
 #   creation/reuse, and promotion are independent durable steps, so recovery
 #   resumes at the failed phase.
 # - The before-PR reviewer fixes its findings in one reviewer commit on top of
-#   the implementation; `review_validate` reruns owner validation and the
-#   ownership check on that head. A `reject` verdict, or fixes that fail
+#   the implementation; `review_validate` attributes its paths (widening
+#   selectors) and reruns owner validation on that head. A `reject` verdict, or fixes that fail
 #   there, stop delivery through the failure handoff with the findings on the
 #   task. Nothing goes back to the implementer and there is no second review.
 # - When the run itself terminalizes before PR completion, its recoverable

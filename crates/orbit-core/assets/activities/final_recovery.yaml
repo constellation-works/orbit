@@ -177,9 +177,11 @@ spec:
 
     2. Classify the failure from that evidence:
        - Incomplete or failing implementation, or a validation gap: you may
-         finish it in the worktree, within the task's stated scope only, and
-         run the repository's own validation commands (its AGENTS.md names
-         them). Then decide `resume` from the step that should run next.
+         finish it in the worktree, within the task's stated intent, changing
+         any path the work requires (the task's selectors are not a limit;
+         delivery widens them over what you change), and run the repository's
+         own validation commands (its AGENTS.md names them). Then decide
+         `resume` from the step that should run next.
        - Git conflict or a broken worktree you can repair without Git writes:
          repair the files, then `resume`.
        - Nothing to commit because the outcome already landed: find the commit
@@ -198,7 +200,8 @@ spec:
 
     3. Hard limits. Breaking any of these is a failed recovery, whatever the
        task then looks like:
-       - Never expand scope beyond the task's description and criteria.
+       - Never expand scope beyond the task's description and criteria. Scope
+         is the task's intent, not its file selectors.
        - Never weaken, skip, or delete validation, tests, sandboxing, policy, or
          containment to make a failure disappear.
        - Never resurrect cancelled, withdrawn, or operator-stopped work. A

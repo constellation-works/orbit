@@ -7,9 +7,10 @@ spec:
   description: >
     Leaf recovery for a typed task-PR rebase conflict, including one discovered
     after PR publication during authorized completion. It uses the configured
-    system crew to repair only the live conflict files. The host executor then
-    validates, stages, continues the stopped rebase, and carries the candidate
-    onto the current base tip before one retry.
+    system crew to resolve the live conflict files, with any companion edit
+    the resolution needs. The host executor then validates, stages, continues
+    the stopped rebase, and carries the candidate onto the current base tip
+    before one retry.
   input_schema_json:
     type: object
     additionalProperties: false
@@ -158,18 +159,23 @@ spec:
        compatible with where the host will land the candidate, but do not
        pre-apply that newer base content: the host rebases the continued
        candidate onto the current tip afterward. Do not take a whole-file side
-       merely to make the index clean.
+       merely to make the index clean. When the resolution needs a companion
+       edit outside the conflict set (a re-export for a moved module, a caller
+       of a renamed item, a test that pins the merged behavior), make it: you
+       may change any path the resolution requires.
     3. Do not stage, commit, continue, abort, or restart the rebase, and do not
        write any Git metadata. The managed sandbox intentionally keeps the
        linked-worktree Git directory read-only. After your successful terminal
        response, Orbit's host boundary revalidates live run/task/worktree,
        branch, original HEAD, stopped-rebase metadata, and conflict-path
-       identity; it then stages exactly the supplied conflict paths, continues
-       the existing rebase onto `target_base_sha`, and, when `origin/<base>`
-       has advanced past that pin, rebases the continued candidate onto the
-       current tip.
+       identity; it then stages the supplied conflict paths together with
+       every other path you changed, continues the existing rebase onto
+       `target_base_sha`, and, when `origin/<base>` has advanced past that
+       pin, rebases the continued candidate onto the current tip. Orbit widens
+       the task's selectors to cover the companion paths. Write scratch only
+       under `.orbit/tmp/`; it is never staged.
     4. Confirm every supplied conflict file is fully repaired (no conflict
-       markers) and no unrelated path changed. Run focused tests for the
+       markers). Run focused tests for the
        crates or modules that own the resolved paths. Then run the
        repository's `make ci-fast` and `make ci-lint` gates as advisory
        checks: record each command, its outcome, and whether any failure

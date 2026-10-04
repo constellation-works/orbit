@@ -11,7 +11,8 @@ use orbit_types::identity::AgentModelPair;
 use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
+    ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
+    TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::workflow::ActivityToolDenyPolicy;
@@ -513,6 +514,26 @@ pub trait RuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability(
             "apply_task_automation_update",
         ))
+    }
+
+    /// Append an exact `file:` selector to `task_id` for each of `paths` its
+    /// selectors do not cover, recording `step` and `activity` as the
+    /// provenance in task history, and return the selectors appended.
+    ///
+    /// Agents may change any path the work requires; delivery widens the
+    /// task's declaration rather than refusing the change. A claimed leaf
+    /// widens nothing here: the owner widens at handoff acceptance. Hosts
+    /// without task records widen nothing.
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        let _ = (task_id, run_id, step, activity, paths);
+        Ok(Vec::new())
     }
 
     // ── Operation-mode rechecks [ORB-11332] ────────────────────────────

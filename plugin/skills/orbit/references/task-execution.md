@@ -142,18 +142,20 @@ orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family
 ```
 
 Re-read after every context update and verify that every prior selector and
-every addition is present. Include an exact `file:` selector for each intended
-new file, even when a `dir:` selector covers it; after creation, ensure that
-exact selector is declared. If it is absent, repeat the read → full-union
+every addition is present. If one is absent, repeat the read → full-union
 update → verify sequence. Use `allow_missing_context: true` to declare files
-before creation.
+before creation. Selectors are a starting point, not a limit: you may change
+any path the work requires. Delivery commits every changed path except
+`.orbit/tmp/` scratch and gitignored output, and widens the selectors with an
+exact `file:` entry for each uncovered path, recording which step introduced
+it. Declaring a path yourself is optional, but keeps the scope readable.
 
 In claimed mode, use the injected list and report additions in
 `context_files_added`; they are recorded for the owner without changing the
-frozen footprint. A declaration does not acquire a lock or expand an already
-frozen claim footprint. If the admitted
-boundary cannot cover the change, request coordinated re-preparation; do not
-bypass the conflict or claim guard.
+frozen footprint. A declaration does not acquire a lock. Paths outside the
+footprint still deliver: the owner widens the footprint from the published
+candidate at handoff. Only Git or `.orbit` metadata, environment files and
+symlinks are refused.
 
 **In a linked pipeline worktree, never use positional `git stash` /
 `git stash pop`.** Refs and the stash list are repository-global, so a positional

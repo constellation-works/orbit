@@ -5,9 +5,10 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Commit the active task candidate: every tracked change plus new paths with
-    exact durable file intent. Refuse unknown untracked paths before changing
-    the index.
+    Commit the active task candidate: every tracked change plus every new
+    path outside `.orbit/tmp/` and gitignored output. Paths outside the task's
+    selectors widen them with exact file selectors; a claimed leaf refuses
+    only protected new paths before changing the index.
   input_schema_json:
     type: object
     properties:

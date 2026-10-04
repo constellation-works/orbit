@@ -56,8 +56,9 @@ anything else stays an ordinary review obligation.
   delivery run lineage (workspace, task set, base branch, and the run with
   its resumes).
 - **Two-commit shape:** the implementation commit, never amended, then at
-  most one reviewer commit carrying every fix; owner validation and the
-  ownership check rerun on the reviewer commit before publication.
+  most one reviewer commit carrying every fix; owner validation reruns on
+  the reviewer commit before publication, and its paths widen the task's
+  selectors.
 - **Certificate:** the durable record binding verdict, reviewer identity,
   base/reviewed/final candidate, commits, findings with what each fix
   changed, validation and consumed

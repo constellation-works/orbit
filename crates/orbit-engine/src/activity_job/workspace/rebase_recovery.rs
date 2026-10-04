@@ -1,13 +1,16 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use orbit_types::task::ContextWideningStep;
+
 use crate::context::{RuntimeHost, StepRecoveryAdmission};
 use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
 
+use super::boundary_guard::is_host_owned_path;
 use super::fingerprint::{
     GitWorktreeFingerprint, changed_paths, git_command_error, git_fingerprint, git_output_raw,
     git_stdout, git_stdout_bytes, nul_paths,
@@ -192,21 +195,13 @@ impl WorktreeBoundaryGuard {
         let after_agent = git_fingerprint(&self.assigned_root)?;
         if after_agent.head != self.assigned_before.head
             || after_agent.branch != self.assigned_before.branch
-            || after_agent.index_sha256 != self.assigned_before.index_sha256
+            || !index_unchanged(&self.assigned_before, &after_agent)
         {
             return Err(invalid(
                 "the provider changed HEAD, branch, or index instead of only repairing files",
             ));
         }
         let changed = changed_paths(&self.assigned_root, &self.assigned_before, &after_agent);
-        if changed
-            .iter()
-            .any(|path| !checkpoint.conflicting_paths.contains(path))
-        {
-            return Err(invalid(
-                "the provider changed a path outside the authorized conflict set",
-            ));
-        }
         if checkpoint
             .conflicting_paths
             .iter()
@@ -216,6 +211,22 @@ impl WorktreeBoundaryGuard {
                 "one or more authorized conflict files were not repaired",
             ));
         }
+        // A resolution may need companion edits beyond the conflict set (a
+        // re-export for a moved module, a caller of a renamed item). Every
+        // other path the provider changed joins the continued commit; only
+        // host-owned `.orbit/` state, and a pre-existing untracked file the
+        // provider removed, stay out of it.
+        let companion_paths = changed
+            .iter()
+            .filter(|path| !checkpoint.conflicting_paths.contains(path))
+            .filter(|path| !is_host_owned_path(path))
+            .filter(|path| {
+                after_agent.path_states.get(*path).is_none_or(|state| {
+                    state.worktree_present || state.index_entry_sha256.is_some()
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         self.validate_rebase_checkpoint(checkpoint, &invalid)?;
         if unmerged_paths(&self.assigned_root)? != checkpoint.conflicting_paths {
             return Err(invalid(
@@ -247,14 +258,19 @@ impl WorktreeBoundaryGuard {
             )));
         }
 
-        let mut add_args = vec!["add", "--"];
+        let mut add_args = vec!["add", "--all", "--"];
         add_args.extend(checkpoint.conflicting_paths.iter().map(String::as_str));
+        add_args.extend(companion_paths.iter().map(String::as_str));
         git_mutation(&self.assigned_root, &add_args)?;
         if !unmerged_paths(&self.assigned_root)?.is_empty() {
             return Err(invalid(
-                "staging the authorized conflict set left unresolved entries",
+                "staging the resolved conflict set left unresolved entries",
             ));
         }
+        // Untracked files the continuation commits are no longer untracked;
+        // every other pre-existing untracked payload must survive unchanged.
+        let mut expected_untracked = self.assigned_before.untracked_content.clone();
+        expected_untracked.retain(|path, _| !companion_paths.contains(path));
         let continued = git_mutation_output(
             &self.assigned_root,
             &["-c", "core.editor=true", "rebase", "--continue"],
@@ -273,12 +289,18 @@ impl WorktreeBoundaryGuard {
                 "continued rebase did not leave the checkpointed branch on the pinned base with a candidate commit",
             ));
         }
-        self.require_clean_continuation(&completed, &invalid)?;
+        self.require_clean_continuation(&completed, &expected_untracked, &invalid)?;
         // The pin only records where the rebase stopped. Land the continued
         // candidate on the base tip that is live now, so the deterministic
         // retry and the PR see current integration rather than a stale one.
-        let base_sha = self.follow_advanced_base(checkpoint, &invalid)?;
+        let base_sha = self.follow_advanced_base(checkpoint, &expected_untracked, &invalid)?;
         let completed = git_fingerprint(&self.assigned_root)?;
+        self.widen_task(
+            host,
+            task_ids,
+            ContextWideningStep::Recovery,
+            &companion_paths,
+        );
         Ok(serde_json::json!({
             "run_id": self.run_id,
             "step_id": step_id,
@@ -292,6 +314,7 @@ impl WorktreeBoundaryGuard {
             "base_sha": base_sha,
             "remote_sha_before": checkpoint.remote_sha_before,
             "head_sha": completed.head,
+            "companion_paths": companion_paths,
             "rewritten": true,
         }))
     }
@@ -300,14 +323,16 @@ impl WorktreeBoundaryGuard {
     /// Those staged paths become clean when Git commits them; comparing dirty
     /// path maps across that transition incorrectly rejects the candidate.
     /// Provider edits were checked before continuation. Now require Git to
-    /// leave no tracked dirt and preserve the pre-existing untracked payload.
+    /// leave no tracked dirt and preserve the pre-existing untracked payload
+    /// the continuation did not commit (`expected_untracked`).
     fn require_clean_continuation(
         &self,
         completed: &GitWorktreeFingerprint,
+        expected_untracked: &BTreeMap<String, String>,
         invalid: &impl Fn(&str) -> DispatchError,
     ) -> Result<(), DispatchError> {
         if !git_output_raw(&self.assigned_root, &["diff", "--quiet", "HEAD", "--"])?.success
-            || completed.untracked_content != self.assigned_before.untracked_content
+            || &completed.untracked_content != expected_untracked
         {
             return Err(invalid(
                 "host continuation left tracked dirt or changed untracked files",
@@ -327,6 +352,7 @@ impl WorktreeBoundaryGuard {
     fn follow_advanced_base(
         &self,
         checkpoint: &RebaseRecoveryCheckpoint,
+        expected_untracked: &BTreeMap<String, String>,
         invalid: &impl Fn(&str) -> DispatchError,
     ) -> Result<String, DispatchError> {
         let pinned = checkpoint.target_base_sha.as_str();
@@ -353,7 +379,7 @@ impl WorktreeBoundaryGuard {
                     "aborting the follow-up rebase onto the advanced base did not restore the pinned result",
                 ));
             }
-            self.require_clean_continuation(&restored, invalid)?;
+            self.require_clean_continuation(&restored, expected_untracked, invalid)?;
             tracing::warn!(
                 target: "orbit.engine.cli_runner",
                 run_id = %self.run_id,
@@ -377,7 +403,7 @@ impl WorktreeBoundaryGuard {
                 "rebasing onto the advanced base did not leave the checkpointed branch on that base with a candidate commit",
             ));
         }
-        self.require_clean_continuation(&followed, invalid)?;
+        self.require_clean_continuation(&followed, expected_untracked, invalid)?;
         Ok(live)
     }
 
@@ -488,6 +514,30 @@ impl RecoveryMetadata {
         }
         Ok(())
     }
+}
+
+/// Whether the provider left the index as it found it. The fingerprint's
+/// index identity covers only dirty paths, so a companion edit that dirties a
+/// clean tracked file changes it without any staging; compare per path
+/// instead. A path dirty on both sides keeps its index entry and staged
+/// delta. A path dirty on one side only was clean (index equal to HEAD) on
+/// the other, so it must carry no staged delta.
+fn index_unchanged(before: &GitWorktreeFingerprint, after: &GitWorktreeFingerprint) -> bool {
+    let paths = before
+        .path_states
+        .keys()
+        .chain(after.path_states.keys())
+        .collect::<BTreeSet<_>>();
+    paths.into_iter().all(|path| {
+        match (before.path_states.get(path), after.path_states.get(path)) {
+            (Some(before), Some(after)) => {
+                before.index_entry_sha256 == after.index_entry_sha256
+                    && before.staged_patch_sha256 == after.staged_patch_sha256
+            }
+            (Some(state), None) | (None, Some(state)) => state.staged_patch_sha256.is_none(),
+            (None, None) => true,
+        }
+    })
 }
 
 fn same_metadata_entry(path: &Path, handle: &fs::File) -> Result<bool, DispatchError> {

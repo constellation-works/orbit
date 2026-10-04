@@ -40,6 +40,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::text::floor_char_boundary;
+use orbit_types::task::ContextWideningStep;
 use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{
@@ -51,7 +52,7 @@ use serde_json::{Value, json};
 use crate::context::{ClaimExecutionContext, RuntimeHost};
 use crate::executor::automation::input::{input_string_field, required_job_run_id};
 
-use super::commit::ensure_candidate_ownership;
+use super::commit::attribute_candidate_paths;
 use super::git::{
     BaseSyncMode, git_command_success, git_output, git_output_raw, git_success,
     resolve_worktree_start_point,
@@ -822,8 +823,9 @@ fn require_clean_checkout(
 ///
 /// With `ownership_base_sha` — the implementation head a before-PR reviewer
 /// commit sits on [ORB-13989] — every path the candidate changed since that
-/// commit must first be owned by one of the delivered tasks' current
-/// selectors, whatever the requirement list holds.
+/// commit is first attributed to the delivered tasks, widening their
+/// selectors with review provenance over any path none of them covers,
+/// whatever the requirement list holds.
 ///
 /// An empty requirement list runs no command. Otherwise the candidate must be
 /// a clean checkout of a named branch that contains the `base_sha` this run
@@ -835,7 +837,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let owned_paths = match input_string_field(input, "ownership_base_sha") {
-        Some(ownership_base) => Some(ensure_changed_paths_owned(host, input, &ownership_base)?),
+        Some(ownership_base) => Some(attribute_reviewed_paths(host, input, &ownership_base)?),
         None => None,
     };
     let commands = host.required_validation_commands();
@@ -940,17 +942,19 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     Ok(output)
 }
 
-/// Refuse a candidate that changed, since `ownership_base`, a path none of the
-/// delivered tasks' selectors owns. Shared ownership is accepted: a reviewer
-/// fix may touch a path two batched tasks both declare.
-fn ensure_changed_paths_owned<H: RuntimeHost + ?Sized>(
+/// Attribute every path the candidate changed since `ownership_base` to the
+/// delivered tasks. A reviewer may change any path a fix requires: a path
+/// none of the tasks' selectors covers widens the first task's selectors with
+/// review provenance rather than refusing. Shared ownership is accepted: a
+/// reviewer fix may touch a path two batched tasks both declare.
+fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     ownership_base: &str,
 ) -> Result<Vec<String>, OrbitError> {
     let task_ids = completed_task_ids_from_input(input).ok_or_else(|| {
         OrbitError::InvalidInput(
-            "candidate_validate requires the run's completed_task_ids to check ownership"
+            "candidate_validate requires the run's completed_task_ids to attribute ownership"
                 .to_string(),
         )
     })?;
@@ -977,7 +981,17 @@ fn ensure_changed_paths_owned<H: RuntimeHost + ?Sized>(
         .iter()
         .map(|task_id| host.get_task(task_id))
         .collect::<Result<Vec<_>, _>>()?;
-    ensure_candidate_ownership(&changed, &workspace_path, &tasks, false)?;
+    let run_id = required_job_run_id(input, "candidate_validate")?;
+    attribute_candidate_paths(
+        host,
+        run_id,
+        ContextWideningStep::Review,
+        "candidate_validate",
+        &changed,
+        &workspace_path,
+        &tasks,
+        false,
+    );
     Ok(changed.into_iter().collect())
 }
 

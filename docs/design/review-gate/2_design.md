@@ -211,13 +211,13 @@ what changed and naming the reviewer commit. `pr_open` appends that section
 to the PR body, generated or supplied, before bounding it.
 
 `review_validate` (`candidate_validate`) runs only when `reviewer_fixed` is
-true. It first checks ownership: every path changed between
-`implementation_head_sha` and the new head must be owned by at least one
-delivered task's current selectors, which settlement has already widened for
-the paths the reviewer declared. It then reruns
-`workflow.required_validation_commands` on the reviewer commit; the ownership
-check runs even when that list is empty. Any failure fails the step with no
-retry and no recovery, and the failure handoff reports verdict `reject` even
+true. It first attributes every path changed between
+`implementation_head_sha` and the new head to the delivered tasks.
+Settlement has already widened the selectors over every repaired path, and
+any path still unowned widens the first task's selectors with review
+provenance instead of failing ([ORB-13990]). It then reruns
+`workflow.required_validation_commands` on the reviewer commit. A failed
+command fails the step with no retry and no recovery, and the failure handoff reports verdict `reject` even
 though the certificate recorded `accept_with_fixes`: the certificate says
 what the reviewer established, and the handoff says why publication stopped.
 ## 4. What the validation records establish [ORB-11528] [ORB-11545]
@@ -262,12 +262,14 @@ another contract version, or an unreadable report is `incomplete`), commits ever
 uncommitted change as the one reviewer commit (§3.1) authored
 `<family>-reviewer <<family>-reviewer@orbit.local>` with the Orbit committer
 and the `Orbit-Review-Attempt` and `Orbit-Review-Crew` trailers, widens the
-tasks' selectors for the paths fixed findings declare, and cross-checks the
-claim: an accept with open findings, a claimed fix that changed nothing, a
-claimed clean accept that changed the tree, a changed path no finding
-declares and no selector owns, validation records that do not establish the
-candidate (§4), or any task-meaning change other than selectors added through
-the task API downgrades the verdict to `incomplete` with the reason recorded.
+tasks' selectors with an exact `file:` entry for every repaired path they do
+not cover, declared in a finding or not, with one `context_files_widened`
+history entry (step `review`), and cross-checks the claim. The reviewer may
+change any path the repair requires ([ORB-13990]). An accept with open
+findings, a claimed fix that changed nothing, a claimed clean accept that
+changed the tree, validation records that do not establish the candidate
+(§4), or any task-meaning change other than selectors added through the task
+API downgrades the verdict to `incomplete` with the reason recorded.
 Verdicts are `accept` (`independent_review`), `accept_with_fixes`
 (`independent_review_with_self_authored_repairs`; the fixes were validated,
 not independently reviewed), `reject`, and `incomplete`. Certificates and
@@ -285,8 +287,8 @@ then each task's `review-gate.json` and verdict comment — and a replay
 resumes from whichever step last persisted. A head one commit past the
 admitted candidate is adopted as the attempt's reviewer commit only when that commit
 has the candidate as its sole parent, carries this attempt's trailer, and has
-the reviewer author and Orbit committer; its paths are judged as they were
-before the commit, so a drive-by still downgrades. A ledger that settled
+the reviewer author and Orbit committer; its paths are judged and widened as
+they were before the commit. A ledger that settled
 without a certificate is re-judged against the ledger as it stood before its
 own charge, with the reviewer runtime it recorded. The certificate is issued only
 when that judgement reproduces the recorded verdict; otherwise the replay
@@ -494,5 +496,6 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
 - [ORB-13890] — closes failed attempts, keys budgets per delivery run lineage, adds gate retry/recovery, tolerant report reading, and the completion re-review.
 - [ORB-13891] — added an implementer rework loop for `changes_required`; retired by [ORB-13989].
 - [ORB-13989] — the reviewer fixes its findings as a second commit, comments them, and owner validation reruns on that head; retires the rework loop and repair-cycle budget.
+- [ORB-13990] — the reviewer may change any path the repair requires; settlement and revalidation widen selectors with review provenance instead of downgrading or failing.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

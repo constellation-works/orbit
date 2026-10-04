@@ -22,7 +22,7 @@ rework loop and no second review round.
 | Verdict | Candidate branch | Delivery |
 | --- | --- | --- |
 | `accept` | the implementation commit(s) only | the PR opens on that head |
-| `accept_with_fixes` | the implementation, then one `review: <summary>` commit authored by `<family>-reviewer` | owner validation and the path-ownership check rerun on the reviewer commit; the PR opens with a "Review fixes" section |
+| `accept_with_fixes` | the implementation, then one `review: <summary>` commit authored by `<family>-reviewer` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
 | `reject` (or `incomplete`) | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
 
 The implementation commit is never amended. A failed revalidation of the
@@ -74,11 +74,12 @@ Identify the failed step from `orbit run show`, then act:
   task, then re-queue it for a fresh run with
   `orbit task update <task-id> --status backlog`. A fresh run starts a new
   review lineage with a full budget.
-- **`review_validate` failed**: the reviewer's fixes broke a required command
-  or touched a path no delivered task owns. The handoff pushed both commits.
-  The failure text names the command or the unowned paths. When the change
-  is in intent, widen the task's `context_files` to own the path; otherwise
-  record why the fix is out of scope on the task. Then re-queue it.
+- **`review_validate` failed**: the reviewer's fixes broke a required
+  command. The handoff pushed both commits, and the failure text names the
+  command. A reviewer path outside the task's selectors does not fail the
+  step; it widens the selectors, recorded as a `context_files_widened` entry
+  in task history. If a widened path is not in intent, record that on the
+  task. Then re-queue it.
 - **`review_gate_admit` refused with `review_budget_exhausted`**: the lineage
   spent its reviewer starts or minutes. Renew it only with a recorded
   decision:

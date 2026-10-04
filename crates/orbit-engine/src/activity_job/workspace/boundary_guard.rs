@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use orbit_types::task::ContextWideningStep;
+
 use crate::context::RuntimeHost;
 
 use super::declared_pair::{
@@ -208,8 +210,16 @@ impl WorktreeBoundaryGuard {
             assigned_root,
             primary_root,
             rebase_recovery: None,
+            activity: String::new(),
             audit: None,
         }))
+    }
+
+    /// Name the dispatched activity, so the guard can widen the task's
+    /// selectors with the paths an implementer or recovery agent changed.
+    pub(crate) fn with_activity(mut self, activity: &str) -> Self {
+        self.activity = activity.to_string();
+        self
     }
 
     /// Bind the run's audit trail so an integrity violation can persist its
@@ -254,8 +264,81 @@ impl WorktreeBoundaryGuard {
         self.verify()?;
         if let Some((step_id, output)) = completion {
             host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
+        } else {
+            self.widen_for_agent_changes(host, task_ids)?;
         }
         Ok(())
+    }
+
+    /// Widen the task's selectors to cover every path an implementer or
+    /// recovery agent changed: agents may change any path the work requires,
+    /// and the guard is the host's exact record of which agent changed what.
+    /// Host-owned `.orbit/` paths (scratch included) are never delivery, and
+    /// gitignored output never appears in the fingerprint. A conflict
+    /// recovery widens from its host continuation instead.
+    fn widen_for_agent_changes(
+        &self,
+        host: &dyn RuntimeHost,
+        task_ids: &[String],
+    ) -> Result<(), DispatchError> {
+        let Some(step) = ContextWideningStep::for_activity(&self.activity) else {
+            return Ok(());
+        };
+        let after = git_fingerprint(&self.assigned_root)?;
+        let paths = changed_paths(&self.assigned_root, &self.assigned_before, &after)
+            .into_iter()
+            .filter(|path| !is_host_owned_path(path))
+            .filter(|path| {
+                // A pre-existing untracked file the agent removed leaves
+                // nothing to deliver; a removed tracked file is a change.
+                after.path_states.get(path).is_none_or(|state| {
+                    state.worktree_present || state.index_entry_sha256.is_some()
+                })
+            })
+            .collect::<Vec<_>>();
+        self.widen_task(host, task_ids, step, &paths);
+        Ok(())
+    }
+
+    /// Record `paths` on the agent's task. Best-effort: delivery widens any
+    /// path still uncovered, so a failed write loses only the provenance.
+    pub(super) fn widen_task(
+        &self,
+        host: &dyn RuntimeHost,
+        task_ids: &[String],
+        step: ContextWideningStep,
+        paths: &[String],
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        let task_id = if self.task_id != "unknown" {
+            self.task_id.as_str()
+        } else if let Some(first) = task_ids.first() {
+            first.as_str()
+        } else {
+            return;
+        };
+        match host.widen_task_context_files(task_id, &self.run_id, step, &self.activity, paths) {
+            Ok(added) if !added.is_empty() => tracing::info!(
+                target: "orbit.engine.cli_runner",
+                task_id,
+                run_id = %self.run_id,
+                activity = %self.activity,
+                step = step.as_str(),
+                selectors = ?added,
+                "widened task selectors for agent-changed paths"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                target: "orbit.engine.cli_runner",
+                task_id,
+                run_id = %self.run_id,
+                activity = %self.activity,
+                error = %error,
+                "could not widen task selectors for agent-changed paths; delivery widens them"
+            ),
+        }
     }
 
     pub(crate) fn verify(&self) -> Result<(), DispatchError> {
@@ -515,4 +598,10 @@ fn primary_dirt_mutations(
         })
         .cloned()
         .collect()
+}
+
+/// Host-owned workspace state (`.orbit/**`, run scratch included) that no
+/// agent change delivers.
+pub(super) fn is_host_owned_path(path: &str) -> bool {
+    path == ".orbit" || path.starts_with(".orbit/")
 }
