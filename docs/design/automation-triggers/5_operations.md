@@ -128,6 +128,16 @@ the span; a task marker never establishes identity. Squash and merge anchors use
 the same PR key. Manual PRs need no Orbit task. A distinct revert is a new landing.
 A no-diff PR, task completion or epic closure alone contributes zero.
 
+Each delivery's `task_ids` come from the landing record, never commit text. A PR
+delivery lists every task carrying its `github-pr:<number>` reference, which
+promotion stamps on each bundle member before the merge; a direct landing lists
+its run's submitted `task_ids`. When the record names no task, `task_ids` is
+empty and `unattributed` says why (`no_landing_task`, or
+`task_records_unreadable` on a checkout that cannot read task records); a task
+store read failure defers the pass instead. `auto-task show` displays both
+fields. Facts recorded before attribution keep their empty `task_ids` and carry
+no `unattributed` reason.
+
 The direct-delivery owner retains its authorized before/after intent before a
 fast-forward merge. It counts only after the exact resulting commits and trees
 are verified on the configured branch. If the owner stops immediately after Git

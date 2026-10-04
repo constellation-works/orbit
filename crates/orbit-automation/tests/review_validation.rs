@@ -290,6 +290,7 @@ fn exact_delivery() -> Delivery {
         after: revision("final"),
         commits: vec!["landed".into()],
         task_ids: Vec::new(),
+        unattributed: None,
         evidence_reference: "https://github.com/owner/repo/pull/7".into(),
         evidence_digest: "digest".into(),
         landed_at: Utc.with_ymd_and_hms(2026, 10, 3, 1, 0, 0).unwrap(),

@@ -45,6 +45,7 @@ pub(super) fn landing(n: usize) -> Delivery {
         after: revision(n),
         commits: vec![revision(n).commit],
         task_ids: vec!["task-a".into(), "task-b".into()],
+        unattributed: None,
         evidence_reference: format!("https://github.com/owner/repo/pull/{n}"),
         evidence_digest: format!("evidence-{n}"),
         landed_at: now(),

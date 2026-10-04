@@ -660,3 +660,143 @@ fn tool_run_mentions(text: &str) -> Vec<String> {
     }
     names
 }
+
+/// Every frozen review delivery once carried empty `task_ids`, so a reviewer
+/// could attribute a finding only from merge-commit text. A PR landing now
+/// names the tasks whose landing record holds the PR — one task, every member
+/// of a bundle — and a PR no task records says so explicitly.
+#[cfg(unix)]
+#[test]
+fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
+    use std::os::unix::fs::PermissionsExt;
+
+    const TEST: &str =
+        "auto_task_lifecycle_cli::provider_landings_carry_the_tasks_that_recorded_the_pull_request";
+    const CHILD: &str = "ORBIT_TEST_DELIVERY_ATTRIBUTION_CHILD";
+    if std::env::var(CHILD).ok().as_deref() != Some(TEST) {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        orbit_common::test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, TEST)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path())
+            .output()
+            .unwrap();
+        orbit_common::test_env::assert_child_test_passed(
+            TEST,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+        return;
+    }
+
+    const REPOSITORY: &str = "fixture-owner/fixture-repo";
+    let fixture = Fixture::new();
+    git(
+        &fixture,
+        &[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://github.com/{REPOSITORY}.git"),
+        ],
+    );
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
+    let (_runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+
+    // Promotion stamps the PR on every task it delivers.
+    let task = |title: &str, pr: u64| {
+        fixture.json(&[
+            "task",
+            "add",
+            "--title",
+            title,
+            "--complexity",
+            "low",
+            "--acceptance-criteria",
+            "Lands through a pull request",
+            "--ref",
+            &format!("github-pr:{pr}"),
+            "--json",
+        ])["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let single = task("Single-task delivery", 7);
+    let mut bundle = vec![task("Bundle member one", 8), task("Bundle member two", 8)];
+    bundle.sort();
+
+    // Each PR squash-merges as one first-parent commit; the stand-in `gh`
+    // answers the provider's commit-to-PR lookup from these records.
+    let bin = fixture._temp.path().join("bin");
+    let pulls = bin.join("pulls");
+    fs::create_dir_all(&pulls).unwrap();
+    for pr in [7_u64, 8, 9] {
+        fs::write(
+            fixture.repo.join("fixture.txt"),
+            format!("landed by #{pr}\n"),
+        )
+        .unwrap();
+        git(&fixture, &["commit", "-am", &format!("Squash-merge #{pr}")]);
+        let sha = git(&fixture, &["rev-parse", "HEAD"]);
+        let response = serde_json::json!([{
+            "number": pr,
+            "html_url": format!("https://github.com/{REPOSITORY}/pull/{pr}"),
+            "merge_commit_sha": sha,
+            "merged_at": "2026-10-04T00:00:00Z",
+            "base": {"ref": "fixture-delivery", "repo": {"full_name": REPOSITORY}},
+        }]);
+        fs::write(pulls.join(format!("{sha}.json")), response.to_string()).unwrap();
+    }
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        "#!/bin/sh\nsha=${2#*/commits/}\nexec cat \"$(dirname \"$0\")/pulls/${sha%%/*}.json\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+
+    let output = fixture
+        .command(&["auto-task", "show", &definition.name, "--preview", "--json"])
+        .env("PATH", path)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let shown: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let pending = shown["automation"]["state"]["pending"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no pending deliveries: {shown}"));
+    let delivery = |pr: u64| {
+        let key = format!("pr:{REPOSITORY}:fixture-delivery:{pr}");
+        pending
+            .iter()
+            .find(|delivery| delivery["key"] == key.as_str())
+            .unwrap_or_else(|| panic!("no delivery {key}: {shown}"))
+    };
+
+    assert_eq!(delivery(7)["task_ids"], serde_json::json!([single]));
+    assert!(delivery(7).get("unattributed").is_none());
+    assert_eq!(
+        delivery(8)["task_ids"],
+        serde_json::json!(bundle),
+        "a bundle's delivery lists every member task"
+    );
+    assert_eq!(delivery(9)["task_ids"], serde_json::json!([]));
+    assert_eq!(
+        delivery(9)["unattributed"],
+        orbit_types::workflow::automation::UNATTRIBUTED_NO_LANDING_TASK
+    );
+}

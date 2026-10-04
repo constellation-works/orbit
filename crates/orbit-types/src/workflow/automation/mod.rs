@@ -87,11 +87,24 @@ pub struct Delivery {
     pub before: SourceRevision,
     pub after: SourceRevision,
     pub commits: Vec<String>,
+    /// The tasks whose delivery this is, from the landing record.
     pub task_ids: Vec<String>,
+    /// Why `task_ids` is empty, when the landing record names no task. A fact
+    /// recorded before attribution carries neither, so its empty `task_ids`
+    /// means unknown rather than none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattributed: Option<String>,
     pub evidence_reference: String,
     pub evidence_digest: String,
     pub landed_at: DateTime<Utc>,
 }
+
+/// No task in this workspace records the landing: a PR merged outside Orbit,
+/// or a direct landing whose run named no task.
+pub const UNATTRIBUTED_NO_LANDING_TASK: &str = "no_landing_task";
+
+/// This checkout cannot read the task records that would attribute the landing.
+pub const UNATTRIBUTED_TASKS_UNREADABLE: &str = "task_records_unreadable";
 
 /// Bounded, pinned source observation. Unresolved commits remain obligations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
