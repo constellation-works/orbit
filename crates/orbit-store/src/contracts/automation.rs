@@ -110,6 +110,25 @@ pub trait AutomationStoreBackend: Send + Sync {
     ) -> Result<Vec<AutomationState>, OrbitError> {
         Ok(vec![])
     }
+
+    /// A bounded page of states whose consumer keys start with the literal
+    /// `prefix`, ordered by consumer key, strictly after `after` when given.
+    /// `limit` must be nonzero; implementations may cap the page size further.
+    /// Continue from the last returned key until an empty page proves exhaustion,
+    /// even when a page contains fewer than `limit` states. An implementation
+    /// that cannot provide this complete traversal must return an error.
+    /// Pages observe current persisted state, not a snapshot across calls.
+    fn automation_states_page(
+        &self,
+        _prefix: &str,
+        _after: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<AutomationState>, OrbitError> {
+        Err(OrbitError::Store(
+            "paginated automation state inspection unavailable".into(),
+        ))
+    }
+
     /// Inserts once; a missing state is never silently substituted for corrupt data.
     fn automation_initialize(&self, state: &AutomationState) -> Result<bool, OrbitError>;
     /// Generation-fenced checkpoint and optional receipt commit in one transaction.

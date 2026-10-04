@@ -25,8 +25,8 @@ const AUTOMATION_TAG: &str = "automation";
 const DIVERGENCE_TAG: &str = "history-diverged";
 /// Last-resort tag when a workspace's vocabulary knows none of the others.
 const FALLBACK_TAG: &str = "other";
-/// Bound on consumer states scanned for a stall report.
-const CONSUMER_SCAN_LIMIT: usize = 100;
+/// Bound on each page of consumer states read for a complete stall report.
+const CONSUMER_PAGE_LIMIT: usize = 100;
 
 /// One stalled consumer on this host, as reported by `orbit doctor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,24 +73,40 @@ pub(super) fn report(
     Ok(Some(stored.record.id))
 }
 
-/// Every consumer on this host whose evaluation is suspended by a stall.
+/// Every consumer in this workspace on this host whose evaluation is suspended
+/// by a stall. Read bounded pages to exhaustion; an incomplete scan is an error,
+/// never a healthy or partial result.
 pub fn stalled_consumers(runtime: &OrbitRuntime) -> Result<Vec<StalledConsumer>, OrbitError> {
     let Some(machine) = runtime.automation_machine_identity() else {
         return Ok(vec![]);
     };
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
 
-    Ok(runtime
-        .automation_store()?
-        .automation_states(&prefix, CONSUMER_SCAN_LIMIT)?
-        .into_iter()
-        .filter_map(|state| {
-            Some(StalledConsumer {
-                consumer: state.consumer,
-                stall: state.stall?,
-            })
-        })
-        .collect())
+    let store = runtime.automation_store()?;
+    let mut after: Option<String> = None;
+    let mut stalled = Vec::new();
+    loop {
+        let page = store.automation_states_page(&prefix, after.as_deref(), CONSUMER_PAGE_LIMIT)?;
+        if page.is_empty() {
+            return Ok(stalled);
+        }
+        for state in page {
+            if !state.consumer.starts_with(&prefix)
+                || after.as_ref().is_some_and(|key| state.consumer <= *key)
+            {
+                return Err(OrbitError::Store(
+                    "automation state page is outside its prefix or not strictly ordered".into(),
+                ));
+            }
+            after = Some(state.consumer.clone());
+            if let Some(stall) = state.stall {
+                stalled.push(StalledConsumer {
+                    consumer: state.consumer,
+                    stall,
+                });
+            }
+        }
+    }
 }
 
 /// The stable substring that identifies this divergence across consumers,

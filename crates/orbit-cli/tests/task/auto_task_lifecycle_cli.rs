@@ -296,6 +296,101 @@ fn baselined_delivery_consumer(
     (runtime, definition)
 }
 
+#[test]
+fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
+    use orbit_core::application::automation::{consumer_key, stalled_consumers};
+    use orbit_types::workflow::automation::recovery::AutomationStall;
+
+    // Runtime writes, as well as CLI writes, belong in an isolated child.
+    const TEST: &str = "auto_task_lifecycle_cli::doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure";
+    const CHILD: &str = "ORBIT_TEST_CONSUMER_SCAN_CHILD";
+    if std::env::var(CHILD).ok().as_deref() != Some(TEST) {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        orbit_common::test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, TEST)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path())
+            .output()
+            .unwrap();
+        orbit_common::test_env::assert_child_test_passed(
+            TEST,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"integrated_qa_v1","max_items":20,"retries":0});
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+    let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let baseline = store.automation_state(&consumer).unwrap().unwrap();
+    let doctor_row = || {
+        let output = fixture.command(&["doctor", "--json"]).output().unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["check"] == "automation-consumers")
+            .cloned()
+            .unwrap()
+    };
+
+    // The original consumer sorts after these 200 healthy states.
+    for index in 0..200 {
+        let mut healthy = baseline.clone();
+        healthy.consumer = consumer_key(&runtime, "auto-task", &format!("aaa-{index:03}")).unwrap();
+        assert!(store.automation_initialize(&healthy).unwrap());
+    }
+    assert!(stalled_consumers(&runtime).unwrap().is_empty());
+    assert_eq!(doctor_row()["status"], "ok");
+
+    let mut stalled = baseline.clone();
+    stalled.generation += 1;
+    stalled.stall = Some(AutomationStall {
+        reason: "history_diverged".into(),
+        since: chrono::Utc::now(),
+        escalated_at: None,
+        friction_id: None,
+        divergence: None,
+    });
+    assert!(store.automation_stall(&baseline, &stalled).unwrap());
+    let listed = stalled_consumers(&runtime).unwrap();
+    assert_eq!(
+        listed.len(),
+        1,
+        "a stall beyond two full pages must be listed"
+    );
+    assert_eq!(listed[0].consumer, consumer);
+    let row = doctor_row();
+    assert_eq!(row["status"], "warning");
+    assert!(row["message"].as_str().unwrap().contains(&definition.name));
+
+    // A malformed later page must fail the scan rather than return the
+    // healthy prefix or a partial list of stalls.
+    let conn = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    assert_eq!(
+        conn.execute(
+            "UPDATE automation_consumers SET state_json='invalid JSON' WHERE consumer=?1",
+            [&consumer],
+        )
+        .unwrap(),
+        1
+    );
+    let error = stalled_consumers(&runtime).unwrap_err().to_string();
+    let row = doctor_row();
+    assert_eq!(row["status"], "warning");
+    assert!(row["message"].as_str().unwrap().contains(&error));
+}
+
 /// A review task that closed without accepted coverage once left its consumer
 /// `admitted` forever: reset and recover refused it as executing and nothing
 /// reported it. Its task being terminal is what makes it not executing.
