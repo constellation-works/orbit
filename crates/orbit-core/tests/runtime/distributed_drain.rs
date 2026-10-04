@@ -512,6 +512,27 @@ fn local_drain_admission(owner: &OrbitRuntime, task: &str) -> Vec<String> {
         .collect()
 }
 
+/// Move a run into the runner's transient retry sleep state. The public run
+/// API treats this state as live, but its general `active_only` query is
+/// intentionally limited to pending/running rows.
+fn set_run_state(owner: &OrbitRuntime, run_id: &str, state: &str) {
+    let store = owner.sqlite_store().unwrap();
+    let workspace_id = owner.workspace_id().unwrap();
+    store
+        .with_transaction(|tx| {
+            let changed = tx
+                .connection()
+                .execute(
+                    "UPDATE job_runs SET state = ?1 WHERE workspace_id = ?2 AND run_id = ?3",
+                    [state, workspace_id.as_str(), run_id],
+                )
+                .unwrap();
+            assert_eq!(changed, 1, "fixture run exists");
+            Ok(())
+        })
+        .unwrap();
+}
+
 /// [ORB-13918] A task the owner's local drain admitted is not pulled while
 /// that admission is live, even though its gate has not yet moved it out of
 /// `backlog` or reserved its footprint; once the local runs end, it is.
@@ -523,6 +544,9 @@ fn a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends() {
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();
     let local = local_drain_admission(&pair.wire.owner, &task);
+    for run in &local {
+        set_run_state(&pair.wire.owner, run, "retrying");
+    }
     let drain = pair.start_drain();
 
     let held = pair.pass(&drain);
@@ -536,6 +560,7 @@ fn a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends() {
         pair.wire.owner.workspace_id().unwrap(),
     );
     for run in &local {
+        set_run_state(&pair.wire.owner, run, "running");
         owner_jobs
             .finalize_job_run(
                 run,

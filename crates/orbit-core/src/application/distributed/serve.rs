@@ -35,7 +35,10 @@ use orbit_store::contracts::{
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::tool::ToolSessionContext;
-use orbit_types::workflow::handoff::{HandoffDelivery, TaskHandoff};
+use orbit_types::workflow::{
+    JobRunState,
+    handoff::{HandoffDelivery, TaskHandoff},
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -312,11 +315,20 @@ impl crate::OrbitRuntime {
     /// against — rather than handing the task to a follower as well.
     fn live_local_delivery_runs(&self) -> Result<BTreeMap<String, String>, OrbitError> {
         let delivery_jobs = self.task_delivery_job_ids()?;
-        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+        let jobs = self.stores().jobs();
+        let mut runs = jobs.list_job_runs_filtered(&JobRunQuery {
             active_only: true,
             include_steps: false,
             ..JobRunQuery::default()
         })?;
+        // `active_only` intentionally means pending/running across the store
+        // API. Retrying is also a live run state, so include it separately
+        // while the runner sleeps between attempts.
+        runs.extend(jobs.list_job_runs_filtered(&JobRunQuery {
+            state: Some(JobRunState::Retrying),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?);
         let mut carried = BTreeMap::new();
         for run in runs
             .into_iter()
