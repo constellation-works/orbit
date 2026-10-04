@@ -43,7 +43,7 @@ export type OrbitShip = {
   message: string | null
 }
 
-export type OrbitView = 'board' | 'ship' | 'map'
+export type OrbitView = 'board' | 'ship'
 
 declare module 'claude-code' {
   interface PluginState {
@@ -55,6 +55,8 @@ declare module 'claude-code' {
       ship: OrbitShip | null
       view: OrbitView
       selected: string | null
+      /** Board sections the person has open; null keeps the defaults. */
+      openLanes: string[] | null
       flash: string | null
     }
   }

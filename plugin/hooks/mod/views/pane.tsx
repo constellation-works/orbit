@@ -1,4 +1,4 @@
-// The Orbit pane: a tab row (Board, Ship, Map), a one-line notice, and the
+// The Orbit pane: a tab row (Board, Ship), a one-line notice, and the
 // view the person picked.
 
 import type { ElementConstructor, SvgProps } from 'claude-code'
@@ -8,7 +8,6 @@ import type { Actions } from './kit'
 import { ACCENT, ago } from '../model'
 import { boardView } from './board'
 import type { Kit } from './kit'
-import { mapView } from './map'
 import { shipView } from './ship'
 
 export type PaneData = {
@@ -16,6 +15,7 @@ export type PaneData = {
   error: string | null
   view: OrbitView
   selected: string | null
+  openLanes: string[] | null
   active: string | null
   ship: OrbitShip | null
   flash: string | null
@@ -26,7 +26,6 @@ export type PaneData = {
 const TABS: readonly { view: OrbitView; label: string; hotkey: string }[] = [
   { view: 'board', label: 'Board', hotkey: '1' },
   { view: 'ship', label: 'Ship', hotkey: '2' },
-  { view: 'map', label: 'Map', hotkey: '3' },
 ]
 
 export function pane(kit: Kit, data: PaneData, act: Actions, Svg?: ElementConstructor<SvgProps>) {
@@ -39,10 +38,8 @@ export function pane(kit: Kit, data: PaneData, act: Actions, Svg?: ElementConstr
     body = <Text dimColor>{error ? `Orbit unavailable: ${error}` : 'Reading the workspace…'}</Text>
   } else if (view === 'ship') {
     body = shipView(kit, { snapshot, ship: data.ship, now: data.now, columns: data.columns }, act, Svg)
-  } else if (view === 'map') {
-    body = mapView(kit, { snapshot, selected: data.selected, active: data.active, columns: data.columns }, act, Svg)
   } else {
-    body = boardView(kit, { snapshot, selected: data.selected, active: data.active, columns: data.columns }, act)
+    body = boardView(kit, { snapshot, selected: data.selected, active: data.active, openLanes: data.openLanes, now: data.now }, act)
   }
 
   return (

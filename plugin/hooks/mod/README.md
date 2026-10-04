@@ -30,9 +30,6 @@ this folder.
     `orbit run ship` runs and the view tracks the run through the 12 steps
     of `task_pr_pipeline`. On desktop and VS Code the trajectory is drawn
     as an SVG.
-  - **Map.** The open tasks on status rings (proposed on the outside,
-    in-progress near the core), sectored by task type, with dependency
-    lines.
 - **Task cards.** A prompt that mentions a known task id, such as
   `ORB-123`, carries that task's card (status, priority, criteria) as
   context.
@@ -51,7 +48,6 @@ this session. Nothing the mod does dispatches work by itself.
 |---|---|
 | `/orbit-board [id]` | Opens the board, with the task selected when an id is given |
 | `/orbit-ship [id]` | Opens the ship view, with the task's preflight when an id is given |
-| `/orbit-map` | Opens the orbital map |
 | `/orbit-band` | Shows or hides the band |
 
 ## Options
@@ -60,7 +56,7 @@ Set these in the plugin's settings (`/plugin`, then Orbit, then configure).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `ownerHost` | empty | SSH host that owns this workspace. Set it when this checkout is a replica, or isn't registered on this machine. Reads and writes then run `orbit` there over `ssh -o BatchMode=yes`. |
+| `ownerHost` | empty | SSH host that owns this workspace, for a checkout that is a replica or isn't registered on this machine. Reads and writes then run `orbit` there over `ssh -o BatchMode=yes`. Empty falls back to the destinations Orbit's federated MCP uses (`~/.orbit/mcp-destinations.toml`); with several, the first that answers for the workspace. |
 | `refreshMinutes` | 3 | How often the band refreshes. It also refreshes after a turn that ends at least 30 s after the last read. |
 | `band` | `on` | `on`, `compact` (always one line), or `off` |
 | `commitTrailer` | true | Add the `Task:` trailer to commits made while working a task |
@@ -74,7 +70,8 @@ session's directory:
 
 - An owner checkout is read locally.
 - A replica, or an unregistered checkout whose git root is named after a
-  workspace, is read through `ownerHost`.
+  workspace, is read through `ownerHost`, or through the federated MCP's
+  destinations when `ownerHost` is empty.
 
 ## Developing
 

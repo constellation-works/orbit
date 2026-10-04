@@ -228,7 +228,13 @@ export function clock(ms: number): string {
 }
 
 export const ago = (ms: number): string =>
-  ms < 60_000 ? 'just now' : ms < 3600_000 ? `${Math.floor(ms / 60_000)}m ago` : `${Math.floor(ms / 3600_000)}h ago`
+  ms < 60_000
+    ? 'just now'
+    : ms < 3600_000
+      ? `${Math.floor(ms / 60_000)}m ago`
+      : ms < 48 * 3600_000
+        ? `${Math.floor(ms / 3600_000)}h ago`
+        : `${Math.floor(ms / (24 * 3600_000))}d ago`
 
 export function clip(value: string, width: number): string {
   if (width <= 1) return value.slice(0, Math.max(0, width))
@@ -282,8 +288,3 @@ export function preflight(task: OrbitTask | undefined, snapshot: OrbitSnapshot, 
   }
   return { checks }
 }
-
-/** Sector of the orbital map a task sits in. */
-export const SECTORS = ['feature', 'bug', 'refactor', 'chore'] as const
-
-export const RING: Record<OpenStatus, number> = { review: 0.3, 'in-progress': 0.5, blocked: 0.6, backlog: 0.72, proposed: 0.92 }

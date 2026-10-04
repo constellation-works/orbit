@@ -1,5 +1,5 @@
 // The Orbit mod for Claude Code: a band above the prompt, a status line,
-// toasts, and the Board / Ship / Map pane, all read from the `orbit` CLI;
+// toasts, and the Board / Ship pane, all read from the `orbit` CLI;
 // plus two hooks: task cards for mentioned task ids, and a `Task:` trailer
 // on commits made while this session works a task.
 //
@@ -10,7 +10,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ProcessRunResult, Register, Timer } from 'claude-code'
 
 import type { OrbitShip, OrbitView } from '../../types'
-import { argvFor, failure, localArgv, OrbitError, ownerHost, readShown, reason, targetFrom, type Target } from './cli'
+import { argvFor, destinationsArgv, failure, federatedHosts, localArgv, OrbitError, ownerHost, readShown, reason, targetFrom, type Target } from './cli'
 import {
   card,
   changes,
@@ -27,23 +27,25 @@ import {
   withTaskTrailer,
 } from './model'
 import { band } from './views/band'
+import { DEFAULT_OPEN } from './views/board'
 import type { Actions } from './views/kit'
 import { pane } from './views/pane'
 
 const PANE = 'orbit'
 const AFTER_TURN_MIN_MS = 30_000
 const RETRY_EMPTY_MS = 5000
+const RETRY_FAILED_MS = 30_000
+const DEFAULT_COLUMNS = 100
 const SHIP_POLL_MS = 5000
 const TASK_UPDATE = /(^|__)orbit_task_update$/
 const TASK_ID = /^[A-Z][A-Z0-9]{1,11}-\d{1,9}$/
 const SUCCESS = new Set(['success', 'succeeded'])
 const FINISHED = new Set([...SUCCESS, 'failed', 'timeout', 'cancelled', 'interrupted'])
-const TITLES: Record<OrbitView, string> = { board: 'Orbit · Board', ship: 'Orbit · Ship', map: 'Orbit · Map' }
+const TITLES: Record<OrbitView, string> = { board: 'Orbit · Board', ship: 'Orbit · Ship' }
 
 const COMMANDS = [
   { name: 'orbit-board', description: 'Open the Orbit board for this workspace', argumentHint: '[task id]' },
   { name: 'orbit-ship', description: 'Preflight and ship an Orbit task through the PR pipeline', argumentHint: '[task id]' },
-  { name: 'orbit-map', description: 'Open the Orbit orbital map of open tasks' },
   { name: 'orbit-band', description: 'Show or hide the Orbit band above the prompt' },
 ]
 
@@ -61,6 +63,7 @@ const shipAtom = atom({ plugin: 'orbit', key: 'ship' } as const, null)
 const viewAtom = atom({ plugin: 'orbit', key: 'view' } as const, 'board')
 const selectedAtom = atom({ plugin: 'orbit', key: 'selected' } as const, null)
 const flashAtom = atom({ plugin: 'orbit', key: 'flash' } as const, null)
+const openLanesAtom = atom({ plugin: 'orbit', key: 'openLanes' } as const, null)
 
 let settings: Settings = { host: null, refreshMs: 180_000, commitTrailer: true, band: 'on' }
 let configError: string | null = null
@@ -70,6 +73,7 @@ let locating: Promise<Target> | null = null
 let inFlight = false
 let lastRefreshAt = 0
 let shipTimer: Timer | null = null
+let refreshTimer: Timer | null = null
 
 /** Which workspace this session's checkout belongs to, and where its tasks are read. */
 async function locate($: EngineInterface): Promise<Target> {
@@ -88,13 +92,38 @@ async function findTarget($: EngineInterface): Promise<Target> {
   } catch {
     shown = null
   }
+  if (shown !== null && shown.role !== 'replica') {
+    target = targetFrom(shown, cwd, null, cwd)
+    return target
+  }
   let root = cwd
-  if (shown === null && settings.host !== null) {
+  if (shown === null) {
     const top = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 5000 }).catch(() => null)
     if (top !== null && top.exitCode === 0) root = top.stdout.trim()
   }
-  target = targetFrom(shown, cwd, settings.host, root)
-  return target
+  const hosts = settings.host !== null ? [settings.host] : await federated($)
+  if (hosts.length <= 1) {
+    target = targetFrom(shown, cwd, hosts[0] ?? null, root)
+    return target
+  }
+  // Several federated owners: the first that answers for the workspace owns it.
+  let failed = ''
+  for (const host of hosts) {
+    const candidate = targetFrom(shown, cwd, host, root)
+    const probe = await $.process.run(argvFor(candidate, ['task', 'list', '--status', 'review', '--json', '--limit', '1']), { cwd, timeoutMs: 15_000 }).catch(() => null)
+    if (probe !== null && probe.exitCode === 0) {
+      target = candidate
+      return target
+    }
+    failed = probe === null ? `${host} timed out` : (failure(candidate, ['task'], probe.exitCode, probe.stdout, probe.stderr) ?? '')
+  }
+  throw new OrbitError(`no federated owner answered for ${shown?.name ?? root}: ${failed}`)
+}
+
+/** The owners Orbit's federated MCP already reaches, when the ownerHost option names none. */
+async function federated($: EngineInterface): Promise<string[]> {
+  const ran = await $.process.run(destinationsArgv, { cwd, timeoutMs: 5000 }).catch(() => null)
+  return ran !== null && ran.exitCode === 0 ? federatedHosts(ran.stdout) : []
 }
 
 async function orbit($: EngineInterface, args: readonly string[], timeoutMs = 20_000): Promise<ProcessRunResult> {
@@ -111,10 +140,11 @@ async function publishStatus($: EngineInterface): Promise<void> {
 
 /** Reads the workspace's open tasks and recent completions; toasts what moved since the last read. */
 async function refresh($: EngineInterface): Promise<void> {
-  if (inFlight || cwd === '' || configError !== null) return
+  if (inFlight || configError !== null) return
   inFlight = true
   lastRefreshAt = await $.clock.now()
   try {
+    await bind($)
     const [open, done] = await Promise.all([
       orbit($, ['task', 'list', '--status', 'proposed,backlog,in-progress,review,blocked', '--json', '--limit', '500']),
       orbit($, ['task', 'list', '--status', 'done', '--json', '--limit', '40']),
@@ -136,16 +166,31 @@ async function refresh($: EngineInterface): Promise<void> {
 }
 
 /**
- * Reads the workspace when nothing has been read yet. The read session.start
- * starts can finish before the session is bound and its write go nowhere, so
- * the band, the pane and the commands each ask again while the snapshot is empty.
+ * The session's checkout and the refresh timer, from whichever hook runs first:
+ * a resumed desktop session can draw the band and the pane before this load
+ * sees session.start.
+ */
+async function bind($: EngineInterface): Promise<void> {
+  if (cwd === '') cwd = await $.session.cwd()
+  refreshTimer ??= $.clock.every(settings.refreshMs, () => void refresh($))
+}
+
+/**
+ * Reads the workspace while the board is empty. The read session.start starts
+ * can finish before the session is bound and its write go nowhere, and an
+ * error stored by an earlier load outlives it in the session's state, so the
+ * band, the pane and the commands each ask again: soon while nothing is
+ * known, every 30 seconds while the last read failed.
  */
 async function ensureLoaded($: EngineInterface): Promise<void> {
   if (inFlight || configError !== null) return
-  if ((await read($, snapshotAtom)) !== null || (await read($, errorAtom)) !== null) return
-  if ((await $.clock.now()) - lastRefreshAt < RETRY_EMPTY_MS) return
+  if ((await read($, snapshotAtom)) !== null) return
+  const wait = (await read($, errorAtom)) === null ? RETRY_EMPTY_MS : RETRY_FAILED_MS
+  if ((await $.clock.now()) - lastRefreshAt < wait) return
   void refresh($)
 }
+
+const columnsOf = (bodyColumns: number | undefined): number => (typeof bodyColumns === 'number' && bodyColumns > 0 ? bodyColumns : DEFAULT_COLUMNS)
 
 async function say($: EngineInterface, text: string | null): Promise<void> {
   await update($, flashAtom, () => text)
@@ -290,6 +335,11 @@ function actionsFor($: EngineInterface): Actions {
     refresh: () => void refresh($),
     setView: next => void openPane($, next),
     select: taskId => void update($, selectedAtom, () => taskId),
+    toggleLane: section =>
+      void update($, openLanesAtom, prior => {
+        const open = prior ?? [...DEFAULT_OPEN]
+        return open.includes(section) ? open.filter(id => id !== section) : [...open, section]
+      }),
     clearFlash: () => void say($, null),
     hideBand: () => void update($, isBandHiddenAtom, () => true),
     closePane: () => void $.ui.close({ id: PANE }),
@@ -346,8 +396,9 @@ export const register: Register = (on, options) => {
     }
     cwd = e.cwd
     target = null
+    // An error stored by an earlier load (another cwd, options since changed) is not this load's.
+    await update($, errorAtom, () => null)
     void refresh($)
-    $.clock.every(settings.refreshMs, () => void refresh($))
     if (isInFlight(await read($, shipAtom))) watchShip($)
     return started
   })
@@ -373,12 +424,6 @@ export const register: Register = (on, options) => {
     if (!TASK_ID.test(id)) return { text: 'Orbit ship pane opened.' }
     await prepareShip($, id)
     return { text: `Ship preflight for ${id} is in the Orbit pane.` }
-  })
-
-  on('command.run', { command: 'orbit-map' }, async $ => {
-    await openPane($, 'map')
-    await ensureLoaded($)
-    return { text: 'Orbit map opened.' }
   })
 
   on('command.run', { command: 'orbit-band' }, async $ => {
@@ -428,10 +473,8 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || settings.band === 'off' || (await read($, isBandHiddenAtom))) return next(e)
     const snapshot = await read($, snapshotAtom)
     const error = configError ?? (await read($, errorAtom))
-    if (snapshot === null && error === null) {
-      await ensureLoaded($)
-      return next(e)
-    }
+    if (snapshot === null) await ensureLoaded($)
+    if (snapshot === null && error === null) return next(e)
     return band(
       $.ui.resolve(e),
       {
@@ -440,7 +483,7 @@ export const register: Register = (on, options) => {
         active: await read($, activeAtom),
         ship: await read($, shipAtom),
         now: await $.clock.now(),
-        columns: e.props.bodyColumns,
+        columns: columnsOf(e.props.bodyColumns),
         isCompact: settings.band === 'compact',
       },
       actionsFor($),
@@ -457,11 +500,12 @@ export const register: Register = (on, options) => {
         error: configError ?? (await read($, errorAtom)),
         view: await read($, viewAtom),
         selected: await read($, selectedAtom),
+        openLanes: await read($, openLanesAtom),
         active: await read($, activeAtom),
         ship: await read($, shipAtom),
         flash: await read($, flashAtom),
         now: await $.clock.now(),
-        columns: e.props.bodyColumns,
+        columns: columnsOf(e.props.bodyColumns),
       },
       actionsFor($),
       'Svg' in table ? table.Svg : undefined,

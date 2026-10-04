@@ -72,7 +72,8 @@ test('the board approves a proposed task with `orbit task update --approve`', as
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
     for (const task of TASKS) expect(await ui.find({ key: `card:${task.id}` })).toBeDefined()
-    await ui.press({ key: 'card:ORB-4' })
+    // The selection outlives the mount: open the row only where it is shut.
+    if ((await ui.find({ key: 'approve' })) === undefined) await ui.press({ key: 'card:ORB-4' })
     ran.length = 0
     await ui.press({ key: 'approve' })
     expect(ran.some(run => run.args.slice(0, 4).join(' ') === 'task update ORB-4 --approve')).toBe(true)
@@ -89,7 +90,7 @@ test('Ship… on a backlog task opens the preflight with Launch armed', async ($
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
     await ui.press({ key: 'tab:board' })
-    await ui.press({ key: 'card:ORB-2' })
+    if ((await ui.find({ key: 'ship' })) === undefined) await ui.press({ key: 'card:ORB-2' })
     await ui.press({ key: 'ship' })
     expect(await ui.find({ key: 'launch' })).toBeDefined()
     await ui.press({ key: 'clear' })
@@ -140,4 +141,96 @@ test('opening the board reads the workspace again when the first read left nothi
   await ui.press({ key: 'tab:board' })
   expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
   await ui.unmount()
+})
+
+test('a failed read is retried from the band, and the board fills once it succeeds', async ($, on) => {
+  const ran: Ran[] = []
+  let isDown = true
+  on('process.run', (_$, e) => {
+    const args = e.argv.slice(4)
+    ran.push({ args, isRemote: false })
+    const reply = (stdout: unknown, exitCode = 0) => ({ value: { exitCode, stdout: JSON.stringify(stdout), stderr: exitCode === 0 ? '' : 'owner unreachable', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (args[0] === 'workspace') return reply({ registered: true, workspace: { name: 'demo' }, checkout: { role: 'owner' } })
+    if (isDown) return reply(null, 1)
+    return reply(args.includes('done') ? [] : TASKS)
+  })
+  stubSession(on)
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+
+  isDown = false
+  await clock.advance(31_000)
+  const band = await $.ui.mount({ plugin: 'orbit', surface: 'terminal', ...BAND })
+  await clock.advance(0)
+  await band.unmount()
+
+  const ui = await $.ui.mount({ plugin: 'orbit', surface: 'desktop', ...PANE })
+  await ui.press({ key: 'tab:board' })
+  expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the pane reads the workspace when it is drawn before session.start', async ($, on) => {
+  const ran: Ran[] = []
+  fakeOrbit(on, ran)
+  on('session.cwd', () => ({ value: '/work/demo' }))
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+
+  const first = await $.ui.mount({ plugin: 'orbit', surface: 'desktop', ...PANE })
+  await clock.advance(0)
+  await first.unmount()
+
+  expect(ran.some(run => run.args[0] === 'task')).toBe(true)
+  const ui = await $.ui.mount({ plugin: 'orbit', surface: 'desktop', ...PANE, props: { ...PANE.props, bodyColumns: undefined as never } })
+  await ui.press({ key: 'tab:board' })
+  expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an unregistered checkout reads the owner the federated MCP names when ownerHost is unset', async ($, on) => {
+  const ran: string[][] = []
+  on('process.run', (_$, e) => {
+    ran.push([...e.argv])
+    const reply = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv[0] === '/bin/sh' && (e.argv[2] ?? '').includes('mcp-destinations.toml')) return reply('[[destinations]]\nssh = "fed-box"\nmachine_id = "hm_1"\n')
+    if (e.argv[0] === 'git') return reply('/work/demo\n')
+    if (e.argv[0] === 'ssh') return reply(JSON.stringify((e.argv.at(-1) ?? '').includes("'done'") ? [] : TASKS))
+    return reply(JSON.stringify({ registered: false, workspace: null, checkout: null }))
+  })
+  stubSession(on)
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+
+  const remote = ran.filter(argv => argv[0] === 'ssh')
+  expect(remote.length).toBeGreaterThan(0)
+  expect(remote.every(argv => argv.includes('fed-box') && (argv.at(-1) ?? '').includes("'--workspace' 'demo'"))).toBe(true)
+  const ui = await $.ui.mount({ plugin: 'orbit', surface: 'desktop', ...PANE })
+  await ui.press({ key: 'tab:board' })
+  expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('board sections fold: Done starts shut, and a header press shuts or opens its section', async ($, on) => {
+  fakeOrbit(on, [])
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ plugin: 'orbit', surface, ...PANE })
+    await ui.press({ key: 'tab:board' })
+    for (const section of ['blocked', 'in-progress', 'review', 'proposed', 'backlog', 'done']) expect(await ui.find({ key: `lane:${section}` })).toBeDefined()
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+    await ui.press({ key: 'lane:backlog' })
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeUndefined()
+    await ui.press({ key: 'lane:backlog' })
+    expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+    await ui.press({ key: 'card:ORB-1' })
+    expect(await ui.find({ key: 'rescue' })).toBeDefined()
+    await ui.press({ key: 'card:ORB-1' })
+    expect(await ui.find({ key: 'rescue' })).toBeUndefined()
+    await ui.unmount()
+  }
 })
