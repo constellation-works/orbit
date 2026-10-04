@@ -335,3 +335,163 @@ fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_l
         "capability_denied"
     );
 }
+
+#[test]
+fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
+    const CHILD: &str = "ORBIT_REVIEW_RESET_BOUNDARY_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let home = tempdir().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        let name = "mcp_roundtrip::transport_operations::review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions";
+        let output = command
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed;"));
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let mut client = workspace.serve();
+    let task = client.call_tool_ok("orbit_task_add", json!({"title":"Review reset proof","description":"Disposable review lineage","complexity":"low","model":"codex"}));
+    let id = task["id"].as_str().unwrap();
+    drop(client);
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &workspace.home.join(".orbit"),
+        &workspace.work.join(".orbit"),
+    )
+    .unwrap();
+    let ws = runtime.workspace_id().unwrap();
+    // Seed the persisted shape produced before timeout accounting was fixed,
+    // deliberately omitting `decisions` to exercise compatibility.
+    let lineage = format!("{ws}/{id}/main");
+    let now = chrono::Utc::now();
+    let ledger = json!({
+        "lineage_key": lineage, "task_ids": [id], "budget": {"reviewer_starts": 1, "repair_cycles": 2, "minutes": 120},
+        "attempts": [{"attempt_id": "rvw-fixture-1", "index": 1, "run_id": "old-run", "task_meaning_digest": "old", "candidate": {"commit": "candidate", "tree": "tree"}, "started_at": now,
+        "state": {"state": "settled", "verdict": "incomplete"}, "repair_cycles": 0, "elapsed_seconds": 19385}],
+        "consumed_seconds": 19385, "revision": 1, "updated_at": now,
+    });
+    let conn = Connection::open(workspace.home.join(".orbit/orbit.db")).unwrap();
+    conn.execute("INSERT INTO review_lineages(workspace_id,lineage_key,revision,ledger_json) VALUES(?1,?2,1,?3)", rusqlite::params![ws,lineage,ledger.to_string()]).unwrap();
+    let persisted = || {
+        conn.query_row(
+            "SELECT ledger_json FROM review_lineages WHERE lineage_key=?1",
+            [&lineage],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap()
+    };
+    let original = persisted();
+    let args = json!({"workspace":selector,"id":id,"lineage_key":lineage,"reason":"Repair old timeout charges"});
+    let mut client = workspace.serve();
+    client.call_tool_err("orbit_task_review_reset", args.clone());
+    assert_eq!(
+        persisted(),
+        original,
+        "ordinary MCP authority cannot reset an exhausted ledger"
+    );
+    drop(client);
+    let denied = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "task",
+            "review-reset",
+            id,
+            "--lineage",
+            &lineage,
+            "--reason",
+            "agent override",
+        ])
+        .env("ORBIT_AGENT_NAME", "fixture-agent")
+        .output()
+        .unwrap();
+    assert!(!denied.status.success());
+    assert_eq!(persisted(), original);
+    let elevated_agent = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "task",
+            "review-reset",
+            id,
+            "--lineage",
+            &lineage,
+            "--reason",
+            "managed override",
+        ])
+        .env("ORBIT_AGENT_NAME", "fixture-agent")
+        .env("ORBIT_OPERATOR", "1")
+        .output()
+        .unwrap();
+    assert!(
+        !elevated_agent.status.success(),
+        "a managed agent cannot use elevated operator authority to reset its budget"
+    );
+    assert_eq!(persisted(), original);
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    client.call_tool_err(
+        "orbit_task_review_reset",
+        json!({"workspace":selector,"id":id,"lineage_key":lineage,"reason":" "}),
+    );
+    assert_eq!(persisted(), original, "a blank decision changes nothing");
+    let reset = client.call_tool_ok("orbit_task_review_reset", args);
+    assert_eq!(reset["ledger"]["attempts"], ledger["attempts"]);
+    assert_eq!(reset["ledger"]["consumed_seconds"], 0);
+    assert_eq!(
+        reset["ledger"]["decisions"][0]["previous_consumption"]["seconds"],
+        19385
+    );
+    assert_eq!(
+        reset["ledger"]["decisions"][0]["reason"],
+        "Repair old timeout charges"
+    );
+    assert!(
+        !reset["ledger"]["decisions"][0]["actor"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(reset["ledger"]["budget"], ledger["budget"]);
+    drop(client);
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args([
+                "task",
+                "review-reset",
+                id,
+                "--lineage",
+                &lineage,
+                "--reason",
+                "Explicit current budget",
+                "--adopt-configured-budget",
+                "--json",
+            ])
+            .env("ORBIT_OPERATOR", "1"),
+    );
+    let reset: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(reset["ledger"]["attempts"], ledger["attempts"]);
+    assert_eq!(reset["ledger"]["decisions"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        reset["ledger"]["decisions"][1]["reason"],
+        "Explicit current budget"
+    );
+    assert_eq!(
+        reset["ledger"]["budget"],
+        serde_json::to_value(runtime.operation_policy().review_budget()).unwrap()
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&persisted()).unwrap(),
+        reset["ledger"],
+        "the CLI decision survives reopening the store"
+    );
+}

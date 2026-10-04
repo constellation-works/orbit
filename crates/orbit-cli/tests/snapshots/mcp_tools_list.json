@@ -1232,6 +1232,48 @@
     }
   },
   {
+    "name": "orbit_task_review_reset",
+    "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Explicit workspace selector from discovery"
+        },
+        "id": {
+          "type": "string",
+          "description": "Task in the selected lineage"
+        },
+        "lineage_key": {
+          "type": "string",
+          "description": "Exact lineage key from the admission refusal or review manifest"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Required explanation retained in the decision history"
+        },
+        "adopt_configured_budget": {
+          "type": "boolean",
+          "description": "Explicitly adopt current configured review limits; default retains the captured limits"
+        }
+      },
+      "required": [
+        "workspace",
+        "id",
+        "lineage_key",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "orbit_task_show",
     "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution. `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed and landed for the task: typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only, from the host's own commit and merge step records. Missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `orbit_workflow_run_show`.",
     "inputSchema": {

@@ -118,9 +118,17 @@ pub(crate) fn review_gate_admit(
     }
     let context = GateContext::load(runtime, &admit_input, Some(admission.clone()))
         .map_err(|error| failed(error.to_string()))?;
-    let outcome = admit(runtime, &context, &admission, rebase.as_ref());
+    let preflight = input
+        .get("preflight")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let outcome = if preflight {
+        preflight_budget(runtime, &context)
+    } else {
+        admit(runtime, &context, &admission, rebase.as_ref())
+    };
     let audit_args = json!({
-        "phase": "admit",
+        "phase": if preflight { "preflight" } else { "admit" },
         "run_id": context.run_id,
         "task_ids": context.task_ids,
         "reviewer_crew": admission.crew,
@@ -252,15 +260,16 @@ fn admit(
         ReviewReservation::Exhausted { reason, consumed } => {
             return Err(OrbitError::CapabilityDenied(format!(
                 "review_budget_exhausted: {reason} for lineage '{lineage_key}' (reviewer starts \
-                 {}/{}, repair cycles {}/{}, {}s of {}s); resume after a recorded decision \
-                 re-scopes the candidate, or dispatch a fresh delivery run, which starts a new \
-                 lineage with a full budget",
+                 {}/{}, repair cycles {}/{}, {}s of {}s); an operator can run \
+                 orbit task review-reset {} --lineage '{lineage_key}' --reason '<decision>' \
+                 before resuming, or dispatch a fresh delivery run",
                 consumed.reviewer_starts,
                 ledger.budget.reviewer_starts,
                 consumed.repair_cycles,
                 ledger.budget.repair_cycles,
                 consumed.seconds,
-                u64::from(ledger.budget.minutes) * 60
+                u64::from(ledger.budget.minutes) * 60,
+                context.task_ids[0]
             )));
         }
     };
@@ -414,4 +423,30 @@ pub(super) fn reviewer_identity(
             .map(ToOwned::to_owned),
         implementer_model,
     })
+}
+
+/// Fail before implementation when the captured lineage cannot admit another
+/// reviewer. This does not reserve an attempt, load Git objects or write a manifest.
+fn preflight_budget(runtime: &OrbitRuntime, context: &GateContext) -> Result<Value, OrbitError> {
+    let lineage = context.lineage_key();
+    if let Some(ledger) = runtime
+        .review_store()?
+        .review_ledger(&context.workspace_id, &lineage)?
+    {
+        let remaining = ledger.remaining_at(Utc::now());
+        let reason = if remaining.seconds == 0 {
+            Some("review_minutes_exhausted")
+        } else if remaining.reviewer_starts == 0 {
+            Some("review_starts_exhausted")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(OrbitError::CapabilityDenied(format!(
+                "review_budget_exhausted: {reason} for lineage '{lineage}'; an operator can run orbit task review-reset {} --lineage '{lineage}' --reason '<decision>' before resuming, or dispatch a fresh delivery run",
+                context.task_ids[0]
+            )));
+        }
+    }
+    Ok(json!({"applies": true, "decision": "preflight_passed", "lineage_key": lineage}))
 }

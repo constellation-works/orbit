@@ -287,7 +287,33 @@ a fresh delivery run of the same tasks — the re-admission after a block —
 starts a new lineage with a full budget [ORB-13890]. Settlement uses the
 lineage its admission named. The first budget written on a lineage is
 captured; a later config change cannot expand or replace it. Reviewer starts
-are reserved before a reviewer launches.
+are reserved before a reviewer launches. The PR pipeline checks the same
+lineage before `implement_bundle`: an exhausted resumed lineage refuses
+without invoking the implementer. This preflight reserves no start and writes
+no reviewer manifest; final admission still atomically checks the budget.
+
+An operator can renew a selected lineage with
+`orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`.
+The refusal names this command. The equivalent MCP action is
+`orbit.task.review_reset` (served with `orbit mcp serve --operator`), with
+`workspace`, `id`, `lineage_key`, and `reason`. Interactive CLI callers have operator authority; noninteractive operators
+use the audited `ORBIT_OPERATOR=1` override. Ordinary agents and managed
+runs cannot reset budgets. The lineage must contain the selected task.
+The decision atomically closes an open attempt, records actor, time, reason,
+previous budget and consumption, and starts a fresh allowance. All attempts
+and earlier decisions remain; the next attempt uses index N+1. Late
+settlement or reviewer events for retired attempts are refused. A reset does
+not approve a verdict or a merge. Inspect the returned ledger after a lost
+reply before repeating a reset.
+
+By default the captured limits remain. Pass `--adopt-configured-budget`
+(MCP `adopt_configured_budget: true`) to explicitly adopt the currently
+configured limits. Raising config alone never changes a ledger.
+For ledgers poisoned by old timeout wall-clock accounting, copy the exact
+lineage key from the original refusal or review manifest, record why the
+charge is invalid using the reset command above, and resume the delivery.
+This also supports the older task/base keys that predate run-root lineages;
+no hand-edit of SQLite or task state is needed.
 
 The lineage is charged reviewer process runtime, not wall time. The engine
 reports the start and end of every reviewer dispatch — each retry and the
@@ -388,7 +414,9 @@ task detail view carry a `review` block: verdict, assurance, reviewer
 implementation and repair commits, findings, validation, consumed and
 remaining budget, landings, and stale-gate reasons. Auto-task inspection and
 the automation panel show `excluded` landings with their certificate. Audit
-rows `review.gate` cover admit, settle, and landing. Task artifacts
+rows `review.gate` cover preflight, admit, settle, and landing. Reset decisions
+are retained atomically in the lineage ledger alongside the normal
+`orbit.task.review_reset` dispatch audit. Task artifacts
 `review-manifest.json`, `review-report.json`, and `review-gate.json` are the
 durable evidence.
 
@@ -414,9 +442,6 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
   `independent_review_with_self_authored_repairs` and says so.
 - Provider token and cost caps are not enforced; only starts, repair cycles,
   and reviewer runtime are bounded, so reviewer spend stays unknown.
-- A resume charges an attempt from the resumed run's start, which includes
-  the skipped steps before the reviewer; the overcount is bounded by that
-  replay and never includes time no run was working.
 - `before-pr` has no meaning on the local-only delivery route and is refused
   at submission rather than downgraded.
 - A denied required check is not evidence either way: it keeps its own

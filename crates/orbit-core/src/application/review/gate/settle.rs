@@ -189,6 +189,12 @@ fn settle(
             ))
         })?;
 
+    if attempt.index <= ledger.reset_through() {
+        return Err(OrbitError::CapabilityDenied(
+            "review_gate_stale: attempt retired by an operator reset; admit a fresh attempt".into(),
+        ));
+    }
+
     // A replay after the certificate was recorded reconciles it instead of
     // judging the candidate twice. A ledger that settled without one is an
     // interrupted settlement, finished below from the same evidence. A

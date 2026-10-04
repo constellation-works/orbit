@@ -16,6 +16,9 @@ spec:
     type: object
     required: [job_run_id, completed_task_ids, workspace_path]
     properties:
+      preflight:
+        type: boolean
+        description: Check existing lineage exhaustion before implementation without reserving a start.
       job_run_id:
         type: string
       completed_task_ids:

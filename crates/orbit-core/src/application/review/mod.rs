@@ -78,3 +78,43 @@ pub(crate) fn lineage_key(
 pub(crate) fn automation_error(error: orbit_automation::AutomationError) -> OrbitError {
     orbit_automation::automation_error_to_orbit(error)
 }
+
+/// Record an operator decision resetting one explicitly selected review lineage.
+/// The tool chokepoint supplies operator authorization; managed leaves are
+/// refused here as well, including an accidentally elevated run.
+pub(crate) fn reset_review(
+    runtime: &crate::OrbitRuntime,
+    input: &serde_json::Value,
+) -> Result<serde_json::Value, OrbitError> {
+    use orbit_common::protocol::tool_input::required_string;
+    use orbit_store::contracts::ReviewResetRequest;
+    if orbit_common::governance::authorization::agent_context_declared() {
+        return Err(OrbitError::CapabilityDenied(
+            "managed agents cannot reset review budgets".into(),
+        ));
+    }
+    let id = required_string(input, &["id"], "id")?;
+    let lineage = required_string(input, &["lineage_key"], "lineage_key")?;
+    let reason = required_string(input, &["reason"], "reason")?;
+    runtime.get_task(&id)?;
+    runtime.ensure_coordination_task_write_permitted()?;
+    let actor = runtime.actor().resolve_write_label(None, None)?;
+    let adopt = input
+        .get("adopt_configured_budget")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let ledger = runtime.review_store()?.review_reset(
+        &runtime.workspace_id()?,
+        &ReviewResetRequest {
+            lineage_key: &lineage,
+            task_id: &id,
+            reason: &reason,
+            actor: &actor,
+            budget: adopt.then(|| runtime.operation_policy().review_budget()),
+            now: chrono::Utc::now(),
+        },
+    )?;
+    // The decision and its prior consumption are atomic in the ledger. The
+    // normal tool-dispatch audit additionally records caller/session provenance.
+    Ok(serde_json::json!({"id": id, "ledger": ledger, "reset": true}))
+}

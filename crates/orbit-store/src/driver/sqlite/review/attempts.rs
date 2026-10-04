@@ -171,7 +171,12 @@ pub(super) fn reserve_new_in(
         ));
     }
 
-    let index = consumed.reviewer_starts.saturating_add(1);
+    let index = ledger
+        .attempts
+        .last()
+        .map_or(0, |a| a.index)
+        .checked_add(1)
+        .ok_or_else(|| OrbitError::Store("review attempt index exhausted".into()))?;
     let attempt = ReviewAttempt {
         attempt_id: attempt_id(request.lineage_key, index),
         index,

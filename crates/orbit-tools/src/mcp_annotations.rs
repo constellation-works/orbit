@@ -52,6 +52,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // original, so a repeat is refused rather than a no-op.
         "orbit.friction.update" => A::destructive(false),
         "orbit.task.artifact.put" => A::destructive(true),
+        "orbit.task.review_reset" => A::destructive(false),
 
         // Starts work outside Orbit's own state: an agent, a workflow run's
         // agents, or an arbitrary process.

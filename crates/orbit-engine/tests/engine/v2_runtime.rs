@@ -1246,3 +1246,84 @@ impl RuntimeHost for ReviewerHost {
         Ok(())
     }
 }
+
+/// Execute the shipped prefix, so an admission refusal must stop the graph
+/// before `implement_one`, even when that step has failure recovery enabled.
+#[test]
+fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation() {
+    struct ExhaustedHost {
+        calls: Mutex<Vec<String>>,
+    }
+    impl RuntimeHost for ExhaustedHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            input: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls.lock().unwrap().push(action.into());
+            if action == "test_review_gate_admit" {
+                assert_eq!(input["preflight"], true);
+                return Err(DispatchError::DeterministicActionRefused {
+                    action: action.into(),
+                    message: "review_budget_exhausted".into(),
+                });
+            }
+            Ok(json!({ "job_run_id": "preflight-run", "workspace_path": "/worktree" }))
+        }
+    }
+    let shipped = std::fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
+    )
+    .unwrap();
+    let shipped = load_job_asset(&shipped).unwrap().spec;
+    let mut job = job_asset(json!([]));
+    job.steps.extend(
+        shipped
+            .steps
+            .into_iter()
+            .take_while(|step| step.id != "commit"),
+    );
+    let mut catalog = V2ActivityCatalog::new();
+    for name in [
+        "worktree_setup",
+        "review_gate_admit",
+        "agent_implement",
+        RECOVERY,
+    ] {
+        catalog.insert(
+            name,
+            ActivityV2 {
+                description: name.into(),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: format!("test_{name}"),
+                    config: Value::Null,
+                }),
+            },
+        );
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let (writer, _, _) = build_writer_and_sinks(root.path(), "preflight-run");
+    let host = ExhaustedHost {
+        calls: Mutex::new(Vec::new()),
+    };
+    let result = execute_job_with_resume(
+        &job,
+        json!({"task_ids": ["fixture-task"], "base_branch": "main", "base_sync": "local"}),
+        "preflight-run",
+        writer,
+        &host,
+        None,
+    );
+    assert!(!matches!(&result, Ok(outcome) if outcome.success));
+    assert_eq!(
+        *host.calls.lock().unwrap(),
+        ["test_worktree_setup", "test_review_gate_admit"],
+        "an exhausted lineage consumes no implementer or recovery invocation: {result:?}"
+    );
+}

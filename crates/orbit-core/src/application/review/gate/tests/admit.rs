@@ -183,3 +183,99 @@ fn a_re_review_applies_only_after_completion_recorded_a_rebase_and_pins_its_base
     assert_eq!(admission["head_sha"], head_sha.as_str());
     assert_eq!(admission["base_sha"], base_sha.as_str());
 }
+
+#[test]
+fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_start() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_start,
+    )) {
+        return;
+    }
+    use orbit_store::contracts::{ReviewResetRequest, ReviewSettlement};
+    let gated = gated_fixture(&format!("{BEFORE_PR}review_reviewer_starts = 1\n"));
+    let first = gated.admit().expect("admit the only allowed start");
+    gated.reviewer_ran(&gated.run_id, &first, 8000);
+    let runtime = &gated.fixture.runtime;
+    let workspace = runtime.workspace_id().unwrap();
+    let store = runtime.review_store().unwrap();
+    let lineage = first["lineage_key"].as_str().unwrap();
+    let attempt = first["attempt_id"].as_str().unwrap();
+    let preflight_input = json!({
+        "job_run_id": gated.run_id,
+        "completed_task_ids": gated.bundle,
+        "workspace_path": gated.fixture.repo,
+        "base": "main", "preflight": true,
+    });
+    let preflight = || {
+        crate::application::review::review_gate_admit(
+            runtime,
+            "review_gate_admit",
+            &preflight_input,
+        )
+    };
+    let error = preflight().expect_err("exhaustion refuses before implementation");
+    assert!(
+        matches!(error, DispatchError::DeterministicActionRefused { .. }),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("orbit task review-reset"),
+        "{error}"
+    );
+    let reset = store
+        .review_reset(
+            &workspace,
+            &ReviewResetRequest {
+                lineage_key: lineage,
+                task_id: &gated.task_id,
+                reason: "Repair obsolete timeout accounting",
+                actor: "human:operator",
+                budget: None,
+                now: Utc::now(),
+            },
+        )
+        .expect("reset with the open attempt still present");
+    assert_eq!(reset.attempts.len(), 1);
+    assert!(reset.open_attempt().is_none());
+    assert_eq!(reset.consumed_seconds, 0);
+    assert_eq!(reset.consumed().reviewer_starts, 0);
+    assert_eq!(reset.decisions[0].previous_consumption.seconds, 8000);
+    assert_eq!(reset.decisions[0].previous_consumption.reviewer_starts, 1);
+    assert_eq!(
+        reset.decisions[0].reason,
+        "Repair obsolete timeout accounting"
+    );
+    assert_eq!(reset.decisions[0].actor, "human:operator");
+    let historical = reset.as_of(attempt).unwrap();
+    assert_eq!(historical.consumed().seconds, 8000);
+    assert!(historical.decisions.is_empty());
+    assert!(
+        store
+            .review_settle(
+                &workspace,
+                &ReviewSettlement {
+                    lineage_key: lineage,
+                    attempt_id: attempt,
+                    verdict: ReviewVerdict::PassedWithoutRepairs,
+                    repair_cycles: 0,
+                    now: Utc::now(),
+                }
+            )
+            .is_err(),
+        "late settlement cannot resurrect the retired attempt"
+    );
+    assert_eq!(preflight().unwrap()["decision"], "preflight_passed");
+    assert_eq!(
+        store.review_ledger(&workspace, lineage).unwrap().unwrap(),
+        reset,
+        "preflight reserves no attempt"
+    );
+    let next = gated.admit().expect("the reset permits another admission");
+    assert_eq!(next["attempt_index"], 2);
+    assert_ne!(next["attempt_id"], first["attempt_id"]);
+    let ledger = gated.ledger(&next);
+    assert_eq!(ledger.attempts.len(), 2);
+    assert_eq!(ledger.decisions, reset.decisions);
+    assert_eq!(ledger.consumed().reviewer_starts, 1);
+    assert_eq!(ledger.as_of(attempt).unwrap().consumed().seconds, 8000);
+}

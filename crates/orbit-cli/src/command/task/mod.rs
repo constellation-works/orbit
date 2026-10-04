@@ -14,6 +14,7 @@ pub(crate) mod output;
 mod publication;
 mod recheck_blocked;
 mod reindex;
+mod review_reset;
 pub(crate) mod show;
 mod update;
 

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReservation,
+    ReviewResetDecision,
 };
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -13,11 +14,58 @@ use super::attempts::{
 use super::ledger::{decode, encode, ledgers_held_by, read_ledger, write_ledger};
 use crate::Store;
 use crate::contracts::{
-    ReviewInvocationRecord, ReviewRelease, ReviewReserveRequest, ReviewSettlement,
-    ReviewStoreBackend,
+    ReviewInvocationRecord, ReviewRelease, ReviewReserveRequest, ReviewResetRequest,
+    ReviewSettlement, ReviewStoreBackend,
 };
 
 impl ReviewStoreBackend for Store {
+    fn review_reset(
+        &self,
+        workspace_id: &str,
+        request: &ReviewResetRequest<'_>,
+    ) -> Result<ReviewLedger, OrbitError> {
+        if request.reason.trim().is_empty() || request.actor.trim().is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "review reset requires a non-empty reason and actor".into(),
+            ));
+        }
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn = tx.connection();
+            let mut ledger =
+                read_ledger(conn, workspace_id, request.lineage_key)?.ok_or_else(|| {
+                    OrbitError::InvalidInput("review reset: selected lineage has no ledger".into())
+                })?;
+            if !ledger.task_ids.iter().any(|id| id == request.task_id) {
+                return Err(OrbitError::InvalidInput(
+                    "review reset: selected lineage does not contain this task".into(),
+                ));
+            }
+            let revision = ledger.revision;
+            if let Some(open) = ledger.open_attempt().cloned() {
+                release_attempt(&mut ledger, &open.attempt_id, request.now, request.now);
+            }
+            let budget = request.budget.unwrap_or(ledger.budget);
+            if budget.reviewer_starts == 0 || budget.minutes == 0 {
+                return Err(OrbitError::InvalidInput(
+                    "review reset requires a usable review budget".into(),
+                ));
+            }
+            ledger.decisions.push(ReviewResetDecision {
+                after_attempt_index: ledger.attempts.last().map_or(0, |a| a.index),
+                reason: request.reason.trim().to_string(),
+                actor: request.actor.to_string(),
+                recorded_at: request.now,
+                previous_budget: ledger.budget,
+                previous_consumption: ledger.consumed(),
+                budget,
+            });
+            ledger.budget = budget;
+            ledger.consumed_seconds = 0;
+            write_ledger(conn, workspace_id, Some(revision), &mut ledger, request.now)?;
+            Ok(ledger)
+        })
+    }
+
     fn review_ledger(
         &self,
         workspace_id: &str,
@@ -84,6 +132,15 @@ impl ReviewStoreBackend for Store {
                     ))
                 })?;
             let previous_revision = ledger.revision;
+            if ledger
+                .attempts
+                .iter()
+                .any(|a| a.attempt_id == settlement.attempt_id && a.index <= ledger.reset_through())
+            {
+                return Err(OrbitError::CapabilityDenied(
+                    "review attempt retired by an operator reset; admit a fresh attempt".into(),
+                ));
+            }
             let already_settled = ledger.attempts.iter().any(|attempt| {
                 attempt.attempt_id == settlement.attempt_id
                     && attempt.released_at.is_none()
@@ -130,6 +187,15 @@ impl ReviewStoreBackend for Store {
                     ))
                 })?;
             let previous_revision = ledger.revision;
+            if ledger
+                .attempts
+                .iter()
+                .any(|a| a.attempt_id == release.attempt_id && a.index <= ledger.reset_through())
+            {
+                return Err(OrbitError::CapabilityDenied(
+                    "review attempt retired by an operator reset; admit a fresh attempt".into(),
+                ));
+            }
             if !ledger
                 .attempts
                 .iter()
@@ -204,6 +270,15 @@ impl ReviewStoreBackend for Store {
                     ))
                 })?;
             let previous_revision = ledger.revision;
+            if ledger
+                .attempts
+                .iter()
+                .any(|a| a.attempt_id == record.attempt_id && a.index <= ledger.reset_through())
+            {
+                return Err(OrbitError::CapabilityDenied(
+                    "review attempt retired by an operator reset; admit a fresh attempt".into(),
+                ));
+            }
             if record_invocation(
                 &mut ledger,
                 record.attempt_id,

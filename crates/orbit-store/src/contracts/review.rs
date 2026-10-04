@@ -59,7 +59,27 @@ pub struct ReviewInvocationRecord<'a> {
     pub now: DateTime<Utc>,
 }
 
+/// Reset one explicitly selected lineage. Authorization belongs to Core;
+/// Store atomically retains the old attempts and the operator decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewResetRequest<'a> {
+    pub lineage_key: &'a str,
+    pub task_id: &'a str,
+    pub reason: &'a str,
+    pub actor: &'a str,
+    /// None retains the captured budget; Some explicitly adopts a new one.
+    pub budget: Option<ReviewBudget>,
+    pub now: DateTime<Utc>,
+}
+
 pub trait ReviewStoreBackend: Send + Sync {
+    /// Close the open attempt and start a fresh budget, preserving all history.
+    fn review_reset(
+        &self,
+        workspace_id: &str,
+        request: &ReviewResetRequest<'_>,
+    ) -> Result<ReviewLedger, OrbitError>;
+
     /// The ledger for one lineage, if any attempt was ever reserved.
     fn review_ledger(
         &self,

@@ -16,6 +16,7 @@ use super::list::TaskListArgs;
 use super::publication::TaskPublicationCommand;
 use super::recheck_blocked::TaskRecheckBlockedArgs;
 use super::reindex::TaskReindexArgs;
+use super::review_reset::TaskReviewResetArgs;
 use super::show::TaskShowArgs;
 use super::update::TaskUpdateArgs;
 
@@ -43,6 +44,7 @@ Health:
   lint         Lint tasks for context-file and acceptance-criteria problems
   flow         Show filed-vs-closed rates over time — is the backlog draining?
   locks        Inspect, reserve, and release the file locks that gate dispatch
+  review-reset Reset one review lineage budget with an audited reason
   recheck-blocked
                Requeue tasks blocked by a provider launcher that now resolves
 
@@ -113,6 +115,8 @@ pub enum TaskSubcommand {
     Flow(TaskFlowArgs),
     /// Inspect, reserve, and release task file locks
     Locks(LocksCommand),
+    /// Reset a review lineage budget with an audited operator reason
+    ReviewReset(TaskReviewResetArgs),
     /// Re-check tasks blocked by a missing provider launcher; `--confirm` returns
     /// the ones whose launcher now resolves to backlog
     RecheckBlocked(TaskRecheckBlockedArgs),
@@ -140,6 +144,7 @@ impl Execute for TaskSubcommand {
             TaskSubcommand::Flow(args) => args.execute(runtime),
             TaskSubcommand::Locks(cmd) => cmd.execute(runtime),
             TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
+            TaskSubcommand::ReviewReset(args) => args.execute(runtime),
             TaskSubcommand::Export(args) => args.execute(runtime),
             TaskSubcommand::Import(args) => args.execute(runtime),
             TaskSubcommand::Publication(command) => command.execute(runtime),
