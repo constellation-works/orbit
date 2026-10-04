@@ -10,7 +10,7 @@ use orbit_types::{
 };
 use serde_json::{Value, json};
 
-use super::desktop_read_tools::bounded_text;
+use super::read::bounded_text;
 use crate::{
     OrbitRuntime,
     application::{
@@ -147,7 +147,7 @@ fn boolean(input: &Value, key: &str) -> Result<bool, OrbitError> {
         .ok_or_else(|| invalid(&format!("{key} must be a boolean")))
 }
 
-pub(super) fn control(
+pub(in crate::adapter::tool_host) fn control(
     runtime: &OrbitRuntime,
     input: Value,
     trigger: JobRunTrigger,

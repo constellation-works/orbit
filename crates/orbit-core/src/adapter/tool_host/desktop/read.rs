@@ -36,13 +36,10 @@ pub(super) fn read(
         "tasks" => tasks(runtime, &input, limit)?,
         "task" => task(runtime, session, &input, limit)?,
         "runs" => runs(runtime, &input, limit)?,
-        "drain" => super::desktop_drain_tools::readiness(runtime)?,
-        "routines" | "auto_tasks" | "jobs" => super::desktop_automation_tools::read(
-            runtime,
-            &scope,
-            number(&input, "offset", 0)?,
-            limit,
-        )?,
+        "drain" => super::drain::readiness(runtime)?,
+        "routines" | "auto_tasks" | "jobs" => {
+            super::automation::read(runtime, &scope, number(&input, "offset", 0)?, limit)?
+        }
         "run" => run(runtime, &input, limit)?,
         _ => {
             return Err(invalid(
@@ -169,8 +166,8 @@ fn task(
     let artifacts = number(input, "artifacts_offset", 0)?;
     let snapshot =
         runtime.desktop_task_snapshot_page(&id, comments, history, artifacts, limit, session)?;
-    let mut value =
-        serde_json::to_value(snapshot).map_err(super::json::serialize_error("desktop task"))?;
+    let mut value = serde_json::to_value(snapshot)
+        .map_err(super::super::json::serialize_error("desktop task"))?;
     for (field, offset) in [
         ("comments", comments),
         ("history", history),
@@ -245,7 +242,7 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
         state.as_ref().map(|state| &state.step_outputs),
         progress.provider_processes.last(),
     ))
-    .map_err(super::json::serialize_error(
+    .map_err(super::super::json::serialize_error(
         "serialize agent invocation result",
     ))?;
     let execution_progress = json!({"state": progress.state,

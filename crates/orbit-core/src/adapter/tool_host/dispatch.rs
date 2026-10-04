@@ -79,25 +79,23 @@ pub(super) fn execute(
         OrbitBuiltinAction::AutoTaskMint => super::auto_task_tools::mint(runtime, input),
         OrbitBuiltinAction::AutoTaskShow => super::auto_task_tools::show(runtime, input),
         OrbitBuiltinAction::AutoTaskUpdate => super::auto_task_tools::update(runtime, input),
-        OrbitBuiltinAction::DesktopAutomation => super::desktop_automation_tools::control(
-            runtime,
-            input,
-            submission_trigger(session_context),
-        ),
-        OrbitBuiltinAction::DesktopDrain => super::desktop_drain_tools::control(
+        OrbitBuiltinAction::DesktopAutomation => {
+            super::desktop::automation::control(runtime, input, submission_trigger(session_context))
+        }
+        OrbitBuiltinAction::DesktopDrain => super::desktop::drain::control(
             runtime,
             input,
             submission_trigger(session_context),
             &super::workflow_tools::actor(runtime, agent.as_deref(), model.as_deref()),
         ),
         OrbitBuiltinAction::DesktopRead => {
-            super::desktop_tools::read(runtime, session_context, input)
+            super::desktop::task::read(runtime, session_context, input)
         }
         OrbitBuiltinAction::DesktopTaskSnapshot => {
-            super::desktop_tools::snapshot(runtime, session_context, input)
+            super::desktop::task::snapshot(runtime, session_context, input)
         }
         OrbitBuiltinAction::DesktopTaskWrite => {
-            super::desktop_tools::write(runtime, session_context, input, agent, model)
+            super::desktop::task::write(runtime, session_context, input, agent, model)
         }
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
         OrbitBuiltinAction::DrainClaims => super::drain_tools::claims(runtime, input),
