@@ -37,10 +37,11 @@ Open it, read the description and criteria, and click **Approve**. It moves to
 `backlog`. If the task is wrong, click **reject**, or ask your agent to fix it
 first.
 
-![Two tasks under Awaiting approval with Approve buttons, above four backlog tasks with Ship buttons.](../../../assets/dashboard/dashboard-approve-ship.png)
+![The Tasks list: proposed tasks under Awaiting approval with Approve buttons, a task in progress with View run, and backlog tasks with Ship buttons.](../../../assets/dashboard/dashboard-approve-ship.png)
 
-You can also tell your agent to approve it. Either way, nothing reaches the
-backlog without your approval.
+You can also tell your agent to approve it. Either way, approval is an
+explicit step, recorded in the task's history; nothing approves a task on its
+own.
 
 ## 3. Ship it
 
@@ -48,7 +49,7 @@ Click **Ship** on the task. Orbit reserves the files the task touches, gives it
 an isolated worktree, and runs an agent in the sandbox to plan, execute, and
 review the change. Click **View run** to follow each step live.
 
-![An open backlog task: its description, acceptance criteria, context files, and history, with Ship, Comment, Reject, and Archive buttons.](../../../assets/dashboard/dashboard-task-detail.png)
+![A finished ship run: its job, state, and duration, and a step timeline from worktree through implement, validate, review gate, and push to pr_open.](../../../assets/dashboard/dashboard-run-detail.png)
 
 Asking your agent to ship it starts the same run. In the default `pr` ship
 mode, the run ends by opening a pull request.

@@ -46,10 +46,11 @@ recorded in the task's status history.
 
 The two gates are independent:
 
-- **Entering the backlog is your decision.** No run, flag, or schedule
-  approves a `proposed` task, with one exception you opt into: an enabled CI
-  failure sweep promotes the repair tasks it files once its pilot validates
-  them.
+- **Entering the backlog takes an explicit approval.** You give it in the
+  dashboard or the CLI, or your agent gives it with `orbit.task.update` when
+  you ask; the task's history records who. No run, flag, or schedule approves
+  a `proposed` task, with one exception you opt into: an enabled CI failure
+  sweep promotes the repair tasks it files once its pilot validates them.
 - **Completing out of `review`** can instead be authorized per run with
   `--complete`. It never approves `proposed` work. See
   [Completing work with `--complete`](../../getting-started/workflows/#completing-work-with---complete).

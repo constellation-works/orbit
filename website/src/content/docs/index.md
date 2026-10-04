@@ -88,7 +88,7 @@ next: false
 <section class="orbit-guarantees" aria-label="What Orbit guarantees">
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
-    <div><h2>Nothing runs until you approve</h2><p>New tasks land in <code>proposed</code>. Your agent can file as many as it likes; only your approval moves one into the backlog.</p></div>
+    <div><h2>Nothing runs until you approve</h2><p>New tasks land in <code>proposed</code>. Your agent can file as many as it likes; each one waits for an explicit approval, from you or from your agent when you tell it to.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M8.5 6H12a3.5 3.5 0 0 1 3.5 3.5"/></svg></div>

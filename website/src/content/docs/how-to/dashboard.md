@@ -256,7 +256,7 @@ the longer fields.
 ### Routines
 
 
-![Automation → Routines: the five seeded routines, each switched off, with its cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
+![Automation → Routines: the next hour's fires on a timeline, then each routine with its switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
 A **Next hour** strip shows each routine due in the next hour: solid if it
 will fire, hollow if it is paused. A paused routine's slot is skipped, not
 queued. An enabled routine that cannot take effect shows a **blocked** pill.

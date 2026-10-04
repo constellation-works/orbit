@@ -56,9 +56,9 @@ kept beside it as the source. Both come from the brand kit in the marketing repo
 (`brand/card.py --brand orbit --keep-svg`), as do the Bead mark in
 `src/assets/orbit-logo-*.svg` and `public/favicon.svg` (`brand/build.py`); change
 the generators there rather than editing these files by hand. The dashboard
-screenshots in `src/assets/dashboard/` come from
-[`scripts/dashboard-shots/`](scripts/dashboard-shots/README.md), which captures
-them from a throwaway demo workspace; rerun it when the dashboard changes.
+screenshots in `src/assets/dashboard/` are captured from a live dashboard by
+[`scripts/dashboard-shots/`](scripts/dashboard-shots/README.md); rerun it when
+the dashboard changes.
 
 Every published page is authored by hand under `src/content/docs/`, with two
 exceptions under `src/pages/`: `/changelog/` renders the repository's tracked
