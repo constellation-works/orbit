@@ -80,7 +80,7 @@ git log v<prev>..HEAD --pretty='%s' --no-merges | grep -oE '\[[A-Z]+-[0-9]+\]' |
 
 ### 2. Draft the CHANGELOG entry
 
-The CHANGELOG is a short consumer-facing release note, not a commit log. PRs never touch it. You compile the section at release time from the survey.
+The CHANGELOG is a short consumer-facing release note, not a commit log. PRs never touch it outside authorized release preparation. You compile the section at release time from the survey.
 
 Add `## <X.Y.Z>` at the top of `CHANGELOG.md` with:
 
@@ -100,7 +100,7 @@ Bullet shape:
 - Migration steps, rationale, and test inventories stay in the cited task or commit. The task ID is the pointer.
 - A breaking bullet gets at most one extra line, with the migration as a phrase (`x removed → use y`).
 
-The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. Nothing mechanically blocks a non-release `CHANGELOG.md` edit. The rule is in [AGENTS.md](AGENTS.md) and review.
+The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. Non-release `CHANGELOG.md` edits are forbidden by [AGENTS.md](AGENTS.md) and rejected at review: before-PR review (`agent_review_repair`) explicitly flags any non-release diff touching `CHANGELOG.md` as an open finding and returns `changes_required` without repairing that file, ensuring only authorized release-preparation tasks (tagged `release`) can edit `CHANGELOG.md`.
 
 ### 3. Confirm breaking changes with the human
 
