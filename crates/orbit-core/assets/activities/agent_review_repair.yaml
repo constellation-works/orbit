@@ -91,6 +91,18 @@ spec:
        or CI result is not evidence; verify claims against code. Then review
        quality: correctness, error paths, tests, docs, and repository
        standards from the workspace AGENTS.md.
+       Enforce repository standards for `CHANGELOG.md`: non-release tasks must
+       never add or edit its entries (AGENTS.md and RELEASING.md). Unless the
+       pinned manifest or injected task identifies an authorized
+       release-preparation task tagged `release` and titled
+       `Prepare v<X.Y.Z> release`, treat any diff touching root `CHANGELOG.md`
+       as a repository-standard violation. A file selector or incidental
+       mention alone does not authorize an edit. Record an open finding; do
+       not repair or remove the file change in this task. Return
+       `changes_required` and explain that the change must be removed or
+       handled by an authorized release-preparation task. The settle step
+       blocks PR publication for that verdict. Review an authorized release
+       change against the checklist and style rules in RELEASING.md.
     3. Record each finding with a stable id, severity, summary, and paths. Repair
        directly only concrete correctness, test, or documentation defects that
        stay inside the accepted intent. A coupled repair of a derived artifact
@@ -99,8 +111,8 @@ spec:
        Listing those paths with disposition `repaired` is sufficient; the gate
        widens `context_files` from that declaration, so you do not have to call
        `orbit.task.update` first. Requirement changes, new dependency edges,
-       substantial redesign, unrelated cleanup, and anything you are unsure
-       about stay open findings.
+       substantial redesign, unrelated cleanup, non-release `CHANGELOG.md`
+       edits, and anything you are unsure about stay open findings.
     4. Run the repository's required validation on the final worktree state
        (for this repository at least `make ci-fast` and `make ci-lint`, plus the
        focused tests for the change). Record every command you ran or could not
@@ -138,7 +150,8 @@ spec:
        - `passed_with_repairs`: every finding is `repaired`, every required
          check passed on the repaired tree, and you changed files.
        - `changes_required`: findings remain open that you may not or could not
-         repair; set `escalation` to the decision needed.
+         repair (including a non-release edit to `CHANGELOG.md`); set
+         `escalation` to the decision needed.
        - `incomplete`: the review could not be completed (missing evidence,
          a denied required check, ambiguous intent, mismatch); set
          `escalation`.
