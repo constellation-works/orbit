@@ -253,6 +253,59 @@ fn config_set_rejections_leave_config_files_byte_identical() {
 }
 
 #[test]
+fn workspace_config_set_validates_crews_against_the_effective_config() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+
+    let global_config = fixture.home.join(".orbit/config.toml");
+    let mut global = fs::read_to_string(&global_config).expect("read global config");
+    global.push_str(
+        "\n[crews.global-only]\nenabled = true\nprovider = \"codex\"\nmodel = \"gpt-test\"\n",
+    );
+    fs::write(&global_config, global).expect("add global crew");
+
+    let workspace_config = fixture.work.join(".orbit/config.toml");
+    let workspace = "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\", \"global-only\"]\n\n[crews.sol]\nenabled = true\nprovider = \"codex\"\nmodel = \"gpt-test\"\n";
+    fs::write(&workspace_config, workspace).expect("write workspace config");
+
+    fixture
+        .orbit()
+        .args(["config", "set", "workflow.base_branch", "qa"])
+        .assert()
+        .success();
+    let valid_workspace: toml::Value = fs::read_to_string(&workspace_config)
+        .expect("read workspace config")
+        .parse()
+        .expect("parse workspace config");
+    assert_eq!(
+        valid_workspace["workflow"]["base_branch"].as_str(),
+        Some("qa"),
+        "workspace config set must persist an unrelated edit when its pool crew is global"
+    );
+
+    let invalid_workspace = "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\", \"global-only\", \"missing\"]\nbase_branch = \"qa\"\n\n[crews.sol]\nenabled = true\nprovider = \"codex\"\nmodel = \"gpt-test\"\n";
+    fs::write(&workspace_config, invalid_workspace).expect("add undefined pool crew");
+    let rejected = fixture
+        .orbit()
+        .args(["config", "set", "workflow.base_branch", "rejected"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("workflow.low_complexity_crews: crew 'missing' is not defined in [crews.*]"),
+        "undefined crew must retain the effective-config error: {}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&workspace_config).expect("read rejected workspace config"),
+        invalid_workspace,
+        "a rejected workspace edit must not change the config file"
+    );
+}
+
+#[test]
 fn tool_toggles_and_mcp_registration_print_json_documents() {
     let fixture = Fixture::new();
     fixture.init_machine_and_workspace();

@@ -55,7 +55,13 @@ impl Execute for ConfigSetArgs {
         };
 
         store.set_value(&self.key, &self.value)?;
-        store.validate_for_set(&self.key)?;
+        match store.scope() {
+            ConfigScope::Global => store.validate_for_set(&self.key)?,
+            ConfigScope::Workspace => {
+                let global_root = runtime.global_root();
+                store.validate_workspace_for_set(&self.key, &global_root)?;
+            }
+        }
         store.save()?;
 
         let scope = store.scope().label();
