@@ -211,11 +211,15 @@ tests that close the gap toward the target.
 
 ### Tests that depend on host process visibility
 
-A few suites derive a process-start identity token from `ps -o lstart=`
-(`orbit_common::process::identity`). Some launch environments refuse to
-execute `ps` at all — the macOS agent-executor sandbox denies it — so those
-probes return `Unavailable` and production takes its documented fail-safe
-branch: an owner it cannot verify is neither finalized nor signalled.
+A few suites derive a process-start identity token with
+`orbit_common::process::identity`. Linux reads `/proc/<pid>/stat` and the
+kernel boot time without needing `ps` on `PATH`. macOS tries libproc first;
+other Unix hosts use `ps -o lstart=`. All stable tokens retain the UTC /
+C-locale `ps` rendering, so persisted tokens remain compatible. Legacy tokens
+written in the caller's local environment still have a `ps` fallback.
+Unreadable kernel data or an unavailable fallback can make a probe
+`Unavailable`; production then takes its documented fail-safe branch:
+an owner it cannot verify is neither finalized nor signalled.
 
 A test whose subject *is* the derived token must therefore ask before
 asserting, rather than fail for a reason unrelated to the code under test.

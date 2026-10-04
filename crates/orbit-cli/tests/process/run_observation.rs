@@ -536,12 +536,145 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     assert_eq!(fixture.run_state(run_id), "success");
 }
 
+/// Capture the pre-change stable timestamp independently of Orbit's probe.
+#[cfg(target_os = "linux")]
+fn ps_lstart_utc(pid: u32) -> String {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("TZ", "UTC")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .output()
+        .expect("capture pre-change ps fixture");
+    assert!(output.status.success(), "ps fixture: {output:?}");
+    let raw = String::from_utf8(output.stdout).unwrap().trim().to_string();
+    assert!(!raw.is_empty(), "ps must describe the live fixture process");
+    raw
+}
+
+/// Re-execution clears PATH only in the child, without changing the parallel
+/// test runner's environment. The fixture token comes from the old ps probe.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
+    use orbit_common::process::identity::{
+        ProbeOutcome, STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace,
+        legacy_lstart_matches, probe_process_start_identity, stable_tokens_match,
+    };
+
+    const PID: &str = "ORBIT_TEST_LSTART_PID";
+    const RAW: &str = "ORBIT_TEST_LSTART_RAW";
+    const TOKEN: &str = "ORBIT_TEST_LSTART_TOKEN";
+    if let Ok(pid) = std::env::var(PID) {
+        assert_eq!(std::env::var("PATH").unwrap(), "");
+        let pid = pid.parse().unwrap();
+        let raw = std::env::var(RAW).unwrap();
+        let token = std::env::var(TOKEN).unwrap();
+        assert_eq!(
+            probe_process_start_identity(pid),
+            ProbeOutcome::Token(token.clone()),
+            "PATH-free kernel identity must equal the pre-change ps fixture"
+        );
+        assert!(stable_tokens_match(
+            &token,
+            &format!("{STABLE_TOKEN_PREFIX_V1}{raw}")
+        ));
+        assert!(legacy_lstart_matches(pid, &raw));
+        assert!(!legacy_lstart_matches(pid, "different start time"));
+        assert_eq!(
+            probe_process_start_identity(u32::MAX),
+            ProbeOutcome::NoProcess
+        );
+        return;
+    }
+
+    let pid = std::process::id();
+    let raw = ps_lstart_utc(pid);
+    let namespace = current_pid_namespace().expect("Linux PID namespace");
+    let token = format!("{STABLE_TOKEN_PREFIX}pidns={namespace}:{raw}");
+    assert_eq!(
+        probe_process_start_identity(pid),
+        ProbeOutcome::Token(token.clone())
+    );
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    test_env::clear_inherited_authority(|name| {
+        child.env_remove(name);
+    });
+    let output = child
+        .args([
+            "--exact",
+            "run_observation::linux_start_identity_without_ps_matches_pre_change_owner_tokens",
+            "--nocapture",
+        ])
+        .env("PATH", "")
+        .env("TZ", "Pacific/Honolulu")
+        .env("LC_ALL", "C.UTF-8")
+        .env(PID, pid.to_string())
+        .env(RAW, raw)
+        .env(TOKEN, token)
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "PATH-free probe: {output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+        "the child must execute the identity assertions: {output:?}"
+    );
+}
+
+/// Persist real ps-derived v2, v1 and legacy tokens in the store, then drive
+/// cancellation through the built binary with no ps on its PATH.
+#[cfg(target_os = "linux")]
+#[test]
+fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
+    use orbit_common::process::identity::{
+        STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace, process_is_alive,
+    };
+
+    let fixture = Fixture::init();
+    for format in ["v2", "v1", "legacy"] {
+        let owner = test_env::spawn_unrelated_process();
+        let raw = ps_lstart_utc(owner.pid());
+        let token = match format {
+            "v2" => format!(
+                "{STABLE_TOKEN_PREFIX}pidns={}:{raw}",
+                current_pid_namespace().unwrap()
+            ),
+            "v1" => format!("{STABLE_TOKEN_PREFIX_V1}{raw}"),
+            _ => raw,
+        };
+        let run_id = format!("jrun-pre-change-{format}");
+        let now = chrono::Utc::now().to_rfc3339();
+        fixture
+            .db()
+            .execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                scheduled_at, started_at, created_at, pid, pid_start_time)
+             VALUES (?1, ?2, 'fixture_job', 1, 'running', ?3, ?3, ?3, ?4, ?5)",
+                params![run_id, fixture.workspace_id(), now, owner.pid(), token],
+            )
+            .unwrap();
+        let cancelled = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
+        assert_eq!(cancelled["outcome"], "cancelled", "{format}: {cancelled}");
+        assert!(
+            cancelled["signal_outcome"]
+                .as_str()
+                .is_some_and(|outcome| outcome.starts_with("terminated_")),
+            "pre-change {format} owner token must still verify: {cancelled}"
+        );
+        assert!(
+            !process_is_alive(owner.pid()),
+            "{format} owner must be stopped"
+        );
+    }
+}
+
 /// Cancelling a live run ends its worker by signal while the launching CLI is
 /// still observing that worker. The observer must treat the signalled exit as
 /// the cancellation's own outcome rather than a worker failure racing it to
 /// the terminal state, and the cancelled outcome must survive a repeat
 /// cancel.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     use std::process::{Child, Stdio};
@@ -570,15 +703,7 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     }
 
     let fixture = Fixture::init();
-    // Owner verification reads the worker's start time through `ps`. Link it
-    // in so the cancel can verify and signal its worker; PATH still holds no
-    // provider launcher.
-    let ps = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .chain([PathBuf::from("/bin"), PathBuf::from("/usr/bin")])
-        .map(|dir| dir.join("ps"))
-        .find(|candidate| candidate.is_file())
-        .expect("ps on the test host");
-    std::os::unix::fs::symlink(ps, fixture.home.join("empty-bin/ps")).unwrap();
+    // Native Linux/macOS owner verification must work with no ps on PATH.
     let jobs = fixture.home.join(".orbit/resources/jobs");
     fs::create_dir_all(&jobs).unwrap();
     fs::write(jobs.join("cancel_fixture.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: cancel_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 60\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
@@ -643,6 +768,12 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     assert_eq!(cancelled["previous_state"], "running");
     assert_eq!(cancelled["final_state"], "cancelled");
     assert_eq!(cancelled["signal_attempted"], true, "{cancelled}");
+    assert!(
+        cancelled["signal_outcome"]
+            .as_str()
+            .is_some_and(|outcome| outcome.starts_with("terminated_")),
+        "cancellation must acknowledge terminating the worker: {cancelled}"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(30);
     while launcher.0.try_wait().unwrap().is_none() {
@@ -681,8 +812,8 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
         );
     }
 
-    let audits: Vec<String> = fixture
-        .json(&["audit", "list", "--limit", "200", "--json"])
+    let audit_rows = fixture.json(&["audit", "list", "--limit", "200", "--json"]);
+    let audits: Vec<String> = audit_rows
         .as_array()
         .unwrap()
         .iter()
@@ -699,6 +830,24 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
             "cancellation audit trail lacks {audit}: {audits:?}"
         );
     }
+    let worker_exit = audit_rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["target_id"] == run_id.as_str()
+                && row["tool_name"] == "pipeline.run.cancel.worker_exit"
+        })
+        .expect("recorded worker exit");
+    let exit: Value =
+        serde_json::from_str(worker_exit["arguments_json"].as_str().unwrap()).unwrap();
+    assert_eq!(exit["owner_pid"], worker_pid);
+    assert_eq!(exit["signal"], libc::SIGTERM);
+    assert!(
+        exit["exit_status"]
+            .as_str()
+            .is_some_and(|status| !status.is_empty())
+    );
 
     let repeated = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
     assert_eq!(repeated["outcome"], "already_terminal");
