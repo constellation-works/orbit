@@ -1,8 +1,8 @@
 ---
 title: Task Migration — Overview
 owner: claude
-last_updated: 2026-09-11
-last_validated: 2026-09-11
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: task-migration
 doc_role: overview
@@ -77,7 +77,7 @@ machine a disjoint id range).
 | Export / validated import + renumber | [crates/orbit-store/src/workflow/task/export.rs](../../../crates/orbit-store/src/workflow/task/export.rs), [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-00034] |
 | Reindex from disk | [crates/orbit-store/src/workflow/task/reindex.rs](../../../crates/orbit-store/src/workflow/task/reindex.rs) | [ORB-00034] |
 | Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs) | [ORB-00034], [ORB-10721] |
-| Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/mod.rs](../../../crates/orbit-cmd/src/registry/runtime/mod.rs) | [ORB-10721] |
+| Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs) | [ORB-10721] |
 | Runtime facades | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
 | `[tasks] id_start` config | [crates/orbit-config/src/raw.rs](../../../crates/orbit-config/src/raw.rs) | [ORB-00034] |
