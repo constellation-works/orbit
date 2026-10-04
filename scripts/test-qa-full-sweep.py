@@ -246,6 +246,16 @@ def validate_inventory(repo: Path, inventory: dict):
     for scenario in inventory["scenarios"]:
         if not scenario.get("assertions"):
             errors.append(f"scenario {scenario['id']} has no concrete assertions")
+        if scenario.get("kind") == "coverage-gap":
+            reason = scenario.get("coverage_gap")
+            if not isinstance(reason, str) or not reason.strip():
+                errors.append(f"scenario {scenario['id']} has an unexplained coverage gap")
+            if "command" in scenario or "required_tests" in scenario:
+                errors.append(f"scenario {scenario['id']} claims executable coverage for a gap")
+        elif "coverage_gap" in scenario:
+            errors.append(f"scenario {scenario['id']} must declare kind coverage-gap")
+        if is_cargo_test(scenario.get("command", [])) and "required_tests" not in scenario:
+            errors.append(f"scenario {scenario['id']} has no required behavioral cases")
         if "required_tests" in scenario:
             tests = scenario["required_tests"]
             if (not isinstance(tests, list) or not tests
@@ -273,6 +283,72 @@ def validate_inventory(repo: Path, inventory: dict):
         if not required_behaviors.issubset(set(scenario["behavior"])):
             errors.append(f"scenario {scenario['id']} lacks normal/failure coverage")
     return errors, {kind: sorted(entries) for kind, entries in actual.items()}
+
+
+def is_cargo_test(command):
+    return len(command) >= 2 and Path(command[0]).name == "cargo" and command[1] == "test"
+
+
+def validate_cargo_target(command, packages):
+    """Check the inventory's explicit package/target against Cargo metadata."""
+    try:
+        package = command[command.index("-p") + 1]
+        targets = packages[package]
+        if "--test" in command:
+            target = command[command.index("--test") + 1]
+            if not any(item["name"] == target and "test" in item["kind"] for item in targets):
+                raise ValueError(f"no test target {target!r} in {package}")
+        elif "--lib" in command:
+            if not any("lib" in item["kind"] and item.get("test", True) for item in targets):
+                raise ValueError(f"no testable library in {package}")
+        else:
+            raise ValueError("Cargo scenario must select an explicit --test target or --lib")
+    except (IndexError, KeyError) as error:
+        raise ValueError("Cargo scenario must select an existing package with -p") from error
+
+
+def cargo_inventory_errors(repo, inventory, *, list_cases=False):
+    scenarios = [item for item in inventory["scenarios"] if is_cargo_test(item.get("command", []))]
+    errors = []
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-cargo-inventory-") as tmp:
+        env = isolated_environment(Path(tmp))
+        metadata = run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
+                       cwd=repo, env=env)
+        try:
+            if metadata.get("output_truncated"):
+                raise ValueError("Cargo inventory metadata output was truncated")
+            packages = {item["name"]: item["targets"]
+                        for item in parse_json(metadata, "Cargo inventory metadata")["packages"]}
+        except (ValueError, KeyError) as error:
+            return [str(error)]
+        for scenario in scenarios:
+            try:
+                validate_cargo_target(scenario["command"], packages)
+                if list_cases:
+                    command = list(scenario["command"])
+                    if "--" not in command:
+                        command.append("--")
+                    command.append("--list")
+                    evidence = run(command, cwd=repo, env=env, timeout=1800)
+                    selected = validate_cargo_case_listing(evidence, scenario.get("required_tests", []))
+                    print(json.dumps({"scenario": scenario["id"], "command": command,
+                                      "selected_tests": selected, "behavioral_coverage": False}))
+            except ValueError as error:
+                errors.append(f"{scenario['id']}: {error}")
+    return errors
+
+
+def validate_cargo_case_listing(evidence, required_tests):
+    """Listing verifies selection only; passing execution is still required."""
+    if evidence["exit_code"] != 0 or evidence.get("output_truncated"):
+        raise ValueError(f"Cargo case discovery failed: {evidence.get('stderr', '')}")
+    selected = set(re.findall(r"^(\S+): test$", evidence.get("stdout", ""), re.MULTILINE))
+    if not selected:
+        raise ValueError("Cargo selection lists zero behavioral cases")
+    missing = set(required_tests) - selected
+    if missing:
+        raise ValueError(f"Cargo selection omits required behavioral cases: {sorted(missing)}")
+    return sorted(selected)
 
 
 def cli_help_children(help_text):
@@ -361,7 +437,7 @@ def parse_json(evidence, description):
 
 def validate_cargo_test_evidence(command, evidence, required_tests=()):
     """Require completed, non-vacuous Rust tests, including command-kind suites."""
-    if len(command) < 2 or Path(command[0]).name != "cargo" or command[1] != "test":
+    if not is_cargo_test(command):
         return
     summaries = re.findall(
         r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;",
@@ -390,6 +466,9 @@ def scenario_decision(inventory, results, candidate_id):
     failures = []
     for scenario in inventory["scenarios"]:
         if not scenario["required"]:
+            continue
+        if scenario.get("kind") == "coverage-gap":
+            failures.append(f"{scenario['id']}: required coverage gap: {scenario.get('coverage_gap')}")
             continue
         rows = [row for row in results if row["scenario"] == scenario["id"]]
         observed = {item for row in rows for item in row.get("assertions", [])}
@@ -1241,6 +1320,31 @@ def self_test():
     validate_cargo_test_evidence(command, named, ["required_behavior"])
     if named["passing_tests"] != ["required_behavior"]:
         raise AssertionError("named behavioral evidence was not retained")
+    packages = {"fixture": [{"name": "boundary", "kind": ["test"]},
+                            {"name": "fixture", "kind": ["lib"], "test": True}]}
+    for selector in (["--test", "boundary"], ["--lib"]):
+        validate_cargo_target(["cargo", "test", "-p", "fixture", *selector], packages)
+    for command in (["cargo", "test", "-p", "fixture", "--test", "retired"],
+                    ["cargo", "test", "-p", "missing", "--lib"],
+                    ["cargo", "test", "-p", "fixture"],
+                    ["cargo", "test", "--test", "boundary"]):
+        try:
+            validate_cargo_target(command, packages)
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid Cargo target selection passed: {command}")
+    for listing in ({"exit_code": 0, "stdout": "0 tests, 0 benchmarks", "stderr": ""},
+                    {"exit_code": 0, "stdout": "unrelated: test\n", "stderr": ""},
+                    {"exit_code": 1, "stdout": "required_behavior: test\n", "stderr": "failed"},
+                    {"exit_code": 0, "stdout": "required_behavior: test\n", "stderr": "",
+                     "output_truncated": True}):
+        try:
+            validate_cargo_case_listing(listing, ["required_behavior"])
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid Cargo case discovery passed: {listing}")
+    validate_cargo_case_listing({"exit_code": 0, "stdout": "module::required_behavior: test\n",
+                                 "stderr": ""}, ["module::required_behavior"])
     inventory = {"scenarios": [{"id":"required", "required":True,
                                 "assertions":["exact-json", "persisted-effect"]}],
                  "required_capability_gaps": {}}
@@ -1263,6 +1367,10 @@ def self_test():
     with_gap = {**inventory, "required_capability_gaps":{"mcp:missing":"not exercised"}}
     if scenario_decision(with_gap, valid, candidate)[0]:
         raise AssertionError("required capability gap passed")
+    coverage_gap = {"scenarios": [{**inventory["scenarios"][0], "kind": "coverage-gap",
+                                   "coverage_gap": "retired case has no boundary replacement"}]}
+    if scenario_decision(coverage_gap, valid, candidate)[0]:
+        raise AssertionError("unrelated PASS evidence concealed a required behavioral gap")
     if scenario_decision(inventory, [], candidate)[0]:
         raise AssertionError("missing required scenario passed")
     before = {"workspace":"qa-primary", "artifacts":[]}
@@ -1417,6 +1525,8 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--run-commands", action="store_true")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--check-cargo-selections", action="store_true",
+                        help="with --check, compile and list each exact Cargo selection without executing it")
     parser.add_argument("--playwright-module", type=Path)
     parser.add_argument("--playwright-browsers-path", type=Path)
     parser.add_argument("--browser-ld-library-path", type=Path)
@@ -1446,6 +1556,9 @@ def main():
         self_test()
         print("qa-full-sweep self-tests: ok")
         return
+    if args.check_cargo_selections and not args.check:
+        parser.error("--check-cargo-selections requires --check")
+    errors.extend(cargo_inventory_errors(repo, inventory, list_cases=args.check_cargo_selections))
     if args.check:
         if errors:
             print("\n".join(errors))
@@ -1529,6 +1642,11 @@ def main():
             results.extend(run_builtins(repo, str(binary), temp, env, candidate_id))
         for scenario in inventory["scenarios"]:
             if scenario["kind"] == "builtin" or scenario["id"] == "source-binary-provenance":
+                continue
+            if scenario["kind"] == "coverage-gap":
+                results.append({"scenario": scenario["id"], "command": [], "exit_code": None,
+                                "stdout": "", "stderr": scenario["coverage_gap"],
+                                "outcome": "BLOCKED", "assertions": [], "candidate_id": candidate_id})
                 continue
             if args.run_commands and capabilities.get(scenario["capability"], False):
                 command = [part.replace("{playwright_module}", str(args.playwright_module))
