@@ -17,6 +17,7 @@ mod worktree;
 
 pub(super) use claim::{claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
+pub use commit::validate_claim_new_paths;
 pub(super) use failure::pr_failure_handoff;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;

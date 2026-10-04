@@ -101,3 +101,66 @@ fn scratch_under_orbit_tmp_is_never_delivered() {
         );
     }
 }
+
+/// ORB-13919: commit admission and the owner's independently read candidate
+/// must agree on adjacent new paths without authorizing unrelated directories.
+#[test]
+fn claimed_module_new_paths_match_owner_handoff_validation() {
+    for (selector, new_path, allowed) in [
+        ("file:a/b/x.rs", "a/b/y.rs", true),
+        ("file:a/b/x.rs", "a/b/tests/x.rs", true),
+        ("file:a/b/x.rs", "a/b/tests/nested/x.rs", true),
+        ("file:a/b/x.rs", "a/c/z.rs", false),
+        ("file:a/b/x.rs", "a/b/other/z.rs", false),
+        ("file:a/b/x.rs", "a/b/tests-other/z.rs", false),
+        ("dir:a/b", "a/b/child/z.rs", true),
+        ("dir:a/b", "a/b-other/z.rs", false),
+        ("file:x.rs", "y.rs", true),
+        ("file:x.rs", "other/y.rs", false),
+        ("dir:.", "a/b/y.rs", true),
+    ] {
+        let temp = claimed_worktree();
+        let workspace = temp.path();
+        let base = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
+        let task = claimed_task(&[selector]);
+        let host = CommitTestHost::new(vec![task.clone()], workspace.to_path_buf())
+            .with_claim_binding(CLAIMED_TASK_ID);
+        write(workspace, new_path, "pub fn added() {}\n");
+        let before = untracked_status(workspace);
+        assert!(
+            super::super::scope::task_candidate_paths(
+                workspace,
+                std::slice::from_ref(&task),
+                super::super::scope::NewPathIntent::ExactFile,
+            )
+            .is_err(),
+            "local delivery still requires an exact selector for {new_path}"
+        );
+        let result = git_commit(&host, &claimed_commit_input(workspace));
+        if allowed {
+            result.expect("admitted module new path is committed");
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("task delivery refused unknown untracked paths"),
+                "ORB-13919: unrelated new paths must retain the delivery refusal"
+            );
+            assert_eq!(
+                untracked_status(workspace),
+                before,
+                "refusal preserves the index and bytes"
+            );
+            // Build the candidate independently as a malicious worker could;
+            // owner validation must refuse it even though Git accepts it.
+            git_success(workspace, &["add", "--", new_path]).unwrap();
+            git_success(workspace, &["commit", "-m", "candidate"]).unwrap();
+        }
+        assert_eq!(
+            crate::validate_claim_new_paths(workspace, &task.context_files, &base, "HEAD").is_ok(),
+            allowed,
+            "ORB-13919: owner validation must agree for {selector} -> {new_path}"
+        );
+    }
+}

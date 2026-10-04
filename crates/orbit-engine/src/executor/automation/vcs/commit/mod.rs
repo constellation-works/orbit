@@ -10,6 +10,8 @@ mod repair;
 mod scope;
 mod summary;
 
+pub use scope::validate_claim_new_paths;
+
 pub(super) use actions::commit_failure_candidate;
 pub(in crate::executor::automation) use actions::git_commit;
 pub(super) use checkpoint::{verified_clean_tree_checkpoint, verify_clean_tree_handoff};

@@ -163,10 +163,13 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   claimed worker can do neither: its reported selectors are never applied and its index is not
   writable, so every module split whose file names the implementer picks was refused at
   `commit`. Under the trusted worker binding, for the claim's own task, the claimed `git_commit`
-  therefore treats any selector of the frozen footprint, `dir:` included, as new-path intent
+  therefore accepts new paths inside admitted `dir:` selectors, beside an admitted `file:`
+  selector, or beneath that file's module `tests/` child as new-path intent
   (`NewPathIntent::AdmittedFootprint` in `vcs/commit/scope.rs`). An untracked path outside every
-  admitted selector is still refused by exact name before any index change. The footprint is
-  not widened. Selectors for files outside it still go through the owner and a fresh claim. Any
+  admitted directory or file module boundary is still refused by exact name before any index
+  change. The owner independently checks additions from its observed Git candidate with the
+  same matcher (rename destinations included). The lock footprint is not widened. Files
+  outside these delivery boundaries still go through the owner and a fresh claim. Any
   run's untracked scratch under `.orbit/tmp/` is never a candidate and is never refused, whatever
   a selector covers. Local delivery keeps the exact-`file:` rule, because its worker can append
   selectors. The rule therefore stays a deliberate local intent check rather than inferring
