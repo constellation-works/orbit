@@ -10,6 +10,10 @@
 //! observing the branch sees the same rewrite, and one record for it is the
 //! useful signal. The record names the consumer that filed it and points at
 //! `orbit doctor` for the full set.
+//!
+//! The `dedupe-key` line in the body is the durable identity. A preliminary
+//! read can miss when two evaluations race; the store repeats that lookup
+//! and the insert in one immediate transaction so both resolve to one id.
 
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
@@ -57,18 +61,29 @@ pub(super) fn report(
         limit: Some(1),
         ..FrictionListFilter::default()
     })?;
-    if let Some(found) = existing.first() {
+    if let Some(found) = existing
+        .iter()
+        .find(|row| body_marks_dedupe(&row.record.body, &key))
+    {
         return Ok(Some(found.record.id.clone()));
     }
 
-    let stored = frictions.add(FrictionAddParams {
-        model: "system".to_string(),
-        title: Some(title(report)),
-        body: body(report, &key),
-        tags: tags(report, &frictions.tags()?),
-        during_task: None,
-        created_at: report.at,
-    })?;
+    // Two reporters can both miss the list above. `add_or_reuse` looks again
+    // under the write lock before inserting.
+    #[cfg(test)]
+    dedupe_miss_hook::run();
+
+    let stored = frictions.add_or_reuse(
+        &key,
+        FrictionAddParams {
+            model: "system".to_string(),
+            title: Some(title(report)),
+            body: body(report, &key),
+            tags: tags(report, &frictions.tags()?),
+            during_task: None,
+            created_at: report.at,
+        },
+    )?;
 
     Ok(Some(stored.record.id))
 }
@@ -110,8 +125,8 @@ pub fn stalled_consumers(runtime: &OrbitRuntime) -> Result<Vec<StalledConsumer>,
 }
 
 /// The stable substring that identifies this divergence across consumers,
-/// ticks and hosts. It is written into the body so the ordinary friction
-/// search is the dedupe query.
+/// ticks and hosts. It is written into the body as a `dedupe-key` line, and
+/// that exact line is the identity a later report matches.
 fn dedupe_key(report: &StallReport<'_>) -> String {
     let mut key = format!(
         "automation-stall:{}:{}:{}",
@@ -246,6 +261,11 @@ fn body(report: &StallReport<'_>, key: &str) -> String {
     body
 }
 
+fn body_marks_dedupe(body: &str, key: &str) -> bool {
+    let marker = format!("dedupe-key: {key}");
+    body.lines().any(|line| line == marker)
+}
+
 /// The definition name inside a `<machine>/<workspace>/<kind>/<name>` key.
 fn definition_name(consumer: &str) -> &str {
     consumer.rsplit('/').next().unwrap_or(consumer)
@@ -254,4 +274,37 @@ fn definition_name(consumer: &str) -> &str {
 /// A stall's age in whole minutes, for operator-facing reporting.
 pub fn stalled_minutes(stall: &AutomationStall, now: DateTime<Utc>) -> i64 {
     now.signed_duration_since(stall.since).num_minutes().max(0)
+}
+
+/// Test seam between a missed preliminary lookup and the keyed insert.
+///
+/// Production has no hook. A test installs one so two reporters can both
+/// observe the miss before either insert runs.
+#[cfg(test)]
+pub(crate) mod dedupe_miss_hook {
+    use std::sync::{Arc, Mutex};
+
+    static HOOK: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
+    pub(crate) fn install(hook: impl Fn() + Send + Sync + 'static) {
+        *HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(hook));
+    }
+
+    pub(crate) fn clear() {
+        *HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    pub(super) fn run() {
+        let hook = HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 }

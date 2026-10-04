@@ -153,6 +153,37 @@ pub(super) fn list_records(
     Ok(records)
 }
 
+/// Oldest record in `workspace_id` whose body contains `marker_line`.
+///
+/// `marker_line` is the full `dedupe-key:` line including its trailing
+/// newline, so a longer key that merely shares this key as a prefix does
+/// not match. Callers hold the write transaction when this result decides
+/// whether to insert.
+pub(super) fn find_by_dedupe_marker(
+    conn: &Connection,
+    workspace_id: &str,
+    marker_line: &str,
+) -> Result<Option<StoredFrictionRecord>, OrbitError> {
+    let mut statement = conn
+        .prepare(&format!(
+            "SELECT {RECORD_COLUMNS} FROM friction_records r \
+             WHERE r.workspace_id = ?1 AND instr(r.body, ?2) > 0 \
+             ORDER BY r.created_at ASC, r.friction_id ASC \
+             LIMIT 1"
+        ))
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let mut rows = statement
+        .query(rusqlite::params![workspace_id, marker_line])
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    match rows
+        .next()
+        .map_err(|error| OrbitError::Store(error.to_string()))?
+    {
+        Some(row) => Ok(Some(decode_record(row)?)),
+        None => Ok(None),
+    }
+}
+
 pub(super) fn show_record(
     conn: &Connection,
     workspace_id: &str,
