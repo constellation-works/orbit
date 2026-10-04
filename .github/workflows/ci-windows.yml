@@ -1,0 +1,72 @@
+name: Windows Compile Check
+
+# Windows is supported through WSL2, where the Linux workflow applies. Native
+# Windows is compile-checked only, so the workspace's library and binary
+# targets keep building for x86_64-pc-windows-msvc. Non-Unix code paths are
+# explicit "unsupported"/`Unknown` stubs, so nothing here runs or tests
+# Windows behaviour, and test targets are not checked. This job is advisory:
+# do not make it a required status check.
+
+on:
+  push:
+    branches: [main, agent-main]
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - ".github/workflows/ci-windows.yml"
+
+# Superseded PR heads must not compete with their replacement. Every non-PR
+# run gets its own group, preserving independent push and scheduled runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # `.cargo/config.toml` points `build.rustc-wrapper` at a bash script that
+  # cargo cannot execute on Windows; an empty override runs plain rustc
+  # (docs/runbooks/compiler-cache.md#windows).
+  CARGO_BUILD_RUSTC_WRAPPER: ""
+
+jobs:
+  windows-check:
+    name: Windows cargo check (x86_64-pc-windows-msvc)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On pull_request, use the PR head SHA: not the branch name
+          # GitHub deletes on merge, and not github.sha (the ephemeral
+          # merge commit). On push, use github.sha directly so a run that
+          # sat queued still builds and reports on the commit that
+          # triggered it, not whatever the branch points to once it starts.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-windows-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-windows-check-
+            ${{ runner.os }}-cargo-
+
+      # Library and binary targets only; `--all-targets` (tests, benches,
+      # examples) is out of scope until the test sources compile here too.
+      - name: cargo check (lib + bin)
+        run: cargo check --workspace --locked --target x86_64-pc-windows-msvc

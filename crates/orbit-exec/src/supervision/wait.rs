@@ -179,7 +179,13 @@ fn wait_cancellable(
     let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
     let mut stdin_write_error = None;
     let mut capture_limited: Option<&'static str> = None;
-    let (timed_out, interrupted_signal, exit_success, exit_code) = loop {
+    // Annotated because the only `Some(signal)` arms are Unix-only.
+    let (timed_out, interrupted_signal, exit_success, exit_code): (
+        bool,
+        Option<i32>,
+        bool,
+        Option<i32>,
+    ) = loop {
         if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
             kill_process_group(child.id());
             let _ = child.kill();

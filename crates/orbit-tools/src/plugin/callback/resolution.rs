@@ -233,6 +233,7 @@ impl CallerProcess {
 /// until the number clears the standard streams and the callback number
 /// settles the question without a `fcntl` of our own; the low descriptors are
 /// closed when the discarded handles drop.
+#[cfg(unix)]
 pub(super) fn open_credential(path: &Path) -> Result<File, OrbitError> {
     use std::os::fd::AsRawFd;
 
@@ -252,6 +253,18 @@ pub(super) fn open_credential(path: &Path) -> Result<File, OrbitError> {
             path.display()
         ))
     })
+}
+
+/// The credential travels to the child as an inherited descriptor, which
+/// only Unix spawns carry; refusing here keeps a session from being minted
+/// for a child that could never present it.
+#[cfg(not(unix))]
+pub(super) fn open_credential(path: &Path) -> Result<File, OrbitError> {
+    Err(OrbitError::Execution(format!(
+        "plugin callback session `{}`: callback credentials are passed on an \
+         inherited descriptor, which is unsupported on this platform",
+        path.display()
+    )))
 }
 
 /// The number the credential is expected on: [`PLUGIN_CALLBACK_FD`], or what
