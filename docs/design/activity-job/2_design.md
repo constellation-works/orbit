@@ -247,6 +247,46 @@ The agent can inspect additional owner-side task comments and artifacts for
 preserved candidate evidence. The backstop applies the typed decision under
 the recovery run's identity and removes its detached base checkout.
 
+Recovery preparation creates an empty, ignored `.orbit/` directory in that
+checkout before launching the agent. Managed task worktrees already create
+this root through `.orbit/tmp` scratch setup. Seeding the root gives
+Bubblewrap an existing inode for its read-only bind and macOS Seatbelt the
+same denied subtree. No runtime stores are copied, and failure to prepare
+the root stops the launch. Both backends resolve recovery's profile against
+its own checkout and append its `.orbit/**` deny after policy exceptions
+and runtime/provider conveniences. Recovery retains source writes while its
+local Orbit stores stay read-only. The existing `.orbit/tmp/**` exception
+remains writable for required artifact uploads; subsequent policy denies,
+including `.env` globs, still constrain scratch. No other local Orbit store
+or config exception is re-allowed.
+
+The host-prepared recovery checkout also uses the managed sandbox path:
+Bubblewrap's post-run guard catches future filename denies such as
+`**/.env`, which a direct invocation cannot enforce with mounts alone.
+Seatbelt enforces those dynamic filters in the kernel; the common checkout
+boundary guard still checks the assigned and primary checkouts after the
+agent exits on either platform. Recovery does not acquire task-worktree
+ownership or delivery transitions. Recognition requires the exact checkout
+directly beneath the recovery pool, excluding the pool itself and aliases
+outside it. Direct Bubblewrap calls still refuse absent write-deny roots;
+macOS kernel coverage checks both absent and prepared roots, including file
+creation, modification, and moving the root aside to replace it.
+
+The other checkout callers do not need this preparation: delivery and
+step/final-recovery activities reuse managed worktrees; source inspections
+create standalone repositories and require the read-only `reviewer` profile,
+so neither backend grants source writes. `agent_invoke_pipeline` creates no
+checkout and uses explicitly admitted `trustedHostExecution` outside Orbit's
+filesystem sandbox on both platforms. Managed `proc.spawn` inherits its
+worker's Bubblewrap/Seatbelt boundary without adding Landlock. The retained
+Landlock read API does not handle agent writes; its production caller is the
+explicit plugin boundary. That boundary creates absent concrete write-grant
+roots before binding them and carves out absent read exclusions. Brokered
+plugin admission drops a write root containing an exact/subtree caller
+exclusion even if the excluded `.orbit/` root is absent. Future wildcard
+exclusions are a separately reported Landlock limitation, not an absent-root
+mount refusal; no Landlock behavior change is needed for this recovery fix.
+
 Conflict recovery projects the failed target's rendered task IDs and assigned
 worktree into its own input. `repo_root` defaults to that same assigned path,
 and `failed_step_input` retains the candidate branch, pre-rewrite HEAD, and

@@ -124,8 +124,12 @@ jobs:
       - name: Run brokered plugin backend confinement tests (real sandbox-exec)
         run: cargo test --no-fail-fast -p orbit-tools --locked plugin::tests::backend::brokered -- --include-ignored
 
-      - name: Run orbit-core sandbox tests
-        run: cargo test --no-fail-fast -p orbit-core --locked sandbox
+      - name: Run orbit-core sandbox and blocked-recovery tests
+        env:
+          ORBIT_REQUIRE_SANDBOX_EXEC: "1"
+        run: |
+          cargo test --no-fail-fast -p orbit-core --locked sandbox
+          cargo test --no-fail-fast -p orbit-core --locked blocked_recovery
 
       # [ORB-13236] Darwin peer credentials and the ancestry walk: a client
       # inside the run's sandbox-exec is answered, another run's client and a
