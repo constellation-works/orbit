@@ -64,9 +64,9 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             names.len(),
-            25,
+            26,
             "the reviewed 37-tool surface loses exactly five protocol tools and seven \
-             tools folded into their siblings"
+             tools folded into their siblings, and gains `orbit_task_eligible`"
         );
         for name in OPERATIONS {
             let advertised = orbit_types::tool::mcp_advertised_tool_name(name);

@@ -45,6 +45,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         "orbit_task_add"
         | "orbit_task_update"
         | "orbit_task_list"
+        | "orbit_task_eligible"
         | "orbit_task_show"
         | "orbit_task_artifact_get"
         | "orbit_task_artifact_put"

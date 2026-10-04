@@ -22,6 +22,7 @@ pub(crate) fn execute(
         OrbitBuiltinAction::TaskUpdate
             | OrbitBuiltinAction::TaskShow
             | OrbitBuiltinAction::TaskList
+            | OrbitBuiltinAction::TaskEligible
             | OrbitBuiltinAction::TaskArtifactGet
             | OrbitBuiltinAction::TaskLint
             | OrbitBuiltinAction::TaskLocks
@@ -209,6 +210,7 @@ pub(crate) fn execute(
         }
         OrbitBuiltinAction::TaskShow
         | OrbitBuiltinAction::TaskList
+        | OrbitBuiltinAction::TaskEligible
         | OrbitBuiltinAction::TaskArtifactGet
         | OrbitBuiltinAction::TaskLint
         | OrbitBuiltinAction::TaskLocks

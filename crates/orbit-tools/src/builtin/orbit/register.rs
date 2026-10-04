@@ -87,6 +87,10 @@ pub fn register(registry: &mut ToolRegistry) {
         McpToolScope::WorkspaceRequired,
     );
     registry.register_mcp(
+        task::eligible::OrbitTaskEligibleTool,
+        McpToolScope::WorkspaceRequired,
+    );
+    registry.register_mcp(
         task::update::OrbitTaskUpdateTool,
         McpToolScope::WorkspaceRequired,
     );

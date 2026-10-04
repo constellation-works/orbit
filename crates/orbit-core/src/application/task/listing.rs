@@ -5,9 +5,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::TaskStoreBackend;
-use orbit_types::task::{Task, TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index};
+use orbit_types::task::{
+    Task, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
+    task_dependencies_ready_with_index,
+};
 
 use crate::OrbitRuntime;
+use crate::runtime::task::locks::{
+    TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
+};
 
 pub use orbit_store::contracts::{TaskCandidates, TaskListFilter, TaskPage, TaskRow};
 
@@ -28,6 +34,43 @@ impl Default for TaskListQuery {
             limit: crate::DEFAULT_TASK_LIST_LIMIT,
         }
     }
+}
+
+/// Statuses `orbit task eligible` selects candidates from: work not yet taken.
+/// `in-progress` and `review` tasks are the holders a candidate is checked
+/// against, never candidates themselves.
+const ELIGIBILITY_CANDIDATE_STATUSES: [TaskStatus; 2] =
+    [TaskStatus::Backlog, TaskStatus::Proposed];
+
+/// Which not-yet-taken tasks can be picked up without colliding with work in
+/// flight.
+pub(crate) struct TaskEligibilityQuery {
+    /// Candidate statuses; empty selects every
+    /// [`ELIGIBILITY_CANDIDATE_STATUSES`] entry.
+    pub(crate) statuses: Vec<TaskStatus>,
+    /// The `task list --path` selector match, applied to candidates.
+    pub(crate) path: Option<String>,
+    /// Maximum eligible tasks returned.
+    pub(crate) limit: usize,
+}
+
+/// A candidate held back by in-flight work, with every overlap that holds it.
+pub(crate) struct TaskEligibilityConflict {
+    pub(crate) task: Task,
+    pub(crate) overlaps: Vec<TaskLockOverlap>,
+}
+
+/// Candidates split by whether their lock surface overlaps any `in-progress`
+/// or `review` task's surface. Both lists are in automatic dispatch order and
+/// hold envelope metadata (no body documents).
+#[derive(Default)]
+pub(crate) struct TaskEligibility {
+    /// Eligible candidates, at most the query's limit.
+    pub(crate) eligible: Vec<Task>,
+    /// Eligible candidates before the limit.
+    pub(crate) total: usize,
+    /// Every conflicting candidate; not limited.
+    pub(crate) conflicting: Vec<TaskEligibilityConflict>,
 }
 
 /// Every task `store` lists, newest first, without body documents:
@@ -152,5 +195,70 @@ impl OrbitRuntime {
             return Ok(None);
         }
         self.stores().tasks().get_task_row(id, true)
+    }
+
+    /// Split candidate tasks by lock conflict with in-flight work.
+    ///
+    /// Lock overlap is the only test, and it is the one automatic admission
+    /// applies: the same surface expansion, the same `in-progress` / `review`
+    /// holder map and the same overlap index. None of admission's other gates
+    /// apply — dependencies, complexity or preparation, group and epic
+    /// roll-ups, crew — and candidates are not checked against one another.
+    /// Nothing is reserved or written.
+    pub(crate) fn task_eligibility(
+        &self,
+        query: &TaskEligibilityQuery,
+    ) -> Result<TaskEligibility, OrbitError> {
+        if let Some(status) = query
+            .statuses
+            .iter()
+            .find(|status| !ELIGIBILITY_CANDIDATE_STATUSES.contains(status))
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "eligibility candidates are `backlog` or `proposed` tasks; `{status}` is not a candidate status"
+            )));
+        }
+        if !self.coordination_task_reads_visible() {
+            return Ok(TaskEligibility::default());
+        }
+        let statuses: &[TaskStatus] = if query.statuses.is_empty() {
+            &ELIGIBILITY_CANDIDATE_STATUSES
+        } else {
+            &query.statuses
+        };
+        let tasks = list_task_metadata_in(self.stores().tasks())?;
+        let workspace_root = self.paths().repo_root.as_path();
+        let lock_holders = active_task_lock_holders(&tasks, workspace_root);
+        let holder_index = lock_holder_index(&lock_holders);
+        let mut candidates: Vec<&Task> = tasks
+            .iter()
+            .filter(|task| statuses.contains(&task.status))
+            .filter(|task| {
+                query.path.as_deref().is_none_or(|path| {
+                    crate::application::search::task_selectors_contain_path(
+                        &task.context_files,
+                        path,
+                    )
+                })
+            })
+            .collect();
+        candidates.sort_by(|left, right| automatic_dispatch_cmp(left, right));
+
+        let mut eligibility = TaskEligibility::default();
+        for task in candidates {
+            let overlaps = task_lock_overlaps(task, &holder_index, workspace_root);
+            if !overlaps.is_empty() {
+                eligibility.conflicting.push(TaskEligibilityConflict {
+                    task: task.clone(),
+                    overlaps,
+                });
+                continue;
+            }
+            eligibility.total += 1;
+            if eligibility.eligible.len() < query.limit {
+                eligibility.eligible.push(task.clone());
+            }
+        }
+        Ok(eligibility)
     }
 }

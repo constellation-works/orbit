@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::fs::selector::{Selector, canonical_selector_in_workspace};
 use orbit_common::protocol::tool_input::{
@@ -21,6 +22,7 @@ use orbit_types::task::{
     inherited_only_epic_roots,
 };
 use orbit_types::telemetry::AuditEventStatus;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -529,6 +531,75 @@ pub(crate) fn lock_context_files_for_task(task: &Task, workspace_root: &Path) ->
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// One requested selector of a candidate that overlaps a selector an
+/// `in-progress` / `review` task holds.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) struct TaskLockOverlap {
+    pub(crate) requested_file: String,
+    pub(crate) locking_task_id: String,
+}
+
+/// Selector -> the `in-progress` / `review` tasks holding it.
+///
+/// Expand each active surface exactly once. Expansion is the expensive half —
+/// every selector is checked against the filesystem — so automatic admission
+/// and `orbit task eligible` both build this map once and read it rather than
+/// expanding again. Holder lists are sorted and deduplicated.
+pub(crate) fn active_task_lock_holders<'a>(
+    tasks: impl IntoIterator<Item = &'a Task>,
+    workspace_root: &Path,
+) -> BTreeMap<String, Vec<String>> {
+    let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for task in tasks {
+        if matches!(task.status, TaskStatus::InProgress | TaskStatus::Review) {
+            for file in lock_context_files_for_task(task, workspace_root) {
+                holders.entry(file).or_default().push(task.id.clone());
+            }
+        }
+    }
+    for locking_task_ids in holders.values_mut() {
+        locking_task_ids.sort();
+        locking_task_ids.dedup();
+    }
+    holders
+}
+
+/// The holders keyed by anchor, so one candidate's overlap check is a prefix
+/// lookup per requested selector rather than a pass over every held one.
+pub(crate) fn lock_holder_index(
+    lock_holders: &BTreeMap<String, Vec<String>>,
+) -> OverlapIndex<&[String]> {
+    let mut index = OverlapIndex::new();
+    for (selector, locking_task_ids) in lock_holders {
+        index.insert(selector, locking_task_ids.as_slice());
+    }
+    index
+}
+
+/// Every (requested selector, holder) pair where `task`'s lock surface
+/// overlaps a held selector, sorted and deduplicated. Empty means the task
+/// collides with no active work.
+pub(crate) fn task_lock_overlaps(
+    task: &Task,
+    holders: &OverlapIndex<&[String]>,
+    workspace_root: &Path,
+) -> Vec<TaskLockOverlap> {
+    let mut conflicts = Vec::new();
+    for requested_file in lock_context_files_for_task(task, workspace_root) {
+        for (_, locking_task_ids) in holders.overlapping(&requested_file) {
+            for locking_task_id in locking_task_ids.iter() {
+                conflicts.push(TaskLockOverlap {
+                    requested_file: requested_file.clone(),
+                    locking_task_id: locking_task_id.clone(),
+                });
+            }
+        }
+    }
+    conflicts.sort();
+    conflicts.dedup();
+    conflicts
 }
 
 /// Envelope metadata indexed for lock-surface expansion: active tasks,

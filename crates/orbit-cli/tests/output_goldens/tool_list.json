@@ -1028,6 +1028,52 @@
     ]
   },
   {
+    "name": "orbit.task.eligible",
+    "description": "List backlog and proposed tasks that can be picked up now without colliding with work in flight, as {tasks, total, truncated[, conflicting]}. A task is eligible when its context-file lock surface overlaps no in-progress or review task's surface, decided by the same lock code automatic dispatch uses. No other gate applies: dependencies, complexity, groups, crew and overlap between candidates are not checked. Read-only.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "status",
+        "description": "Candidate statuses: `backlog`, `proposed`, or both (the default). Pass a comma-separated string or an array.",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "path",
+        "description": "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit.task.list` matches `path`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "limit",
+        "description": "Maximum eligible tasks to return (default 50). Must be at least 1.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "explain",
+        "description": "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "agent",
+        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.task.list",
     "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path.",
     "enabled": true,

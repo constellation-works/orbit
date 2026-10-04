@@ -140,6 +140,7 @@ pub(super) fn execute(
         }
         OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
+        OrbitBuiltinAction::TaskEligible => super::task_tools::eligible(runtime, input),
         OrbitBuiltinAction::TaskLint => super::task_tools::lint(runtime, input),
         OrbitBuiltinAction::TaskList => super::task_tools::list(runtime, input),
         OrbitBuiltinAction::TaskLocks => crate::runtime::task::locks::list(runtime),

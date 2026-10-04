@@ -53,6 +53,7 @@ Plugins install once per machine; a repository commits only its
 | `orbit task add` | Create a task. `--title` and `--complexity` are required. |
 | `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`); `--status` follows the [lifecycle table](../../concepts/tasks/#transition-rules), and `--force` overrides it. |
 | `orbit task list` | List tasks. Status-neutral by default; filter with `--status`, `--tag`, `--path`, `--ready`, `--ref`. |
+| `orbit task eligible` | List `backlog` and `proposed` tasks you can pick up now: those whose context-file lock surface overlaps no `in-progress` or `review` task's surface, by the same lock test automatic dispatch applies. No other gate — dependencies, complexity, groups, crew, overlap between candidates — is checked. `--status backlog\|proposed`, `--path`, `--limit`; `--explain` also lists the held-back candidates with the overlapping file and the task holding it. Read-only. JSON shape: [Response shapes](../../how-to/mcp-integration/#response-shapes). |
 | `orbit task show <id>` | Show one task, found by ID across registered workspaces. `--fields` projects specific fields. |
 | `orbit task archive <id>` | Archive a task from any status. Archived is terminal: restore to any other status with `task update <id> --status <status> --force`. |
 | `orbit task artifact` | Manage task artifact files. |

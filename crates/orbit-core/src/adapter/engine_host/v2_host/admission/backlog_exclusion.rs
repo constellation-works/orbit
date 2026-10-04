@@ -1,8 +1,6 @@
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
-use std::path::Path;
 
-use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
     EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskReferenceIndex, TaskStatus,
@@ -16,7 +14,9 @@ use crate::OrbitRuntime;
 use crate::application::job::crew_pools::CapturedCrewPools;
 use crate::application::task::list_task_metadata_in;
 use crate::runtime::engine::crew::CrewAllowlist;
-use crate::runtime::task::locks::lock_context_files_for_task;
+use crate::runtime::task::locks::{
+    TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
+};
 
 const MAX_TASK_PARENT_CHAIN_DEPTH: usize = 32;
 
@@ -69,11 +69,9 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     UnassessedComplexity,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub(in crate::adapter::engine_host::v2_host) struct BacklogTaskConflict {
-    pub(in crate::adapter::engine_host::v2_host) requested_file: String,
-    pub(in crate::adapter::engine_host::v2_host) locking_task_id: String,
-}
+/// The overlap `orbit task eligible` reports, so a conflict means the same
+/// thing to a drain and to an operator choosing work.
+pub(in crate::adapter::engine_host::v2_host) type BacklogTaskConflict = TaskLockOverlap;
 
 /// The task population and leaf eligibility result shared by automatic
 /// dispatch and its read-only diagnostic.  Keeping the lock filter here
@@ -105,29 +103,6 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogSnapshot {
     pub(in crate::adapter::engine_host::v2_host) lock_holders: BTreeMap<String, Vec<String>>,
 }
 
-/// Expand each `in-progress` / `review` surface exactly once. Expansion is
-/// the expensive half — every selector is checked against the filesystem —
-/// so the map is built here and every consumer (exclusion, admission, the
-/// lock-wait diagnostic) reads it rather than expanding again.
-fn active_task_lock_holders(
-    tasks: &BTreeMap<String, Task>,
-    workspace_root: &Path,
-) -> BTreeMap<String, Vec<String>> {
-    let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for task in tasks.values() {
-        if matches!(task.status, TaskStatus::InProgress | TaskStatus::Review) {
-            for file in lock_context_files_for_task(task, workspace_root) {
-                holders.entry(file).or_default().push(task.id.clone());
-            }
-        }
-    }
-    for locking_task_ids in holders.values_mut() {
-        locking_task_ids.sort();
-        locking_task_ids.dedup();
-    }
-    holders
-}
-
 /// The tasks a live claim is currently executing [ORB-12500].
 fn live_claim_task_ids(
     runtime: &OrbitRuntime,
@@ -144,38 +119,6 @@ fn live_claim_task_ids(
         .filter(|claim| claim.phase.protects_footprint())
         .map(|claim| claim.task_id)
         .collect())
-}
-
-/// The holders keyed by anchor, so one backlog task's overlap check is a
-/// prefix lookup per requested selector rather than a pass over every held
-/// one.
-fn lock_holder_index(lock_holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<&[String]> {
-    let mut index = OverlapIndex::new();
-    for (selector, locking_task_ids) in lock_holders {
-        index.insert(selector, locking_task_ids.as_slice());
-    }
-    index
-}
-
-fn task_overlap_conflicts(
-    task: &Task,
-    holders: &OverlapIndex<&[String]>,
-    workspace_root: &Path,
-) -> Vec<BacklogTaskConflict> {
-    let mut conflicts = Vec::new();
-    for requested_file in lock_context_files_for_task(task, workspace_root) {
-        for (_, locking_task_ids) in holders.overlapping(&requested_file) {
-            for locking_task_id in locking_task_ids.iter() {
-                conflicts.push(BacklogTaskConflict {
-                    requested_file: requested_file.clone(),
-                    locking_task_id: locking_task_id.clone(),
-                });
-            }
-        }
-    }
-    conflicts.sort();
-    conflicts.dedup();
-    conflicts
 }
 
 pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
@@ -445,7 +388,7 @@ fn backlog_snapshot_in_mode(
     // this path would only add a way for the drain's hot loop to fail on a
     // journal awaiting repair. The paths that can reach a claimed task
     // directly, rather than through the backlog, consult it themselves.
-    let lock_holders = active_task_lock_holders(&task_lookup, workspace_root);
+    let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
     // ending in the task ID, so the dispatch sequence is unchanged.
@@ -550,7 +493,7 @@ fn backlog_snapshot_in_mode(
         let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
             .iter()
             .filter_map(|task| {
-                let conflicts = task_overlap_conflicts(task, &holder_index, workspace_root);
+                let conflicts = task_lock_overlaps(task, &holder_index, workspace_root);
                 (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
             })
             .collect();

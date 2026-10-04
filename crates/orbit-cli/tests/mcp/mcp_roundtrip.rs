@@ -2738,6 +2738,43 @@ fn mcp_task_list_fields_projects_each_task_to_an_object_of_just_those_fields() {
 }
 
 #[test]
+fn mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task_id = author_task(&workspace, "eligibility probe");
+
+    let listed = client.request("tools/list", Value::Null);
+    let tool = listed["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .find(|tool| tool["name"] == "orbit_task_eligible")
+        .unwrap_or_else(|| panic!("orbit_task_eligible is advertised: {listed}"))
+        .clone();
+    assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
+    let properties = tool["inputSchema"]["properties"]
+        .as_object()
+        .expect("input properties");
+    for option in ["status", "path", "limit", "explain"] {
+        assert!(properties.contains_key(option), "{option}: {tool}");
+    }
+
+    // A proposed task declaring no context holds nothing, so nothing in flight
+    // can collide with it.
+    let eligible = client.call_tool_ok("orbit_task_eligible", json!({ "explain": true }));
+    assert_eq!(eligible["tasks"][0]["id"], task_id, "{eligible}");
+    assert_eq!(eligible["total"], 1);
+    assert_eq!(eligible["truncated"], false);
+    assert_eq!(eligible["conflicting"], json!([]));
+
+    // Holders are not candidates, and the tool takes no filters beyond its own.
+    for input in [json!({ "status": "review" }), json!({ "tag": "cli" })] {
+        let refused = client.call_tool_err("orbit_task_eligible", input.clone());
+        assert_eq!(refused["code"], "invalid_input", "{input}: {refused}");
+    }
+}
+
+#[test]
 fn mcp_task_add_and_update_validate_context_selectors() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
