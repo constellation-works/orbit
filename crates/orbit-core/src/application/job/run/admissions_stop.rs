@@ -64,6 +64,8 @@ pub struct DrainAdmissionsStopChange {
     /// Claimed leaves a forced stop could not confirm it stopped; each keeps
     /// its claim on the owner.
     pub unstopped_leaves: Vec<super::types::UnstoppedLeaf>,
+    /// Detached children a forced stop could not confirm stopped.
+    pub unstopped_children: Vec<super::types::UnstoppedChild>,
 }
 
 /// Workspace-scoped result of `orbit run auto --stop`.
@@ -214,6 +216,7 @@ impl OrbitRuntime {
                 remaining_children: Vec::new(),
                 forced_runs: Vec::new(),
                 unstopped_leaves: Vec::new(),
+                unstopped_children: Vec::new(),
             });
         }
         if run.state.is_terminal() {
@@ -274,6 +277,7 @@ impl OrbitRuntime {
             remaining_children: Vec::new(),
             forced_runs: Vec::new(),
             unstopped_leaves: Vec::new(),
+            unstopped_children: Vec::new(),
         };
         if request.force {
             // Admissions are already stopped, so nothing new starts while the
@@ -288,6 +292,7 @@ impl OrbitRuntime {
             change.outcome = "force_cancelled";
             change.forced_runs = forced.forced_runs;
             change.unstopped_leaves = forced.unstopped_leaves;
+            change.unstopped_children = forced.unstopped_children;
         }
         change.remaining_children = self.remaining_children(&run.run_id)?;
         Ok(change)

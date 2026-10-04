@@ -125,18 +125,27 @@ pub(super) fn control(
                 claim_token: claim.as_deref(),
                 force,
             })?;
-            // A forced stop that left a leaf running is not a success: the
-            // drain is cancelled, but those claims stay with the owner.
+            // Preserve every unconfirmed stop, including local children,
+            // when the request touches more than one coordinator.
             let unstopped = stopped
                 .coordinators
                 .iter()
-                .flat_map(|change| &change.unstopped_leaves)
-                .map(|leaf| leaf.describe())
+                .flat_map(|change| {
+                    change
+                        .unstopped_leaves
+                        .iter()
+                        .map(|leaf| leaf.describe())
+                        .chain(
+                            change
+                                .unstopped_children
+                                .iter()
+                                .map(|child| child.describe()),
+                        )
+                })
                 .collect::<Vec<_>>();
             if !unstopped.is_empty() {
                 return Err(OrbitError::Execution(format!(
-                    "forced stop incomplete: {} claimed leaf(s) could not be confirmed stopped \
-                     and keep their claims on the owner: {}",
+                    "forced stop incomplete: {} run(s) could not be confirmed stopped: {}",
                     unstopped.len(),
                     unstopped.join("; ")
                 )));

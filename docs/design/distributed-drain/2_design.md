@@ -424,7 +424,10 @@ finalized, so its recorded release stays held, as above. The MCP stop control
 (`orbit.workflow.auto`, `action: stop`) takes `force` and applies the same cancel to each live
 drain after stopping its admissions. A queued drain, or one whose worker is gone, has
 no pass to wait for and is cancelled immediately. The owner's local drain keeps detach-on-cancel;
-its `--force` cancels the detached children too.
+its `--force` cancels the detached children too, accepting only confirmed worker stops.
+An unconfirmed or failed child cancellation is reported in `unstopped_children` with its run
+ID and reason, alongside the successfully stopped `forced_runs`; it fails the CLI (exit 1)
+and the MCP forced-stop control.
 
 **Branches** carry attempt identity: the run-derived branch suffices because each claim binds
 one run; `orbit/<task-id>-<claim-id>` is also valid. The follower implements, validates, pushes and

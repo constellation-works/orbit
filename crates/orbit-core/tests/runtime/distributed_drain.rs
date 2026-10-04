@@ -2203,3 +2203,109 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
         "no new drain"
     );
 }
+
+/// A failed detached child does not hide the parent or prevent a later child
+/// from stopping. Both an unconfirmed worker and a missing run stay visible.
+#[test]
+fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
+    if !isolated("a_forced_local_drain_cancel_reports_mixed_child_outcomes") {
+        return;
+    }
+    let pair = Pair::new(0);
+    let jobs = &pair.follower_jobs;
+    let drain = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    let failed = jobs
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    jobs.mark_job_run_running(&failed.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    let worker = Worker::spawn();
+    let stopped = jobs
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    jobs.mark_job_run_running(&stopped.run_id, Utc::now(), worker.pid)
+        .unwrap();
+    let terminal = jobs
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    pair.follower.cancel_job_run(&terminal.run_id).unwrap();
+    let missing = "jrun-missing-child";
+    let mut state = PipelineState::new(drain.run_id.clone(), drain.job_id, json!({}));
+    for child in [
+        failed.run_id.as_str(),
+        missing,
+        &stopped.run_id,
+        &terminal.run_id,
+    ] {
+        state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
+            child.into(),
+            "task_auto_pipeline".into(),
+            "dispatch".into(),
+            false,
+            false,
+            Utc::now(),
+        ));
+    }
+    pair.follower
+        .write_run_state(&drain.run_id, &state)
+        .unwrap();
+    let cancel = pair
+        .follower
+        .cancel_job_run_with_options(&drain.run_id, "operator", "cli", None, true)
+        .unwrap();
+    assert_eq!(cancel.outcome, "cancelled");
+    assert_eq!(cancel.final_state, "cancelled");
+    assert_eq!(cancel.forced_runs, vec![stopped.run_id.clone()]);
+    assert!(worker.stopped());
+    assert_eq!(pair.run_state(&drain.run_id), JobRunState::Cancelled);
+    assert_eq!(pair.run_state(&stopped.run_id), JobRunState::Cancelled);
+    assert_eq!(pair.run_state(&failed.run_id), JobRunState::Running);
+    assert_eq!(cancel.unstopped_children.len(), 2, "{cancel:?}");
+    assert_eq!(cancel.unstopped_children[0].child_run_id, failed.run_id);
+    assert!(
+        cancel.unstopped_children[0]
+            .reason
+            .contains("could not confirm"),
+        "{cancel:?}"
+    );
+    assert_eq!(cancel.unstopped_children[1].child_run_id, missing);
+    assert!(!cancel.unstopped_children[1].reason.is_empty());
+
+    // The workspace stop control is another consumer of the cancel result:
+    // it must fail with the same child identity rather than drop the field.
+    let another = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    let mut state = PipelineState::new(another.run_id.clone(), another.job_id, json!({}));
+    state.record_child_dispatch(orbit_types::workflow::ChildDispatch::submitted(
+        failed.run_id.clone(),
+        "task_auto_pipeline".into(),
+        "dispatch".into(),
+        false,
+        false,
+        Utc::now(),
+    ));
+    pair.follower
+        .write_run_state(&another.run_id, &state)
+        .unwrap();
+    let error = pair.follower.run_tool_with_context_and_role(
+        "orbit.workflow.auto",
+        json!({"workspace": pair.follower.workspace_id().unwrap(), "action": "stop", "force": true}),
+        Role::Admin,
+        ToolContext {
+            session_context: ToolSessionContext {
+                transport: Some(McpTransport::Local),
+                effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                ..ToolSessionContext::default()
+            },
+            ..ToolContext::default()
+        },
+    ).expect_err("an unconfirmed detached child makes the forced stop fail");
+    assert!(matches!(error, OrbitError::Execution(_)), "{error}");
+    assert!(error.to_string().contains(&failed.run_id), "{error}");
+    assert!(error.to_string().contains("could not confirm"), "{error}");
+    assert_eq!(pair.run_state(&another.run_id), JobRunState::Cancelled);
+    assert_eq!(pair.run_state(&failed.run_id), JobRunState::Running);
+}
