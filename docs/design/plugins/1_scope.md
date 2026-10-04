@@ -2,7 +2,7 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-09-27
+last_updated: 2026-10-04
 last_validated: 2026-09-22
 ---
 
@@ -222,6 +222,12 @@ source to its plugin root before reading anything:
 
 `validate` and `test` report the resolved plugin root. `scaffold <ns>` creates
 `<ns>/.orbit-plugin/`, and `migrate --out-dir <dir>` writes into `<dir>/.orbit-plugin/`.
+
+**No source form runs plugin code at install.** Every form must already contain the backend
+executable. An opt-in `spec.build` that builds a commit-pinned `git+` source at install time is
+decided but not implemented. Its threat model, which covers the build sandbox, network phases,
+per-install `--allow-build` consent and the rule that a pin alone never builds, is
+[3_install_time_build.md](./3_install_time_build.md).
 
 **Workspace toggles.** The host row is the ceiling; a workspace may narrow it.
 `--scope workspace` writes `[plugin_enablement] <ns> = true|false` into the selected
