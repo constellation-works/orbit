@@ -65,6 +65,30 @@ impl OrbitRuntime {
         reason: Option<&str>,
         force: bool,
     ) -> Result<JobRunCancelResult, OrbitError> {
+        self.cancel_job_run_with_options_and_signal(
+            run_id,
+            actor,
+            source,
+            reason,
+            force,
+            signal_run_owner_confirmed,
+        )
+    }
+
+    /// Keep the parent's stop injectable so deterministic interleavings can
+    /// exercise admissions persisted before that stop is confirmed.
+    pub(super) fn cancel_job_run_with_options_and_signal<F>(
+        &self,
+        run_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        force: bool,
+        signal: F,
+    ) -> Result<JobRunCancelResult, OrbitError>
+    where
+        F: FnOnce(&JobRun) -> Result<String, OrbitError>,
+    {
         let run = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
@@ -72,7 +96,7 @@ impl OrbitRuntime {
         if run.job_id == PULL_DRAIN_JOB {
             // Forcing an ended drain still stops the leaves it left running.
             if force {
-                return self.force_cancel_pull_drain(&run, actor, source, reason);
+                return self.force_cancel_pull_drain(&run, actor, source, reason, signal);
             }
             if run.state == JobRunState::Running
                 && run_owner_liveness(&run) != RunOwnerLiveness::Stopped
@@ -81,7 +105,7 @@ impl OrbitRuntime {
             }
         }
         if force && run.job_id == LOCAL_DRAIN_JOB {
-            return self.force_cancel_local_drain(&run, actor, source, reason);
+            return self.force_cancel_local_drain(&run, actor, source, reason, signal);
         }
         self.cancel_job_run_with_reason(run_id, actor, source, reason)
     }
@@ -224,19 +248,25 @@ impl OrbitRuntime {
     /// drain that already ended is reported `already_terminal`, and the
     /// leaves it left running are still stopped.
     ///
-    /// Only the drain's own work is touched ([`Self::pull_drain_admissions`],
-    /// read before the drain stops): never a leaf another live drain carries.
+    /// Retain the admissions it carried before stopping (including inherited
+    /// work), then scan its own admissions after the worker is confirmed
+    /// stopped so a final admission cannot be missed. Never touch a leaf
+    /// another live drain carries.
     /// A leaf whose stop cannot be confirmed keeps its claim on the owner and
     /// is reported in `unstopped_leaves`. If the drain worker cannot be
     /// confirmed stopped, the request fails before finalizing the drain or
     /// releasing any carried claim.
-    fn force_cancel_pull_drain(
+    fn force_cancel_pull_drain<F>(
         &self,
         run: &JobRun,
         actor: &str,
         source: &str,
         reason: Option<&str>,
-    ) -> Result<JobRunCancelResult, OrbitError> {
+        signal: F,
+    ) -> Result<JobRunCancelResult, OrbitError>
+    where
+        F: FnOnce(&JobRun) -> Result<String, OrbitError>,
+    {
         let carried = self
             .pull_drain_admissions(&run.run_id)?
             .into_iter()
@@ -244,14 +274,8 @@ impl OrbitRuntime {
             .collect::<Vec<_>>();
         // Confirm the drain stopped before finalizing it or releasing claims:
         // a non-stopping signal outcome must not let it keep admitting work.
-        let mut result = self.cancel_job_run_cascading(
-            &run.run_id,
-            actor,
-            source,
-            reason,
-            signal_run_owner_confirmed,
-            0,
-        )?;
+        let mut result =
+            self.cancel_job_run_cascading(&run.run_id, actor, source, reason, signal, 0)?;
         let cause = match reason {
             Some(reason) => format!(
                 "drain {} was cancelled with --force by {actor}: {reason}",
@@ -265,9 +289,10 @@ impl OrbitRuntime {
                 .unsettled_local_pull_admissions()?
                 .into_iter()
                 .filter(|record| {
-                    carried.iter().any(|(to, id)| {
-                        *to == record.destination && *id == record.request.request_id
-                    })
+                    record.request.run_context.run_id == run.run_id
+                        || carried.iter().any(|(to, id)| {
+                            *to == record.destination && *id == record.request.request_id
+                        })
                 })
                 .collect())
         };
@@ -375,30 +400,32 @@ impl OrbitRuntime {
 
     /// Cancel a local auto drain and the detached children its cancel would
     /// otherwise leave running.
-    fn force_cancel_local_drain(
+    fn force_cancel_local_drain<F>(
         &self,
         run: &JobRun,
         actor: &str,
         source: &str,
         reason: Option<&str>,
-    ) -> Result<JobRunCancelResult, OrbitError> {
+        signal: F,
+    ) -> Result<JobRunCancelResult, OrbitError>
+    where
+        F: FnOnce(&JobRun) -> Result<String, OrbitError>,
+    {
+        let mut result =
+            self.cancel_job_run_cascading(&run.run_id, actor, source, reason, signal, 0)?;
+        // The stopped parent can no longer persist another dispatch. Its
+        // cancellation closes open dispatches but preserves their lineage,
+        // so include closed records too: detached children may still run.
         let children = self
             .read_run_state(&run.run_id)?
             .map(|state| {
                 state
-                    .open_child_dispatches()
-                    .map(|dispatch| dispatch.child_run_id.clone())
+                    .child_dispatches
+                    .into_iter()
+                    .map(|dispatch| dispatch.child_run_id)
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let mut result = self.cancel_job_run_cascading(
-            &run.run_id,
-            actor,
-            source,
-            reason,
-            signal_run_owner_confirmed,
-            0,
-        )?;
         for child in children {
             // Keep every child's failure in the result, including unreadable
             // or missing run records, and continue stopping its siblings.

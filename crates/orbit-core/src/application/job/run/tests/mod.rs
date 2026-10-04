@@ -5,6 +5,7 @@ use crate::OrbitRuntime;
 #[cfg(unix)]
 mod actions;
 mod conflict;
+mod drain_cancel;
 mod owner;
 
 use chrono::{DateTime, Utc};
