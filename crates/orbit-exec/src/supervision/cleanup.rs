@@ -7,7 +7,7 @@ use orbit_common::OrbitError;
 pub(super) const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 #[cfg(unix)]
-pub(super) fn terminate_process_group(
+pub(crate) fn terminate_process_group(
     child: &mut Child,
     signal: i32,
     poll_interval: Duration,
@@ -24,7 +24,7 @@ pub(super) fn terminate_process_group(
 }
 
 #[cfg(not(unix))]
-pub(super) fn terminate_process_group(
+pub(crate) fn terminate_process_group(
     child: &mut Child,
     _signal: i32,
     _poll_interval: Duration,
@@ -46,12 +46,12 @@ pub(super) fn terminate_orphaned_process_group(pid: u32, signal: i32, poll_inter
 }
 
 #[cfg(unix)]
-pub(super) fn termination_signal() -> i32 {
+pub(crate) fn termination_signal() -> i32 {
     libc::SIGTERM
 }
 
 #[cfg(not(unix))]
-pub(super) fn termination_signal() -> i32 {
+pub(crate) fn termination_signal() -> i32 {
     15
 }
 

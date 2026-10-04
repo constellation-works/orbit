@@ -13,6 +13,7 @@
 //! definitions break the §4.5 rules registers no tools either, because half a
 //! plugin is not a state an operator can reason about.
 
+pub(crate) mod build;
 mod conformance;
 mod inspect;
 mod install;
@@ -38,8 +39,8 @@ pub use crate::runtime::plugin::definitions::{
 pub use conformance::{PluginTestOptions, PluginTestOutcome, PluginTestReport, test_plugin_dir};
 pub use inspect::{
     PluginDoctorResult, PluginPermissionSummary, PluginRenderedEnvironment, PluginRenderedProfile,
-    PluginSummary, PluginToolSummary, PluginValidationReport, list_plugins, plugin_doctor,
-    show_plugin, validate_plugin_dir, validate_plugin_dir_for_workspace,
+    PluginSummary, PluginToolSummary, PluginValidationReport, list_plugins, plugin_build_doctor,
+    plugin_doctor, show_plugin, validate_plugin_dir, validate_plugin_dir_for_workspace,
 };
 pub(crate) use install::install_plugin_reporting_enable;
 pub use install::{

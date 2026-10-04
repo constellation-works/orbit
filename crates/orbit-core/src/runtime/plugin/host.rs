@@ -467,6 +467,8 @@ fn verify_enabled_row(
     verify_recorded_grants(global_root, installed).map_err(|message| ("verify_grants", message))?;
     verify_install_path(global_root, installed)
         .map_err(|message| ("verify_install_path", message))?;
+    super::build_witness::verify_build_record(global_root, installed)
+        .map_err(|message| ("verify_build_record", message))?;
     Ok(())
 }
 

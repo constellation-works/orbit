@@ -1,5 +1,44 @@
 use super::*;
 
+/// The plugin section's source-built rows: each plugin this host built from
+/// source at install time, with its command, consent, profile and artifact
+/// digest, and any drift `orbit plugin doctor` finds in those builds.
+pub(super) fn doctor_check_plugin_builds(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let rows = match runtime.plugin_build_doctor() {
+        Ok(rows) => rows,
+        Err(error) => {
+            return check(
+                "plugin-builds",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot inspect source-built plugins: {error}"),
+            );
+        }
+    };
+    if rows.is_empty() {
+        return check(
+            "plugin-builds",
+            WorkspaceDoctorStatus::Skipped,
+            "no plugin on this host was built from source".to_string(),
+        );
+    }
+    let findings = rows.iter().filter(|row| !row.intentional).count();
+    let message = rows
+        .iter()
+        .map(|row| format!("{}: {}", row.plugin, row.message))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if findings == 0 {
+        return check("plugin-builds", WorkspaceDoctorStatus::Ok, message);
+    }
+    actionable_check(
+        "plugin-builds",
+        WorkspaceDoctorStatus::Warning,
+        message,
+        "Take the step each source-built plugin row names, then rerun `orbit plugin doctor`."
+            .to_string(),
+    )
+}
+
 /// Warn when git still tracks files under `.orbit/`. Sync rewrites the
 /// managed ignore block but never runs git; the operator untracks once.
 pub(super) fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {

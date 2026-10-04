@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use super::{LandlockPathGrant, workspace};
 
 /// System directories a dynamically linked program executes out of.
-const RUNTIME_DIRS: &[&str] = &[
+pub(crate) const RUNTIME_DIRS: &[&str] = &[
     "/usr",
     "/bin",
     "/sbin",
@@ -46,7 +46,7 @@ const RUNTIME_DIRS: &[&str] = &[
 ];
 
 /// Loader configuration and the character devices a process opens on startup.
-const RUNTIME_FILES: &[&str] = &[
+pub(crate) const RUNTIME_FILES: &[&str] = &[
     "/etc/ld.so.cache",
     "/etc/ld.so.conf",
     "/dev/null",
@@ -76,7 +76,7 @@ const RUNTIME_PROC_FILES: &[&str] = &[
 ];
 
 /// Name resolution, service lookup, and time zone data.
-const RESOLVER_FILES: &[&str] = &[
+pub(crate) const RESOLVER_FILES: &[&str] = &[
     "/etc/gai.conf",
     "/etc/gitconfig",
     "/etc/group",
@@ -92,7 +92,7 @@ const RESOLVER_FILES: &[&str] = &[
 ];
 
 /// Certificate authority stores.
-const TRUST_DIRS: &[&str] = &["/etc/ca-certificates", "/etc/pki", "/etc/ssl"];
+pub(crate) const TRUST_DIRS: &[&str] = &["/etc/ca-certificates", "/etc/pki", "/etc/ssl"];
 
 /// A tool's state directory: the environment variable that names it, and the
 /// tool's documented default when that variable is absent. A relative default

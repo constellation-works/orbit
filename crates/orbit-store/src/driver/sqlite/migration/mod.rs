@@ -45,7 +45,7 @@ use learning::{apply_learning_index_workspace_scope, apply_remove_native_learnin
 use operation_mode::apply_remove_operation_mode;
 use plugins::{
     apply_audit_brokered_call, apply_audit_plugin_secret_updates, apply_audit_plugin_secrets,
-    apply_plugin_archive_digest, apply_plugin_certified_orbit_version,
+    apply_plugin_archive_digest, apply_plugin_build_record, apply_plugin_certified_orbit_version,
     apply_plugins_and_audit_plugin_provenance,
 };
 use routine::apply_routine_scheduler_schema;

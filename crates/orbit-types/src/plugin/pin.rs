@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::build::git_commit_source;
+
 pub const PIN_FILE_NAME: &str = "plugins.yaml";
 pub const PIN_FILE_SCHEMA_VERSION: u32 = 1;
 
@@ -81,6 +83,13 @@ pub struct PluginPin {
     /// the install never checks.
     #[serde(default)]
     pub digest: Option<String>,
+    /// `sha256:<hex>` artifact digest the build of a `git+<url>#<commit>`
+    /// source is expected to produce
+    /// (`docs/design/plugins/3_install_time_build.md` §3.7). A statement of
+    /// expectation only: it can refuse an install or mark one unsatisfied,
+    /// and never starts a build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_digest: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -116,6 +125,7 @@ impl PluginPinFile {
                     .map_err(|error| format!("plugins[{index}].version: {error}"))?;
             }
             validate_pin_digest(index, pin)?;
+            validate_pin_artifact_digest(index, pin)?;
         }
         Ok(())
     }
@@ -140,4 +150,24 @@ fn validate_pin_digest(index: usize, pin: &PluginPin) -> Result<(), String> {
         )),
         (None, None) => Ok(()),
     }
+}
+
+/// An artifact digest describes what building one commit produces, so it is
+/// accepted only beside a source that names one: a `git+` URL pinned to a
+/// full commit object id. On any other source it would claim a check no
+/// install performs.
+fn validate_pin_artifact_digest(index: usize, pin: &PluginPin) -> Result<(), String> {
+    let Some(digest) = &pin.artifact_digest else {
+        return Ok(());
+    };
+    if pin.source.as_deref().and_then(git_commit_source).is_none() {
+        return Err(format!(
+            "plugins[{index}].artifact_digest: only a `git+<url>#<full commit id>` source is \
+             built and digested; pin the source to a 40- or 64-character commit or remove the \
+             artifact digest"
+        ));
+    }
+    parse_archive_digest(digest)
+        .map(|_| ())
+        .map_err(|error| format!("plugins[{index}].artifact_digest: {error}"))
 }
