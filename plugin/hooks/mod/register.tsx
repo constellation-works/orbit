@@ -1,5 +1,5 @@
 // The Orbit mod for Claude Code: a band above the prompt, a status line,
-// toasts, and the Board / Ship / Map pane, all read from the `orbit` CLI;
+// toasts, and the Board / Ship pane, all read from the `orbit` CLI;
 // plus two hooks: task cards for mentioned task ids, and a `Task:` trailer
 // on commits made while this session works a task.
 //
@@ -41,12 +41,11 @@ const TASK_UPDATE = /(^|__)orbit_task_update$/
 const TASK_ID = /^[A-Z][A-Z0-9]{1,11}-\d{1,9}$/
 const SUCCESS = new Set(['success', 'succeeded'])
 const FINISHED = new Set([...SUCCESS, 'failed', 'timeout', 'cancelled', 'interrupted'])
-const TITLES: Record<OrbitView, string> = { board: 'Orbit · Board', ship: 'Orbit · Ship', map: 'Orbit · Map' }
+const TITLES: Record<OrbitView, string> = { board: 'Orbit · Board', ship: 'Orbit · Ship' }
 
 const COMMANDS = [
   { name: 'orbit-board', description: 'Open the Orbit board for this workspace', argumentHint: '[task id]' },
   { name: 'orbit-ship', description: 'Preflight and ship an Orbit task through the PR pipeline', argumentHint: '[task id]' },
-  { name: 'orbit-map', description: 'Open the Orbit orbital map of open tasks' },
   { name: 'orbit-band', description: 'Show or hide the Orbit band above the prompt' },
 ]
 
@@ -425,12 +424,6 @@ export const register: Register = (on, options) => {
     if (!TASK_ID.test(id)) return { text: 'Orbit ship pane opened.' }
     await prepareShip($, id)
     return { text: `Ship preflight for ${id} is in the Orbit pane.` }
-  })
-
-  on('command.run', { command: 'orbit-map' }, async $ => {
-    await openPane($, 'map')
-    await ensureLoaded($)
-    return { text: 'Orbit map opened.' }
   })
 
   on('command.run', { command: 'orbit-band' }, async $ => {

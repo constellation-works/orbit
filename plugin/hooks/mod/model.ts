@@ -288,8 +288,3 @@ export function preflight(task: OrbitTask | undefined, snapshot: OrbitSnapshot, 
   }
   return { checks }
 }
-
-/** Sector of the orbital map a task sits in. */
-export const SECTORS = ['feature', 'bug', 'refactor', 'chore'] as const
-
-export const RING: Record<OpenStatus, number> = { review: 0.3, 'in-progress': 0.5, blocked: 0.6, backlog: 0.72, proposed: 0.92 }

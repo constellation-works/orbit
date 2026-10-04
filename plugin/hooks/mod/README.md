@@ -30,9 +30,6 @@ this folder.
     `orbit run ship` runs and the view tracks the run through the 12 steps
     of `task_pr_pipeline`. On desktop and VS Code the trajectory is drawn
     as an SVG.
-  - **Map.** The open tasks on status rings (proposed on the outside,
-    in-progress near the core), sectored by task type, with dependency
-    lines.
 - **Task cards.** A prompt that mentions a known task id, such as
   `ORB-123`, carries that task's card (status, priority, criteria) as
   context.
@@ -51,7 +48,6 @@ this session. Nothing the mod does dispatches work by itself.
 |---|---|
 | `/orbit-board [id]` | Opens the board, with the task selected when an id is given |
 | `/orbit-ship [id]` | Opens the ship view, with the task's preflight when an id is given |
-| `/orbit-map` | Opens the orbital map |
 | `/orbit-band` | Shows or hides the band |
 
 ## Options

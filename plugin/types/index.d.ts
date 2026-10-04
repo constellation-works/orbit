@@ -43,7 +43,7 @@ export type OrbitShip = {
   message: string | null
 }
 
-export type OrbitView = 'board' | 'ship' | 'map'
+export type OrbitView = 'board' | 'ship'
 
 declare module 'claude-code' {
   interface PluginState {
