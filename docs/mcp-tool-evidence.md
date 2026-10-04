@@ -110,7 +110,7 @@ The registered tool-host proofs are in `crates/orbit-core/src/adapter/tool_host/
 
 The distributed admission proofs use isolated stores and in-process transports. No SSH or live owner was contacted.
 
-- **I-pull / I-bind-settle / I-settle**: `crates/orbit-core/tests/runtime/distributed_drain.rs` drives a follower's drain against a real owner runtime: `lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once`, `three_failed_claims_open_the_breaker_and_a_new_drain_resets_it`, and `a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once`.
+- **I-pull / I-bind-settle / I-settle**: `crates/orbit-core/tests/runtime/distributed_drain/` drives a follower's drain against a real owner runtime: `settlement::lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once`, `admission::three_failed_claims_open_the_breaker_and_a_new_drain_resets_it`, and `settlement::a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once`.
 - **I-receipt / I-pull-denial** (store level, `crates/orbit-store/tests/allocation_admission.rs`): `simultaneous_retries_of_one_request_create_one_claim`, `distinct_concurrent_requests_never_claim_overlapping_tasks`, and `handoff_authorization_follows_the_owner_policy_at_admission`. Session refusal is the `internal_drain` stdio proof above.
 - **I-probe** and upgraded or incompatible receipt lookups have no current test.
 
