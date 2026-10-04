@@ -10,57 +10,51 @@ next: false
 
 <section class="orbit-hero">
   <div class="orbit-hero-copy">
-    <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>See what shipped in the latest release</span><span aria-hidden="true">→</span></a>
-    <h1 id="_top" class="orbit-hero-headline">Your agent files the work. Orbit ships it. <span class="orbit-hero-headline-muted">You review the pull request.</span></h1>
-    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask for a change in the agent you already use; Orbit turns it into a scoped task, runs it in an isolated worktree, and hands back a pull request with every step on the record.</p>
-    <div class="orbit-hero-actions">
-      <a class="orbit-button primary" href="/getting-started/">Get started →</a>
-      <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
+    <div class="orbit-hero-claim">
+      <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>See what shipped in the latest release</span><span aria-hidden="true">→</span></a>
+      <h1 id="_top" class="orbit-hero-headline">Your agent files the work. Orbit ships it. <span class="orbit-hero-headline-muted">You review the pull request.</span></h1>
     </div>
-    <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
-    <div class="orbit-hero-providers">
-      <div class="orbit-hero-providers-label">Drives the agent CLI you already sign in to</div>
-      <ul class="orbit-hero-providers-list">
-        <li>Claude Code</li>
-        <li>Codex</li>
-        <li>Antigravity</li>
-        <li>Grok</li>
-        <li>Copilot</li>
-        <li>Cursor</li>
-        <li>OpenCode</li>
-        <li>Pi</li>
-      </ul>
-      <p class="orbit-hero-providers-note">Gemini CLI remains as a legacy executor. <a href="/concepts/agents/">How agents are invoked →</a></p>
+    <div class="orbit-hero-pitch">
+      <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask for a change in the agent you already use; Orbit turns it into a scoped task, runs it in an isolated worktree, and hands back a pull request with every step on the record.</p>
+      <div class="orbit-hero-actions">
+        <a class="orbit-button primary" href="/getting-started/">Get started →</a>
+        <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
+      </div>
+      <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
     </div>
   </div>
 
-  <div class="orbit-hero-side">
-    <figure class="orbit-session">
-      <div class="orbit-session-frame" role="img" aria-label="Illustrative session between you, your agent, and Orbit. You ask for the fsProfile lookup to be documented. The agent calls orbit.task.add and Orbit creates a task in proposed. The agent asks whether to approve and ship; you say yes. The agent calls orbit.task.update, which moves the task from proposed to backlog, then orbit.workflow.ship, and Orbit returns a run ID with the task's file scope reserved in an isolated worktree. The agent calls orbit.workflow.run.show: plan, execute and review settled, a pull request opened, and the task in review. The agent tells you the pull request is open and that the diff and the merge are yours.">
-        <div class="orbit-session-bar" aria-hidden="true">
-          <span class="orbit-session-dots"><span></span><span></span><span></span></span>
-          <span class="orbit-session-name">example-repo · your agent, connected to Orbit</span>
-        </div>
-        <div class="orbit-session-body" aria-hidden="true">
-          <div class="orbit-session-turn is-you"><span class="orbit-session-key">you</span><span class="orbit-session-text">The fsProfile lookup is undocumented. Get that fixed.</span></div>
-          <div class="orbit-session-turn"><span class="orbit-session-key">agent</span><span class="orbit-session-text">Filing it as a task with acceptance criteria.</span></div>
-          <div class="orbit-session-receipt">
-            <div class="orbit-session-row"><span class="orbit-session-tool">orbit.task.add</span><span class="orbit-session-arrow">→</span><span class="orbit-session-result">task <span class="orbit-session-id">&lt;task-id&gt;</span> <em>proposed</em></span></div>
-          </div>
-          <div class="orbit-session-turn"><span class="orbit-session-key">agent</span><span class="orbit-session-text">Filed. Approve it into the backlog and ship?</span></div>
-          <div class="orbit-session-turn is-you"><span class="orbit-session-key">you</span><span class="orbit-session-text">Yes.</span></div>
-          <div class="orbit-session-receipt">
-            <div class="orbit-session-row"><span class="orbit-session-tool">orbit.task.update</span><span class="orbit-session-arrow">→</span><span class="orbit-session-result">proposed → <em>backlog</em></span></div>
-            <div class="orbit-session-row"><span class="orbit-session-tool">orbit.workflow.ship</span><span class="orbit-session-arrow">→</span><span class="orbit-session-result">run <span class="orbit-session-id">&lt;run-id&gt;</span> · scope reserved · worktree isolated</span></div>
-          </div>
-          <div class="orbit-session-turn"><span class="orbit-session-key">agent</span><span class="orbit-session-text">Pull request open. The diff and the merge are yours.</span></div>
-          <div class="orbit-session-receipt">
-            <div class="orbit-session-row"><span class="orbit-session-tool">orbit.workflow.run.show</span><span class="orbit-session-arrow">→</span><span class="orbit-session-result">plan · execute · review settled · PR opened · task <em>review</em></span></div>
-          </div>
-        </div>
-      </div>
-      <figcaption class="orbit-session-caption">Illustrative session, not captured output. Tool names are real; identifiers are placeholders and arguments are omitted.</figcaption>
-    </figure>
+  <figure class="orbit-demo">
+    <video class="orbit-demo-video" src="/media/orbit-demo.mp4" poster="/media/orbit-demo-poster.jpg" width="1920" height="1080" autoplay controls muted loop playsinline preload="auto" aria-label="Illustrative 31-second session. On the left, your agent CLI; on the right, the task Orbit holds. You ask for the fsProfile lookup to be documented, and orbit.task.add files it as proposed with acceptance criteria and a file scope. You say yes; orbit.task.update moves it to backlog. orbit.workflow.ship runs it in an isolated worktree under file locks through plan, execute and review, ending with a pull request opened and the task in review; the merge stays yours. orbit run auto then drains three tasks in parallel while a fourth waits on a file lock. Finally orbit task show prints the task record and git log shows the task ID on the commit."></video>
+    <figcaption class="orbit-demo-caption">Illustrative session, not captured output. Tool names, states and steps are real; identifiers are placeholders.</figcaption>
+  </figure>
+  <script>
+    {
+      // Autoplay is the default; a reader who asks for reduced motion gets the
+      // poster frame and the native controls instead.
+      const video = document.querySelector('.orbit-demo-video');
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+      const sync = () => (reduce.matches ? video.pause() : video.play().catch(() => {}));
+      if (video) {
+        if (reduce.matches) video.pause();
+        reduce.addEventListener('change', sync);
+      }
+    }
+  </script>
+
+  <div class="orbit-hero-providers">
+    <div class="orbit-hero-providers-label">Drives the agent CLI you already sign in to</div>
+    <ul class="orbit-hero-providers-list">
+      <li>Claude Code</li>
+      <li>Codex</li>
+      <li>Antigravity</li>
+      <li>Grok</li>
+      <li>Copilot</li>
+      <li>Cursor</li>
+      <li>OpenCode</li>
+      <li>Pi</li>
+    </ul>
+    <p class="orbit-hero-providers-note">Gemini CLI remains as a legacy executor. <a href="/concepts/agents/">How agents are invoked →</a></p>
   </div>
 </section>
 
