@@ -31,6 +31,7 @@
 //! to repair the candidate (for example commit a formatting fix) before the
 //! one post-recovery attempt reruns every command.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -48,6 +49,7 @@ use serde_json::{Value, json};
 use crate::context::{ClaimExecutionContext, RuntimeHost};
 use crate::executor::automation::input::{input_string_field, required_job_run_id};
 
+use super::commit::ensure_candidate_ownership;
 use super::git::{
     BaseSyncMode, git_command_success, git_output, git_output_raw, git_success,
     resolve_worktree_start_point,
@@ -892,8 +894,13 @@ fn require_clean_checkout(
 /// Run the workspace's required commands on the owner's committed candidate
 /// and attach one captured log per command to every task the run delivers.
 ///
-/// An empty requirement list is a no-op. Otherwise the candidate must be a
-/// clean checkout of a named branch that contains the `base_sha` this run
+/// With `ownership_base_sha` — the implementation head a before-PR reviewer
+/// commit sits on [ORB-13989] — every path the candidate changed since that
+/// commit must first be owned by one of the delivered tasks' current
+/// selectors, whatever the requirement list holds.
+///
+/// An empty requirement list runs no command. Otherwise the candidate must be
+/// a clean checkout of a named branch that contains the `base_sha` this run
 /// synchronized onto, and must stay exactly that while the suite runs. A
 /// failing command fails the step with its output after its log — and those
 /// of the commands that passed before it — is attached.
@@ -901,14 +908,22 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
+    let owned_paths = match input_string_field(input, "ownership_base_sha") {
+        Some(ownership_base) => Some(ensure_changed_paths_owned(host, input, &ownership_base)?),
+        None => None,
+    };
     let commands = host.required_validation_commands();
     if commands.is_empty() {
-        return Ok(json!({
+        let mut output = json!({
             "phase": "validate",
             "decision": "skipped_no_required_commands",
             "commands": [],
             "validation": [],
-        }));
+        });
+        if let Some(owned_paths) = owned_paths {
+            output["owned_paths"] = json!(owned_paths);
+        }
+        return Ok(output);
     }
     let run_id = required_job_run_id(input, "candidate_validate")?.to_string();
     let task_ids = completed_task_ids_from_input(input).ok_or_else(|| {
@@ -978,7 +993,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     }
 
     let references = attach_logs(host, &task_ids, &run_id, &logs)?;
-    Ok(json!({
+    let mut output = json!({
         "phase": "validate",
         "decision": "passed",
         "commands": passed,
@@ -986,7 +1001,52 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         "tested_head": candidate,
         "validation": serde_json::to_value(&references)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
-    }))
+    });
+    if let Some(owned_paths) = owned_paths {
+        output["owned_paths"] = json!(owned_paths);
+    }
+    Ok(output)
+}
+
+/// Refuse a candidate that changed, since `ownership_base`, a path none of the
+/// delivered tasks' selectors owns. Shared ownership is accepted: a reviewer
+/// fix may touch a path two batched tasks both declare.
+fn ensure_changed_paths_owned<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    ownership_base: &str,
+) -> Result<Vec<String>, OrbitError> {
+    let task_ids = completed_task_ids_from_input(input).ok_or_else(|| {
+        OrbitError::InvalidInput(
+            "candidate_validate requires the run's completed_task_ids to check ownership"
+                .to_string(),
+        )
+    })?;
+    let workspace_path = input_string_field(input, "workspace_path")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| OrbitError::InvalidInput("workspace_path is required".to_string()))?;
+    let changed = git_output(
+        &workspace_path,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--end-of-options",
+            &format!("{ownership_base}..HEAD"),
+        ],
+    )?;
+    let changed = changed
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    let tasks = task_ids
+        .iter()
+        .map(|task_id| host.get_task(task_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    ensure_candidate_ownership(&changed, &workspace_path, &tasks, false)?;
+    Ok(changed.into_iter().collect())
 }
 
 fn attach_logs<H: RuntimeHost + ?Sized>(

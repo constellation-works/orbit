@@ -260,13 +260,11 @@ fn admit(
         ReviewReservation::Exhausted { reason, consumed } => {
             return Err(OrbitError::CapabilityDenied(format!(
                 "review_budget_exhausted: {reason} for lineage '{lineage_key}' (reviewer starts \
-                 {}/{}, repair cycles {}/{}, {}s of {}s); an operator can run \
+                 {}/{}, {}s of {}s); an operator can run \
                  orbit task review-reset {} --lineage '{lineage_key}' --reason '<decision>' \
                  before resuming, or dispatch a fresh delivery run",
                 consumed.reviewer_starts,
                 ledger.budget.reviewer_starts,
-                consumed.repair_cycles,
-                ledger.budget.repair_cycles,
                 consumed.seconds,
                 u64::from(ledger.budget.minutes) * 60,
                 context.task_ids[0]

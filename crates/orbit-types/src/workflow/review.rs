@@ -42,7 +42,6 @@ pub const REVIEW_GATE_ARTIFACT: &str = "review-gate.json";
 /// repository's full validation must fit several times over, so a retried or
 /// re-reviewed candidate is not starved by the first invocation.
 pub const DEFAULT_REVIEW_REVIEWER_STARTS: u32 = 3;
-pub const DEFAULT_REVIEW_REPAIR_CYCLES: u32 = 2;
 pub const DEFAULT_REVIEW_MINUTES: u32 = 90;
 
 /// When automatic code review applies to a managed delivery.
@@ -51,7 +50,7 @@ pub const DEFAULT_REVIEW_MINUTES: u32 = 90;
 pub enum ReviewTiming {
     /// No automatic review managed by this policy.
     None,
-    /// Hold PR creation for a fresh reviewer and scoped repairs.
+    /// Hold PR creation for a fresh reviewer that fixes what it finds.
     BeforePr,
     /// Accumulate uncovered landed deliveries for a scheduled review.
     AfterLanding,
@@ -72,12 +71,14 @@ impl ReviewTiming {
 /// the candidate and every resume of it. They cover retries, interruptions,
 /// and candidate invalidations within that lineage; a fresh delivery run
 /// starts a new lineage with a fresh budget.
+///
+/// Budgets captured before [ORB-13989] also carry a `repair_cycles` limit.
+/// The reviewer now fixes its findings in the one reviewer commit an attempt
+/// may add, so nothing is charged against it and reading ignores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewBudget {
     /// Fresh reviewer invocations allowed for the lineage.
     pub reviewer_starts: u32,
-    /// Repair/validation cycles allowed for the lineage.
-    pub repair_cycles: u32,
     /// Aggregate reviewer runtime after which no further start is admitted.
     pub minutes: u32,
 }
@@ -86,7 +87,6 @@ impl Default for ReviewBudget {
     fn default() -> Self {
         Self {
             reviewer_starts: DEFAULT_REVIEW_REVIEWER_STARTS,
-            repair_cycles: DEFAULT_REVIEW_REPAIR_CYCLES,
             minutes: DEFAULT_REVIEW_MINUTES,
         }
     }
@@ -154,18 +154,28 @@ pub struct CommitIdentity {
     pub subject: String,
 }
 
-/// The reviewer's structured decision. Both pass variants require every
-/// finding resolved or explicitly disposed and final validation satisfied.
+/// The reviewer's structured decision [ORB-13989]. Both accepting variants
+/// require every finding fixed or explicitly disposed and final validation
+/// satisfied.
+///
+/// Evidence written before [ORB-13989] spells the same decisions
+/// `passed_without_repairs`, `passed_with_repairs` and `changes_required`;
+/// those labels still read, so stored ledgers and certificates stay readable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewVerdict {
-    /// The candidate passed as implemented.
-    PassedWithoutRepairs,
-    /// The candidate passed after reviewer-authored repairs, which did not
-    /// receive an independent second review.
-    PassedWithRepairs,
-    /// Findings remain that the reviewer could not or may not repair.
-    ChangesRequired,
+    /// No findings: the candidate is accepted as implemented.
+    #[serde(alias = "passed_without_repairs")]
+    Accept,
+    /// The reviewer fixed every finding in its own commit on the candidate.
+    /// Its fixes were validated but did not receive a second review.
+    #[serde(alias = "passed_with_repairs")]
+    AcceptWithFixes,
+    /// Findings remain that cannot be fixed in review: a wrong approach, a
+    /// scope or criteria mismatch, a safety issue, or fixes that fail
+    /// validation.
+    #[serde(alias = "changes_required")]
+    Reject,
     /// The review could not be completed honestly: missing evidence,
     /// unavailable validation, exhausted budget, or a failed invocation.
     Incomplete,
@@ -175,29 +185,26 @@ impl ReviewVerdict {
     /// Stable label for projections.
     pub fn as_str(self) -> &'static str {
         match self {
-            ReviewVerdict::PassedWithoutRepairs => "passed_without_repairs",
-            ReviewVerdict::PassedWithRepairs => "passed_with_repairs",
-            ReviewVerdict::ChangesRequired => "changes_required",
+            ReviewVerdict::Accept => "accept",
+            ReviewVerdict::AcceptWithFixes => "accept_with_fixes",
+            ReviewVerdict::Reject => "reject",
             ReviewVerdict::Incomplete => "incomplete",
         }
     }
 
     /// Whether the verdict lets the candidate open a PR.
     pub fn passed(self) -> bool {
-        matches!(
-            self,
-            ReviewVerdict::PassedWithoutRepairs | ReviewVerdict::PassedWithRepairs
-        )
+        matches!(self, ReviewVerdict::Accept | ReviewVerdict::AcceptWithFixes)
     }
 
     /// The assurance label a passed verdict carries.
     pub fn assurance(self) -> Option<ReviewAssurance> {
         match self {
-            ReviewVerdict::PassedWithoutRepairs => Some(ReviewAssurance::IndependentReview),
-            ReviewVerdict::PassedWithRepairs => {
+            ReviewVerdict::Accept => Some(ReviewAssurance::IndependentReview),
+            ReviewVerdict::AcceptWithFixes => {
                 Some(ReviewAssurance::IndependentReviewWithSelfAuthoredRepairs)
             }
-            ReviewVerdict::ChangesRequired | ReviewVerdict::Incomplete => None,
+            ReviewVerdict::Reject | ReviewVerdict::Incomplete => None,
         }
     }
 }
@@ -319,7 +326,7 @@ pub struct ReviewValidation {
 pub enum FindingDisposition {
     /// Still open; blocks a pass verdict.
     Open,
-    /// Repaired by the reviewer in this attempt.
+    /// Fixed by the reviewer in this attempt's reviewer commit.
     Repaired,
     /// Disposed by an authorized decision with a recorded reason.
     Disposed { reason: String },
@@ -334,6 +341,10 @@ pub struct ReviewFinding {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
     pub disposition: FindingDisposition,
+    /// What the reviewer changed to fix this finding, in one line. Absent on
+    /// open findings and in reports written before [ORB-13989].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<String>,
 }
 
 /// The structured report the reviewer persists as
@@ -585,7 +596,6 @@ pub struct ReviewerIdentity {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewConsumption {
     pub reviewer_starts: u32,
-    pub repair_cycles: u32,
     pub seconds: u64,
 }
 
@@ -625,12 +635,6 @@ pub struct ReviewCertificate {
     /// issued before this field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selectors_widened: Vec<String>,
-    /// Whether a `changes_required` verdict sent its open findings back to
-    /// the implementer for rework within the same delivery run, charging one
-    /// repair cycle, instead of stopping delivery [ORB-13891]. Absent on
-    /// certificates issued before rework existed.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub rework_requested: bool,
     pub issued_at: DateTime<Utc>,
 }
 
@@ -721,8 +725,6 @@ pub struct ReviewAttempt {
     pub candidate: SourceRevision,
     pub started_at: DateTime<Utc>,
     pub state: ReviewAttemptState,
-    #[serde(default)]
-    pub repair_cycles: u32,
     /// Reviewer runtime charged to the lineage for this attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_seconds: Option<u64>,
@@ -871,12 +873,6 @@ impl ReviewLedger {
                     .count(),
             )
             .unwrap_or(u32::MAX),
-            repair_cycles: self
-                .attempts
-                .iter()
-                .filter(|a| a.index > self.reset_through())
-                .map(|a| a.repair_cycles)
-                .fold(0, u32::saturating_add),
             seconds: self.consumed_seconds,
         }
     }
@@ -904,7 +900,6 @@ impl ReviewLedger {
             reviewer_starts: budget
                 .reviewer_starts
                 .saturating_sub(consumed.reviewer_starts),
-            repair_cycles: budget.repair_cycles.saturating_sub(consumed.repair_cycles),
             seconds: u64::from(budget.minutes)
                 .saturating_mul(60)
                 .saturating_sub(consumed.seconds),
@@ -941,21 +936,6 @@ impl ReviewLedger {
             .filter(|attempt| attempt.index > reset_through)
             .filter_map(|attempt| attempt.elapsed_seconds)
             .fold(0, u64::saturating_add);
-        Some(ledger)
-    }
-
-    /// The ledger while `attempt_id` was still open: [`Self::as_of`] with
-    /// the attempt's own settlement undone. A settlement resumed after the
-    /// ledger recorded it judges against this view, so its own charge is
-    /// not counted against it twice.
-    pub fn before_settling(&self, attempt_id: &str) -> Option<ReviewLedger> {
-        let mut ledger = self.as_of(attempt_id)?;
-        let attempt = ledger.attempts.last_mut()?;
-        let charged = attempt.elapsed_seconds.take().unwrap_or(0);
-        attempt.state = ReviewAttemptState::Open;
-        attempt.released_at = None;
-        attempt.repair_cycles = 0;
-        ledger.consumed_seconds = ledger.consumed_seconds.saturating_sub(charged);
         Some(ledger)
     }
 

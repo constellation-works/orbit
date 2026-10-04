@@ -171,12 +171,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "operation.review_repair_cycles": {
-      "scope": "built-in",
-      "state": "unset",
-      "path": null,
-      "shadowed_by": []
-    },
     "operation.review_reviewer_starts": {
       "scope": "built-in",
       "state": "unset",

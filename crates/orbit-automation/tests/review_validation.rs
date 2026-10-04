@@ -263,7 +263,7 @@ fn revision(label: &str) -> SourceRevision {
 
 /// A passing certificate that claims complete validation over `validation`.
 fn certificate(validation: Vec<ReviewValidation>) -> ReviewCertificate {
-    let verdict = ReviewVerdict::PassedWithoutRepairs;
+    let verdict = ReviewVerdict::Accept;
     ReviewCertificate {
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: "rvw-1".into(),
@@ -293,7 +293,6 @@ fn certificate(validation: Vec<ReviewValidation>) -> ReviewCertificate {
         budget: ReviewBudget::default(),
         escalation: None,
         selectors_widened: Vec::new(),
-        rework_requested: false,
         issued_at: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).unwrap(),
     }
 }

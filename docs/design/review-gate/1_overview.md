@@ -7,22 +7,24 @@ status: Accepted
 feature: review-gate
 doc_role: overview
 type: design
-summary: Independent automatic code review — before-PR gating with a fresh reviewer and scoped repairs, after-landing scheduling, lineage budgets, and exact-tree delivery coverage.
+summary: Independent automatic code review — before-PR gating with a fresh reviewer that fixes its findings as a second commit, after-landing scheduling, lineage budgets, and exact-tree delivery coverage.
 tags: [review-gate, review-policy, automation, delivery]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13891]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13989]
 ---
 
 # Review Gate — Overview
 
 **Shipped.** [ORB-11333] implements an automatic code review that is
 independent of who implemented the work. Before-PR review admits a fresh,
-separately configured reviewer that checks the implementation, makes bounded
-scoped repairs committed under its own identity, and validates the final
-candidate before the PR opens. A `changes_required` verdict goes back to the
-implementer, whose rework a fresh reviewer examines in the same run, until
-the lineage budget runs out [ORB-13891]. Passed certificates exclude exactly reproduced
+separately configured reviewer that checks the implementation commit, fixes
+what it finds as one second commit (`review: <summary>`) under its own
+identity, and comments every finding with what changed for it [ORB-13989].
+The verdict is `accept` (no fixes), `accept_with_fixes` (owner validation
+reruns on the reviewer commit before the PR opens, and the PR body gains a
+"Review fixes" section), or `reject` (the task blocks with both commits
+preserved; there is no second review round). Passed certificates exclude exactly reproduced
 landings from redundant after-landing review while QA stays independent.
 Neither review timing nor a reviewer verdict grants merge permission.
 
@@ -50,22 +52,22 @@ anything else stays an ordinary review obligation.
 - **Reviewer:** a fresh invocation with its own instruction, tool allowlist
   and wall clock, resolved from `operation.review_crew`. It never becomes the
   implementer and never merges.
-- **Lineage budget:** reviewer starts, repair cycles, and reviewer minutes
-  bounding one delivery run lineage (workspace, task set, base branch, and
-  the run with its resumes). A rework takes a repair cycle, and its
-  re-review a reviewer start.
-- **Rework:** the implementer addressing a `changes_required` verdict's open
-  findings in the same worktree; the pipeline commits and validates it and
-  the gate reviews the new head.
+- **Lineage budget:** reviewer starts and reviewer minutes bounding one
+  delivery run lineage (workspace, task set, base branch, and the run with
+  its resumes).
+- **Two-commit shape:** the implementation commit, never amended, then at
+  most one reviewer commit carrying every fix; owner validation and the
+  ownership check rerun on the reviewer commit before publication.
 - **Certificate:** the durable record binding verdict, reviewer identity,
-  base/reviewed/final candidate, commits, findings, validation and consumed
+  base/reviewed/final candidate, commits, findings with what each fix
+  changed, validation and consumed
   budget. Indexed by final candidate tree when passed.
 - **Delivery coverage:** exact-tree exclusion of an already-reviewed landing
   from after-landing review; never a rewrite of pending debt.
 
 Scope covers admission, the reviewer invocation, settlement, budgets,
 managed completion under a gate, and coverage. It excludes granting merge
-authority, changing task lifecycle, and reviewing the reviewer's own repairs
+authority, changing task lifecycle, and reviewing the reviewer's own fixes
 a second time.
 
 ## 3. At a Glance
@@ -73,7 +75,8 @@ a second time.
 | Concern | File | Task |
 | --- | --- | --- |
 | Shipped contract: gate, evidence rules, budgets, coverage, surfaces, rollback | [Design](./2_design.md) | [ORB-11333] |
-| Sending `changes_required` back for rework and re-review | [Design §3.1](./2_design.md#31-rework-orb-13891) | [ORB-13891] |
+| Verdicts, the two-commit shape, the findings comment, and revalidation | [Design §3.1](./2_design.md#31-verdicts-the-two-commit-shape-and-revalidation-orb-13989) | [ORB-13989] |
+| Operating a blocked review | [Review gate runbook](../../runbooks/review-gate.md) | [ORB-13989] |
 | What a validation record establishes | [Design §4](./2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545) | [ORB-11528], [ORB-11545] |
 | After-landing scheduling and coverage consumers | [Delivery automation operations](../automation-triggers/5_operations.md) | [ORB-11331] |
 | `[operation]` key reference | [CONFIG.md](../../CONFIG.md) | [ORB-11333] |
@@ -84,6 +87,6 @@ a second time.
 - [ORB-11528] — adds validation-record roles to the certificate contract.
 - [ORB-11545] — tightens what a superseded validation record may claim.
 - [ORB-11331] — owns the delivery automation consumers that spend certificates.
-- [ORB-13891] — sends `changes_required` findings back to the implementer for rework and re-review within the run.
+- [ORB-13989] — the reviewer fixes its findings as a second commit and comments them; retires the rework loop and the repair-cycle budget.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

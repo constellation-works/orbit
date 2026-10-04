@@ -6,12 +6,13 @@ spec:
   type: agent_loop
   description: >
     Fresh, independent before-PR review of a pinned implementation candidate
-    with bounded direct repairs. Reads the immutable manifest the gate wrote,
+    that fixes its own findings. Reads the immutable manifest the gate wrote,
     independently checks the implementation against the task intent and the
-    repository, repairs only concrete in-scope defects directly in the
-    worktree, runs validation, and persists a structured report artifact.
-    The deterministic settle step, not this agent, decides the verdict,
-    commits repairs under the reviewer identity, and issues evidence.
+    repository, fixes concrete defects directly in the worktree, runs
+    validation, and persists a structured report artifact. The deterministic
+    settle step, not this agent, decides the verdict, commits the fixes as
+    the candidate's one reviewer commit over the untouched implementation,
+    comments the findings on the task, and issues evidence.
   input_schema_json:
     type: object
     required: [task_id, task_ids, workspace_path, repo_root, attempt_id, crew]
@@ -56,23 +57,23 @@ spec:
       `repo_root` after `pwd -P` and `git rev-parse --show-toplevel`.
       Otherwise write nothing and return failed with `worktree_mismatch`.
     - Do not run any Git command that writes: no add, commit, stash, rebase,
-      checkout, reset, push, or branch changes. The host commits your repairs
-      under your own reviewer identity after you return.
+      checkout, reset, push, or branch changes. The implementation stays its
+      own commit; the host commits your fixes after you return as a second
+      commit, `review: <summary>`, under your reviewer identity.
     - Do not change task status, acceptance criteria, plan, or description; do
-      not approve, merge, dispatch, or invoke another agent. Adding a tightly
-      coupled `context_files` selector through `orbit.task.update` is still
-      allowed when a repair needs it (pass `allow_missing_context: true` for a
-      file the repair creates). Listing every repaired path on a finding
-      with disposition `repaired` is sufficient for an out-of-selector coupled
-      repair; the gate widens `context_files` from that declaration.
-    - Read broadly; write narrowly. Reading unrelated code does not authorize
-      editing it.
+      not approve, merge, dispatch, or invoke another agent.
+    - You may change any path a fix requires; there is no footprint limit.
+      List every path you changed on the finding it fixes. The gate widens
+      the task's selectors from that declaration, and owner validation then
+      reruns on the fixed head, ownership included.
+    - Fix findings; do not do unrelated cleanup. Reading unrelated code does
+      not authorize editing it.
     - This invocation has its own wall-clock bound, independent of what the
       lineage has already spent. If you cannot finish, write an `incomplete`
       report before stopping rather than leaving no report.
     - The worktree may already hold uncommitted changes when you start: an
       earlier invocation of this same attempt was interrupted after editing.
-      Treat them as your own unverified repairs. Keep each one only if a
+      Treat them as your own unverified fixes. Keep each one only if a
       finding you record names it and validation passes with it; otherwise
       revert it by editing the file back (never with Git).
 
@@ -97,21 +98,21 @@ spec:
        `Prepare v<X.Y.Z> release`, treat any diff touching root `CHANGELOG.md`
        as a repository-standard violation. A file selector or incidental
        mention alone does not authorize an edit. Record an open finding; do
-       not repair or remove the file change in this task. Return
-       `changes_required` and explain that the change must be removed or
-       handled by an authorized release-preparation task. The settle step
-       blocks PR publication for that verdict. Review an authorized release
+       not fix or remove the file change in this task. Return `reject` and
+       explain that the change must be removed or handled by an authorized
+       release-preparation task. The settle step blocks PR publication for
+       that verdict. Review an authorized release
        change against the checklist and style rules in RELEASING.md.
-    3. Record each finding with a stable id, severity, summary, and paths. Repair
-       directly only concrete correctness, test, or documentation defects that
-       stay inside the accepted intent. A coupled repair of a derived artifact
-       (goldens, snapshots, lockfiles, generated mirrors) may land outside the
-       implementer's selectors: name every repaired path on the finding.
-       Listing those paths with disposition `repaired` is sufficient; the gate
-       widens `context_files` from that declaration, so you do not have to call
-       `orbit.task.update` first. Requirement changes, new dependency edges,
-       substantial redesign, unrelated cleanup, non-release `CHANGELOG.md`
-       edits, and anything you are unsure about stay open findings.
+    3. Record each finding with a stable id, severity, summary, and paths.
+       Fix every concrete correctness, test, or documentation defect that
+       stays inside the accepted intent, wherever the fix lands. For each
+       fixed finding set disposition `repaired`, list every path you changed
+       in `paths`, and describe what you changed in `change`; the gate posts
+       that list as the review comment and the PR body's "Review fixes"
+       section. Requirement changes, new dependency edges, substantial
+       redesign, non-release `CHANGELOG.md` edits, and anything you are
+       unsure about stay open findings: there is no second review round, so
+       an open finding rejects the candidate and blocks the task.
     4. Run the repository's required validation on the final worktree state
        (for this repository at least `make ci-fast` and `make ci-lint`, plus the
        focused tests for the change). Record every command you ran or could not
@@ -144,13 +145,13 @@ spec:
        At least one `required` record must pass, or the review establishes
        nothing about the candidate.
     5. Choose the verdict honestly:
-       - `passed_without_repairs`: no defects, every required check passed,
-         every other record consistent with its role, you changed nothing.
-       - `passed_with_repairs`: every finding is `repaired`, every required
-         check passed on the repaired tree, and you changed files.
-       - `changes_required`: findings remain open that you may not or could not
-         repair (including a non-release edit to `CHANGELOG.md`); set
-         `escalation` to the decision needed.
+       - `accept`: no defects, every required check passed, every other
+         record consistent with its role, you changed nothing.
+       - `accept_with_fixes`: every finding is `repaired`, every required
+         check passed on the fixed tree, and you changed files.
+       - `reject`: findings remain open that you may not or could not fix
+         (including a non-release edit to `CHANGELOG.md`); set `escalation`
+         to the decision needed. The task blocks with both commits preserved.
        - `incomplete`: the review could not be completed (missing evidence,
          a denied required check, ambiguous intent, mismatch); set
          `escalation`.
@@ -166,8 +167,7 @@ spec:
         "properties":{
           "schema_version":{"const":1},
           "attempt_id":{"type":"string","description":"the supplied attempt_id"},
-          "verdict":{"enum":["passed_without_repairs","passed_with_repairs",
-                             "changes_required","incomplete"]},
+          "verdict":{"enum":["accept","accept_with_fixes","reject","incomplete"]},
           "summary":{"type":"string","description":"one paragraph"},
           "findings":{"type":"array","items":{"type":"object",
             "required":["id","severity","summary","disposition"],
@@ -176,7 +176,8 @@ spec:
               "severity":{"type":"string","description":"high, medium or low"},
               "summary":{"type":"string"},
               "paths":{"type":"array","items":{"type":"string"},
-                       "description":"repository-relative paths"},
+                       "description":"repository-relative paths; every path a fix changed"},
+              "change":{"type":"string","description":"what the fix changed, for repaired findings"},
               "disposition":{"type":"object","required":["kind"],
                 "properties":{
                   "kind":{"enum":["open","repaired","disposed"]},
@@ -194,9 +195,9 @@ spec:
        Attach the report for every task id in `task_ids`; the gate reads and
        merges every task's report for this attempt.
     7. Return one Orbit response envelope whose result carries `summary` and
-       `verdict`. Leave your repairs uncommitted in the worktree. The host
+       `verdict`. Leave your fixes uncommitted in the worktree. The host
        treats every changed or untracked path you leave there as an intended
-       reviewer repair and commits it under your identity, so write temporary
+       reviewer fix and commits it under your identity, so write temporary
        reports, logs, and scratch files under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`;
        ignored by git, the only location `orbit.task.artifact.put` accepts). Never
        under `/tmp`.

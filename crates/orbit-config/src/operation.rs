@@ -25,7 +25,6 @@ use crate::registry::{read_optional, removed_key_note};
 pub const OPERATION_POLICY_VERSION: u32 = 2;
 
 const MAX_REVIEW_REVIEWER_STARTS: u32 = 10;
-const MAX_REVIEW_REPAIR_CYCLES: u32 = 10;
 const MAX_REVIEW_MINUTES: u32 = 1_440;
 
 /// When automatic code review applies.
@@ -144,9 +143,6 @@ pub struct OperationLayer {
     /// Explicit reviewer starts per candidate lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_reviewer_starts: Option<u32>,
-    /// Explicit repair cycles per candidate lineage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_repair_cycles: Option<u32>,
     /// Explicit review wall-time minutes per candidate lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_minutes: Option<u32>,
@@ -158,7 +154,6 @@ pub const OPERATION_KEYS: &[&str] = &[
     "operation.review_crew",
     "operation.review_minutes",
     "operation.review_policy",
-    "operation.review_repair_cycles",
     "operation.review_reviewer_starts",
 ];
 
@@ -205,11 +200,6 @@ impl OperationLayer {
                 "operation.review_reviewer_starts",
                 config_path,
             )?)?,
-            review_repair_cycles: review_repair_cycles(read_optional(
-                document,
-                "operation.review_repair_cycles",
-                config_path,
-            )?)?,
             review_minutes: review_minutes(read_optional(
                 document,
                 "operation.review_minutes",
@@ -236,8 +226,6 @@ pub struct OperationPolicy {
     pub review_crew: OperationField<Option<String>>,
     /// Reviewer starts allowed per delivery candidate lineage.
     pub review_reviewer_starts: OperationField<u32>,
-    /// Repair/validation cycles allowed per delivery candidate lineage.
-    pub review_repair_cycles: OperationField<u32>,
     /// Aggregate review wall-time minutes per delivery candidate lineage.
     pub review_minutes: OperationField<u32>,
 }
@@ -257,9 +245,6 @@ impl OperationPolicy {
             review_crew: OperationField::built_in(None),
             review_reviewer_starts: OperationField::built_in(
                 orbit_types::workflow::DEFAULT_REVIEW_REVIEWER_STARTS,
-            ),
-            review_repair_cycles: OperationField::built_in(
-                orbit_types::workflow::DEFAULT_REVIEW_REPAIR_CYCLES,
             ),
             review_minutes: OperationField::built_in(orbit_types::workflow::DEFAULT_REVIEW_MINUTES),
         }
@@ -284,8 +269,6 @@ impl OperationPolicy {
         }
         self.review_reviewer_starts
             .set(layer.review_reviewer_starts.as_ref(), source);
-        self.review_repair_cycles
-            .set(layer.review_repair_cycles.as_ref(), source);
         self.review_minutes
             .set(layer.review_minutes.as_ref(), source);
     }
@@ -294,7 +277,6 @@ impl OperationPolicy {
     pub fn review_budget(&self) -> ReviewBudget {
         ReviewBudget {
             reviewer_starts: self.review_reviewer_starts.value,
-            repair_cycles: self.review_repair_cycles.value,
             minutes: self.review_minutes.value,
         }
     }
@@ -313,15 +295,6 @@ pub(crate) fn review_reviewer_starts(raw: Option<u32>) -> Result<Option<u32>, Or
         "operation.review_reviewer_starts",
         1,
         MAX_REVIEW_REVIEWER_STARTS,
-    )
-}
-
-pub(crate) fn review_repair_cycles(raw: Option<u32>) -> Result<Option<u32>, OrbitError> {
-    bounded(
-        raw,
-        "operation.review_repair_cycles",
-        0,
-        MAX_REVIEW_REPAIR_CYCLES,
     )
 }
 

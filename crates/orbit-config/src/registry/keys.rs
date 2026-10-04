@@ -61,11 +61,18 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
         OPERATION_MODE_REMOVED_NOTE,
     ),
     ("operation.delivery_cap", OPERATION_MODE_REMOVED_NOTE),
+    // [ORB-13989] The before-PR reviewer fixes its findings in one reviewer
+    // commit per attempt; no repair or rework cycle is counted any more.
+    (
+        "operation.review_repair_cycles",
+        "the before-PR reviewer fixes its findings in one reviewer commit per attempt and \
+     nothing is reworked, so no repair cycle is counted; review_reviewer_starts and \
+     review_minutes still bound a lineage",
+    ),
 ];
 
 const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; the [operation] table \
-     keeps only review_policy, review_crew, review_reviewer_starts, review_repair_cycles and \
-     review_minutes";
+     keeps only review_policy, review_crew, review_reviewer_starts and review_minutes";
 
 /// The migration note for a removed key, or `None` for any other key.
 pub(crate) fn removed_key_note(key: &str) -> Option<&'static str> {

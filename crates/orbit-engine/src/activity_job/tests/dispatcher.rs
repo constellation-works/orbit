@@ -39,7 +39,7 @@ fn dispatch_error_retryability_classification_table() {
         },
         DispatchError::DeterministicActionRefused {
             action: "review_gate_settle".into(),
-            message: "review_gate_blocked: verdict changes_required".into(),
+            message: "review_gate_blocked: verdict reject".into(),
         },
     ];
     for err in &permanent {

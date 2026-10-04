@@ -526,7 +526,7 @@ requirements are normalized in the task store and freeze once the task enters
 
 The seeded agent loops (`agent_implement`, `agent_invoke`,
 `agent_review_repair`, `pr_conflict_recovery`, `step_failure_recovery`, and
-`task_pilot`, and since [ORB-13891] `agent_rework`) declare
+`task_pilot`) declare
 `tool_disallow_list`. They refuse registered
 control-plane mutations and `orbit.agent.invoke`; the read-only
 `agent_invoke` and `task_pilot` also refuse task and friction writes. Their

@@ -535,9 +535,9 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
     };
 
     for verdict in [
-        ReviewVerdict::PassedWithoutRepairs,
-        ReviewVerdict::ChangesRequired,
-        ReviewVerdict::PassedWithRepairs,
+        ReviewVerdict::Accept,
+        ReviewVerdict::Reject,
+        ReviewVerdict::AcceptWithFixes,
     ] {
         let root = TempDir::new().unwrap();
         let global = root.path().join("home/.orbit");
@@ -636,7 +636,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             )
             .unwrap();
         assert_eq!(admitted["applies"], true);
-        let repaired = verdict == ReviewVerdict::PassedWithRepairs;
+        let repaired = verdict == ReviewVerdict::AcceptWithFixes;
         if repaired {
             std::fs::write(repo.join("coupled.txt"), "reviewer repair\n").unwrap();
         }
@@ -645,7 +645,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             "attempt_id": admitted["attempt_id"],
             "verdict": verdict,
             "summary": "Checked the fixture.",
-            "findings": if repaired || verdict == ReviewVerdict::ChangesRequired {
+            "findings": if repaired || verdict == ReviewVerdict::Reject {
                 json!([{
                     "id": "F1", "severity": "medium", "summary": "Coupled repair",
                     "paths": ["coupled.txt"],
