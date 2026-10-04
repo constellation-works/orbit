@@ -1,8 +1,8 @@
 ---
 title: Task Migration — Decisions
 owner: claude
-last_updated: 2026-09-11
-last_validated: 2026-09-11
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: task-migration
 doc_role: decisions
@@ -21,7 +21,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 ## Task authority is per prefix, not per host
 
 **Recorded:** 2026-09 · [ORB-12126]
-**Code anchors:** `crates/orbit-store/src/workflow/task/import.rs::import_tasks`, `crates/orbit-cmd/src/registry/runtime/selection.rs::sync_task_prefix`
+**Code anchors:** `crates/orbit-store/src/workflow/task/import.rs::import_tasks`, `crates/orbit-cmd/src/registry/runtime/selection.rs::sync_task_prefix_for_identity`
 
 ### Context
 

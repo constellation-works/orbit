@@ -1,8 +1,8 @@
 ---
 title: Task Migration — Vision
 owner: claude
-last_updated: 2026-09-11
-last_validated: 2026-09-11
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: task-migration
 doc_role: vision
@@ -79,7 +79,7 @@ refs; local-prefix bundles are your branches.
   a conflicting prefix once allocation has begun.
 - [remote-access](../remote-access/1_overview.md) is the route for a client
   that owns no checkout: reach the owner over MCP instead of minting locally.
-- [federated-mcp](../federated-mcp/1_overview.md) is the proposed cross-host
+- [federated-mcp](../federated-mcp/1_overview.md) is the implemented cross-host
   discovery surface; a mirror that is visible but read-only is a natural fit for
   its capability split.
 
