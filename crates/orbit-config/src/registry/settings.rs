@@ -1,5 +1,9 @@
 use super::*;
 
+/// Built-in `workflow.final_recovery_crews`: the strongest reasoning crews, so
+/// the last automated look at a failed task is the most capable one.
+pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];
+
 macro_rules! define_config_settings {
     ($(
         $field:ident : $resolved:ty => $raw:ty {
@@ -254,6 +258,12 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 65,
         resolve: |raw: Option<String>| resolve_distributed_completion(raw),
     },
+    workflow_final_recovery_crews: Option<Vec<String>> => Vec<String> {
+        key: "workflow.final_recovery_crews", value_type: "array<string>",
+        description: "Weighted crew pool the final-recovery activity draws once per run after step recovery is exhausted; entries are `name` or `name:weight` (all bare or all weighted). Unset defaults to [\"sol:100\", \"opus:20\"], keeping only the members the crew registry defines; [] disables final recovery.",
+        section: ConfigSection::Delivery, order: 105,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw),
+    },
     workflow_hard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.hard_complexity_crews", value_type: "array<string>",
         description: "Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
@@ -377,6 +387,10 @@ impl ConfigSnapshot {
             crews,
             "workflow.xhard_complexity_crews",
         )?;
+        self.workflow_final_recovery_crews = Some(admit_final_recovery_crews(
+            self.workflow_final_recovery_crews.take(),
+            crews,
+        )?);
         self.workflow_default_crew =
             resolve_default_crew(self.workflow_default_crew.take(), crews, env_default)?;
         if self.machine_worker_containment_strict && !self.machine_worker_containment {
@@ -411,6 +425,14 @@ impl ConfigSnapshot {
         }
         self.machine().check_complete()?;
         Ok(())
+    }
+
+    /// The admitted `workflow.final_recovery_crews` pool; empty disables final
+    /// recovery. Admission always fills the field, so `None` never reaches here.
+    pub fn final_recovery_crews(&self) -> &[String] {
+        self.workflow_final_recovery_crews
+            .as_deref()
+            .unwrap_or_default()
     }
 
     /// This machine's identity, as admitted from the same registry rows every
@@ -544,21 +566,10 @@ impl Default for ConfigSnapshot {
     }
 }
 
+/// The built-in crew registry a config without `[crews]` resolves to, so the
+/// built-in snapshot admits the same defaults such a config does.
 fn default_admission_crews() -> BTreeMap<String, Crew> {
-    BTreeMap::from([(
-        DEFAULT_WORKFLOW_CREW.to_string(),
-        Crew {
-            name: DEFAULT_WORKFLOW_CREW.to_string(),
-            assignment: CrewAssignment {
-                model: String::new(),
-                provider: "claude".to_string(),
-                effort: None,
-            },
-            description: None,
-            tags: Vec::new(),
-            enabled: true,
-        },
-    )])
+    crate::resolved::default_crews()
 }
 
 /// Admit one `workflow.*_complexity_crews` value in place, replacing it with
@@ -570,6 +581,36 @@ fn admit_crew_pool(
 ) -> Result<(), OrbitError> {
     *pool = crate::canonical_crew_pool(pool, crews, setting)?.to_setting_value();
     Ok(())
+}
+
+/// Admit `workflow.final_recovery_crews`.
+///
+/// A written pool is admitted exactly like the complexity pools, so a typo
+/// fails at load. An unset key is the built-in default, which names crews a
+/// custom `[crews]` registry may not define; it keeps only the members that
+/// registry does define rather than failing every command on such a host, and
+/// a registry with none of them leaves final recovery disabled.
+fn admit_final_recovery_crews(
+    raw: Option<Vec<String>>,
+    crews: &BTreeMap<String, Crew>,
+) -> Result<Vec<String>, OrbitError> {
+    let pool = match raw {
+        Some(pool) => pool,
+        None => DEFAULT_FINAL_RECOVERY_CREWS
+            .iter()
+            .filter(|entry| {
+                let name = entry
+                    .rsplit_once(crate::crew_pools::WEIGHT_SEPARATOR)
+                    .map_or(**entry, |(name, _)| name);
+                crews.contains_key(name)
+            })
+            .map(ToString::to_string)
+            .collect(),
+    };
+    Ok(
+        crate::canonical_crew_pool(&pool, crews, "workflow.final_recovery_crews")?
+            .to_setting_value(),
+    )
 }
 
 pub(crate) fn read_optional<T: DeserializeOwned>(

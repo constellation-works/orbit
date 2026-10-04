@@ -25,6 +25,17 @@ pub(super) fn agent_crew_config_for_input(
                     "activity crew configured by `workflow.system_crew` cannot be resolved or used: {error}"
                 ))
             })?,
+        Some(orbit_types::workflow::FINAL_RECOVERY_CREWS_KEY) => runtime
+            .final_recovery_crew(
+                input,
+                &mut crate::application::job::crew_pools::random_crew_ticket,
+            )
+            .map_err(|error| {
+                DispatchError::JobValidation(format!(
+                    "activity crew drawn from `workflow.final_recovery_crews` cannot be resolved \
+                     or used: {error}"
+                ))
+            })?,
         Some(other) => {
             return Err(DispatchError::JobValidation(format!(
                 "activity crew names unsupported configuration key `{other}`"

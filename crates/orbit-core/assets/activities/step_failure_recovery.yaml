@@ -109,7 +109,6 @@ spec:
         enum:
           - none
           - repair_and_retry
-          - resumed_pipeline
           - direct_delivery
       pr_number:
         type:
@@ -232,17 +231,17 @@ spec:
        task refuses writes, or the checked-out branch / pre-rewrite HEAD does
        not match the failed step's checkpoint.
 
-    5. For an already-terminal source run, prefer repair-and-resume over direct
-       delivery when the checkpointed remaining steps can run. Never resume the
-       still-live run that is waiting for this activity to return. Repair the
-       source worktree if needed, then use Orbit's job-resume operation so
-       successful checkpoints are skipped and remaining delivery steps retain
-       the pipeline's identity, PR-reuse logic, and retry lineage. Confirm the
-       resumed run's effect by re-inspecting the world it was supposed to
-       change, not by assuming the resume call implies the outcome.
+    5. For an already-terminal source run, prefer repairing for resume over
+       direct delivery when the checkpointed remaining steps can run. You
+       cannot resume a run yourself: job resume is withheld from this activity
+       and belongs to an operator or Orbit's final-recovery layer, which skip
+       successful checkpoints so the remaining delivery steps keep the
+       pipeline's identity, PR-reuse logic, and retry lineage. Repair the
+       source worktree so a resume from the failed step succeeds on its own,
+       then report the repair and the step to resume from in `follow_up`.
 
     6. Direct delivery is the last resort. Use it only with concrete evidence
-       that neither the current retry nor a resumed pipeline can execute the
+       that neither the current retry nor a resume of the run can execute the
        remaining delivery steps; do not preempt a viable pipeline retry. In
        that case:
        - verify the candidate tree still matches the completed implementation;
@@ -274,7 +273,7 @@ spec:
     - summary: short string
     - actions_taken: array of strings
     - follow_up: string or null
-    - delivery_mode: none, repair_and_retry, resumed_pipeline, or direct_delivery
+    - delivery_mode: none, repair_and_retry, or direct_delivery
     - pr_number: integer or null
     - pr_url: string or null
     - task_moved_to_review: boolean
@@ -315,6 +314,6 @@ spec:
   on_denial: terminate
   # Dispatch supplies the configured workflow.system_crew as an explicit crew input.
   # One hour accommodates provider startup plus networked git/PR operations
-  # and a resumed pipeline while retaining a hard terminal bound. This bound is
+  # while retaining a hard terminal bound. This bound is
   # enforced: the CLI runner spawns the subprocess with this deadline.
   wall_clock_timeout_seconds: 3600

@@ -13,6 +13,8 @@ use orbit_config::{
 };
 use orbit_types::identity::Crew;
 use orbit_types::task::{Task, TaskComplexity};
+use orbit_types::workflow::RunStateUpdate;
+use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember, FINAL_RECOVERY_CREWS_KEY};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -383,6 +385,112 @@ impl OrbitRuntime {
         });
         input["crew"] = json!(selected.crew.name);
         Ok(())
+    }
+}
+
+impl OrbitRuntime {
+    /// The crew a `final_recovery` activity runs as: one draw from
+    /// `workflow.final_recovery_crews`, frozen in the run's state.
+    ///
+    /// The first dispatch draws over the enabled members this run's
+    /// `allowed_crews` permits and records the choice in the same run-state
+    /// transaction that reads it, so two racing dispatches cannot record
+    /// different crews. Every later dispatch of the key in this run, and every
+    /// resume seeded from it, reuses the record even if the pool has since
+    /// changed; the caller's allowlist gate still applies to the frozen crew.
+    pub(crate) fn final_recovery_crew(
+        &self,
+        input: &Value,
+        random: &mut impl FnMut() -> Result<u64, OrbitError>,
+    ) -> Result<Crew, OrbitError> {
+        let source = FINAL_RECOVERY_CREWS_KEY;
+        let run_id = input
+            .get("run_id")
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "an activity crew drawn from `{source}` needs the input's `run_id` to freeze \
+                     the draw"
+                ))
+            })?;
+        let allowlist = self.crew_allowlist_from_input(input)?;
+        let mut drawn: Option<ActivityCrewDraw> = None;
+        let update = self
+            .stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                if let Some(frozen) = state.activity_crew_draws.get(source) {
+                    drawn = Some(frozen.clone());
+                    return Ok(());
+                }
+                let candidates = self.final_recovery_candidates()?;
+                let candidates = permitted_candidates(candidates, source, allowlist.as_ref())?;
+                let selected = weighted_draw(&candidates, source, random)?;
+                let draw = ActivityCrewDraw {
+                    crew: selected.crew.name.clone(),
+                    source: source.to_string(),
+                    eligible_pool: candidates
+                        .iter()
+                        .map(|candidate| ActivityCrewPoolMember {
+                            name: candidate.crew.name.clone(),
+                            weight: candidate.weight,
+                        })
+                        .collect(),
+                };
+                state
+                    .activity_crew_draws
+                    .insert(source.to_string(), draw.clone());
+                drawn = Some(draw);
+                Ok(())
+            })?;
+        if update != RunStateUpdate::Updated {
+            return Err(OrbitError::InvalidInput(format!(
+                "run '{run_id}' has no persisted state to freeze its `{source}` draw in"
+            )));
+        }
+        let draw = drawn.ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "`{source}` draw for run '{run_id}' did not run inside its state update"
+            ))
+        })?;
+        self.resolve_crew_for_task(Some(&draw.crew), None)
+    }
+
+    /// The enabled members of `workflow.final_recovery_crews`, each with its
+    /// tickets. An empty pool disables final recovery, and a pool whose every
+    /// member is disabled is refused the same way rather than falling back to
+    /// another crew.
+    fn final_recovery_candidates(&self) -> Result<Vec<CrewCandidate>, OrbitError> {
+        let source = FINAL_RECOVERY_CREWS_KEY;
+        let registry = self.context.settings().crews();
+        let pool = canonical_crew_pool(
+            self.context.settings().final_recovery_crews(),
+            registry,
+            source,
+        )?;
+        if pool.entries.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "final recovery is disabled: `{source}` is []"
+            )));
+        }
+        let candidates = pool
+            .entries
+            .iter()
+            .filter(|entry| registry.get(&entry.name).is_some_and(|crew| crew.enabled))
+            .map(|entry| {
+                Ok(CrewCandidate {
+                    crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
+                    weight: entry.weight,
+                })
+            })
+            .collect::<Result<Vec<_>, OrbitError>>()?;
+        if candidates.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "every crew in `{source}` is disabled"
+            )));
+        }
+        Ok(candidates)
     }
 }
 

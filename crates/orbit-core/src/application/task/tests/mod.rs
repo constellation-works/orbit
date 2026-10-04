@@ -3,6 +3,7 @@
 mod add;
 mod contention;
 mod desktop;
+mod final_recovery;
 mod lifecycle;
 mod paths;
 mod transitions;

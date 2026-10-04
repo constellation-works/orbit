@@ -50,6 +50,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/pull_refill.yaml"),
     ),
     (
+        "final_recovery",
+        include_str!("../../assets/activities/final_recovery.yaml"),
+    ),
+    (
         "file_ci_failure_tasks",
         include_str!("../../assets/activities/file_ci_failure_tasks.yaml"),
     ),

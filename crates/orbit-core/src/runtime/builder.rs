@@ -314,6 +314,7 @@ pub(crate) fn build_context_from_roots(
             crews,
             default_crew,
             runtime_config.complexity_crews.clone(),
+            runtime_config.snapshot.final_recovery_crews().to_vec(),
             system_crew,
             runtime_config.system_crew_alias.clone(),
             operation,
