@@ -804,6 +804,19 @@ pub fn seconds_between(start: DateTime<Utc>, end: DateTime<Utc>) -> u64 {
     u64::try_from(end.signed_duration_since(start).num_seconds()).unwrap_or(0)
 }
 
+/// An operator decision starting a fresh budget while retaining attempt history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewResetDecision {
+    /// All attempts through this index belong to the previous budget.
+    pub after_attempt_index: u32,
+    pub reason: String,
+    pub actor: String,
+    pub recorded_at: DateTime<Utc>,
+    pub previous_budget: ReviewBudget,
+    pub previous_consumption: ReviewConsumption,
+    pub budget: ReviewBudget,
+}
+
 /// Aggregate review consumption for one delivery candidate lineage. Retry,
 /// interruption, candidate invalidation, and delivery lineage share it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -813,6 +826,9 @@ pub struct ReviewLedger {
     pub budget: ReviewBudget,
     pub attempts: Vec<ReviewAttempt>,
     pub consumed_seconds: u64,
+    /// Audited budget resets; absent in ledgers written before reset support.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decisions: Vec<ReviewResetDecision>,
     /// Compare-and-set handle.
     pub revision: u32,
     pub updated_at: DateTime<Utc>,
@@ -832,16 +848,35 @@ impl ReviewLedger {
             budget,
             attempts: Vec::new(),
             consumed_seconds: 0,
+            decisions: Vec::new(),
             revision: 0,
             updated_at: now,
         }
     }
 
-    /// What the lineage has consumed so far.
+    /// Last attempt retired by an operator reset, or zero for the original budget.
+    pub fn reset_through(&self) -> u32 {
+        self.decisions
+            .last()
+            .map_or(0, |decision| decision.after_attempt_index)
+    }
+
+    /// What the current budget has consumed so far.
     pub fn consumed(&self) -> ReviewConsumption {
         ReviewConsumption {
-            reviewer_starts: u32::try_from(self.attempts.len()).unwrap_or(u32::MAX),
-            repair_cycles: self.attempts.iter().map(|a| a.repair_cycles).sum(),
+            reviewer_starts: u32::try_from(
+                self.attempts
+                    .iter()
+                    .filter(|a| a.index > self.reset_through())
+                    .count(),
+            )
+            .unwrap_or(u32::MAX),
+            repair_cycles: self
+                .attempts
+                .iter()
+                .filter(|a| a.index > self.reset_through())
+                .map(|a| a.repair_cycles)
+                .fold(0, u32::saturating_add),
             seconds: self.consumed_seconds,
         }
     }
@@ -887,11 +922,23 @@ impl ReviewLedger {
             .position(|attempt| attempt.attempt_id == attempt_id)?;
         let mut ledger = self.clone();
         ledger.attempts.truncate(position.saturating_add(1));
+        let index = ledger.attempts.last()?.index;
+        let original_budget = self
+            .decisions
+            .first()
+            .map_or(self.budget, |d| d.previous_budget);
+        ledger.decisions.retain(|d| d.after_attempt_index < index);
+        ledger.budget = ledger
+            .decisions
+            .last()
+            .map_or(original_budget, |d| d.budget);
+        let reset_through = ledger.reset_through();
         // Only settlement charges seconds, so settled consumption is the
         // sum of the kept attempts' recorded elapsed time.
         ledger.consumed_seconds = ledger
             .attempts
             .iter()
+            .filter(|attempt| attempt.index > reset_through)
             .filter_map(|attempt| attempt.elapsed_seconds)
             .fold(0, u64::saturating_add);
         Some(ledger)

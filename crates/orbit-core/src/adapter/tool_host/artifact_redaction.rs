@@ -253,6 +253,10 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_arrays: &[],
             nested_objects: &[],
         },
+        OrbitBuiltinAction::TaskReviewReset => ActionPolicy {
+            free_text_fields: &["reason"],
+            free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
+        },
         OrbitBuiltinAction::TaskReject => ActionPolicy {
             free_text_fields: &["note", "comment"],
             free_text_arrays: &[],
@@ -361,6 +365,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | OrbitBuiltinAction::TaskAdd
             | OrbitBuiltinAction::TaskUpdate
             | OrbitBuiltinAction::TaskReject
+            | OrbitBuiltinAction::TaskReviewReset
             | OrbitBuiltinAction::AutoTaskAdd
             | OrbitBuiltinAction::AutoTaskUpdate
             | OrbitBuiltinAction::Friction(FrictionVerb::Add | FrictionVerb::Update)
@@ -649,7 +654,8 @@ fn artifact_target<'a>(
         }),
         OrbitBuiltinAction::TaskAdd
         | OrbitBuiltinAction::TaskUpdate
-        | OrbitBuiltinAction::TaskReject => {
+        | OrbitBuiltinAction::TaskReject
+        | OrbitBuiltinAction::TaskReviewReset => {
             let id = persisted_task_id.ok_or_else(|| {
                 OrbitError::Execution("redaction audit missing persisted task id".to_string())
             })?;
@@ -694,6 +700,7 @@ fn tool_name(action: OrbitBuiltinAction) -> &'static str {
         OrbitBuiltinAction::TaskAdd => "orbit.task.add",
         OrbitBuiltinAction::TaskUpdate => "orbit.task.update",
         OrbitBuiltinAction::TaskReject => "orbit.task.reject",
+        OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
         OrbitBuiltinAction::Friction(FrictionVerb::Add) => "orbit.friction.add",
         OrbitBuiltinAction::Friction(FrictionVerb::Update) => "orbit.friction.update",
         OrbitBuiltinAction::AutoTaskAdd => "orbit.auto_task.add",

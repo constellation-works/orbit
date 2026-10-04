@@ -8,6 +8,7 @@ pub mod lint;
 pub mod list;
 pub mod locks;
 pub mod reject;
+pub mod review_reset;
 pub mod show;
 pub mod update;
 

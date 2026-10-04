@@ -79,6 +79,10 @@ pub fn register(registry: &mut ToolRegistry) {
     // Task rejection is a human/operator decision — CLI / dashboard only.
     registry.register_inactive(task::reject::OrbitTaskRejectTool);
     registry.register_mcp(
+        task::review_reset::OrbitTaskReviewResetTool,
+        McpToolScope::WorkspaceRequired,
+    );
+    registry.register_mcp(
         task::show::OrbitTaskShowTool,
         McpToolScope::WorkspaceRequired,
     );
