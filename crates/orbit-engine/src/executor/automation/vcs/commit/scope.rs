@@ -35,7 +35,7 @@ pub(super) enum NewPathIntent {
     /// appends one after creating the file; directory selectors are ownership
     /// boundaries, not new-file intent.
     ExactFile,
-    /// Any selector of the claim's frozen footprint, `dir:` included. A
+    /// The frozen selectors, including file siblings and their `tests/` child. A
     /// claimed worker cannot write owner task state or stage on a writable
     /// index, so the footprint the owner admitted is the only intent it can
     /// carry (distributed-drain design §3).
@@ -67,18 +67,15 @@ pub(super) fn task_candidate_paths(
     .into_iter()
     .filter(|path| !path_matches_scope(path, SCRATCH_DIR))
     .collect::<Vec<_>>();
-    let declared_new_scopes = tasks
+    let exact_scopes = tasks
         .iter()
-        .flat_map(|task| match intent {
-            NewPathIntent::ExactFile => exact_file_scopes(task, workspace_path),
-            NewPathIntent::AdmittedFootprint => task_scopes(task, workspace_path),
-        })
+        .flat_map(|task| exact_file_scopes(task, workspace_path))
         .collect::<BTreeSet<_>>();
-    let declared = |path: &str| {
-        declared_new_scopes.iter().any(|scope| match intent {
-            NewPathIntent::ExactFile => path == scope,
-            NewPathIntent::AdmittedFootprint => path_matches_scope(path, scope),
-        })
+    let declared = |path: &str| match intent {
+        NewPathIntent::ExactFile => exact_scopes.contains(path),
+        NewPathIntent::AdmittedFootprint => tasks
+            .iter()
+            .any(|task| claimed_new_path_matches(path, &task.context_files, workspace_path)),
     };
     let unknown = untracked
         .iter()
@@ -112,6 +109,62 @@ pub(super) fn task_candidate_paths(
     .collect::<BTreeSet<_>>();
     candidates.extend(untracked.into_iter().filter(|path| declared(path)));
     Ok(candidates)
+}
+
+/// Verify new paths from the owner's observed Git candidate against the frozen
+/// selectors. Neither reported selector additions nor the worker's path list
+/// can widen this decision. Rename detection is disabled to check destinations.
+pub fn validate_claim_new_paths(
+    workspace_path: &Path,
+    selectors: &[String],
+    base: &str,
+    candidate: &str,
+) -> Result<(), OrbitError> {
+    let new_paths = git_output_paths(
+        workspace_path,
+        &[
+            "diff",
+            "--name-only",
+            "--diff-filter=A",
+            "--no-renames",
+            "-z",
+            base,
+            candidate,
+            "--",
+        ],
+    )?;
+    let unknown = new_paths
+        .into_iter()
+        .filter(|path| {
+            path_matches_scope(path, SCRATCH_DIR)
+                || !claimed_new_path_matches(path, selectors, workspace_path)
+        })
+        .collect::<Vec<_>>();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(OrbitError::Execution(format!(
+        "task delivery refused unknown untracked paths: {unknown:?}. Owner handoff validation \
+         requires new paths under an admitted directory or beside an admitted file, including \
+         its module's tests/ child"
+    )))
+}
+
+fn claimed_new_path_matches(path: &str, selectors: &[String], workspace: &Path) -> bool {
+    selectors.iter().any(|selector| {
+        let Some(scope) = normalize_task_scope(selector, workspace) else {
+            return false;
+        };
+        if path_matches_scope(path, &scope) {
+            return true;
+        }
+        if !selector.starts_with("file:") {
+            return false;
+        }
+        let parent = Path::new(&scope).parent().unwrap_or_else(|| Path::new(""));
+        let candidate = Path::new(path);
+        candidate.parent() == Some(parent) || candidate.starts_with(parent.join("tests"))
+    })
 }
 
 pub(super) fn ensure_candidate_ownership(
@@ -194,14 +247,20 @@ fn normalize_relative_path(path: &Path) -> Option<String> {
             Component::CurDir => {}
             Component::Normal(part) => normalized.push(part),
             Component::ParentDir => {
-                normalized.pop();
+                if !normalized.pop() {
+                    return None;
+                }
             }
             Component::RootDir | Component::Prefix(_) => return None,
         }
     }
 
     let value = normalized.to_string_lossy().replace('\\', "/");
-    (!value.is_empty()).then_some(value)
+    Some(if value.is_empty() {
+        ".".to_string()
+    } else {
+        value
+    })
 }
 
 fn path_matches_scope(path: &str, scope: &str) -> bool {

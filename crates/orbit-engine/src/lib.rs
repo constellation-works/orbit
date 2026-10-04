@@ -57,4 +57,5 @@ pub use executor::automation::vcs::claim::{observe_candidate, observe_published_
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::{
     WorktreeGcOptions, WorktreeGcResult, collect_worktrees, fetch_remote_base,
+    validate_claim_new_paths,
 };

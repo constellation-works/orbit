@@ -258,6 +258,13 @@ impl crate::OrbitRuntime {
                 ));
             }
         };
+        let claim = self.current_claim(&handoff.claim_id)?;
+        orbit_engine::validate_claim_new_paths(
+            &self.paths().repo_root,
+            &claim.footprint,
+            &candidate.base.commit,
+            &candidate.candidate.commit,
+        )?;
         let required_commands = self.workflow_required_validation_commands().to_vec();
         if required_commands.is_empty() {
             return Err(refused(
