@@ -78,11 +78,17 @@ the [review gate](../review-gate/2_design.md).
 
 `coverage` is `integrated_qa_v1` or `landed_code_review_v1`. Threshold must be
 positive and at most `max_items` (maximum 50). Maximum wait is positive and retries
-are 0–5. Defaults are 50 items and zero retries. Retries have five-minute backoff
+are 0–5. Defaults are 50 items and zero retries; the shipped
+`delivery-code-review` definition sets one retry, so a single unusable evidence
+file does not hold its batch for an operator. Retries have five-minute backoff
 and a captured 24-hour automatic-retry deadline. A task waiting for approval is
-still the same action; waiting does not mint another task. Closed/rejected tasks
-stop automatic attempts and retain the coverage gap. Only known-stopped failed
-jobs are automatically replaceable within the captured budget.
+still the same action; waiting does not mint another task. A task that closes
+(done, rejected or archived) without accepted evidence — none attached, or bytes
+that fail validation — settles its attempt: the coverage gap is retained, the
+reason (including any parse error) is recorded on the attempt, and the next
+attempt is admitted within the captured budget. A spent budget holds the batch
+as exhausted for an operator. An action never stays `admitted` behind a terminal
+task. Jobs are replaced the same way only once known to have stopped.
 
 For job-only routines, replace `trigger.cron` with the same
 `trigger.deliveries_landed` object, retain `target: job:<existing-job>`, use
@@ -160,6 +166,13 @@ The version-1 schema has these required fields:
 | `checks` | Nonempty array of nonempty `subject`, `method`, `observation` objects. |
 | `findings` | Array of finding references/descriptions; it may be empty. |
 
+`orbit.task.artifact.put` — and any task update attaching
+`automation-coverage.json` — refuses a file that does not parse as this schema
+and stores nothing, returning the exact parse error (for example `invalid type:
+map, expected a string at line 137 column 4`) so the executor can fix and re-put
+it inside its run. Parsing is the only check at put time; identity, membership,
+completeness and authority are validated when the action settles.
+
 Unknown fields, changed identities, partial membership, empty checks, unavailable
 source objects or false completion cannot advance coverage. Findings may remain
 open after complete examination. Skipped required checks mean incomplete evidence.
@@ -216,7 +229,11 @@ workspace base branch, or create the branch). The same check reports every
 enabled definition whose resolved owner is not this host, naming the refusal
 (`owned_elsewhere` or `ownership_unresolved`), the owner machine and this host's,
 and pointing at `orbit auto-task show <name> --preview` for the coverage debt it
-is holding.
+is holding. It also reports a consumer *wedged* on an admitted action whose task
+closed without acceptable evidence, naming the action and its recorded
+validation reason. Evaluation settles such an action, so one still reported
+means no evaluation is reaching it; the remediation names `orbit auto-task
+recover <name> --reissue-action --reason <why>` and `orbit auto-task reset`.
 Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
 and `incomplete_examination` remain attached to the relevant admission or evidence
 operation. State read failures are reported separately; corrupted delivery state is
@@ -299,7 +316,10 @@ does not also adopt the identity it would run under) or `missing_authorization`
 (no reason or actor). A change of workspace, owner machine, repository, branch
 or coverage class is never adopted: those change what the retained debt means,
 so settle the old consumer's debt and preview a new baseline instead. An action
-that is claimed or admitted has to settle first.
+that is claimed or admitted has to settle first. An admitted action whose task
+is already terminal without evidence its settlement would accept counts as
+settled: it is reissuable and does not refuse as `active_execution`, even
+before an evaluation has run.
 
 Only this host, as the resolved owner, may recover its own consumer, and only
 delivery auto-tasks are covered: delivery routines and state-member consumers
@@ -419,7 +439,8 @@ resolved trigger, so a later recovery can always prove its coverage contract.
 Reset has deliberately no compatibility refusals: a branch, repository, owner or
 coverage class that moved is exactly when it is needed. It refuses
 `action_executing` unless `--force` is passed (the admitted task or run is
-abandoned, not cancelled), `member_consumer`, `unknown_consumer`,
+abandoned, not cancelled) — an admitted task already terminal without acceptable
+evidence is not executing and needs no `--force` — `member_consumer`, `unknown_consumer`,
 `owned_elsewhere` and `missing_authorization`. Forgotten debt is not coverage:
 the discarded landings never appear in a receipt, and the record is the only
 trace they existed.

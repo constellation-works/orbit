@@ -408,9 +408,15 @@ fn validate_reissue(
 ) -> Result<(), OrbitError> {
     let invalid = || OrbitError::InvalidInput("invalid automation recovery transition".into());
 
+    // An admitted attempt is replaceable only once Automation proved its
+    // action stopped without acceptable evidence; Store cannot see task
+    // liveness, so it fences the batch identity, not that proof.
     if settled.batch != claim.batch
         || settled.input_digest != claim.input_digest
-        || !matches!(settled.state, BatchState::Failed | BatchState::Exhausted)
+        || !matches!(
+            settled.state,
+            BatchState::Failed | BatchState::Exhausted | BatchState::Admitted
+        )
         || claim.state != BatchState::Claimed
         || claim.action_id.is_some()
         || claim.reason.is_some()

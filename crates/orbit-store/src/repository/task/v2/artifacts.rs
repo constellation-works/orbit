@@ -116,7 +116,9 @@ impl TaskV2Store {
             ));
         }
 
-        use orbit_types::workflow::automation::{EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission};
+        use orbit_types::workflow::automation::{
+            COVERAGE_ARTIFACT, CoverageEvidence, EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission,
+        };
         let mut artifacts = fields.upsert_artifacts.clone();
         for artifact in &mut artifacts {
             artifact.path = normalize_v2_artifact_path(&artifact.path)?;
@@ -125,10 +127,18 @@ impl TaskV2Store {
                     "automation evidence authority is reserved for the artifact store".into(),
                 ));
             }
+            // Settlement reads these bytes only after the action stops, when
+            // nobody can fix them; refusing here hands the submitter the
+            // exact error while its run can still re-put the file.
+            if artifact.path == COVERAGE_ARTIFACT
+                && let Err(error) = serde_json::from_slice::<CoverageEvidence>(&artifact.content)
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{COVERAGE_ARTIFACT} is not valid coverage evidence: {error}"
+                )));
+            }
         }
-        if let Some(artifact) = artifacts
-            .iter()
-            .find(|a| a.path == "automation-coverage.json")
+        if let Some(artifact) = artifacts.iter().find(|a| a.path == COVERAGE_ARTIFACT)
             && let Some(run_id) = &fields.owner_run_id
         {
             let witness = EvidenceSubmission {

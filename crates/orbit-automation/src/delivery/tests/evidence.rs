@@ -55,6 +55,11 @@ pub(super) struct Host {
     pub(super) page: Mutex<SourcePage>,
     pub(super) actions: Mutex<BTreeMap<String, String>>,
     pub(super) evidence: Mutex<Option<CoverageEvidence>>,
+    /// Raw artifact bytes submitted instead of `evidence`, such as a file
+    /// written before the Store validated coverage on put.
+    pub(super) raw_evidence: Mutex<Option<Vec<u8>>>,
+    /// The admitted action's task is terminal.
+    pub(super) stopped: AtomicBool,
     pub(super) fail_admit: AtomicBool,
     pub(super) failed: AtomicBool,
     pub(super) admission_deferred: AtomicBool,
@@ -77,6 +82,8 @@ impl Host {
             }),
             actions: Mutex::new(BTreeMap::new()),
             evidence: Mutex::new(None),
+            raw_evidence: Mutex::new(None),
+            stopped: AtomicBool::new(false),
             fail_admit: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             admission_deferred: AtomicBool::new(false),
@@ -165,20 +172,21 @@ impl DeliveryHost for Host {
                 reason: "worker failed".into(),
             });
         }
-        Ok(match &*self.evidence.lock().unwrap() {
-            None => ActionOutcome::Pending,
-            Some(e) => {
-                let bytes = serde_json::to_vec(e).unwrap();
-                ActionOutcome::Evidence(EvidenceFacts {
-                    artifact_digest: delivery::digest(&bytes),
-                    bytes,
-                    reference: "task:action/artifacts/automation-coverage.json".into(),
-                    submitted_by: "authorized-run".into(),
-                    authorized: true,
-                    source_verified: true,
-                })
-            }
-        })
+        let raw = self.raw_evidence.lock().unwrap().clone();
+        let bytes = match (raw, &*self.evidence.lock().unwrap()) {
+            (Some(bytes), _) => bytes,
+            (None, Some(e)) => serde_json::to_vec(e).unwrap(),
+            (None, None) => return Ok(ActionOutcome::Pending),
+        };
+        Ok(ActionOutcome::Evidence(EvidenceFacts {
+            artifact_digest: delivery::digest(&bytes),
+            bytes,
+            reference: "task:action/artifacts/automation-coverage.json".into(),
+            submitted_by: "authorized-run".into(),
+            authorized: true,
+            source_verified: true,
+            action_stopped: self.stopped.load(Ordering::SeqCst),
+        }))
     }
 }
 
@@ -264,6 +272,7 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
         submitted_by: "run".into(),
         authorized: false,
         source_verified: true,
+        action_stopped: false,
     };
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
     facts.authorized = true;

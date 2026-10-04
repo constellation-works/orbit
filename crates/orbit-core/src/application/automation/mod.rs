@@ -23,15 +23,16 @@ mod task;
 
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{
-    UnadmittableDefinition, UnresolvableBranch, delivery_ownership_refusal, inspect_auto_task,
-    inspect_routine, unadmittable_delivery_definitions, unresolvable_delivery_branches,
+    UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,
+    inspect_auto_task, inspect_routine, unadmittable_delivery_definitions,
+    unresolvable_delivery_branches, wedged_delivery_consumers,
 };
 pub use recovery::recover_auto_task;
 pub use reset::{ConsumerTeardown, reset_auto_task};
 pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};
 pub use stall::{StalledConsumer, stalled_consumers, stalled_minutes};
 
-pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
+pub use orbit_types::workflow::automation::COVERAGE_ARTIFACT;
 
 /// Identity is machine/workspace-qualified in the authoritative host database.
 pub fn consumer_key(runtime: &OrbitRuntime, kind: &str, name: &str) -> Result<String, OrbitError> {
@@ -150,6 +151,36 @@ fn evaluate(
     diagnostic.ownership = Some(ownership);
 
     Ok(diagnostic)
+}
+
+/// Whether a delivery auto-task consumer holds an admitted action that
+/// stopped without evidence its settlement would accept — the shared rule
+/// reset, recovery and `orbit doctor` read. A consumer without state has none.
+/// An outcome that cannot be read leaves the action executing, so `--force`
+/// stays the only way past an action whose liveness is unknown.
+fn auto_task_action_stopped(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    state: Option<&AutomationState>,
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(state) = state else {
+        return false;
+    };
+    let host = Host {
+        runtime,
+        action: Action::Task(definition),
+        source: source::Source::new(&runtime.paths().repo_root),
+    };
+
+    delivery::action_stopped(&host, state, now).unwrap_or_else(|error| {
+        tracing::warn!(
+            consumer = state.consumer,
+            %error,
+            "cannot read the admitted action's outcome; treating it as executing"
+        );
+        false
+    })
 }
 
 enum Action<'a> {

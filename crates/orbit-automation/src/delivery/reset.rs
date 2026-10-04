@@ -17,9 +17,7 @@ use crate::AutomationError;
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::*;
-use orbit_types::workflow::automation::{
-    AutomationState, BatchState, DeliveryTrigger, SourceRevision,
-};
+use orbit_types::workflow::automation::{AutomationState, DeliveryTrigger, SourceRevision};
 
 /// One reset request against one consumer, already resolved by the host.
 pub struct Reset<'a> {
@@ -38,6 +36,9 @@ pub struct Reset<'a> {
     /// Pinned `refs/orbit/automation/<consumer-digest>/*` refs the host holds
     /// for the forgotten batches. Recorded by an apply; empty on a preview.
     pub released_refs: Vec<String>,
+    /// The host proved the admitted action stopped without acceptable
+    /// evidence ([`super::action_stopped`]): forgetting it orphans nothing.
+    pub action_stopped: bool,
 }
 
 /// Project what a reset would forget, without touching any state.
@@ -97,7 +98,7 @@ fn record(
         reset: Some(ResetRecord {
             previous_generation: state.generation,
             forgotten: recovery::debt(store, state)?,
-            abandoned_action: recovery::stalled_action(store, state)?,
+            abandoned_action: recovery::stalled_action(store, state, request.action_stopped)?,
             baseline: request.baseline.clone(),
             released_refs: request.released_refs.clone(),
             cleared_stall: state.stall.clone(),
@@ -124,12 +125,9 @@ fn refusals(request: &Reset<'_>, state: &AutomationState) -> Vec<String> {
     }
 
     // Destroying the claim an executor is working against orphans its action.
-    // The operator may still force it once they accept that outcome.
-    if !request.request.force
-        && state.active.as_ref().is_some_and(|active| {
-            matches!(active.state, BatchState::Claimed | BatchState::Admitted)
-        })
-    {
+    // The operator may still force it once they accept that outcome. An action
+    // whose task already closed has no executor left to orphan.
+    if !request.request.force && recovery::executing(state, request.action_stopped) {
         refusals.push(refusal::ACTION_EXECUTING.into());
     }
 
@@ -148,11 +146,16 @@ fn project(
 ) -> Result<ResetPreview, AutomationError> {
     Ok(ResetPreview {
         consumer: state.consumer.clone(),
-        reason: recovery::scheduling_reason(state, request.epoch, &request.trigger.branch),
+        reason: recovery::scheduling_reason(
+            state,
+            request.epoch,
+            &request.trigger.branch,
+            request.action_stopped,
+        ),
         generation: state.generation,
         epoch: state.epoch.clone(),
         debt: recovery::debt(store, state)?,
-        action: recovery::stalled_action(store, state)?,
+        action: recovery::stalled_action(store, state, request.action_stopped)?,
         stall: state.stall.clone(),
         baseline: request.baseline.clone(),
         refusals: if applied {

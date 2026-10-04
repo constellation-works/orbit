@@ -1,13 +1,15 @@
 //! Recovery keeps every obligation and never substitutes authorization for
 //! evidence [ORB-12295].
 
-use super::evidence::{Host, evaluate, now, setup};
+use super::evidence::{Host, evaluate, now, revision, setup};
 use crate::{
     AutomationError,
-    delivery::{self, Evaluation, recovery},
+    delivery::{self, Evaluation, recovery, reset},
 };
 use orbit_store::contracts::AutomationStoreBackend;
-use orbit_types::workflow::automation::recovery::{RecoveryRequest, refusal};
+use orbit_types::workflow::automation::recovery::{
+    RecoveryPreview, RecoveryRequest, ResetRequest, refusal,
+};
 use orbit_types::workflow::automation::*;
 use std::sync::atomic::Ordering;
 
@@ -37,6 +39,7 @@ fn recovery<'a>(
         by: "operator",
         now: now(),
         replay: None,
+        action_stopped: false,
     }
 }
 
@@ -163,4 +166,102 @@ fn incompatible_and_unauthorized_changes_are_refused_without_touching_state() {
                 .is_empty()
         );
     }
+}
+
+/// A consumer still holding an admitted action whose task closed with
+/// malformed coverage — the state an evaluation never reached to settle.
+fn wedged() -> (
+    std::sync::Arc<dyn AutomationStoreBackend>,
+    Host,
+    DeliveryTrigger,
+    AutomationState,
+) {
+    let (store, host, trigger) = setup();
+    host.page(0, 2);
+    evaluate(store.as_ref(), &host, &trigger, true);
+    *host.raw_evidence.lock().unwrap() = Some(br#"{"schema_version":1,"batch_id":{}}"#.to_vec());
+    host.stopped.store(true, Ordering::SeqCst);
+    let state = store.automation_state(CONSUMER).unwrap().unwrap();
+    assert_eq!(state.active.as_ref().unwrap().state, BatchState::Admitted);
+
+    (store, host, trigger, state)
+}
+
+#[test]
+fn an_admitted_action_is_stopped_only_once_its_task_closed_without_acceptable_evidence() {
+    let (_store, host, _trigger, state) = wedged();
+    assert!(delivery::action_stopped(&host, &state, now()).unwrap());
+
+    // The executor can still replace malformed bytes while its task is open.
+    host.stopped.store(false, Ordering::SeqCst);
+    assert!(!delivery::action_stopped(&host, &state, now()).unwrap());
+
+    // Valid evidence on a closed task is settled by acceptance, not failure.
+    host.stopped.store(true, Ordering::SeqCst);
+    *host.raw_evidence.lock().unwrap() = None;
+    host.evidence(state.active.as_ref().unwrap());
+    assert!(!delivery::action_stopped(&host, &state, now()).unwrap());
+}
+
+#[test]
+fn recovery_reissues_an_admitted_action_whose_task_closed_without_evidence() {
+    let (store, _host, trigger, state) = wedged();
+    let reissue = request(false, true);
+
+    let mut executing = recovery(&trigger, "v1", &reissue);
+    let error = recovery::apply(store.as_ref(), &executing).expect_err("live action refused");
+    let AutomationError::Refused(reasons) = error else {
+        panic!("expected a typed refusal, got {error}");
+    };
+    assert!(reasons.contains(refusal::ACTIVE_EXECUTION), "{reasons}");
+
+    executing.action_stopped = true;
+    let preview = recovery::preview(store.as_ref(), &executing).unwrap();
+    assert_eq!(preview.reason, "needs_attention");
+    assert!(preview.action.as_ref().unwrap().reissuable);
+
+    let applied = recovery::apply(store.as_ref(), &executing).unwrap();
+    assert_eq!(
+        applied.applied,
+        vec![RecoveryPreview::REISSUED_ACTION.to_string()]
+    );
+    let after = store.automation_state(CONSUMER).unwrap().unwrap();
+    let attempt = after.active.unwrap();
+    assert_eq!(attempt.state, BatchState::Claimed);
+    assert_eq!(attempt.attempt, 2);
+    assert_eq!(attempt.batch, state.active.unwrap().batch);
+    assert_eq!(after.covered, revision(0));
+}
+
+#[test]
+fn reset_forgets_a_consumer_whose_admitted_action_already_stopped() {
+    let (store, _host, trigger, state) = wedged();
+    let request = ResetRequest {
+        reason: "the review task closed with malformed coverage".into(),
+        force: false,
+    };
+    let mut operation = reset::Reset {
+        consumer: CONSUMER,
+        epoch: "v1",
+        trigger: &trigger,
+        host_refusal: None,
+        request: &request,
+        by: "operator",
+        now: now(),
+        baseline: revision(2),
+        released_refs: vec![],
+        action_stopped: false,
+    };
+
+    let error = reset::apply(store.as_ref(), &operation).expect_err("live action refused");
+    let AutomationError::Refused(reasons) = error else {
+        panic!("expected a typed refusal, got {error}");
+    };
+    assert!(reasons.contains(refusal::ACTION_EXECUTING), "{reasons}");
+    assert_eq!(store.automation_state(CONSUMER).unwrap(), Some(state));
+
+    operation.action_stopped = true;
+    let applied = reset::apply(store.as_ref(), &operation).unwrap();
+    assert!(applied.applied);
+    assert!(store.automation_state(CONSUMER).unwrap().is_none());
 }
