@@ -146,6 +146,7 @@ OVERBROAD_ACCESS_PATH = """extensions:
 
 RELEASE_CALLABLE = "orbit_cmd::update::source::validated_release_url"
 RELEASE_OUTPUT = "ReturnValue.Field[core::result::Result::Ok(0)]"
+GIT_ARGV_CALLABLE = "orbit_common::fs::git::admitted_git_args"
 
 
 def model_yaml(predicate, row):
@@ -308,6 +309,26 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
             model_yaml("barrierModel", release_row("orbit_cmd::update::source::other", kind="path-injection"))
         )
         self.assertEqual(self.errors(), [])
+
+    def test_git_argv_command_injection_barrier_passes(self):
+        self.write_pack(
+            model_yaml(
+                "barrierModel",
+                release_row(GIT_ARGV_CALLABLE, kind="command-injection"),
+            )
+        )
+        self.assertEqual(self.errors(), [])
+
+    def test_command_injection_kind_rejected_for_unapproved_callable(self):
+        self.write_pack(
+            model_yaml(
+                "barrierModel",
+                release_row("orbit_common::fs::git::run_git", kind="command-injection"),
+            )
+        )
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("'command-injection' model kind is only allowed", errors[0])
 
     def test_current_extension_files_pass(self):
         self.assertEqual(CHECK.validate_root(REPO_ROOT), [])

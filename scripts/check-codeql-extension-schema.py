@@ -33,18 +33,30 @@ PACK_FILENAME = "codeql-pack.yml"
 GENERATED_EXTENSION_GLOB = "extensions/**/*.yaml"
 CANONICAL_CALLABLE = re.compile(r"^orbit_[a-z0-9_]+(?:::[A-Za-z_][A-Za-z0-9_]*)+$")
 # CodeQL's rust/cleartext-transmission query reads barrier kind "transmission"
-# (CleartextTransmissionExtensions.qll, ModelsAsDataBarrier in rust-all 0.2.21).
-# The kind is far broader than path validation, so only the exact model rows
-# that were reviewed for the HTTPS release transport are accepted. Every other
-# kind, callable, output or predicate must be reviewed and added here.
+# (CleartextTransmissionExtensions.qll, ModelsAsDataBarrier in rust-all 0.2.21)
+# and rust/command-line-injection reads "command-injection". Both kinds are far
+# broader than path validation, so only the exact model rows reviewed for them
+# are accepted: the HTTPS release transport, and the `run_git` argv admission.
+# Every other kind, callable, output or predicate must be reviewed and added
+# here.
 PATH_INJECTION_KIND = "path-injection"
 TRANSMISSION_KIND = "transmission"
-APPROVED_TRANSMISSION_MODELS = {
-    (
-        "barrierModel",
-        "orbit_cmd::update::source::validated_release_url",
-        "ReturnValue.Field[core::result::Result::Ok(0)]",
-    ),
+COMMAND_INJECTION_KIND = "command-injection"
+APPROVED_MODELS = {
+    TRANSMISSION_KIND: {
+        (
+            "barrierModel",
+            "orbit_cmd::update::source::validated_release_url",
+            "ReturnValue.Field[core::result::Result::Ok(0)]",
+        ),
+    },
+    COMMAND_INJECTION_KIND: {
+        (
+            "barrierModel",
+            "orbit_common::fs::git::admitted_git_args",
+            "ReturnValue.Field[core::result::Result::Ok(0)]",
+        ),
+    },
 }
 ACCESS_PATH = re.compile(
     r"^(?:ReturnValue|Argument\[(?:self|[0-9]+)\])"
@@ -452,22 +464,22 @@ def _validate_repository_model_scope(
             )
 
     kind = values.get("kind")
-    if kind == TRANSMISSION_KIND:
+    if kind in APPROVED_MODELS:
         model = (predicate, callable_path, values.get("output"))
-        if model not in APPROVED_TRANSMISSION_MODELS:
+        if model not in APPROVED_MODELS[kind]:
             errors.append(
                 _error(
                     path,
-                    f"{location}: the '{TRANSMISSION_KIND}' model kind is only allowed for "
-                    "the reviewed release-transport barrier models",
+                    f"{location}: the '{kind}' model kind is only allowed for "
+                    "the reviewed barrier models",
                 )
             )
     elif kind != PATH_INJECTION_KIND:
         errors.append(
             _error(
                 path,
-                f"{location}: only the '{PATH_INJECTION_KIND}' and "
-                f"'{TRANSMISSION_KIND}' model kinds are allowed",
+                f"{location}: only the '{PATH_INJECTION_KIND}', '{TRANSMISSION_KIND}' and "
+                f"'{COMMAND_INJECTION_KIND}' model kinds are allowed",
             )
         )
     if values.get("provenance") != "manual":

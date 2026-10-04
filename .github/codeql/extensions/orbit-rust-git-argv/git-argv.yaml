@@ -1,0 +1,16 @@
+# `run_git` spawns `git` from an argv, never a shell, so an argument becomes a
+# command only by asking Git to run one. `admitted_git_args` refuses every
+# argv-borne way to do that (non-admitted global options and `-c` overrides,
+# subcommands outside the plumbing set, program-naming options, `init` from a
+# non-empty template) before the argv reaches `Command::args`.
+extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierModel
+    data:
+      - [
+          "orbit_common::fs::git::admitted_git_args",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "command-injection",
+          "manual",
+        ]
