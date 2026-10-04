@@ -37,6 +37,7 @@ use orbit_engine::{
     ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost, TaskActivityUpdate,
     TaskAutomationUpdate, execute_deterministic_action, review_gate,
 };
+use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment, TaskPriority, TaskStatus,
     TaskType,
@@ -431,6 +432,150 @@ fn missing_required_validation_tool_reports_its_search_path() {
             assert!(log["output"].as_str().unwrap().contains(&diagnostic));
         },
     );
+}
+
+/// What `env -i PATH=/usr/bin:/bin orbit run auto …` hands the owner.
+const MINIMAL_PATH: &str = "/usr/bin:/bin";
+/// A repository tool only the owner's login-shell profile puts on PATH.
+const PROFILE_TOOL: &str = "orbit-profile-lint-13987";
+
+/// A drain launched from a minimal PATH still validates with the owner's
+/// login-shell toolchain, and the log records that the login shell decided
+/// PATH [ORB-13987].
+#[test]
+fn validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain() {
+    isolated(
+        "validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let (launcher, shell, tools) = login_shell_toolchain(sandbox);
+            host.resolve_validation_env(ValidationEnvironment::resolve(
+                launcher,
+                &ValidationEnvPolicy::default(),
+                &LoginShell::new(shell, Duration::from_secs(10)),
+            ));
+            host.require_commands(&[PROFILE_TOOL]);
+
+            let validated = action(&host, "candidate_validate", &fx.validate_input())
+                .expect("the login-shell toolchain runs the required tool");
+
+            assert_eq!(validated["decision"], "passed");
+            assert_eq!(validated["validation_env"]["source"], "login_shell");
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["output"], "lint-ok");
+            assert_eq!(log["validation_env"]["source"], "login_shell");
+            let path = log["validation_env"]["path"].as_str().unwrap();
+            assert!(
+                path.starts_with(&format!("{}:", tools.display())) && path.ends_with(MINIMAL_PATH),
+                "the profile's PATH is used over the launcher's: {path}"
+            );
+            assert_eq!(log["failure_kind"], Value::Null);
+        },
+    );
+}
+
+/// Without the login shell's PATH the same tool is missing. That failure is
+/// the environment's, not the candidate's: the typed marker carries the PATH
+/// and the tool, the log classifies it, and nothing is published.
+#[test]
+fn a_missing_validation_tool_is_an_environment_failure() {
+    isolated(
+        "a_missing_validation_tool_is_an_environment_failure",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let (launcher, _shell, _tools) = login_shell_toolchain(sandbox);
+            host.resolve_validation_env(ValidationEnvironment::launcher(launcher));
+            host.require_commands(&[PROFILE_TOOL]);
+            let remote_before = fx.remote_tip(BRANCH);
+
+            let error = action(&host, "candidate_validate", &fx.validate_input())
+                .expect_err("a missing tool cannot pass validation");
+
+            let message = error.to_string();
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&message)),
+                "a missing tool is typed as an environment failure: {message}"
+            );
+            assert!(
+                message.contains(&format!("`{PROFILE_TOOL}`"))
+                    && message.contains(&format!("PATH={MINIMAL_PATH}"))
+                    && message.contains("source: launcher_fallback"),
+                "the failure reports the tool, PATH and its source: {message}"
+            );
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["exit_code"], 127);
+            assert_eq!(log["failure_kind"], "environment");
+            assert_eq!(log["missing_tool"], PROFILE_TOOL);
+            assert_eq!(log["validation_env"]["source"], "launcher_fallback");
+            assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
+
+            // The run's failure handoff keeps the unjudged candidate for
+            // `orbit job resume`: no `[BLOCKED]` PR, no push, no repair.
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "validate",
+                    "error_code": "validation_environment",
+                    "error_message": message,
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("hand off the environment failure");
+            assert_eq!(handoff["decision"], "blocked_validation_environment");
+            assert_eq!(handoff["head_sha"], fx.candidate.as_str());
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(
+                fx.head(),
+                fx.candidate,
+                "the candidate is kept as validated"
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+            let comments = host.comments(TASK_ID);
+            assert!(
+                comments
+                    .iter()
+                    .any(|comment| comment.message.contains(&format!("PATH={MINIMAL_PATH}"))),
+                "the block reports the PATH the tool was missing from: {comments:?}"
+            );
+        },
+    );
+}
+
+/// A launcher environment with only [`MINIMAL_PATH`], plus a substitute login
+/// shell whose profile prints a banner and prepends a toolchain directory
+/// holding [`PROFILE_TOOL`].
+fn login_shell_toolchain(sandbox: &Path) -> (Vec<(String, String)>, PathBuf, PathBuf) {
+    let home = sandbox.join("owner-home");
+    let tools = home.join(".toolchain/bin");
+    fs::create_dir_all(&tools).unwrap();
+    let tool = tools.join(PROFILE_TOOL);
+    fs::write(&tool, "#!/bin/sh\necho lint-ok\n").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    let shell = home.join("login-shell");
+    fs::write(
+        &shell,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = -l ] && [ \"$2\" = -c ] || exit 64\n\
+             echo 'Welcome back'\nPATH=\"{}:$PATH\"; export PATH\neval \"$3\"\n",
+            tools.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+    let launcher = vec![
+        ("HOME".to_string(), home.display().to_string()),
+        ("PATH".to_string(), MINIMAL_PATH.to_string()),
+    ];
+    (launcher, shell, tools)
 }
 
 // ---------------------------------------------------------------------------
@@ -961,6 +1106,9 @@ struct DeliveryHost {
     /// Attached task artifacts, by task id and path.
     artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     releases: Mutex<Vec<ReviewReleaseRequest>>,
+    /// The resolved validation environment, standing in for the owner's
+    /// resolver; `None` keeps the trait default.
+    validation_env: Mutex<Option<ValidationEnvironment>>,
 }
 
 impl DeliveryHost {
@@ -974,7 +1122,12 @@ impl DeliveryHost {
             required_commands: Mutex::default(),
             artifacts: Mutex::default(),
             releases: Mutex::default(),
+            validation_env: Mutex::default(),
         }
+    }
+
+    fn resolve_validation_env(&self, environment: ValidationEnvironment) {
+        *self.validation_env.lock().unwrap() = Some(environment);
     }
 
     fn require_commands(&self, commands: &[&str]) {
@@ -1122,6 +1275,16 @@ impl RuntimeHost for DeliveryHost {
 
     fn required_validation_commands(&self) -> Vec<String> {
         self.required_commands.lock().unwrap().clone()
+    }
+
+    fn validation_subprocess_environment(&self) -> ValidationEnvironment {
+        self.validation_env
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| {
+                ValidationEnvironment::launcher(self.agent_subprocess_environment(&[]))
+            })
     }
 
     /// Like the task store, accept evidence only from the run owning the task.

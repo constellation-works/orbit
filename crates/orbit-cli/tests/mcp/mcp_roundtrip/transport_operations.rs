@@ -506,3 +506,74 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
         "the CLI decision survives reopening the store"
     );
 }
+
+/// [ORB-13987] With login-shell resolution disabled and no configured PATH,
+/// required validation runs with whatever PATH launched the worker. The MCP
+/// drain status and the CLI doctor both say so before a drain is started;
+/// without required commands there is nothing to warn about.
+#[test]
+fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let configure = |key: &str, value: &str| {
+        orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+                "config",
+                "set",
+                "--seed-from-global",
+                key,
+                value,
+            ]),
+        );
+    };
+    let observe = || {
+        let mut client = workspace.serve_with_args(&["--operator"]);
+        let readiness = client.call_tool_ok(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"status"}),
+        );
+        let doctor = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+                .args(["doctor", "--json"]),
+        );
+        let rows: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["check"] == "validation-env")
+            .cloned()
+            .unwrap_or_else(|| panic!("doctor has a validation-env row: {rows}"));
+        (readiness["validation_env_warning"].clone(), row)
+    };
+
+    configure("workflow.validation_env.login_shell", "false");
+    let (warning, row) = observe();
+    assert_eq!(
+        warning,
+        Value::Null,
+        "no required commands, nothing to warn"
+    );
+    assert_eq!(row["status"], "skipped", "{row}");
+
+    configure(
+        "workflow.required_validation_commands",
+        r#"["make ci-fast"]"#,
+    );
+    let (warning, row) = observe();
+    let warning = warning.as_str().expect("the drain status warns");
+    assert!(
+        warning.contains("`workflow.validation_env.login_shell = false`")
+            && warning.contains("source: launcher_fallback")
+            && warning.contains("PATH="),
+        "the warning names the disabled resolution, the fallback and its PATH: {warning}"
+    );
+    assert_eq!(row["status"], "warning", "{row}");
+    assert_eq!(row["message"], warning, "doctor reports the same warning");
+    assert!(
+        row["remediation"]
+            .as_str()
+            .is_some_and(|fix| fix.contains("workflow.validation_env.path")),
+        "{row}"
+    );
+}

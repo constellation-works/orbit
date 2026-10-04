@@ -73,6 +73,11 @@ pub(super) fn recover_or_return_original(
     if orbit_types::workflow::is_provider_unavailable(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }
+    // [ORB-13987] Nor can it install a tool required validation could not
+    // find; repairing the candidate would only spend the recovery budget.
+    if orbit_types::workflow::is_validation_environment_failure(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
     let Some(recovery) = recovery_activity_for_step(step, ctx) else {
         return failure.into_result();
     };
@@ -490,6 +495,14 @@ pub(super) fn attempt_failure_activity(
         DispatchError::WorktreeIntegrity { code, .. } => *code,
         DispatchError::RecoverableVcsConflict { .. } => "recoverable_vcs_conflict",
         DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+        error
+            if orbit_types::workflow::is_validation_environment_failure(
+                None,
+                Some(&error.to_string()),
+            ) =>
+        {
+            orbit_types::workflow::VALIDATION_ENVIRONMENT_ERROR_CODE
+        }
         _ => "pipeline_step_failed",
     };
     let input = serde_json::json!({

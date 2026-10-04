@@ -644,6 +644,33 @@ impl OrbitRuntime {
             .workflow_required_validation_commands()
     }
 
+    /// `[workflow.validation_env]` as admitted [ORB-13987].
+    pub fn validation_env_policy(&self) -> &orbit_exec::ValidationEnvPolicy {
+        self.context.settings().validation_env()
+    }
+
+    /// The environment owner-side repository tooling runs in: the allowlisted
+    /// agent environment with PATH and toolchain locators resolved from the
+    /// owner user's login shell (cached per process) and
+    /// `workflow.validation_env.path`, never from whatever launched this
+    /// process [ORB-13987].
+    pub fn validation_environment(&self) -> orbit_exec::ValidationEnvironment {
+        let base = self.execution_env_policy().agent_subprocess_env(&[]);
+        let shell = orbit_exec::LoginShell::for_current_user(&base);
+        orbit_exec::ValidationEnvironment::resolve(base, self.validation_env_policy(), &shell)
+    }
+
+    /// Why required validation may not find the user's toolchain on this
+    /// host, for drain submission and `orbit doctor` [ORB-13987]. `None` when
+    /// no required commands are configured or the environment resolved
+    /// cleanly.
+    pub fn validation_env_preflight_warning(&self) -> Option<String> {
+        if self.workflow_required_validation_commands().is_empty() {
+            return None;
+        }
+        self.validation_environment().preflight_warning()
+    }
+
     /// `[workflow] distributed_completion`: `review` or `done`.
     pub fn workflow_distributed_completion(&self) -> &str {
         self.context.settings().workflow_distributed_completion()

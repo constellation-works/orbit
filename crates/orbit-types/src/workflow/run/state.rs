@@ -45,6 +45,26 @@ pub fn is_provider_unavailable(error_code: Option<&str>, message: Option<&str>) 
         || message.is_some_and(|message| message.contains(PROVIDER_UNAVAILABLE_MARKER))
 }
 
+/// Token a required-validation failure carries when a command could not find
+/// a tool in the validation environment — exit 127, `command not found`, or a
+/// guardrail's "is required" — as opposed to the candidate failing its checks
+/// [ORB-13987].
+///
+/// No repair of the candidate can install a tool, so step and final recovery
+/// skip it, the failure handoff keeps the candidate for `orbit job resume`
+/// without opening a `[BLOCKED]` PR, and a pull drain releases the claim.
+pub const VALIDATION_ENVIRONMENT_ERROR_CODE: &str = "validation_environment";
+
+/// The bracketed marker form of [`VALIDATION_ENVIRONMENT_ERROR_CODE`].
+pub const VALIDATION_ENVIRONMENT_MARKER: &str = "[validation_environment]";
+
+/// Whether a step failure says required validation lacked a tool.
+#[must_use]
+pub fn is_validation_environment_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(VALIDATION_ENVIRONMENT_ERROR_CODE)
+        || message.is_some_and(|message| message.contains(VALIDATION_ENVIRONMENT_MARKER))
+}
+
 /// Why a follower cannot run a crew for the rest of its pull drain window.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]

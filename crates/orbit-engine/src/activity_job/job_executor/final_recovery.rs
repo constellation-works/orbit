@@ -97,6 +97,13 @@ pub(super) fn attempt_final_recovery(
     if matches!(budget, FinalRecoveryBudget::Spent) {
         return skip("final recovery already ran for this run");
     }
+    // [ORB-13987] No decision about the task fixes a host that lacks a tool;
+    // the failure handoff keeps the candidate for a resume instead.
+    if orbit_types::workflow::is_validation_environment_failure(None, Some(error_message)) {
+        return skip(
+            "required validation lacked a tool in its environment; the candidate was not judged",
+        );
+    }
     let Some(task_id) = single_task_id(&ctx.input) else {
         return skip(
             "final recovery decides for exactly one task; this run carries none or several",

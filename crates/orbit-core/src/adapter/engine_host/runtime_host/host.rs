@@ -488,6 +488,10 @@ impl RuntimeHost for OrbitRuntime {
             .agent_subprocess_env(required_env_vars)
     }
 
+    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+        self.validation_environment()
+    }
+
     fn orbit_registry_root(&self) -> Option<String> {
         Some(
             self.context

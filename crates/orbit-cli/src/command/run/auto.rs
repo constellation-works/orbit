@@ -174,7 +174,7 @@ impl Execute for AutoCommand {
                     error_code: None,
                     error_message: None,
                 }],
-                resource_throttle_warning(runtime),
+                submission_warnings(runtime),
             );
         }
         let complexity_crews = orbit_config::ComplexityCrewPools {
@@ -217,12 +217,18 @@ impl Execute for AutoCommand {
             error_code: None,
             error_message: None,
         };
-        workflow_dispatch_payload_with_warning(
-            AUTO_WORKFLOW,
-            &[run],
-            resource_throttle_warning(runtime),
-        )
+        workflow_dispatch_payload_with_warning(AUTO_WORKFLOW, &[run], submission_warnings(runtime))
     }
+}
+
+/// What a drain submission warns about while still starting: a host resource
+/// throttle, and a validation environment that may not find the user's
+/// toolchain [ORB-13987].
+fn submission_warnings(runtime: &OrbitRuntime) -> Vec<String> {
+    resource_throttle_warning(runtime)
+        .into_iter()
+        .chain(runtime.validation_env_preflight_warning())
+        .collect()
 }
 
 /// [ORB-13901] The drain starts either way and holds its own waves while the

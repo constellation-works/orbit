@@ -12,6 +12,9 @@ pub(super) fn readiness(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     // This is a bounded observational read, not a reconciliation tick.
     let mut value = runtime.workspace_auto_readiness(&[], None, 50, &[])?;
     value["controls_authorized"] = json!(true);
+    // [ORB-13987] What `orbit doctor` reports as `validation-env`, before a
+    // start: required validation may not find the user's toolchain.
+    value["validation_env_warning"] = json!(runtime.validation_env_preflight_warning());
     Ok(value)
 }
 
@@ -93,9 +96,19 @@ pub(in crate::adapter::tool_host) fn control(
                 "completion":completion.as_input_value(),"submitted_at":run.submitted_at});
             // [ORB-13901] The drain starts and holds its own waves while the
             // host is throttled; the caller learns why it admits nothing.
+            let mut warnings = Vec::new();
             if let Some(throttle) = runtime.admission_resource_throttle().throttle {
-                started["warning"] = json!(throttle.hold_reason());
+                warnings.push(throttle.hold_reason());
                 started["resource_throttle"] = json!(throttle);
+            }
+            // [ORB-13987] The drain starts either way; the caller learns that
+            // required validation may not find the user's toolchain.
+            if let Some(warning) = runtime.validation_env_preflight_warning() {
+                started["validation_env_warning"] = json!(warning);
+                warnings.push(warning);
+            }
+            if !warnings.is_empty() {
+                started["warning"] = json!(warnings.join("\n"));
             }
             started
         }

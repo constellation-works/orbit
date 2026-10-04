@@ -103,17 +103,18 @@ pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
 ) -> CommandOut {
-    workflow_dispatch_payload_with_warning(workflow_alias, runs, None)
+    workflow_dispatch_payload_with_warning(workflow_alias, runs, Vec::new())
 }
 
-/// [`workflow_dispatch_payload`] with an admission warning the submission
-/// proceeded past, such as a host resource throttle [ORB-13901]. The warning
-/// is `.warning` in JSON and a `Warning:` line in text; the exit code is
-/// unchanged.
+/// [`workflow_dispatch_payload`] with the admission warnings the submission
+/// proceeded past, such as a host resource throttle [ORB-13901] or a
+/// validation environment that may not find the user's toolchain
+/// [ORB-13987]. The warnings are `.warning` in JSON (one per line) and one
+/// `Warning:` line each in text; the exit code is unchanged.
 pub(crate) fn workflow_dispatch_payload_with_warning(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
-    warning: Option<String>,
+    warnings: Vec<String>,
 ) -> CommandOut {
     let mut doc = if runs.len() == 1 {
         workflow_dispatch_result_to_json(&runs[0])
@@ -130,9 +131,9 @@ pub(crate) fn workflow_dispatch_payload_with_warning(
         .iter()
         .flat_map(workflow_dispatch_result_lines)
         .collect::<Vec<_>>();
-    if let Some(warning) = warning {
-        lines.push(format!("Warning: {warning}"));
-        doc["warning"] = json!(warning);
+    if !warnings.is_empty() {
+        lines.extend(warnings.iter().map(|warning| format!("Warning: {warning}")));
+        doc["warning"] = json!(warnings.join("\n"));
     }
     let payload = Payload::detail(doc, lines.join("\n"));
     if runs

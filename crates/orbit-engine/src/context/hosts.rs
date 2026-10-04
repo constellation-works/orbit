@@ -674,6 +674,17 @@ pub trait RuntimeHost: Send + Sync {
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&[], required_env_vars)
     }
+    /// The environment owner-side repository tooling runs in: required
+    /// validation and `local_shell` steps [ORB-13987].
+    ///
+    /// It starts from the agent subprocess environment, so the allowlist still
+    /// decides every variable, but PATH and toolchain locators must not depend
+    /// on whatever launched the worker. The default keeps the launcher's PATH
+    /// (`launcher_fallback`); `OrbitRuntime` resolves the owner user's login
+    /// shell under `[workflow.validation_env]`.
+    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+        orbit_exec::ValidationEnvironment::launcher(self.agent_subprocess_environment(&[]))
+    }
     /// The authoritative shared Orbit registry root to hand a spawned CLI
     /// agent as `ORBIT_REGISTRY_ROOT`.
     ///
