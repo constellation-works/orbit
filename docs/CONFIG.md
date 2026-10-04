@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-09-23
+last_validated: 2026-10-04
 ---
 
 # Orbit Configuration
@@ -87,6 +87,7 @@ low_complexity_crews = []
 medium_complexity_crews = []
 hard_complexity_crews = []
 xhard_complexity_crews = []
+final_recovery_crews = ["sol:100", "opus:20"]
 ```
 
 | Key | Default | What it does |
@@ -95,6 +96,7 @@ xhard_complexity_crews = []
 | `workflow.default_crew` | see [resolution](#resolution-precedence) | Crew for a task with no `crew`. Must name a defined crew. |
 | `workflow.system_crew` | `system` | Crew for runtime-synthesized system work such as step-failure recovery. |
 | `workflow.low_complexity_crews`, `medium_…`, `hard_…`, `xhard_…` | `[]` | Crew pools a crew-less task draws from at creation, by complexity. Empty means "use `default_crew`". See [pools](#automatic-crew-pools-by-complexity). |
+| `workflow.final_recovery_crews` | `["sol:100", "opus:20"]` | Weighted crew pool the final-recovery activity draws once per run after step recovery is exhausted; entries are `name` or `name:weight` (all bare or all weighted). Unset defaults to `["sol:100", "opus:20"]`, keeping only the members the crew registry defines; `[]` disables final recovery. See [final recovery pool](#final-recovery-pool). |
 | `workflow.auto_ship` | `false` | Opt in to unattended ship dispatch from the sweep/routine scheduler. While `false`, the ship sweep skips with `auto_ship_disabled`. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass. `task_pr_pipeline` and `task_local_pipeline` run them on the exact candidate before push or merge and attach each log to the task; a failure goes to step recovery. A distributed-drain claim must pass them before this owner accepts its handoff. Empty skips the owner-path check and refuses every claimed handoff. |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff. `review` waits for an operator's **Approve handoff**; `done` has the owner authorize it on acceptance and land it through `task_landing_pipeline`, rechecking this key before the merge. |
@@ -425,6 +427,21 @@ hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 
 **Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, and descendants inherit that copy. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep the admitted selection.
 
+### Final recovery pool
+
+`workflow.final_recovery_crews` sets the weighted crew pool the `final_recovery` activity draws from once per run when a task fails after step-failure recovery is exhausted.
+
+```toml
+[workflow]
+final_recovery_crews = ["sol:100", "opus:20"]
+```
+
+- **Draw:** One crew is drawn per run from this pool to evaluate the task failure and attempt a final typed decision and recovery fix.
+- **Built-in default:** Unset defaults to `["sol:100", "opus:20"]` (the strongest reasoning crews).
+- **Graceful filtering:** To tolerate custom configurations that may not define `sol` or `opus`, an unset key filters the default pool to retain only the crews defined in `[crews.*]`. If neither crew is defined, the admitted pool is empty and final recovery is quietly disabled rather than failing config validation.
+- **Explicit entries fail loud:** If you explicitly define `final_recovery_crews`, entries must follow the standard pool grammar (`name` or `name:weight`), and every named crew must exist in `[crews.*]`.
+- **Disabling:** Set `final_recovery_crews = []` to disable final recovery entirely.
+
 ### Setting `task.crew`
 
 | Surface | How |
@@ -492,10 +509,10 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 |---|---|---|
 | `execution.codex.sandbox` | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. The file `orbit init` seeds sets `danger-full-access` globally. Security key, not inherited by a workspace file. |
 | `execution.codex.approval_policy` | unset | `untrusted`, `on-request` or `never`. Security key. |
-| `operation.review_policy` | `none` | Automatic review: `none`, `before-pr` (hold PR creation for a fresh reviewer, refused for local-only delivery) or `after-landing` (minted by the `delivery-code-review` auto-task with its own template crew). See [review-gate design](design/review-gate/2_design.md). |
-| `operation.review_crew` | unset | Reviewer crew for `before-pr`. |
-| `operation.review_reviewer_starts` | `2` | Fresh reviewer invocations per delivery candidate lineage (1–10). |
-| `operation.review_minutes` | `30` | Before-PR review, fix and final-validation minutes per lineage (1–1440). `operation.review_repair_cycles` is retired: the reviewer fixes its findings in one commit and nothing is reworked, so the key is ignored with a warning. |
+| `operation.review_policy` | `none` | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. `before-pr` holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery. `after-landing` enables the workspace's `delivery-code-review` auto-task (whatever its own `enabled` setting says), which freezes landed deliveries on the base branch into batches and mints review tasks; `orbit doctor` fails while that consumer cannot run here. See [review-gate design](design/review-gate/2_design.md). |
+| `operation.review_crew` | unset | Crew for automatic review: the before-PR reviewer, and the crew of every review task the after-landing `delivery-code-review` consumer mints (unset, that definition's template crew). |
+| `operation.review_reviewer_starts` | `3` | Fresh reviewer starts allowed per delivery run lineage. Retrying a failed reviewer step continues its start; a review of a changed candidate, including a completion rebase, takes a new one (1..=10, default 3). |
+| `operation.review_minutes` | `90` | Aggregate before-PR reviewer runtime minutes per delivery run lineage (a delivery run and its resumes; a fresh delivery run starts a new lineage). Once spent, no further reviewer start is admitted; an admitted reviewer is bounded by its own activity timeout, not by this remainder (1..=1440, default 90). `operation.review_repair_cycles` is retired: the reviewer fixes its findings in one commit and nothing is reworked, so the key is ignored with a warning. |
 | `tasks.id_start` | unset | Forward-only floor for this machine's task-ID allocator, raised on every runtime build and never lowered, so machines can hold disjoint ranges. For the first seed prefer `orbit workspace init --task-id-start N`. See [task migration](design/task-migration/1_overview.md). |
 | `automation.stall_window_minutes` | `60` | How long a delivery-automation consumer may sit on a stuck deferral (`history_diverged`, `repository_changed`, `provider_identity_missing`, `state_missing`) before a warning and one deduped friction (1–1440). Transient backpressure never escalates. See [auto-tasks](../plugin/skills/orbit-setup/references/auto-tasks.md). |
 | `scoring.enabled` | `true` | Record per-agent scoreboard metrics for task runs. |
@@ -527,6 +544,7 @@ plugins:
 
 - **Sources:** a directory outside the current repo, `git+<url>#<ref>`, a local `.tar.gz`/`.tgz`/`.tar`/`.zip`, or an `https://` archive pinned by `sha256` digest (no trust-on-first-use). Sources containing symlinks are refused.
 - **Permissions are requested, never implied.** `spec.permissions` in the manifest is a request. Only `--grant` on `plugin add --enable`, `enable`, `upgrade` or `sync` grants it, and an ungranted plugin's tools register inactive. An upgrade that widens the request disables the plugin until you re-grant it.
+- **Source builds and consent (`spec.build`).** A `git+<url>#<full commit id>` source whose manifest declares `spec.build` compiles its backend on the installing host under an isolated build sandbox (Bubblewrap on Linux, `sandbox-exec` on macOS). Installing or upgrading a source-built plugin requires explicit operator consent via `--allow-build` on `orbit plugin add` or `orbit plugin upgrade`; without the flag, the command refuses with `build_consent_required` and displays the build plan. Consent covers only that single invocation — it is never stored in pins, configuration (`config.toml`), environment variables, or granted via MCP tools. Managed agent runs and automated routines cannot consent to builds (`build_consent_unavailable`).
 - **`[plugins.<ns>]`** holds the plugin's own settings, validated against its `spec.config.schema` with its defaults underneath. `orbit config get`/`set plugins.<ns>.<key>` accepts only declared keys, and values layer workspace over global. An invalid value disables only that plugin. A section for a plugin this machine hasn't installed is warned about and ignored.
 - **`[plugin_enablement]`** (workspace file only) switches a host-enabled plugin off in this workspace: `<ns> = false`. Write it with `orbit plugin disable|enable <ns> --scope workspace` rather than by hand. An unset entry inherits the host state, and `true` never switches on a plugin the host has disabled — `enable --scope workspace` refuses instead. The pin's `enabled: false` is applied here by `orbit plugin sync`, never to the host row. Values must be booleans keyed by plugin namespace, and the table is refused in the global file.
 
@@ -559,6 +577,7 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | Retired | Note |
 |---|---|
 | `operation.preset`, `completion`, `preparation`, `preparation_due_seconds`, `promotion`, `leaf_ceiling`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, `delivery_cap` | Operation mode was removed. `[operation]` keeps only the review keys. |
+| `operation.review_repair_cycles` | Retired: the before-PR reviewer fixes findings in one reviewer commit per attempt and nothing is reworked, so no repair cycle is counted; `review_reviewer_starts` and `review_minutes` still bound a lineage. |
 | `[docs]` | The docs corpus was removed. |
 | `[semantic]`, `search.model` | Search is lexical (SQLite FTS5) and needs no model. The legacy `semantic.db` path remains the lexical search database. |
 | `workflow.pilot_max_complexity` | Route a tier with `workflow.<tier>_complexity_crews`, or pin `crew` on the task. |
