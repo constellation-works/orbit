@@ -39,8 +39,7 @@ impl Default for TaskListQuery {
 /// Statuses `orbit task eligible` selects candidates from: work not yet taken.
 /// `in-progress` and `review` tasks are the holders a candidate is checked
 /// against, never candidates themselves.
-const ELIGIBILITY_CANDIDATE_STATUSES: [TaskStatus; 2] =
-    [TaskStatus::Backlog, TaskStatus::Proposed];
+const ELIGIBILITY_CANDIDATE_STATUSES: [TaskStatus; 2] = [TaskStatus::Backlog, TaskStatus::Proposed];
 
 /// Which not-yet-taken tasks can be picked up without colliding with work in
 /// flight.
