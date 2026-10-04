@@ -203,6 +203,119 @@ mod unix {
         }
     }
 
+    /// ORB-13854: a real gate must explicitly release its reservation before
+    /// reporting a failed child, rather than relying on terminal-run cleanup.
+    #[test]
+    fn gate_releases_reservation_after_child_failure_or_success() {
+        let fixture = Fixture::new();
+        fs::write(fixture.repo.join("reserved.rs"), "fixture\n").expect("context file");
+        let task = fixture.json(&[
+            "task",
+            "add",
+            "--title",
+            "gate release fixture",
+            "--description",
+            "Exercise reservation release after a child finishes.",
+            "--acceptance-criteria",
+            "The gate releases its reservation.",
+            "--plan",
+            "Run the deterministic fixture child.",
+            "--complexity",
+            "low",
+            "--status",
+            "backlog",
+            "--context",
+            "file:reserved.rs",
+            "--tag",
+            "delivery:gate_release_fixture",
+            "--json",
+        ]);
+        let task_input = format!("task_ids={}", serde_json::json!([task["id"]]));
+
+        for child_status in ["failed", "success"] {
+            fs::write(
+                fixture
+                    .home
+                    .join(".orbit/resources/jobs/gate_release_fixture.yaml"),
+                format!(
+                    r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: gate_release_fixture
+spec:
+  state: enabled
+  kind: workflow
+  task_delivery:
+    modes: [pr]
+  steps:
+    - id: fixture_result
+      target: activity:pipeline_success_guard
+      default_input:
+        context: gate release fixture
+        result:
+          run_id: fixture-result
+          status: {child_status}
+"#
+                ),
+            )
+            .expect("fixture child job");
+            let submitted = fixture.json(&[
+                "run",
+                "job",
+                "task_gate_pipeline",
+                "--input",
+                &task_input,
+                "--json",
+            ]);
+            let gate_id = submitted["run_id"].as_str().expect("gate run id");
+            let gate = fixture.poll_run(gate_id, child_status, Duration::from_secs(30));
+            let dispatches = gate["run"]["child_dispatches"]
+                .as_array()
+                .expect("child dispatches");
+            assert_eq!(dispatches.len(), 1, "gate must dispatch a real child");
+            let child_id = dispatches[0]["child_run_id"]
+                .as_str()
+                .expect("child run id");
+            fixture.poll_run(child_id, child_status, Duration::from_secs(10));
+
+            let release = fixture.json(&[
+                "run",
+                "show",
+                gate_id,
+                "-s",
+                "release_reservation",
+                "--json",
+            ]);
+            assert_eq!(
+                release["step"]["state"], "success",
+                "ORB-13854: release step must run successfully: {gate}"
+            );
+            assert_eq!(
+                release["step_output"]["released"], true,
+                "ORB-13854: release must free a granted reservation before terminal cleanup"
+            );
+            let locks = fixture.json(&["task", "locks", "list", "--json"]);
+            assert_eq!(
+                locks["total_reservations"], 0,
+                "finished gate left a reservation: {locks}"
+            );
+            if child_status == "failed" {
+                let guard = fixture.json(&[
+                    "run",
+                    "show",
+                    gate_id,
+                    "-s",
+                    "require_child_success",
+                    "--json",
+                ]);
+                assert!(
+                    matches!(guard["step"]["state"].as_str(), Some("failed" | "error")),
+                    "gate must still report its child's failure: {guard}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn resume_returns_while_detached_worker_continues_after_cli_exit() {
         let fixture = Fixture::new();
