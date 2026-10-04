@@ -7,11 +7,11 @@ status: Accepted
 feature: review-gate
 doc_role: design
 type: design
-summary: Shipped review contract — captured timing, the before-PR gate, what validation records establish, lineage budgets, managed completion, delivery coverage, surfaces, and rollback.
+summary: Shipped review contract — captured timing, the before-PR gate and its rework loop, what validation records establish, lineage budgets, managed completion, delivery coverage, surfaces, and rollback.
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13891, ORB-13896]
 ---
 
 # Review Gate — Design [ORB-11333]
@@ -67,7 +67,9 @@ by none, wedged, stalled, held for an operator (`definition_changed`,
 or naming a crew that does not — is an `error`, so `orbit doctor` exits nonzero.
 Under any other policy the row is `skipped`.
 
-The three `review_*` budgets bound one delivery run lineage (§5). The
+The three `review_*` budgets bound one delivery run lineage (§5);
+`review_repair_cycles` also bounds how often a `changes_required` verdict is
+sent back to the implementer for rework (§3.1). The
 resolved-policy version is 2; a version-1 snapshot fails closed and must be
 replaced.
 
@@ -90,11 +92,13 @@ candidate later, and it is retired [ORB-12491].
 
 ## 3. The gate
 
-`task_pr_pipeline` runs three steps after the final base
-synchronization and before push/PR creation: `review_gate_admit`,
-`review` (`agent_review_repair`), and `review_gate_settle`. Under `none`,
-`after-landing`, or a checked no-diff exemption the gate reports
-`applies: false` and publication proceeds unchanged with no certificate.
+`task_pr_pipeline` runs the `review_gate` loop after the final base
+synchronization and before push/PR creation. Each pass runs
+`review_gate_admit`, `review` (`agent_review_repair`), and
+`review_gate_settle`; a settlement that asks for rework also runs the rework
+steps (§3.1) and starts the next pass. Under `none`, `after-landing`, or a
+checked no-diff exemption the gate reports `applies: false` and publication
+proceeds unchanged with no certificate.
 
 Admission pins the candidate (base and head commits and trees, every
 implementation commit with the attribution Git recorded), digests each task's
@@ -143,8 +147,52 @@ exponential backoff) and the reviewer step retries once; each then gets one
 `step_failure_recovery` diagnosis before the run fails. A retried reviewer
 continues the same attempt and must verify or revert edits an interrupted
 invocation left in the worktree. Decisions are refusals that neither retry
-nor recover: a settled non-pass verdict, an exhausted budget, an
-unconfigured, unavailable, or excluded crew, and a local route.
+nor recover: a settled non-pass verdict that is not reworked, an exhausted
+budget, an unconfigured, unavailable, or excluded crew, and a local route.
+
+### 3.1 Rework [ORB-13891]
+
+The loop's settlement passes `rework_allowed`. With it, a `changes_required`
+verdict that names at least one open finding is sent back to the implementer
+instead of stopping delivery, provided the lineage can afford another cycle:
+a reviewer start left for the re-review, a repair cycle left after any the
+reviewer's own repair took, and reviewer minutes left. The decision is part
+of the judgement — made against the ledger the attempt was judged on, so a
+replay reproduces it — and the granted rework is charged as one repair cycle
+on the `changes_required` attempt. The certificate records
+`rework_requested`, and the verdict comment on each task lists every finding
+with its disposition and says whether rework was requested. Settlement then
+returns `gate: rework_required` with an empty `reviewed_head_sha` and a
+`rework` block: the attempt, the head and base the findings were raised on,
+the open findings, the escalation, the attempt's repair commits, and the
+remaining repair cycles and reviewer starts.
+
+The loop then runs three steps guarded on `gate == rework_required`:
+
+- `rework` (`agent_rework`) runs as the implementer in the same worktree with
+  the `rework` block. It verifies `HEAD` is the reviewed head, addresses the
+  findings that are correct and in scope, declines the others with a task
+  comment (all declined fails `rework_declined`), keeps the task's selectors
+  and execution summary current, and leaves its changes uncommitted.
+- `rework_commit` (`git_commit`, scope `all`) commits the rework as
+  implementer work, pinned to the head the findings were raised on; a rework
+  that changed nothing has nothing to commit and fails.
+- `rework_validate` (`candidate_validate`) reruns the required validation on
+  the new head.
+
+`break_when` ends the loop on any other gate, so the next pass admits a fresh
+reviewer start for the reworked head, whose implementation commits now
+include the rework. When the lineage cannot afford another rework, the
+settlement refuses with `review_gate_blocked` and an escalation naming
+`review_rework_exhausted` and the spent budget
+(`review_starts_exhausted`, `review_repair_cycles_exhausted`, or
+`review_minutes_exhausted`); `changes_required` without an open finding
+escalates `review_rework_unavailable`. Either refusal reaches the failure
+handoff with every cycle's verdict and findings already on the task. An
+`incomplete` verdict is never reworked. `max_iterations` is 10, the largest
+configurable reviewer-start budget, and `pr_open` refuses a gate whose last
+settlement still asks for rework, so a loop that never passes cannot
+publish. The completion re-review (§6) does not pass `rework_allowed`.
 
 ## 4. What the validation records establish [ORB-11528] [ORB-11545]
 
@@ -219,10 +267,14 @@ task-meaning or head drift first.
 
 A pass returns `reviewed_head_sha` / `reviewed_base_sha`; `pr_open` refuses
 (`review_gate_stale`, phase `stale-review-gate`) when the checked-out head or
-pinned base differ. A non-pass refuses the step; the failure handoff
-releases the attempt if it has no verdict yet (§5), commits leftover reviewer
-work under the reviewer identity, pushes the candidate branch, blocks the task
-with `review_gate_escalation`, and opens no PR.
+pinned base differ. A `changes_required` verdict the loop can rework
+returns `rework_required` (§3.1); any other non-pass refuses the step. The
+failure handoff — for any failure inside the `review_gate` loop — releases the
+attempt if it has no verdict yet (§5), commits leftover reviewer work under
+the reviewer identity, or, when the last settlement asked for rework that was
+not committed yet, commits the leftover edits as the implementer's rework
+(`partial_rework_commit`), pushes the candidate branch, blocks the task with
+`review_gate_escalation`, and opens no PR.
 Passing grants no lifecycle transition; `completion: review` still stops at
 the handoff.
 
@@ -263,7 +315,9 @@ is stale.
 runtime reaches it, no new start is admitted. It does not shorten an admitted
 reviewer, whose own activity timeout bounds each invocation, and a pass that
 overran the remainder still settles on its evidence. Repair cycles settle
-with the attempt. Exhaustion refuses admission (`review_budget_exhausted:
+with the attempt: one for a reviewer repair commit and one for a granted
+rework (§3.1), so a `changes_required` attempt whose reviewer also repaired
+needs two cycles left to be reworked. Exhaustion refuses admission (`review_budget_exhausted:
 review_starts_exhausted | review_minutes_exhausted`). Provider token/cost
 caps are not enforced; usage stays unknown.
 
@@ -367,6 +421,15 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
   at submission rather than downgraded.
 - A denied required check is not evidence either way: it keeps its own
   `validation_unavailable` reason instead of counting as a failure.
+- The `review_gate` loop is checkpointed as one step, so a resumed run starts
+  it again at admission. A run that died between a rework-granting settlement
+  and the rework commit re-reviews the unchanged head with a new start, and
+  rework edits it left uncommitted are judged as reviewer changes on that
+  pass. The failure handoff, by contrast, attributes them to the implementer.
+- A reworked candidate is reviewed as a whole by a fresh reviewer; the
+  rework is not separately diffed against the findings it answers, and a
+  reviewer repair made on a `changes_required` attempt becomes part of the
+  next pass's implementation commits.
 
 ## Task References
 
@@ -375,5 +438,6 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
 - [ORB-11545] — tightens what a superseded validation record may claim.
 - [ORB-12491] — retires epic assembly, the one caller that gated a combined candidate later.
 - [ORB-13890] — closes failed attempts, keys budgets per delivery run lineage, adds gate retry/recovery, tolerant report reading, and the completion re-review.
+- [ORB-13891] — sends `changes_required` findings back to the implementer for rework and re-review within the run, bounded by the lineage budget.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

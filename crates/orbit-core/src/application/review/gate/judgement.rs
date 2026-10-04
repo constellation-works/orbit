@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use orbit_automation::review::{
     combined_task_meaning_digest, task_meaning_digest, validation_evidence, validation_role_counts,
 };
@@ -314,11 +315,7 @@ impl Judgement {
         ledger: &ReviewLedger,
         repair: Option<&CommitIdentity>,
     ) {
-        let open_findings = self
-            .findings
-            .iter()
-            .filter(|finding| finding.disposition == FindingDisposition::Open)
-            .count();
+        let open_findings = open_findings(&self.findings).count();
         match self.verdict {
             ReviewVerdict::PassedWithoutRepairs if repair.is_some() => self.downgrade(
                 "verdict_inconsistent: the reviewer reported no repairs but changed the worktree",
@@ -355,14 +352,75 @@ impl Judgement {
         }
     }
 
+    /// Whether a settled `changes_required` verdict goes back to the
+    /// implementer for rework within this run [ORB-13891].
+    ///
+    /// Rework needs an open finding to act on, a reviewer start left for the
+    /// re-review, a repair cycle left after this attempt's own reviewer
+    /// repair, and reviewer minutes left. `ledger` is the lineage while this
+    /// attempt was still open, so a replayed settlement decides exactly as
+    /// the first one did. A refusal is recorded in the escalation, and
+    /// delivery stops as for any other non-pass verdict.
+    pub(super) fn request_rework(
+        &mut self,
+        ledger: &ReviewLedger,
+        reviewer_repair_cycles: u32,
+        now: DateTime<Utc>,
+    ) -> bool {
+        if self.verdict != ReviewVerdict::ChangesRequired {
+            return false;
+        }
+        let remaining = ledger.remaining_at(now);
+        let budget = ledger.budget;
+        let refusal = if open_findings(&self.findings).next().is_none() {
+            "review_rework_unavailable: changes_required names no open finding for the \
+             implementer to rework"
+                .to_string()
+        } else if remaining.reviewer_starts == 0 {
+            format!(
+                "review_rework_exhausted: review_starts_exhausted: all {} reviewer start(s) of \
+                 the lineage are spent, so a rework could not be re-reviewed",
+                budget.reviewer_starts
+            )
+        } else if remaining.repair_cycles <= reviewer_repair_cycles {
+            format!(
+                "review_rework_exhausted: review_repair_cycles_exhausted: all {} repair \
+                 cycle(s) of the lineage are spent",
+                budget.repair_cycles
+            )
+        } else if remaining.seconds == 0 {
+            format!(
+                "review_rework_exhausted: review_minutes_exhausted: the lineage's {} reviewer \
+                 minute(s) are spent",
+                budget.minutes
+            )
+        } else {
+            return true;
+        };
+        self.escalate(&refusal);
+        false
+    }
+
     fn downgrade(&mut self, reason: &str) {
         self.verdict = ReviewVerdict::Incomplete;
         self.validation_complete = false;
+        self.escalate(reason);
+    }
+
+    fn escalate(&mut self, reason: &str) {
         self.escalation = Some(match self.escalation.take() {
             Some(existing) if !existing.is_empty() => format!("{existing}; {reason}"),
             _ => reason.to_string(),
         });
     }
+}
+
+fn open_findings(
+    findings: &[orbit_types::workflow::ReviewFinding],
+) -> impl Iterator<Item = &orbit_types::workflow::ReviewFinding> {
+    findings
+        .iter()
+        .filter(|finding| finding.disposition == FindingDisposition::Open)
 }
 
 /// One report for the bundle: the most severe verdict, every distinct
@@ -526,7 +584,7 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
          - Findings: {} ({} open)\n\
          - Validation on final candidate: {} record(s) [{}], complete: {}\n\
          - Consumed: {} reviewer start(s), {} repair cycle(s), {}s of {} min\n\
-         - Escalation: {}\n\n\
+         - Escalation: {}{}{}\n\n\
          Reviewer repairs were validated but not independently reviewed; this verdict is \
          review evidence, not task approval or merge permission.",
         certificate.attempt_id,
@@ -551,11 +609,7 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
             certificate.selectors_widened.join(", ")
         },
         certificate.findings.len(),
-        certificate
-            .findings
-            .iter()
-            .filter(|finding| finding.disposition == FindingDisposition::Open)
-            .count(),
+        open_findings(&certificate.findings).count(),
         certificate.validation.len(),
         validation_roles(&certificate.validation),
         certificate.validation_complete,
@@ -564,7 +618,58 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
         certificate.consumed.seconds,
         certificate.budget.minutes,
         certificate.escalation.as_deref().unwrap_or("none"),
+        rework_line(certificate),
+        finding_lines(&certificate.findings),
     )
+}
+
+/// The rework decision a `changes_required` verdict carries [ORB-13891].
+fn rework_line(certificate: &ReviewCertificate) -> &'static str {
+    match (certificate.verdict, certificate.rework_requested) {
+        (ReviewVerdict::ChangesRequired, true) => {
+            "\n- Rework: requested; the implementer addresses the open findings in this run and \
+             the new head is reviewed again"
+        }
+        (ReviewVerdict::ChangesRequired, false) => {
+            "\n- Rework: not requested; delivery stops for a recorded decision"
+        }
+        _ => "",
+    }
+}
+
+/// Every finding of the attempt, one line each, so the task keeps each
+/// review cycle's findings even after a later attempt replaces the
+/// certificate artifact.
+fn finding_lines(findings: &[orbit_types::workflow::ReviewFinding]) -> String {
+    let mut lines = String::new();
+    for finding in findings {
+        let disposition = match &finding.disposition {
+            FindingDisposition::Open => "open".to_string(),
+            FindingDisposition::Repaired => "repaired".to_string(),
+            FindingDisposition::Disposed { reason } => format!("disposed: {}", one_line(reason)),
+        };
+        let paths = if finding.paths.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", finding.paths.join(", "))
+        };
+        lines.push_str(&format!(
+            "\n  - `{}` [{}, {}] {}{}",
+            finding.id,
+            finding.severity,
+            disposition,
+            one_line(&finding.summary),
+            paths
+        ));
+    }
+    if lines.is_empty() {
+        return lines;
+    }
+    format!("\n\nFindings:{lines}")
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The classification breakdown of a validation set, so a reader sees which

@@ -200,7 +200,7 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 | `operation.review_policy` | string | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. `before-pr` holds PR creation for a fresh reviewer and is refused for local-only delivery. |
 | `operation.review_crew` | string | Crew for before-PR automatic review. After-landing review uses its delivery auto-task's template crew. |
 | `operation.review_reviewer_starts` | integer | Fresh reviewer invocations allowed per delivery candidate lineage (1–10, default 2). |
-| `operation.review_repair_cycles` | integer | Reviewer repair/validation cycles allowed per delivery candidate lineage (0–10, default 2). |
+| `operation.review_repair_cycles` | integer | Repair/validation cycles allowed per delivery run lineage: a reviewer repair commit, or a `changes_required` verdict sent back to the implementer for rework and re-review, takes one. Once spent, `changes_required` blocks the task (0–10, default 2). |
 | `operation.review_minutes` | integer | Before-PR reviewer, repair, and final-validation wall-time minutes per delivery candidate lineage (1–1440, default 30). |
 
 `orbit config keys` also lists `machine.id` and `machine.task_prefix`. Both are

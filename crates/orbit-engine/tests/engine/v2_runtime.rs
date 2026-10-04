@@ -892,13 +892,11 @@ fn shipped_review_step_job() -> orbit_types::workflow::JobV2 {
         workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
     )
     .expect("read the shipped PR pipeline");
-    let mut review = load_job_asset(&shipped)
+    let shipped = load_job_asset(&shipped)
         .expect("the shipped PR pipeline loads")
-        .spec
-        .steps
-        .into_iter()
-        .find(|step| step.id == "review")
-        .expect("the shipped PR pipeline has a review step");
+        .spec;
+    let mut review =
+        shipped_step(&shipped.steps, "review").expect("the shipped PR pipeline has a review step");
     let retry = review
         .retry
         .as_mut()
@@ -934,6 +932,23 @@ fn shipped_review_step_job() -> orbit_types::workflow::JobV2 {
     job
 }
 
+/// The shipped step `id`, at the top level or inside a `loop:` body such as
+/// the before-PR `review_gate`.
+fn shipped_step(
+    steps: &[orbit_types::workflow::JobV2Step],
+    id: &str,
+) -> Option<orbit_types::workflow::JobV2Step> {
+    steps.iter().find_map(|step| {
+        if step.id == id {
+            return Some(step.clone());
+        }
+        match &step.body {
+            orbit_types::workflow::JobV2StepBody::Loop { loop_ } => shipped_step(&loop_.steps, id),
+            _ => None,
+        }
+    })
+}
+
 /// The shipped pipeline slice that reaches completion and can enter its
 /// re-review branch, with all external activities resolved to the test host.
 fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
@@ -945,12 +960,8 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
         .expect("the shipped PR pipeline loads")
         .spec;
     let find_step = |id: &str| {
-        shipped
-            .steps
-            .iter()
-            .find(|step| step.id == id)
+        shipped_step(&shipped.steps, id)
             .unwrap_or_else(|| panic!("the shipped PR pipeline has `{id}`"))
-            .clone()
     };
     let stub = |id: &str| {
         json!({
@@ -961,16 +972,10 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
     let stubs = |ids: &[&str]| ids.iter().map(|id| stub(id)).collect::<Vec<_>>();
     // Keep the graph boundary under test while replacing unrelated VCS and
     // task-store effects with deterministic stub activities.
-    let prefix = stubs(&[
-        "worktree",
-        "commit",
-        "prepare_branch",
-        "sync_base",
-        "review_gate_admit",
-    ]);
+    let prefix = stubs(&["worktree", "commit", "prepare_branch", "sync_base"]);
     let mut job = job_asset(json!(prefix));
-    job.steps.push(find_step("review"));
-    let middle = stubs(&["review_gate_settle", "push", "pr_open", "promote_tasks"]);
+    job.steps.push(find_step("review_gate"));
+    let middle = stubs(&["push", "pr_open", "promote_tasks"]);
     job.steps.extend(job_asset(json!(middle)).steps);
     job.steps.push(find_step("complete_pr"));
     for id in [
@@ -992,6 +997,9 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
         "review_gate_admit",
         REVIEWER,
         "review_gate_settle",
+        "agent_rework",
+        "git_commit",
+        "candidate_validate",
         "push",
         "git_push",
         "pr_open",

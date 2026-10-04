@@ -182,7 +182,7 @@ define_config_settings! {
     },
     operation_review_repair_cycles: Option<u32> => u32 {
         key: "operation.review_repair_cycles", value_type: "integer",
-        description: "Reviewer repair/validation cycles allowed per delivery run lineage (0..=10, default 2).",
+        description: "Repair/validation cycles allowed per delivery run lineage: each reviewer repair commit, and each changes_required verdict sent back to the implementer for rework and re-review, takes one. Once spent, a changes_required verdict blocks the task with every cycle's findings recorded (0..=10, default 2).",
         section: ConfigSection::Operation, order: 40,
         resolve: |raw: Option<u32>| operation::review_repair_cycles(raw),
     },

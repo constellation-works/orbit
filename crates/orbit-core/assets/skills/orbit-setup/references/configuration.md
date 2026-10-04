@@ -54,7 +54,7 @@ assuming a value.
 | `operation.review_policy` | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. |
 | `operation.review_crew` | Crew for before-PR automatic review. After-landing review uses the delivery auto-task's template crew. |
 | `operation.review_reviewer_starts` | Fresh reviewer starts per delivery run lineage (a run and its resumes). Retrying a failed reviewer step continues its start; reviewing a changed candidate, including a completion rebase, takes a new one (1..=10, default 3). |
-| `operation.review_repair_cycles` | Repair/validation cycles per delivery run lineage (0..=10, default 2). |
+| `operation.review_repair_cycles` | Repair/validation cycles per delivery run lineage: a reviewer repair commit, or a `changes_required` verdict sent back to the implementer for rework and re-review, takes one. Once spent, `changes_required` blocks the task (0..=10, default 2). |
 | `operation.review_minutes` | Reviewer runtime minutes per delivery run lineage; once spent, no new reviewer start is admitted. A fresh delivery run starts a new lineage (1..=1440, default 90). |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |

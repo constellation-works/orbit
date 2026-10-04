@@ -341,6 +341,24 @@ impl Gated {
         run_id: &str,
         admission: &Value,
     ) -> Result<Value, orbit_engine::DispatchError> {
+        self.settle_with(run_id, admission, false)
+    }
+
+    /// Settle as the pipeline's pre-PR review loop does, which may send a
+    /// `changes_required` verdict back to the implementer.
+    pub(super) fn settle_in_loop(
+        &self,
+        admission: &Value,
+    ) -> Result<Value, orbit_engine::DispatchError> {
+        self.settle_with(&self.run_id, admission, true)
+    }
+
+    fn settle_with(
+        &self,
+        run_id: &str,
+        admission: &Value,
+        rework_allowed: bool,
+    ) -> Result<Value, orbit_engine::DispatchError> {
         review_gate_settle(
             &self.fixture.runtime,
             "review_gate_settle",
@@ -351,8 +369,33 @@ impl Gated {
                 "base": "main",
                 "base_sync": "local",
                 "admission": admission,
+                "rework_allowed": rework_allowed,
             }),
         )
+    }
+
+    /// Commit an implementer's rework on the candidate, as the pipeline's
+    /// rework commit does, returning the new head.
+    pub(super) fn commit_rework(&self, contents: &str) -> String {
+        let repo = &self.fixture.repo;
+        fs::write(repo.join("src.txt"), contents).expect("rework");
+        git(repo, &["add", "src.txt"]);
+        git(
+            repo,
+            &["commit", "-m", &format!("fix: rework [{}]", self.task_id)],
+        );
+        git(repo, &["rev-parse", "HEAD"])
+    }
+
+    /// The task's comments, oldest first.
+    pub(super) fn comments(&self) -> Vec<String> {
+        self.fixture
+            .runtime
+            .get_task_comments(&self.task_id)
+            .expect("read comments")
+            .into_iter()
+            .map(|comment| comment.message)
+            .collect()
     }
 
     /// The lineage ledger an admission reserved in.
