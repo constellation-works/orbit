@@ -326,8 +326,6 @@ fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
         "user.name=fixture",
         "-c",
         "user.email=fixture@orbit.invalid",
-        "-c",
-        "commit.gpgsign=false",
         "commit",
         "--allow-empty",
         "-q",
