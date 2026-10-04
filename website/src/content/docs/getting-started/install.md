@@ -1,210 +1,122 @@
 ---
 title: Install Orbit
-description: "Install the Orbit CLI, initialize global and workspace state, prepare the sandbox, and stay current with orbit update."
+description: "Install the Orbit CLI, then let the orbit-setup skill in your agent finish the setup. Each step is also here to do by hand."
 sidebar:
   order: 2
 ---
 
-## Install
+Install the CLI, then let your agent do the rest: Orbit ships an `orbit-setup`
+skill that sets up your repository for you. Every step is also here to do by
+hand.
 
-The recommended install uses the npm binary proxy:
+## Prerequisites
+
+- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside WSL2.
+- Node 18 or newer, for the npm install.
+- At least one signed-in agent CLI, such as Claude Code or Codex. Orbit runs
+  every agent step through one. The
+  [setup explorer](../../concepts/agents/#set-up-an-executor) lists the
+  supported CLIs.
+- The GitHub CLI (`gh`), signed in, if you want pull requests.
+
+## Install
 
 ```bash
 npm install -g @orbit-tools/cli
+orbit init
 ```
 
-Node 18 or newer is required. The package downloads the matching native Orbit
-binary and puts `orbit` on your `PATH`. Release binaries ship for macOS and
-Linux, on x64 and arm64; there is no Windows build. Confirm it:
+The package downloads the matching native binary and puts `orbit` on your
+`PATH`. `orbit init` asks for a machine name and a task-ID prefix, detects
+your agent CLIs, links Orbit's skills into your agents, and on Linux prepares
+the sandbox.
 
-```bash
-orbit --version
-```
+## Let your agent set it up
 
-### Alternatives
+:::tip[Recommended]
+Open your agent in the repository and ask it to **set up Orbit for this repo**.
+:::
 
-From a trusted source checkout, the release installer detects the platform,
-downloads the matching release binary, authenticates signed checksums, validates
-the archive contents, and installs into `~/.orbit/bin`:
+The `orbit-setup` skill takes it from there. It checks what is already in
+place, registers the repository, connects your agent over MCP, checks your
+agent CLIs and the sandbox, and runs `orbit doctor`. It asks only for choices it
+cannot infer, such as the branch pull requests should target. Start a fresh
+agent session when it finishes, so the Orbit tools load.
 
-```bash
-./install.sh
-```
+Go back to the same skill for later changes: adding a provider, scheduling
+work, upgrading, or fixing a failing `orbit doctor`.
 
-For development from a source checkout (this one needs the Rust toolchain):
+## Set up by hand
 
-```bash
-make install
-```
+The skill runs these same steps. Use this section to do them yourself or to
+see what the skill did.
 
-This installs into `~/.orbit/bin` as well (override with `INSTALL_BIN_DIR=...`), so a
-source build replaces a release install instead of shadowing it elsewhere on `PATH`.
-
-After installing, `install.sh` runs `orbit clock repair`. The host scheduler clock unit
-names an orbit binary by absolute path, so installing to a new location would otherwise
-leave launchd or systemd invoking the previous one — which fails every minute without
-saying so. It reports what it changed, and does nothing on a host with no clock unit.
-
-### Pinned versions and custom install directory
-
-```bash
-ORBIT_VERSION=vX.Y.Z ./install.sh
-ORBIT_INSTALL_DIR="$HOME/.local/bin" ./install.sh
-```
-
-Replace `vX.Y.Z` with the release you intend to pin. Use the unpinned install
-command above when you want the latest published release.
-
-`ORBIT_VERSION`, `ORBIT_INSTALL_REPO`, and `ORBIT_INSTALL_BASE_URL` change the
-release source the installer trusts, so use them only for pinned releases,
-forks, or controlled test mirrors. `ORBIT_INSTALL_BASE_URL` may use any
-downloader-supported scheme, including `file://` for tests; the signature check
-protects artifact integrity, not transport confidentiality.
-
-`ORBIT_RELEASE_TRUSTED_KEYS_FILE` is the preferred override for the full
-trusted signing-key set, including key IDs, `not_after`, and `revoked_at`; it
-requires `ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE=1` and should
-be limited to tests or emergency operations.
-`ORBIT_RELEASE_PUBLIC_KEY_FILE` is **deprecated** in favor of the trusted-keys
-file (which is a strict superset); it still works for the single-key case and
-requires `ORBIT_RELEASE_PUBLIC_KEY_FILE_ACKNOWLEDGE_TRUST_CHANGE=1`. Setting
-both files at once is refused.
-
-## Initialize state
-
-Orbit keeps global state under `~/.orbit/` and per-repository state under
-`.orbit/` in each workspace.
+### Initialize state
 
 ```bash
 orbit init
 cd <repo>
-orbit workspace init
+orbit workspace init --mcp
 ```
 
-`orbit init` asks for two things: a **machine name**, which you can rename later
-with `orbit config set --global machine.name <value>`, and a **task-id prefix**
-of 2–5 uppercase letters that namespaces every task ID this machine allocates
-and can never change (`ORB` and `ADR` are reserved). Supply them up front for an
-unattended setup:
+`orbit init` sets up this machine under `~/.orbit/`. It asks for a **machine
+name**, which you can rename later, and a **task-ID prefix** of 2–5 uppercase
+letters, such as `ABC`, which can never change (`ORB` and `ADR` are reserved).
+For an unattended setup, pass both:
 
 ```bash
 orbit init --non-interactive --machine-name build-01 --task-prefix ABC
 ```
 
-It also seeds `~/.orbit/config.toml` with crews for the provider CLIs it
-detects, and installs the default skills under `~/.orbit/skills`, linking them
-into `~/.agents/skills` and `~/.claude/skills`. The same reconcile removes
-dangling Orbit-owned links for retired skill IDs and leaves your own custom
-skills in place.
+`orbit workspace init` registers the repository and keeps its state under
+`.orbit/`. `--mcp` connects your agent clients with **operator** authority,
+which lets them ship tasks and run governed operations. Plain `orbit mcp init`
+registers an agent-only connection instead; see
+[Connect Your Agent](../../how-to/mcp-integration/). Add
+`--base-branch <branch>` when pull requests should target a branch other than
+`main`, or `--ship-mode local` to merge in place instead of opening pull
+requests.
 
-`orbit workspace init` registers the repository. Useful options:
+### Prepare the sandbox
 
-```bash
-orbit workspace init --ship-mode local      # deliver in place instead of opening PRs
-orbit workspace init --base-branch develop  # default base for ship workflows
-orbit workspace init --mcp                  # also set up MCP client integrations
-orbit workspace init --inject-agent-rules   # add an Orbit rules block to CLAUDE.md / AGENTS.md
-```
+Orbit runs each agent in an OS-level sandbox: `sandbox-exec` on macOS, which
+needs no setup, and Bubblewrap on Linux, which fails closed without a trusted
+`/usr/bin/bwrap`.
 
-`--mcp` registers the Orbit MCP server with **operator** authority, which is what
-lets an agent dispatch workflows and run governed operations. Plain
-`orbit mcp init` registers the agent-only surface instead. See
-[Connect Your Agent](../../how-to/mcp-integration/) for the full picture.
-
-## Prerequisites
-
-You need at least one authenticated provider CLI, because agent activities
-dispatch through it. `orbit init` probes `PATH` for `claude`, `codex`, `agy`
-(Antigravity), `gemini`, `grok`, `copilot`, `cursor-agent`, `pi`, and
-`opencode`, and seeds crews for the ones it finds. The
-[setup explorer](../../concepts/agents/#set-up-an-executor) shows each
-executor's binary and a starter crew. PR mode additionally needs the GitHub CLI
-(`gh`) authenticated in the environment where Orbit runs.
-
-Orbit itself installs without Rust. You only need a Rust toolchain to build from
-source or contribute to the workspace.
-
-## Prepare the sandbox
-
-Orbit wraps each spawned agent subprocess in an OS-level sandbox — `sandbox-exec`
-on macOS, Bubblewrap on Linux (which fails closed without a trusted
-`/usr/bin/bwrap`); see
-[Platform Support](../../concepts/agents/#platform-support).
-
-On Ubuntu 24.04 and other distributions that restrict unprivileged user
-namespaces under AppArmor, install Bubblewrap and load the narrow profile before
-your first dispatch:
-
-```bash
-sudo apt-get install --yes bubblewrap apparmor-profiles
-test -x /usr/bin/bwrap
-```
-
-When you install as root in a container or image build, where no unprivileged
-Orbit user exists yet, leave the sandbox packages to the image and skip this
-step:
-
-```bash
-curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh \
-  | ORBIT_SKIP_HOST_PREREQUISITES=1 sh
-```
-
-Sandboxed dispatch stays fail-closed until `orbit doctor providers` reports the
-sandbox ready.
+On Linux, `orbit init` prepares the sandbox for you. It probes Bubblewrap as
+your account and, only if that fails, installs it through the distribution's
+package manager, asking for your password. On Ubuntu 24.04 it also loads the
+packaged AppArmor rule. Run `orbit init` as the account that will run Orbit,
+not through `sudo`.
 
 A run failing with `bwrap: setting up uid map: Permission denied` is this
-prerequisite, not your task. The full procedure, including loading the
-`bwrap-userns-restrict` AppArmor profile, is in the
-[Linux sandbox runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/linux-sandbox.md).
+step, not your task. The
+[Linux sandbox runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/linux-sandbox.md)
+covers which distributions are prepared automatically, container images, and
+the fix for each failure.
 
-## Configure Orbit
+### Configure and check
 
-`orbit init` writes a working `~/.orbit/config.toml`. Review the crews it
-detected and pick a default:
+`orbit init` writes a working `~/.orbit/config.toml` with a crew for each agent
+CLI it found. Pick the default crew, then check the workspace:
 
 ```bash
-orbit config show
-orbit config keys
 orbit config set workflow.default_crew opus
-```
-
-See [Configuration](../../reference/config/) for the file locations, the full
-settable key list, and how crews resolve.
-
-## Check the workspace
-
-```bash
 orbit doctor
 ```
 
-`orbit doctor` diagnoses config, database, disk, index, lock, and run health.
-It reports problems by default; the `--fix-*` flags are the opt-in repairs.
+`orbit doctor` checks config, database, disk, indexes, locks, and runs, and
+`orbit doctor providers` shows whether each agent CLI and the sandbox are ready.
+[Configuration](../../reference/config/) lists every setting.
 
 ## Stay current
 
-`orbit update` installs a published release and then converges this machine to
-it:
-
 ```bash
-orbit update --check          # report what is available, change nothing
-orbit update                  # install the newest published release
-orbit update --version X.Y.Z  # install one exact release
+npm install -g @orbit-tools/cli@latest
 ```
 
-The download is verified against the signed release checksum manifest before
-anything is replaced. After the executable is swapped, the new binary applies
-pending `.orbit` layout and store migrations, reconciles managed workspace
-assets, then repoints the host scheduler clock unit at the installed binary
-(`orbit clock repair`), in that order. Re-running `orbit update` is idempotent
-and is the supported way to finish a run that did not complete.
-
-Two limits are worth knowing:
-
-- Only installations made by Orbit's own installer can be replaced in place.
-  Where a package manager owns the binary, `orbit update` reports the command
-  that upgrades it instead of overwriting it.
-- Installing an older release requires `--allow-downgrade`, and is permitted
-  only if that release can still open this workspace's state.
-
-To inspect migrations without applying them, use `orbit migrate` on its own;
-`orbit migrate --confirm` applies them.
+`orbit update --check` tells you whether a newer release is out. npm owns this
+install, so upgrade through npm; `orbit update` names the right command for
+however Orbit was installed. Pending state migrations apply the next time Orbit
+opens the workspace. Stop running Orbit sessions and `orbit web serve` before
+upgrading, or ask your agent to upgrade Orbit and let the skill check for them.

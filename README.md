@@ -50,6 +50,8 @@ $ orbit task update ORB-1042 --approve       # after you merge: review → done
 
 <sub>Illustrative session. The tool names are real, and the IDs are placeholders.</sub>
 
+For more than one task, hand your agent a spec and ask it to orchestrate. The bundled `orbit-orchestrate` skill splits the spec into tasks, queues them once you approve, runs them in parallel with `orbit run auto`, and diagnoses any run that fails.
+
 1. **Nothing starts without you.** New tasks land in `proposed`, and only your approval moves them to `backlog`.
 2. **Every run ends at a pull request.** Orbit never merges on its own. Merging the PR and completing the task are separate decisions, unless you explicitly pass `--complete`.
 3. **Everything is on the record.** `orbit task show ORB-1042` reconstructs the prompt, plan, execution trace, and review thread, even months later.
@@ -58,44 +60,41 @@ $ orbit task update ORB-1042 --approve       # after you merge: review → done
 
 ## Quick start
 
-**You need:** macOS or Linux (x64 or arm64; on Windows, run Orbit inside WSL2, as there is no native Windows build), at least one authenticated agent CLI, plus `gh` authenticated if you want pull requests. On Linux, the shell installer or `orbit init` prepares the sandbox prerequisite automatically; see [readiness and distro coverage](docs/runbooks/linux-sandbox.md).
+**You need:** macOS or Linux (x64 or arm64; on Windows, run Orbit inside WSL2, as there is no native Windows build), Node 18+, at least one authenticated agent CLI, plus `gh` authenticated if you want pull requests.
 
 ```bash
-# 1. Install (pick one)
-npm install -g @orbit-tools/cli                 # Node 18+
-brew install constellation-works/tap/orbit
-curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh | sh
+npm install -g @orbit-tools/cli
+orbit init    # asks for a machine name and a task-ID prefix, links Orbit's skills into your agents, and on Linux prepares the sandbox
+```
 
-# 2. Initialize the machine: asks for a machine name and a task-ID prefix, and detects your agent CLIs
-orbit init
+**Then let your agent set up the repo.** Open your agent in the repository and ask it to *"set up Orbit for this repo"*. The bundled `orbit-setup` skill registers the repo, connects your agent over MCP, and runs `orbit doctor`, asking only for what it can't infer, such as the branch pull requests should target. Start a fresh agent session when it finishes so the Orbit tools load, then ask for something: it files the task, asks for approval, ships it, and reports the PR. Watch it all with `orbit web serve`.
 
-# 3. Register a repo and connect your agents over MCP
-cd <repo> && orbit workspace init --mcp         # add --ship-mode local to skip PRs
+<details>
+<summary>Set up the repo by hand</summary>
 
-# Review and commit the checkout files listed by workspace init before the first ship.
-# Local delivery requires a clean base checkout; the list includes MCP client files.
-
-# 4. Check workspace state, routed agent CLIs, and MCP client registration
+```bash
+cd <repo> && orbit workspace init --mcp    # add --ship-mode local to skip PRs
 orbit doctor
-
-# 5. Open up dashboard to monitor tasks and runs
 orbit web serve
 ```
 
-Now open your agent in the repo and ask for something. It files the task, asks for approval, ships it, and reports the PR.
+Review and commit the checkout files listed by `workspace init` before the first ship. Local delivery requires a clean base checkout; the list includes MCP client files.
 
 `orbit doctor` reports missing CLIs for crews selected by the default, system,
 or complexity routing and warns when no Orbit MCP client is registered for this
 workspace. It checks CLI presence and registration files only; provider sign-in
 and MCP connectivity are not checked. Use `orbit doctor providers` to inspect
 all executor definitions, including providers not selected by workflow routing.
+On Linux, see [sandbox readiness and distro coverage](docs/runbooks/linux-sandbox.md).
+
+</details>
 
 | To… | Run |
 |---|---|
 | Inspect a task or run | `orbit task show <ID>` · `orbit run show <RUN_ID>` |
 | Open the dashboard | `orbit web serve` (remote: `orbit web connect <host>`) |
 | Pick the default crew (provider and model) | `orbit config set workflow.default_crew <crew>` |
-| Upgrade | `orbit update` |
+| Upgrade | `npm install -g @orbit-tools/cli@latest` (`orbit update --check` shows what's new) |
 
 <details>
 <summary><strong>The same loop without an agent</strong></summary>
@@ -130,7 +129,7 @@ orbit task update "$TASK_ID" --approve   # after merging the PR: review → done
 - **Nine agent CLIs, routed by crews.** Claude Code, Codex, Cursor, Copilot, Grok, Gemini, Antigravity, OpenCode, and Pi. Crews pin a provider, model, and effort level. Complexity-tiered, weighted crew pools spread the work across them.
 
 ### Run unattended
-- **Bounded drains.** `orbit run auto --for 4h --concurrency 8` ships the backlog until the time window closes. `orbit run readiness` previews what would run without starting anything.
+- **Bounded drains.** `orbit run auto --for 4h --concurrency 8` ships the backlog until the time window closes. `orbit run readiness` previews what would run without starting anything. Or ask your agent to run one: the `orbit-orchestrate` skill prepares the backlog, starts the drain, and works through failed runs.
 - **Opt-in completion.** `--complete` merges PRs once GitHub allows it and closes tasks after the merge is verified. Nothing else turns this on.
 - **Continuous review.** The shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks read everything that landed since their last run, verify findings against live code, and file confirmed ones as tasks with `file:line` evidence.
 - **Recurring work as data.** Scheduled task templates live in `.orbit/auto_tasks/*.yaml`, and one machine scheduler (`orbit clock`) runs routines and auto-tasks.

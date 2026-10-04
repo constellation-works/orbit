@@ -13,6 +13,13 @@ runs `orbit run auto --pull <selector>` against the owner, which keeps landing
 authority. See
 [Set Up a Distributed Drain](../distributed-drain/).
 
+:::tip[Let your agent run it]
+Ask your agent to run a delivery window. The `orbit-orchestrate` skill works
+through these same steps: it pilots and promotes the tasks you authorize,
+starts the drain, and diagnoses any run that fails. This page is the procedure
+by hand.
+:::
+
 ## 1. Prepare proposed work
 
 Start with the zero-input pilot. It discovers `proposed` and `backlog` tasks
@@ -229,7 +236,9 @@ children you actually want to abandon.
 
 ## 7. Recover from a failed delivery
 
-First inspect the failed child run and its task. Fix a real code, review, or
+Your agent can do this part with the `orbit-orchestrate` skill, which reads the
+run evidence, matches it to a known failure, and files a repair task when the
+code needs fixing. By hand, first inspect the failed child run and its task. Fix a real code, review, or
 dependency problem before creating or authorizing corrective work; do not re-run
 blindly.
 
