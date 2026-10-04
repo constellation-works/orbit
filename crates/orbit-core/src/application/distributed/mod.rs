@@ -54,5 +54,7 @@ pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal};
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
 pub use probe::{AdmissionReceiptLookup, DrainProbeReport, DrainProbeSession};
 pub use serve::TaskPullResponse;
-pub use settlement::{PendingPullSettlements, PullLeafClaim, PullSettlementEntry};
+pub use settlement::{
+    DrainClaimedLeaf, PendingPullSettlements, PullLeafClaim, PullSettlementEntry,
+};
 pub(crate) use settlement::{is_owner_refusal, is_owner_transport_failure};

@@ -334,9 +334,14 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
 - Each leaf settles itself when it ends ([ORB-13663]): its worker records
-  the handoff (success) or a failure, then delivers it to the owner. A drain
-  pass, a cancel or `orbit run auto --stop` delivers anything the leaf could
-  not. A leaf that fails before its handoff moves its task to `blocked` on
+  the handoff (success) or a failure, then delivers it to the owner, retrying
+  for a few minutes if the owner is unreachable and no live drain carries the
+  claim. Every drain pass, a cancel or `orbit run auto --stop` delivers
+  anything the leaf could not, and a drain pass also reconciles a launched
+  leaf whose worker died so its settlement is recorded and delivered. A leaf
+  that was cancelled before it launched releases its claim instead: the task
+  goes back to `backlog` on the owner with a comment naming the drain. A leaf
+  that fails before its handoff moves its task to `blocked` on
   the owner with a summary naming the leaf run, its failed step and that
   step's error. The full diagnostic stays in the follower's run
   (`orbit run show <leaf-run>`, and `.orbit/state/logs/<leaf-run>.worker.log`
@@ -479,21 +484,62 @@ On the dashboard, **approve** on a review task that has a handed-off claim
 sends **Approve handoff** for the exact candidate. A plain status write would
 be refused with `active execution claim requires a claim-scoped mutation`.
 
-**Stopping or cancelling a follower drain** ([ORB-13663]). Both are safe;
-neither strands a claim.
+**Stopping or cancelling a follower drain** ([ORB-13663], [ORB-13892]). All
+three are safe; none strands a claim, and none fails a task that never ran.
 
 - `orbit run auto --stop` (or the dashboard's auto **Stop**) closes the
   window. The drain keeps running until every admission settles, and the stop
-  also runs a settle-only pass of its own.
+  also runs a settle-only pass of its own. Its output lists the claimed
+  leaves still running (`remaining_children` in `--json`).
 - `orbit run cancel <drain-run> --confirm` (or the dashboard's **cancel** on
-  the run) kills the coordinator. Claims it had not launched yet are ended as
-  failures (their tasks go `blocked` with that reason; recover them to
-  `backlog` on the owner to rerun). Leaves already running keep running and
-  deliver their own handoff or failure when they end. The command prints a
-  `Pull settlements` section, one line per admission, and `--json` carries
-  the same list as `pull_settlements`.
-- Prefer `--stop` when you only want no new work: it wastes nothing. The
+  the run, answering **Cancel** when asked whether to stop the leaves) is
+  graceful. It returns at once with `cancelling: waiting for N leaves` and
+  lists them (`waiting_leaves` in `--json`). The drain stops requesting work;
+  its next pass releases every claim it had not launched back to the owner's
+  `backlog`, with a comment naming the drain and your `--reason`. Launched
+  leaves keep running and deliver their own handoff or failure; once every
+  settlement has reached the owner, the drain ends `cancelled`. Meanwhile
+  `orbit run show <drain-run>` prints a `Cancelling:` line and the
+  `Claimed leaves:` it waits for (`.run.drain_cancel` and `.claimed_leaves`
+  in `--json`), and the dashboard's run page shows the same.
+- `orbit run cancel <drain-run> --confirm --force` (the dashboard's **OK** to
+  stopping the leaves) does not wait. It stops the drain, records each running
+  leaf's claim as released, stops the leaf's process group, and every claim —
+  running or not — goes back to the owner's `backlog` with a comment naming
+  the drain and the reason. The stopped leaves are listed as `forced_runs`.
+  A leaf that had already recorded its handoff is left to finish and deliver
+  it. `--force` on a drain that already ended still stops the leaves it left
+  running. It touches only what that drain carries: the leaves it admitted
+  and, while it was live, those an ended drain for the same owner left
+  behind. Never a leaf another live drain admitted.
+- A leaf `--force` cannot stop and see gone keeps its claim on the owner.
+  Its worker might run in another PID namespace, or have an identity that
+  cannot be verified. The cancel lists it under `unstopped_leaves` (the
+  dashboard flags it) and exits 1. When the leaf is refused before the stop,
+  nothing is released and the leaf delivers its own outcome when it ends. A
+  stop that was signalled but not confirmed holds the recorded release
+  (`release_held` in `pull_settlements`): it reaches the owner only once the
+  leaf is seen to stop, so a second executor never starts the task beside a
+  first that is still running. Stop that leaf by hand on its host.
+- The MCP stop control takes the same option: `orbit.workflow.auto` with
+  `action: "stop"` and `force: true` stops admissions, then force-cancels each
+  live drain as above (a local drain's task runs included). It fails, naming
+  the leaves, when any leaf could not be confirmed stopped.
+- A drain that is still queued, or whose worker is gone, is cancelled at once;
+  its unlaunched claims go back to `backlog` and its live leaves settle
+  themselves.
+- Cancel prints a `Pull settlements` section, one line per admission, and
+  `--json` carries the same list as `pull_settlements`.
+- Prefer `--stop` when you only want no new work: it ends nothing. The
   dashboard's cancel prompt for a drain run says this too.
+
+A graceful cancel waits as long as a leaf runs and its settlement is owed. If
+the owner stays unreachable the drain keeps showing `cancelling` (each pass
+reports the transport error); `--force` ends it, and anything undelivered stays
+recorded for the retry below.
+
+For the owner's local drain (`orbit run auto`), cancel still detaches the task
+runs it started, which finish on their own; `--force` cancels them too.
 
 The dashboard reports the same `pull_settlements` list after **Stop** and
 after **cancel**: a one-line summary counting each outcome, with any
@@ -503,12 +549,19 @@ settlement that has not reached its owner called out (`owner_unreachable` and
 the auto card's button reads **Settle pending** and runs the same settle-only
 pass; it stays available because the pass needs no active drain.
 
-Leaf delivery can still fail — the owner was unreachable when the leaf ended.
-The settlement stays recorded on the follower as `settling`. Flush it with
+Leaf delivery can still fail — the owner was unreachable when the leaf ended,
+or when `--force` released it. The settlement stays recorded on the follower
+as `settling` and is retried without a new drain. A live drain retries on
+each pass, and a leaf's worker retries briefly (15s, 60s, 240s). After both
+have ended, the OS clock sweep (`orbit clock tick`, every minute once
+`orbit clock install` has run) retries it: each tick opens the host's replica
+checkouts too, only to deliver what their drains recorded. A tick never ends
+unlaunched work, and it delivers a leaf's failure once the leaf's dead worker
+is reconciled. On a host without the clock, flush it with
 `orbit run auto --stop` in the replica checkout once the owner is reachable
 (safe to repeat, and it needs no active drain), or by starting the next
 drain. `orbit run cancel <drain-run> --confirm` on a drain that already ended
-does the same flush. Nothing retries on a timer, so `orbit doctor` reports a
+does the same flush. `orbit doctor` reports a
 `pull-settlements` warning while any recorded settlement is undelivered: how many
 wait, how long the oldest has, and `orbit run auto --stop` as the fix. The row
 is `ok` once they are delivered, and on a workspace that never pulled. Every line

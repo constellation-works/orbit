@@ -56,11 +56,13 @@ impl OrbitRuntime {
     /// Cancel a run and preserve the requesting surface and optional reason in
     /// its v2 audit trail and any coupled task's blocked history note.
     ///
-    /// [ORB-13663] Cancelling a follower pull drain, or a claimed leaf, also
-    /// runs a settle-only pass, so nothing the cancelled run was carrying is
-    /// left holding an owner claim with no process responsible for it. This
-    /// runs on `already_terminal` too: cancelling a drain that already ended
-    /// delivers whatever it left behind.
+    /// This is the immediate cancel; a live pull drain's graceful cancel and
+    /// `force` go through `cancel_job_run_with_options`. [ORB-13663]
+    /// Cancelling a follower pull drain, or a claimed leaf, also runs a
+    /// settle-only pass, so nothing the cancelled run was carrying is left
+    /// holding an owner claim with no process responsible for it. This runs on
+    /// `already_terminal` too: cancelling a drain that already ended delivers
+    /// whatever it left behind.
     pub fn cancel_job_run_with_reason(
         &self,
         run_id: &str,
@@ -100,7 +102,7 @@ impl OrbitRuntime {
             .collect()
     }
 
-    fn cancel_job_run_cascading<F>(
+    pub(super) fn cancel_job_run_cascading<F>(
         &self,
         run_id: &str,
         actor: &str,
@@ -354,7 +356,7 @@ impl OrbitRuntime {
         Ok(0)
     }
 
-    fn record_run_cancelled_audit(
+    pub(super) fn record_run_cancelled_audit(
         &self,
         run: &JobRun,
         request_id: &str,
@@ -401,7 +403,7 @@ impl OrbitRuntime {
         })
     }
 
-    fn record_cancellation_request(
+    pub(super) fn record_cancellation_request(
         &self,
         run: &JobRun,
         request_id: &str,
@@ -448,7 +450,7 @@ impl OrbitRuntime {
         )
     }
 
-    fn record_cancellation_completion(
+    pub(super) fn record_cancellation_completion(
         &self,
         run: &JobRun,
         request_id: &str,
@@ -655,7 +657,7 @@ impl OrbitRuntime {
     /// deliberately does not touch `child_dispatches`: dependency and lock
     /// waits are momentary and meaningless once terminal, but the child a
     /// parent dispatched outlives the parent's own record of waiting for it.
-    fn mark_cancelled_pipeline_state(&self, run: &JobRun) -> Result<(), OrbitError> {
+    pub(super) fn mark_cancelled_pipeline_state(&self, run: &JobRun) -> Result<(), OrbitError> {
         if let Some(mut state) = self.read_run_state(&run.run_id)? {
             if let Some(object) = state.pipeline.as_object_mut() {
                 object.insert(
@@ -696,7 +698,7 @@ impl OrbitRuntime {
     }
 }
 
-fn cancellation_result(
+pub(super) fn cancellation_result(
     run: &JobRun,
     outcome: &str,
     final_state: JobRunState,
@@ -716,6 +718,9 @@ fn cancellation_result(
         signal_outcome,
         provider_processes_stopped: 0,
         pull_settlements: Vec::new(),
+        waiting_leaves: Vec::new(),
+        forced_runs: Vec::new(),
+        unstopped_leaves: Vec::new(),
     }
 }
 

@@ -23,6 +23,10 @@ pub struct DiscoveredWorkspaces {
     pub entries: Vec<(Workspace, OrbitRuntime)>,
     /// Registered workspaces that could not be opened.
     pub errors: Vec<RoutineLoadError>,
+    /// Active replica checkouts, opened only so the sweep can deliver the
+    /// pull settlements their follower drains recorded. No routine or
+    /// auto-task fires in them.
+    pub replicas: Vec<(Workspace, OrbitRuntime)>,
 }
 
 /// Registry-neutral source of workspace runtimes for routine status and sweep.

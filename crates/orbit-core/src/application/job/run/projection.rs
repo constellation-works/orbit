@@ -67,6 +67,10 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         .and_then(|state| state.drain_admissions_stop.as_ref())
         .and_then(|stop| serde_json::to_value(stop).ok())
         .unwrap_or(Value::Null);
+    let drain_cancel = state
+        .and_then(|state| state.drain_cancel.as_ref())
+        .and_then(|cancel| serde_json::to_value(cancel).ok())
+        .unwrap_or(Value::Null);
     // Read before the terminal filter below: an invocation's result is most
     // interesting *after* the run finishes.
     let state_for_agent_result = state;
@@ -99,6 +103,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "child_dispatches": child_dispatches,
         "drain_worker_limit": drain_worker_limit,
         "drain_admissions_stop": drain_admissions_stop,
+        "drain_cancel": drain_cancel,
         "run_id": run.run_id,
         "executed_on": run.executed_on,
         "run_role": run_id_role(&run.run_id).map(|role| role.to_string()),

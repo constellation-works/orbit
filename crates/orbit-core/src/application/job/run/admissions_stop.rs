@@ -9,7 +9,9 @@
 //! admitted with.
 //!
 //! Stopping already-running workers is a separate, explicit
-//! `orbit run cancel <child-run-id> --confirm` of each child.
+//! `orbit run cancel <child-run-id> --confirm` of each child, or a stop with
+//! `force`, which also cancels each live drain the way
+//! `orbit run cancel <drain> --force` does.
 
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
@@ -31,6 +33,10 @@ pub struct DrainAdmissionsStopRequest<'a> {
     pub source: &'a str,
     pub reason: Option<&'a str>,
     pub claim_token: Option<&'a str>,
+    /// Also cancel each live drain and stop the work it has in flight: a
+    /// pull drain's claimed leaves, whose claims go back to the owner's
+    /// backlog, or a local drain's detached children.
+    pub force: bool,
 }
 
 /// A child this coordinator still has in flight after admissions stopped.
@@ -49,9 +55,15 @@ pub struct DrainAdmissionsStopChange {
     pub job_id: String,
     /// `stopped` when the flag was newly written, `unchanged` when it was
     /// already set, `cancelled_queued` when a never-started coordinator was
-    /// cancelled so it cannot admit later.
+    /// cancelled so it cannot admit later, `force_cancelled` when a forced
+    /// stop cancelled it and stopped its in-flight work.
     pub outcome: &'static str,
     pub remaining_children: Vec<RemainingDrainChild>,
+    /// Runs a forced stop cancelled under this coordinator.
+    pub forced_runs: Vec<String>,
+    /// Claimed leaves a forced stop could not confirm it stopped; each keeps
+    /// its claim on the owner.
+    pub unstopped_leaves: Vec<super::types::UnstoppedLeaf>,
 }
 
 /// Workspace-scoped result of `orbit run auto --stop`.
@@ -59,7 +71,8 @@ pub struct DrainAdmissionsStopChange {
 pub struct DrainAdmissionsStopResult {
     /// `idle` when this workspace has no auto coordinator, `stopped` when at
     /// least one running coordinator was acknowledged, `cancelled_queued`
-    /// when only queued never-started coordinators were removed.
+    /// when only queued never-started coordinators were removed,
+    /// `force_cancelled` when a forced stop cancelled at least one.
     pub outcome: &'static str,
     pub coordinators: Vec<DrainAdmissionsStopChange>,
     /// [ORB-13663] Pull settlements the stop's settle-only pass carried, for
@@ -156,7 +169,12 @@ impl OrbitRuntime {
             }
         }
 
-        let outcome = if changes.iter().any(|change| change.outcome == "stopped") {
+        let outcome = if changes
+            .iter()
+            .any(|change| change.outcome == "force_cancelled")
+        {
+            "force_cancelled"
+        } else if changes.iter().any(|change| change.outcome == "stopped") {
             "stopped"
         } else if changes
             .iter()
@@ -194,6 +212,8 @@ impl OrbitRuntime {
                 job_id: run.job_id.clone(),
                 outcome: "cancelled_queued",
                 remaining_children: Vec::new(),
+                forced_runs: Vec::new(),
+                unstopped_leaves: Vec::new(),
             });
         }
         if run.state.is_terminal() {
@@ -247,20 +267,53 @@ impl OrbitRuntime {
             }
         }
 
-        let remaining_children = self.remaining_children(&run.run_id)?;
-        Ok(DrainAdmissionsStopChange {
+        let mut change = DrainAdmissionsStopChange {
             run_id: run.run_id.clone(),
             job_id: run.job_id.clone(),
             outcome: if unchanged { "unchanged" } else { "stopped" },
-            remaining_children,
-        })
+            remaining_children: Vec::new(),
+            forced_runs: Vec::new(),
+            unstopped_leaves: Vec::new(),
+        };
+        if request.force {
+            // Admissions are already stopped, so nothing new starts while the
+            // drain and its in-flight work are cancelled.
+            let forced = self.cancel_job_run_with_options(
+                &run.run_id,
+                request.actor,
+                request.source,
+                request.reason,
+                true,
+            )?;
+            change.outcome = "force_cancelled";
+            change.forced_runs = forced.forced_runs;
+            change.unstopped_leaves = forced.unstopped_leaves;
+        }
+        change.remaining_children = self.remaining_children(&run.run_id)?;
+        Ok(change)
     }
 
+    /// A local drain's open child dispatches, or the claimed leaves a pull
+    /// drain is still carrying (it dispatches none: its leaves are recorded
+    /// as pull admissions).
     fn remaining_children(&self, run_id: &str) -> Result<Vec<RemainingDrainChild>, OrbitError> {
+        let mut remaining = self
+            .pull_drain_claimed_leaves(run_id)?
+            .into_iter()
+            .map(|leaf| RemainingDrainChild {
+                run_id: leaf.leaf_run_id,
+                job_name: leaf.job_id,
+                phase: format!(
+                    "claimed:{}:{}",
+                    leaf.task_id.as_deref().unwrap_or("-"),
+                    leaf.settlement_phase
+                ),
+                child_status: Some(leaf.leaf_state),
+            })
+            .collect::<Vec<_>>();
         let Some(state) = self.read_run_state(run_id)? else {
-            return Ok(Vec::new());
+            return Ok(remaining);
         };
-        let mut remaining = Vec::new();
         for dispatch in state.open_child_dispatches() {
             let Some(child) = self.get_job_run_backend(&dispatch.child_run_id)? else {
                 continue;

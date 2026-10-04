@@ -29,8 +29,9 @@ impl Tool for OrbitDrainClaimSettleTool {
                 name: "settlement".to_string(),
                 description:
                     "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` \
-                     for a published pull request, or `{\"Fail\": <evidence>}`. Nothing else \
-                     settles a claim."
+                     for a published pull request, `{\"Fail\": <evidence>}`, or \
+                     `{\"Release\": <evidence>}` to hand an unfinished claim back. Nothing \
+                     else settles a claim."
                         .to_string(),
                 param_type: "object".to_string(),
                 required: true,
@@ -43,8 +44,10 @@ impl Tool for OrbitDrainClaimSettleTool {
                  the owner reads the pull request from the provider and resolves its candidate \
                  and base in the owner's own checkout, and only with digest-pinned validation \
                  evidence; it moves the task to `review`, which awaits owner approval — it does \
-                 not merge. A failure records its evidence and blocks the task. Either releases \
-                 only this claim's reservation. Retries replay the recorded outcome."
+                 not merge. A failure records its evidence and blocks the task. A release \
+                 (a cancelled drain giving back work it will not finish) returns the task to \
+                 the backlog with its reason as a comment. Each releases only this claim's \
+                 reservation. Retries replay the recorded outcome."
                     .to_string(),
             parameters,
             builtin: true,

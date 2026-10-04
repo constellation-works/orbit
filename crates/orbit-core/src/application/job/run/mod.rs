@@ -9,6 +9,7 @@
 //! - `conflict` — recording a terminal outcome that contradicts the one already persisted.
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
+//! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
@@ -16,6 +17,7 @@ mod actions;
 mod admissions_stop;
 mod conflict;
 mod delivery;
+mod drain_cancel;
 mod owner;
 mod projection;
 mod query;
@@ -45,5 +47,5 @@ pub use projection::{
     ActivityInvocationEvidence, job_run_to_json, job_run_to_json_with_activity_provenance,
     run_error_step,
 };
-pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder};
+pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedLeaf};
 pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};

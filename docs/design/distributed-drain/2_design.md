@@ -296,8 +296,9 @@ idempotent deliverers. Admission:
    replaces another run for that claim.
 4. Launch only after binding. A crash between steps resumes the same request, claim or
    not-yet-started run. Stopping the drain stops new admissions, not live children. Cancelling it
-   kills only the coordinator: its unlaunched admissions are ended as failures and its live leaves
-   finish and settle themselves (see **Settlement ownership** below).
+   is graceful: it releases unlaunched admissions to the owner's backlog and waits for launched
+   leaves to finish and settle before the drain ends; `--force` stops them instead (see
+   **Cancelling a pull drain** below).
 
 **Interrupted execution** is left for deliberate recovery. `orbit job resume` refuses claimed
 leaves (`submit_resume_run` creates a new run that cannot inherit the binding). Recovery fences the old
@@ -329,25 +330,65 @@ owns delivery:
 
 - *Recording.* Run finalization (`finalize_job_run_with_cleanup_after_prior_read`), in whichever
   process terminalizes a claimed leaf — its worker, a cancel, orphan reconciliation — records the
-  failure a terminal `Bound`, `Launching` or `Launched` leaf implies. Success already recorded its
-  handoff. A `Created` admission is left to a pass that binds it first, because the owner fences a
-  failure naming a leaf against the claim's binding.
-- *Delivery.* The leaf's own bound worker delivers right after recording. The worker is an
+  settlement a terminal leaf implies: a `Launching` or `Launched` leaf ran and failed; a `Bound`
+  leaf never launched, so its claim is released (below). Success already recorded its handoff. A
+  `Created` admission is left to a pass that binds it first, because the owner fences a settlement
+  naming a leaf against the claim's binding.
+- *Delivery.* The leaf's own bound worker delivers right after recording and, once its run is
+  finalized, retries with backoff (15s, 60s, 240s) while the owner is unreachable and no live
+  drain carries that owner. The worker is an
   unsandboxed Orbit process with the host's federated route; only the agent subprocess is
   sandboxed. Everything else is a settle-only pass (`OrbitRuntime::settle_pending_pulls`,
   `PullDrain::carry_settlement`) run by `orbit run cancel` / the dashboard's cancel (for a pull
   drain or a claimed leaf, including one already terminal) and by `orbit run auto --stop` / the
-  dashboard's stop. A pass covers every owner and never requests work or launches a leaf.
+  dashboard's stop. A pass covers every owner and never requests work or launches a leaf. A live
+  drain's refill pass delivers too, and first reconciles any launched leaf whose worker died, so
+  an orphaned leaf's settlement is recorded and delivered without operator action. Once the
+  worker and every drain are gone, the OS clock sweep retries: each tick also opens the host's
+  replica checkouts (they fire no schedule) and runs a delivery-only pass
+  (`OrbitRuntime::deliver_recorded_pull_settlements`). That pass delivers what is recorded and
+  records a terminal leaf's settlement, but never ends unlaunched work.
   Whether it is the settle-only pass or the live drain's reconciliation, a pass costs at most one
   failed delivery per unreachable owner: after the first transport error to an owner it stops
   delivering to that owner for the pass, and the remaining admissions stay pending for the next
   one. A live drain's refill still carries every admission for its owner, whichever drain made it.
 - *Abandonment.* For an admission no live drain will carry — its own drain ended and no live drain
   pulls from its owner — a pass also ends what was never launched: an unanswered request is reconciled against the owner's receipt, a claim
-  with no leaf is settled as a failure, and a queued leaf is cancelled through ordinary run
-  cancellation, then settled. Live leaves are never cancelled by this.
+  with no leaf is released, and a queued leaf's release is recorded before the leaf is cancelled
+  through ordinary run cancellation. Live leaves are never cancelled by this, and a settlement
+  never closes a leaf that has started.
+- *Release* ([ORB-13892]). Work a follower took but never ran is not a failure. The executor's
+  `ClaimMutation::Release` (a summary naming the drain and why, and a comment) is accepted from
+  `claimed` or `running`: the owner revokes the claim, releases its reservation, returns the task
+  to `backlog` with the reason as its status note, and adds the comment to the task. Only a
+  launched leaf that ended without its handoff settles as `Fail`; the breaker counts only those.
+  A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
+  delivers it until the leaf is seen to stop. The task is never back in the backlog while its
+  first executor may still be working.
 - Two processes delivering the same settlement is safe: the first recorded value is immutable
   locally, and the owner's per-claim mutation IDs make a second delivery a replay.
+
+**Cancelling a pull drain** ([ORB-13892]). `orbit run cancel` on a running pull drain records a
+`drain_cancel` request on the drain's state (actor, source, reason, time), which also stops
+admissions, and returns `cancelling` with the claimed leaves still running. The drain's own next
+refill pass sees the request and runs a settle-only pass in place of a refill: unanswered requests
+are reconciled (or withdrawn when the owner holds none), unlaunched claims and queued leaves are
+released, recorded settlements are delivered. When nothing it carries is unsettled, the pass ends
+the drain `cancelled`, audited under the requesting actor; the engine's own finalization leaves
+that state alone. `--force` instead cancels the drain at once and releases everything unlaunched.
+For each launched live leaf it records `Release`, then cancels the leaf, stopping its process
+group. A leaf that already recorded its handoff keeps it. Force acts only on what the drain carries:
+the admissions it made and, while it was live, those for its owner whose own drain had ended.
+Never another live drain's. The set is read before the drain stops. Before recording anything,
+force asks whether the leaf's worker can be signalled and seen gone. A worker in another PID
+namespace, with an unverifiable identity, or in this process's own group is refused. Its claim
+stays, and the leaf is reported in `unstopped_leaves`, which fails the CLI (exit 1) and the MCP
+stop. The leaf's cancel accepts only a confirmed stop: an unconfirmed one fails before the run is
+finalized, so its recorded release stays held, as above. The MCP stop control
+(`orbit.workflow.auto`, `action: stop`) takes `force` and applies the same cancel to each live
+drain after stopping its admissions. A queued drain, or one whose worker is gone, has
+no pass to wait for and is cancelled immediately. The owner's local drain keeps detach-on-cancel;
+its `--force` cancels the detached children too.
 
 **Branches** carry attempt identity: the run-derived branch suffices because each claim binds
 one run; `orbit/<task-id>-<claim-id>` is also valid. The follower implements, validates, pushes and
@@ -703,7 +744,8 @@ Acceptance criteria, not reported as passing.
 | Reservation expires during valid execution | No automatic revocation or duplicate admission; status lock remains |
 | Old worker returns after recovery and reassignment | Cannot bind, mutate evidence, promote, settle, or release the new reservation |
 | Failure/cancellation while owner disconnected | Settlement stays pending locally; later idempotent settlement or explicit recovery |
-| Pull drain cancelled while its leaves are live | Each leaf delivers its own handoff or failure when it ends; unlaunched claims settle as failures; no claim is left `running` without a responsible follower process ([ORB-13663]) |
+| Pull drain cancelled while its leaves are live | Graceful: unlaunched claims return to `backlog` with a comment; launched leaves finish and deliver, then the drain ends `cancelled`. `--force`: the drain's own launched leaves are released and stopped, their tasks return to `backlog`; another live drain's leaves are untouched; a leaf whose stop is unconfirmed keeps its claim and fails the cancel. No claim is left `running` without a responsible follower process ([ORB-13663], [ORB-13892]) |
+| Forced release while the owner is unreachable | The release stays recorded; the clock sweep delivers it once the owner answers, with no drain running ([ORB-13892]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
 | Claimed implementer with no route to the owner (agent sandbox) | Claimed mode denies it the owner task tools; its output summary reaches `claim_handoff` and becomes the owner's `execution_summary` |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; an untracked path outside the footprint is refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
@@ -745,9 +787,14 @@ Acceptance criteria, not reported as passing.
   interchangeable.
 - **Coordination requires the owner.** Task reads, evidence writes, settlement and handoff stall
   during partitions; large tasks hold their slots for as long as they run.
-- **Undelivered settlements wait for a follower process.** A leaf whose own delivery fails while
-  no drain is running keeps its settlement recorded until the next drain, cancel or
-  `orbit run auto --stop` on that follower; nothing retries on a timer ([ORB-13663]).
+- **Undelivered settlements wait for the clock.** A leaf whose own delivery and short retries
+  fail while no drain is running keeps its settlement recorded until the next clock-sweep tick
+  delivers it ([ORB-13892]). On a follower without the OS clock installed, it waits for the next
+  drain, cancel or `orbit run auto --stop` ([ORB-13663]). A graceful cancel waits on such a
+  settlement for as long as the owner is unreachable; `--force` ends the drain without it.
+- **A forced stop is only as good as the signal.** Force refuses a leaf it cannot signal and see
+  gone, and holds the release of one whose stop was not confirmed. Such a leaf needs an operator
+  on its host. Releasing it blind could let a second executor run the task beside the first.
 - **One owner is an operator prerequisite** (§1): two stores can admit overlapping work, so the
   demoted host's drains and coordination routines must be quiesced before replica pull.
 - **Throughput is not guaranteed to scale**: shared CI, provider limits, file conflicts, serial

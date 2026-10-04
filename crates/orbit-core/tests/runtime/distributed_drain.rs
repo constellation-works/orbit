@@ -25,12 +25,23 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
+use orbit_core::application::routines::{
+    DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
+    run_sweep_at_with_providers,
+};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunStoreBackend;
+use orbit_store::contracts::{
+    ClaimMutation, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation,
+};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
 use orbit_types::policy::Role;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
-use orbit_types::workflow::PipelineState;
+use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::handoff::{
+    HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition, TaskHandoff,
+};
+use orbit_types::workflow::{JobRunState, PipelineState, ReviewTiming};
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -124,6 +135,8 @@ struct Wire {
     task_reads_fail: Mutex<Option<String>>,
     /// When set, the owner answers task reads with a structured tool error.
     task_reads_remote_error: Mutex<Option<(String, String)>>,
+    /// When set, every tool call fails at the transport: an owner outage.
+    unreachable: Mutex<bool>,
 }
 
 impl Wire {
@@ -150,6 +163,17 @@ impl DrainOwnerTransport for Wire {
             .lock()
             .unwrap()
             .push((name.to_string(), input.clone()));
+        if *self.unreachable.lock().unwrap() {
+            return Err(OrbitError::UnreachableDestination(
+                "ssh: connect to host owner port 22: Connection timed out".into(),
+            ));
+        }
+        // The owner verifies a handoff against its published pull request,
+        // which no test here has; the wire answers as an owner that did.
+        if name == "orbit.drain.claim.settle" && input["settlement"].get("AcceptHandoff").is_some()
+        {
+            return Ok(json!({"phase": "handed_off"}));
+        }
         let session = ToolSessionContext {
             caller_machine_id: Some(FOLLOWER.to_string()),
             process_machine_id: Some(OWNER.to_string()),
@@ -277,6 +301,7 @@ impl Pair {
             task_reads: Mutex::default(),
             task_reads_fail: Mutex::default(),
             task_reads_remote_error: Mutex::default(),
+            unreachable: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), FOLLOWER);
         let follower = follower
@@ -321,6 +346,11 @@ impl Pair {
     /// One drain iteration with its window open and one leaf slot. A pass
     /// never fails the drain; it reports what stopped it.
     fn pass(&self, drain: &str) -> Value {
+        self.pass_with(drain, 1)
+    }
+
+    /// A pass with `slots` leaf slots.
+    fn pass_with(&self, drain: &str, slots: u64) -> Value {
         self.follower
             .run_deterministic(
                 "pull_refill",
@@ -329,11 +359,127 @@ impl Pair {
                     "run_id": drain,
                     "destination": self.destination,
                     "window_expired": false,
-                    "max_active_leaf_runs": 1,
+                    "max_active_leaf_runs": slots,
                 }),
                 ToolContext::default(),
             )
             .expect("a pass reports its errors instead of failing the drain")
+    }
+
+    /// A running drain that names its owner in its input, as a submitted
+    /// `orbit run auto --pull` does, so it carries the owner's admissions an
+    /// ended drain left behind.
+    fn run_owner_drain(&self) -> String {
+        let run = self
+            .follower_jobs
+            .insert_job_run(
+                "workspace_pull_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({"destination": self.destination})),
+                None,
+            )
+            .expect("drain run");
+        self.follower
+            .write_run_state(
+                &run.run_id,
+                &PipelineState::new(run.run_id.clone(), run.job_id, json!({})),
+            )
+            .expect("drain state");
+        self.follower_jobs
+            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .expect("drain running");
+        run.run_id
+    }
+
+    /// A drain whose worker is this process, as a running drain is; a cancel
+    /// treats it as live and never signals it.
+    fn run_drain(&self) -> String {
+        let drain = self.start_drain();
+        self.follower_jobs
+            .mark_job_run_running(&drain, Utc::now(), std::process::id())
+            .expect("drain running");
+        drain
+    }
+
+    /// Admit the owner's next task as a queued leaf: the bind reply is lost,
+    /// so the pass stops with the leaf created and the owner's claim bound.
+    fn queued_leaf(&self, drain: &str, slots: u64) -> String {
+        let before = self.leaf_runs();
+        self.wire.lose_next_reply("orbit.drain.claim.bind");
+        let pass = self.pass_with(drain, slots);
+        assert!(error_of(&pass).contains("dropped"), "{pass}");
+        self.leaf_runs()
+            .into_iter()
+            .find(|leaf| !before.contains(leaf))
+            .expect("a new leaf")
+    }
+
+    /// A queued leaf taken through its launch the way the drain launches one,
+    /// its worker this process — which no cancel here can stop.
+    fn running_leaf(&self, drain: &str, slots: u64) -> String {
+        self.launched_leaf(drain, slots, std::process::id())
+    }
+
+    /// A launched leaf whose worker is a real process in its own group, as a
+    /// leaf's worker runs, so a forced cancel can stop it and see it gone.
+    fn running_leaf_with_worker(&self, drain: &str, slots: u64) -> (String, Worker) {
+        let worker = Worker::spawn();
+        (self.launched_leaf(drain, slots, worker.pid), worker)
+    }
+
+    fn launched_leaf(&self, drain: &str, slots: u64, worker: u32) -> String {
+        let leaf = self.queued_leaf(drain, slots);
+        self.advance(&leaf, LocalPullMutation::Bound);
+        self.advance(&leaf, LocalPullMutation::LaunchIntent);
+        self.follower_jobs
+            .mark_job_run_running(&leaf, Utc::now(), worker)
+            .expect("leaf running");
+        self.advance(&leaf, LocalPullMutation::Launched);
+        leaf
+    }
+
+    fn admission(&self, leaf: &str) -> LocalPullAdmission {
+        self.follower_jobs
+            .local_pull_for_run(leaf)
+            .expect("admission")
+            .expect("claimed leaf")
+    }
+
+    fn advance(&self, leaf: &str, mutation: LocalPullMutation) {
+        let record = self.admission(leaf);
+        self.follower_jobs
+            .mutate_local_pull(&record.destination, &record.request.request_id, &mutation)
+            .expect("admission mutation");
+    }
+
+    /// The leaf ends the way a successful worker ends it: its handoff
+    /// recorded as the settlement, then the run terminal.
+    fn leaf_hands_off(&self, leaf: &str) {
+        let record = self.admission(leaf);
+        self.advance(
+            leaf,
+            LocalPullMutation::Settle(Box::new(ClaimMutation::AcceptHandoff(handoff(&record)))),
+        );
+        self.follower_jobs
+            .finalize_job_run(leaf, JobRunState::Success, Utc::now(), None)
+            .expect("leaf finished");
+    }
+
+    fn run_state(&self, run: &str) -> JobRunState {
+        self.follower_jobs
+            .get_job_run(run)
+            .expect("run")
+            .expect("run exists")
+            .state
+    }
+
+    fn claimed_task(&self, leaf: &str) -> String {
+        self.admission(leaf)
+            .receipt
+            .and_then(|receipt| receipt.claim)
+            .expect("claim")
+            .task_id
     }
 
     fn owner_claims(&self) -> Vec<Value> {
@@ -361,6 +507,92 @@ impl Pair {
             .into_iter()
             .map(|run| run.run_id)
             .collect()
+    }
+}
+
+/// A stand-in leaf worker: a process leading its own group, reaped the
+/// moment it exits so a stop can see it gone.
+struct Worker {
+    pid: u32,
+    exited: std::sync::mpsc::Receiver<()>,
+}
+
+impl Worker {
+    fn spawn() -> Self {
+        use std::os::unix::process::CommandExt;
+        let mut child = std::process::Command::new("sleep")
+            .arg("600")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("worker process");
+        let pid = child.id();
+        let (exited, on_exit) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = child.wait();
+            let _ = exited.send(());
+        });
+        Self {
+            pid,
+            exited: on_exit,
+        }
+    }
+
+    /// Whether the process has exited and been reaped.
+    fn stopped(&self) -> bool {
+        self.exited.recv_timeout(Duration::from_secs(5)).is_ok()
+    }
+
+    fn running(&self) -> bool {
+        self.exited.try_recv().is_err()
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &self.pid.to_string()])
+            .status();
+    }
+}
+
+/// The typed handoff a successful leaf records for its claim.
+fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
+    let claim = record
+        .receipt
+        .as_ref()
+        .and_then(|receipt| receipt.claim.as_ref())
+        .expect("claim");
+    TaskHandoff {
+        schema_version: 1,
+        workspace_id: record.destination.owner_workspace_id.clone(),
+        task_id: claim.task_id.clone(),
+        claim_id: claim.claim_id.clone(),
+        machine_id: claim.executed_on.machine_id.clone(),
+        run_id: record.leaf_run_id.clone().expect("leaf"),
+        candidate: HandoffCandidate {
+            repository: "owner/repository".into(),
+            source_branch: format!("orbit/{}", claim.task_id),
+            base_branch: "main".into(),
+            landing_branch: "main".into(),
+            candidate: SourceRevision {
+                commit: "a".repeat(40),
+                tree: "b".repeat(40),
+            },
+            base: SourceRevision {
+                commit: "c".repeat(40),
+                tree: "d".repeat(40),
+            },
+            delivery: HandoffDelivery::PullRequest { number: 42 },
+        },
+        review: HandoffReview {
+            policy: ReviewTiming::None,
+            disposition: HandoffReviewDisposition::NotRequired,
+        },
+        execution_summary: "Outcome: success".into(),
+        validation: vec![],
     }
 }
 
@@ -875,4 +1107,405 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         "the owner's answer decides: {report:#}"
     );
     assert!(worktree.exists());
+}
+
+/// The owner's comments on `task`, as one searchable text.
+fn comments_of(task: &Value) -> String {
+    task["comments"].to_string()
+}
+
+/// [ORB-13892] Cancelling a running pull drain is graceful. The request
+/// returns at once naming the leaf it waits for; the drain's next pass stops
+/// requesting and returns the claim it never launched to the owner's backlog
+/// with a comment naming the drain, while the launched leaf keeps running.
+/// Once that leaf hands off, the next pass delivers it and the drain ends
+/// `cancelled`.
+#[test]
+fn a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves() {
+    if !isolated("a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves")
+    {
+        return;
+    }
+    let pair = Pair::new(3);
+    let drain = pair.run_drain();
+    let running = pair.running_leaf(&drain, 2);
+    let queued = pair.queued_leaf(&drain, 2);
+    let (running_task, queued_task) = (pair.claimed_task(&running), pair.claimed_task(&queued));
+
+    let cancel = pair
+        .follower
+        .cancel_job_run_with_options(&drain, "operator", "cli", Some("host maintenance"), false)
+        .expect("cancel");
+    assert_eq!(cancel.outcome, "cancelling");
+    let waiting: Vec<_> = cancel
+        .waiting_leaves
+        .iter()
+        .map(|leaf| leaf.leaf_run_id.as_str())
+        .collect();
+    assert_eq!(waiting, vec![running.as_str()]);
+    assert_eq!(pair.run_state(&drain), JobRunState::Running);
+
+    let waits = pair.pass_with(&drain, 2);
+    assert_eq!(waits["cancelling"], true, "{waits}");
+    assert_eq!(waits["done"], false, "{waits}");
+    assert!(waits["error"].is_null(), "{waits}");
+    assert_eq!(
+        waits["waiting_leaves"][0]["leaf_run_id"],
+        running.as_str(),
+        "{waits}"
+    );
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        2,
+        "no new request"
+    );
+    assert_eq!(
+        pair.owner_status(&queued_task),
+        "backlog",
+        "the unlaunched claim is released"
+    );
+    let released = pair.owner_task(&queued_task);
+    assert!(comments_of(&released).contains(&drain), "{released:#}");
+    assert!(
+        comments_of(&released).contains("host maintenance"),
+        "{released:#}"
+    );
+    assert_eq!(pair.run_state(&queued), JobRunState::Cancelled);
+    assert_eq!(
+        pair.run_state(&running),
+        JobRunState::Running,
+        "the launched leaf keeps going"
+    );
+    assert_eq!(pair.owner_status(&running_task), "in-progress");
+    assert_eq!(pair.run_state(&drain), JobRunState::Running);
+
+    pair.leaf_hands_off(&running);
+    let done = pair.pass_with(&drain, 2);
+    assert_eq!(done["done"], true, "{done}");
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert!(
+        settles
+            .iter()
+            .any(|settle| settle["run_id"] == running.as_str()
+                && settle["settlement"].get("AcceptHandoff").is_some()),
+        "the leaf's own success is delivered: {settles:?}"
+    );
+    assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    let state = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .expect("state");
+    assert!(
+        state.drain_cancelling(),
+        "the cancel request stays on record"
+    );
+}
+
+/// [ORB-13892] `force` stops a running leaf instead of waiting for it: its
+/// claim is released before the leaf is cancelled, and both the running and
+/// the unlaunched claim go back to the owner's backlog with a comment naming
+/// the drain and the reason.
+#[test]
+fn a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog() {
+    if !isolated("a_forced_drain_cancel_stops_running_leaves_and_returns_their_tasks_to_backlog") {
+        return;
+    }
+    let pair = Pair::new(2);
+    let drain = pair.run_drain();
+    let (running, worker) = pair.running_leaf_with_worker(&drain, 2);
+    let queued = pair.queued_leaf(&drain, 2);
+
+    let cancel = pair
+        .follower
+        .cancel_job_run_with_options(&drain, "operator", "cli", Some("host maintenance"), true)
+        .expect("forced cancel");
+    assert_eq!(cancel.outcome, "cancelled");
+    assert_eq!(cancel.forced_runs, vec![running.clone()]);
+    assert!(cancel.unstopped_leaves.is_empty(), "{cancel:?}");
+    assert!(worker.stopped(), "the leaf's worker is stopped");
+    assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
+    for leaf in [&running, &queued] {
+        assert_eq!(pair.run_state(leaf), JobRunState::Cancelled, "{leaf}");
+        let task = pair.claimed_task(leaf);
+        let owner = pair.owner_task(&task);
+        assert_eq!(owner["status"], "backlog", "{owner:#}");
+        assert!(comments_of(&owner).contains(&drain), "{owner:#}");
+        assert!(
+            comments_of(&owner).contains("host maintenance"),
+            "{owner:#}"
+        );
+    }
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert!(
+        settles
+            .iter()
+            .all(|settle| settle["settlement"].get("Release").is_some()),
+        "nothing is failed: {settles:?}"
+    );
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+}
+
+/// [ORB-13892] A settlement the owner could not take while it was down stays
+/// pending, and the cancelling drain waits for it rather than ending; once
+/// the owner answers again, the drain's next pass delivers it and the drain
+/// ends. No new drain is needed.
+#[test]
+fn a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends() {
+    if !isolated("a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends") {
+        return;
+    }
+    let pair = Pair::new(2);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let cancel = pair
+        .follower
+        .cancel_job_run_with_options(&drain, "operator", "cli", None, false)
+        .expect("cancel");
+    assert_eq!(cancel.outcome, "cancelling");
+
+    pair.leaf_hands_off(&leaf);
+    *pair.wire.unreachable.lock().unwrap() = true;
+    let outage = pair.pass(&drain);
+    assert_eq!(outage["done"], false, "{outage}");
+    assert!(
+        error_of(&outage).contains("Connection timed out"),
+        "{outage}"
+    );
+    assert_eq!(pair.run_state(&drain), JobRunState::Running);
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+
+    *pair.wire.unreachable.lock().unwrap() = false;
+    let recovered = pair.pass(&drain);
+    assert_eq!(recovered["done"], true, "{recovered}");
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        1,
+        "no new request"
+    );
+    let claim = pair
+        .follower
+        .pull_leaf_claim(&leaf)
+        .unwrap()
+        .expect("claimed leaf");
+    assert_eq!(claim.settlement_phase, "settled");
+    assert_eq!(claim.refusal, None, "delivered, not closed as obsolete");
+}
+
+/// [ORB-13892] `force` stops only what the cancelled drain carries: a leaf
+/// another live drain for the same owner admitted keeps running, and its
+/// task stays claimed.
+#[test]
+fn a_forced_drain_cancel_leaves_another_live_drains_leaves_alone() {
+    if !isolated("a_forced_drain_cancel_leaves_another_live_drains_leaves_alone") {
+        return;
+    }
+    let pair = Pair::new(2);
+    let cancelled = pair.run_owner_drain();
+    let other = pair.run_owner_drain();
+    let (mine, my_worker) = pair.running_leaf_with_worker(&cancelled, 2);
+    let (theirs, their_worker) = pair.running_leaf_with_worker(&other, 2);
+
+    let cancel = pair
+        .follower
+        .cancel_job_run_with_options(&cancelled, "operator", "cli", None, true)
+        .expect("forced cancel");
+    assert_eq!(cancel.forced_runs, vec![mine.clone()]);
+    assert!(my_worker.stopped());
+    assert_eq!(pair.owner_status(&pair.claimed_task(&mine)), "backlog");
+
+    assert!(
+        their_worker.running(),
+        "another drain's leaf is not signalled"
+    );
+    assert_eq!(pair.run_state(&theirs), JobRunState::Running);
+    assert_eq!(pair.run_state(&other), JobRunState::Running);
+    assert_eq!(
+        pair.owner_status(&pair.claimed_task(&theirs)),
+        "in-progress"
+    );
+    assert_eq!(pair.admission(&theirs).settlement, None);
+}
+
+/// [ORB-13892] A leaf `force` cannot stop and see gone keeps its claim: no
+/// release is recorded or sent, the cancel reports it as unstopped, and the
+/// leaf's own outcome still reaches the owner when it ends.
+#[test]
+fn a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped() {
+    if !isolated("a_forced_drain_cancel_keeps_the_claim_of_a_leaf_it_cannot_confirm_stopped") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    // Its worker is this process, which a cancel never signals.
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+
+    let cancel = pair
+        .follower
+        .cancel_job_run_with_options(&drain, "operator", "cli", None, true)
+        .expect("forced cancel");
+    assert!(cancel.forced_runs.is_empty(), "{cancel:?}");
+    assert_eq!(cancel.unstopped_leaves.len(), 1, "{cancel:?}");
+    assert_eq!(cancel.unstopped_leaves[0].leaf_run_id, leaf);
+    assert!(
+        cancel.unstopped_leaves[0].reason.contains("claim stays"),
+        "{cancel:?}"
+    );
+    assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
+    assert_eq!(pair.run_state(&leaf), JobRunState::Running);
+    assert_eq!(
+        pair.admission(&leaf).settlement,
+        None,
+        "nothing was released"
+    );
+    assert_eq!(pair.owner_status(&task), "in-progress");
+    assert!(pair.wire.calls("orbit.drain.claim.settle").is_empty());
+
+    pair.leaf_hands_off(&leaf);
+    pair.follower.deliver_recorded_pull_settlements();
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    assert!(
+        settles[0]["settlement"].get("AcceptHandoff").is_some(),
+        "{settles:?}"
+    );
+}
+
+/// [ORB-13892] The existing MCP stop control takes `force`: it stops
+/// admissions, cancels the drain, stops its running leaf and returns the
+/// leaf's task to the owner's backlog.
+#[test]
+fn the_mcp_stop_control_with_force_stops_claimed_leaves() {
+    if !isolated("the_mcp_stop_control_with_force_stops_claimed_leaves") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+
+    let stopped = pair
+        .follower
+        .run_tool_with_context_and_role(
+            "orbit.workflow.auto",
+            json!({
+                "workspace": pair.follower.workspace_id().unwrap(),
+                "action": "stop",
+                "force": true,
+            }),
+            Role::Admin,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    transport: Some(McpTransport::Local),
+                    effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                    ..ToolSessionContext::default()
+                },
+                ..ToolContext::default()
+            },
+        )
+        .expect("forced stop");
+    assert_eq!(stopped["outcome"], "force_cancelled", "{stopped:#}");
+    assert_eq!(stopped["coordinators"][0]["run_id"], drain.as_str());
+    assert_eq!(
+        stopped["coordinators"][0]["forced_runs"],
+        json!([leaf]),
+        "{stopped:#}"
+    );
+    assert!(worker.stopped());
+    assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
+    assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
+    assert_eq!(pair.owner_status(&task), "backlog");
+}
+
+/// Discovery for a follower host with one replica checkout and no owner
+/// checkout: nothing to schedule, only settlements to deliver.
+struct ReplicaOnly(OrbitRuntime);
+
+impl RoutineWorkspaceProvider for ReplicaOnly {
+    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
+        let workspace = Workspace {
+            id: self.0.workspace_id()?,
+            name: "replica".into(),
+            owner_machine_id: Some(OWNER.into()),
+            git_remote: None,
+            ship_mode: None,
+            base_branch: "main".into(),
+            status: WorkspaceStatus::Active,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        Ok(DiscoveredWorkspaces {
+            replicas: vec![(workspace, self.0.clone())],
+            ..DiscoveredWorkspaces::default()
+        })
+    }
+}
+
+/// [ORB-13892] A forced release the owner was down for is retried by the
+/// clock sweep once the leaf's worker and the drain are both gone: no new
+/// drain, and the task returns to the owner's backlog.
+#[test]
+fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
+    if !isolated("a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+
+    *pair.wire.unreachable.lock().unwrap() = true;
+    let cancel = pair
+        .follower
+        .cancel_job_run_with_options(&drain, "operator", "cli", Some("host maintenance"), true)
+        .expect("forced cancel");
+    assert_eq!(cancel.forced_runs, vec![leaf.clone()]);
+    assert!(worker.stopped());
+    assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+    assert_eq!(pair.owner_status(&task), "in-progress");
+
+    *pair.wire.unreachable.lock().unwrap() = false;
+    let sweep = run_sweep_at_with_providers(
+        &pair.follower.global_root(),
+        SweepOptions::default(),
+        RoutineMachineIdentity {
+            machine_id: FOLLOWER.into(),
+            machine_name: "follower".into(),
+        },
+        &ReplicaOnly(pair.follower.clone()),
+    )
+    .expect("sweep");
+    assert!(!sweep.lock_busy);
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    let owner = pair.owner_task(&task);
+    assert_eq!(owner["status"], "backlog", "{owner:#}");
+    assert!(
+        comments_of(&owner).contains("host maintenance"),
+        "{owner:#}"
+    );
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert!(
+        settles
+            .iter()
+            .all(|settle| settle["settlement"].get("Release").is_some()),
+        "{settles:?}"
+    );
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        1,
+        "no new request"
+    );
+    assert_eq!(
+        pair.follower_jobs
+            .list_job_runs("workspace_pull_pipeline")
+            .unwrap()
+            .len(),
+        1,
+        "no new drain"
+    );
 }

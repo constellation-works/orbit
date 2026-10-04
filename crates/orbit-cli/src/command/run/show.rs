@@ -22,7 +22,7 @@ use super::steps::{
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes and whether its outcome reached the owner; it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`; a drain's own `.run.state` says the coordinator ran, not that its leaves shipped.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes and whether its outcome reached the owner; it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`; a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -119,9 +119,17 @@ pub(crate) fn run_show_payload(
         tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull admission unreadable; run shown without its claim");
         None
     });
+    // A pull drain's live claimed leaves: what a graceful cancel waits for.
+    let claimed_leaves = runtime
+        .pull_drain_claimed_leaves(&run.run_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull admissions unreadable; drain shown without its leaves");
+            Vec::new()
+        });
     let doc = json!({
         "run": run_projection,
         "pull_claim": pull_claim,
+        "claimed_leaves": claimed_leaves,
         "catalog_layers": catalog_layers
             .iter()
             .map(CatalogReferenceLayer::to_json)
@@ -189,6 +197,7 @@ pub(crate) fn run_show_payload(
         header.push('\n');
         header.push_str(&summary.lines(run.state).join("\n"));
     }
+    header.push_str(&claimed_leaf_lines(&run, state.as_ref(), &claimed_leaves));
     if steps_source == StepSource::Audit && !steps.is_empty() {
         header.push_str(&format!(
             "\n{} reconstructed from the run audit trail; the run record stores none",
@@ -358,6 +367,44 @@ fn collect_failed_leaf_causes_from(
         message,
     });
     Ok(())
+}
+
+/// A pull drain's graceful cancel and the claimed leaves it still carries.
+/// Empty for every other run.
+fn claimed_leaf_lines(
+    run: &JobRun,
+    state: Option<&PipelineState>,
+    leaves: &[orbit_core::application::distributed::DrainClaimedLeaf],
+) -> String {
+    let mut lines = String::new();
+    if !run.state.is_terminal()
+        && let Some(cancel) = state.and_then(|state| state.drain_cancel.as_ref())
+    {
+        lines.push_str(&format!(
+            "\n{} waiting for {} leaves (requested by {} at {}{}); `orbit run cancel {} --confirm --force` stops them",
+            crate::output::color::bold("Cancelling:"),
+            leaves.len(),
+            cancel.actor,
+            cancel.requested_at.format("%Y-%m-%dT%H:%M:%SZ"),
+            cancel
+                .reason
+                .as_deref()
+                .map(|reason| format!(", reason={reason}"))
+                .unwrap_or_default(),
+            run.run_id,
+        ));
+    }
+    if !leaves.is_empty() {
+        lines.push_str(&format!(
+            "\n{} {} running",
+            crate::output::color::bold("Claimed leaves:"),
+            leaves.len()
+        ));
+        for leaf in leaves {
+            lines.push_str(&format!("\n  {}", leaf.describe()));
+        }
+    }
+    lines
 }
 
 /// One line per catalog reference, naming the layer that resolved it.

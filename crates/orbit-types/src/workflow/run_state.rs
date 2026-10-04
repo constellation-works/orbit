@@ -24,6 +24,21 @@ pub struct DrainAdmissionsStop {
     pub stopped_at: DateTime<Utc>,
 }
 
+/// A graceful cancel of a pull drain that is waiting for its launched leaves.
+///
+/// The drain stops admitting at once and hands its unlaunched claims back to
+/// the owner, but stays the same running coordinator until every leaf it
+/// launched has finished and settled; only then does it end `cancelled`. A
+/// forced cancel does not wait and records nothing here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainCancelRequest {
+    pub actor: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub requested_at: DateTime<Utc>,
+}
+
 /// A live operator adjustment to a bounded drain's worker ceiling [ORB-11253].
 ///
 /// The ceiling a drain was submitted with lives in its immutable
@@ -192,6 +207,10 @@ pub struct PipelineState {
     /// finished coordinator is distinguished from cancellation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_admissions_stop: Option<DrainAdmissionsStop>,
+    /// A graceful cancel this pull drain is carrying out: present while it
+    /// waits for its launched leaves, and kept once it ends `cancelled`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_cancel: Option<DrainCancelRequest>,
     /// What this drain's last admission pass left waiting. Survives
     /// terminalization: it is how `run show` reports the backlog a finished
     /// drain never started.
@@ -247,6 +266,7 @@ impl PipelineState {
             child_dispatches: Vec::new(),
             drain_worker_limit: None,
             drain_admissions_stop: None,
+            drain_cancel: None,
             drain_last_pass: None,
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
@@ -319,6 +339,33 @@ impl PipelineState {
             actor,
             reason,
             stopped_at: Utc::now(),
+        });
+        self.updated_at = Utc::now();
+        true
+    }
+
+    /// Whether a graceful cancel is waiting for this drain's leaves.
+    pub fn drain_cancelling(&self) -> bool {
+        self.drain_cancel.is_some()
+    }
+
+    /// Record a graceful cancel, stopping new admissions with it. Idempotent:
+    /// a drain already cancelling keeps the first request and returns `false`.
+    pub fn set_drain_cancel(
+        &mut self,
+        actor: String,
+        source: String,
+        reason: Option<String>,
+    ) -> bool {
+        if self.drain_cancel.is_some() {
+            return false;
+        }
+        self.set_drain_admissions_stop(actor.clone(), reason.clone());
+        self.drain_cancel = Some(DrainCancelRequest {
+            actor,
+            source,
+            reason,
+            requested_at: Utc::now(),
         });
         self.updated_at = Utc::now();
         true

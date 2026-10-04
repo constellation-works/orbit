@@ -215,13 +215,30 @@ function cancelPromptText(run) {
     return [`Cancel ${runId}?`, claimed, "Add a reason (optional):"].join("\n\n");
   }
   const consequence = runIsPullDrain(run)
-    ? "Cancelling ends the drain now: claims it has not launched yet fail and their tasks are blocked. Workers already running keep going and deliver their own result."
-    : "Cancelling ends the drain coordinator now instead of letting admitted work wind down.";
+    ? "Cancelling stops new requests now and returns claims it has not launched to the owner's backlog. Leaves already running finish and deliver their result; the drain ends once they have. You choose next whether to stop them instead."
+    : "Cancelling ends the drain coordinator now instead of letting admitted work wind down. Task runs it started keep going unless you choose next to stop them too.";
   return [
     `Cancel drain ${runId}?`,
     consequence,
     "To only stop taking new work, press Stop on the Auto-drain card (Tasks tab) instead — nothing is wasted.",
     "Enter a reason (optional) and press OK to cancel the drain, or press Cancel to leave it running:",
+  ].join("\n\n");
+}
+
+// A drain's cancel can also stop the work already in flight (`force`): a pull
+// drain's running leaves, whose claims go back to the owner's backlog, or a
+// local drain's task runs. Asked only for a drain; OK forces.
+function confirmForceText(run) {
+  if (runIsPullDrain(run)) {
+    return [
+      `Also stop the leaves ${run.run_id} has running?`,
+      "OK stops them now and returns their tasks to the owner's backlog with a comment naming this drain.",
+      "Cancel lets them finish and deliver first; the drain shows as cancelling until then.",
+    ].join("\n\n");
+  }
+  return [
+    `Also cancel the task runs ${run.run_id} started?`,
+    "OK cancels them now. Cancel leaves them running to finish on their own.",
   ].join("\n\n");
 }
 
@@ -282,11 +299,21 @@ onWorkspaceChange(() => {
 
 function cancelNoticeFor(run, result) {
   const settlements = describePullSettlements(result && result.pull_settlements);
-  if (!settlements.text) return null;
+  const waiting = Array.isArray(result && result.waiting_leaves) ? result.waiting_leaves.length : 0;
+  const forced = Array.isArray(result && result.forced_runs) ? result.forced_runs.length : 0;
+  const unstopped = Array.isArray(result && result.unstopped_leaves) ? result.unstopped_leaves.length : 0;
+  const cancelling = result && result.outcome === "cancelling";
+  if (!settlements.text && !cancelling && forced === 0 && unstopped === 0) return null;
+  const notStopped = unstopped > 0
+    ? ` Could not confirm ${unstopped} leaves stopped; their claims stay with the owner.`
+    : "";
+  const head = cancelling
+    ? `${run.run_id} cancelling: waiting for ${waiting} leaves.`
+    : `${run.run_id} cancelled.${forced > 0 ? ` Stopped ${forced} running.` : ""}${notStopped}`;
   return {
     key: runIdentity(run),
-    text: `${run.run_id} cancelled. Settlements: ${settlements.text}.`,
-    attention: settlements.attention,
+    text: settlements.text ? `${head} Settlements: ${settlements.text}.` : head,
+    attention: settlements.attention || unstopped > 0,
   };
 }
 
@@ -330,6 +357,7 @@ async function cancelRunInVisit(run, btn, host, visit) {
   btn.disabled = !runIsCancellable(run);
   const reason = window.prompt(cancelPromptText({ ...run, pull_claim: pullClaim }), "");
   if (reason === null) return;
+  const force = runIsDrain(run) && window.confirm(confirmForceText(run));
   let cancelled = false;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>cancel`;
@@ -337,11 +365,11 @@ async function cancelRunInVisit(run, btn, host, visit) {
   let notice = null;
   try {
     const result = await postJson(requestPath,
-      { reason: reason.trim() || null });
+      { reason: reason.trim() || null, force });
     cancelled = true;
     if (!visit.isCurrent()) return;
     // The button must not offer a second cancel while the refresh is in flight.
-    btn.textContent = "cancelled";
+    btn.textContent = result && result.outcome === "cancelling" ? "cancelling" : "cancelled";
     notice = cancelNoticeFor(run, result);
     // On the runs table the report renders at the top of the list (below);
     // elsewhere (run detail) it is appended to the host once the view refreshes.

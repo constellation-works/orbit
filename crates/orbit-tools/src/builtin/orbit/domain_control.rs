@@ -73,6 +73,12 @@ impl Tool for WorkflowAutoTool {
                 "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
             ),
             parameter(
+                "force",
+                "boolean",
+                false,
+                "Stop only: also cancel each live drain and stop its in-flight work. A pull drain's claimed leaves are stopped and their tasks return to the owner's backlog with a comment; a local drain's task runs are cancelled. A leaf that cannot be confirmed stopped keeps its claim and fails the call. Default false stops admissions only",
+            ),
+            parameter(
                 "claim_token",
                 "string",
                 false,
@@ -88,7 +94,7 @@ impl Tool for WorkflowAutoTool {
         parameters.extend(super::model_identity_params());
         ToolSchema {
             name: "orbit.workflow.auto".into(),
-            description: "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers, or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.".into(),
+            description: "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers (or, with force, stop those workers too), or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.".into(),
             parameters,
             builtin: true,
         }

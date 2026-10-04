@@ -242,6 +242,17 @@ pub(crate) fn run_sweep_at_with_providers_at(
     let mut collection = collect_routines(&discovered.entries);
     load_errors.append(&mut collection.errors);
 
+    // [ORB-13892] A follower's recorded pull settlements are retried here,
+    // so one that missed its owner — a forced release while the owner was
+    // down, a leaf whose worker died — reaches it without a new drain once
+    // the leaf's worker and its drain are gone. Delivery starts nothing, so
+    // a pending host shutdown does not hold it.
+    if !options.dry_run {
+        for (workspace, runtime) in discovered.entries.iter().chain(&discovered.replicas) {
+            deliver_recorded_pull_settlements(workspace, runtime);
+        }
+    }
+
     // [ORB-12968] A pending host shutdown or reboot would kill anything this
     // tick starts, so the whole fire phase — routines and auto-tasks — stands
     // down for it. Cursors are not advanced, so once the schedule is cancelled
@@ -368,6 +379,30 @@ pub(crate) fn run_sweep_at_with_providers_at(
         load_errors,
         no_workspace_loaded,
     })
+}
+
+/// Deliver one checkout's recorded pull settlements, logging what is still
+/// pending; the next tick retries it.
+fn deliver_recorded_pull_settlements(workspace: &Workspace, runtime: &OrbitRuntime) {
+    for entry in runtime.deliver_recorded_pull_settlements() {
+        match entry.outcome.as_str() {
+            "settled" | "closed_obsolete" => tracing::info!(
+                target: "orbit.core.sweep",
+                workspace = %workspace.name,
+                settlement = %entry.describe(),
+                "sweep.pull_settlement_delivered",
+            ),
+            "pending_delivery" | "owner_unreachable" | "pending" | "no_owner_route" => {
+                tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    settlement = %entry.describe(),
+                    "sweep.pull_settlement_pending",
+                )
+            }
+            _ => {}
+        }
+    }
 }
 
 /// One fail-loud row when discovery found workspaces but opened none.
