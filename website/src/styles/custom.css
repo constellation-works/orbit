@@ -256,16 +256,12 @@ html:not([data-has-sidebar]) header.header {
    Zero it for every landing container that lays its children out itself. */
 .orbit-hero > *,
 .orbit-hero-copy > *,
+.orbit-hero-claim > *,
+.orbit-hero-pitch > *,
 .orbit-hero-actions > *,
 .orbit-hero-providers > *,
 .orbit-hero-providers-list > *,
-.orbit-session > *,
-.orbit-session-frame > *,
-.orbit-session-bar > *,
-.orbit-session-body > *,
-.orbit-session-turn > *,
-.orbit-session-receipt > *,
-.orbit-session-row > *,
+.orbit-demo > *,
 .orbit-section > *,
 .orbit-section-head > *,
 .orbit-section-intro > *,
@@ -274,7 +270,6 @@ html:not([data-has-sidebar]) header.header {
 .orbit-card-grid > *,
 .orbit-card-row > *,
 .orbit-card-body > *,
-.orbit-hero-side > *,
 .orbit-guarantees > *,
 .orbit-guarantee > *,
 .orbit-guarantee > div > *,
@@ -291,17 +286,26 @@ html:not([data-has-sidebar]) header.header {
 /* ------------------------------------------------------------------------
    Hero
    ------------------------------------------------------------------------ */
-/* Center the session panel against the taller copy column so the slack splits
-   above and below it instead of pooling under it. */
+/* The hero stacks three rows: the copy, the demo video at the full 75rem
+   width (it is a 16:9 frame with its own text, unreadable in a half column),
+   then the provider strip. The copy opens like every section below it: the
+   claim on the left, the lede and CTAs on the right, their last lines aligned. */
 .orbit-hero {
-  align-items: center;
-  display: grid;
-  gap: 3.5rem;
-  grid-template-columns: minmax(0, 30rem) minmax(0, 1fr);
-  padding: 4rem 0 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 3rem;
+  padding: 4rem 0;
 }
 
 .orbit-hero-copy {
+  align-items: end;
+  display: grid;
+  gap: 1.75rem 4rem;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+}
+
+.orbit-hero-claim,
+.orbit-hero-pitch {
   display: flex;
   flex-direction: column;
 }
@@ -314,7 +318,7 @@ html:not([data-has-sidebar]) header.header {
   font-weight: 650;
   letter-spacing: -0.022em;
   line-height: 1.02;
-  margin: 0 0 1.375rem;
+  margin: 0;
   text-wrap: balance;
 }
 
@@ -371,7 +375,6 @@ html:not([data-has-sidebar]) header.header {
   display: flex;
   flex-direction: column;
   gap: 0.625rem;
-  margin-top: 2.75rem;
   padding-top: 1.5rem;
 }
 
@@ -412,156 +415,34 @@ html:not([data-has-sidebar]) header.header {
   text-decoration: underline;
 }
 
-/* Hero session: one exchange between the reader, their agent, and Orbit. The
-   agent drives Orbit over MCP, so the hero visual is that conversation: the
-   reader's and the agent's turns in body type, and under each agent turn a
-   receipt — one mono line per tool call with what Orbit returned, arguments
-   omitted. `role="img"` on the frame and a figcaption mark it as
-   illustrative, not captured output. */
-.orbit-session {
+/* Hero demo: a 31 s illustrative session (agent CLI beside the task Orbit
+   holds), rendered from marketing/media/video/orbit-readme-demo. The frame's
+   background is the video's own, so letterboxing never shows in either theme.
+   The figcaption marks it illustrative, as the page requires. */
+.orbit-demo {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin: 0.375rem 0 0;
+  margin: 0;
   min-width: 0;
 }
 
-.orbit-session-frame {
-  background: color-mix(in srgb, var(--sl-color-bg) 70%, var(--sl-color-bg-inline-code));
+.orbit-demo-video {
+  aspect-ratio: 16 / 9;
+  background: #070a12;
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 10px;
   box-shadow: 0 30px 80px rgb(0 0 0 / 0.5);
-  overflow: hidden;
+  display: block;
+  height: auto;
+  width: 100%;
 }
 
-:root[data-theme='light'] .orbit-session-frame {
+:root[data-theme='light'] .orbit-demo-video {
   box-shadow: 0 20px 60px rgb(15 16 20 / 0.12);
 }
 
-.orbit-session-bar {
-  align-items: center;
-  border-bottom: 1px solid var(--sl-color-hairline-light);
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  min-height: 2.5rem;
-  padding: 0 1rem;
-}
-
-.orbit-session-dots {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.orbit-session-dots span {
-  background: var(--sl-color-gray-5);
-  border-radius: 999px;
-  display: block;
-  height: 10px;
-  width: 10px;
-}
-
-.orbit-session-name {
-  color: var(--sl-color-gray-4);
-  font-family: var(--sl-font-mono);
-  font-size: 0.75rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.orbit-session-body {
-  --orbit-session-key: 3rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.875rem;
-  padding: 1.25rem 1.375rem 1.375rem;
-}
-
-/* A turn: speaker label in the key column, prose beside it. The reader's
-   label is in the accent so the two voices read apart at a glance. */
-.orbit-session-turn {
-  align-items: baseline;
-  display: grid;
-  gap: 0 0.75rem;
-  grid-template-columns: var(--orbit-session-key) minmax(0, 1fr);
-}
-
-.orbit-session-turn .orbit-session-key {
-  color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.75rem;
-}
-
-.orbit-session-turn.is-you .orbit-session-key {
-  color: var(--sl-color-text-accent);
-}
-
-.orbit-session-turn .orbit-session-text {
-  color: var(--sl-color-gray-2);
-  font-size: 0.9rem;
-  line-height: 1.5;
-  min-width: 0;
-}
-
-.orbit-session-turn.is-you .orbit-session-text {
-  color: var(--sl-color-text);
-}
-
-/* A receipt sits under the agent's turn, indented to the text column: the
-   tool calls that turn made and what Orbit returned, one row each. */
-.orbit-session-receipt {
-  background: color-mix(in srgb, var(--sl-color-bg) 55%, transparent);
-  border-left: 2px solid var(--sl-color-gray-5);
-  border-radius: 0 6px 6px 0;
-  display: flex;
-  flex-direction: column;
-  font-family: var(--sl-font-mono);
-  font-size: 0.78rem;
-  gap: 0.375rem;
-  line-height: 1.6;
-  margin-left: calc(var(--orbit-session-key) + 0.75rem);
-  padding: 0.625rem 0.875rem;
-}
-
-.orbit-session-row {
-  align-items: baseline;
-  display: grid;
-  gap: 0 0.625rem;
-  grid-template-columns: auto auto minmax(0, 1fr);
-}
-
-.orbit-session-tool {
-  color: var(--sl-color-text);
-  white-space: nowrap;
-}
-
-.orbit-session-arrow {
-  color: var(--sl-color-gray-4);
-}
-
-.orbit-session-result {
-  color: var(--sl-color-gray-3);
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.orbit-session-id {
-  color: var(--sl-color-gray-2);
-}
-
-/* A task status, drawn as a pill so the state change is the thing you see. */
-.orbit-session-result em {
-  background: var(--sl-color-accent-low);
-  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 45%, transparent);
-  border-radius: 999px;
-  color: var(--sl-color-accent-high);
-  font-size: 0.92em;
-  font-style: normal;
-  padding: 0 0.5em;
-  white-space: nowrap;
-}
-
-.orbit-landing .orbit-session-caption {
+.orbit-landing .orbit-demo-caption {
   color: var(--sl-color-gray-4);
   font-size: 0.78rem;
   line-height: 1.5;
@@ -989,9 +870,8 @@ a.orbit-card:focus-visible :is(h2, h3) {
 }
 
 @media (max-width: 72rem) {
-  .orbit-hero {
-    gap: 3rem;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  .orbit-hero-copy {
+    column-gap: 3rem;
   }
 
   .orbit-hero-headline {
@@ -1236,38 +1116,19 @@ a.orbit-card:focus-visible :is(h2, h3) {
 
   .orbit-hero {
     gap: 2.5rem;
-    grid-template-columns: minmax(0, 1fr);
     padding: 2rem 0 3rem;
+  }
+
+  .orbit-hero-copy {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .orbit-hero-headline {
     font-size: 2.2rem;
   }
 
-  .orbit-session-frame {
+  .orbit-demo-video {
     box-shadow: none;
-  }
-
-  .orbit-session-body {
-    --orbit-session-key: 2.5rem;
-    padding: 1rem 1rem 1.125rem;
-  }
-
-  .orbit-session-receipt {
-    font-size: 0.72rem;
-    padding: 0.5rem 0.625rem;
-  }
-
-  /* Three columns leave the result a sliver this narrow; the result drops
-     under its tool name and takes the full width, indented a step. */
-  .orbit-session-row {
-    grid-template-columns: auto minmax(0, 1fr);
-    row-gap: 0.125rem;
-  }
-
-  .orbit-session-row .orbit-session-result {
-    grid-column: 1 / -1;
-    padding-left: 1rem;
   }
 
   .orbit-section {
@@ -1359,17 +1220,13 @@ a.orbit-card:focus-visible :is(h2, h3) {
     grid-column: 2;
   }
 
-  .orbit-session-name {
-    display: none;
-  }
-
   .orbit-card-row {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
 /* ------------------------------------------------------------------------
-   Hero: release chip, requirements line, and the right-hand column
+   Hero: release chip, requirements line, and provider list
    ------------------------------------------------------------------------ */
 .orbit-hero-release {
   align-items: center;
@@ -1419,13 +1276,6 @@ a.orbit-card:focus-visible :is(h2, h3) {
   list-style: none;
   margin: 0;
   padding: 0;
-}
-
-.orbit-hero-side {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  min-width: 0;
 }
 
 /* ------------------------------------------------------------------------

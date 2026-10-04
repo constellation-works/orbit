@@ -75,7 +75,7 @@ No display font. No serif anywhere. Both families ship as npm packages
 
 - **Logo:** a single thin ring with an offset dot. Must be legible at 16px favicon size.
 - **Section dividers** in long pages: 1px rule with a small ring glyph centered.
-- **Landing page:** the hero carries a static session preview (see 3.5), not an orbit diagram. No animation.
+- **Landing page:** the hero carries one demo video of an illustrative session (see 3.5), not an orbit diagram. It is the only motion on the site and stops for readers who ask for reduced motion.
 - No starfields, parallax, planet illustrations, or animation anywhere inside docs content.
 
 ### 3.4 Layout
@@ -104,20 +104,27 @@ Three-column, fixed:
 
 The homepage uses an in-content hero in place of Starlight's auto-rendered title (which is hidden via a scoped CSS rule on the homepage only).
 
-**Hero, left column** — release chip (`Early access`, linking to the
-changelog), a 3.6rem headline whose last sentence is muted, a lede that says
-what Orbit is, primary and secondary CTAs, a one-line requirements note, and
-the provider strip: the shipped CLI executors as a plain list under a
+The hero stacks three rows:
+
+**Copy** — opens like the sections below it. On the left, the release chip
+(`Early access`, linking to the changelog) over a 3.6rem headline whose last
+sentence is muted. On the right, a lede that says what Orbit is, primary and
+secondary CTAs, and a one-line requirements note, bottom-aligned with the
+headline. Below 54rem the two columns stack.
+
+**Demo video** — full content width, because the 16:9 frame carries its own
+text and is unreadable in a half column. A silent, looping 31 s render of an
+illustrative session from `marketing/media/video/orbit-readme-demo`: the
+reader's agent CLI on the left and the task Orbit holds on the right, through
+file → approve → ship → review → scale → record. The site serves a web
+re-encode at `public/media/orbit-demo.mp4` with a poster frame from the review
+beat. It autoplays muted with native controls; under
+`prefers-reduced-motion: reduce` it stays on the poster. The `figcaption` says
+it is illustrative, and the `aria-label` narrates the session.
+
+**Provider strip** — the shipped CLI executors as a plain list under a
 hairline, with the legacy Gemini executor named in a footnote rather than
 implied current.
-
-**Hero, right column** — one **session preview**: a `figure` of one exchange
-between the reader, their agent, and Orbit, laid out as a conversation with
-receipts: `orbit.task.add` (task in `proposed`), the go-ahead,
-`orbit.task.update` and `orbit.workflow.ship`, then
-`orbit.workflow.run.show` with the task in `review`. Tool names are real and
-identifiers are placeholders; the `figcaption` says so and `role="img"`
-marks it illustrative.
 
 Below the hero, in order:
 
