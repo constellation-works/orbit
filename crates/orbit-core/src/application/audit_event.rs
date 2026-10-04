@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
@@ -163,9 +165,8 @@ impl OrbitRuntime {
             .get_audit_denials_by_role(since)
     }
 
-    /// `(operation, count)` for `status='denied'` audit events at or after
-    /// `since`, sorted desc by count. Backs `orbit audit stats`'s denial
-    /// breakdown [ORB-12257].
+    /// Canonical SQLite capability/policy decisions by operation, excluding
+    /// coordination and settlement refusals and duplicate invocation evidence.
     pub fn audit_denials_by_operation(
         &self,
         since: Option<&DateTime<Utc>>,
@@ -173,6 +174,69 @@ impl OrbitRuntime {
         self.stores()
             .audit_events()
             .get_audit_denials_by_operation(since)
+    }
+
+    /// Shared policy-denial population for the dashboard and audit CLI.
+    /// Raw `AuditStats::denied_count` remains the forensic row count.
+    pub fn audit_policy_denial_stats(
+        &self,
+        since: Option<&DateTime<Utc>>,
+    ) -> Result<AuditPolicyDenialStats, OrbitError> {
+        use orbit_store::contracts::V2AuditEventFilter;
+        use orbit_types::workflow::activity_job::{
+            V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_STEP_DENIED,
+        };
+
+        let mut operations: BTreeMap<String, i64> = self
+            .audit_denials_by_operation(since)?
+            .into_iter()
+            .collect();
+        let sql_denied = operations.values().sum();
+        let mut v2_denied = 0;
+        const PAGE: usize = 1000;
+        for event_type in V2_DENIAL_EVENT_TYPES {
+            let mut offset = 0;
+            loop {
+                let events = self.list_v2_audit_events(V2AuditEventFilter {
+                    since: since.copied(),
+                    event_type: Some((*event_type).to_string()),
+                    limit: Some(PAGE),
+                    offset: Some(offset),
+                    ..Default::default()
+                })?;
+                let fetched = events.len();
+                for event in events {
+                    let Ok(payload) =
+                        serde_json::from_str::<serde_json::Value>(&event.payload_json)
+                    else {
+                        continue;
+                    };
+                    let operation = if *event_type == V2_EVENT_TYPE_FS_CALL_DENIED {
+                        format!("fs.{}", payload["op"].as_str().unwrap_or("unknown"))
+                    } else if *event_type == V2_EVENT_TYPE_STEP_DENIED {
+                        payload["step_id"].as_str().unwrap_or("step").to_string()
+                    } else {
+                        payload["tool_name"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                            .to_string()
+                    };
+                    *operations.entry(operation).or_default() += 1;
+                    v2_denied += 1;
+                }
+                if fetched < PAGE {
+                    break;
+                }
+                offset += fetched;
+            }
+        }
+        let mut by_operation: Vec<_> = operations.into_iter().collect();
+        by_operation.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(AuditPolicyDenialStats {
+            sql_denied,
+            v2_denied,
+            by_operation,
+        })
     }
 
     /// Per-role counts for audited tool invocations. `failed` counts every
@@ -304,4 +368,14 @@ pub fn compute_p95(sorted_durations: &[i64]) -> i64 {
     let idx = ((sorted_durations.len() as f64) * 0.95).ceil() as usize;
     let idx = idx.min(sorted_durations.len()) - 1;
     sorted_durations[idx]
+}
+
+/// Decision counts shared by the audit CLI and dashboard KPI.
+pub struct AuditPolicyDenialStats {
+    /// Canonical SQLite capability and policy decisions.
+    pub sql_denied: i64,
+    /// Policy decisions in the workspace's v2 audit envelope.
+    pub v2_denied: i64,
+    /// Combined decisions by operation.
+    pub by_operation: Vec<(String, i64)>,
 }

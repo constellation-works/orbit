@@ -45,7 +45,7 @@ The Denials 24h tile counted SQLite audit rows and v2 loop denials, but the Poli
 Aggregate v2 denial envelopes and SQLite `status = denied` audit events in the policy-denials endpoint. SQLite filesystem denials without an activity fsProfile use `workspace-boundary`.
 
 ### Consequences
-- Audit > Policy is a faithful drill-down for Denials 24h, including direct `orbit tool run` policy denials.
+- Audit > Policy includes direct `orbit tool run` policy denials and retained coordination/protocol refusal evidence. The policy-denials KPI counts canonical capability/policy decisions only; lock contention and claim-settlement protocol refusals remain visible with distinct diagnostics.
 - Cost: The endpoint carries a translation layer because SQLite audit rows lack typed denial fields like `profile` and `path`.
 
 ## Compact Scoreboard Ratio Columns

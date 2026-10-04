@@ -330,6 +330,19 @@ fn sqlite_denial_diagnostics(
         };
     }
 
+    // Authorization decisions about this surface still count as capability
+    // denials; a refused authorized settlement is a protocol outcome.
+    if event.command != "authorization"
+        && !is_capability_denial_evidence(event)
+        && event.tool_name.as_deref() == Some("orbit.drain.claim.settle")
+    {
+        return DenialDiagnostics {
+            denial_kind: "claim_settlement_refusal".to_string(),
+            cause: "claim settlement protocol refusal".to_string(),
+            ..DenialDiagnostics::default()
+        };
+    }
+
     if kind == "fs" {
         let profile = sqlite_denial_profile(event, kind, arguments_json);
         return DenialDiagnostics {
@@ -354,8 +367,20 @@ fn sqlite_denial_diagnostics(
 }
 
 fn is_task_lock_reserve_denial(event: &orbit_core::AuditEvent) -> bool {
-    event.tool_name.as_deref() == Some("orbit.task.locks.reserve")
-        || event.command == "task.locks.reserve.denied"
+    event.command != "authorization"
+        && !is_capability_denial_evidence(event)
+        && (event.tool_name.as_deref() == Some("orbit.task.locks.reserve")
+            || event.command == "task.locks.reserve.denied")
+}
+
+// Legacy entry-point evidence repeats AuthorizationDenial's message. It must
+// not be labelled as contention/protocol merely because of its tool name.
+fn is_capability_denial_evidence(event: &orbit_core::AuditEvent) -> bool {
+    event.error_message.as_deref().is_some_and(|message| {
+        message.starts_with("operation '")
+            && message.contains(" requires the `")
+            && message.contains(" capability (")
+    })
 }
 
 fn string_field(value: Option<&Value>, key: &str) -> Option<String> {

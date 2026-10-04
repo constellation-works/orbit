@@ -23,7 +23,9 @@ impl Execute for AuditStatsArgs {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
         let stats = runtime.audit_event_stats(since, self.tool.clone())?;
         let denied_by_operation = scoped_to_tool(
-            runtime.audit_denials_by_operation(since.as_ref())?,
+            runtime
+                .audit_policy_denial_stats(since.as_ref())?
+                .by_operation,
             self.tool.as_deref(),
         );
 
@@ -62,13 +64,9 @@ fn scoped_to_tool(
 /// The governed-operation denial breakdown, or an empty string when no
 /// governed operation was refused in scope.
 ///
-/// Headed "Denied governed operations" rather than "Denied by operation"
-/// because it counts a narrower population than `Denied:` above it: one
-/// authorization-decision row per capability refusal. `Denied:` also counts
-/// the coordination refusals that never reach a capability check (a held task
-/// file lock, a held workspace claim) and the second, entry-point row a
-/// tool-surface refusal writes. The two numbers answer different questions and
-/// are not expected to add up.
+/// Uses the dashboard's canonical capability/policy decisions, including v2
+/// policy events. Raw `Denied:` above retains every forensic audit row, so it
+/// also includes coordination/protocol refusals and duplicate entry-point rows.
 fn denied_operations_section(denied_by_operation: &[(String, i64)]) -> String {
     use std::fmt::Write as _;
 
@@ -90,6 +88,7 @@ fn stats_to_json(stats: &AuditStats, denied_by_operation: &[(String, i64)]) -> V
         "success_count": stats.success_count,
         "failure_count": stats.failure_count,
         "denied_count": stats.denied_count,
+        "policy_denied_count": denied_by_operation.iter().map(|(_, count)| count).sum::<i64>(),
         "avg_duration_ms": stats.avg_duration_ms,
         "p95_duration_ms": stats.p95_duration_ms,
         "max_duration_ms": stats.max_duration_ms,

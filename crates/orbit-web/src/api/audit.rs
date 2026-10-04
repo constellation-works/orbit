@@ -16,9 +16,7 @@ use orbit_core::{
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::{Value, json};
 
-use super::denials::{
-    collect_denial_rows, denials_by_reason_summary, denials_by_tool_summary, scan_v2_loop_denials,
-};
+use super::denials::{collect_denial_rows, denials_by_reason_summary, denials_by_tool_summary};
 use super::incidents::{ROLLUP_SCAN_LIMIT, failure_category_summaries};
 use super::{
     AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, HISTORY_DEFAULT_LIMIT,
@@ -420,9 +418,9 @@ fn compute_audit_summary_bundle(
 ) -> Result<AuditSummaryBundle, OrbitError> {
     let stats = runtime.audit_event_stats(Some(since), None)?;
     let total = stats.total;
-    let sql_denied = stats.denied_count;
-
-    let v2_denials = scan_v2_loop_denials(runtime, Some(since), None, None)?.len() as i64;
+    let policy = runtime.audit_policy_denial_stats(Some(&since))?;
+    let sql_denied = policy.sql_denied;
+    let v2_denials = policy.v2_denied;
 
     // ORB-10871: the same window, grouped. Reported next to `total` so the
     // header tiles can state both counts with their denominators.
