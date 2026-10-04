@@ -256,11 +256,27 @@ impl OrbitRuntime {
         })
     }
 
+    /// A local drain's open child dispatches, or the claimed leaves a pull
+    /// drain is still carrying (it dispatches none: its leaves are recorded
+    /// as pull admissions).
     fn remaining_children(&self, run_id: &str) -> Result<Vec<RemainingDrainChild>, OrbitError> {
+        let mut remaining = self
+            .pull_drain_claimed_leaves(run_id)?
+            .into_iter()
+            .map(|leaf| RemainingDrainChild {
+                run_id: leaf.leaf_run_id,
+                job_name: leaf.job_id,
+                phase: format!(
+                    "claimed:{}:{}",
+                    leaf.task_id.as_deref().unwrap_or("-"),
+                    leaf.settlement_phase
+                ),
+                child_status: Some(leaf.leaf_state),
+            })
+            .collect::<Vec<_>>();
         let Some(state) = self.read_run_state(run_id)? else {
-            return Ok(Vec::new());
+            return Ok(remaining);
         };
-        let mut remaining = Vec::new();
         for dispatch in state.open_child_dispatches() {
             let Some(child) = self.get_job_run_backend(&dispatch.child_run_id)? else {
                 continue;

@@ -370,6 +370,9 @@ pub(super) async fn get_run(Ws(runtime): Ws, Path(id): Path<String>) -> Response
 pub(super) struct CancelRunBody {
     #[serde(default)]
     reason: Option<String>,
+    /// Stop a drain's in-flight leaves instead of waiting for them.
+    #[serde(default)]
+    force: bool,
 }
 
 pub(super) async fn cancel_run_action(
@@ -383,7 +386,13 @@ pub(super) async fn cancel_run_action(
     };
     let Json(body) = body.unwrap_or_default();
     match blocking("cancel run", move || {
-        Ok(runtime.cancel_job_run_with_reason(&id, "dashboard", "web", body.reason.as_deref()))
+        Ok(runtime.cancel_job_run_with_options(
+            &id,
+            "dashboard",
+            "web",
+            body.reason.as_deref(),
+            body.force,
+        ))
     })
     .await
     {
@@ -398,9 +407,13 @@ pub(super) async fn cancel_run_action(
             "signal_outcome": result.signal_outcome,
             "provider_processes_stopped": result.provider_processes_stopped,
             // [ORB-13663] Cancelling a follower pull drain settles what it
-            // carried: unlaunched claims end as failures, recorded
-            // settlements are delivered, and live leaves settle themselves.
+            // carried: recorded settlements are delivered and claims nothing
+            // will launch go back to the owner's backlog.
             "pull_settlements": result.pull_settlements,
+            // A gracefully cancelled pull drain is `cancelling` until these
+            // leaves finish; a forced cancel names what it stopped.
+            "waiting_leaves": result.waiting_leaves,
+            "forced_runs": result.forced_runs,
         }))
         .into_response(),
         Ok(Err(orbit_core::OrbitError::JobValidation(msg)))
@@ -488,9 +501,18 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         None
     });
 
+    // A pull drain's launched leaves that are still running: what a graceful
+    // cancel waits for, and what `force` would stop.
+    let claimed_leaves = or_warn(
+        runtime.pull_drain_claimed_leaves(run_id),
+        run_id,
+        "claimed leaves",
+    );
+
     json!({
         "run": full,
         "pull_claim": pull_claim,
+        "claimed_leaves": claimed_leaves,
         "steps": steps,
         "provider_processes": provider_processes
             .iter()

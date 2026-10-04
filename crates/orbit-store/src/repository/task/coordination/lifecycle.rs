@@ -436,6 +436,32 @@ impl TaskCommitBoundary {
                     state.last_event = "claim_failed".into();
                 }
             }
+            ClaimMutation::Release(value) => {
+                if auth.operator
+                    || !matches!(
+                        claim.phase,
+                        ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
+                    )
+                {
+                    return Err(invalid("stale_claim"));
+                }
+                let Some(reason) = value.summary.as_deref().filter(|s| !s.trim().is_empty()) else {
+                    return Err(invalid("claim release requires a reason"));
+                };
+                // The task goes back to the backlog untouched: its execution
+                // summary stays whatever the last real attempt left, and the
+                // reason travels as the status note and the comment.
+                evidence = ClaimEvidence {
+                    comment: value.comment.clone(),
+                    ..ClaimEvidence::default()
+                };
+                state.claim.phase = ExecutionClaimPhase::Revoked;
+                state.landing_invalidated = true;
+                params.status = Some(TaskStatus::Backlog);
+                params.status_note = Some(reason.to_string());
+                release = true;
+                state.last_event = "claim_released".into();
+            }
             ClaimMutation::Recover { status, reason } => {
                 if !auth.operator {
                     return Err(invalid("operator recovery capability required"));

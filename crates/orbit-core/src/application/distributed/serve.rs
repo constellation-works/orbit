@@ -64,6 +64,9 @@ fn bind_mutation_id(claim_id: &str) -> String {
 fn fail_mutation_id(claim_id: &str) -> String {
     format!("pull-fail:{claim_id}")
 }
+fn release_mutation_id(claim_id: &str) -> String {
+    format!("pull-release:{claim_id}")
+}
 fn handoff_mutation_id(claim_id: &str) -> String {
     format!("pull-handoff:{claim_id}")
 }
@@ -198,6 +201,11 @@ impl crate::OrbitRuntime {
                 &fail_mutation_id(&claim.claim_id),
                 &ClaimMutation::Fail(evidence),
             ),
+            ClaimMutation::Release(evidence) => self.mutate_execution_claim(
+                Some(&context),
+                &release_mutation_id(&claim.claim_id),
+                &ClaimMutation::Release(evidence),
+            ),
             ClaimMutation::AcceptHandoff(handoff) => {
                 let observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
                 self.accept_task_handoff(
@@ -208,8 +216,8 @@ impl crate::OrbitRuntime {
                 )
             }
             _ => Err(refused(
-                "only a typed handoff or a failure settles a claimed leaf; approval, revocation \
-                 and recovery are owner-operator actions",
+                "only a typed handoff, a failure or a release settles a claimed leaf; approval, \
+                 revocation and recovery are owner-operator actions",
             )),
         }
     }

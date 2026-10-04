@@ -85,7 +85,8 @@ pub use run_delivery::{
 pub use run_id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use run_state::{
     ActivityCrewDraw, ActivityCrewPoolMember, DrainAdmissionPass, DrainAdmissionsStop,
-    DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint, PipelineState,
+    DrainCancelRequest, DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint,
+    PipelineState,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

@@ -24,9 +24,11 @@ pub struct JobRunListParams {
 #[derive(Debug, Clone, Serialize)]
 pub struct JobRunCancelResult {
     pub run_id: String,
-    /// `cancelled` when this request terminalized the run, or
+    /// `cancelled` when this request terminalized the run,
     /// `already_terminal` when the run reached a durable terminal outcome
-    /// before this request could do so.
+    /// before this request could do so, or `cancelling` when a pull drain
+    /// stopped admitting and is waiting for its launched leaves before it
+    /// ends `cancelled` on its own.
     pub outcome: String,
     pub previous_state: String,
     pub final_state: String,
@@ -38,11 +40,16 @@ pub struct JobRunCancelResult {
     /// process groups, so the owner signal never reaches them.
     pub provider_processes_stopped: usize,
     /// [ORB-13663] Pull settlements this cancellation carried: for a follower
-    /// pull drain, every admission a settle-only pass touched (the drain's
-    /// unlaunched claims are ended as failures; live leaves keep running and
-    /// settle themselves); for a claimed leaf, its own settlement. Empty for
-    /// every other run.
+    /// pull drain, every admission a settle-only pass touched (its unlaunched
+    /// claims are released back to the owner's backlog once no drain carries
+    /// them); for a claimed leaf, its own settlement. Empty for every other
+    /// run.
     pub pull_settlements: Vec<crate::application::distributed::PullSettlementEntry>,
+    /// The claimed leaves a `cancelling` pull drain is waiting for.
+    pub waiting_leaves: Vec<crate::application::distributed::DrainClaimedLeaf>,
+    /// Runs a forced cancel stopped besides this one: a pull drain's live
+    /// claimed leaves, or a local drain's detached children.
+    pub forced_runs: Vec<String>,
 }
 
 impl JobRunCancelResult {

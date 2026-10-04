@@ -24,7 +24,7 @@ pub struct PullSettlementEntry {
     pub leaf_run_id: Option<String>,
     /// Where the admission stands after the pass:
     ///
-    /// - `settled` — the owner accepted its handoff or failure;
+    /// - `settled` — the owner accepted its handoff, failure or release;
     /// - `closed_obsolete` — the owner had already ended the claim, so the
     ///   settlement was closed locally (ORB-13639);
     /// - `leaf_running` — its leaf is live and settles itself when it ends;
@@ -99,9 +99,11 @@ fn outcome_guidance(outcome: &str) -> Option<&'static str> {
 
 /// Settlements this follower recorded but never delivered to the owner.
 ///
-/// Nothing retries delivery on a timer by design, so an undelivered
-/// settlement waits for an operator to run `orbit run auto --stop`. This is
-/// the read-only summary `orbit doctor` reports so the wait is visible.
+/// A live or cancelling drain retries delivery on every pass, and a leaf's
+/// own worker retries its settlement with a bounded backoff when no drain
+/// carries its owner. What outlasts both waits for the next drain or for an
+/// operator to run `orbit run auto --stop`. This is the read-only summary
+/// `orbit doctor` reports so the wait is visible.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PendingPullSettlements {
     /// Admissions whose outcome is recorded but not delivered.
@@ -161,6 +163,41 @@ impl PullLeafClaim {
     }
 }
 
+/// A claimed leaf a pull drain is still carrying: launched, not yet
+/// terminal. `orbit run cancel` (graceful) waits for these, `--force` stops
+/// them, and `orbit run auto --stop` and `orbit run show` list them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DrainClaimedLeaf {
+    pub leaf_run_id: String,
+    /// The leaf's job: one of the claimed leaf definitions.
+    pub job_id: String,
+    /// The owner's task the leaf executes.
+    pub task_id: Option<String>,
+    /// The owner's host-qualified selector.
+    pub owner: String,
+    /// The drain run that admitted the claim; an earlier drain's admission
+    /// is carried by the live drain for the same owner.
+    pub admitted_by: String,
+    /// The leaf run's state (`running`, `pending`, ...).
+    pub leaf_state: String,
+    /// Where the follower's record of this admission stands.
+    pub settlement_phase: String,
+}
+
+impl DrainClaimedLeaf {
+    /// One line for a terminal report.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "{} (leaf {}) {} settlement={}",
+            self.task_id.as_deref().unwrap_or("-"),
+            self.leaf_run_id,
+            self.leaf_state,
+            self.settlement_phase
+        )
+    }
+}
+
 fn phase_guidance(phase: orbit_store::contracts::LocalPullPhase, refusal: Option<&str>) -> String {
     use orbit_store::contracts::LocalPullPhase as Phase;
     match (phase, refusal) {
@@ -183,6 +220,80 @@ fn phase_guidance(phase: orbit_store::contracts::LocalPullPhase, refusal: Option
 }
 
 impl crate::OrbitRuntime {
+    /// The admissions a pull drain carries that still hold a slot: those for
+    /// its owner, whichever drain made them, and any it made itself. Empty
+    /// for every other run.
+    pub(crate) fn pull_drain_admissions(
+        &self,
+        drain_run_id: &str,
+    ) -> Result<Vec<orbit_store::contracts::LocalPullAdmission>, OrbitError> {
+        let jobs = self.stores().jobs();
+        let Some(run) = jobs.get_job_run(drain_run_id)? else {
+            return Ok(Vec::new());
+        };
+        if run.job_id != super::PULL_DRAIN_JOB {
+            return Ok(Vec::new());
+        }
+        let destination = run
+            .input
+            .as_ref()
+            .and_then(|input| input.get("destination"))
+            .cloned()
+            .and_then(|value| {
+                serde_json::from_value::<orbit_store::contracts::PullDestination>(value).ok()
+            });
+        Ok(jobs
+            .unsettled_local_pull_admissions()?
+            .into_iter()
+            .filter(|record| {
+                record.request.run_context.run_id == drain_run_id
+                    || destination.as_ref() == Some(&record.destination)
+            })
+            .collect())
+    }
+
+    /// The claimed leaves a pull drain is still carrying: launched and not
+    /// yet terminal. Empty for every other run.
+    pub fn pull_drain_claimed_leaves(
+        &self,
+        drain_run_id: &str,
+    ) -> Result<Vec<DrainClaimedLeaf>, OrbitError> {
+        use orbit_store::contracts::LocalPullPhase as Phase;
+        let jobs = self.stores().jobs();
+        let mut leaves = Vec::new();
+        for record in self.pull_drain_admissions(drain_run_id)? {
+            if !matches!(
+                record.phase,
+                Phase::Launching | Phase::Launched | Phase::Settling
+            ) {
+                continue;
+            }
+            let Some(leaf) = record.leaf_run_id.as_deref() else {
+                continue;
+            };
+            let Some(run) = jobs.get_job_run(leaf)? else {
+                continue;
+            };
+            if run.state.is_terminal() {
+                continue;
+            }
+            leaves.push(DrainClaimedLeaf {
+                leaf_run_id: run.run_id.clone(),
+                job_id: run.job_id.clone(),
+                task_id: record
+                    .receipt
+                    .as_ref()
+                    .and_then(|receipt| receipt.claim.as_ref())
+                    .map(|claim| claim.task_id.clone()),
+                owner: record.destination.selector.clone(),
+                admitted_by: record.request.run_context.run_id.clone(),
+                leaf_state: run.state.to_string(),
+                settlement_phase: phase_name(record.phase),
+            });
+        }
+        Ok(leaves)
+    }
+
     /// The pull admission a local run executes, when it is a claimed leaf.
     /// `None` for every other run, including runs on an owner checkout.
     pub fn pull_leaf_claim(
@@ -196,10 +307,7 @@ impl crate::OrbitRuntime {
             .receipt
             .as_ref()
             .and_then(|receipt| receipt.claim.as_ref());
-        let settlement_phase = serde_json::to_value(admission.phase)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_else(|| "unknown".to_string());
+        let settlement_phase = phase_name(admission.phase);
         Ok(Some(PullLeafClaim {
             task_id: claim.map(|claim| claim.task_id.clone()),
             claim_id: claim.map(|claim| claim.claim_id.clone()),
@@ -210,6 +318,13 @@ impl crate::OrbitRuntime {
             guidance: phase_guidance(admission.phase, admission.refusal.as_deref()),
         }))
     }
+}
+
+fn phase_name(phase: orbit_store::contracts::LocalPullPhase) -> String {
+    serde_json::to_value(phase)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Whether the owner answered a pull with a refusal, as opposed to a lost or

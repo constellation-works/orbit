@@ -12,10 +12,15 @@
 //!
 //! - **The leaf's own worker.** Run terminalization records the failure a
 //!   terminal leaf implies (success already recorded its typed handoff), and
-//!   the bound worker then delivers its own settlement. The worker is an
-//!   unsandboxed Orbit process with the host's federated owner route; only the
-//!   agent subprocess inside a leaf runs under the sandbox, which is why the
-//!   agent itself never talks to the owner (ORB-13642).
+//!   the bound worker then delivers its own settlement. When the owner cannot
+//!   be reached and no live drain carries its owner, the worker retries with
+//!   a bounded backoff before it exits. The worker is an unsandboxed Orbit
+//!   process with the host's federated owner route; only the agent subprocess
+//!   inside a leaf runs under the sandbox, which is why the agent itself never
+//!   talks to the owner (ORB-13642).
+//! - **The drain's own passes**, live or cancelling, which also reconcile a
+//!   leaf whose worker died, so its failure is recorded and delivered in the
+//!   same pass.
 //! - **Any settle-only pass** ([`OrbitRuntime::settle_pending_pulls`]):
 //!   `orbit run cancel` and the dashboard's cancel, `orbit run auto --stop`
 //!   and the dashboard's stop. A pass delivers recorded settlements for every
@@ -34,6 +39,7 @@
 //! admission deliver it once.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_engine::run_worktree_has_build_output;
@@ -42,11 +48,21 @@ use orbit_store::contracts::{
 };
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
-use super::drain::{PullDrain, SettleScope, leaf_failure_settlement};
+use super::drain::{PullDrain, SettleScope, leaf_failure_settlement, release_settlement};
 use crate::OrbitRuntime;
 use crate::application::distributed::{
     PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, is_owner_transport_failure,
 };
+
+/// How long a leaf's own worker waits between delivery attempts when its
+/// settlement did not reach the owner and no drain will retry it. Bounded: a
+/// worker does not outlive its leaf for long, and whatever is still pending
+/// afterwards waits in the outbox for the next pass.
+const LEAF_SETTLEMENT_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(15),
+    Duration::from_secs(60),
+    Duration::from_secs(240),
+];
 
 impl OrbitRuntime {
     /// Record a terminal claimed leaf's settlement in its admission. Local
@@ -80,7 +96,7 @@ impl OrbitRuntime {
         if !run.state.is_terminal() {
             return Ok(Some(record));
         }
-        let settlement = leaf_failure_settlement(record.phase, &run, diagnostic);
+        let settlement = leaf_failure_settlement(&record, &run, diagnostic);
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
@@ -129,6 +145,117 @@ impl OrbitRuntime {
             .is_some_and(|binding| binding.bound_run_id == run_id)
         {
             self.deliver_claimed_leaf_settlement(run_id);
+        }
+    }
+
+    /// The leaf's own worker, once its run is final: when the settlement it
+    /// delivered at terminalization is still undelivered (the owner was down
+    /// or did not answer), retry with a bounded backoff while no live drain
+    /// carries its owner — a drain retries on every pass. Runs after
+    /// finalization, so the wait never delays the run's terminal state.
+    /// Whatever is still pending afterwards stays in the outbox.
+    pub(crate) fn retry_own_claimed_leaf_settlement(&self, run_id: &str) {
+        if self
+            .worker_invocation()
+            .is_none_or(|binding| binding.bound_run_id != run_id)
+        {
+            return;
+        }
+        for delay in LEAF_SETTLEMENT_RETRY_DELAYS {
+            let undelivered = matches!(
+                self.stores().jobs().local_pull_for_run(run_id),
+                Ok(Some(record)) if record.phase == LocalPullPhase::Settling
+            );
+            if !undelivered || self.drain_carries_leaf(run_id) {
+                return;
+            }
+            tracing::info!(
+                target: "orbit.core.pull",
+                run_id,
+                delay_seconds = delay.as_secs(),
+                "claimed leaf settlement not delivered; retrying",
+            );
+            std::thread::sleep(delay);
+            self.deliver_claimed_leaf_settlement(run_id);
+        }
+    }
+
+    /// Whether a live drain will carry this leaf's admission: one pulls from
+    /// its owner. Unreadable drains count as none, so the worker retries.
+    fn drain_carries_leaf(&self, run_id: &str) -> bool {
+        let Ok(Some(record)) = self.stores().jobs().local_pull_for_run(run_id) else {
+            return false;
+        };
+        self.live_drain_destinations()
+            .is_some_and(|live| live.contains(&record.destination))
+    }
+
+    /// Record a forced release of a live claimed leaf's claim, before the
+    /// leaf is stopped: its terminalization then finds the claim's settlement
+    /// already decided, and the owner's task returns to the backlog rather
+    /// than being failed for a stop the operator asked for. A settlement the
+    /// leaf recorded first — its handoff — wins, and is returned instead.
+    pub(crate) fn record_forced_leaf_release(
+        &self,
+        record: &LocalPullAdmission,
+        why: &str,
+    ) -> Result<LocalPullAdmission, OrbitError> {
+        let jobs = self.stores().jobs();
+        match jobs.mutate_local_pull(
+            &record.destination,
+            &record.request.request_id,
+            &LocalPullMutation::Settle(Box::new(release_settlement(record, why))),
+        ) {
+            Ok(settling) => Ok(settling),
+            Err(error) => {
+                let current = match record.leaf_run_id.as_deref() {
+                    Some(leaf) => jobs.local_pull_for_run(leaf)?,
+                    None => None,
+                };
+                match current {
+                    Some(current) if current.settlement.is_some() => Ok(current),
+                    _ => Err(error),
+                }
+            }
+        }
+    }
+
+    /// Reconcile the launched leaves `destination`'s admissions are waiting
+    /// on whose worker died, so a drain pass records — and then delivers —
+    /// their failure instead of waiting on a run nothing will finish. A leaf
+    /// whose owner is alive, or cannot be judged, is left alone.
+    pub(crate) fn reconcile_orphaned_claimed_leaves(&self, destination: &PullDestination) {
+        let jobs = self.stores().jobs();
+        let records = match jobs.unsettled_local_pull_admissions() {
+            Ok(records) => records,
+            Err(error) => {
+                tracing::warn!(target: "orbit.core.pull", %error, "pull admissions unreadable; no leaf reconciled");
+                return;
+            }
+        };
+        for record in records {
+            if record.destination != *destination
+                || !matches!(
+                    record.phase,
+                    LocalPullPhase::Launching | LocalPullPhase::Launched
+                )
+            {
+                continue;
+            }
+            let Some(leaf) = record.leaf_run_id.as_deref() else {
+                continue;
+            };
+            let run = match jobs.get_job_run(leaf) {
+                Ok(Some(run)) if !run.state.is_terminal() => run,
+                Ok(_) => continue,
+                Err(error) => {
+                    tracing::warn!(target: "orbit.core.pull", leaf, %error, "claimed leaf unreadable");
+                    continue;
+                }
+            };
+            if let Err(error) = self.reconcile_stale_job_run(&run) {
+                tracing::warn!(target: "orbit.core.pull", leaf, %error, "could not reconcile a claimed leaf");
+            }
         }
     }
 
@@ -199,6 +326,17 @@ impl OrbitRuntime {
     }
 
     fn carry_settlements(&self, records: Vec<LocalPullAdmission>) -> Vec<PullSettlementEntry> {
+        self.carry_settlements_for(records, "the drain ended before launching this task")
+    }
+
+    /// A settle-only pass over `records` whose releases carry `cause` — a
+    /// forced cancel names itself to the owner. `records` should belong to a
+    /// drain that is no longer live, or nothing unlaunched is released.
+    pub(crate) fn carry_settlements_for(
+        &self,
+        records: Vec<LocalPullAdmission>,
+        cause: &str,
+    ) -> Vec<PullSettlementEntry> {
         if records.is_empty() {
             return Vec::new();
         }
@@ -250,7 +388,7 @@ impl OrbitRuntime {
                 SettleScope::Abandon
             };
             let error = drain
-                .carry_settlement(&mut record, scope, &|record| !drain_live(record))
+                .carry_settlement(&mut record, scope, &|record| !drain_live(record), cause)
                 .err();
             if let Some(error) = &error {
                 if is_owner_transport_failure(error) {

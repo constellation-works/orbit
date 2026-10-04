@@ -293,10 +293,17 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
                     child.run_id, child.job_name, child.phase, status
                 ));
             }
-            lines.push(
+            lines.push(if change.job_id == orbit_core::application::distributed::PULL_DRAIN_JOB {
+                format!(
+                    "Claimed leaves finish and settle on their own. `orbit run cancel {} --confirm` \
+                     waits for them and then ends the drain; add `--force` to stop them and return \
+                     their tasks to the owner's backlog.",
+                    change.run_id
+                )
+            } else {
                 "To cancel already-running workers, use `orbit run cancel <run_id> --confirm` on each child."
-                    .to_string(),
-            );
+                    .to_string()
+            });
         }
     }
     lines.extend(settlement_lines);

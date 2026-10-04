@@ -348,6 +348,9 @@ impl OrbitRuntime {
             if initial_state.drain_admissions_stop.is_none() {
                 initial_state.drain_admissions_stop = existing.drain_admissions_stop;
             }
+            if initial_state.drain_cancel.is_none() {
+                initial_state.drain_cancel = existing.drain_cancel;
+            }
             if initial_state.child_dispatches.is_empty() {
                 initial_state.child_dispatches = existing.child_dispatches;
             }
@@ -375,6 +378,17 @@ impl OrbitRuntime {
         outcome: Result<&V2JobRunResult, &OrbitError>,
         options: V2RunFinalizationOptions,
     ) -> Result<(), OrbitError> {
+        // A gracefully cancelled pull drain ends itself `cancelled` from its
+        // last pass; the engine finishes after that with nothing to record.
+        if self
+            .get_job_run_backend(&run.run_id)?
+            .is_some_and(|current| current.state == JobRunState::Cancelled)
+            && self
+                .read_run_state(&run.run_id)?
+                .is_some_and(|state| state.drain_cancelling())
+        {
+            return Ok(());
+        }
         let duration_ms = Some(
             finished_at
                 .signed_duration_since(started_at)
