@@ -62,6 +62,10 @@ pub(super) fn outcome(
     };
 
     let task = runtime.get_task(id)?;
+    let stopped = matches!(
+        task.status,
+        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
+    );
     let artifact = runtime.get_task_artifact(id, COVERAGE_ARTIFACT)?;
 
     if let Some(artifact) = artifact {
@@ -79,16 +83,16 @@ pub(super) fn outcome(
                 artifact_digest: provenance.sha256.clone(),
                 authorized: owner.is_some(),
                 source_verified: source.verify_batch(&attempt.batch).is_ok(),
+                action_stopped: stopped,
             }));
         }
     }
 
-    if matches!(
-        task.status,
-        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
-    ) {
+    // A closed task with no evidence is the same unevidenced stop as one with
+    // invalid evidence: coverage stays owed and the retry budget applies.
+    if stopped {
         return Ok(ActionOutcome::Failed {
-            retryable: false,
+            retryable: true,
             reason: "task_closed_without_accepted_evidence".into(),
         });
     }
@@ -106,6 +110,14 @@ pub(super) fn job_outcome(
     };
 
     let run = runtime.show_job_run(id)?;
+    let stopped = matches!(
+        run.state,
+        JobRunState::Failed
+            | JobRunState::Cancelled
+            | JobRunState::Interrupted
+            | JobRunState::Success
+    ) && crate::application::job::run_owner_liveness(&run)
+        == crate::application::job::RunOwnerLiveness::Stopped;
 
     // Only a canonical persisted step result can attest job-only examination.
     let input = run.input.as_ref();
@@ -140,19 +152,12 @@ pub(super) fn job_outcome(
                 submitted_by: format!("run:{id}"),
                 authorized: true,
                 source_verified: source.verify_batch(&attempt.batch).is_ok(),
+                action_stopped: stopped,
             }));
         }
     }
 
-    if matches!(
-        run.state,
-        JobRunState::Failed
-            | JobRunState::Cancelled
-            | JobRunState::Interrupted
-            | JobRunState::Success
-    ) && crate::application::job::run_owner_liveness(&run)
-        == crate::application::job::RunOwnerLiveness::Stopped
-    {
+    if stopped {
         return Ok(ActionOutcome::Failed {
             retryable: run.state == JobRunState::Failed,
             reason: "job_stopped_without_accepted_evidence".into(),

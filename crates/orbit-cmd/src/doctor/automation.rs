@@ -177,6 +177,11 @@ pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoc
 /// coverage debt it can never discharge [ORB-12867]. It carries no stall
 /// marker and its branch may resolve perfectly, so nothing else here would
 /// notice. A disabled definition stays quiet: `disabled` already says why.
+///
+/// A consumer whose admitted action stopped without acceptable evidence — its
+/// task closed with missing or malformed coverage — is wedged: evaluation
+/// settles it, so one still reported means no evaluation reaches it, and it
+/// admits nothing new until one does or an operator recovers or resets it.
 pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let stalled = match orbit_core::application::automation::stalled_consumers(runtime) {
         Ok(stalled) => stalled,
@@ -212,7 +217,21 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
             }
         };
 
-    if stalled.is_empty() && unresolvable.is_empty() && unadmittable.is_empty() {
+    let now = chrono::Utc::now();
+    let wedged = match orbit_core::application::automation::wedged_delivery_consumers(runtime, now)
+    {
+        Ok(wedged) => wedged,
+        Err(error) => {
+            return check(
+                "automation-consumers",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot read delivery automation actions: {error}"),
+            );
+        }
+    };
+
+    if stalled.is_empty() && unresolvable.is_empty() && unadmittable.is_empty() && wedged.is_empty()
+    {
         return check(
             "automation-consumers",
             WorkspaceDoctorStatus::Ok,
@@ -220,9 +239,36 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
         );
     }
 
-    let now = chrono::Utc::now();
     let mut segments = Vec::new();
     let mut remediation = Vec::new();
+    if !wedged.is_empty() {
+        let detail = wedged
+            .iter()
+            .map(|consumer| match &consumer.reason {
+                Some(reason) => format!(
+                    "{} (action {}: {reason})",
+                    consumer.definition, consumer.action_id
+                ),
+                None => format!("{} (action {})", consumer.definition, consumer.action_id),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let first = wedged
+            .first()
+            .map(|consumer| consumer.definition.clone())
+            .unwrap_or_default();
+        segments.push(format!(
+            "{} delivery automation consumer(s) wedged on an action that closed without \
+             accepted coverage evidence: {detail}",
+            wedged.len()
+        ));
+        remediation.push(format!(
+            "The next delivery evaluation on the owning host settles the action and applies \
+             the retry budget. Without one, `orbit auto-task recover {first} --reissue-action \
+             --reason <why>` re-examines the same batch, or `orbit auto-task reset {first} \
+             --reason <why>` forgets its debt."
+        ));
+    }
     if !stalled.is_empty() {
         let detail = stalled
             .iter()

@@ -102,79 +102,11 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
 
 #[test]
 fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes() {
-    use chrono::Utc;
-    use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-    use orbit_core::ActorIdentity;
-    use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
+    use orbit_core::application::automation::consumer_key;
 
     let fixture = Fixture::new();
-    let git = |args: &[&str]| {
-        let result = std::process::Command::new("git")
-            .args([
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "user.name=Fixture",
-                "-c",
-                "user.email=fixture@example.invalid",
-            ])
-            .args(args)
-            .current_dir(&fixture.repo)
-            .env("HOME", &fixture.home)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_CONFIG_GLOBAL")
-            .env_remove("GIT_CONFIG_SYSTEM")
-            .output()
-            .unwrap();
-        assert!(
-            result.status.success(),
-            "git fixture: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-    };
-    git(&["checkout", "-b", "fixture-delivery"]);
-    fs::write(fixture.repo.join("fixture.txt"), "baseline\n").unwrap();
-    git(&["add", "fixture.txt"]);
-    git(&["commit", "-m", "Disposable baseline"]);
     let mut trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"integrated_qa_v1","max_items":20,"retries":0});
-    let schedule = trigger.to_string();
-    fixture.json(&[
-        "auto-task",
-        "add",
-        "--name",
-        "fixture-delivery-consumer",
-        "--deliveries-landed",
-        &schedule,
-        "--title",
-        "Never dispatch in this fixture",
-        "--json",
-    ]);
-    fixture.json(&[
-        "auto-task",
-        "toggle",
-        "fixture-delivery-consumer",
-        "on",
-        "--json",
-    ]);
-    let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.repo, Some(&fixture.root))
-        .unwrap();
-    assert!(roots.global_root.starts_with(fixture._temp.path()));
-    assert!(roots.shared_root.starts_with(fixture._temp.path()));
-    let runtime = RegisteredRuntimeFactory::open_resolved_roots(roots)
-        .unwrap()
-        .with_actor(ActorIdentity::human("fixture"));
-    let definition = runtime
-        .auto_task_show("fixture-delivery-consumer")
-        .unwrap()
-        .unwrap();
-    // One public evaluation establishes the existing branch baseline. No landing,
-    // obligation, provider process, or action is introduced.
-    evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
     let store = runtime.automation_store().unwrap();
     let original = store.automation_state(&consumer).unwrap().unwrap();
@@ -277,6 +209,225 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
         .assert()
         .failure();
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
+}
+
+/// Run one git command in the fixture repository, isolated from the caller's
+/// configuration, and return its trimmed stdout.
+fn git(fixture: &Fixture, args: &[&str]) -> String {
+    let result = std::process::Command::new("git")
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+        ])
+        .args(args)
+        .current_dir(&fixture.repo)
+        .env("HOME", &fixture.home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_CONFIG_GLOBAL")
+        .env_remove("GIT_CONFIG_SYSTEM")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "git fixture: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    String::from_utf8_lossy(&result.stdout).trim().to_string()
+}
+
+/// An enabled delivery auto-task over a disposable `fixture-delivery` branch,
+/// baselined by one public evaluation. No landing, obligation, provider
+/// process, or action is introduced.
+fn baselined_delivery_consumer(
+    fixture: &Fixture,
+    trigger: &serde_json::Value,
+) -> (
+    orbit_core::OrbitRuntime,
+    orbit_types::workflow::AutoTaskDefinition,
+) {
+    use chrono::Utc;
+    use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+    use orbit_core::ActorIdentity;
+    use orbit_core::application::automation::evaluate_auto_task;
+
+    git(fixture, &["checkout", "-b", "fixture-delivery"]);
+    fs::write(fixture.repo.join("fixture.txt"), "baseline\n").unwrap();
+    git(fixture, &["add", "fixture.txt"]);
+    git(fixture, &["commit", "-m", "Disposable baseline"]);
+    fixture.json(&[
+        "auto-task",
+        "add",
+        "--name",
+        "fixture-delivery-consumer",
+        "--deliveries-landed",
+        &trigger.to_string(),
+        "--title",
+        "Never dispatch in this fixture",
+        "--json",
+    ]);
+    fixture.json(&[
+        "auto-task",
+        "toggle",
+        "fixture-delivery-consumer",
+        "on",
+        "--json",
+    ]);
+    let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.repo, Some(&fixture.root))
+        .unwrap();
+    assert!(roots.global_root.starts_with(fixture._temp.path()));
+    assert!(roots.shared_root.starts_with(fixture._temp.path()));
+    let runtime = RegisteredRuntimeFactory::open_resolved_roots(roots)
+        .unwrap()
+        .with_actor(ActorIdentity::human("fixture"));
+    let definition = runtime
+        .auto_task_show("fixture-delivery-consumer")
+        .unwrap()
+        .unwrap();
+    evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    (runtime, definition)
+}
+
+/// A review task that closed without accepted coverage once left its consumer
+/// `admitted` forever: reset and recover refused it as executing and nothing
+/// reported it. Its task being terminal is what makes it not executing.
+#[test]
+fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
+    use chrono::Utc;
+    use orbit_core::application::automation::consumer_key;
+    use orbit_types::workflow::automation::{
+        BatchAttempt, BatchState, CoverageBatch, SourceRevision,
+    };
+
+    let fixture = Fixture::new();
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":1});
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+    let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let baselined = store.automation_state(&consumer).unwrap().unwrap();
+
+    // One landed commit, frozen into a batch and admitted to a review task.
+    fs::write(fixture.repo.join("fixture.txt"), "landed\n").unwrap();
+    git(&fixture, &["commit", "-am", "Disposable landing"]);
+    let landed = SourceRevision {
+        commit: git(&fixture, &["rev-parse", "HEAD"]),
+        tree: git(&fixture, &["rev-parse", "HEAD^{tree}"]),
+    };
+    let review = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Review the frozen batch",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Attach coverage evidence",
+        "--json",
+    ]);
+    let action_id = review["id"].as_str().unwrap().to_string();
+    let now = Utc::now();
+    let batch = CoverageBatch {
+        schema_version: 1,
+        id: "fixture-batch".into(),
+        consumer: consumer.clone(),
+        epoch: baselined.epoch.clone(),
+        repository: baselined.repository.clone(),
+        branch: baselined.branch.clone(),
+        coverage: baselined.trigger.as_ref().unwrap().coverage,
+        from_exclusive: baselined.covered.clone(),
+        through_inclusive: landed.clone(),
+        commits: vec![landed.commit.clone()],
+        deliveries: vec![],
+        exclusions: vec![],
+        created_at: now,
+        max_attempts: 2,
+        retry_until: now + chrono::Duration::hours(24),
+    };
+    let mut admitted = baselined.clone();
+    admitted.generation += 1;
+    admitted.observed = landed;
+    admitted.pending_commits = batch.commits.clone();
+    admitted.active = Some(BatchAttempt {
+        action_key: "automation:fixture-batch:1".into(),
+        batch,
+        input_digest: "fixture-input".into(),
+        attempt: 1,
+        action_id: Some(action_id.clone()),
+        state: BatchState::Admitted,
+        reason: None,
+        retry_after: None,
+        reissue: None,
+    });
+    assert!(
+        store
+            .automation_commit(&baselined, &admitted, None)
+            .unwrap()
+    );
+
+    let doctor_row = || {
+        let output = fixture.command(&["doctor", "--json"]).output().unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["check"] == "automation-consumers")
+            .cloned()
+            .unwrap()
+    };
+
+    // While the task is open its executor may still submit evidence.
+    let preview = fixture.json(&["auto-task", "reset", &definition.name, "--json"]);
+    assert!(
+        preview["refusals"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("action_executing"))
+    );
+    assert!(
+        !doctor_row()["message"].as_str().unwrap().contains("wedged"),
+        "an open action is not wedged"
+    );
+
+    fixture.json(&[
+        "task", "update", &action_id, "--status", "rejected", "--force", "--json",
+    ]);
+
+    let row = doctor_row();
+    assert_eq!(row["status"], "warning");
+    let message = row["message"].as_str().unwrap();
+    assert!(
+        message.contains("wedged") && message.contains(&definition.name),
+        "{message}"
+    );
+
+    let recover = fixture.json(&["auto-task", "recover", &definition.name, "--json"]);
+    assert_eq!(recover["reason"], "needs_attention");
+    assert_eq!(recover["action"]["reissuable"], true);
+    assert!(
+        !recover["refusals"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("active_execution"))
+    );
+
+    let reset = fixture.json(&[
+        "auto-task",
+        "reset",
+        &definition.name,
+        "--reason",
+        "The review task closed without coverage evidence",
+        "--json",
+    ]);
+    assert_eq!(reset["applied"], true);
+    assert!(store.automation_state(&consumer).unwrap().is_none());
 }
 
 /// The auto-task defaults seeded into every workspace stay inert, declare a

@@ -49,6 +49,12 @@ pub fn reset_auto_task(
     let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
     let by = runtime.actor().resolve_write_label(None, None)?;
     let store = runtime.automation_store()?;
+    let action_stopped = super::auto_task_action_stopped(
+        runtime,
+        definition,
+        store.automation_state(&consumer)?.as_ref(),
+        now,
+    );
 
     if !request.mutates() {
         return reset::preview(
@@ -63,6 +69,7 @@ pub fn reset_auto_task(
                 now,
                 baseline,
                 released_refs: vec![],
+                action_stopped,
             },
         )
         .map_err(automation_error_to_orbit);
@@ -89,6 +96,7 @@ pub fn reset_auto_task(
             now,
             baseline,
             released_refs: retained.clone(),
+            action_stopped,
         },
     )
     .map_err(automation_error_to_orbit)?;

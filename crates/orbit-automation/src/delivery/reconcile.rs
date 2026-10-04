@@ -44,6 +44,17 @@ pub(super) fn reconcile(
         ActionOutcome::Evidence(facts) => {
             let receipt = match evidence::validate(active, &facts, now) {
                 Ok(receipt) => receipt,
+                // A stopped action can never replace its evidence, so waiting
+                // would hold the batch forever. It settles like any other
+                // unevidenced stop: coverage stays owed and retries apply.
+                Err(error) if facts.action_stopped => {
+                    return commit(
+                        store,
+                        &state,
+                        settle_failed(&state, true, error.to_string(), now),
+                        None,
+                    );
+                }
                 Err(error) => {
                     let mut next = state.clone();
                     if let Some(attempt) = &mut next.active {
@@ -86,32 +97,75 @@ pub(super) fn reconcile(
 
             commit(store, &state, next, Some(&receipt))
         }
-        ActionOutcome::Failed { retryable, reason } => {
-            let mut next = state.clone();
-            if let Some(attempt) = &mut next.active {
-                attempt.reason = Some(reason);
+        ActionOutcome::Failed { retryable, reason } => commit(
+            store,
+            &state,
+            settle_failed(&state, retryable, reason, now),
+            None,
+        ),
+    }
+}
 
-                let retry_budget_remains = retryable
-                    && attempt.attempt < attempt.batch.max_attempts
-                    && now < attempt.batch.retry_until;
+/// Settle the active attempt as stopped without accepted evidence: claim the
+/// next attempt while the frozen retry budget remains, otherwise hold the
+/// batch as exhausted or failed for an operator. Coverage never advances.
+fn settle_failed(
+    state: &AutomationState,
+    retryable: bool,
+    reason: String,
+    now: DateTime<Utc>,
+) -> AutomationState {
+    let mut next = state.clone();
+    if let Some(attempt) = &mut next.active {
+        attempt.reason = Some(reason);
 
-                if retry_budget_remains {
-                    attempt.attempt += 1;
-                    attempt.retry_after = Some(now + chrono::Duration::minutes(5));
-                    attempt.action_key =
-                        format!("automation:{}:{}", attempt.batch.id, attempt.attempt);
-                    attempt.action_id = None;
-                    attempt.state = BatchState::Claimed;
-                } else {
-                    attempt.state = if retryable {
-                        BatchState::Exhausted
-                    } else {
-                        BatchState::Failed
-                    };
-                }
-            }
+        let retry_budget_remains = retryable
+            && attempt.attempt < attempt.batch.max_attempts
+            && now < attempt.batch.retry_until;
 
-            commit(store, &state, next, None)
+        if retry_budget_remains {
+            attempt.attempt += 1;
+            attempt.retry_after = Some(now + chrono::Duration::minutes(5));
+            attempt.action_key = format!("automation:{}:{}", attempt.batch.id, attempt.attempt);
+            attempt.action_id = None;
+            attempt.state = BatchState::Claimed;
+        } else {
+            attempt.state = if retryable {
+                BatchState::Exhausted
+            } else {
+                BatchState::Failed
+            };
         }
     }
+
+    next
+}
+
+/// True when the consumer's admitted action has stopped without evidence the
+/// next settlement would accept, so that settlement can only fail it.
+///
+/// Operator reset and recovery read this instead of the raw `admitted` state:
+/// an action whose task is terminal is not executing, and refusing to touch
+/// it until some evaluation happens to run is how a consumer wedged. Unknown
+/// liveness is `Pending`, which keeps the action executing.
+pub fn action_stopped(
+    host: &dyn DeliveryHost,
+    state: &AutomationState,
+    now: DateTime<Utc>,
+) -> Result<bool, AutomationError> {
+    let Some(active) = state
+        .active
+        .as_ref()
+        .filter(|active| active.state == BatchState::Admitted && active.action_id.is_some())
+    else {
+        return Ok(false);
+    };
+
+    Ok(match host.outcome(active)? {
+        ActionOutcome::Pending => false,
+        ActionOutcome::Failed { .. } => true,
+        ActionOutcome::Evidence(facts) => {
+            facts.action_stopped && evidence::validate(active, &facts, now).is_err()
+        }
+    })
 }

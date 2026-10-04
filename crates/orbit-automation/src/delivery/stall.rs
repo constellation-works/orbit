@@ -227,6 +227,7 @@ fn replay(
         by: SYSTEM_ACTOR,
         now: request.now,
         replay: Some(proof),
+        action_stopped: false,
     };
 
     // The record is written first: only a committed replay may be reported as
