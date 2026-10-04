@@ -27,7 +27,10 @@
 //! each pass then requests nothing, releases every admission that never
 //! launched back to the owner's backlog, and waits for the launched leaves to
 //! finish and settle. The pass that finds nothing left unsettled ends the
-//! drain `cancelled`.
+//! drain `cancelled`. If that state cannot be read, the entire pass waits and
+//! retries before probing or advancing pending requests: neither new work nor
+//! an earlier unanswered request may be admitted without knowing whether the
+//! drain is cancelling.
 
 use std::cell::RefCell;
 
@@ -107,15 +110,38 @@ pub(crate) fn pull_refill(
         peer: &peer,
         launcher: &launcher,
     };
+    let cancel = match runtime.read_run_state(&run_id) {
+        Ok(state) => state.and_then(|state| state.drain_cancel),
+        Err(failure) => {
+            tracing::warn!(
+                target: "orbit.core.pull",
+                %run_id,
+                selector = %destination.selector,
+                %failure,
+                "pull drain could not read cancellation state; retrying next iteration",
+            );
+            return Ok(json!({
+                "admitted": 0,
+                "unsettled": Value::Null,
+                "admitting": false,
+                "refusal": Value::Null,
+                "crews": Value::Null,
+                "consecutive_failures": 0,
+                "reclaimed_build_bytes": 0,
+                "error": failure.to_string(),
+                "host_shutdown": Value::Null,
+                "resource_throttle": Value::Null,
+                "resource_telemetry_unknown": [],
+                "cancelling": false,
+                "done": false,
+                "wait": true,
+                "sleep_seconds": poll,
+            }));
+        }
+    };
     // A launched leaf whose worker died is reconciled first, so this pass
     // records and delivers its failure rather than waiting on it.
     runtime.reconcile_orphaned_claimed_leaves(&destination);
-
-    let cancel = runtime
-        .read_run_state(&run_id)
-        .ok()
-        .flatten()
-        .and_then(|state| state.drain_cancel);
     if let Some(cancel) = cancel {
         return Ok(cancelling_pass(
             runtime,
