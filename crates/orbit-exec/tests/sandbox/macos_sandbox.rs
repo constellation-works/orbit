@@ -65,13 +65,13 @@ fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
 probe() { if eval "$2" >/dev/null 2>&1; then echo "$1:allowed"; else echo "$1:denied"; fi; }
 probe read-masked 'cat "$MASKED/state.json"'
 probe list-masked 'ls "$MASKED"'
-probe write-masked ': > "$MASKED/planted"'
+probe write-masked 'touch "$MASKED/planted"'
 probe read-secret 'cat "$SECRETS/token"'
 probe list-secret 'ls "$SECRETS"'
-probe write-secret ': > "$SECRETS/planted"'
+probe write-secret 'touch "$SECRETS/planted"'
 probe read-source 'cat "$SOURCE/README"'
-probe write-source ': > "$SOURCE/planted"'
-probe write-root ': > "$WRITE_ROOT/written"'
+probe write-source 'touch "$SOURCE/planted"'
+probe write-root 'touch "$WRITE_ROOT/written"'
 "#;
     let env = [
         ("PATH".to_string(), "/usr/bin:/bin".to_string()),

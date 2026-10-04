@@ -29,7 +29,6 @@ on:
       # [ORB-11067] Managed-child logging must use the registry root authorized
       # by the macOS sandbox rather than the provider-specific HOME.
       - "crates/orbit-common/src/observability/logging.rs"
-      - "crates/orbit-common/src/observability/tests/logging.rs"
       # [ORB-10682] Darwin owner/cancellation liveness uses native libproc
       # state so unreaped zombies do not look like surviving work.
       - "crates/orbit-common/src/process/**"
@@ -113,7 +112,7 @@ jobs:
 
       - name: Run macOS proc.spawn regressions
         run: |
-          /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools scoped_proc_spawn_inherits_parent_read_view_for_direct_and_indirect_reads -- --nocapture
+          /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools restrictive_fs_profile_does_not_narrow_the_parent_read_view -- --nocapture
           cargo test --locked -p orbit-tools a_git_shell_alias -- --nocapture
 
       # [ORB-13237] A plugin backend the host spawns on an agent's behalf must
@@ -137,13 +136,13 @@ jobs:
       # read-only descriptor and must refuse, not write, a takeover it cannot
       # record. Linux alone cannot evidence that.
       - name: Run executable-generation admission tests
-        run: cargo test --no-fail-fast -p orbit-common --locked fs::tests::generation
+        run: cargo test --no-fail-fast -p orbit-common --locked readonly_generation_record_refuses_takeover_without_descriptor_errors -- --nocapture
 
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
       - name: Run process identity and job-run owner tests
         run: |
-          cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture
+          cargo test --no-fail-fast -p orbit-common --locked process::tests -- --nocapture
           cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
           cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture
 

@@ -910,6 +910,9 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
 fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
+    // The default crews include Claude-backed providers; keep doctor’s
+    // availability checks independent of which CLIs the host has installed.
+    plant_agent_cli_stub(&home, "claude");
     write_machine_identity(&home);
     let partitions = home.join(".orbit/tasks/workspaces");
     let deleted_volume = temp.path().join("deleted-volume");

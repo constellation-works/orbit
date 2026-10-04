@@ -180,7 +180,15 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
         if name.starts_with("orbit.task.") && tool.plugin.is_none() {
-            validate_task_arguments(&input, &tool.tool.schema())?;
+            // The spoke connector forwards only the bounded artifact bytes
+            // after reading the caller-local source file. This private shape
+            // stays out of the public schema and is accepted only on the
+            // authenticated SSH MCP or bound worker path; the tool handler
+            // validates the payload again before it reaches the task store.
+            let allows_preloaded_artifacts = name == "orbit.task.artifact.put"
+                && (ctx.session_context.transport == Some(orbit_types::tool::McpTransport::SshMcp)
+                    || ctx.session_context.worker_invocation.is_some());
+            validate_task_arguments(&input, &tool.tool.schema(), allows_preloaded_artifacts)?;
         }
         tool.tool.execute(ctx, input)
     }
@@ -280,18 +288,25 @@ impl ToolRegistry {
 /// Task argument shapes are checked before a handler can ignore a mistyped
 /// optional field or reach the application host. Required fields and richer
 /// guarded modes remain the handler's responsibility.
-fn validate_task_arguments(input: &Value, schema: &ToolSchema) -> Result<(), OrbitError> {
+fn validate_task_arguments(
+    input: &Value,
+    schema: &ToolSchema,
+    allows_preloaded_artifacts: bool,
+) -> Result<(), OrbitError> {
     use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
     use orbit_common::protocol::tool_schema::tool_parameter_schema;
 
     let object = input
         .as_object()
         .ok_or_else(|| OrbitError::InvalidInput("task tool arguments must be an object".into()))?;
-    let allowed = schema
+    let mut allowed = schema
         .parameters
         .iter()
         .map(|param| param.name.as_str())
         .collect::<Vec<_>>();
+    if allows_preloaded_artifacts {
+        allowed.push("artifacts");
+    }
     reject_unknown_tool_fields(input, &allowed)?;
     for parameter in &schema.parameters {
         let Some(value) = object.get(&parameter.name) else {
