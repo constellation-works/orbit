@@ -1252,10 +1252,6 @@ a.orbit-card:focus-visible :is(h2, h3) {
   white-space: nowrap;
 }
 
-.orbit-hero-headline-muted {
-  color: var(--sl-color-gray-3);
-}
-
 .orbit-landing .orbit-hero-requirements {
   color: var(--sl-color-gray-3);
   font-size: 0.8125rem;

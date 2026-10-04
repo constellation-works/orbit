@@ -11,7 +11,7 @@ next: false
 <section class="orbit-hero">
   <div class="orbit-hero-copy">
     <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>See what shipped in the latest release</span><span aria-hidden="true">→</span></a>
-    <h1 id="_top" class="orbit-hero-headline">Your agent files the work. Orbit ships it. <span class="orbit-hero-headline-muted">You review the pull request.</span></h1>
+    <h1 id="_top" class="orbit-hero-headline">Agents write. Orbit delivers.</h1>
     <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask for a change in the agent you already use; Orbit turns it into a scoped task, runs it in an isolated worktree, and hands back a pull request with every step on the record.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Get started →</a>

@@ -1,6 +1,6 @@
 # Orbit
 
-**Your agent files the work. Orbit ships it. You review the pull request.**
+**Agents write. Orbit delivers.**
 
 <p align="center">
   <a href="https://github.com/constellation-works/orbit/releases"><img src="https://img.shields.io/github/v/release/constellation-works/orbit" alt="Release" /></a>
