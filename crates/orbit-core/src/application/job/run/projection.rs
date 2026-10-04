@@ -89,6 +89,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let agent_invocation = crate::application::job::agent_invoke_result(
         run,
         state_for_agent_result.map(|state| &state.step_outputs),
+        None,
     )
     .and_then(|result| serde_json::to_value(result).ok())
     .unwrap_or(Value::Null);

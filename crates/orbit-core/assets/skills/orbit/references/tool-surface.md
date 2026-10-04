@@ -106,12 +106,27 @@ Orbit logs the same at WARN: the provider may use host integrations (browser,
 computer use, …) beyond the working directory.
 
 Track it with the ordinary run surfaces — `orbit_workflow_run_show`, or
-`orbit run show|logs|cancel <RUN_ID>`. `show` carries the invocation's outcome,
-whether it terminated its response envelope, a bounded preview of the answer,
-the effective `provider_sandbox`, and a durable reference to the full captured
-output. A provider that exits zero without terminating its envelope stopped
-mid-turn: the run records `failed`, and the exit code alone is never evidence
-the investigation succeeded.
+`orbit run show|logs|cancel <RUN_ID>`. Both read the same `agent_invocation`
+object (top level over MCP, `.run.agent_invocation` in `orbit run show --json`):
+
+- `answer` is the result: `summary`, `findings`, `next_steps`, every other
+  field the agent put in its envelope `result` under `extra` (a
+  `report_markdown`, for instance), and its `final_message`, bounded to 64 KiB.
+  When that message was cut, `final_message_blob_ref` names the complete
+  captured output, which `orbit run logs <RUN_ID>` prints.
+- `progress` is what the agent is doing while it runs: its newest
+  `latest_message` and `last_activity_at`, sampled about every ten seconds
+  while it writes output. A provider that prints nothing until it exits shows
+  none.
+- `outcome`, `failure_reason`, `completed_envelope`, the effective
+  `provider_sandbox`, and `stdout_blob_ref`, the durable reference to the full
+  captured output — present for a failed invocation too.
+
+The response envelope is required. A provider that exits zero without
+terminating it stopped mid-turn, and one whose envelope has no `result` object
+returned no answer: either way the run records `failed` with a
+`failure_reason` naming why, and the exit code alone is never evidence the
+investigation succeeded.
 
 A session that arrived over SSH is admitted on the same terms as a local one.
 The durable admission and `trusted_host.execution_admitted` event retain the

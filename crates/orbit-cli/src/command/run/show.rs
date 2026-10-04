@@ -1,6 +1,7 @@
 use clap::Args;
 use std::collections::HashSet;
 
+use orbit_core::application::job::agent_invoke_result;
 use orbit_core::runtime::audit::run::RunProviderProcess;
 use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
 use orbit_types::workflow::{JobRunState, PipelineState};
@@ -96,8 +97,16 @@ pub(crate) fn run_show_payload(
         }
     }
 
-    let run_projection =
+    let mut run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
+    // [ORB-13899] The same audit scan holds the invocation's child: its live
+    // progress, and the output reference a failed step never checkpoints.
+    run_projection["agent_invocation"] = serde_json::to_value(agent_invoke_result(
+        &run,
+        state.as_ref().map(|state| &state.step_outputs),
+        provider_processes.last(),
+    ))
+    .unwrap_or(Value::Null);
     // Which catalog layer answered for each reference this run's job makes,
     // and what that layer shadowed. A plugin activity a workspace file
     // overrides is otherwise invisible (plugins design §8).
@@ -373,8 +382,10 @@ fn catalog_layer_lines(layers: &[CatalogReferenceLayer]) -> String {
 ///
 /// Empty for every other job. The outcome comes from the run record, not the
 /// provider's exit code — an agent that exits 0 without terminating its
-/// envelope stopped mid-turn, and the run says `failed`. The preview is
-/// bounded; the blob reference names where the rest is.
+/// envelope stopped mid-turn, and the run says `failed`. The answer follows
+/// in full, as the agent returned it [ORB-13899]; while the run is open, its
+/// newest message and last activity stand in for it. The blob reference
+/// names where the complete output is.
 fn agent_invocation_lines(value: &Value) -> String {
     let Some(result) = value.as_object() else {
         return String::new();
@@ -401,8 +412,32 @@ fn agent_invocation_lines(value: &Value) -> String {
     if let Some(reason) = text("failure_reason") {
         lines.push_str(&format!("\n  reason: {reason}"));
     }
-    if let Some(summary) = text("summary") {
-        lines.push_str(&format!("\n  summary: {summary}"));
+    match result.get("answer").and_then(Value::as_object) {
+        Some(answer) => lines.push_str(&answer_lines(answer)),
+        None => {
+            if let Some(summary) = text("summary") {
+                lines.push_str(&format!("\n  summary: {summary}"));
+            }
+        }
+    }
+    if let Some(progress) = result.get("progress").and_then(Value::as_object) {
+        let progress_text = |key: &str| progress.get(key).and_then(Value::as_str);
+        if let Some(at) = progress_text("last_activity_at") {
+            lines.push_str(&format!("\n  last activity: {at}"));
+        }
+        // Once the answer is in, the newest sampled message is history.
+        if result.get("answer").is_none_or(Value::is_null)
+            && let Some(message) = progress_text("latest_message")
+        {
+            lines.push_str(&labelled_block(
+                "latest message",
+                message,
+                progress
+                    .get("latest_message_truncated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ));
+        }
     }
     if let Some(blob) = text("stdout_blob_ref") {
         let truncated = result
@@ -419,6 +454,79 @@ fn agent_invocation_lines(value: &Value) -> String {
         ));
     }
     lines
+}
+
+/// The agent's answer: named envelope fields, then every other result field,
+/// then its final message.
+fn answer_lines(answer: &serde_json::Map<String, Value>) -> String {
+    let mut lines = String::new();
+    if let Some(summary) = answer.get("summary").and_then(Value::as_str) {
+        lines.push_str(&labelled_block("summary", summary, false));
+    }
+    for key in ["findings", "next_steps"] {
+        let items = answer
+            .get(key)
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if items.is_empty() {
+            continue;
+        }
+        lines.push_str(&format!("\n  {key}:"));
+        for item in items {
+            lines.push_str(&format!(
+                "\n    - {}",
+                indent(&display_value(item), "      ")
+            ));
+        }
+    }
+    for (key, value) in answer
+        .get("extra")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        lines.push_str(&labelled_block(key, &display_value(value), false));
+    }
+    if let Some(message) = answer.get("final_message").and_then(Value::as_str) {
+        lines.push_str(&labelled_block(
+            "final message",
+            message,
+            answer
+                .get("final_message_truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ));
+    }
+    lines
+}
+
+/// `label: text` on one line, or the label then the text indented beneath it
+/// when the text spans lines.
+fn labelled_block(label: &str, text: &str, truncated: bool) -> String {
+    let suffix = if truncated {
+        "\n    … truncated; full text: orbit run logs <RUN_ID>"
+    } else {
+        ""
+    };
+    if text.contains('\n') {
+        format!("\n  {label}:\n    {}{suffix}", indent(text, "    "))
+    } else {
+        format!("\n  {label}: {text}{suffix}")
+    }
+}
+
+fn indent(text: &str, prefix: &str) -> String {
+    text.lines()
+        .collect::<Vec<_>>()
+        .join(&format!("\n{prefix}"))
+}
+
+fn display_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// One line per provider subprocess that has not reported an exit.

@@ -28,7 +28,7 @@ no pull request, and dispatches no further work.
 
 Submission is asynchronous: this prints the durable run ID and returns. Track
 and read the invocation with the ordinary run surfaces:
-  orbit run show <RUN_ID>      structured state, outcome, and bounded preview
+  orbit run show <RUN_ID>      outcome, the agent's answer, and live progress
   orbit run logs <RUN_ID>      the complete captured output
   orbit run cancel <RUN_ID>    stop it and terminate its process tree
 

@@ -294,3 +294,83 @@ fn mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace(
         );
     }
 }
+
+/// [ORB-13899] A running invocation shows what its agent last said and when
+/// it last produced output, before any answer exists. A later sample whose
+/// output tail held no message keeps the earlier message but moves the time.
+#[test]
+fn mcp_run_show_reports_a_running_invocations_latest_message() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            crate::application::job::AGENT_INVOKE_JOB_ID,
+            1,
+            Utc::now(),
+            None,
+            None,
+        )
+        .expect("insert run");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("start run");
+    let run_id = run.run_id;
+
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-step",
+        "2026-10-04T08:00:00Z",
+        None,
+        json!({"body_kind": "step_started", "step_id": "invoke"}),
+    );
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-process",
+        "2026-10-04T08:00:01Z",
+        Some("evt-step"),
+        json!({"body_kind": "cli_invocation_process", "provider": "codex", "pid": std::process::id()}),
+    );
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-activity-1",
+        "2026-10-04T08:00:11Z",
+        Some("evt-step"),
+        json!({
+            "body_kind": "cli_invocation_activity",
+            "provider": "codex",
+            "observed_bytes": 512,
+            "latest_message": "Reading the sweep clock config.",
+        }),
+    );
+    seed_v2_event(
+        &runtime,
+        &run_id,
+        "evt-activity-2",
+        "2026-10-04T08:00:21Z",
+        Some("evt-step"),
+        json!({"body_kind": "cli_invocation_activity", "provider": "codex", "observed_bytes": 2048}),
+    );
+
+    let shown = run_tool_as_operator(&runtime, "orbit.workflow.run.show", json!({"id": run_id}))
+        .expect("operator run show");
+    let invocation = &shown["agent_invocation"];
+    assert_eq!(invocation["outcome"], "running", "{shown}");
+    assert_eq!(invocation["answer"], Value::Null, "{shown}");
+    assert_eq!(
+        invocation["progress"],
+        json!({
+            "last_activity_at": "2026-10-04T08:00:21+00:00",
+            "latest_message": "Reading the sweep clock config.",
+            "latest_message_truncated": false,
+        })
+    );
+    let child = &shown["execution_progress"]["provider_processes"]["items"][0];
+    assert_eq!(child["latest_message"], "Reading the sweep clock config.");
+    assert_eq!(child["last_activity_at"], "2026-10-04T08:00:21+00:00");
+}
