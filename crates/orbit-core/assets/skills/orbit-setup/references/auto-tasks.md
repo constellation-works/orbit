@@ -10,7 +10,7 @@ sweep, a dependency audit, a stale-branch review, doc validation. Use a
 
 ## Prerequisites
 
-Definitions fire when their versioned `enabled` switch is on and the host clock
+Definitions fire when their `enabled` switch is on and the host clock
 is enabled. See [automation.md](automation.md). No scheduler routine or job is
 required.
 
@@ -32,8 +32,9 @@ orbit auto-task add \
   --complexity medium
 ```
 
-Definitions land in `.orbit/auto_tasks/<name>.yaml` — a versioned file, so
-review it in a PR like any other definition.
+Definitions land in `.orbit/auto_tasks/<name>.yaml`. `.orbit/` is per-user
+checkout state that git ignores, so the file is not reviewed in a PR; read it
+back with `orbit auto-task show <name>` before enabling it.
 
 | Flag | Notes |
 |---|---|

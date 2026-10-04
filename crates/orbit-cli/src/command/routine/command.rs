@@ -22,9 +22,11 @@ use crate::command::CommandOut;
     about = "Inspect and control scheduled routines on this host",
     arg_required_else_help = true,
     subcommand_required = true,
-    after_help = "Routine definitions are versioned YAML under `.orbit/routines/` in any\n\
-                  registered owner checkout. Pauses are host-local and never synced.\n\
-                  The host scheduler is controlled through `orbit clock`."
+    after_help = "Routine definitions are YAML files under `.orbit/routines/` in each\n\
+                  registered owner checkout. `.orbit/` is per-user checkout state that\n\
+                  git ignores, so a definition edit applies to that checkout only.\n\
+                  Pauses are host-local and never synced. The host scheduler is\n\
+                  controlled through `orbit clock`."
 )]
 pub struct RoutineCommand {
     #[command(subcommand)]

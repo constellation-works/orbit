@@ -38,11 +38,15 @@ do not delete registry or identity files to get past them.
 
 ## What travels
 
-| Git-versioned definitions | Host-local state |
+| Travels through Git | Stays on this checkout or host |
 |---|---|
-| Workspace config, routines, auto-task templates, resource overrides | Machine identity (`[machine]` in the global config), workspace registry and owner/replica declarations |
-| Source and documentation | Task coordination store, locks, reservations, run evidence, scheduler cursors and pauses |
-| Dedicated publication repository: explicitly published task snapshots | Publication binding and last-success metadata, audit store, logs, search indexes |
+| Source and documentation | Workspace `.orbit/` (gitignored per-user state): config, routines, auto-task templates, resource overrides, plugin pins |
+| Dedicated publication repository: explicitly published task snapshots | Machine identity (`[machine]` in the global config), workspace registry and owner/replica declarations |
+| | Task coordination store, locks, reservations, run evidence, scheduler cursors and pauses |
+| | Publication binding and last-success metadata, audit store, logs, search indexes |
+
+A second host gets the shipped definitions from `orbit workspace init`, not from
+Git. Copy any local edits across deliberately.
 
 Task publications are the supported explicit snapshot path; ordinary source
 Git sync is not live task replication. Publication inspection preserves the

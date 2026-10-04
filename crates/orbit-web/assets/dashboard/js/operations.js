@@ -651,7 +651,7 @@ function renderOperations(payload) {
       body.appendChild(group);
     }
     if (paused.length) {
-      const group = operationGroup("paused", "Paused", paused.length, "enabled: false in the versioned definition · slots are skipped, not queued");
+      const group = operationGroup("paused", "Paused", paused.length, "enabled: false in the definition file · slots are skipped, not queued");
       group.appendChild(operationColumns(columns));
       for (const routine of paused) group.appendChild(routineRow(payload, routine, workspaceId));
       body.appendChild(group);

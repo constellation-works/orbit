@@ -45,8 +45,10 @@ orbit clock set --cadence-seconds 300  # whole-minute cadence, reloads the unit
 `clock pause` stops scheduled invocation; a manual `orbit clock tick` still works.
 `orbit sweep` is a compatibility alias for the same tick and produces the same output.
 
-**2. Enable routines, one at a time.** Each is a versioned YAML file — flipping
-`enabled: true` is a reviewable commit, not a runtime toggle. Registering the
+**2. Enable routines, one at a time.** Each is a YAML file in this checkout's
+`.orbit/routines/`. `.orbit/` is per-user state that git ignores, so flipping
+`enabled: true` is a local edit to that file, not a commit; `orbit routine
+pause` is the separate host-local toggle. Registering the
 checkout already made the workspace a routine source; an older `.orbit/config.toml`
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
@@ -125,7 +127,7 @@ single activity in a one-step job.
 ```yaml
 schemaVersion: 1
 name: <routine-name>              # unique across every routine source on the host
-enabled: true                      # versioned kill-switch
+enabled: true                      # kill-switch in the definition file
 trigger:
   cron: "0 22 * * *"              # 5-field, host-local time
   missed_run: skip                 # skip | catch_up_once
