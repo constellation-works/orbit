@@ -9,7 +9,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::JobRunState;
+use super::super::JobRunState;
 
 /// Version of [`RunDeliveryObservation`]'s wire shape.
 pub const RUN_DELIVERY_SCHEMA_VERSION: u32 = 1;
