@@ -1,0 +1,70 @@
+Invoke an agent on the host for exploration or debugging (operator only)
+
+Usage: orbit run agent <PROMPT> [OPTIONS]
+
+Arguments:
+  <PROMPT>
+          What to investigate
+
+Options:
+      --cwd <CWD>
+          Absolute directory the agent starts in. Defaults to the current directory; must be inside this workspace's checkout
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --crew <CREW>
+          Configured crew selecting provider, model, and reasoning effort. Defaults to the workspace's default crew
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --timeout <TIMEOUT>
+          Provider wall-clock bound (seconds, or e.g. 30m, 2h). Defaults to 1800; maximum 7200. Queue time is excluded
+
+      --wait
+          Block until terminal and print the agent's answer; exit nonzero on failure
+
+      --idempotency-key <IDEMPOTENCY_KEY>
+          Retry handle. Resubmitting with a key a recent submission already used resolves that run instead of starting a second agent
+
+      --provider-sandbox <PROVIDER_SANDBOX>
+          Per-invocation provider inner-sandbox override (Codex: read-only, workspace-write, or danger-full-access). Values the provider does not support are refused
+
+      --json
+          Output as JSON
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+The agent runs OUTSIDE Orbit's filesystem sandbox, as the same OS user as Orbit,
+so it can read and write anything that user can. That is the point of the
+command and it is not an isolation boundary — invoke it the way you would run a
+shell command yourself. Each invocation is admitted separately and requires
+operator capability; a managed run cannot invoke one.
+
+The agent investigates and reports. It changes no task, makes no commit, opens
+no pull request, and dispatches no further work.
+
+Submission is asynchronous: this prints the durable run ID and returns. Track
+and read the invocation with the ordinary run surfaces, or pass --wait to
+block until terminal and print the answer (nonzero exit on failure):
+  orbit run show <RUN_ID>      outcome, the agent's answer, and live progress
+  orbit run logs <RUN_ID> --follow  stream output until terminal
+  orbit run cancel <RUN_ID>    stop it and terminate its process tree
+
+Examples:
+  orbit run agent 'why does the sweep clock keep restarting?'
+  orbit run agent 'explain this failure' --cwd /srv/checkout --crew qa
+  orbit run agent 'long investigation' --wait --timeout 1h --json
+  orbit run agent 'retryable submit' --idempotency-key incident-4821
+  orbit run agent 'read Cargo.toml' --provider-sandbox read-only

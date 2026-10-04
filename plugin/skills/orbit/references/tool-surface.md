@@ -46,7 +46,7 @@ records in a second store merely to get past a connection error.
 | Delivery evidence | `orbit_task_show` with `field: "delivery"` alone and optional `run_id` (read only; needs no operator authority) | What one delivery run committed and landed for one task of this workspace, read only from the host's commit and merge step records: typed status, base/head and landed SHAs, PR number, timestamps and provenance. Missing, inconsistent or foreign evidence is `unavailable` with a reason, never inferred; a local fast-forward records no landed SHA. Without `run_id` it reads the newest task-delivery run submitted with the task. Full run details stay on operator-only `orbit_workflow_run_show` |
 | Auto-tasks | `orbit_auto_task_add/list/update/mint`; `update` `enabled` enables or disables a definition | Those four are also CLI commands. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are CLI-only (`orbit auto-task`) |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
-| Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |
+| Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; returns a run ID, or the answer with `--wait` |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval, revocation and recovery remain owner-dashboard actions. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
@@ -90,8 +90,33 @@ What it is not:
 
 Required arguments are the `prompt` and an absolute `cwd` inside the workspace's
 checkout or a linked worktree under `.orbit/state/worktrees/`. `crew` selects the provider/model, `timeout_seconds` bounds the run
-(default 1800, maximum 7200), and `idempotency_key` makes a resubmission resolve
+(default 1800, enforced ceiling 7200, excluding queue time), and `idempotency_key` makes a resubmission resolve
 the run the first attempt created rather than starting a second agent.
+
+The CLI accepts `--wait` to block until terminal and print the same `answer`
+projection; a failed, timed-out, cancelled or interrupted run exits nonzero.
+`--timeout` bounds provider execution, accepts seconds or durations such as
+`30m` and `2h`, and excludes queue time. MCP `wait_seconds` is an optional
+integer from 0 to 600: a finished run returns `answer` and `agent_invocation`;
+an unfinished one returns its run ID and actual state for later observation.
+The wait deadline never cancels or changes the invocation outcome.
+
+Submissions report `queued` and `queue_position` (one-based among waiting
+runs, null if runnable) plus a warning when the concurrency limit is saturated.
+These describe admission time; the run may start before the response arrives.
+The shipped job retains eight concurrent provider processes as a host resource
+guard because these processes have no executor sandbox or memory budget.
+
+`orbit run logs <RUN_ID> --follow` streams retained redacted provider tracing
+lines and stops at any terminal outcome. JSON modes emit JSONL records
+`{run_id, provider, stream, text}`. Completed captures supply output not yet
+streamed; with `--step`, each capture is emitted when its invocation finishes.
+Provider lines are retained in the JSONL feed by default while stderr diagnostics
+stay at WARN. Explicit `RUST_LOG` and tracing retention limit live history;
+if the live feed differs from the capture, follow mode replays that capture with
+a diagnostic (some lines may repeat). Use the ordinary
+`orbit run logs` command to read durable captures. Ctrl-C ends observation
+without cancelling the run.
 
 `provider_sandbox` is an optional per-invocation override of the provider's own
 inner sandbox (not Orbit's executor sandbox — that is already off, reported as

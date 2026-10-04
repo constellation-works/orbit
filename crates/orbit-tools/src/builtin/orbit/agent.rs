@@ -52,8 +52,18 @@ impl Tool for OrbitAgentInvokeTool {
             },
             ToolParam {
                 name: "timeout_seconds".to_string(),
-                description: "Wall-clock bound for the invocation. Defaults to 1800 and may not \
-                     exceed 7200."
+                description: "Provider wall-clock bound in seconds, excluding queue time. \
+                     Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling."
+                    .to_string(),
+                param_type: "integer".to_string(),
+                required: false,
+            },
+            ToolParam {
+                name: "wait_seconds".to_string(),
+                description: "Wait up to this many seconds (integer from 0 to 600). Returns \
+                     `answer` and `agent_invocation` if finished; otherwise returns the run ID \
+                     and actual state so you can keep observing it. The deadline never cancels \
+                     the run. Omit for an asynchronous submission."
                     .to_string(),
                 param_type: "integer".to_string(),
                 required: false,
@@ -84,7 +94,9 @@ impl Tool for OrbitAgentInvokeTool {
             name: "orbit.agent.invoke".to_string(),
             description:
                 "Submit an asynchronous agent invocation for exploration or debugging and return \
-                 its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as \
+                 its run ID, or wait for its answer with `wait_seconds`. Queued submissions \
+                 include `queued: true`, a one-based `queue_position` and a warning. \
+                 The agent runs on the host outside Orbit's filesystem sandbox, as \
                  the same OS user as Orbit, so it can reach anything that user can; it is \
                  admitted per invocation and requires operator capability — the same test for a \
                  session that arrived over SSH as for a local one. Track it with \
@@ -113,5 +125,17 @@ impl Tool for OrbitAgentInvokeTool {
             ));
         }
         super::execute_host_action(ctx, input, OrbitBuiltinAction::AgentInvoke)
+    }
+
+    fn input_schema(&self) -> Option<Value> {
+        let mut schema = Value::Object(orbit_common::protocol::tool_schema::tool_input_schema(
+            &self.schema(),
+        ));
+        schema["properties"]["timeout_seconds"]["minimum"] = serde_json::json!(1);
+        schema["properties"]["timeout_seconds"]["maximum"] = serde_json::json!(7200);
+        schema["properties"]["timeout_seconds"]["default"] = serde_json::json!(1800);
+        schema["properties"]["wait_seconds"]["minimum"] = serde_json::json!(0);
+        schema["properties"]["wait_seconds"]["maximum"] = serde_json::json!(600);
+        Some(schema)
     }
 }

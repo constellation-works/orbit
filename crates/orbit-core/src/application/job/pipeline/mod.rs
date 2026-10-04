@@ -78,6 +78,8 @@ pub struct PipelineInvokeResult {
     pub job_name: String,
     pub submitted_at: String,
     pub queued: bool,
+    /// One-based position among runs waiting for a concurrency slot at admission.
+    pub queue_position: Option<usize>,
 }
 
 /// [ORB-12038] A run's own `<run_id>.worker.log`, read for inspection when no

@@ -365,34 +365,34 @@ fn json_field_name(field: &Field) -> &str {
 /// first event. Path resolution reads environment variables only; it does
 /// not walk the log directory or parse `config.toml`.
 pub fn init_default_subscriber(default_filter: &str) {
-    let filter = env_filter(default_filter);
+    init_subscriber_with_file_filter(default_filter, default_filter);
+}
+
+/// Install stderr and JSONL layers with independent defaults. `RUST_LOG`, when
+/// set and valid, overrides both; otherwise callers can retain additional file
+/// evidence without also printing it as a terminal diagnostic.
+pub fn init_subscriber_with_file_filter(stderr_default: &str, file_default: &str) {
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
         .with_ansi(stderr_ansi_enabled())
-        .fmt_fields(RedactingFields::default());
+        .fmt_fields(RedactingFields::default())
+        .with_filter(env_filter(stderr_default));
 
     match global_jsonl_log_path() {
         Ok(path) => {
             let (file_layer, guard) = jsonl_layer_at_path(&path);
             if FILE_GUARD.set(guard).is_ok() {
                 let _ = Registry::default()
-                    .with(filter)
                     .with(stderr_layer)
-                    .with(file_layer)
+                    .with(file_layer.with_filter(env_filter(file_default)))
                     .try_init();
             } else {
-                let _ = Registry::default()
-                    .with(filter)
-                    .with(stderr_layer)
-                    .try_init();
+                let _ = Registry::default().with(stderr_layer).try_init();
                 emit_log_init_warning("JSONL tracing worker guard was already initialized");
             }
         }
         Err(err) => {
-            let _ = Registry::default()
-                .with(filter)
-                .with(stderr_layer)
-                .try_init();
+            let _ = Registry::default().with(stderr_layer).try_init();
             emit_log_init_warning(&err.to_string());
         }
     }

@@ -1273,6 +1273,7 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
             "prompt": "read-only remote probe",
             "cwd": workspace.work,
             "timeout_seconds": 30,
+            "wait_seconds": 30,
             "model": "codex",
         }),
     );
@@ -1301,6 +1302,10 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
         std::thread::sleep(Duration::from_millis(25));
     };
     assert_eq!(terminal["state"], "success", "{terminal}");
+    assert_eq!(submitted["state"], "success", "{submitted}");
+    assert_eq!(submitted["waited"], true);
+    assert_eq!(submitted["answer"], terminal["agent_invocation"]["answer"]);
+    assert_eq!(submitted["agent_invocation"]["completed_envelope"], true);
     assert_eq!(terminal["agent_invocation"]["completed_envelope"], true);
 
     // [ORB-13899] The answer is readable where an MCP caller already looks,
@@ -5804,3 +5809,111 @@ mod desktop;
 mod transport_operations;
 
 mod internal_drain;
+
+#[cfg(unix)]
+#[test]
+fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
+    let workspace = McpWorkspace::init();
+    for provider in ["codex", "claude"] {
+        plant_agent_cli_stub(&McpWorkspace::stub_bin_dir(&workspace.home), provider);
+        std::fs::write(
+            McpWorkspace::stub_bin_dir(&workspace.home).join(provider),
+            format!(
+                "#!/bin/sh\ncat > /dev/null\nsleep 2\nprintf '%s\\n' '{AGENT_ANSWER_ENVELOPE}'\n"
+            ),
+        )
+        .unwrap();
+    }
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let listed = client.request("tools/list", Value::Null);
+    let tool = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "orbit_agent_invoke")
+        .unwrap();
+    let properties = &tool["inputSchema"]["properties"];
+    assert_eq!(properties["wait_seconds"]["minimum"], 0);
+    assert_eq!(properties["wait_seconds"]["maximum"], 600);
+    assert_eq!(
+        properties["timeout_seconds"]["maximum"],
+        orbit_core::application::job::MAX_AGENT_INVOKE_TIMEOUT_SECONDS
+    );
+    assert_eq!(
+        properties["timeout_seconds"]["default"],
+        orbit_core::application::job::DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS
+    );
+    for invalid in [json!(601), json!(-1), json!(0.5), json!("1")] {
+        let error = client.call_tool_err(
+            "orbit_agent_invoke",
+            json!({"prompt":"invalid wait", "cwd":workspace.work,"wait_seconds":invalid}),
+        );
+        assert_eq!(error["code"], "invalid_input", "{error}");
+    }
+    let listed = client.call_tool_ok("orbit_workflow_run_list", json!({}));
+    assert_eq!(
+        listed["items"],
+        json!([]),
+        "invalid wait must not submit a run"
+    );
+    let request = json!({"prompt":"bounded wait", "cwd":workspace.work,"wait_seconds":0,"timeout_seconds":30,"idempotency_key":"bounded-wait"});
+    let pending = client.call_tool_ok("orbit_agent_invoke", request.clone());
+    assert_eq!(pending["answer"], Value::Null, "{pending}");
+    let run_id = pending["run_id"].as_str().unwrap();
+    let observed = client.call_tool_ok("orbit_workflow_run_show", json!({"id":run_id}));
+    assert!(
+        matches!(observed["state"].as_str(), Some("pending" | "running")),
+        "a client deadline leaves the run active: {observed}"
+    );
+    let mut retry = request;
+    retry["wait_seconds"] = json!(30);
+    let answer = client.call_tool_ok("orbit_agent_invoke", retry);
+    assert_eq!(answer["run_id"], run_id);
+    assert_eq!(answer["deduplicated"], true);
+    assert_eq!(answer["state"], "success", "{answer}");
+    assert_eq!(answer["answer"]["summary"], "remote probe complete");
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_invoke_mcp_reports_a_saturated_queue() {
+    let workspace = McpWorkspace::init();
+    let shown = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "job",
+            "show",
+            "agent_invoke_pipeline",
+            "--json",
+        ]),
+    );
+    let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let limit = shown["max_active_runs"].as_u64().unwrap();
+    let config: Value = serde_yaml::from_str(
+        &std::fs::read_to_string(workspace.work.join(".orbit/config.yaml")).unwrap(),
+    )
+    .unwrap();
+    let connection = Connection::open(workspace.home.join(".orbit/orbit.db")).unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+    for index in 0..limit {
+        connection.execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, created_at, pid) VALUES (?1, ?2, 'agent_invoke_pipeline', 1, 'running', ?3, ?3, ?3, ?4)",
+            rusqlite::params![format!("jrun-mcp-occupied-{index}"), config["workspace_id"].as_str().unwrap(), now, std::process::id()]).unwrap();
+    }
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let queued = client.call_tool_ok(
+        "orbit_agent_invoke",
+        json!({"prompt":"queued MCP probe", "cwd":workspace.work}),
+    );
+    assert_eq!(queued["queued"], true, "{queued}");
+    assert_eq!(queued["state"], "queued");
+    assert_eq!(queued["queue_position"], 1);
+    assert!(!queued["warnings"].as_array().unwrap().is_empty());
+    orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "run",
+            "cancel",
+            queued["run_id"].as_str().unwrap(),
+            "--confirm",
+            "--json",
+        ]),
+    );
+}

@@ -1,0 +1,45 @@
+Print raw stdout/stderr captured for a job run
+
+Usage: orbit run logs [OPTIONS] [RUN_ID]
+
+Arguments:
+  [RUN_ID]
+          Run ID to inspect. Defaults to the most recently scheduled run globally
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+  -s, --step <STEP_ID>
+          Show raw logs for a single activity step.id from the v2 job YAML
+
+  -f, --follow
+          Stream output until the run is terminal. JSON output is JSONL
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --json
+          Output as JSON
+
+      --no-reconcile
+          Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted and releases its task reservations
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+JSON shape: {"run_id":"...","job_id":"...","records":[{"step_id":...,"stdout_blob_ref":...,"stderr_blob_ref":...,"stdout":"...","stderr":"..."}]}
+With --follow, JSON modes emit JSONL records {run_id, provider, stream, text}. Live provider lines come from the retained redacted tracing feed; completed captures supply remaining output. With --step, captures are emitted as each invocation finishes. Stops at any terminal outcome; Ctrl-C stops observing without cancelling.
+Examples:
+  orbit run logs
+  orbit run logs jrun-20260426-0631 --follow
+  orbit run logs jrun-20260426-0631 -s implement_one --json

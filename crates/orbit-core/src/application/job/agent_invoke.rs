@@ -53,9 +53,8 @@ use crate::runtime::audit::run::RunProviderProcess;
 /// Catalog job that carries one agent invocation.
 pub const AGENT_INVOKE_JOB_ID: &str = "agent_invoke_pipeline";
 
-/// Wall-clock bound applied when the caller does not name one. The activity
-/// asset's own `wall_clock_timeout_seconds` remains the ceiling; a request may
-/// only shorten it.
+/// Wall-clock bound applied when the caller does not name one. The shipped
+/// activity ceiling is 7200 seconds; a request may only shorten that ceiling.
 pub const DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS: u64 = 1800;
 
 /// Longest bound a caller may request. Anything above this is refused rather
@@ -110,6 +109,9 @@ pub struct AgentInvokeSubmission {
     /// Whether the run is waiting on the job's `max_active_runs` ceiling rather
     /// than already executing.
     pub queued: bool,
+    /// One-based position among waiting invocations, observed at submission.
+    /// A queued run may start before the response reaches the caller.
+    pub queue_position: Option<usize>,
     /// Whether this submission resolved an existing run through its
     /// idempotency key instead of creating a new one.
     pub deduplicated: bool,
@@ -120,8 +122,7 @@ pub struct AgentInvokeSubmission {
     /// Effective provider inner sandbox, as `provider:mode` (for example
     /// `codex:danger-full-access`). Distinct from Orbit's executor sandbox.
     pub provider_sandbox: String,
-    /// Operator-facing warnings. Non-empty when `provider_sandbox` is the
-    /// provider's least-restrictive inner sandbox.
+    /// Operator-facing warnings for queueing and the least-restrictive inner sandbox.
     pub warnings: Vec<String>,
 }
 
@@ -302,16 +303,51 @@ impl OrbitRuntime {
             );
         }
 
+        let mut warnings: Vec<String> = warning.into_iter().collect();
+        if let Some(position) = invoke.queue_position {
+            warnings.push(format!(
+                "Agent invocation queued at position {position}; the job's concurrent-run limit is saturated."
+            ));
+        }
+
         Ok(AgentInvokeSubmission {
             run_id: invoke.run_id,
             job_id: invoke.job_name,
             submitted_at: invoke.submitted_at,
             queued: invoke.queued,
+            queue_position: invoke.queue_position,
             deduplicated,
             admission,
             timeout_seconds,
             provider_sandbox,
-            warnings: warning.into_iter().collect(),
+            warnings,
+        })
+    }
+
+    /// Wait for an invocation, then read the same answer projection as run show.
+    /// `None` waits until terminal; a caller deadline leaves the run executing
+    /// and returns its actual state rather than projecting a run timeout.
+    pub fn wait_agent_invoke_run(
+        &self,
+        run_id: &str,
+        wait_seconds: Option<u64>,
+    ) -> Result<AgentInvokeResult, OrbitError> {
+        self.wait_pipeline_runs(
+            &[run_id.to_string()],
+            wait_seconds.unwrap_or(u64::MAX),
+            1,
+            None,
+        )?;
+        let run = self.show_job_run(run_id)?;
+        let state = self.read_run_state(run_id)?;
+        let progress = self.collect_run_execution_progress(run_id)?;
+        agent_invoke_result(
+            &run,
+            state.as_ref().map(|state| &state.step_outputs),
+            progress.provider_processes.last(),
+        )
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!("run '{run_id}' is not an agent invocation"))
         })
     }
 

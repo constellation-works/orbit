@@ -942,3 +942,6 @@ fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
     assert_eq!(runtime.show_job_run(id).unwrap().input, Some(input));
     assert_eq!(fixture.run_state(id), "running");
 }
+
+#[cfg(unix)]
+mod agent_invoke;
