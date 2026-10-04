@@ -5,9 +5,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
-    CrewConfig, DispatchError, PluginBrokerHandle, PluginBrokerRun, ResolvedActivityTools,
-    ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate,
-    TaskAutomationUpdate,
+    CrewConfig, DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
+    FinalRecoveryApplication, FinalRecoveryApplied, PluginBrokerHandle, PluginBrokerRun,
+    ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
+    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -264,7 +265,7 @@ impl RuntimeHost for OrbitRuntime {
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                     status: Some(update.status), expected_status: Some(update.expected_status),
                     status_note: update.note,
-                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![]},
+                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], final_recovery: None},
                     ..Default::default()
                 }
             }), Default::default())?;
@@ -407,7 +408,7 @@ impl RuntimeHost for OrbitRuntime {
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                     status: update.status, plan: update.plan, context_files: update.context_files,
                     external_refs: update.external_refs, status_note: update.status_note,
-                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![]},
+                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], final_recovery: None},
                     ..Default::default()
                 }
             }), Default::default())?;
@@ -656,6 +657,22 @@ impl RuntimeHost for OrbitRuntime {
             failed_step_id,
             output,
         )
+    }
+
+    fn admit_final_recovery(
+        &self,
+        run_id: &str,
+        request: &FinalRecoveryAdmissionRequest,
+    ) -> Result<FinalRecoveryAdmission, OrbitError> {
+        self.admit_run_final_recovery(run_id, request)
+    }
+
+    fn apply_final_recovery(
+        &self,
+        run_id: &str,
+        application: &FinalRecoveryApplication,
+    ) -> Result<FinalRecoveryApplied, OrbitError> {
+        self.apply_run_final_recovery(run_id, application)
     }
 
     fn checkpoint_rebase_recovery(

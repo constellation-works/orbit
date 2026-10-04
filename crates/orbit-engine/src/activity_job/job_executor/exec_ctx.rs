@@ -15,6 +15,10 @@ pub(super) struct ExecCtx<'a> {
     pub(super) pipeline: Arc<Mutex<PipelineSteps>>,
     pub(super) recovery_activity: Option<ResolvedRecoveryActivity>,
     pub(super) failure_activity: Option<ResolvedRecoveryActivity>,
+    /// [ORB-13907] The job's final recovery hook. Only the top-level context
+    /// carries it: the hook answers for a failed top-level step, so nested
+    /// block contexts leave it `None`.
+    pub(super) final_recovery_activity: Option<ResolvedRecoveryActivity>,
     /// `Some(value)` inside a fan-out worker. Rendered into template context
     /// as `{{ item }}`.
     pub(super) item: Option<Value>,

@@ -299,6 +299,8 @@ fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
         resolved_recovery_activity: None,
         failure_activity: None,
         resolved_failure_activity: None,
+        final_recovery_activity: None,
+        resolved_final_recovery_activity: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
         steps: vec![JobV2Step {
@@ -340,6 +342,8 @@ fn pipeline_with_assessor_loop() -> JobV2 {
         resolved_recovery_activity: None,
         failure_activity: None,
         resolved_failure_activity: None,
+        final_recovery_activity: None,
+        resolved_final_recovery_activity: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
         steps: vec![JobV2Step {

@@ -189,6 +189,7 @@ pub(crate) fn execute(
                         input, "comment",
                     )?,
                     artifacts: super::input::parse_artifacts(input)?,
+                    final_recovery: None,
                 },
                 ..Default::default()
             })

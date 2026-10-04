@@ -30,7 +30,7 @@ use orbit_store::contracts::JobRunStoreBackend;
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
 use orbit_types::policy::Role;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
-use orbit_types::workflow::PipelineState;
+use orbit_types::workflow::{FinalRecoveryCheckpoint, FinalRecoveryDecision, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -518,6 +518,101 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .filter(|event| event["to_status"] == "blocked")
         .count();
     assert_eq!(blocked, 1, "{after:#}");
+}
+
+/// [ORB-13907] A claimed leaf's final-recovery decision never touches the
+/// owner's task from the follower: it rides on the leaf's failure settlement,
+/// and the owner applies it once its journal has failed the claim. A replayed
+/// settlement changes nothing more.
+#[test]
+fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settlement() {
+    if !isolated(
+        "a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settlement",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.start_drain();
+    let task = pair.tasks[0].clone();
+
+    // The bind reply is lost, so the leaf exists but has not launched or
+    // settled yet.
+    pair.wire.lose_next_reply("orbit.drain.claim.bind");
+    let lost = pair.pass(&drain);
+    assert!(error_of(&lost).contains("dropped"), "{lost}");
+    let leaf = pair.leaf_runs().pop().expect("leaf");
+    let mut state = pair
+        .follower_jobs
+        .read_run_state(&leaf)
+        .unwrap()
+        .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
+    state.final_recovery = Some(FinalRecoveryCheckpoint {
+        failed_step_id: "implement".into(),
+        task_id: task.clone(),
+        observed: None,
+        base_ref: Some("main".into()),
+        admitted_at: Utc::now(),
+        decision: Some(FinalRecoveryDecision::Reject {
+            reason: "the task contradicts its own criteria".into(),
+            evidence: "criterion 1 forbids the change criterion 2 requires".into(),
+        }),
+        outcome: Some("settled: recorded for the claim settlement".into()),
+    });
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    // The leaf ran, its final recovery decided, and the run failed.
+    set_run_state(&pair.follower, &leaf, "running");
+    pair.follower_jobs
+        .finalize_job_run(
+            &leaf,
+            orbit_types::workflow::JobRunState::Failed,
+            Utc::now(),
+            None,
+        )
+        .unwrap();
+    let before = pair.owner_task(&task);
+
+    let settled = pair.pass(&drain);
+    assert!(
+        !launch_refused(&settled),
+        "a failed leaf is settled, not relaunched: {settled}"
+    );
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    let carried = &settles[0]["settlement"]["Fail"]["final_recovery"];
+    assert_eq!(carried["run_id"], leaf.as_str(), "{settles:?}");
+    assert_eq!(carried["decision"]["decision"], "reject", "{settles:?}");
+    assert_ne!(
+        before["status"], "rejected",
+        "the follower wrote nothing to the owner's task"
+    );
+
+    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "failed");
+    let applied = pair.owner_task(&task);
+    assert_eq!(applied["status"], "rejected", "{applied:#}");
+    let header = format!("final_recovery run_id={leaf} decision=reject");
+    let recorded = |task: &Value| {
+        task["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|comment| {
+                comment["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with(&header))
+            })
+            .count()
+    };
+    assert_eq!(recorded(&applied), 1, "{applied:#}");
+
+    let replay = pair
+        .wire
+        .call("", "orbit.drain.claim.settle", settles[0].clone())
+        .expect("a replayed settlement answers with the recorded outcome");
+    assert_eq!(replay["phase"], "failed", "{replay}");
+    let after = pair.owner_task(&task);
+    for field in ["status", "comments", "history"] {
+        assert_eq!(after[field], applied[field], "{field} changed on replay");
+    }
 }
 
 /// A local drain's admission of `task` on the owner, as its gate leaves it

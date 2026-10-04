@@ -191,6 +191,7 @@ fn activity_references(job: &JobV2) -> Vec<String> {
     };
     push(job.recovery_activity.as_ref());
     push(job.failure_activity.as_ref());
+    push(job.final_recovery_activity.as_ref());
     let mut collected = Vec::new();
     for step in &job.steps {
         collect_step_references(step, &mut collected);

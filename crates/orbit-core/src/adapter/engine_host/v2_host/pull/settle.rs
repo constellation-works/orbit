@@ -80,7 +80,11 @@ impl OrbitRuntime {
         if !run.state.is_terminal() {
             return Ok(Some(record));
         }
-        let settlement = leaf_failure_settlement(record.phase, &run, diagnostic);
+        let final_recovery = jobs
+            .read_run_state(run_id)?
+            .and_then(|state| state.final_recovery);
+        let settlement =
+            leaf_failure_settlement(record.phase, &run, diagnostic, final_recovery.as_ref());
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,

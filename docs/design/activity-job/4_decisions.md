@@ -1587,7 +1587,7 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 
 ### Consequences
 
-- This change ships the layer only: the activity, the contract, the applier and the pool. Planned: the delivery pipelines dispatch `final_recovery` once step recovery is exhausted, and a backstop covers tasks blocked outside pipelines; both call this applier.
+- This change ships the layer only: the activity, the contract, the applier and the pool. [ORB-13907] wires the delivery pipelines to dispatch `final_recovery` once step recovery is exhausted ([design §4](./2_design.md)). Planned: a backstop covers tasks blocked outside pipelines; it calls this applier too.
 - An unsure agent still produces a `blocked` task, now with a diagnosis and a named human action.
 - `Cost:` a final-recovery run is a frontier-model session per terminally failed run; `[]` turns it off.
 

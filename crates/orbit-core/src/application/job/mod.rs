@@ -5,6 +5,7 @@ pub(crate) mod claimed;
 pub(crate) mod crew_pools;
 pub(crate) mod delivery;
 mod exec;
+mod final_recovery;
 pub(crate) mod pipeline;
 mod resume;
 mod run;

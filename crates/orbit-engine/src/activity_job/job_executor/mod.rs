@@ -55,6 +55,7 @@ mod audit;
 mod concurrency;
 mod exec_ctx;
 mod fan_out;
+mod final_recovery;
 mod loop_block;
 mod parallel;
 mod recovery;
@@ -70,6 +71,7 @@ use self::audit::*;
 use self::concurrency::*;
 use self::exec_ctx::*;
 use self::fan_out::*;
+use self::final_recovery::*;
 use self::loop_block::*;
 use self::parallel::*;
 use self::recovery::*;
@@ -154,6 +156,16 @@ pub fn execute_job_with_resume(
         }),
         _ => None,
     };
+    let final_recovery_activity = match (
+        &job.final_recovery_activity,
+        &job.resolved_final_recovery_activity,
+    ) {
+        (Some(name), Some(activity)) => Some(ResolvedRecoveryActivity {
+            name: name.clone(),
+            spec: activity.spec.clone(),
+        }),
+        _ => None,
+    };
 
     let pipeline = seed_pipeline_from_resume(job, resume);
     let preparation_refresh = if let Some(resume) = resume {
@@ -172,18 +184,26 @@ pub fn execute_job_with_resume(
         pipeline: Arc::new(Mutex::new(pipeline_steps_from_raw(pipeline))),
         recovery_activity,
         failure_activity,
+        final_recovery_activity,
         item: None,
         iteration: None,
     };
 
+    // [ORB-13907] Final recovery runs at most once per run: a run resumed
+    // from state that recorded it never runs it again.
+    let mut final_recovery_spent = resume.is_some_and(|state| state.final_recovery.is_some());
+    // After a final-recovery `resume`, every step from the resume point runs
+    // again, whatever the seeding checkpoint recorded.
+    let mut rerunning = false;
     let mut overall_ok = true;
     let mut overall_message = None;
-    for (index, step) in job.steps.iter().enumerate() {
+    let mut index = 0;
+    while let Some(step) = job.steps.get(index) {
         let step_index = index as u32;
         let refreshes_preparation = preparation_refresh
             .as_ref()
             .is_some_and(|refresh| refresh.step_index == step_index);
-        if step_completed_in_resume(resume, step_index) && !refreshes_preparation {
+        if !rerunning && step_completed_in_resume(resume, step_index) && !refreshes_preparation {
             emit_job_event_lossy(
                 &ctx.audit,
                 ctx.task_id(),
@@ -194,33 +214,51 @@ pub fn execute_job_with_resume(
                     ),
                 },
             );
+            index += 1;
             continue;
         }
         // Compound steps write nested entries into the shared pipeline; the
         // pre-step map is what tells them apart from earlier steps' entries.
         let pipeline_before = step_is_compound(step).then(|| ctx.pipeline_snapshot());
-        let mut outcome = match run_step(step, &ctx) {
+        let failure = match run_step(step, &ctx) {
+            Ok(outcome) if outcome.success => Ok(outcome),
+            Ok(outcome) => {
+                let message = outcome
+                    .message
+                    .unwrap_or_else(|| format!("step `{}` completed with success=false", step.id));
+                Err((DispatchError::JobExecution(message.clone()), Some(message)))
+            }
+            Err(error) => Err((error, None)),
+        };
+        let mut outcome = match failure {
             Ok(outcome) => outcome,
-            Err(error) => {
-                attempt_failure_activity(step, &ctx, &error);
-                return Err(error);
+            Err((error, unsuccessful)) => {
+                let verdict = attempt_final_recovery(
+                    job,
+                    &ctx,
+                    index,
+                    &error.to_string(),
+                    &mut final_recovery_spent,
+                );
+                if let FinalRecoveryVerdict::Resume(target) = verdict {
+                    forget_step_outputs_from(&ctx, job, target);
+                    rerunning = true;
+                    index = target;
+                    continue;
+                }
+                if verdict.runs_failure_activity() {
+                    attempt_failure_activity(step, &ctx, &error);
+                }
+                match unsuccessful {
+                    Some(message) => {
+                        overall_ok = false;
+                        overall_message = Some(message);
+                        break;
+                    }
+                    None => return Err(error),
+                }
             }
         };
-        if !outcome.success {
-            overall_ok = false;
-            overall_message = Some(
-                outcome
-                    .message
-                    .unwrap_or_else(|| format!("step `{}` completed with success=false", step.id)),
-            );
-            let error = DispatchError::JobExecution(
-                overall_message
-                    .clone()
-                    .unwrap_or_else(|| format!("step `{}` failed", step.id)),
-            );
-            attempt_failure_activity(step, &ctx, &error);
-            break;
-        }
         if refreshes_preparation && let Some(refresh) = preparation_refresh.as_ref() {
             refresh.annotate_output(&mut outcome.output)?;
             record_pipeline(&ctx, &step.id, outcome.output.clone());
@@ -235,6 +273,7 @@ pub fn execute_job_with_resume(
             &outcome.output,
             &compound_outputs,
         );
+        index += 1;
     }
 
     Ok(JobOutcome {
@@ -331,6 +370,43 @@ fn compound_outputs_since(
 /// completed successfully; such steps are skipped instead of re-executed.
 fn step_completed_in_resume(resume: Option<&PipelineState>, step_index: u32) -> bool {
     resume.is_some_and(|state| state.step_states.get(&step_index) == Some(&JobRunState::Success))
+}
+
+/// [ORB-13907] Drop what the steps from `index` on recorded, before a
+/// final-recovery `resume` reruns them: their own outputs, fan-in aliases,
+/// and nested entries. A rerun step whose `when:` is now false must not leave
+/// the previous pass's output visible to later templates.
+fn forget_step_outputs_from(ctx: &ExecCtx<'_>, job: &JobV2, index: usize) {
+    let mut keys = Vec::new();
+    for step in &job.steps[index..] {
+        collect_step_keys(step, &mut keys);
+    }
+    let mut steps = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
+    let steps = Arc::make_mut(&mut steps);
+    for key in keys {
+        steps.remove(key);
+    }
+}
+
+fn collect_step_keys<'a>(step: &'a JobV2Step, keys: &mut Vec<&'a str>) {
+    keys.push(&step.id);
+    match &step.body {
+        JobV2StepBody::Parallel { parallel } => {
+            for branch in &parallel.branches {
+                collect_step_keys(branch, keys);
+            }
+        }
+        JobV2StepBody::FanOut { fan_out, fan_in } => {
+            keys.extend(fan_in.collect.as_deref());
+            collect_step_keys(&fan_out.worker, keys);
+        }
+        JobV2StepBody::Loop { loop_ } => {
+            for nested in &loop_.steps {
+                collect_step_keys(nested, keys);
+            }
+        }
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+    }
 }
 
 /// [ORB-10002] Persist a checkpoint for a completed top-level step through

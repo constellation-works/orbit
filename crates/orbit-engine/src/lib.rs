@@ -46,7 +46,8 @@ pub use activity_job::{
     resolve_job_catalog_refs_for_execution, validate_job, validate_job_deterministic_actions,
 };
 pub use context::{
-    ClaimExecutionContext, CrewConfig, HandoffLandingContext, HandoffLandingStep,
+    ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
+    FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingStep,
     HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
     ResolvedActivityTools, ReviewLandingRequest, RuntimeHost, TaskActivityUpdate,
     TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT,

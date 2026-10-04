@@ -27,6 +27,13 @@ spec:
   # No job-level ceiling: the drain's own worker limit (`--concurrency`, retuned
   # live by `orbit run concurrency`) bounds how many of these run at once.
   max_active_runs: 0
+  # ORB-13907: once step recovery is spent, a crew from
+  # `workflow.final_recovery_crews` gets one last look and returns a typed
+  # decision. `resume` reruns from the failed step or an earlier one of its
+  # phase; `escalate` blocks the task and still runs `failure_activity`; any
+  # other decision is applied by Orbit's deterministic applier and the run ends
+  # without a blocked PR. An empty crew pool skips it.
+  final_recovery_activity: final_recovery
   # Preserve recoverable work after terminal failures while keeping the
   # original error authoritative. Completion-stage failures retain the
   # already-published PR instead of fabricating a conflict handoff.

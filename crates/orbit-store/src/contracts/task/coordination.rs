@@ -369,6 +369,22 @@ pub struct ClaimEvidence {
     pub summary: Option<String>,
     pub comment: Option<String>,
     pub artifacts: Vec<orbit_types::task::TaskArtifact>,
+    /// [ORB-13907] On a failure settlement only: the leaf's final-recovery
+    /// decision, which the owner applies to its task once the claim has
+    /// failed. An owner that predates the field ignores it and only blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_recovery: Option<ClaimFinalRecovery>,
+}
+
+/// [ORB-13907] A claimed leaf's final-recovery decision, carried to the owner
+/// by the leaf's failure settlement instead of being written by the follower.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimFinalRecovery {
+    /// The leaf run whose final recovery decided.
+    pub run_id: String,
+    /// The decision as the leaf's agent proposed it. The owner verifies a
+    /// `complete_no_diff` commit against its own base branch.
+    pub decision: orbit_types::workflow::FinalRecoveryDecision,
 }
 
 /// Worker-owned documents and coordination metadata. Lifecycle transitions
