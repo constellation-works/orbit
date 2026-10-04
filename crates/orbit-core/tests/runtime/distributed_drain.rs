@@ -118,6 +118,12 @@ struct Wire {
     owner: OrbitRuntime,
     calls: Mutex<Vec<(String, Value)>>,
     lose: Mutex<Vec<&'static str>>,
+    /// The selector of every task read, in order.
+    task_reads: Mutex<Vec<String>>,
+    /// When set, every task read fails at the transport with this error.
+    task_reads_fail: Mutex<Option<String>>,
+    /// When set, the owner answers task reads with a structured tool error.
+    task_reads_remote_error: Mutex<Option<(String, String)>>,
 }
 
 impl Wire {
@@ -171,6 +177,21 @@ impl DrainOwnerTransport for Wire {
         Ok(answer)
     }
 
+    fn show_task(&self, selector: &str, input: Value) -> Result<Value, OrbitError> {
+        self.task_reads.lock().unwrap().push(selector.to_string());
+        if let Some(error) = self.task_reads_fail.lock().unwrap().clone() {
+            return Err(OrbitError::UnreachableDestination(error));
+        }
+        if let Some((code, message)) = self.task_reads_remote_error.lock().unwrap().clone() {
+            return Err(OrbitError::RemoteTool {
+                code: code.clone(),
+                message: message.clone(),
+                payload: json!({"code": code, "message": message}),
+            });
+        }
+        self.owner.run_tool("orbit.task.show", input)
+    }
+
     fn worker_coordinator(&self) -> Arc<dyn OwnerCoordinator> {
         Arc::new(NoWorkerRoute)
     }
@@ -191,6 +212,7 @@ struct Pair {
     _root: TempDir,
     wire: Arc<Wire>,
     follower: OrbitRuntime,
+    follower_repo: PathBuf,
     follower_jobs: Arc<dyn JobRunStoreBackend>,
     destination: Value,
     tasks: Vec<String>,
@@ -252,8 +274,11 @@ impl Pair {
             owner,
             calls: Mutex::default(),
             lose: Mutex::default(),
+            task_reads: Mutex::default(),
+            task_reads_fail: Mutex::default(),
+            task_reads_remote_error: Mutex::default(),
         });
-        let (follower, _repo) = open_runtime(root.path(), FOLLOWER);
+        let (follower, follower_repo) = open_runtime(root.path(), FOLLOWER);
         let follower = follower
             .with_coordination_write_owner(Some(OWNER.into()))
             .with_drain_owner_transport(wire.clone());
@@ -265,6 +290,7 @@ impl Pair {
             _root: root,
             wire,
             follower,
+            follower_repo,
             follower_jobs,
             destination: json!({
                 "owner_machine_id": OWNER,
@@ -637,4 +663,216 @@ fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
         "no local delivery run starts beside the claim"
     );
     assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "claimed");
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=Orbit Test",
+            "-c",
+            "user.email=test@orbit.invalid",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// The checkout setup gives a claimed leaf: a Git worktree of the follower's
+/// checkout on the leaf's own branch, holding a Cargo `target/` that the
+/// checkout ignores. Returns the worktree and the build output's size.
+fn leaf_worktree(pair: &Pair, leaf: &str) -> (PathBuf, u64) {
+    let repo = &pair.follower_repo;
+    if !repo.join(".git").exists() {
+        git(repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join(".gitignore"), "/target/\n/.orbit/\n").unwrap();
+        git(repo, &["add", ".gitignore"]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+    }
+    let worktree = repo
+        .join(".orbit/state/worktrees")
+        .join(format!("orbit-{leaf}"));
+    git(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("orbit/{leaf}"),
+            worktree.to_str().unwrap(),
+        ],
+    );
+    let build = worktree.join("target/debug");
+    std::fs::create_dir_all(&build).unwrap();
+    std::fs::write(build.join("orbit"), vec![0u8; 4096]).unwrap();
+    (worktree, 4096)
+}
+
+fn gc_report(result: &orbit_engine::WorktreeGcResult, leaf: &str) -> Value {
+    let result = serde_json::to_value(result).unwrap();
+    result["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|report| report["run_id"] == leaf)
+        .cloned()
+        .unwrap_or_else(|| panic!("no report for {leaf}: {result:#}"))
+}
+
+/// [ORB-13920] A settled claim is all a follower needs to give back its
+/// leaf's disk. The drain's next pass reclaims the leaf's `target/` and keeps
+/// the checkout; worktree GC then removes the checkout on the strength of the
+/// settled admission alone. Every owner task read would fail here, and none
+/// is made.
+#[test]
+fn a_settled_claimed_leaf_gives_back_its_build_output_and_then_its_worktree() {
+    if !isolated("a_settled_claimed_leaf_gives_back_its_build_output_and_then_its_worktree") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.start_drain();
+    let settled = pair.pass(&drain);
+    assert!(launch_refused(&settled), "{settled}");
+    let leaf = pair.leaf_runs().pop().expect("leaf");
+    let claim = pair
+        .follower
+        .pull_leaf_claim(&leaf)
+        .unwrap()
+        .expect("claimed leaf");
+    assert_eq!(claim.settlement_phase, "settled");
+    let (worktree, build_bytes) = leaf_worktree(&pair, &leaf);
+    *pair.wire.task_reads_fail.lock().unwrap() =
+        Some("ssh: connect to host owner port 22: Connection timed out".into());
+
+    let next = pair.pass(&drain);
+    assert!(
+        next["reclaimed_build_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes >= build_bytes),
+        "{next}"
+    );
+    assert!(!worktree.join("target").exists(), "build output reclaimed");
+    assert!(
+        worktree.join(".gitignore").exists(),
+        "the checkout stays for worktree GC"
+    );
+
+    let gc = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    let report = gc_report(&gc, &leaf);
+    assert_eq!(report["action"], "removed", "{report:#}");
+    assert!(
+        report["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("claim settled")),
+        "{report:#}"
+    );
+    assert!(!worktree.exists());
+    assert!(
+        pair.wire.task_reads.lock().unwrap().is_empty(),
+        "a settled claim needs no task read"
+    );
+}
+
+/// [ORB-13920] A claim not yet settled leaves the decision to its task's
+/// status on the owner, read over the claim's own route. A transport failure
+/// is reported as `owner_unreachable` carrying the transport's error; once
+/// the owner answers, its answer decides.
+#[test]
+fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure() {
+    if !isolated("an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.start_drain();
+    pair.wire.lose_next_reply("orbit.drain.claim.settle");
+    let lost = pair.pass(&drain);
+    assert!(error_of(&lost).contains("dropped"), "{lost}");
+    let leaf = pair.leaf_runs().pop().expect("leaf");
+    let claim = pair
+        .follower
+        .pull_leaf_claim(&leaf)
+        .unwrap()
+        .expect("claimed leaf");
+    assert_eq!(claim.settlement_phase, "settling");
+    // The leaf has finished; only its settlement is still owed to the owner.
+    set_run_state(&pair.follower, &leaf, "running");
+    pair.follower_jobs
+        .finalize_job_run(
+            &leaf,
+            orbit_types::workflow::JobRunState::Failed,
+            Utc::now(),
+            None,
+        )
+        .unwrap();
+    let (worktree, _) = leaf_worktree(&pair, &leaf);
+    let timeout = "ssh: connect to host owner port 22: Connection timed out";
+    *pair.wire.task_reads_fail.lock().unwrap() = Some(timeout.into());
+
+    let unreachable = pair
+        .follower
+        .gc_worktrees(false, None, None, false, false)
+        .unwrap();
+    let report = gc_report(&unreachable, &leaf);
+    assert_eq!(report["action"], "skipped:owner_unreachable", "{report:#}");
+    assert!(
+        report["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains(timeout)),
+        "the transport's error is reported: {report:#}"
+    );
+    let selector = pair.destination["selector"].as_str().unwrap();
+    assert_eq!(
+        *pair.wire.task_reads.lock().unwrap(),
+        vec![selector.to_string()],
+        "asked over the claim's route"
+    );
+
+    *pair.wire.task_reads_fail.lock().unwrap() = None;
+    *pair.wire.task_reads_remote_error.lock().unwrap() = Some((
+        "execution_failed".into(),
+        "owner task store unavailable".into(),
+    ));
+    let owner_error = pair
+        .follower
+        .gc_worktrees(false, None, None, false, false)
+        .unwrap();
+    let report = gc_report(&owner_error, &leaf);
+    assert_eq!(
+        report["action"], "skipped:owner_lookup_failed",
+        "{report:#}"
+    );
+    assert!(
+        report["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("owner task store unavailable")),
+        "a structured owner error proves the route answered: {report:#}"
+    );
+
+    *pair.wire.task_reads_remote_error.lock().unwrap() = None;
+    let answered = pair
+        .follower
+        .gc_worktrees(false, None, None, false, false)
+        .unwrap();
+    let report = gc_report(&answered, &leaf);
+    assert_eq!(
+        report["action"], "skipped:task_status_ineligible",
+        "{report:#}"
+    );
+    assert_eq!(
+        report["task_status"], "blocked",
+        "the owner's answer decides: {report:#}"
+    );
+    assert!(worktree.exists());
 }

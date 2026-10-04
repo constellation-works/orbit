@@ -145,6 +145,11 @@ returns.
 - `orbit run concurrency <run-id> --set N` retunes the slot ceiling live. It is
   the only ceiling: the claimed leaf jobs declare no active-run limit of their
   own, so size it to what the follower can carry.
+- Each iteration reclaims the `target/` build output of every settled leaf
+  whose worker has exited (`reclaimed_build_bytes`) and keeps the checkout.
+  `orbit gc worktrees --confirm` on the follower removes settled leaves'
+  checkouts without asking the owner; see
+  [maintenance.md](../../../orbit-setup/references/maintenance.md).
 
 ## Read-only owner surface
 

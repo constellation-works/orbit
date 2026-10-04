@@ -27,10 +27,26 @@ enable the `worktree-gc` routine for hourly reclamation —
 [automation.md](automation.md).
 
 On a replica checkout (one that pulls work from an owner on another machine),
-task records live on the owner, so GC asks the owner for each task's status
-over the federated route the pull drain uses. If the owner cannot be reached,
-those worktrees are kept and reported `skipped:owner_unreachable` rather than
-`skipped:task_unresolved`; run GC again once the owner answers.
+task records live on the owner. A claimed leaf whose claim this follower has
+settled with the owner needs no task answer: the owner holds its delivery, so
+its worktree is collected and `detail` names the settled claim. For any other
+worktree GC asks the owner for the task's status over the owner's tool
+surface, through the claim's own route (the owner must be in
+`~/.orbit/mcp-destinations.toml`). A transport failure keeps the worktree as
+`skipped:owner_unreachable` with the error in `detail`; run GC again once the
+owner answers. `skipped:no_owner_route` means the replica has no route to ask
+at all — the owner is missing from `mcp-destinations.toml` or the checkout is
+not a registered workspace — and `detail` says which. A status lookup that
+fails without a transport error is reported as `skipped:owner_lookup_failed`
+with the reason in `detail`; it does not establish that the owner is down.
+The pull drain also
+reclaims each settled leaf's `target/` on its next pass, so follower disk
+does not depend on this schedule.
+
+A directory under the worktree root that Git does not list as a worktree is
+never removed (`skipped:not_registered_worktree`). `detail` gives the remedy:
+`git worktree repair <path>` if it was moved, otherwise inspect it and delete
+it by hand once nothing in it is needed.
 
 `--target-only` reclaims per-worktree Cargo `target/` directories, which hold
 most of a worktree's size. It deletes only `<worktree>/target` and keeps the

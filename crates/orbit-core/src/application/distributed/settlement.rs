@@ -9,6 +9,7 @@
 //! admission that still held a slot when the pass started.
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use serde::Serialize;
 
 /// One admission carried by a settle-only pass.
@@ -208,5 +209,49 @@ impl crate::OrbitRuntime {
             refusal: admission.refusal.clone(),
             guidance: phase_guidance(admission.phase, admission.refusal.as_deref()),
         }))
+    }
+}
+
+/// Whether the owner answered a pull with a refusal, as opposed to a lost or
+/// uncertain delivery.
+///
+/// Only an answer counts. A refusal from the owner's pre-admission ladder —
+/// selector, capability, shape, version, ship mode, review policy, a stale
+/// ship contract — commits nothing, so it is safe to close the request once
+/// the owner also confirms it holds no receipt for it. A delivery miss, a lost
+/// answer or a store failure says nothing about whether an earlier send of the
+/// same request committed, so the request stays pending and is retried.
+pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
+    match error {
+        OrbitError::RemoteTool { code, .. } => matches!(
+            code.as_str(),
+            "invalid_input" | "capability_refused" | "capability_denied" | "policy_denied"
+        ),
+        OrbitError::InvalidInput(_)
+        | OrbitError::CapabilityRefused(_)
+        | OrbitError::CapabilityDenied(_)
+        | OrbitError::PolicyDenied(_) => true,
+        _ => false,
+    }
+}
+
+/// Whether an error says the owner could not be reached or did not answer
+/// cleanly: an unreachable or stale route, a lost or unknown outcome, an owner
+/// that is unavailable, or an owner-side failure that is not a refusal.
+///
+/// Only these mean the next call to the same owner is likely to fail or hang
+/// the same way, so a pass stops calling that owner after the first one. A
+/// refusal is an answer, and a local error (a store read, a missing binding)
+/// says nothing about the owner at all.
+pub(crate) fn is_owner_transport_failure(error: &OrbitError) -> bool {
+    match error {
+        OrbitError::RemoteTool { .. } => !is_owner_refusal(error),
+        OrbitError::UnreachableDestination(_)
+        | OrbitError::OutcomeUnknown { .. }
+        | OrbitError::OwnerUnavailable(_)
+        | OrbitError::OwnerNegotiation(_)
+        | OrbitError::StaleRoute(_)
+        | OrbitError::UnhealthyCheckout(_) => true,
+        _ => false,
     }
 }

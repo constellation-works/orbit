@@ -9,6 +9,8 @@ use orbit_store::contracts::{
     JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
 
+use crate::application::distributed::{is_owner_refusal, is_owner_transport_failure};
+
 /// Trusted owner transport, supplied by runtime composition. Implementations
 /// must check current claim/run/phase on bind and settlement; replaying a receipt
 /// never supplies execution authority. There is no local fallback.
@@ -59,50 +61,6 @@ pub(crate) enum SettleScope {
     /// left holding a claim no follower process is responsible for. Live
     /// leaves are left running; they settle themselves when they terminalize.
     Abandon,
-}
-
-/// Whether the owner answered a pull with a refusal, as opposed to a lost or
-/// uncertain delivery.
-///
-/// Only an answer counts. A refusal from the owner's pre-admission ladder —
-/// selector, capability, shape, version, ship mode, review policy, a stale
-/// ship contract — commits nothing, so it is safe to close the request once
-/// the owner also confirms it holds no receipt for it. A delivery miss, a lost
-/// answer or a store failure says nothing about whether an earlier send of the
-/// same request committed, so the request stays pending and is retried.
-fn is_owner_refusal(error: &OrbitError) -> bool {
-    match error {
-        OrbitError::RemoteTool { code, .. } => matches!(
-            code.as_str(),
-            "invalid_input" | "capability_refused" | "capability_denied" | "policy_denied"
-        ),
-        OrbitError::InvalidInput(_)
-        | OrbitError::CapabilityRefused(_)
-        | OrbitError::CapabilityDenied(_)
-        | OrbitError::PolicyDenied(_) => true,
-        _ => false,
-    }
-}
-
-/// Whether an error says the owner could not be reached or did not answer
-/// cleanly: an unreachable or stale route, a lost or unknown outcome, an owner
-/// that is unavailable, or an owner-side failure that is not a refusal.
-///
-/// Only these mean the next call to the same owner is likely to fail or hang
-/// the same way, so a pass stops calling that owner after the first one. A
-/// refusal is an answer, and a local error (a store read, a missing binding)
-/// says nothing about the owner at all.
-pub(crate) fn is_owner_transport_failure(error: &OrbitError) -> bool {
-    match error {
-        OrbitError::RemoteTool { .. } => !is_owner_refusal(error),
-        OrbitError::UnreachableDestination(_)
-        | OrbitError::OutcomeUnknown { .. }
-        | OrbitError::OwnerUnavailable(_)
-        | OrbitError::OwnerNegotiation(_)
-        | OrbitError::StaleRoute(_)
-        | OrbitError::UnhealthyCheckout(_) => true,
-        _ => false,
-    }
 }
 
 /// A [`PullPeer`] that stops calling the owner after its first transport

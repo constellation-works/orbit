@@ -154,6 +154,10 @@ pub(crate) fn pull_refill(
     if !refilled && let Err(failure) = drain.reconcile_pending(&destination) {
         error.get_or_insert(failure.to_string());
     }
+    // Settled leaves give back their build output here, not on an external
+    // GC schedule: a follower's disk would otherwise grow by a leaf's
+    // `target/` per claim [ORB-13920].
+    let reclaimed_build_bytes = runtime.reclaim_settled_leaf_build_output();
     // Count after this pass's settlements, so a breaker that opened during it
     // is reported now rather than on the next poll.
     match drain.consecutive_failed_settlements(&destination, &run_id) {
@@ -201,6 +205,7 @@ pub(crate) fn pull_refill(
              failures; inspect them and start a new drain once the cause is fixed"
         ))),
         "consecutive_failures": consecutive_failures,
+        "reclaimed_build_bytes": reclaimed_build_bytes,
         "error": error,
         "host_shutdown": host_shutdown.map(|shutdown| shutdown.describe()),
         "done": done,

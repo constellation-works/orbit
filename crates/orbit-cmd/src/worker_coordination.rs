@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
+use orbit_mcp::McpHost;
 use orbit_mcp::federated::{self, FederatedMcpHost, SshDestinationProbe};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
 use orbit_types::tool::ToolSessionContext;
@@ -119,6 +120,14 @@ impl DrainOwnerTransport for FederatedDrainOwner {
         }
         self.host()?
             .call_internal_drain(name, input, ToolSessionContext::default())
+    }
+
+    fn show_task(&self, selector: &str, mut input: Value) -> Result<Value, OrbitError> {
+        if let Some(object) = input.as_object_mut() {
+            object.insert("workspace".into(), Value::String(selector.to_string()));
+        }
+        self.host()?
+            .call_tool("orbit.task.show", input, ToolSessionContext::default())
     }
 
     fn worker_coordinator(&self) -> Arc<dyn OwnerCoordinator> {

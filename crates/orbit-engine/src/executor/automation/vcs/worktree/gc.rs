@@ -58,7 +58,18 @@ pub struct WorktreeGcReport {
     pub pr_status: Option<String>,
     pub action: String,
     pub bytes_reclaimed: u64,
+    /// Why the action was taken, when the action alone does not say: the
+    /// owner transport's error, the missing owner route, the settled claim
+    /// that licensed removal, or the remedy for a worktree GC cannot touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
+
+/// What an operator can do about a directory Git does not list as a
+/// worktree of this checkout. GC never removes one.
+const NOT_REGISTERED_REMEDY: &str = "Git does not list this directory as a worktree of this \
+     checkout, so GC never removes it. If the worktree was moved, `git worktree repair <path>` \
+     re-registers it; otherwise inspect it and delete it by hand once nothing in it is needed.";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WorktreeGcResult {
@@ -111,6 +122,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                 pr_status: None,
                 action: "skipped:ambiguous_run_path".to_string(),
                 bytes_reclaimed: 0,
+                detail: None,
             }));
             continue;
         }
@@ -137,6 +149,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                     pr_status: None,
                     action: format!("failed:{error}"),
                     bytes_reclaimed: 0,
+                    detail: None,
                 }
             });
         reports.push(report);
@@ -155,6 +168,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                     pr_status: None,
                     action: "skipped:unrecognized".to_string(),
                     bytes_reclaimed: 0,
+                    detail: None,
                 });
             }
         }
@@ -173,14 +187,14 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     })
 }
 
-/// One sweep's task lookups. Runs that retry a task, and bundles that share
-/// one, ask about each task once. Once a replica's owner proves unreachable,
-/// every later lookup in the sweep reports that without waiting on the
-/// transport again: the next sweep asks afresh.
+/// One sweep's task lookups. Results and transport failures are memoized by
+/// owner route and task, so a down owner is contacted once while another
+/// route can still answer. A missing route is not an outage and is not carried
+/// over: another run's claim may name a route.
 struct SweepTaskLookups<'a, H: RuntimeHost + ?Sized> {
     host: &'a H,
-    answers: RefCell<BTreeMap<String, WorktreeGcTaskLookup>>,
-    owner_unreachable: RefCell<Option<String>>,
+    answers: RefCell<BTreeMap<(String, String), WorktreeGcTaskLookup>>,
+    owner_unreachable: RefCell<BTreeMap<String, String>>,
 }
 
 impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
@@ -188,26 +202,35 @@ impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
         Self {
             host,
             answers: RefCell::new(BTreeMap::new()),
-            owner_unreachable: RefCell::new(None),
+            owner_unreachable: RefCell::new(BTreeMap::new()),
         }
     }
 
-    fn lookup(&self, task_id: &str) -> WorktreeGcTaskLookup {
-        if let Some(answer) = self.answers.borrow().get(task_id) {
-            return answer.clone();
-        }
-        if let Some(reason) = self.owner_unreachable.borrow().as_ref() {
-            return WorktreeGcTaskLookup::OwnerUnreachable(reason.clone());
-        }
-        let answer = self.host.lookup_task_for_worktree_gc(task_id);
-        match &answer {
-            WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
-                *self.owner_unreachable.borrow_mut() = Some(reason.clone());
+    fn lookup(&self, run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
+        let scope = self.host.worktree_gc_task_lookup_scope(run_id);
+        if let Some(scope) = scope.as_ref() {
+            let key = (scope.clone(), task_id.to_string());
+            if let Some(answer) = self.answers.borrow().get(&key) {
+                return answer.clone();
             }
-            _ => {
-                self.answers
-                    .borrow_mut()
-                    .insert(task_id.to_string(), answer.clone());
+            if let Some(reason) = self.owner_unreachable.borrow().get(scope) {
+                return WorktreeGcTaskLookup::OwnerUnreachable(reason.clone());
+            }
+        }
+        let answer = self.host.lookup_task_for_worktree_gc(run_id, task_id);
+        if let Some(scope) = scope {
+            match &answer {
+                WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
+                    self.owner_unreachable
+                        .borrow_mut()
+                        .insert(scope, reason.clone());
+                }
+                WorktreeGcTaskLookup::NoOwnerRoute(_) => {}
+                _ => {
+                    self.answers
+                        .borrow_mut()
+                        .insert((scope, task_id.to_string()), answer.clone());
+                }
             }
         }
         answer
@@ -223,14 +246,21 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     registered: &BTreeSet<PathBuf>,
 ) -> Result<WorktreeGcReport, OrbitError> {
     let task_ids = attributed_task_ids(run);
+    // A claimed leaf whose claim is settled with its owner needs no task
+    // answer: the owner already holds what the leaf delivered.
+    let settled_claim = if options.target_only {
+        None
+    } else {
+        lookups.host.settled_claim_for_worktree_gc(&run.run_id)
+    };
     // Target-only collection never consults task state, so it never pays a
-    // store or owner round trip per task.
-    let resolved = if options.target_only {
+    // store or owner round trip per task; neither does a settled claim.
+    let resolved = if options.target_only || settled_claim.is_some() {
         Vec::new()
     } else {
         task_ids
             .iter()
-            .map(|task_id| (task_id.clone(), lookups.lookup(task_id)))
+            .map(|task_id| (task_id.clone(), lookups.lookup(&run.run_id, task_id)))
             .collect::<Vec<(String, WorktreeGcTaskLookup)>>()
     };
     let first_task = resolved.first().and_then(|(_, lookup)| match lookup {
@@ -249,6 +279,7 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         pr_status: first_task.and_then(|(_, pr_status)| pr_status),
         action: String::new(),
         bytes_reclaimed: 0,
+        detail: None,
     };
 
     // Secondary gate: never disturb a worktree that may still back a live
@@ -276,6 +307,7 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     }
     if !path_is_registered(registered, path) {
         report.action = "skipped:not_registered_worktree".to_string();
+        report.detail = Some(NOT_REGISTERED_REMEDY.to_string());
         return Ok(report);
     }
     if options.target_only {
@@ -292,19 +324,36 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     // eligible only when *every* task it serves is settled, so a bundle is
     // never easier to discard than its least-settled member. The first
     // member that blocks deletion becomes the reported task.
-    if resolved.is_empty() {
+    //
+    // A claimed leaf's settled claim stands in for its task's status: the
+    // follower holds no task records, and the owner already has the leaf's
+    // delivery whatever the task's status says now.
+    if let Some(settlement) = settled_claim {
+        report.detail = Some(settlement);
+    } else if resolved.is_empty() {
         report.action = "skipped:unattributed".to_string();
         return Ok(report);
     }
     for (task_id, lookup) in resolved {
-        let (task_status, pr_status, action) = match lookup {
+        let (task_status, pr_status, action, detail) = match lookup {
             WorktreeGcTaskLookup::Found { status, pr_status } => {
                 if task_status_permits_deletion(status) {
                     continue;
                 }
-                (Some(status), pr_status, "skipped:task_status_ineligible")
+                (
+                    Some(status),
+                    pr_status,
+                    "skipped:task_status_ineligible",
+                    None,
+                )
             }
-            WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved"),
+            WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved", None),
+            WorktreeGcTaskLookup::NoOwnerRoute(reason) => {
+                (None, None, "skipped:no_owner_route", Some(reason))
+            }
+            WorktreeGcTaskLookup::OwnerLookupFailed(reason) => {
+                (None, None, "skipped:owner_lookup_failed", Some(reason))
+            }
             // A replica's task state lives on its owner. Not reaching the
             // owner is not evidence the task is unknown, so say which it was.
             WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
@@ -315,13 +364,14 @@ fn classify_known<H: RuntimeHost + ?Sized>(
                     %reason,
                     "worktree GC could not reach the workspace owner to resolve a task; retaining the worktree"
                 );
-                (None, None, "skipped:owner_unreachable")
+                (None, None, "skipped:owner_unreachable", Some(reason))
             }
         };
         report.task_id = Some(task_id);
         report.task_status = task_status;
         report.pr_status = pr_status;
         report.action = action.to_string();
+        report.detail = detail;
         return Ok(report);
     }
 
@@ -453,6 +503,19 @@ fn collect_build_output(
     })?;
     report.action = "removed_target".to_string();
     Ok(report)
+}
+
+/// Whether any worktree this run could have left behind still holds a real
+/// `target/` build output directory. A cheap probe — no Git, no walk — for
+/// callers that sweep many finished runs and collect only those with
+/// something to reclaim.
+pub fn run_worktree_has_build_output(repo_root: &Path, run: &JobRun) -> bool {
+    expected_paths(repo_root, run).is_ok_and(|paths| {
+        paths.iter().any(|path| {
+            fs::symlink_metadata(path.join(BUILD_OUTPUT_DIR))
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        })
+    })
 }
 
 /// Every directory this run could have left behind.

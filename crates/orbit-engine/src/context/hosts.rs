@@ -256,8 +256,17 @@ pub enum WorktreeGcTaskLookup {
     },
     /// The owning store answered but did not produce the task.
     Unresolved,
-    /// This checkout is a replica and its owner could not be asked. The
-    /// string is the transport's reason, for logs.
+    /// This checkout is a replica with no route to ask its owner: it is not
+    /// a registered workspace or has no federated destination for the owner.
+    /// Nothing was attempted over the wire, so this is a configuration gap,
+    /// not an outage. The string names it.
+    NoOwnerRoute(String),
+    /// The owner route was available, but the owner answered with a failure
+    /// while reading the task. The string names the owner's response.
+    OwnerLookupFailed(String),
+    /// This checkout is a replica and the transport to its owner failed. The
+    /// string is the transport's error, reported beside the retained
+    /// worktree.
     OwnerUnreachable(String),
 }
 
@@ -593,9 +602,11 @@ pub trait RuntimeHost: Send + Sync {
         ))
     }
     /// A task's settlement state for worktree GC, read from the store that
-    /// owns the workspace's tasks. The default reads this host's own store;
-    /// a replica host overrides it to ask its owner.
-    fn lookup_task_for_worktree_gc(&self, task_id: &str) -> WorktreeGcTaskLookup {
+    /// owns the workspace's tasks. `run_id` is the run whose worktree is
+    /// being classified, so a replica can ask through that run's own claim
+    /// route. The default reads this host's own store; a replica host
+    /// overrides it to ask its owner.
+    fn lookup_task_for_worktree_gc(&self, _run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
         match self.get_task(task_id) {
             Ok(task) => WorktreeGcTaskLookup::Found {
                 status: task.status,
@@ -603,6 +614,20 @@ pub trait RuntimeHost: Send + Sync {
             },
             Err(_) => WorktreeGcTaskLookup::Unresolved,
         }
+    }
+    /// Stable scope for memoizing task lookups during one GC sweep. Replica
+    /// hosts return the claim's owner selector, because one checkout may hold
+    /// claims routed to different owners. `None` disables memoization.
+    fn worktree_gc_task_lookup_scope(&self, _run_id: &str) -> Option<String> {
+        Some("local".to_string())
+    }
+    /// Whether `run_id` is a claimed leaf whose claim this follower has
+    /// settled with its owner. The owner then holds the leaf's delivery, so
+    /// a terminal leaf's worktree is this machine's to reclaim without asking
+    /// about the task. `Some` names the settlement for the GC report; the
+    /// default host pulls no work and holds no claims.
+    fn settled_claim_for_worktree_gc(&self, _run_id: &str) -> Option<String> {
+        None
     }
     fn data_root(&self) -> &Path {
         Path::new("")

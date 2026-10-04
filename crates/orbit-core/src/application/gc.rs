@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use orbit_engine::{WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees};
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contracts::{JobRunQuery, LocalPullPhase};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
@@ -52,11 +52,18 @@ impl OrbitRuntime {
     /// A task's settlement state for worktree GC [ORB-13658].
     ///
     /// An owner checkout reads its own store. A replica holds no task records
-    /// — they live on its owner — so it asks the owner over the same federated
-    /// route its pull drain uses. A transport failure is reported as such, not
-    /// folded into "unresolved": the owner not answering says nothing about
-    /// whether the task exists.
-    pub(crate) fn worktree_gc_task_lookup(&self, task_id: &str) -> WorktreeGcTaskLookup {
+    /// — they live on its owner — so it asks the owner over the owner's
+    /// ordinary tool surface, through the route the run's own claim names
+    /// (its admission's destination) or else this checkout's registered
+    /// workspace on the owner. Only a transport failure is reported as the
+    /// owner being unreachable [ORB-13920]: the owner not answering says
+    /// nothing about whether the task exists, and a route this replica does
+    /// not have is a configuration gap, not an outage.
+    pub(crate) fn worktree_gc_task_lookup(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> WorktreeGcTaskLookup {
         let Some(owner_machine) = self.coordination_write_owner() else {
             return match self.get_task(task_id) {
                 Ok(task) => WorktreeGcTaskLookup::Found {
@@ -66,25 +73,22 @@ impl OrbitRuntime {
                 Err(_) => WorktreeGcTaskLookup::Unresolved,
             };
         };
-        let Some(logical_workspace) = self
-            .workspace_runtime_binding()
-            .map(|binding| binding.logical_workspace_id.as_str())
-        else {
-            return WorktreeGcTaskLookup::OwnerUnreachable(
-                "this replica checkout is not a registered workspace".into(),
+        let Some(selector) = self.worktree_gc_owner_selector(owner_machine, run_id) else {
+            return WorktreeGcTaskLookup::NoOwnerRoute(
+                "this replica checkout is not a registered workspace and the run holds no claim \
+                 naming its owner; register it with `orbit workspace init --role replica`"
+                    .into(),
             );
         };
         let Some(transport) = self.drain_owner_transport() else {
-            return WorktreeGcTaskLookup::OwnerUnreachable(
+            return WorktreeGcTaskLookup::NoOwnerRoute(
                 "this runtime has no federated owner route; add the owner to \
                  ~/.orbit/mcp-destinations.toml"
                     .into(),
             );
         };
-        let selector = format!("{owner_machine}/{logical_workspace}");
-        let answer = transport.call(
+        let answer = transport.show_task(
             &selector,
-            "orbit.task.show",
             json!({ "id": task_id, "fields": ["status", "pr_status"] }),
         );
         match answer {
@@ -93,8 +97,92 @@ impl OrbitRuntime {
             Err(OrbitError::RemoteTool { code, .. }) if code == "not_found" => {
                 WorktreeGcTaskLookup::Unresolved
             }
-            Err(error) => WorktreeGcTaskLookup::OwnerUnreachable(error.to_string()),
+            Err(error @ (OrbitError::UnknownSelector(_) | OrbitError::AmbiguousDestination(_))) => {
+                WorktreeGcTaskLookup::NoOwnerRoute(format!("{selector}: {error}"))
+            }
+            Err(error) if is_worktree_gc_transport_failure(&error) => {
+                WorktreeGcTaskLookup::OwnerUnreachable(format!("{selector}: {error}"))
+            }
+            Err(error) => WorktreeGcTaskLookup::OwnerLookupFailed(format!("{selector}: {error}")),
         }
+    }
+
+    /// Scope for memoizing owner lookups during one worktree GC sweep.
+    /// Different claimed leaves can belong to different owner destinations.
+    pub(crate) fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
+        let Some(owner_machine) = self.coordination_write_owner() else {
+            return Some("local".to_string());
+        };
+        self.worktree_gc_owner_selector(owner_machine, run_id)
+    }
+
+    fn worktree_gc_owner_selector(&self, owner_machine: &str, run_id: &str) -> Option<String> {
+        let claim_selector = match self.stores().jobs().local_pull_for_run(run_id) {
+            Ok(record) => record.map(|record| record.destination.selector),
+            Err(error) => {
+                tracing::warn!(
+                    run_id,
+                    %error,
+                    "worktree GC could not read the run's claim admission; asking through the \
+                     workspace route"
+                );
+                None
+            }
+        };
+        claim_selector.or_else(|| {
+            self.workspace_runtime_binding()
+                .map(|binding| format!("{owner_machine}/{}", binding.logical_workspace_id))
+        })
+    }
+
+    /// The settled claim behind a claimed leaf's worktree, if it has one
+    /// [ORB-13920].
+    ///
+    /// The local admission record is the follower's durable account of the
+    /// claim: once it is `Settled` the owner has accepted the leaf's outcome
+    /// (or had already ended the claim), so the owner holds whatever the leaf
+    /// delivered and nothing on this machine is still owed to it. Read
+    /// without creating the pull schema, so a workspace that never pulled
+    /// reads nothing.
+    pub(crate) fn worktree_gc_settled_claim(&self, run_id: &str) -> Option<String> {
+        let record = match self.stores().jobs().local_pull_for_run(run_id) {
+            Ok(record) => record?,
+            Err(error) => {
+                tracing::warn!(run_id, %error, "worktree GC could not read the run's claim admission");
+                return None;
+            }
+        };
+        if record.phase != LocalPullPhase::Settled {
+            return None;
+        }
+        let owner = &record.destination.selector;
+        Some(match &record.refusal {
+            Some(refusal) => format!("claim closed by its owner {owner}: {refusal}"),
+            None => format!("claim settled with its owner {owner}"),
+        })
+    }
+
+    /// Reclaim the `target/` build output of one terminal run's worktree,
+    /// keeping its checkout. The collector's target-only gates apply: a
+    /// terminal run, a registered worktree, no live or undecidable worker,
+    /// and only Git-ignored content under `target/`.
+    pub(crate) fn reclaim_run_build_output(
+        &self,
+        runs: &[JobRun],
+        run_id: &str,
+    ) -> Result<WorktreeGcResult, OrbitError> {
+        collect_worktrees(
+            &self.paths().repo_root,
+            runs,
+            self,
+            &WorktreeGcOptions {
+                delete: true,
+                run_id: Some(run_id.to_string()),
+                older_than: None,
+                estimate_bytes: false,
+                target_only: true,
+            },
+        )
     }
 
     pub fn gc_worktrees(
@@ -132,6 +220,19 @@ impl OrbitRuntime {
             },
         )
     }
+}
+
+/// Only an unreachable destination, a lost result, or a fenced unavailable
+/// owner is evidence that the owner could not be reached. Stale local routes,
+/// unhealthy checkout probes, and structured tool errors leave the owner
+/// reachable or unverified, so they do not mean `owner_unreachable`.
+fn is_worktree_gc_transport_failure(error: &OrbitError) -> bool {
+    matches!(
+        error,
+        OrbitError::UnreachableDestination(_)
+            | OrbitError::OutcomeUnknown { .. }
+            | OrbitError::OwnerUnavailable(_)
+    )
 }
 
 /// The owner's `status`/`pr_status` projection. An answer GC cannot read is

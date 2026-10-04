@@ -26,7 +26,9 @@ pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attri
 pub(super) use push::push_batch_changes;
 pub(crate) use resume::reconcile_resumed_failure_handoff;
 pub(super) use worktree::setup_worktree;
-pub use worktree::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
+pub use worktree::{
+    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, run_worktree_has_build_output,
+};
 
 pub(crate) fn run_private_operation(
     operation: &str,
