@@ -6,7 +6,8 @@
 //!   lands the maximum id.
 //! - Job-run ids are never minted twice, even after the run they named is
 //!   archived or deleted and the store reopened; local pull admission holds
-//!   one slot per admitted request under a shared ceiling.
+//!   one slot per admitted request under a shared ceiling, which is the
+//!   drain's live worker limit and nothing else.
 //! - The owner's commit boundary admits at most one claim per request and per
 //!   task under concurrent pulls, and a handoff is authorized only by the
 //!   policy its claim was admitted under and only over unchanged evidence.
@@ -425,6 +426,55 @@ fn concurrent_pull_admission_obeys_the_shared_ceiling() {
             .unwrap()
             .is_none(),
         "a full ceiling admits nothing more"
+    );
+}
+
+/// The drain's own limit is the only ceiling on pulled leaves: one drain
+/// admits well past the ten a leaf definition used to allow, under the limit
+/// an operator retuned on the drain's state rather than the one it was
+/// submitted with.
+#[test]
+fn pull_admission_is_bound_only_by_the_drains_live_limit() {
+    if !isolated("pull_admission_is_bound_only_by_the_drains_live_limit") {
+        return;
+    }
+    const SUBMITTED: usize = 3;
+    const RETUNED: u32 = 24;
+    let root = TempDir::new().unwrap();
+    let jobs = workspace_job_run_store(Store::open(&root.path().join("pull.db")).unwrap(), "ws");
+    let parent = jobs
+        .insert_job_run("workspace_pull_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    let mut state = PipelineState::new(
+        parent.run_id.clone(),
+        parent.job_id.clone(),
+        serde_json::json!({}),
+    );
+    assert!(state.set_drain_worker_limit(RETUNED, SUBMITTED as u32, "cli".into(), None, None));
+    jobs.write_run_state(&parent.run_id, &state).unwrap();
+    let destination = PullDestination {
+        owner_machine_id: "owner".into(),
+        owner_workspace_id: "ws".into(),
+        selector: "owner/ws".into(),
+        execution_machine_id: "owner".into(),
+    };
+
+    let admitted = (0..RETUNED + 6)
+        .filter(|index| {
+            let request = pull_request(&parent.run_id, &format!("request-{index}"));
+            jobs.allocate_pull_request(&destination, &request, SUBMITTED)
+                .unwrap()
+                .is_some()
+        })
+        .count();
+
+    assert_eq!(admitted, RETUNED as usize, "the retuned limit governs");
+    let occupancy = jobs.drain_leaf_occupancy().unwrap();
+    assert_eq!(occupancy.occupied, RETUNED as usize);
+    assert_eq!(
+        occupancy.per_pipeline.get("task_claimed_local_pipeline"),
+        Some(&(RETUNED as usize)),
+        "one leaf definition holds every slot, with no ceiling of its own"
     );
 }
 

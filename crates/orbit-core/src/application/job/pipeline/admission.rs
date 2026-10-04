@@ -418,11 +418,17 @@ pub(super) fn pipeline_run_is_runnable(
         && pipeline_run_queue_position(runs, run_id, max_active_runs).is_none()
 }
 
+/// The run's one-based place among those waiting for the job's
+/// `max_active_runs`, or `None` when it may execute now. A ceiling of `0` is
+/// no ceiling: nothing ever waits.
 fn pipeline_run_queue_position(
     runs: &[JobRun],
     run_id: &str,
     max_active_runs: u32,
 ) -> Option<usize> {
+    if max_active_runs == 0 {
+        return None;
+    }
     let mut ordered = runs.to_vec();
     ordered.sort_by(|left, right| {
         left.scheduled_at
@@ -433,7 +439,7 @@ fn pipeline_run_queue_position(
     ordered
         .iter()
         .position(|run| run.run_id == run_id)
-        .and_then(|index| (index + 1).checked_sub(max_active_runs.max(1) as usize))
+        .and_then(|index| (index + 1).checked_sub(max_active_runs as usize))
         .filter(|position| *position > 0)
 }
 

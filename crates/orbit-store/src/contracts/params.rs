@@ -504,18 +504,10 @@ pub struct DrainLeafOccupancy {
     /// descendants rather than counted beside them, and a terminal leaf keeps
     /// its slot until its claim settles.
     pub occupied: usize,
-    /// Occupancy per leaf job definition, so each definition's own
-    /// `max_active_runs` can be checked against the same reading. Includes
-    /// pending admissions no live run represents yet.
+    /// Occupancy per leaf job definition, reported beside the total so an
+    /// operator can see which definitions hold the slots. Includes pending
+    /// admissions no live run represents yet.
     pub per_pipeline: std::collections::BTreeMap<String, usize>,
-}
-
-impl DrainLeafOccupancy {
-    /// Live runs and pending admissions of one leaf definition.
-    #[must_use]
-    pub fn for_pipeline(&self, job_id: &str) -> usize {
-        self.per_pipeline.get(job_id).copied().unwrap_or(0)
-    }
 }
 
 /// Immutable request and binding with a monotone local execution checkpoint.

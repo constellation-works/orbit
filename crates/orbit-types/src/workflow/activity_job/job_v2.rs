@@ -49,6 +49,9 @@ pub struct JobV2 {
     pub failure_activity: Option<String>,
     #[serde(skip)]
     pub resolved_failure_activity: Option<ActivityV2>,
+    /// Runs of this job allowed to execute at once; later submissions wait
+    /// `pending` in submission order. `0` imposes no job-level ceiling, for a
+    /// job whose callers already bound how many runs they start.
     #[serde(default = "default_max_active_runs")]
     pub max_active_runs: u32,
     #[serde(default)]

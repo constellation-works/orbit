@@ -221,7 +221,8 @@ its transaction:
   definitions, or a pull admission whose bound leaf went terminal before settling), not counted
   beside it;
 - an admission with no live run holds its own slot;
-- each definition's `max_active_runs: 10` is checked against the same reading;
+- the drain's worker limit is the only ceiling: the leaf definitions declare none of their own
+  ([ORB-13893]), so `orbit run concurrency` retunes a pull drain exactly as it does an auto drain;
 - a slot returns when the claim settles, not when its leaf terminalizes.
 
 `classify_workspace_auto_tasks` and the readiness diagnostic report `wrapper_leaf_runs` and

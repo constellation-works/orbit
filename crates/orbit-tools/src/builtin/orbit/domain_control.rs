@@ -40,19 +40,19 @@ impl Tool for WorkflowAutoTool {
                 "for_seconds",
                 "integer",
                 false,
-                "Required for start: window length in seconds, 1 through 604800",
+                "Required for start: window length in seconds, 1 through 86400 (24 hours)",
             ),
             parameter(
                 "concurrency",
                 "integer",
                 false,
-                "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize, from 1 to the ship job's own active-run limit",
+                "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. The drain's only ceiling: delivery jobs impose none of their own",
             ),
             parameter(
                 "id",
                 "string",
                 false,
-                "Resize only: auto-drain run ID. Omitted targets the workspace's one live auto drain; refused when none or several are live",
+                "Resize only: auto- or pull-drain run ID. Omitted targets the workspace's one live drain; refused when none or several are live",
             ),
             parameter(
                 "if_revision",

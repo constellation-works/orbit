@@ -40,13 +40,15 @@ An explicit task ID must be in `backlog` or `in-progress`: shipping a `blocked`,
 so return a blocked task to the backlog (`orbit task update <id> --status backlog`)
 before shipping it again.
 
-`run auto` drains backlog leaf tasks for a bounded window. The window bounds
-only the *start* of new work — a task already shipping when it expires still
-finishes.
+`run auto` drains backlog leaf tasks for a bounded window of at most 24 hours.
+The window bounds only the *start* of new work — a task already shipping when
+it expires still finishes.
 
 It keeps `--concurrency` tasks in flight (5 by default) and re-lists the whole
 backlog every pass, so a slot is refilled as soon as its own task finishes and a
-task filed mid-window starts without waiting for the batch around it.
+task filed mid-window starts without waiting for the batch around it. That
+number is the only bound: the delivery jobs impose no active-run limit of their
+own, so size it to what the host can carry.
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
 --set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
@@ -58,9 +60,9 @@ authorization. The retune keeps all of them:
 - The next admission pass reads the new ceiling. Raising it fills the extra
   slots from the same backlog; lowering it stops new admissions until enough
   children finish, and cancels nothing that is already running.
-- It is refused, with the reason, for a run that is not a drain, has not started,
-  has already finished, or asks for more workers than the leaf job's own
-  `max_active_runs` allows.
+- It is refused, with the reason, for a run that is not a drain (an `orbit run
+  auto` window or a replica's `orbit run auto --pull` drain), has not started,
+  or has already finished.
 - `--if-revision N` makes the change conditional on the ceiling still being the
   one you read, so two operators cannot silently overwrite each other. The
   current value and who last moved it are on `orbit run show <run-id>`

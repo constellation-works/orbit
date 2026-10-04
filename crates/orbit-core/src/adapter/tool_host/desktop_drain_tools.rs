@@ -1,6 +1,7 @@
 //! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
 //! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
 use crate::application::job::DrainWorkerLimitRequest;
+use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
 use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string, required_string};
@@ -37,14 +38,16 @@ pub(super) fn control(
     }
     let mut result = match action.as_str() {
         "start" => {
+            // The drain refuses a longer window at its first step, so a start
+            // past it would only submit a run that fails.
             let seconds = input
                 .get("for_seconds")
                 .and_then(Value::as_u64)
-                .filter(|seconds| (1..=604_800).contains(seconds))
+                .filter(|seconds| (1..=MAX_DRAIN_WINDOW_SECONDS).contains(seconds))
                 .ok_or_else(|| {
-                    OrbitError::InvalidInput(
-                        "for_seconds must be a whole number from 1 to 604800 (seven days)".into(),
-                    )
+                    OrbitError::InvalidInput(format!(
+                        "for_seconds must be a whole number from 1 to {MAX_DRAIN_WINDOW_SECONDS} (24 hours)"
+                    ))
                 })?;
             let concurrency = input
                 .get("concurrency")
@@ -120,7 +123,7 @@ pub(super) fn control(
 /// [ORB-11253] Move a live drain's worker ceiling without replacing its run:
 /// the run ID, deadline, completion authorization and dispatched children
 /// stay as they are, and a lower ceiling only stops new admissions. Without
-/// an `id` it targets the workspace's one live auto drain.
+/// an `id` it targets the workspace's one live auto or pull drain.
 fn resize(
     runtime: &OrbitRuntime,
     input: &Value,
@@ -141,7 +144,7 @@ fn resize(
     let reason = optional_string(input, "reason")?;
     let run_id = match optional_string(input, "id")? {
         Some(id) => id,
-        None => runtime.active_auto_drain_run_id()?,
+        None => runtime.active_drain_run_id()?,
     };
     let change = runtime.set_drain_worker_limit(DrainWorkerLimitRequest {
         run_id: &run_id,
@@ -160,7 +163,6 @@ fn resize(
         "previous_concurrency": change.previous_max_active_leaf_runs,
         "concurrency": change.max_active_leaf_runs,
         "revision": change.revision,
-        "hard_limit": change.hard_limit,
     }))
 }
 

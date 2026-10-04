@@ -24,7 +24,9 @@ spec:
   task_delivery:
     modes: [pr]
   kind: workflow
-  max_active_runs: 10
+  # No job-level ceiling: the drain's own worker limit (`--concurrency`, retuned
+  # live by `orbit run concurrency`) bounds how many of these run at once.
+  max_active_runs: 0
   # Preserve recoverable work after terminal failures while keeping the
   # original error authoritative. Completion-stage failures retain the
   # already-published PR instead of fabricating a conflict handoff.

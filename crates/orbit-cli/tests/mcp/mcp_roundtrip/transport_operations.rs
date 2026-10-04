@@ -205,6 +205,46 @@ fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unautho
     assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), before);
 }
 
+/// A start window longer than the drain itself accepts is refused before any
+/// run exists, and resize retunes a replica's pull drain — the workspace's one
+/// live drain when no `id` is given — past the former leaf ceiling of ten.
+#[test]
+fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let id = "jrun-stdio-pull-workers";
+    let runtime = seeded_run(
+        &workspace,
+        id,
+        "workspace_pull_pipeline",
+        "running",
+        json!({"max_active_leaf_runs":5}),
+    );
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let refused = client.call_tool_err(
+        "orbit_workflow_auto",
+        json!({"workspace":selector,"action":"start","for_seconds":86_401}),
+    );
+    assert_eq!(refused["code"], "invalid_input", "{refused}");
+    let runs = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    assert_eq!(
+        runs["items"].as_array().unwrap().len(),
+        1,
+        "only the seeded pull drain exists: {runs}"
+    );
+
+    let changed = client.call_tool_ok(
+        "orbit_workflow_auto",
+        json!({"workspace":selector,"action":"resize","concurrency":24}),
+    );
+
+    assert_eq!(changed["run_id"], id);
+    assert_eq!(changed["previous_concurrency"], 5);
+    assert_eq!(changed["concurrency"], 24);
+    let state = runtime.read_run_state(id).unwrap().unwrap();
+    assert_eq!(state.effective_max_active_leaf_runs(5), 24);
+}
+
 #[test]
 fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_lineage() {
     let workspace = McpWorkspace::init();

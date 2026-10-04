@@ -22,7 +22,9 @@ spec:
   task_delivery:
     modes: [local]
   kind: workflow
-  max_active_runs: 10
+  # No job-level ceiling: the drain's own worker limit (`--concurrency`, retuned
+  # live by `orbit run concurrency`) bounds how many of these run at once.
+  max_active_runs: 0
   default_input:
     task_ids: []
     auto_push: false

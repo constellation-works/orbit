@@ -45,8 +45,8 @@ spec:
   default_input:
     max_tasks: 50
     for_seconds: 0
-    # Live `task_auto_pipeline` runs allowed at once. That job declares
-    # `max_active_runs: 10`, which is the hard ceiling above this one.
+    # Live `task_auto_pipeline` runs allowed at once. The leaf jobs declare no
+    # active-run ceiling of their own, so this is the only bound.
     #
     # ORB-11253: this is the ceiling the run *starts* with, not a fixed one.
     # `orbit run concurrency <run_id> --set N` records a live ceiling on this

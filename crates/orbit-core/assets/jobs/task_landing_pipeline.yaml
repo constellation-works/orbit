@@ -23,9 +23,9 @@ metadata:
 spec:
   state: enabled
   kind: workflow
-  # Landing is serial per handoff; the ceiling only bounds unrelated handoffs
-  # landing at the same time.
-  max_active_runs: 10
+  # Landing is serial per handoff. Unrelated handoffs land side by side with
+  # no job-level ceiling, as many as the drains above them delivered.
+  max_active_runs: 0
   default_input:
     handoff_id: ""
     task_id: ""

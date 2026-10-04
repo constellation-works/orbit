@@ -352,8 +352,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   carries anything an earlier drain left behind.
 
 Operate it with the ordinary run commands: `orbit run show <run-id>`,
-`orbit run concurrency <run-id> --set N`, and `orbit run auto --stop` (closes
-the window; live leaves keep running and still settle). Ship-sweep
+`orbit run concurrency <run-id> --set N` (MCP: `orbit_workflow_auto` with
+`action: "resize"`), and `orbit run auto --stop` (closes the window; live
+leaves keep running and still settle). The drain's `--concurrency`, as last
+retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
+active-run limit of their own. `--for` is at most 24 hours. Ship-sweep
 enablement is unchanged by any of this.
 
 To close the feature entirely, set `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`

@@ -28,12 +28,11 @@ impl Execute for JobShowArgs {
             bold("State:"),
             text(&job.state().to_string(), Domain::JobState)
         );
-        let _ = writeln!(
-            out,
-            "{} {}",
-            bold("Max Active Runs:"),
-            job.max_active_runs()
-        );
+        let max_active_runs = match job.max_active_runs() {
+            0 => "unlimited".to_string(),
+            limit => limit.to_string(),
+        };
+        let _ = writeln!(out, "{} {}", bold("Max Active Runs:"), max_active_runs);
         let _ = writeln!(out, "{} {}", bold("Path:"), job.path.display());
         if let Some(default_input) = job.default_input() {
             let rendered = serde_json::to_string(default_input)

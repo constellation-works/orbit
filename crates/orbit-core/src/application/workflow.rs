@@ -32,6 +32,12 @@ pub fn find_workflow(name: &str) -> Option<&'static Workflow> {
 pub const SHIP_WORKFLOW_ALIAS: &str = "ship";
 pub const AUTO_WORKFLOW_ALIAS: &str = "auto";
 
+/// Longest drain window a caller may request, in seconds (24h). The window is
+/// the caller's, not a safety property, but an unbounded deadline would let a
+/// typo hold the drain job's single active-run slot indefinitely. The drain's
+/// own window check and every submission surface read this one value.
+pub(crate) const MAX_DRAIN_WINDOW_SECONDS: u64 = 86_400;
+
 /// Build the `task_auto_pipeline` input document for a ship run.
 ///
 /// An empty `task_ids` slice selects auto mode (the pipeline discovers

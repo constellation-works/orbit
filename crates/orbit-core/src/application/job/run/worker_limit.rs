@@ -1,4 +1,9 @@
-//! Adjust the worker ceiling of a live auto drain [ORB-11253].
+//! Adjust the worker ceiling of a live drain [ORB-11253].
+//!
+//! Both drains carry one: an owner's `orbit run auto` window and a replica's
+//! `orbit run auto --pull` drain each read the control below on every
+//! admission pass. It is the only ceiling on their leaves — the leaf job
+//! definitions declare no active-run limit of their own [ORB-13893].
 //!
 //! A drain's `max_active_leaf_runs` is snapshotted into the run's immutable
 //! `initial_input` at submission, so raising it used to mean cancelling the
@@ -20,7 +25,8 @@ use orbit_types::workflow::{DrainWorkerLimit, JobRun, JobRunState, PipelineState
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, SHIP_WORKFLOW_ALIAS, find_workflow};
+use crate::application::distributed::PULL_DRAIN_JOB;
+use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, find_workflow};
 
 const WORKER_LIMIT_REQUEST_AUDIT: &str = "pipeline.run.workers.requested";
 const WORKER_LIMIT_COMPLETION_AUDIT: &str = "pipeline.run.workers.completed";
@@ -60,13 +66,11 @@ pub struct DrainWorkerLimitChange {
     pub previous_max_active_leaf_runs: u32,
     pub max_active_leaf_runs: u32,
     pub revision: u32,
-    /// The ceiling `task_auto_pipeline`'s own `max_active_runs` imposes above
-    /// this one, echoed so an operator sees the headroom they have left.
-    pub hard_limit: u32,
 }
 
 impl OrbitRuntime {
-    /// Set the live worker ceiling of an auto drain that is still running.
+    /// Set the live worker ceiling of an auto or pull drain that is still
+    /// running.
     ///
     /// The liveness check and the write share one transaction, so a run that
     /// terminalizes concurrently refuses the update instead of accepting a
@@ -88,7 +92,6 @@ impl OrbitRuntime {
                     "previous_max_active_leaf_runs": change.previous_max_active_leaf_runs,
                     "max_active_leaf_runs": change.max_active_leaf_runs,
                     "revision": change.revision,
-                    "hard_limit": change.hard_limit,
                 }),
                 None,
             )?,
@@ -113,19 +116,17 @@ impl OrbitRuntime {
         let run = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
-        let drain_job_id = workflow_job_id(AUTO_WORKFLOW_ALIAS)?;
-        if run.job_id != drain_job_id {
+        let drain_jobs = drain_job_ids()?;
+        if !drain_jobs.contains(&run.job_id.as_str()) {
             return Err(OrbitError::InvalidInput(format!(
-                "job run '{run_id}' is a `{}` run; the worker ceiling is a `{drain_job_id}` control",
-                run.job_id
+                "job run '{run_id}' is a `{}` run; the worker ceiling is a `{}` or `{}` control",
+                run.job_id, drain_jobs[0], drain_jobs[1]
             )));
         }
-        let hard_limit = self.leaf_run_hard_limit()?;
-        if !(1..=hard_limit).contains(&requested) {
-            return Err(OrbitError::InvalidInput(format!(
-                "worker ceiling must be between 1 and {hard_limit}, the `{}` job's own active-run limit",
-                workflow_job_id(SHIP_WORKFLOW_ALIAS)?
-            )));
+        if requested == 0 {
+            return Err(OrbitError::InvalidInput(
+                "worker ceiling must be at least 1".to_string(),
+            ));
         }
         if run.state.is_terminal() {
             return Err(terminal_run_error(run_id, run.state));
@@ -203,42 +204,34 @@ impl OrbitRuntime {
             previous_max_active_leaf_runs: effective_before_request,
             max_active_leaf_runs: requested,
             revision: applied.as_ref().map_or(0, |limit| limit.revision),
-            hard_limit,
         })
     }
 
-    /// The auto drain a resize without an explicit run ID targets: the one
-    /// pending or running in this workspace. None running, or more than one,
-    /// is refused rather than guessed, so the caller names the run.
-    pub fn active_auto_drain_run_id(&self) -> Result<String, OrbitError> {
-        let drain_job_id = workflow_job_id(AUTO_WORKFLOW_ALIAS)?;
-        let mut active = self
-            .stores()
-            .jobs()
-            .list_pending_or_running_job_runs(drain_job_id)?;
+    /// The drain a resize without an explicit run ID targets: the one auto or
+    /// pull drain pending or running in this workspace. None running, or more
+    /// than one, is refused rather than guessed, so the caller names the run.
+    pub fn active_drain_run_id(&self) -> Result<String, OrbitError> {
+        let mut active = Vec::new();
+        for job_id in drain_job_ids()? {
+            active.extend(
+                self.stores()
+                    .jobs()
+                    .list_pending_or_running_job_runs(job_id)?,
+            );
+        }
         match active.len() {
-            0 => Err(OrbitError::InvalidInput(format!(
-                "no `{drain_job_id}` run is pending or running in this workspace"
-            ))),
+            0 => Err(OrbitError::InvalidInput(
+                "no auto or pull drain is pending or running in this workspace".to_string(),
+            )),
             1 => Ok(active.remove(0).run_id),
             count => Err(OrbitError::InvalidInput(format!(
-                "{count} `{drain_job_id}` runs are live in this workspace; pass `id` to choose one"
+                "{count} drains are live in this workspace; pass `id` to choose one"
             ))),
         }
     }
 
-    /// The ceiling the leaf job imposes above the drain's own: no drain can
-    /// keep more `task_auto_pipeline` runs live than that job admits, so a
-    /// larger number would be accepted and then silently queue.
-    pub(crate) fn leaf_run_hard_limit(&self) -> Result<u32, OrbitError> {
-        Ok(self
-            .resolved_job_spec(workflow_job_id(SHIP_WORKFLOW_ALIAS)?)?
-            .max_active_runs
-            .max(1))
-    }
-
     /// The ceiling this run was submitted with: its own input when it carries
-    /// one, otherwise the drain job's declared default.
+    /// one, otherwise its drain job's declared default.
     fn submitted_max_active_leaf_runs(&self, run: &JobRun) -> Result<u32, OrbitError> {
         if let Some(submitted) = run
             .input
@@ -249,7 +242,7 @@ impl OrbitRuntime {
             return Ok(submitted);
         }
         Ok(self
-            .resolved_job_spec(workflow_job_id(AUTO_WORKFLOW_ALIAS)?)?
+            .resolved_job_spec(&run.job_id)?
             .default_input
             .as_ref()
             .and_then(|input| input.get("max_active_leaf_runs"))
@@ -318,10 +311,15 @@ impl OrbitRuntime {
     }
 }
 
-fn workflow_job_id(alias: &str) -> Result<&'static str, OrbitError> {
-    find_workflow(alias)
+/// The drain jobs that carry a worker ceiling: the owner's auto drain and a
+/// replica's pull drain.
+fn drain_job_ids() -> Result<[&'static str; 2], OrbitError> {
+    let auto = find_workflow(AUTO_WORKFLOW_ALIAS)
         .map(|workflow| workflow.job_id)
-        .ok_or_else(|| OrbitError::InvalidInput(format!("unknown workflow '{alias}'")))
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!("unknown workflow '{AUTO_WORKFLOW_ALIAS}'"))
+        })?;
+    Ok([auto, PULL_DRAIN_JOB])
 }
 
 /// A run input value that went through the template engine may arrive as a

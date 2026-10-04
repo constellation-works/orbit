@@ -1531,19 +1531,19 @@
       },
       {
         "name": "for_seconds",
-        "description": "Required for start: window length in seconds, 1 through 604800",
+        "description": "Required for start: window length in seconds, 1 through 86400 (24 hours)",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "concurrency",
-        "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize, from 1 to the ship job's own active-run limit",
+        "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. The drain's only ceiling: delivery jobs impose none of their own",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "id",
-        "description": "Resize only: auto-drain run ID. Omitted targets the workspace's one live auto drain; refused when none or several are live",
+        "description": "Resize only: auto- or pull-drain run ID. Omitted targets the workspace's one live drain; refused when none or several are live",
         "param_type": "string",
         "required": false
       },
