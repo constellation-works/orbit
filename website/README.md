@@ -51,8 +51,11 @@ for local evidence and manual-publication verification.
 
 `public/robots.txt` allows all crawlers and points at the sitemap index Astro
 generates from the `site` URL. The social-preview image is `public/og-image.png`
-(1200x630), rendered from `public/og-image.svg` because most platforms do not
-render SVG previews; regenerate the PNG whenever the SVG changes.
+(1200x630); most platforms do not render SVG previews, so `public/og-image.svg` is
+kept beside it as the source. Both come from the brand kit in the marketing repo
+(`brand/card.py --brand orbit --keep-svg`), as do the Bead mark in
+`src/assets/orbit-logo-*.svg` and `public/favicon.svg` (`brand/build.py`); change
+the generators there rather than editing these files by hand.
 
 Every published page is authored by hand under `src/content/docs/`, with two
 exceptions under `src/pages/`: `/changelog/` renders the repository's tracked
