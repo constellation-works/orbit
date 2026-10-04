@@ -100,7 +100,7 @@ Bullet shape:
 - Migration steps, rationale, and test inventories stay in the cited task or commit. The task ID is the pointer.
 - A breaking bullet gets at most one extra line, with the migration as a phrase (`x removed → use y`).
 
-The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. Non-release `CHANGELOG.md` edits are forbidden by [AGENTS.md](AGENTS.md) and rejected at review: before-PR review (`agent_review_repair`) explicitly flags any non-release diff touching `CHANGELOG.md` as an open finding and returns `changes_required` without repairing that file, ensuring only authorized release-preparation tasks (tagged `release`) can edit `CHANGELOG.md`.
+The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. Non-release `CHANGELOG.md` edits are forbidden by [AGENTS.md](AGENTS.md). When `operation.review_policy = "before-pr"` is configured, before-PR review (`agent_review_repair`) flags any diff touching `CHANGELOG.md` as an open finding unless the manifest or task identifies an authorized release-preparation task tagged `release` and titled `Prepare v<X.Y.Z> release`; it returns `changes_required` without repairing the file. This review guard does not run under the default `none` policy.
 
 ### 3. Confirm breaking changes with the human
 
