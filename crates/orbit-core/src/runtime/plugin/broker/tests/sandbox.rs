@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::cli_runner::run_cli_backend;
 use orbit_engine::{
-    DispatchError, DispatchOutcome, PluginBrokerHandle, PluginBrokerRun, ResolvedCliExecutor,
-    ResolvedSandbox, RuntimeHost, V2AuditWriter,
+    DispatchError, DispatchOutcome, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
+    ResolvedCliExecutor, ResolvedSandbox, RuntimeHost, V2AuditWriter,
 };
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::policy::ResolvedFsProfile;
@@ -37,6 +37,35 @@ const RESULT_ENV: &str = "ORBIT_BROKER_TEST_RESULT";
 const TARGET_ENV: &str = "ORBIT_BROKER_TEST_TARGET";
 const HOLD_ENV: &str = "ORBIT_BROKER_TEST_HOLD";
 const WAIT: Duration = Duration::from_secs(60);
+
+/// The in-sandbox half, invoked by `client_provider` with an exact test filter.
+#[test]
+#[ignore = "client half of the sandboxed broker test; runs inside the agent sandbox"]
+fn broker_client() {
+    if std::env::var_os(CLIENT_ENV).is_none() {
+        return;
+    }
+    let result = PathBuf::from(std::env::var_os(RESULT_ENV).expect("result path"));
+    let partial = result.with_extension("partial");
+    fs::write(&partial, client_outcome()).expect("write outcome");
+    fs::rename(&partial, &result).expect("publish outcome");
+    if let Some(hold) = std::env::var_os(HOLD_ENV) {
+        // Keep this run, and so its broker, alive while the outer test
+        // probes it from elsewhere.
+        wait_for(Path::new(&hold));
+    }
+}
+
+fn client_outcome() -> String {
+    let Some(target) = std::env::var_os(TARGET_ENV).or_else(|| std::env::var_os(PLUGIN_BROKER_ENV))
+    else {
+        return "absent".to_string();
+    };
+    match UnixStream::connect(&target) {
+        Ok(mut stream) => request_outcome(&mut stream),
+        Err(error) => format!("connect failed: {error}"),
+    }
+}
 
 fn request_outcome(stream: &mut UnixStream) -> String {
     let _ = stream.set_read_timeout(Some(WAIT));
