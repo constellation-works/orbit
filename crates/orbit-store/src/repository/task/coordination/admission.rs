@@ -550,9 +550,10 @@ pub fn admission_refusal(
     {
         return Some(AdmissionRefusal::InvalidInput);
     }
-    if request.caller_version != owner_version
-        || request.caller_schema != DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
-    {
+    if request.caller_schema != DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA {
+        return Some(AdmissionRefusal::ProtocolMismatch);
+    }
+    if request.caller_version != owner_version {
         return Some(AdmissionRefusal::VersionMismatch);
     }
     if !matches!(request.ship.mode.as_str(), "pr" | "local")
@@ -574,6 +575,10 @@ fn validate_request(
     version: &str,
 ) -> Result<(), OrbitError> {
     match admission_refusal(identity, request, version) {
+        Some(AdmissionRefusal::ProtocolMismatch) => Err(OrbitError::InvalidInput(format!(
+            "protocol_mismatch: caller revision {}; owner revision {}",
+            request.caller_schema, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
+        ))),
         Some(refusal) => Err(OrbitError::InvalidInput(refusal.as_str().into())),
         None => Ok(()),
     }

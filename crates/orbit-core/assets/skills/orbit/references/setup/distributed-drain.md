@@ -49,7 +49,7 @@ orbit config get operation.review_policy
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `1`, equivalent crew and toolchain resolution, and
+protocol schema `2`, equivalent crew and toolchain resolution, and
 `operation.review_policy = none`. Empty
 `workflow.required_validation_commands` is fail-closed for a claimed handoff.
 A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
@@ -135,8 +135,9 @@ returns.
   settlement still recorded on the follower (for example after the owner was
   unreachable) once no drain or leaf worker is left to; `orbit run auto --stop`
   flushes it by hand, with or without an active drain.
-- An unreachable or refusing owner is reported in each iteration's output and
-  retried. A request the owner refused and holds no receipt for closes as
+- An unreachable or refusing owner is reported in each iteration's output.
+  Failed passes are retried until three in a row degrade the drain; settlement
+  retries continue in the degraded state. A request the owner refused and holds no receipt for closes as
   `Refused`; a committed one is carried forward.
 - The leaf's agent runs in claimed mode: the sandbox denies `~/.ssh`, so it
   has no route to the owner and needs none. It is denied `orbit.task.show` /
@@ -167,7 +168,7 @@ destination refuses them. They need an identified caller (`agent` or
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 1,
+  "caller_schema": 2,
   "caller_review_policy": "none"
 }'
 ```
@@ -197,6 +198,19 @@ inside the task detail (`orbit web serve --operator`, then
 `GET /api/distributed/claims`). There is no distributed tab; the panel appears
 only for a task this workspace holds a claim for, and a replica reports that
 the owner machine holds that state.
+
+Followers must match the owner's distributed-drain protocol revision, independently of
+`orbit --version`. Deploy matching revisions on both hosts and restart long-lived processes.
+The read-only probe reports `protocol_schema`; a mismatch is `protocol_mismatch` with both
+revisions, including when an older owner calls its refusal `version_mismatch`.
+
+`orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
+count. JSON carries `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
+`pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
+warning and stop new admissions for that drain. A successful pass before the threshold resets
+the streak. Degraded drains keep retrying settlements and outlive their window until nothing
+is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
+`orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
 
 ## Recovery
 

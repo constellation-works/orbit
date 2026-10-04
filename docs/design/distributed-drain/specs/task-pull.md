@@ -86,11 +86,25 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 
 The caller persists the request before sending it. One drain run uses many request IDs. There is
 no count, slot declaration, or caller scan bound. The crew capability is part of the immutable
-request, so a replay is judged by the capability it was first sent with. Adding it did not raise
-`caller_schema`: the field is optional and absent from every earlier request and receipt, an
-older owner refuses it as an unknown field rather than ignoring it, and binary parity is already
-required. Completion authorization is resolved
+request, so a replay is judged by the capability it was first sent with. Protocol revision
+2 adds this field: revision 1 owners reject it even though it is optional. Before persisting a
+new request, the follower compares the probe's `protocol_schema` with its own revision and
+reports `protocol_mismatch` naming both revisions. Binary-version equality is insufficient
+because wire changes can land between releases. Completion authorization is resolved
 from durable owner-side grants; the input does not grant merge rights.
+
+Followers must match the owner's distributed-drain protocol revision, independently of
+`orbit --version`. Deploy matching revisions on both hosts and restart long-lived processes.
+The read-only probe reports `protocol_schema`; a mismatch is `protocol_mismatch` with both
+revisions, including when an older owner calls its refusal `version_mismatch`.
+
+`orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
+count. JSON carries `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
+`pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
+warning and stop new admissions for that drain. A successful pass before the threshold resets
+the streak. Degraded drains keep retrying settlements and outlive their window until nothing
+is unsettled; successful settlement does not clear the warning. Fix the reported cause, run
+`orbit run auto --stop` to close the window, and start a new drain once this one ends. An unreadable or unwritable run-state record fails the activity visibly.
 
 ## Idempotency and admission
 
@@ -194,7 +208,8 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `unknown_selector` | Selector cannot resolve to the named owner workspace |
 | `capability_refused` | Destination is a replica or caller lacks required authority |
 | `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
-| `version_mismatch` | Caller binary/schema differs from owner |
+| `version_mismatch` | Caller binary version differs from owner |
+| `protocol_mismatch` | Caller and owner protocol revisions differ; diagnostics name both |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
 | `review_policy_unsupported` | Owner/executor review policy is not `none` |
 | `request_mismatch` | Existing request ID is reused with different input |

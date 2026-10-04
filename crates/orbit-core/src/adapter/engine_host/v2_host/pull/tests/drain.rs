@@ -222,7 +222,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
         AdmissionRequest {
             request_id: "template".into(),
             caller_version: "1".into(),
-            caller_schema: 1,
+            caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             caller_review_policy: "none".into(),
             run_context: AdmissionRunContext {
                 run_id: parent.run_id,

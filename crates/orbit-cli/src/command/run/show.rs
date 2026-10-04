@@ -22,7 +22,7 @@ use super::steps::{
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes and whether its outcome reached the owner; it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight` or `provider_unavailable`) and `reason`, and is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes and whether its outcome reached the owner; it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight` or `provider_unavailable`) and `reason`, and is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -213,6 +213,21 @@ pub(crate) fn run_show_payload(
         // A pull drain records its passes too, without a leaf summary.
         header.push('\n');
         header.push_str(&line);
+    }
+    if let Some(pass) = state
+        .as_ref()
+        .and_then(|state| state.drain_last_pass.as_ref())
+    {
+        if let Some(error) = &pass.last_pass_error {
+            header.push_str(&format!(
+                "\n{} consecutive_failures={} last_pass_error={error}",
+                crate::output::color::bold("Pull pass warning:"),
+                pass.consecutive_pass_failures,
+            ));
+        }
+        if pass.degraded {
+            header.push_str("\nDrain degraded: new admissions stopped; settlement retries continue. Fix the cause, run `orbit run auto --stop`, and start a new drain once this one ends.");
+        }
     }
     header.push_str(&claimed_leaf_lines(&run, state.as_ref(), &claimed_leaves));
     if let Some(window) = &crew_window {
