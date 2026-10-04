@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::build::PluginBuildRecord;
+
 /// One installed plugin as the host records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledPlugin {
@@ -35,6 +37,13 @@ pub struct InstalledPlugin {
     /// "certified for <version>".
     #[serde(default)]
     pub certified_orbit_version: Option<String>,
+    /// How this host built the installed outputs, when the plugin was built
+    /// from a commit-pinned `git+` source under `--allow-build`
+    /// (`docs/design/plugins/3_install_time_build.md` §3.6). `None` for
+    /// every install that ran no build. Mirrored into a host-owned witness
+    /// the loader checks this against.
+    #[serde(default)]
+    pub build: Option<PluginBuildRecord>,
     pub installed_at: String,
     pub updated_at: String,
 }

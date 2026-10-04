@@ -65,6 +65,46 @@ impl Execute for PluginShowArgs {
                 bold("Unsandboxed:")
             ));
         }
+        // A plugin built on this host: what ran, under which profile, who
+        // consented, and the digest its outputs must keep (design 3 §3.9).
+        if let Some(build) = &plugin.build {
+            header.push_str(&format!(
+                "\n{} {} at commit {}",
+                bold("Built from:"),
+                build.source,
+                build.commit
+            ));
+            if let Some(fetch) = &build.fetch {
+                header.push_str(&format!("\n{} {}", bold("Build fetch:"), fetch.join(" ")));
+            }
+            header.push_str(&format!(
+                "\n{} {}",
+                bold("Build command:"),
+                build.command.join(" ")
+            ));
+            let landlock = build
+                .landlock_abi
+                .map(|abi| format!(" (Landlock ABI {abi})"))
+                .unwrap_or_default();
+            header.push_str(&format!(
+                "\n{} {}{landlock}",
+                bold("Build profile:"),
+                build.profile
+            ));
+            header.push_str(&format!(
+                "\n{} {} at {} by {} (Orbit {})",
+                bold("Build consent:"),
+                build.consent.flag,
+                build.consent.at,
+                build.consent.os_user,
+                build.consent.orbit_version
+            ));
+            header.push_str(&format!(
+                "\n{} {}",
+                bold("Artifact digest:"),
+                build.artifact_digest
+            ));
+        }
         if let Some(diagnostic) = &plugin.diagnostic {
             header.push_str(&format!("\n{} {diagnostic}", bold("Diagnostic:")));
         }

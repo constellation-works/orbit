@@ -3,9 +3,9 @@ type: design
 title: "Threat model: install-time spec.build for source-built plugins"
 summary: "Threat model and binding decisions for an opt-in spec.build that builds a git+ plugin source at install time: sandbox profile, network, environment, write scope, artifact digest, consent, pin files, doctor and abuse cases"
 owner: claude
-status: Draft
+status: Accepted
 tags: [plugins, security, sandbox, supply-chain, install]
-paths: ["crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install.rs", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build.rs", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install.rs", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 last_updated: 2026-10-04
@@ -14,9 +14,9 @@ last_validated: 2026-10-04
 
 # Threat model: install-time spec.build for source-built plugins
 
-Status: decided, not implemented. No `spec.build` exists in the manifest schema today. This
-document fixes the contract the implementation must follow. A change to any decision below is a
-security decision and needs a change to this document in the same PR.
+Status: implemented. §6 maps each decision to the code and records where the implementation
+refines it. A change to any decision below is a security decision and needs a change to this
+document in the same PR.
 
 Builds on [1_scope.md](./1_scope.md) §3 (plugin sources, pin file, staged install) and §4.1–§4.3
 (grants, execution protocol, backend sandbox).
@@ -137,7 +137,8 @@ fails) refuses builds.
 **macOS.** `sandbox-exec` with a new deny-by-default profile:
 `(deny default)`, `process-fork` and `process-exec` limited to the readable set,
 `file-read*` limited to the readable set, `file-write*` limited to the build directory, the
-credential denies, and `(deny network*)` for the build phase. It is not a variant of
+credential denies, and `(deny network*)`. macOS runs no `fetch` phase (§3.3), so the profile
+never allows network. It is not a variant of
 `compile_macos_sandbox_profile`, which starts from broad read access.
 
 **Rationale.** The backend profile is shaped by grants the operator gives a known plugin. A
@@ -159,9 +160,14 @@ loopback, and a pid namespace whose teardown kills every descendant (§4, leftov
 - **Linux `fetch`:** bwrap with `--share-net` plus a Landlock ABI 4 network ruleset applied
   inside it that handles `bind` and `connect` for TCP and allows only `connect` to port 443. A
   kernel below ABI 4 refuses a manifest that declares `fetch`. A build-only manifest still runs.
-- **macOS `fetch`:** `(allow network-outbound (remote tcp "*:443"))`, the mDNSResponder socket
-  for resolution, `(deny network-outbound (remote ip "localhost:*"))`, and no
-  `network-inbound` or `network-bind`.
+- **macOS: no `fetch` phase.** A manifest that declares `spec.build.fetch` is refused on macOS
+  with `build_fetch_unsupported_on_macos` before anything runs, with or without consent, and
+  before the consent refusal, so the operator is never asked to approve a build that cannot run.
+  macOS has no pid namespace: a fetch descendant that calls `setsid` leaves the process group
+  that the phase-end kill reaches, and it would keep the fetch profile's network while the
+  offline `build` phase and later processes run. A build-only manifest (vendored or otherwise
+  offline dependencies) still runs on macOS under `(deny network*)`. A source that needs a
+  network fetch builds on Linux, or ships as a prebuilt archive.
 - Orbit fetches the plugin source itself, before either phase, with the existing hardened
   `git clone` (scope §3). The build never sees `.git` or the source URL's credentials.
 - Private registries are not supported. No registry credential, `.netrc`, `.npmrc` auth line or
@@ -370,13 +376,13 @@ deterministic, matching the archive-digest finding that already exists.
 
 | Case | What the attacker does | Decision | Residual |
 |---|---|---|---|
-| Malicious build script | `build.rs`, a postinstall hook or the command reads secrets, plants persistence or attacks the network | Deny-by-default reads (§3.2), empty environment (§3.5), build directory as the only write root (§3.4), no network in `build` and port 443 only in `fetch` (§3.3), declared outputs only | It can produce a malicious backend. That backend is bounded by the backend sandbox and grants (scope §4.3), as an archive's is. During `fetch` it can send what it can read (source, toolchain) over 443 or UDP |
+| Malicious build script | `build.rs`, a postinstall hook or the command reads secrets, plants persistence or attacks the network | Deny-by-default reads (§3.2), empty environment (§3.5), build directory as the only write root (§3.4), no network in `build` and port 443 only in `fetch` (§3.3), declared outputs only | It can produce a malicious backend. That backend is bounded by the backend sandbox and grants (scope §4.3), as an archive's is. On Linux, during `fetch` it can send what it can read (source, toolchain) over 443 or UDP. macOS runs no `fetch` |
 | Hostile output paths | `outputs[].from` symlinked to `~/.ssh/id_ed25519`, or `to` set to `../../bin/orbit` or `plugin.yaml` | Physical resolution with no links inside `{{build_dir}}`, `to` confined to the plugin root, no `plugin.yaml`, no overwrite of pristine files, special mode bits cleared | None beyond the hostile backend above |
 | Dependency confusion | A public package shadows an internal name, or a registry serves altered bytes | No private-registry credentials or user registry config (§3.5); toolchain locked mode against the lockfile in the pinned commit; the `fetch` argv is shown verbatim at consent; optional pin `artifact_digest` | Orbit does not parse lockfiles. A source with no lockfile or no `--locked` gets whatever the registry serves at build time. The consent plan makes that visible, and an `artifact_digest` pin catches drift on later hosts |
 | TOCTOU on the source | A tag or branch moves after review; the local tree changes mid-build; the build rewrites the manifest it was reviewed by | Full commit required and verified (§3.1); Orbit's own pristine scratch; the sandbox works on a copy; the installed root comes from the pristine copy (§3.4) | The repository host can refuse or delay the commit, but not substitute it, short of a SHA-1 collision on a SHA-1 repository |
 | TOCTOU on toolchains | A toolchain link is retargeted between consent and run | Programs and roots resolved to canonical paths at consent and re-checked before each phase (same rules as `requires.programs`) | A toolchain modified in place, at the same path, is the operator's own install. Orbit trusts it as it trusts `git` |
 | Resource exhaustion | Infinite loop, fork bomb, filling the disk, giant logs | `timeout_ms` capped by `PLUGIN_BUILD_TIMEOUT_CEILING_MS` (3,600,000), default 1,200,000 per phase; build directory capped at 8 GiB by polling, with a kill on breach; stdout and stderr captured to one log capped at 1 MiB (head and tail kept); `RLIMIT_CORE=0`; outputs capped at 256 MiB; pid namespace on Linux | Memory and CPU are not limited beyond the timeout. The kernel OOM killer is the bound, and the disk poll can overshoot by one interval |
-| Leftover processes | A daemonized child outlives the build to keep a foothold | Linux: the pid namespace is torn down with bwrap (`--die-with-parent`, `--new-session`), which kills every descendant, even those that called `setsid`. macOS: a new process group and session, `killpg` with SIGTERM then SIGKILL at exit or timeout (`orbit-exec` supervision) | macOS has no pid namespace. A child that calls `setsid` escapes the group. It stays under the inherited sandbox profile (no network after `fetch`, writes only to a build directory Orbit then deletes), so it can burn CPU but cannot persist or exfiltrate further. The macOS build record names this containment level |
+| Leftover processes | A daemonized child outlives the build to keep a foothold | Linux: the pid namespace is torn down with bwrap (`--die-with-parent`, `--new-session`), which kills every descendant, even those that called `setsid`. macOS: a new process group and session, `killpg` with SIGTERM then SIGKILL at exit or timeout (`orbit-exec` supervision) | macOS has no pid namespace. A child that calls `setsid` escapes the group. It stays under the inherited sandbox profile: no network at all, because macOS refuses a `fetch` phase (§3.3) and every macOS phase runs under `(deny network*)`, and writes only to a build directory Orbit then deletes. It can burn CPU but cannot persist or exfiltrate. The macOS build record names this containment level |
 | Consent laundering | A pin, routine, auto-task, agent or plugin backend tries to start a build | §3.7 and §3.8: no unattended source of consent, refusal in managed contexts, the agent sandbox's write boundary | An unsandboxed agent with a shell, run by the operator outside Orbit, can pass the flag. It already holds operator authority |
 | Replaying consent | An upgrade reuses yesterday's consent for a new commit | Consent recorded per commit; every install needs the flag (§3.8) | None |
 | Build record tampering | A backend or agent edits the row to hide a modified binary | Witness copy under `plugins/.grants/`, outside every write boundary; mismatch makes the row inactive (§3.9) | As for grants, the witness is a digest, not a MAC. It holds because of the write boundary, not cryptography |
@@ -389,6 +395,8 @@ deterministic, matching the archive-digest finding that already exists.
 - **`fetch` has a network.** On Linux, UDP (DNS and anything else) and host loopback port 443 stay
   reachable during `fetch`, because Landlock filters only TCP by port. What can leave is bounded
   by what the sandbox can read.
+- **No `fetch` on macOS.** A plugin whose build needs a network fetch cannot be built on macOS.
+  Its author vendors dependencies for an offline build, or publishes a prebuilt archive.
 - **Reproducibility is the author's job.** Orbit fixes time, locale and paths but does not
   require deterministic output. An unreproducible build is installable but cannot be pinned by
   `artifact_digest` across hosts.
@@ -396,23 +404,46 @@ deterministic, matching the archive-digest finding that already exists.
   consented and timed out, so it is not required for the first implementation.
 - **No Windows.** Plugins already declare `platforms: [linux, macos]`.
 
-## 6. Implementation checklist
+## 6. Implementation
 
-The implementation task delivers, with boundary tests for each refusal:
+| Decision | Where |
+|---|---|
+| `spec.build` schema and validation (§1) | `orbit-types` `plugin/build.rs`; `PluginSpec.build` |
+| Commit fetch and `HEAD` check (§3.1) | `orbit-tools` `plugin/source.rs` (`fetch_git_commit`) |
+| Profiles, probes, supervision (§3.2–§3.4) | `orbit-exec` `build_sandbox/` (`linux.rs`, `macos.rs`, `supervise.rs`); goldens `plugin_build_{fetch,offline}` |
+| Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build.rs` |
+| Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `install.rs` |
+| Build record on the row (schema v35 `build_json`) and witness (§3.6) | `orbit-store` `plugin_store.rs`; `orbit-core` `runtime/plugin/build_witness.rs`, checked in the load pass |
+| Sync never builds; pin drift (§3.7) | `orbit-core` `application/plugin/lifecycle/sync.rs` |
+| Doctor and `plugin show` (§3.9) | `orbit-core` `application/plugin/inspect/doctor.rs`; the `plugin-builds` row of `orbit doctor` |
 
-1. `spec.build` in the manifest schema (`deny_unknown_fields`, argv arrays, `outputs` shape)
-   and its `orbit plugin validate` checks.
-2. Commit-pinned `git+` fetch with a `HEAD` check (§3.1).
-3. The two build profiles and their probes, with refusal when either profile is unavailable
-   (§3.2–§3.3), plus profile goldens in `make goldens`.
-4. Build directory lifecycle, output copy and caps (§3.4), environment construction and the
-   denylist test (§3.5).
-5. Artifact digest, build record and witness (§3.6). Load refuses a missing or mismatched record.
-6. Pin `artifact_digest` parsing and sync's refusal to build (§3.7).
-7. `--allow-build` on `add` and `upgrade`, the plan output, and the managed-context refusal
-   (§3.8).
-8. Doctor and `plugin show` rows (§3.9), and updates to [1_scope.md](./1_scope.md) §3,
-   `docs/CONFIG.md` (pin fields) and CLI goldens in the same PR.
+Where the implementation makes a decision above more precise:
+
+- **The source fetch** is `git init`, then `git fetch --depth 1 --no-tags -- <url> <commit>`,
+  then a detached checkout of `FETCH_HEAD`, rather than `git clone`, because a clone cannot
+  name an arbitrary commit. It runs with the same protocol policy plus `core.hooksPath=/dev/null`.
+- **The build directory** is `~/.orbit/plugins/<ns>/.build-<pid>-<nonce>/`. The pid lets install
+  pruning and doctor tell a live build from a leftover one with `kill(pid, 0)`.
+- **The macOS `fetch` refusal** is checked twice: the install refuses the manifest before it
+  plans or asks for consent (`OrbitError::PluginBuildFetchUnsupported`,
+  `orbit_exec::BUILD_FETCH_PHASE_SUPPORTED`), and the macOS probe and phase launcher refuse a
+  networked phase, so `compile_macos_build_profile` renders no network allowance. The sandbox
+  goldens hold `plugin_build_fetch` for Linux only.
+- **The Linux `fetch` Landlock ruleset** handles only TCP `bind` and `connect`, and no
+  filesystem access. It is applied to the `bwrap` process just before `exec`, so the sandboxed
+  build inherits it. A network-only domain does not restrict the mounts `bwrap` makes.
+- **Toolchain locators.** When a program is a rustup proxy, Orbit derives `RUSTUP_HOME` from the
+  proxy's install, adds `RUSTUP_HOME/toolchains` and `settings.toml` to the readable set, and
+  puts the default toolchain's `bin` on `PATH` after the programs' directories.
+  `RUSTUP_TOOLCHAIN` is passed only alongside it.
+- **A build manifest loads before its build.** A backend command that is a declared output and
+  is not yet present does not refuse the load. The install refuses a build that does not produce
+  it.
+- **A record that disagrees with its witness** is reported by the plugin's own doctor row. The
+  load pass registers it inactive with that diagnostic; doctor does not add a second row.
+- **Sync and drift.** A pin whose commit or `artifact_digest` differs from the installed build
+  gets the drift message, and sync neither enables, toggles on nor seeds that plugin. The
+  reported status is the plugin's effective status, because a pin cannot disable the host row.
 
 ## Task References
 

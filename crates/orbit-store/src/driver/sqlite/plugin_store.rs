@@ -1,13 +1,14 @@
 //! Host-local installed-plugin records (`plugins`, beside `tools`).
 
 use orbit_common::OrbitError;
-use orbit_types::plugin::InstalledPlugin;
+use orbit_types::plugin::{InstalledPlugin, PluginBuildRecord};
 use rusqlite::{OptionalExtension, Row, params};
 
 use crate::{Store, StoreTx, now_string};
 
 const PLUGIN_COLUMNS: &str = "name, version, source, install_path, manifest_digest, enabled, \
-     grants_json, first_party, installed_at, updated_at, certified_orbit_version, archive_digest";
+     grants_json, first_party, installed_at, updated_at, certified_orbit_version, archive_digest, \
+     build_json";
 
 fn plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPlugin> {
     let grants_json: String = row.get(6)?;
@@ -27,7 +28,24 @@ fn plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPlugin> {
         updated_at: row.get(9)?,
         certified_orbit_version: row.get(10)?,
         archive_digest: row.get(11)?,
+        build: build_record_from_column(row.get(12)?)?,
     })
+}
+
+/// A stored build record that no longer parses is a conversion failure, not
+/// an absent record: reading it as `None` would describe a built tree as one
+/// no build produced.
+fn build_record_from_column(raw: Option<String>) -> rusqlite::Result<Option<PluginBuildRecord>> {
+    raw.map(|raw| {
+        serde_json::from_str(&raw).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                12,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })
+    })
+    .transpose()
 }
 
 impl Store {
@@ -64,20 +82,29 @@ impl StoreTx<'_> {
     pub fn upsert_plugin(&mut self, plugin: &InstalledPlugin) -> Result<(), OrbitError> {
         let grants_json = serde_json::to_string(&plugin.grants)
             .map_err(|error| OrbitError::Store(format!("serialize plugin grants: {error}")))?;
+        let build_json = plugin
+            .build
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| {
+                OrbitError::Store(format!("serialize plugin build record: {error}"))
+            })?;
         let now = now_string();
         self.tx
             .execute(
                 "INSERT INTO plugins(name, version, source, install_path, manifest_digest, enabled, \
                  grants_json, first_party, installed_at, updated_at, certified_orbit_version, \
-                 archive_digest) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11) \
+                 archive_digest, build_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12) \
                  ON CONFLICT(name) DO UPDATE SET version = excluded.version, \
                  source = excluded.source, install_path = excluded.install_path, \
                  manifest_digest = excluded.manifest_digest, enabled = excluded.enabled, \
                  grants_json = excluded.grants_json, first_party = excluded.first_party, \
                  updated_at = excluded.updated_at, \
                  certified_orbit_version = excluded.certified_orbit_version, \
-                 archive_digest = excluded.archive_digest",
+                 archive_digest = excluded.archive_digest, \
+                 build_json = excluded.build_json",
                 params![
                     plugin.name,
                     plugin.version,
@@ -90,6 +117,7 @@ impl StoreTx<'_> {
                     now,
                     plugin.certified_orbit_version,
                     plugin.archive_digest,
+                    build_json,
                 ],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
