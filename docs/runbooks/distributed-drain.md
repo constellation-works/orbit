@@ -197,13 +197,16 @@ Reservation TTL on a pulled claim is 14,400 seconds (four hours). Expiry does
 non-pruned footprint. Status-derived locks on `in-progress` and `review` tasks
 keep the declared selectors, including files that do not exist yet.
 
-Claimed leaves can request footprint widening for new files within an already-touched crate or
-top-level directory, or in a crate's `tests/` directory. The final Git candidate determines the
-request, not the implementer's reported selectors. The owner independently checks the diff and
-policy, then under its admission lock rejects overlap with other live claims, in-progress/review
-selectors or active reservations. Acceptance records exact file selectors and widening history
-with the enlarged live claim; the original receipt stays immutable. Protected paths, symlinks
-and untouched source crates are refused with exact paths. Both peers require protocol revision 3.
+A claimed implementer may add files anywhere the work requires; the frozen
+footprint is a scheduling hint, not a delivery gate. Every added path the
+footprint does not cover becomes a widening request, derived from the final Git
+candidate rather than the implementer's reported selectors. The owner
+independently checks the diff and accepts the widening even when another live
+claim, in-progress/review selector or reservation names the path. Acceptance
+records exact file selectors, a `context_files_widened` history entry and the
+enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
+metadata, environment files, symlinks and malformed paths are refused, with
+exact paths. Both peers require protocol revision 3.
 
 
 ### 5. Establish SSH owner access (no destination callers file)

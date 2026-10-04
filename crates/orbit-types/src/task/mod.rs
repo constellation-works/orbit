@@ -1,6 +1,7 @@
 //! Domain contracts for this Orbit types module.
 
 mod artifacts;
+mod context_widening;
 mod epic;
 mod error;
 mod model;
@@ -11,6 +12,9 @@ pub use error::TaskError;
 #[cfg(test)]
 mod tests;
 
+pub use context_widening::{
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
+};
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 
 pub use artifacts::{

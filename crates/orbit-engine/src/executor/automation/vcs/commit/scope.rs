@@ -1,64 +1,43 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::selector::{anchor_path, claim_new_path_is_safe, claim_widening_allowed};
-use orbit_types::task::Task;
+use orbit_common::fs::selector::{anchor_path, claim_new_path_is_safe};
+use orbit_types::task::{
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, Task,
+};
+
+use crate::context::RuntimeHost;
 
 use super::super::git::git_output_paths;
-
-pub(super) fn filter_changed_files_for_task(
-    changed_files: &BTreeSet<String>,
-    workspace_path: &Path,
-    task: &Task,
-) -> Vec<String> {
-    let scopes = task_scopes(task, workspace_path);
-    if scopes.is_empty() {
-        return Vec::new();
-    }
-
-    changed_files
-        .iter()
-        .filter(|file| scopes.iter().any(|scope| path_matches_scope(file, scope)))
-        .cloned()
-        .collect()
-}
 
 /// The run-scoped scratch root (`$ORBIT_SCRATCH_DIR`). Repositories normally
 /// ignore it; it is excluded here as well so no selector can deliver scratch.
 const SCRATCH_DIR: &str = ".orbit/tmp";
 
-/// Which task selectors declare a new (untracked) path as intended delivery.
+/// Which new (untracked) paths delivery accepts.
+///
+/// Implementers, recovery agents and reviewers may create any path the work
+/// requires; selectors and footprint locks are not a delivery gate. Delivery
+/// widens the task's selectors to cover what it accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NewPathIntent {
-    /// Only an exact `file:` selector. A worker that can write task state
-    /// appends one after creating the file; directory selectors are ownership
-    /// boundaries, not new-file intent.
-    ExactFile,
-    /// The original selectors and eligible unit additions. A claimed worker
-    /// carries these to the owner as a widening request, not durable intent;
-    /// only atomic owner handoff acceptance widens the live claim.
-    AdmittedFootprint,
+pub(super) enum NewPathPolicy {
+    /// An owner run: every untracked path outside scratch.
+    Owner,
+    /// A claimed leaf: every untracked path outside scratch that the owner
+    /// can accept as footprint widening at handoff — no traversal, Git or
+    /// `.orbit` metadata, or environment-secret path.
+    Claimed,
 }
 
-/// Resolve the concrete paths a task worker authorized for delivery.
-///
-/// Tracked changes already have repository identity. A new file has no such
-/// identity, so a task selector `intent` accepts (or a pre-staged index entry
-/// from a writable caller) supplies intent. Untracked paths under the scratch
-/// root are never candidates. Refusing unknown untracked paths before staging
-/// preserves both their bytes and the exact index the worker left behind.
+/// Resolve the concrete paths a task run delivers: every tracked change and
+/// every untracked path outside the scratch root. Gitignored output is never
+/// listed. Refusing a protected claimed path before staging preserves both
+/// its bytes and the exact index the worker left behind.
 pub(super) fn task_candidate_paths(
     workspace_path: &Path,
-    tasks: &[Task],
-    intent: NewPathIntent,
+    policy: NewPathPolicy,
 ) -> Result<BTreeSet<String>, OrbitError> {
-    let staged = git_output_paths(
-        workspace_path,
-        &["diff", "--cached", "--name-only", "-z", "--relative"],
-    )?
-    .into_iter()
-    .collect::<BTreeSet<_>>();
     let untracked = git_output_paths(
         workspace_path,
         &["ls-files", "--others", "--exclude-standard", "-z", "--"],
@@ -66,37 +45,20 @@ pub(super) fn task_candidate_paths(
     .into_iter()
     .filter(|path| !path_matches_scope(path, SCRATCH_DIR))
     .collect::<Vec<_>>();
-    let exact_scopes = tasks
-        .iter()
-        .flat_map(|task| exact_file_scopes(task, workspace_path))
-        .collect::<BTreeSet<_>>();
-    let declared = |path: &str| match intent {
-        NewPathIntent::ExactFile => exact_scopes.contains(path),
-        NewPathIntent::AdmittedFootprint => tasks
+    if policy == NewPathPolicy::Claimed {
+        let protected = untracked
             .iter()
-            .any(|task| claimed_new_path_eligible(path, &task.context_files, workspace_path)),
-    };
-    let unknown = untracked
-        .iter()
-        .filter(|path| !staged.contains(*path) && !declared(path))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unknown.is_empty() {
-        let remedy = match intent {
-            NewPathIntent::ExactFile => {
-                "Declare every intended new source path with an exact `file:` task selector (or \
-                 stage it explicitly on a writable index)"
-            }
-            NewPathIntent::AdmittedFootprint => {
-                "A claimed run may request new paths only in an already-touched crate or \
-                 top-level directory, or a crate tests/ directory"
-            }
-        };
-        return Err(OrbitError::Execution(format!(
-            "task delivery refused unknown untracked paths: {unknown:?}. {remedy}, and write \
-             scratch and evidence under `{SCRATCH_DIR}/`. Orbit did not change the index or any \
-             listed file"
-        )));
+            .filter(|path| !claim_new_path_is_safe(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !protected.is_empty() {
+            return Err(OrbitError::Execution(format!(
+                "task delivery refused protected untracked paths: {protected:?}. A claimed run \
+                 cannot deliver Git or `.orbit` metadata or environment files; write scratch \
+                 and evidence under `{SCRATCH_DIR}/`. Orbit did not change the index or any \
+                 listed file"
+            )));
+        }
     }
 
     let mut candidates = git_output_paths(
@@ -105,12 +67,15 @@ pub(super) fn task_candidate_paths(
     )?
     .into_iter()
     .collect::<BTreeSet<_>>();
-    candidates.extend(untracked.into_iter().filter(|path| declared(path)));
+    candidates.extend(untracked);
     Ok(candidates)
 }
 
 /// Independently read additions (rename detection off) and recompute the exact
-/// widening request from the original admission selectors.
+/// widening request from the original admission selectors: every added path
+/// they do not cover. Only paths no owner can accept are refused — traversal,
+/// Git or `.orbit` metadata, environment secrets, and anything but a regular
+/// file in the candidate tree.
 pub fn validate_claim_new_paths(
     workspace_path: &Path,
     selectors: &[String],
@@ -130,7 +95,11 @@ pub fn validate_claim_new_paths(
             "--",
         ],
     )?;
-    let mut unknown = Vec::new();
+    let scopes = selectors
+        .iter()
+        .filter_map(|selector| normalize_task_scope(selector, workspace_path))
+        .collect::<Vec<_>>();
+    let mut refused = Vec::new();
     let mut widening = Vec::new();
     for path in new_paths.iter().cloned() {
         // Refuse candidate symlinks even when the owner's worktree has not
@@ -139,98 +108,147 @@ pub fn validate_claim_new_paths(
             workspace_path,
             &["--literal-pathspecs", "ls-tree", candidate, "--", &path],
         )?;
-        if !claimed_new_path_eligible(&path, selectors, workspace_path)
+        if !claim_new_path_is_safe(&path)
             || !entry.starts_with("100644 ") && !entry.starts_with("100755 ")
         {
-            unknown.push(path);
-        } else if !claimed_new_path_matches(&path, selectors, workspace_path) {
+            refused.push(path);
+        } else if !scopes.iter().any(|scope| path_matches_scope(&path, scope)) {
             widening.push(path);
         }
     }
-    if !unknown.is_empty() {
+    if !refused.is_empty() {
         return Err(OrbitError::Execution(format!(
-            "task delivery refused unknown untracked paths: {unknown:?}. \
-             Owner footprint widening requires an already-touched crate or top-level \
-             directory, or a crate tests/ directory; protected paths and symlinks are refused"
+            "task delivery refused protected new paths: {refused:?}. Owner footprint widening \
+             accepts any regular file outside Git and `.orbit` metadata and environment files; \
+             symlinks are refused"
         )));
     }
     widening.sort();
     Ok((new_paths, widening))
 }
 
-fn claimed_new_path_eligible(path: &str, selectors: &[String], workspace: &Path) -> bool {
-    let anchors = selectors
-        .iter()
-        .filter_map(|s| normalize_task_scope(s, workspace))
-        .collect::<Vec<_>>();
-    claim_new_path_is_safe(path)
-        && (claimed_new_path_matches(path, selectors, workspace)
-            || claim_widening_allowed(path, &anchors))
-}
-
-fn claimed_new_path_matches(path: &str, selectors: &[String], workspace: &Path) -> bool {
-    selectors.iter().any(|selector| {
-        let Some(scope) = normalize_task_scope(selector, workspace) else {
-            return false;
-        };
-        if path_matches_scope(path, &scope) {
-            return true;
-        }
-        if !selector.starts_with("file:") {
-            return false;
-        }
-        let parent = Path::new(&scope).parent().unwrap_or_else(|| Path::new(""));
-        let candidate = Path::new(path);
-        candidate.parent() == Some(parent) || candidate.starts_with(parent.join("tests"))
-    })
-}
-
-pub(in crate::executor::automation::vcs) fn ensure_candidate_ownership(
+/// Assign every candidate path to the participating tasks that deliver it,
+/// returning each task's paths. Nothing is refused.
+///
+/// A path some task's selectors cover goes to those owners — with `unique`,
+/// to exactly one: the task whose agent changed it (a widening its history
+/// records), else the owner naming it with an exact `file:` selector, else
+/// the first owner in bundle order. A path no selector covers goes to the
+/// task whose agent changed it, else the first task, and that task's
+/// selectors widen to cover it with `step` provenance.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::executor::automation::vcs) fn attribute_candidate_paths<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    step: ContextWideningStep,
+    activity: &str,
     candidate_paths: &BTreeSet<String>,
     workspace_path: &Path,
     tasks: &[Task],
-    require_unique_owner: bool,
-) -> Result<(), OrbitError> {
+    unique: bool,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut assigned = tasks
+        .iter()
+        .map(|task| (task.id.clone(), BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    let Some(first) = tasks.first() else {
+        return assigned;
+    };
     let scopes = tasks
         .iter()
         .map(|task| {
             (
                 task.id.as_str(),
-                task_scopes(task, workspace_path)
-                    .into_iter()
-                    .collect::<Vec<_>>(),
+                task_scopes(task, workspace_path),
+                exact_file_scopes(task, workspace_path),
             )
         })
         .collect::<Vec<_>>();
-    let mut unowned = Vec::new();
-    let mut ambiguous = Vec::new();
+    let changed_by = agent_changed_paths(host, tasks);
+    let mut widen = BTreeMap::<&str, Vec<String>>::new();
     for path in candidate_paths {
         let owners = scopes
             .iter()
-            .filter(|(_, scopes)| scopes.iter().any(|scope| path_matches_scope(path, scope)))
-            .map(|(task_id, _)| *task_id)
+            .filter(|(_, scopes, _)| scopes.iter().any(|scope| path_matches_scope(path, scope)))
             .collect::<Vec<_>>();
-        if owners.is_empty() {
-            unowned.push(path.clone());
-        } else if require_unique_owner && owners.len() > 1 {
-            ambiguous.push((path.clone(), owners));
+        let exact_owner = owners
+            .iter()
+            .find(|(_, _, exact)| exact.contains(path))
+            .map(|(task_id, _, _)| *task_id);
+        let owners = owners
+            .iter()
+            .map(|(task_id, _, _)| *task_id)
+            .collect::<Vec<_>>();
+        let changer = changed_by.get(path.as_str()).copied();
+        let delivering = match owners.as_slice() {
+            [] => {
+                let task_id = changer.unwrap_or(first.id.as_str());
+                widen.entry(task_id).or_default().push(path.clone());
+                vec![task_id]
+            }
+            [owner] => vec![*owner],
+            many if unique => vec![
+                changer
+                    .filter(|task_id| many.contains(task_id))
+                    .or(exact_owner)
+                    .unwrap_or(many[0]),
+            ],
+            many => many.to_vec(),
+        };
+        for task_id in delivering {
+            if let Some(paths) = assigned.get_mut(task_id) {
+                paths.insert(path.clone());
+            }
         }
     }
-    if unowned.is_empty() && ambiguous.is_empty() {
-        return Ok(());
+    for (task_id, paths) in widen {
+        // Best-effort: the delivery itself does not depend on the widening,
+        // and a later delivery step widens anything still uncovered.
+        if let Err(error) = host.widen_task_context_files(task_id, run_id, step, activity, &paths) {
+            tracing::warn!(
+                target: "orbit.engine.vcs",
+                task_id,
+                run_id,
+                activity,
+                error = %error,
+                paths = ?paths,
+                "could not widen task selectors for delivered paths"
+            );
+        }
     }
+    assigned
+}
 
-    Err(OrbitError::Execution(format!(
-        "task delivery refused candidate paths without deterministic task ownership: \
-         unowned={unowned:?}, ambiguous={ambiguous:?}. Update the participating tasks' explicit \
-         file or directory selectors so every path has {} owner before publication. Orbit did not \
-         change the index or any listed file",
-        if require_unique_owner {
-            "exactly one"
-        } else {
-            "at least one"
+/// Which participating task's agent changed each path, from the widenings
+/// the tasks' histories record (the first recorded task wins).
+fn agent_changed_paths<'a, H: RuntimeHost + ?Sized>(
+    host: &H,
+    tasks: &'a [Task],
+) -> BTreeMap<String, &'a str> {
+    let mut changed_by = BTreeMap::new();
+    for task in tasks {
+        let history = host.get_task_history(&task.id).unwrap_or_default();
+        for entry in history
+            .iter()
+            .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
+        {
+            let Some(widening) = entry
+                .note
+                .as_deref()
+                .and_then(ContextFilesWidening::from_note)
+            else {
+                continue;
+            };
+            for selector in widening.selectors {
+                if let Some(path) = selector.strip_prefix("file:") {
+                    changed_by
+                        .entry(path.to_string())
+                        .or_insert(task.id.as_str());
+                }
+            }
         }
-    )))
+    }
+    changed_by
 }
 
 fn task_scopes(task: &Task, workspace_path: &Path) -> Vec<String> {

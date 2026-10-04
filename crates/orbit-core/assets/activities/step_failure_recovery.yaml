@@ -213,7 +213,10 @@ spec:
        targeted state repair makes the failed operation safe and idempotent and
        the remaining pipeline steps can still run, make only that repair, and
        leave the worktree in a state where a re-run of the failed step succeeds
-       on its own. Do not rerun or duplicate the failed operation. The executor
+       on its own. A repair may change any path it needs, inside or outside
+       the task's selectors; Orbit widens the task's selectors over the paths
+       you change and records the recovery step in task history. Do not rerun
+       or duplicate the failed operation. The executor
        performs its one post-recovery attempt whenever this activity completes,
        and then continues through the normal commit, branch preparation, base
        sync, push, PR open/reuse, and PR promotion steps. The pipeline, not you,

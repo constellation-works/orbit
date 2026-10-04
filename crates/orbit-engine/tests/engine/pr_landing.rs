@@ -39,8 +39,8 @@ use orbit_engine::{
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
-    ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment, TaskPriority, TaskStatus,
-    TaskType,
+    ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment,
+    TaskPriority, TaskStatus, TaskType,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -774,33 +774,37 @@ fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
     );
 }
 
-/// [ORB-13989] Owner revalidation of a reviewer commit refuses a path no
-/// delivered task owns, even with no required command configured, and
-/// accepts the same commit once the task's selectors own it.
+/// [ORB-13990] Owner revalidation of a reviewer commit accepts a path no
+/// delivered task owns, widening the task's selectors with review provenance
+/// instead of refusing; a path the selectors already own widens nothing.
 #[test]
-fn review_revalidation_refuses_a_reviewer_change_outside_task_ownership() {
+fn review_revalidation_widens_selectors_for_a_reviewer_change_outside_task_ownership() {
     isolated(
-        "review_revalidation_refuses_a_reviewer_change_outside_task_ownership",
+        "review_revalidation_widens_selectors_for_a_reviewer_change_outside_task_ownership",
         |sandbox| {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-            host.set_context_files(TASK_ID, &["src/feature.txt"]);
+            host.set_context_files(TASK_ID, &["file:src/feature.txt"]);
             let fixed_head = fx.commit("docs/fix.md", "reviewer fix\n");
             let mut input = fx.validate_input();
             input["ownership_base_sha"] = json!(fx.candidate);
 
-            let error = action(&host, "candidate_validate", &input)
-                .expect_err("an unowned reviewer path must not validate");
-            assert!(
-                error.to_string().contains("docs/fix.md"),
-                "the refusal names the unowned path: {error}"
-            );
-            assert_eq!(fx.head(), fixed_head, "validation changes nothing");
-
-            host.set_context_files(TASK_ID, &["src/feature.txt", "docs/fix.md"]);
-            let validated =
-                action(&host, "candidate_validate", &input).expect("owned paths validate");
+            let validated = action(&host, "candidate_validate", &input)
+                .expect("a reviewer path outside the selectors validates");
             assert_eq!(validated["owned_paths"], json!(["docs/fix.md"]));
+            assert_eq!(fx.head(), fixed_head, "validation changes no commit");
+            assert_eq!(
+                host.widenings(),
+                vec![(
+                    TASK_ID.to_string(),
+                    ContextWideningStep::Review,
+                    "candidate_validate".to_string(),
+                    vec!["docs/fix.md".to_string()],
+                )]
+            );
+
+            action(&host, "candidate_validate", &input).expect("owned paths validate");
+            assert_eq!(host.widenings().len(), 1, "owned paths widen nothing");
         },
     );
 }
@@ -1109,7 +1113,11 @@ struct DeliveryHost {
     /// The resolved validation environment, standing in for the owner's
     /// resolver; `None` keeps the trait default.
     validation_env: Mutex<Option<ValidationEnvironment>>,
+    /// Selector widenings requested, as (task, step, activity, paths).
+    widenings: Mutex<Vec<Widening>>,
 }
+
+type Widening = (String, ContextWideningStep, String, Vec<String>);
 
 impl DeliveryHost {
     fn new(repo: &Path, status: TaskStatus) -> Self {
@@ -1123,6 +1131,7 @@ impl DeliveryHost {
             artifacts: Mutex::default(),
             releases: Mutex::default(),
             validation_env: Mutex::default(),
+            widenings: Mutex::default(),
         }
     }
 
@@ -1195,9 +1204,37 @@ impl DeliveryHost {
     fn landings(&self) -> Vec<ReviewLandingRequest> {
         self.landings.lock().unwrap().clone()
     }
+
+    fn widenings(&self) -> Vec<Widening> {
+        self.widenings.lock().unwrap().clone()
+    }
 }
 
 impl RuntimeHost for DeliveryHost {
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        _run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        self.widenings.lock().unwrap().push((
+            task_id.to_string(),
+            step,
+            activity.to_string(),
+            paths.to_vec(),
+        ));
+        let selectors = paths
+            .iter()
+            .map(|path| format!("file:{path}"))
+            .collect::<Vec<_>>();
+        if let Some(task) = self.tasks.lock().unwrap().get_mut(task_id) {
+            task.context_files.extend(selectors.iter().cloned());
+        }
+        Ok(selectors)
+    }
+
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.tasks
             .lock()

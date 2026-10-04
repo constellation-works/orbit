@@ -4,6 +4,7 @@ mod add;
 mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;
+mod context_widening;
 mod desktop;
 mod final_recovery;
 mod helpers;

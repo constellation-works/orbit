@@ -43,7 +43,8 @@ use orbit_store::workflow::task::{
     ExportSelection, ImportConflictPolicy, export_tasks, import_tasks,
 };
 use orbit_types::task::{
-    ORB_TASK_ID_MAX, TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ORB_TASK_ID_MAX,
+    TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
@@ -1094,19 +1095,22 @@ fn replaced_handoff_evidence_blocks_approval_and_landing() {
     }
 }
 
-/// Owner acceptance journals selectors, history and the enlarged review lock
-/// together; denied requests leave the running claim and task unchanged.
+/// Owner acceptance journals selectors, provenance history and the enlarged
+/// review lock together. ORB-13990: a claimed implementer may change any path
+/// the work requires, so every path an owner can track widens — another
+/// crate, docs, a new top-level `tests/` file. Only metadata, environment
+/// and non-normal paths are refused, leaving the claim and task unchanged.
 #[test]
-fn handoff_widening_accepts_only_original_units_and_replays_once() {
-    if !isolated("handoff_widening_accepts_only_original_units_and_replays_once") {
+fn handoff_widening_accepts_any_safe_path_and_replays_once() {
+    if !isolated("handoff_widening_accepts_any_safe_path_and_replays_once") {
         return;
     }
     for (path, allowed) in [
         ("crates/touched/src/split/new.rs", true),
         ("crates/other/tests/test_env.rs", true),
-        ("crates/other/src/lib.rs", false),
-        ("crates/touched-other/src/lib.rs", false),
-        ("docs/new.md", false),
+        ("crates/other/src/lib.rs", true),
+        ("docs/new.md", true),
+        ("tests/claim_refusal.rs", true),
         ("crates/touched/.env", false),
         ("crates/touched/.orbit/new", false),
         ("crates/touched/../other/src/lib.rs", false),
@@ -1126,7 +1130,7 @@ fn handoff_widening_accepts_only_original_units_and_replays_once() {
             .unwrap();
         let result = delivery.accept(None);
         if allowed {
-            result.expect("eligible widening accepted");
+            result.unwrap_or_else(|error| panic!("{path} widening accepted: {error}"));
             delivery.accept(None).expect("lost response replay");
             let task = delivery
                 .owner
@@ -1150,19 +1154,19 @@ fn handoff_widening_accepts_only_original_units_and_replays_once() {
                 .get_task_history(&delivery.claim.task_id)
                 .unwrap()
                 .unwrap();
-            let events = history
+            let widenings = history
                 .iter()
-                .filter(|e| e.event == "claim_footprint_widened")
+                .filter(|e| e.event == CONTEXT_FILES_WIDENED_EVENT)
+                .map(|e| ContextFilesWidening::from_note(e.note.as_deref().unwrap()).unwrap())
                 .collect::<Vec<_>>();
             assert_eq!(
-                events.len(),
+                widenings.len(),
                 1,
                 "replay must not duplicate widening history"
             );
-            assert_eq!(
-                serde_json::from_str::<Vec<String>>(events[0].note.as_ref().unwrap()).unwrap(),
-                vec![format!("file:{path}")]
-            );
+            assert_eq!(widenings[0].step, ContextWideningStep::Implement);
+            assert_eq!(widenings[0].run_id, delivery.handoff.run_id);
+            assert_eq!(widenings[0].selectors, vec![format!("file:{path}")]);
             let current = delivery.owner.claims().pop().unwrap();
             assert!(current.footprint.contains(&format!("file:{path}")));
             // Admission replay remains the immutable original receipt.
@@ -1193,51 +1197,19 @@ fn handoff_widening_accepts_only_original_units_and_replays_once() {
             );
         }
     }
-    let mut delivery = Delivery::admit_in(
-        owner_request("template").ship,
-        &["file:crates/touched/src/lib.rs"],
-    );
-    delivery.handoff.footprint_widening = vec![
-        "crates/other/tests/env.rs".into(),
-        "crates/other/src/lib.rs".into(),
-    ];
-    let error = delivery.accept(None).unwrap_err().to_string();
-    assert!(
-        error.contains("crates/other/src/lib.rs"),
-        "widening cannot chain from the tests exception into untouched source: {error}"
-    );
 }
 
+/// The widening request must equal the owner's independently observed diff,
+/// while a competing claim or lock on the added path no longer refuses it:
+/// footprint locks are a scheduling hint, not a delivery gate.
 #[test]
-fn handoff_widening_refuses_competing_claim_and_owner_observation_mismatch() {
-    if !isolated("handoff_widening_refuses_competing_claim_and_owner_observation_mismatch") {
+fn handoff_widening_accepts_locked_paths_and_refuses_observation_mismatch() {
+    if !isolated("handoff_widening_accepts_locked_paths_and_refuses_observation_mismatch") {
         return;
     }
-    let mut delivery = Delivery::admit(owner_request("template").ship);
     let path = "src/new/nested.rs";
-    delivery
-        .owner
-        .create_task_in("competing", &["file:src/new/nested.rs"]);
-    let competitor = delivery
-        .owner
-        .pull(&owner_request("second"))
-        .claim
-        .expect("second claim");
+    let mut delivery = Delivery::admit(owner_request("template").ship);
     delivery.handoff.footprint_widening = vec![path.into()];
-    let failure = delivery.accept(None).unwrap_err().to_string();
-    assert!(
-        failure.contains(path),
-        "competing claim refusal names the path: {failure}"
-    );
-    assert_eq!(
-        delivery.owner.task_status(&delivery.claim.task_id),
-        TaskStatus::InProgress
-    );
-    assert_eq!(delivery.owner.claims().len(), 2);
-    assert_eq!(
-        competitor.phase,
-        orbit_store::contracts::ExecutionClaimPhase::Claimed
-    );
     let mut observed = delivery.observation(None);
     observed.footprint_widening.clear();
     let error = delivery
@@ -1255,99 +1227,70 @@ fn handoff_widening_refuses_competing_claim_and_owner_observation_mismatch() {
         error.contains(path),
         "request must equal independently observed diff: {error}"
     );
-}
-
-/// Concurrent admission and widening share the exclusive boundary. Exactly
-/// one obtains the new path, regardless of which side acquires it first.
-#[test]
-fn handoff_widening_and_competing_pull_are_serialized() {
-    if !isolated("handoff_widening_and_competing_pull_are_serialized") {
-        return;
-    }
-    let mut delivery = Delivery::admit(owner_request("template").ship);
-    let competitor = delivery
-        .owner
-        .create_task_in("competing", &["file:src/new/nested.rs"]);
-    delivery.handoff.footprint_widening = vec!["src/new/nested.rs".into()];
-    let barrier = Arc::new(Barrier::new(2));
-    let root = delivery._root.path().to_path_buf();
-    let ready = barrier.clone();
-    let pull = std::thread::spawn(move || {
-        let owner = Coordinated::open(&root);
-        ready.wait();
-        owner.pull(&owner_request("second"))
-    });
-    barrier.wait();
-    let accepted = delivery.accept(None).is_ok();
-    let admitted = pull.join().unwrap().claim.is_some();
-    assert_ne!(
-        accepted, admitted,
-        "both decisions must never hold the same path"
+    assert_eq!(
+        delivery.owner.task_status(&delivery.claim.task_id),
+        TaskStatus::InProgress
     );
-    if accepted {
-        assert_eq!(
-            delivery.owner.task_status(&competitor.id),
-            TaskStatus::Backlog
-        );
-    } else {
-        assert_eq!(
-            delivery.owner.task_status(&delivery.claim.task_id),
-            TaskStatus::InProgress
-        );
-    }
-}
 
-#[test]
-fn handoff_widening_refuses_live_reservation_and_status_lock() {
-    if !isolated("handoff_widening_refuses_live_reservation_and_status_lock") {
-        return;
-    }
-    for reservation in [false, true] {
+    for lock in ["claim", "reservation", "status"] {
         let mut delivery = Delivery::admit(owner_request("template").ship);
-        let path = "src/new/nested.rs";
         let competitor = delivery
             .owner
             .create_task_in("competing", &["file:src/new/nested.rs"]);
-        if reservation {
-            let reserved = delivery
-                .owner
-                .backends
-                .reservation
-                .reserve_task_reservation(orbit_store::contracts::TaskReservationReserveParams {
-                    workspace_orbit_dir: delivery.owner.orbit_dir.to_string_lossy().into_owned(),
-                    workspace_id: Some(PARTITION_ID.into()),
-                    task_ids: vec![competitor.id.clone()],
-                    requested_files: vec![format!("file:{path}")],
-                    actor: "owner".into(),
-                    ttl_seconds: 600,
-                    owner_run_id: None,
-                    owner_metadata_json: None,
-                })
-                .unwrap();
-            assert!(reserved.reserved);
-        } else {
-            delivery
-                .owner
-                .backends
-                .commit_boundary
-                .commit_task_transition(&orbit_store::contracts::TaskCoordinationCommitParams {
-                    task_id: competitor.id.clone(),
-                    actor: "owner".into(),
-                    expected_status: vec![TaskStatus::Backlog],
-                    status: Some(TaskStatus::InProgress),
-                    ..Default::default()
-                })
-                .unwrap();
+        match lock {
+            "claim" => {
+                delivery
+                    .owner
+                    .pull(&owner_request("second"))
+                    .claim
+                    .expect("second claim");
+            }
+            "reservation" => {
+                let reserved = delivery
+                    .owner
+                    .backends
+                    .reservation
+                    .reserve_task_reservation(
+                        orbit_store::contracts::TaskReservationReserveParams {
+                            workspace_orbit_dir: delivery
+                                .owner
+                                .orbit_dir
+                                .to_string_lossy()
+                                .into_owned(),
+                            workspace_id: Some(PARTITION_ID.into()),
+                            task_ids: vec![competitor.id.clone()],
+                            requested_files: vec![format!("file:{path}")],
+                            actor: "owner".into(),
+                            ttl_seconds: 600,
+                            owner_run_id: None,
+                            owner_metadata_json: None,
+                        },
+                    )
+                    .unwrap();
+                assert!(reserved.reserved);
+            }
+            _ => {
+                delivery
+                    .owner
+                    .backends
+                    .commit_boundary
+                    .commit_task_transition(&orbit_store::contracts::TaskCoordinationCommitParams {
+                        task_id: competitor.id.clone(),
+                        actor: "owner".into(),
+                        expected_status: vec![TaskStatus::Backlog],
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
         }
         delivery.handoff.footprint_widening = vec![path.into()];
-        let error = delivery.accept(None).unwrap_err().to_string();
-        assert!(
-            error.contains(path),
-            "all admission lock surfaces refuse the exact path: {error}"
-        );
+        delivery
+            .accept(None)
+            .unwrap_or_else(|error| panic!("a live {lock} lock does not gate delivery: {error}"));
         assert_eq!(
             delivery.owner.task_status(&delivery.claim.task_id),
-            TaskStatus::InProgress
+            TaskStatus::Review
         );
     }
 }

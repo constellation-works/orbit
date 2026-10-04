@@ -48,6 +48,9 @@ pub(crate) struct WorktreeBoundaryGuard {
     assigned_before: GitWorktreeFingerprint,
     primary_before: GitWorktreeFingerprint,
     rebase_recovery: Option<RebaseRecoveryCheckpoint>,
+    /// The dispatched activity, whose changed paths widen its task's
+    /// selectors when it is an implementer or recovery agent.
+    activity: String,
     /// Sink for the full fingerprint evidence a violation would otherwise have
     /// to inline into its error string. Absent only where no run audit exists.
     audit: Option<Arc<V2AuditWriter>>,

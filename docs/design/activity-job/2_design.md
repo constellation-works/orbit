@@ -769,25 +769,35 @@ response envelope ([L-0115]); an agent-authored summary is always preserved; and
 a worktree with nothing to describe still yields no summary and is still
 refused.
 
-After [ORB-12050], task delivery has a concrete path-intent contract at that
-same deterministic boundary. Every tracked modification, deletion, or rename
-is a candidate because Git already identifies it as repository content. A new
-path is a candidate only when the implementing worker appends its exact
-`file:` selector to durable task state after creating it. This ordering
-respects the authoring rule that selectors name existing paths and also works
-in managed workers whose Git metadata is read-only. An explicitly staged path
-remains accepted for callers with a writable index, but staging is not required
-of managed workers. Directory selectors are ownership boundaries, not
-new-file intent. The one exception is a claimed leaf, which can neither append
-selectors nor stage. Its frozen footprint, `dir:` selectors included, is its
-new-path intent (distributed-drain design §3, [ORB-13756]). Untracked scratch
-under `.orbit/tmp/` is never a candidate. Before staging anything,
-`git_commit` compares all untracked
-paths with those explicit signals and refuses every unknown path by exact name.
-It therefore cannot be bypassed by a persuasive summary, empty selectors, or
-one legitimate file already in the index, and refusal preserves the prior
-index and every worktree byte. Accepted candidates are staged by explicit path;
-per-task publication commits only the paths assigned to that task so an
+**Agent-changed paths.** Implementers, recovery agents and the before-PR
+reviewer may change any path the work requires ([ORB-13990]); a task's
+selectors are a starting point and its footprint locks a scheduling hint, not a
+delivery gate. Every tracked modification, deletion or rename and every new
+untracked path is a delivery candidate, except untracked scratch under
+`.orbit/tmp/` and gitignored output, which are never delivered. Paths the
+task's selectors do not cover widen them with exact `file:` selectors, and each
+widening appends one `context_files_widened` history entry naming the run, the
+step that introduced the paths (`implement`, `recovery` or `review`) and the
+activity that observed them:
+
+- as `agent_implement`, `step_failure_recovery` or `final_recovery` exits, the
+  worktree boundary records the paths that agent changed;
+- `pr_conflict_recovery` stages the resolved conflict set together with every
+  companion edit, and the host's rebase continuation records the companions;
+- review settlement widens over every repaired path, declared in a finding or
+  not, and `candidate_validate` over a reviewer commit attributes the rest;
+- `git_commit` widens anything still uncovered, as a fallback.
+
+A per-task bundle assigns each path to exactly one task instead of refusing an
+ambiguous path: the task whose agent's widening history names it, else the
+task with the exact `file:` selector, else the first owner; a path no selector
+covers goes to the first task. A claimed leaf writes no owner selectors; it
+refuses only protected new paths (Git or `.orbit` metadata, environment files)
+before changing the index, and the owner accepts the rest as footprint widening
+at handoff (distributed-drain design §3). What stays enforced is the sandbox,
+Git-metadata ownership, host-owned staging, rebase, commit and push, the
+owner's `candidate_validate` on the resulting head, and run, task and branch
+identity. Accepted candidates are staged by explicit path, so an
 already-populated index cannot leak a sibling candidate.
 
 Failure-candidate preservation uses the same task-candidate boundary. The
@@ -1325,5 +1335,6 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[ORB-10604]** — Reconcile local-pipeline merges against the current in-session base while retaining the remote-mode divergence refusal.
 - **[ORB-13756]** — Accept a claimed leaf's frozen footprint, `dir:` selectors included, as new-path delivery intent, and never deliver `.orbit/tmp/` scratch.
 - **[ORB-13907]** — Run the job-level `final_recovery_activity` once per run after step recovery is spent and before `failure_activity`: engine-owned phase-bounded `resume`, applier-owned settlement, and claimed decisions carried by the failure settlement to the owner.
+- **[ORB-13990]** — Let implementer, recovery and review agents change any path the work requires: delivery widens task selectors with per-step provenance instead of refusing, and footprint locks become a scheduling hint.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

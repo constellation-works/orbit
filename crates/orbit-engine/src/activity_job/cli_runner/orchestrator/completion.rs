@@ -184,9 +184,11 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
 
     // A conflict-recovery provider repairs files only. Once its process has
     // satisfied the activity completion contract, the host-side boundary
-    // independently revalidates live ownership, stages exactly the conflict
-    // set, and continues the checkpointed rebase. No response result field is
-    // consulted. Ordinary providers retain the same post-run integrity check.
+    // independently revalidates live ownership, stages the resolved conflict
+    // set with every companion edit, and continues the checkpointed rebase.
+    // No response result field is consulted. Ordinary providers retain the
+    // same post-run integrity check, and an implementer's or recovery
+    // agent's changed paths widen its task's selectors.
     if let Some(boundary) = worktree_boundary {
         boundary.verify_after_provider(
             host,

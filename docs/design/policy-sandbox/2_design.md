@@ -384,7 +384,9 @@ memory. Before staging it rejects a different gitdir/common directory, replaced
 directory inodes or changed recovery instructions, then checks the existing
 commit/index/conflict set and live ownership/authorization. Scratch copies are
 permitted as readable data but cannot substitute for this host checkpoint.
-Only the host stages the authorized conflict paths and continues the rebase.
+Only the host stages the resolved conflict paths, together with any companion
+edits the provider made outside them (never `.orbit/` state), and continues
+the rebase.
 
 This protects the live invocation's in-memory checkpoint and Git destinations.
 Durable recovery certificates also live in `job_runs.pipeline_state_json` in

@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
 use orbit_types::workflow::{ReviewTiming, handoff::*};
 
 use super::TaskCommitBoundary;
@@ -255,7 +256,7 @@ impl TaskCommitBoundary {
         else {
             return Err(invalid("claim receipt unavailable"));
         };
-        let original = receipt
+        receipt
             .claim
             .as_ref()
             .ok_or_else(|| invalid("claim receipt unavailable"))?;
@@ -265,21 +266,19 @@ impl TaskCommitBoundary {
                 handoff.footprint_widening, observation.footprint_widening
             )));
         }
+        // Agents may change any path the work requires; a footprint lock is
+        // a scheduling hint, not a delivery gate. A concurrent task that
+        // holds an added path meets it as a rebase conflict, which conflict
+        // recovery resolves. Only paths no owner can track are refused.
         let mut footprint = state.claim.footprint.clone();
         if !handoff.footprint_widening.is_empty() {
             let checkout = self
                 .registry
                 .find_workspace_checkout(&self.workspace_id)?
                 .ok_or_else(|| invalid("claimed workspace checkout unavailable"))?;
-            let anchors = original
-                .footprint
-                .iter()
-                .filter_map(|s| orbit_common::fs::selector::anchor_path(s).ok())
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect::<Vec<_>>();
             let mut additions = BTreeSet::new();
             for path in &handoff.footprint_widening {
-                if !orbit_common::fs::selector::claim_widening_allowed(path, &anchors)
+                if !orbit_common::fs::selector::claim_new_path_is_safe(path)
                     || !additions.insert(format!("file:{path}"))
                 {
                     return Err(invalid(&format!("footprint widening refused path: {path}")));
@@ -298,18 +297,6 @@ impl TaskCommitBoundary {
                 }
             }
             let additions = additions.into_iter().collect::<Vec<_>>();
-            let conflicts = self.widening_conflicts(
-                &auth.task_id,
-                &state.claim.reservation_id,
-                &additions,
-                &checkout.repo_root,
-                &checkout.orbit_dir,
-            )?;
-            if !conflicts.is_empty() {
-                return Err(invalid(&format!(
-                    "footprint widening overlaps live lock paths: {conflicts:?}"
-                )));
-            }
             let bundle = self.bundle_store.read_bundle_lightweight(&auth.task_id)?;
             let mut context = bundle.envelope.context_files;
             for selector in &additions {
@@ -324,13 +311,21 @@ impl TaskCommitBoundary {
                 context_files: Some(context),
                 ..Default::default()
             });
+            // The handoff carries no per-path step, and a follower's commits
+            // are host-made from its implementer's tree, so a claimed
+            // attempt's additions are recorded as the implementer's.
             params
                 .append_history
                 .push(orbit_types::task::TaskHistoryEntry {
                     at: Utc::now(),
                     by: params.actor.clone(),
-                    event: "claim_footprint_widened".into(),
-                    note: Some(encode(&additions)?),
+                    event: CONTEXT_FILES_WIDENED_EVENT.into(),
+                    note: Some(encode(&ContextFilesWidening {
+                        run_id: handoff.run_id.clone(),
+                        step: ContextWideningStep::Implement,
+                        activity: "claim_handoff".into(),
+                        selectors: additions,
+                    })?),
                     from_status: None,
                     to_status: None,
                 });

@@ -179,22 +179,22 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   from the final candidate rather than trusted from the implementer output, then a line naming the delivered candidate. Each part is bounded, and a summary whose
   first line is `Outcome: failed` is refused before it becomes a settlement. Acceptance writes it
   as the owner's `execution_summary`.
-- New files in a claimed candidate use owner-validated footprint widening. Paths under an admitted
-  directory or beside an admitted file (including its module's `tests/` child) keep the existing
-  admission rule. Other additions may request an exact `file:` selector within a crate or top-level
-  directory already named by the ORIGINAL admission selectors. `crates/<crate>` is the unit,
-  never the shared `crates/` parent. A crate's `tests/` directory is also eligible without a selector
-  in that crate. The follower recomputes `TaskHandoff.footprint_widening` from the final Git diff
-  with rename detection disabled. Old payloads decode with an empty request; protocol revision 3
-  prevents newer peers sending the additive field to older endpoints.
-  The owner independently reads the published candidate, refuses protected paths, symlinks and
-  malformed paths, and requires the request to equal its observed additions. Under the exclusive
-  admission lock, acceptance rechecks other live claims, in-progress/review task selectors and
-  active reservations. It journals task selector additions, `claim_footprint_widened` history, the
-  enlarged live claim and handoff acceptance as one decision. The admission receipt remains
-  unchanged, so widening cannot chain authority into another unit. Refusals name exact paths and
-  leave the task and claim unchanged. Scratch under `.orbit/tmp/` is never delivered. Owner-path
-  runs still require exact new-file selectors; implementer-reported selectors alone grant nothing.
+- A claimed implementer may change any path the work requires; the frozen footprint is a
+  scheduling hint, not a delivery gate. Every added path the admission selectors do not cover
+  becomes an owner-validated widening request for an exact `file:` selector. The follower
+  recomputes `TaskHandoff.footprint_widening` from the final Git diff with rename detection
+  disabled. Old payloads decode with an empty request; protocol revision 3 prevents newer peers
+  sending the additive field to older endpoints.
+  The owner independently reads the published candidate, refuses only paths no owner can track
+  (Git or `.orbit` metadata, environment files, symlinks and malformed or redirected paths), and
+  requires the request to equal its observed additions. A competing live claim, in-progress or
+  review selector, or reservation on an added path does not refuse it; a concurrent task meets
+  the overlap as a rebase conflict instead. Acceptance journals the task selector additions, one
+  `context_files_widened` history entry (step `implement`, activity `claim_handoff`), the enlarged
+  live claim and handoff acceptance as one decision. The admission receipt remains unchanged.
+  Refusals name exact paths and leave the task and claim unchanged. Scratch under `.orbit/tmp/`
+  and gitignored output are never delivered. Owner-path runs widen the same way at delivery (activity-job
+  design §7.6a, agent-changed paths).
 - The delivery gate judges this attempt ([ORB-13755]). Until acceptance, the owner's stored
   summary is whatever an earlier attempt left, and after a failed attempt that is its
   `Outcome: failed` failure settlement. The `Outcome: failed` gate in `git_commit` and in the

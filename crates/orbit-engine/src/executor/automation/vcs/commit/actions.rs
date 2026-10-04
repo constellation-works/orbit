@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_types::task::NO_DIFF_EXPECTED_TAG;
+use orbit_types::task::{ContextWideningStep, NO_DIFF_EXPECTED_TAG};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -29,9 +29,7 @@ use super::git_ops::{
     git_commit_with_identity, stage_paths, staged_changed_files,
 };
 use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
-use super::scope::{
-    NewPathIntent, ensure_candidate_ownership, filter_changed_files_for_task, task_candidate_paths,
-};
+use super::scope::{NewPathPolicy, attribute_candidate_paths, task_candidate_paths};
 use super::summary::ensure_durable_execution_summary;
 
 pub(in crate::executor::automation) fn git_commit<H: RuntimeHost + ?Sized>(
@@ -96,16 +94,30 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
         .map(|task_id| host.get_task(task_id))
         .collect::<Result<Vec<_>, _>>()?;
     let resolved_model = host.resolved_crew_model(batch_id)?;
-    // Multi-task scopes run only in local pipelines, whose workers can append
-    // exact selectors for the files they create.
-    let candidate_paths = task_candidate_paths(&workspace_path, &tasks, NewPathIntent::ExactFile)?;
-    ensure_candidate_ownership(&candidate_paths, &workspace_path, &tasks, true)?;
+    // Multi-task scopes run only in local pipelines. Each path is committed
+    // with exactly one task: the one whose agent changed it when selectors
+    // alone are ambiguous, widening that task's selectors when none cover it.
+    let candidate_paths = task_candidate_paths(&workspace_path, NewPathPolicy::Owner)?;
+    let mut assigned = attribute_candidate_paths(
+        host,
+        batch_id,
+        ContextWideningStep::Implement,
+        "git_commit",
+        &candidate_paths,
+        &workspace_path,
+        &tasks,
+        true,
+    );
 
     let mut committed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
 
     for task in tasks {
-        let changed_files = filter_changed_files_for_task(&candidate_paths, &workspace_path, &task);
+        let changed_files = assigned
+            .remove(&task.id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
         if changed_files.is_empty() {
             skipped_task_ids.push(task.id);
             continue;
@@ -143,21 +155,28 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     ensure_named_branch(&workspace_path)?;
     ensure_no_unmerged_changes(&workspace_path)?;
 
-    let changed_files =
-        task_candidate_paths(&workspace_path, &batch_tasks, NewPathIntent::ExactFile)?;
+    let changed_files = task_candidate_paths(&workspace_path, NewPathPolicy::Owner)?;
     if changed_files.is_empty() {
         return Ok(json!({}));
     }
-    ensure_candidate_ownership(&changed_files, &workspace_path, &batch_tasks, false)?;
+    let assigned = attribute_candidate_paths(
+        host,
+        batch_id,
+        ContextWideningStep::Implement,
+        "git_commit",
+        &changed_files,
+        &workspace_path,
+        &batch_tasks,
+        false,
+    );
 
     let mut affected_tasks = Vec::new();
     let mut files_to_commit = BTreeSet::new();
     for task in batch_tasks {
-        let task_files = filter_changed_files_for_task(&changed_files, &workspace_path, &task);
-        if task_files.is_empty() {
+        let Some(task_files) = assigned.get(&task.id).filter(|files| !files.is_empty()) else {
             continue;
-        }
-        files_to_commit.extend(task_files);
+        };
+        files_to_commit.extend(task_files.iter().cloned());
         affected_tasks.push(task);
     }
 
@@ -203,15 +222,15 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
 
     ensure_no_unmerged_changes(&workspace_path)?;
 
-    // ORB-13756: the claim's worker binding, not step input, marks the frozen
-    // footprint as this run's new-path intent.
-    let new_path_intent = if host
+    // ORB-13756: the claim's worker binding, not step input, marks a claimed
+    // leaf, whose new paths the owner must be able to accept as widening.
+    let new_path_policy = if host
         .worker_invocation()
         .is_some_and(|binding| binding.task_id == task.id)
     {
-        NewPathIntent::AdmittedFootprint
+        NewPathPolicy::Claimed
     } else {
-        NewPathIntent::ExactFile
+        NewPathPolicy::Owner
     };
     let task = if claimed_attempt_summary(host, input, task).is_some() {
         // ORB-13755: a claimed leaf delivers this attempt, whose summary lives
@@ -294,14 +313,10 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         }
     };
 
-    // Tracked paths carry repository identity. New paths require durable
-    // selector intent (or a pre-staged writable index). Resolve and validate
-    // that set before mutating the index, then stage exactly those paths.
-    let candidate_paths = task_candidate_paths(
-        &workspace_path,
-        std::slice::from_ref(&task),
-        new_path_intent,
-    )?;
+    // Every tracked change and new path outside scratch is delivery: agents
+    // may change any path the work requires. Resolve and validate that set
+    // before mutating the index, then stage exactly those paths.
+    let candidate_paths = task_candidate_paths(&workspace_path, new_path_policy)?;
     let candidate_paths = candidate_paths.into_iter().collect::<Vec<_>>();
     stage_paths(&workspace_path, &candidate_paths)?;
 
@@ -347,6 +362,18 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         )?);
     }
 
+    // Widen the task's selectors over every delivered path they do not yet
+    // cover. A claimed leaf's host widens nothing: the owner does at handoff.
+    attribute_candidate_paths(
+        host,
+        batch_id,
+        ContextWideningStep::Implement,
+        "git_commit",
+        &changed_files.iter().cloned().collect(),
+        &workspace_path,
+        std::slice::from_ref(&task),
+        true,
+    );
     let message = batch_commit_message(&task);
     let resolved_model = host.resolved_crew_model(batch_id)?;
 
@@ -379,17 +406,23 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
     ensure_named_branch(workspace_path)?;
     ensure_no_unmerged_changes(workspace_path)?;
     // Only `pr_failure_handoff` reaches this, and no claimed pipeline runs it.
-    let candidate_paths = task_candidate_paths(
-        workspace_path,
-        std::slice::from_ref(task),
-        NewPathIntent::ExactFile,
-    )?;
+    let candidate_paths = task_candidate_paths(workspace_path, NewPathPolicy::Owner)?;
     stage_paths(
         workspace_path,
         &candidate_paths.into_iter().collect::<Vec<_>>(),
     )?;
     let changed_files = staged_changed_files(workspace_path)?;
     if !changed_files.is_empty() {
+        attribute_candidate_paths(
+            host,
+            run_id,
+            ContextWideningStep::Implement,
+            "pr_failure_handoff",
+            &changed_files.iter().cloned().collect(),
+            workspace_path,
+            std::slice::from_ref(task),
+            true,
+        );
         let message = batch_commit_message(task);
         let resolved_model = host.resolved_crew_model(run_id)?;
         git_commit_with_identity(workspace_path, &message, resolved_model.as_deref())?;

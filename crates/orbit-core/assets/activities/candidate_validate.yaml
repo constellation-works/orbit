@@ -16,8 +16,9 @@ spec:
     repair the candidate and retry; a command that fails for lack of a tool
     fails as a `validation_environment` failure that no recovery repairs.
     With `ownership_base_sha`, every path the candidate changed since that
-    commit must first be owned by a delivered task's selectors. An empty
-    requirement list is a no-op.
+    commit is first attributed to the delivered tasks; a path no selector owns
+    widens a task's selectors with review provenance rather than failing. An
+    empty requirement list is a no-op.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, completed_task_ids]
@@ -35,9 +36,9 @@ spec:
       # contain it; a later advance of the base tip is not a refusal.
       base_sha:
         type: [string, "null"]
-      # The implementation head a before-PR reviewer commit sits on. Paths changed since it must each be owned by one of the
-      # delivered tasks' current selectors, which settlement widened for the
-      # reviewer's declared paths.
+      # The implementation head a before-PR reviewer commit sits on. Paths
+      # changed since it are attributed to the delivered tasks, widening
+      # their selectors for any path settlement did not already cover.
       ownership_base_sha:
         type: [string, "null"]
   output_schema_json:
@@ -57,7 +58,7 @@ spec:
         type: string
       owned_paths:
         type: array
-        description: Paths the ownership check accepted, when requested.
+        description: Paths changed since ownership_base_sha and attributed to the delivered tasks, when requested.
         items:
           type: string
       tested_head:

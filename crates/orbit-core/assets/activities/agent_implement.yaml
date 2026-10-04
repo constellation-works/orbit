@@ -37,7 +37,8 @@ spec:
       # Claimed mode: the execution summary the handoff carries to the owner.
       execution_summary:
         type: string
-      # Claimed mode: exact selectors the implementer would have appended.
+      # Claimed mode: selectors the implementer would have appended (advisory;
+      # the owner widens the claim over the candidate's additions).
       context_files_added:
         type: array
         items:
@@ -62,8 +63,9 @@ spec:
       owning machine. The injected task is authoritative; `orbit.task.show`
       and `orbit.task.update` are unavailable. Return writes as output fields:
       - `execution_summary` (REQUIRED): the item 12 summary.
-      - `context_files_added`: selectors from items 4 and 11 (reported, not
-        applied; the claim's footprint is frozen, so prefer staying inside it).
+      - `context_files_added`: selectors from item 4 (reported, not applied;
+        the owner widens the claim's footprint over every path the candidate
+        adds when it accepts the handoff).
       - `comment`: any task comment, blocker (item 8) or leftovers (item 11).
     - Other owner-routed tools may be unreachable; that is never a failure or
       blocker. Record it in `comment`; report `failed` only for the work.
@@ -104,23 +106,22 @@ spec:
 
     Scope and implementation
 
-    4. Treat `context_files` as the intended scope, not a perfect inventory.
-       Add unlisted files only for acceptance criteria or consistency of
-       directly affected materials and consumers; explain why in the summary
-       and make the smallest compatible change. Before editing, read durable
+    4. Treat `context_files` as a starting point, not a limit. Create or
+       modify any path the work requires, including paths outside the task's
+       selectors (a new test file, a caller, a re-export); explain why in the
+       summary. Orbit widens the task's selectors over every path you change
+       and records in task history which step introduced it, so declaring
+       selectors yourself is optional. To declare one, read durable
        `context_files` with `orbit.task.show`, then use `orbit.task.update`
        with the deduplicated union of ALL existing selectors and the added
-       canonical in-workspace `file:`, `dir:`, or `symbol:` selector. The list
+       canonical in-workspace `file:`, `dir:`, or `symbol:` selector (with
+       `allow_missing_context: true` for a file you will create). The list
        REPLACES existing selectors; omission preserves them, `[]` clears them.
-       Never send additions alone. Re-read and verify all prior selectors and
-       additions survived. In claimed mode, use the injected list and report
+       Never send additions alone. In claimed mode, report
        `context_files_added` instead of calling unavailable task tools.
-       For intended new files, declare exact `file:` selectors in that union
-       with `allow_missing_context: true` (run-worktree calls automatically
-       relax existence checks and report `context_files_unverified`). Revert
-       accidental edits; declaring paths cannot authorize them. Comment and
-       stop for broad, ambiguous, or out-of-scope behavior. Never delete
-       unrelated materials as cleanup.
+       Revert accidental edits. Comment and stop for broad, ambiguous, or
+       out-of-scope behavior: scope is the task's intent, not its selectors.
+       Never delete unrelated materials as cleanup.
     5. Keep shared instructions domain-neutral. Follow the workspace's
        AGENTS.md, current evidence, and requirements for repository practices.
     6. Deliver clear outputs, preserve compatibility, and explain constraints.
@@ -170,12 +171,11 @@ spec:
     11. Reconcile changes before returning, even if cleanup was denied.
         Inventory with `git status --short` and `git diff --check`: staged,
         unstaged, untracked, deletions, and both sides of renames. Account for
-        every entry against item 3's baseline. Re-read durable `context_files`
-        after updates; verify prior selectors remain and every delivery path
-        is covered. Each intended new file needs its exact `file:` selector;
-        a containing directory is insufficient. If missing, follow item 4's
-        read/full-union update/re-read procedure. Tracked changes need no
-        declaration beyond existing scope. Repeat inventory after cleanup.
+        every entry against item 3's baseline. Delivery commits every tracked
+        change and every untracked path outside `.orbit/tmp/` (gitignored
+        output excepted), so each remaining entry must be deliverable. If you
+        updated `context_files`, re-read them and verify prior selectors
+        remain. Repeat inventory after cleanup.
         If denied or unsafe cleanup leaves run-owned output outside
         `.orbit/tmp/`, record exact paths and the blocker in an
         `orbit.task.update` comment; do not hand off as success.
@@ -206,13 +206,13 @@ spec:
         checks disqualify this path; report a validation blocker.
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
-        and merge. Follow item 10's scratch policy. Delivery refuses untracked
-        paths without exact durable intent. Gates read durable artifacts and
+        and merge. Follow item 10's scratch policy. Gates read durable artifacts and
         task state, never the execution summary as an oracle. Do not invoke another agent
         or dispatch work. In the execution summary, map criteria to results,
         list validation commands as passed/failed/not run with reasons, record
-        the item 11 reconciliation (delivery paths, selector coverage, cleanup
-        outcome, leftovers), and disclose risks or deviations.
+        the item 11 reconciliation (delivery paths, paths outside the task's
+        selectors, cleanup outcome, leftovers), and disclose risks or
+        deviations.
         Do not claim skipped checks passed or incomplete work successful.
   tool_disallow_list:
     - orbit.agent.invoke

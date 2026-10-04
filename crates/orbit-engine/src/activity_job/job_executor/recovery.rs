@@ -156,7 +156,7 @@ pub(super) fn attempt_recovery_activity(
     attempt: u32,
     max_attempts: u32,
 ) -> bool {
-    // The conflict leaf edits conflict files only; a declared-failed outcome
+    // The conflict leaf resolves a stopped rebase; a declared-failed outcome
     // or any other error is never a rebase conflict for it to resolve.
     if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
         && !matches!(

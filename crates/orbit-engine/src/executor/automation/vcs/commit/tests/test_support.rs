@@ -4,7 +4,10 @@ use std::sync::Mutex;
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{ExecutionLocation, Task, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ExecutionLocation,
+    Task, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+};
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::JobRun;
 use tempfile::tempdir;
@@ -20,6 +23,8 @@ pub struct CommitTestHost {
     scoreboard_dir: PathBuf,
     /// The trusted claim binding a claimed leaf's host carries, if any.
     worker: Option<WorkerInvocation>,
+    /// Task history, including the selector widenings this host recorded.
+    history: Mutex<Vec<(String, TaskHistoryEntry)>>,
 }
 
 impl CommitTestHost {
@@ -32,7 +37,45 @@ impl CommitTestHost {
             data_root,
             scoreboard_dir,
             worker: None,
+            history: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every widening recorded for `task_id`, in order.
+    pub fn widenings(&self, task_id: &str) -> Vec<ContextFilesWidening> {
+        self.get_task_history(task_id)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
+            .filter_map(|entry| {
+                entry
+                    .note
+                    .as_deref()
+                    .and_then(ContextFilesWidening::from_note)
+            })
+            .collect()
+    }
+
+    /// Record that `task_id`'s agent changed `paths`, as the boundary guard
+    /// does when an implementer exits.
+    pub fn with_agent_widening(self, task_id: &str, paths: &[&str]) -> Self {
+        let paths = paths
+            .iter()
+            .map(|path| path.to_string())
+            .collect::<Vec<_>>();
+        self.widen_task_context_files(
+            task_id,
+            "batch-1",
+            ContextWideningStep::Implement,
+            "agent_implement",
+            &paths,
+        )
+        .unwrap();
+        self
+    }
+
+    pub fn task(&self, task_id: &str) -> Task {
+        self.get_task(task_id).unwrap()
     }
 
     /// Run as a claimed leaf bound to `task_id`, as a follower's worker is.
@@ -151,6 +194,70 @@ impl RuntimeHost for CommitTestHost {
 
     fn worker_invocation(&self) -> Option<WorkerInvocation> {
         self.worker.clone()
+    }
+
+    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        Ok(self
+            .history
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, _)| id == task_id)
+            .map(|(_, entry)| entry.clone())
+            .collect())
+    }
+
+    /// Mirrors the owner host: exact `file:` selectors for uncovered paths
+    /// plus one provenance entry; a claimed leaf widens nothing.
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        if self.worker.is_some() {
+            return Ok(Vec::new());
+        }
+        let mut tasks = self.tasks.lock().unwrap();
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+        let added = paths
+            .iter()
+            .map(|path| format!("file:{path}"))
+            .filter(|selector| {
+                !task
+                    .context_files
+                    .iter()
+                    .any(|existing| orbit_common::fs::selector::overlaps(existing, selector))
+            })
+            .collect::<Vec<_>>();
+        if added.is_empty() {
+            return Ok(added);
+        }
+        task.context_files.extend(added.iter().cloned());
+        let note = serde_json::to_string(&ContextFilesWidening {
+            run_id: run_id.to_string(),
+            step,
+            activity: activity.to_string(),
+            selectors: added.clone(),
+        })
+        .unwrap();
+        self.history.lock().unwrap().push((
+            task_id.to_string(),
+            TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".to_string(),
+                event: CONTEXT_FILES_WIDENED_EVENT.to_string(),
+                note: Some(note),
+                from_status: None,
+                to_status: None,
+            },
+        ));
+        Ok(added)
     }
 }
 
