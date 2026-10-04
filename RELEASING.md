@@ -80,7 +80,7 @@ git log v<prev>..HEAD --pretty='%s' --no-merges | grep -oE '\[[A-Z]+-[0-9]+\]' |
 
 ### 2. Draft the CHANGELOG entry
 
-The CHANGELOG is a short consumer-facing release note, not a commit log. PRs never touch it. You compile the section at release time from the survey.
+The CHANGELOG is a short consumer-facing release note, not a commit log. Non-release task PRs do not edit it. An explicitly authorized release-preparation task compiles the section at release time from the survey.
 
 Add `## <X.Y.Z>` at the top of `CHANGELOG.md` with:
 
@@ -100,7 +100,7 @@ Bullet shape:
 - Migration steps, rationale, and test inventories stay in the cited task or commit. The task ID is the pointer.
 - A breaking bullet gets at most one extra line, with the migration as a phrase (`x removed → use y`).
 
-The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. Nothing mechanically blocks a non-release `CHANGELOG.md` edit. The rule is in [AGENTS.md](AGENTS.md) and review.
+The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. The style check does not enforce the task/release boundary. When before-PR review is enabled (`operation.review_policy = "before-pr"`), the reviewer must treat any diff touching `CHANGELOG.md` for a non-release task as an open finding, return `changes_required` without repairing it, and let the settle step block PR publication. The release exception requires an explicitly authorized task tagged `release` and titled `Prepare v<X.Y.Z> release`; listing `CHANGELOG.md` as a context file alone does not authorize an edit. Deliveries without before-PR review rely on the repository rule in [AGENTS.md](AGENTS.md) and after-landing review. Universal deterministic enforcement is out of scope.
 
 ### 3. Confirm breaking changes with the human
 
