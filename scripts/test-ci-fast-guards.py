@@ -400,6 +400,55 @@ sys.stdout.write(status)
         self.assertEqual(len(commit_calls), 1)
 
 
+class WorkflowYamlGuardrailTests(unittest.TestCase):
+    def setUp(self):
+        try:
+            import yaml  # noqa: F401
+        except ImportError:
+            self.skipTest("PyYAML not installed; the guard skips locally without it")
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / "scripts").mkdir()
+        self.workflows = self.root / ".github/workflows"
+        self.workflows.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "check-workflow-yaml.py", self.root / "scripts")
+
+    def write_workflow(self, name, run):
+        (self.workflows / name).write_text(
+            "on: push\njobs:\n  test:\n    steps:\n      - name: filtered tests\n"
+            f"        run: {run}\n")
+
+    def run_guard(self):
+        return subprocess.run(
+            ["python3", str(self.root / "scripts/check-workflow-yaml.py")],
+            text=True, capture_output=True,
+        )
+
+    def test_passes_when_every_workflow_parses(self):
+        self.write_workflow("ci.yml", "cargo test -p orbit-cli --locked")
+        self.write_workflow(
+            "ci-macos.yaml", "|\n          cargo test -p orbit-cli --locked generation_root::")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("2 workflow files parsed", result.stdout)
+
+    def test_trailing_colon_filter_fails_with_its_line(self):
+        # A plain scalar ending in `:` is a mapping key; GitHub then creates
+        # no jobs for the workflow and the leg silently stops running.
+        self.write_workflow("ci-macos.yml", "cargo test -p orbit-cli --locked generation_root::")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(".github/workflows/ci-macos.yml:6: invalid YAML", result.stderr)
+
+    def test_workflow_without_jobs_fails(self):
+        (self.workflows / "empty.yml").write_text("on: push\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("empty.yml: a workflow must be a mapping with a `jobs` mapping",
+                      result.stderr)
+
+
 class CargoDenyGuardrailTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
