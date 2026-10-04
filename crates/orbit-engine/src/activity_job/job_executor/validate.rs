@@ -17,6 +17,14 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
              `resolve_job_catalog_refs_for_execution` at load time before dispatch"
         )));
     }
+    if let Some(name) = &job.final_recovery_activity
+        && job.resolved_final_recovery_activity.is_none()
+    {
+        return Err(DispatchError::JobValidation(format!(
+            "job final_recovery_activity `{name}` was not resolved — caller must run \
+             `resolve_job_catalog_refs_for_execution` at load time before dispatch"
+        )));
+    }
     for step in &job.steps {
         validate_step(step)?;
     }
@@ -208,8 +216,9 @@ fn output_step_refs(expr: &str) -> Vec<String> {
 /// [`DispatchError::DeterministicActionUnavailable`] naming both the activity
 /// and the action.
 ///
-/// The scan covers the job's `recovery_activity` and `failure_activity`, every
-/// step's `recovery_activity`, and every resolved deterministic target —
+/// The scan covers the job's `recovery_activity`, `failure_activity` and
+/// `final_recovery_activity`, every step's `recovery_activity`, and every
+/// resolved deterministic target —
 /// recursing through `parallel:`, `fan_out:`, and `loop:` bodies. `agent_loop`
 /// activities have no action to check, and an unresolved `TargetRef` is left
 /// to the structural error the dispatcher already raises.
@@ -225,6 +234,18 @@ pub fn validate_job_deterministic_actions(
     check_activity_action(
         job.resolved_failure_activity.as_ref().map(|a| &a.spec),
         || activity_label(job.failure_activity.as_deref(), "job failure_activity"),
+        host,
+    )?;
+    check_activity_action(
+        job.resolved_final_recovery_activity
+            .as_ref()
+            .map(|a| &a.spec),
+        || {
+            activity_label(
+                job.final_recovery_activity.as_deref(),
+                "job final_recovery_activity",
+            )
+        },
         host,
     )?;
     for step in &job.steps {

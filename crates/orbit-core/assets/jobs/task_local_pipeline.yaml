@@ -27,6 +27,12 @@ spec:
   # No job-level ceiling: the drain's own worker limit (`--concurrency`, retuned
   # live by `orbit run concurrency`) bounds how many of these run at once.
   max_active_runs: 0
+  # ORB-13907: once step recovery is spent, a crew from
+  # `workflow.final_recovery_crews` gets one last look and returns a typed
+  # decision. `resume` reruns from the failed step or an earlier one of its
+  # phase; any other decision is applied by Orbit's deterministic applier.
+  # An empty crew pool skips it.
+  final_recovery_activity: final_recovery
   default_input:
     task_ids: []
     auto_push: false

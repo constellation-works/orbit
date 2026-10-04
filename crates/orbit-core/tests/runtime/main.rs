@@ -1,5 +1,6 @@
 //! The composed runtime through its public surface: dispatch admission, the
-//! distributed drain, relation auto-close and the sandbox opt-out.
+//! distributed drain, final recovery, relation auto-close and the sandbox
+//! opt-out.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -10,6 +11,7 @@
 
 mod dispatch_admission;
 mod distributed_drain;
+mod final_recovery;
 mod relation_auto_close;
 mod sandbox_off;
 

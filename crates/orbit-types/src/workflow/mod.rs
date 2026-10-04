@@ -88,9 +88,9 @@ pub use run_id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use run_state::{
     ActivityCrewDraw, ActivityCrewPoolMember, CrewExclusion, CrewExclusionSource,
     DrainAdmissionPass, DrainAdmissionsStop, DrainCancelRequest, DrainWaitingTask,
-    DrainWorkerLimit, FailureActivityCheckpoint, PROVIDER_UNAVAILABLE_ERROR_CODE,
-    PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight, ResourcePressure,
-    ResourceThrottle, is_provider_unavailable,
+    DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
+    FinalRecoveryObservedTask, PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER,
+    PipelineState, PullCrewPreflight, ResourcePressure, ResourceThrottle, is_provider_unavailable,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

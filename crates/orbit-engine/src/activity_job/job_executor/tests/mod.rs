@@ -129,6 +129,8 @@ pub(super) fn job_with_steps(steps: Vec<JobV2Step>) -> JobV2 {
         resolved_recovery_activity: None,
         failure_activity: None,
         resolved_failure_activity: None,
+        final_recovery_activity: None,
+        resolved_final_recovery_activity: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
         steps,

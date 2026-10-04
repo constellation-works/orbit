@@ -109,6 +109,21 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
     },
+    /// [ORB-13907] The job-level final recovery hook ran, or was skipped, for
+    /// a failed top-level step.
+    FinalRecoveryAttempted {
+        step_id: String,
+        final_recovery_activity: String,
+        /// `skipped`, `resume`, `settled`, or `escalated`.
+        outcome: String,
+        /// The decision acted on; absent when skipped.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<String>,
+        /// Why it was skipped, or what it settled or escalated; bounded and
+        /// redacted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     StepDenied {
         step_id: String,
         reason: String,
@@ -326,6 +341,7 @@ impl V2AuditEventKind {
             V2AuditEventKind::StepRetry { .. } => "step.retry",
             V2AuditEventKind::StepRecoveryAttempted { .. } => "step.recovery_attempted",
             V2AuditEventKind::StepPostRecoveryAttempt { .. } => "step.post_recovery_attempt",
+            V2AuditEventKind::FinalRecoveryAttempted { .. } => "job.final_recovery_attempted",
             V2AuditEventKind::StepDenied { .. } => V2_EVENT_TYPE_STEP_DENIED,
             V2AuditEventKind::StepJoin { .. } => "step.join",
             V2AuditEventKind::FanoutDispatched { .. } => "fanout.dispatched",

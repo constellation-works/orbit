@@ -795,7 +795,7 @@ fn family_from_assignment(assignment: &CrewAssignment) -> Option<String> {
 }
 
 /// Whether a resolved job can dispatch an agent-loop activity, as a step at any
-/// nesting depth or as a recovery or failure hook [ORB-13016]. A reference the
+/// nesting depth or as a recovery, failure or final-recovery hook [ORB-13016]. A reference the
 /// catalog has not resolved counts as one, so only a definition proven
 /// agent-free skips the run's crew record.
 pub(crate) fn job_dispatches_agent(job: &JobV2) -> bool {
@@ -805,6 +805,9 @@ pub(crate) fn job_dispatches_agent(job: &JobV2) -> bool {
     ) || hook_dispatches_agent(
         job.failure_activity.as_deref(),
         job.resolved_failure_activity.as_ref(),
+    ) || hook_dispatches_agent(
+        job.final_recovery_activity.as_deref(),
+        job.resolved_final_recovery_activity.as_ref(),
     ) || job.steps.iter().any(step_dispatches_agent)
 }
 
