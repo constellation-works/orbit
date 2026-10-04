@@ -11,7 +11,9 @@
 //! dispatches through a stub `RuntimeHost` and persists its §7 envelope
 //! events, a deterministic step's tool binding comes from the dispatch rather
 //! than its tool arguments, and job assets with `parallel:`, `fan_out:` and `loop:` blocks
-//! keep their join semantics when run through `execute_job_with_resume`.
+//! keep their join semantics when run through `execute_job_with_resume`,
+//! and the shipped before-PR `review` step retries and recovers a failing
+//! reviewer while charging only reviewer invocations.
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_runtime::/)'`.
 
@@ -21,12 +23,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_agent::loop_engine::InMemorySink;
-use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
+use orbit_common::OrbitError;
+use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{
-    DispatchError, JobOutcome, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
-    V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
+    DispatchError, JobOutcome, ResolvedCliExecutor, ReviewerInvocationRequest, RuntimeHost,
+    V2AuditWriter, V2DispatchInput, V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
+    resolve_job_catalog_refs_for_execution,
 };
-use orbit_types::workflow::activity_job::{ActivityV2, V2AuditEvent, V2AuditEventKind};
+use orbit_types::workflow::ReviewerInvocationEvent;
+use orbit_types::workflow::activity_job::{
+    ActivityV2, ActivityV2Spec, DeterministicSpec, V2AuditEvent, V2AuditEventKind,
+};
 use serde_json::{Value, json};
 
 #[test]
@@ -676,5 +683,558 @@ impl RuntimeHost for GraphHost {
             });
         }
         Ok(input.clone())
+    }
+}
+
+// --------------------------------------------------------------------------
+// Before-PR reviewer resilience [ORB-13890]
+// --------------------------------------------------------------------------
+
+/// The shipped `review` step's own `retry:` and `recovery_activity:`, driven
+/// with a fault-injected reviewer. A transient failure is retried and the
+/// step succeeds without recovery; a persistent one exhausts its attempts,
+/// gets one `step_failure_recovery` and one re-attempt, and only then fails
+/// the run. Each reviewer dispatch — and nothing else — reports its start
+/// and end, so backoff and recovery are never charged as review minutes.
+#[test]
+fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
+    for (failures, succeeds, expected_calls) in [
+        (1, true, vec![REVIEWER, REVIEWER]),
+        (
+            usize::MAX,
+            false,
+            vec![REVIEWER, REVIEWER, RECOVERY, REVIEWER],
+        ),
+    ] {
+        let audit_root = tempfile::tempdir().expect("audit tempdir");
+        let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), "review-run");
+        let host = ReviewerHost::failing(failures);
+        let result = execute_job_with_resume(
+            &shipped_review_step_job(),
+            json!({ "task_ids": ["T-1"] }),
+            "review-run",
+            writer.clone(),
+            &host,
+            None,
+        );
+        let events = writer.events_snapshot().expect("persisted audit events");
+
+        assert_eq!(
+            matches!(&result, Ok(outcome) if outcome.success),
+            succeeds,
+            "{failures} failure(s): {result:?}"
+        );
+        assert_eq!(host.calls(), expected_calls, "{failures} failure(s)");
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                V2AuditEventKind::StepRetry { step_id, .. } if step_id == "review"
+            )),
+            "the reviewer step retried after its first failure"
+        );
+        let recovered = events.iter().any(|event| {
+            matches!(
+                &event.kind,
+                V2AuditEventKind::StepRecoveryAttempted { step_id, recovery_activity, .. }
+                    if step_id == "review" && recovery_activity == RECOVERY
+            )
+        });
+        assert_eq!(recovered, !succeeds, "recovery runs only once retries fail");
+
+        let reviewer_calls = expected_calls
+            .iter()
+            .filter(|call| **call == REVIEWER)
+            .count();
+        let invocations = host.invocations();
+        assert_eq!(invocations.len(), reviewer_calls * 2);
+        for pair in invocations.chunks(2) {
+            assert!(matches!(
+                pair[0].event,
+                ReviewerInvocationEvent::Started { timeout_seconds } if timeout_seconds > 0
+            ));
+            assert!(matches!(
+                pair[1].event,
+                ReviewerInvocationEvent::Finished { .. }
+            ));
+            for request in pair {
+                assert_eq!(
+                    (
+                        request.run_id.as_str(),
+                        request.lineage_key.as_str(),
+                        request.attempt_id.as_str()
+                    ),
+                    ("review-run", "lineage-1", "rvw-1")
+                );
+            }
+        }
+    }
+}
+
+/// Run the shipped completion/re-review steps as one job graph. The
+/// deterministic completion stub reports that the published, reviewed head
+/// needs rebasing; the fake reviewer then certifies the new head before the
+/// pipeline republishes and completes it. This catches broken step wiring or
+/// template references that action-level tests cannot see.
+#[test]
+fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
+    let audit_root = tempfile::tempdir().expect("audit tempdir");
+    let (writer, _envelope, _inner) =
+        build_writer_and_sinks(audit_root.path(), "complete-review-run");
+    let host = CompletionReviewHost::default();
+    let result = execute_job_with_resume(
+        &shipped_completion_review_job(),
+        json!({
+            "task_ids": ["T-1"],
+            "base_branch": "main",
+            "base_sync": "remote",
+            "completion": "done",
+        }),
+        "complete-review-run",
+        writer,
+        &host,
+        None,
+    );
+
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    let calls = host.calls();
+    let actions = calls
+        .iter()
+        .map(|(action, _)| action.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actions,
+        [
+            "test_stub_worktree",
+            "test_stub_commit",
+            "test_stub_prepare_branch",
+            "test_stub_sync_base",
+            "test_stub_review_gate_admit",
+            "test_stub_agent_review_repair",
+            "test_stub_review_gate_settle",
+            "test_stub_push",
+            "test_stub_pr_open",
+            "test_stub_promote_tasks",
+            "test_stub_pr_complete",
+            "test_stub_review_gate_admit",
+            "test_stub_agent_review_repair",
+            "test_stub_review_gate_settle",
+            "test_stub_git_push",
+            "test_stub_pr_complete",
+        ],
+        "a completion conflict must enter the shipped re-review route before the second merge"
+    );
+
+    let admissions = calls
+        .iter()
+        .filter(|(action, _)| action == "test_stub_review_gate_admit")
+        .map(|(_, input)| input.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(admissions.len(), 2);
+    assert!(admissions[0].get("re_review_after").is_none());
+    assert_eq!(admissions[1]["re_review_after"], "complete_pr");
+
+    let reviewer_inputs = calls
+        .iter()
+        .filter(|(action, _)| action == "test_stub_agent_review_repair")
+        .map(|(_, input)| input.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(reviewer_inputs.len(), 2);
+    assert_eq!(reviewer_inputs[0]["attempt_id"], "rvw-first");
+    assert_eq!(reviewer_inputs[1]["attempt_id"], "rvw-re-review");
+
+    let completion_inputs = calls
+        .iter()
+        .filter(|(action, _)| action == "test_stub_pr_complete")
+        .map(|(_, input)| input.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(completion_inputs.len(), 2);
+    assert_eq!(completion_inputs[0]["reviewed_head_sha"], "candidate");
+    assert_eq!(completion_inputs[1]["reviewed_head_sha"], "rebased-head");
+    assert_eq!(completion_inputs[1]["published_head_sha"], "rebased-head");
+
+    let invocations = host.invocations();
+    assert_eq!(
+        invocations.len(),
+        4,
+        "both reviewer runs record their bounds"
+    );
+    assert_eq!(invocations[0].attempt_id, "rvw-first");
+    assert_eq!(invocations[2].attempt_id, "rvw-re-review");
+    assert!(matches!(
+        invocations[0].event,
+        ReviewerInvocationEvent::Started { .. }
+    ));
+    assert!(matches!(
+        invocations[1].event,
+        ReviewerInvocationEvent::Finished { .. }
+    ));
+    assert!(matches!(
+        invocations[2].event,
+        ReviewerInvocationEvent::Started { .. }
+    ));
+    assert!(matches!(
+        invocations[3].event,
+        ReviewerInvocationEvent::Finished { .. }
+    ));
+}
+
+const REVIEWER: &str = "agent_review_repair";
+const RECOVERY: &str = "step_failure_recovery";
+
+/// Stub worktree and admission steps followed by the shipped `review` step,
+/// whose reviewer and recovery activities resolve to scripted actions. Only
+/// the backoff sleep is shortened; attempts and recovery stay as shipped.
+fn shipped_review_step_job() -> orbit_types::workflow::JobV2 {
+    let shipped = std::fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
+    )
+    .expect("read the shipped PR pipeline");
+    let mut review = load_job_asset(&shipped)
+        .expect("the shipped PR pipeline loads")
+        .spec
+        .steps
+        .into_iter()
+        .find(|step| step.id == "review")
+        .expect("the shipped PR pipeline has a review step");
+    let retry = review
+        .retry
+        .as_mut()
+        .expect("the review step declares retry");
+    retry.initial_backoff_ms = 1;
+    retry.backoff_cap_ms = 1;
+
+    let stub = |id: &str| {
+        json!({
+            "id": id,
+            "spec": { "type": "deterministic", "action": id, "config": {} },
+        })
+    };
+    let mut job = job_asset(json!([stub("worktree"), stub("review_gate_admit")]));
+    job.steps.push(review);
+    let mut catalog = V2ActivityCatalog::new();
+    for name in [REVIEWER, RECOVERY] {
+        catalog.insert(
+            name,
+            ActivityV2 {
+                description: format!("scripted `{name}`"),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: name.to_string(),
+                    config: Value::Null,
+                }),
+            },
+        );
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).expect("resolve the review step");
+    job
+}
+
+/// The shipped pipeline slice that reaches completion and can enter its
+/// re-review branch, with all external activities resolved to the test host.
+fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
+    let shipped = std::fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
+    )
+    .expect("read the shipped PR pipeline");
+    let shipped = load_job_asset(&shipped)
+        .expect("the shipped PR pipeline loads")
+        .spec;
+    let find_step = |id: &str| {
+        shipped
+            .steps
+            .iter()
+            .find(|step| step.id == id)
+            .unwrap_or_else(|| panic!("the shipped PR pipeline has `{id}`"))
+            .clone()
+    };
+    let stub = |id: &str| {
+        json!({
+            "id": id,
+            "spec": { "type": "deterministic", "action": format!("test_stub_{id}"), "config": {} },
+        })
+    };
+    let stubs = |ids: &[&str]| ids.iter().map(|id| stub(id)).collect::<Vec<_>>();
+    // Keep the graph boundary under test while replacing unrelated VCS and
+    // task-store effects with deterministic stub activities.
+    let prefix = stubs(&[
+        "worktree",
+        "commit",
+        "prepare_branch",
+        "sync_base",
+        "review_gate_admit",
+    ]);
+    let mut job = job_asset(json!(prefix));
+    job.steps.push(find_step("review"));
+    let middle = stubs(&["review_gate_settle", "push", "pr_open", "promote_tasks"]);
+    job.steps.extend(job_asset(json!(middle)).steps);
+    job.steps.push(find_step("complete_pr"));
+    for id in [
+        "re_review_gate_admit",
+        "re_review",
+        "re_review_gate_settle",
+        "re_push",
+        "complete_reviewed_pr",
+    ] {
+        job.steps.push(find_step(id));
+    }
+
+    let mut catalog = V2ActivityCatalog::new();
+    for name in [
+        "worktree",
+        "commit",
+        "prepare_branch",
+        "sync_base",
+        "review_gate_admit",
+        REVIEWER,
+        "review_gate_settle",
+        "push",
+        "git_push",
+        "pr_open",
+        "promote_tasks",
+        "pr_complete",
+        "pr_conflict_recovery",
+        RECOVERY,
+    ] {
+        catalog.insert(
+            name,
+            ActivityV2 {
+                description: format!("scripted `{name}`"),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: format!("test_stub_{name}"),
+                    config: Value::Null,
+                }),
+            },
+        );
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog)
+        .expect("resolve the shipped completion and review steps");
+    job
+}
+
+#[derive(Default)]
+struct CompletionReviewHost {
+    calls: Mutex<Vec<(String, Value)>>,
+    invocations: Mutex<Vec<ReviewerInvocationRequest>>,
+}
+
+impl CompletionReviewHost {
+    fn calls(&self) -> Vec<(String, Value)> {
+        self.calls.lock().expect("call log").clone()
+    }
+
+    fn invocations(&self) -> Vec<ReviewerInvocationRequest> {
+        self.invocations.lock().expect("invocations").clone()
+    }
+}
+
+impl RuntimeHost for CompletionReviewHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .push((action.to_string(), input.clone()));
+        let output = match action {
+            "test_stub_worktree" => json!({
+                "job_run_id": "complete-review-run",
+                "workspace_path": "/worktrees/complete-review-run",
+            }),
+            "test_stub_commit" => json!({ "skipped_no_diff_expected": false }),
+            "test_stub_prepare_branch" => json!({
+                "head": "candidate-branch",
+                "head_sha": "candidate",
+                "base": "main",
+                "base_ref": "origin/main",
+                "base_sha": "base-sha",
+                "remote_sha": "candidate",
+                "commits_behind": 0,
+                "sync_required": false,
+            }),
+            "test_stub_sync_base" => json!({
+                "head": "candidate-branch",
+                "head_sha": "candidate",
+                "base": "main",
+                "base_ref": "origin/main",
+                "base_sha": "base-sha",
+                "remote_sha": "candidate",
+                "commits_behind": 0,
+                "sync_required": false,
+                "rewritten": false,
+            }),
+            "test_stub_review_gate_admit" => {
+                let re_review = input.get("re_review_after").is_some();
+                json!({
+                    "applies": true,
+                    "first_task_id": "T-1",
+                    "attempt_id": if re_review { "rvw-re-review" } else { "rvw-first" },
+                    "lineage_key": "lineage-1",
+                    "manifest_artifact": "review-manifest.json",
+                    "report_artifact": "review-report.json",
+                    "reviewer": { "crew": "reviewers" },
+                })
+            }
+            "test_stub_agent_review_repair" => {
+                json!({ "summary": "reviewed", "verdict": "passed_without_repairs" })
+            }
+            "test_stub_review_gate_settle" => {
+                let attempt = input
+                    .pointer("/admission/attempt_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                json!({
+                    "gate": "passed",
+                    "reviewed_head_sha": if attempt == "rvw-re-review" { "rebased-head" } else { "candidate" },
+                    "reviewed_base_sha": if attempt == "rvw-re-review" { "rebased-base" } else { "base-sha" },
+                })
+            }
+            "test_stub_push" => json!({ "local_sha": "candidate" }),
+            "test_stub_git_push" => json!({
+                "local_sha": if input.get("branch").and_then(Value::as_str) == Some("rebased-branch") {
+                    "rebased-head"
+                } else {
+                    "candidate"
+                },
+            }),
+            "test_stub_pr_open" => {
+                json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" })
+            }
+            "test_stub_promote_tasks" => json!({ "promoted": true }),
+            "test_stub_pr_complete"
+                if input.get("reviewed_head_sha").and_then(Value::as_str) == Some("candidate") =>
+            {
+                json!({
+                    "re_review_required": true,
+                    "rebased": {
+                        "head": "rebased-branch",
+                        "head_sha": "rebased-head",
+                        "base": "main",
+                        "base_ref": "origin/main",
+                        "base_sha": "rebased-base",
+                        "remote_sha_before": "candidate",
+                        "head_sha_before": "candidate",
+                        "rewritten": true,
+                    },
+                    "completed_task_ids": [],
+                    "skipped_task_ids": [],
+                })
+            }
+            "test_stub_pr_complete" => json!({
+                "re_review_required": false,
+                "merge": { "merged": true },
+                "completed_task_ids": ["T-1"],
+                "skipped_task_ids": [],
+            }),
+            other => panic!("unexpected action `{other}`"),
+        };
+        Ok(output)
+    }
+
+    fn record_reviewer_invocation(
+        &self,
+        request: &ReviewerInvocationRequest,
+    ) -> Result<(), OrbitError> {
+        self.invocations
+            .lock()
+            .expect("invocations")
+            .push(request.clone());
+        Ok(())
+    }
+}
+
+/// Serves the stub gate steps, a reviewer that fails its first `failures`
+/// dispatches like an unavailable provider, and a recovery that succeeds.
+struct ReviewerHost {
+    failures_left: Mutex<usize>,
+    calls: Mutex<Vec<&'static str>>,
+    invocations: Mutex<Vec<ReviewerInvocationRequest>>,
+}
+
+impl ReviewerHost {
+    fn failing(failures: usize) -> Self {
+        Self {
+            failures_left: Mutex::new(failures),
+            calls: Mutex::default(),
+            invocations: Mutex::default(),
+        }
+    }
+
+    fn calls(&self) -> Vec<&'static str> {
+        self.calls.lock().expect("call log").clone()
+    }
+
+    fn invocations(&self) -> Vec<ReviewerInvocationRequest> {
+        self.invocations.lock().expect("invocations").clone()
+    }
+}
+
+impl RuntimeHost for ReviewerHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        match action {
+            "worktree" => Ok(json!({
+                "job_run_id": "review-run",
+                "workspace_path": "/worktrees/review-run",
+            })),
+            "review_gate_admit" => Ok(json!({
+                "applies": true,
+                "first_task_id": "T-1",
+                "attempt_id": "rvw-1",
+                "lineage_key": "lineage-1",
+                "manifest_artifact": "review-manifest.json",
+                "report_artifact": "review-report.json",
+                "reviewer": { "crew": "reviewers" },
+            })),
+            REVIEWER => {
+                self.calls.lock().expect("call log").push(REVIEWER);
+                let mut failures_left = self.failures_left.lock().expect("failures");
+                if *failures_left == 0 {
+                    return Ok(
+                        json!({ "summary": "reviewed", "verdict": "passed_without_repairs" }),
+                    );
+                }
+                *failures_left = failures_left.saturating_sub(1);
+                Err(DispatchError::CliInvocationFailed(
+                    "provider overloaded".to_string(),
+                ))
+            }
+            RECOVERY => {
+                self.calls.lock().expect("call log").push(RECOVERY);
+                Ok(json!({ "recovered": true }))
+            }
+            other => panic!("unexpected action `{other}`"),
+        }
+    }
+
+    fn system_crew_for_dispatch(&self) -> Option<String> {
+        Some("system".to_string())
+    }
+
+    fn record_reviewer_invocation(
+        &self,
+        request: &ReviewerInvocationRequest,
+    ) -> Result<(), OrbitError> {
+        self.invocations
+            .lock()
+            .expect("invocations")
+            .push(request.clone());
+        Ok(())
     }
 }

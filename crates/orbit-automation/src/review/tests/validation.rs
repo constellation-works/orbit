@@ -74,7 +74,8 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         "a one-sided check identity is not an unambiguous replacement"
     );
 
-    // Empty and whitespace identities match nothing.
+    // Empty and whitespace identities relate nothing; only a shared command
+    // could, and a corrected command is not one.
     for invalid in ["", "   "] {
         let invalid_identity = vec![
             with_check(
@@ -86,7 +87,10 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
                 ),
                 invalid,
             ),
-            required("cargo test", ValidationOutcome::Passed),
+            with_check(
+                required("cargo test --workspace", ValidationOutcome::Passed),
+                invalid,
+            ),
         ];
         assert_eq!(
             validation_evidence(&invalid_identity),

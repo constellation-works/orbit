@@ -170,7 +170,7 @@ define_config_settings! {
     },
     operation_review_minutes: Option<u32> => u32 {
         key: "operation.review_minutes", value_type: "integer",
-        description: "Aggregate before-PR reviewer, repair, and final-validation wall-time minutes per delivery candidate lineage (1..=1440, default 30).",
+        description: "Aggregate before-PR reviewer runtime minutes per delivery run lineage (a delivery run and its resumes; a fresh delivery run starts a new lineage). Once spent, no further reviewer start is admitted; an admitted reviewer is bounded by its own activity timeout, not by this remainder (1..=1440, default 90).",
         section: ConfigSection::Operation, order: 50,
         resolve: |raw: Option<u32>| operation::review_minutes(raw),
     },
@@ -182,13 +182,13 @@ define_config_settings! {
     },
     operation_review_repair_cycles: Option<u32> => u32 {
         key: "operation.review_repair_cycles", value_type: "integer",
-        description: "Reviewer repair/validation cycles allowed per delivery candidate lineage (0..=10, default 2).",
+        description: "Reviewer repair/validation cycles allowed per delivery run lineage (0..=10, default 2).",
         section: ConfigSection::Operation, order: 40,
         resolve: |raw: Option<u32>| operation::review_repair_cycles(raw),
     },
     operation_review_reviewer_starts: Option<u32> => u32 {
         key: "operation.review_reviewer_starts", value_type: "integer",
-        description: "Fresh reviewer invocations allowed per delivery candidate lineage, including retries and invalidations (1..=10, default 2).",
+        description: "Fresh reviewer starts allowed per delivery run lineage. Retrying a failed reviewer step continues its start; a review of a changed candidate, including a completion rebase, takes a new one (1..=10, default 3).",
         section: ConfigSection::Operation, order: 30,
         resolve: |raw: Option<u32>| operation::review_reviewer_starts(raw),
     },

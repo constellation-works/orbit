@@ -34,10 +34,13 @@ use std::time::Duration;
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError, process::run_bounded_capped, test_env};
 use orbit_engine::{
-    ReviewLandingRequest, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
-    execute_deterministic_action, review_gate,
+    ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost, TaskActivityUpdate,
+    TaskAutomationUpdate, execute_deterministic_action, review_gate,
 };
-use orbit_types::task::{Task, TaskComment, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{
+    ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment, TaskPriority, TaskStatus,
+    TaskType,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -359,6 +362,99 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
     );
 }
 
+// ---------------------------------------------------------------------------
+// Conflicting reviewed head at completion [ORB-13890]
+// ---------------------------------------------------------------------------
+
+/// A reviewed PR that GitHub reports conflicting is never merged as rebased,
+/// unreviewed content. Without `re_review_on_conflict` completion refuses as
+/// `review_gate_stale` and changes nothing. With it, completion rebases the
+/// branch locally, publishes nothing, completes no task, and hands back the
+/// rebase checkpoint. Once that head is (re)reviewed and republished under
+/// the rebase lease, completing it with the new reviewed head merges exactly
+/// that head and reaches `done`.
+#[test]
+fn a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes() {
+    isolated(
+        "a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .expect("open the reviewed candidate");
+            host.set_status(TASK_ID, TaskStatus::Review);
+            fx.advance_base();
+            fx.script_checks(&["dirty"]);
+
+            let error = action(&host, "pr_complete", &fx.complete_input())
+                .expect_err("a caller without re-review cannot repair a reviewed head");
+            assert!(error.to_string().contains("review_gate_stale"), "{error}");
+            assert_eq!(fx.head(), fx.candidate, "the checkout is untouched");
+
+            let mut input = fx.complete_input();
+            input["re_review_on_conflict"] = json!(true);
+            let rebased = action(&host, "pr_complete", &input)
+                .expect("a conflicting reviewed head is rebased for re-review");
+            assert_eq!(rebased["re_review_required"], true);
+            assert_eq!(rebased["completed_task_ids"], json!([]));
+            assert_eq!(rebased["merge"]["merged"], false);
+            let checkpoint = &rebased["rebased"];
+            let rebased_head = checkpoint["head_sha"].as_str().unwrap().to_string();
+            assert_eq!(rebased_head, fx.head());
+            assert_ne!(rebased_head, fx.candidate);
+            assert_eq!(checkpoint["rewritten"], true);
+            assert_eq!(
+                fx.remote_tip(BRANCH),
+                fx.candidate,
+                "nothing unreviewed is published"
+            );
+            assert!(fx.merge_requests().is_empty(), "no merge is requested");
+            assert!(host.landings().is_empty());
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+
+            // The pipeline reviews the rebased head, then republishes it
+            // under the lease the rebase checkpoint carries.
+            let pushed = action(
+                &host,
+                "git_push",
+                &json!({
+                    "workspace_path": fx.repo,
+                    "job_run_id": RUN_ID,
+                    "completed_task_ids": [TASK_ID],
+                    "branch": checkpoint["head"],
+                    "rewrite_performed": checkpoint["rewritten"],
+                    "rewrite_head_before": checkpoint["head_sha_before"],
+                    "expected_remote_sha": checkpoint["remote_sha_before"],
+                }),
+            )
+            .expect("republish the re-reviewed head");
+            assert_eq!(pushed["local_sha"], rebased_head.as_str());
+            assert_eq!(fx.remote_tip(BRANCH), rebased_head);
+
+            fx.script_checks(&["success"]);
+            let mut reviewed = fx.complete_input();
+            reviewed["published_head_sha"] = json!(rebased_head);
+            reviewed["reviewed_head_sha"] = json!(rebased_head);
+            let completed =
+                action(&host, "pr_complete", &reviewed).expect("the re-reviewed head completes");
+            assert_eq!(completed["re_review_required"], false);
+            assert_eq!(completed["merge"]["merged"], true);
+            assert_eq!(
+                fx.merge_requests(),
+                vec![format!("sha={rebased_head} merge_method=squash")],
+                "exactly one merge, conditional on the re-reviewed head"
+            );
+            assert_eq!(host.landings().len(), 1);
+            assert_eq!(host.landings()[0].reviewed_head_sha, rebased_head);
+            assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+        },
+    );
+}
+
 /// Without `workflow.required_validation_commands` the step changes nothing:
 /// no command runs, no evidence is attached, and even a checkout that would be
 /// refused is passed through as today.
@@ -377,6 +473,87 @@ fn required_validation_without_commands_is_a_no_op() {
             assert_eq!(validated["decision"], "skipped_no_required_commands");
             assert_eq!(validated["validation"], json!([]));
             assert!(host.artifacts.lock().unwrap().is_empty());
+        },
+    );
+}
+
+/// A completion-stage failure — here the re-review of a rebased head — closes
+/// every review attempt the run admitted, so none stays open, and keeps the
+/// published PR and the task in review. A bundle's handoff, which refuses to
+/// reconcile more than one task, still closes its attempts first.
+#[test]
+fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
+    isolated(
+        "a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+            host.publish_pr(TASK_ID);
+            let admission = |attempt: &str| {
+                json!({
+                    "applies": true,
+                    "lineage_key": "ws/T-LANDING/agent-main/jrun-landing",
+                    "attempt_id": attempt,
+                })
+            };
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "re_review",
+                    "error_code": "pipeline_step_failed",
+                    "error_message": "reviewer exceeded its wall clock",
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                        "review_gate_admit": admission("rvw-first-1"),
+                        "re_review_gate_admit": admission("rvw-first-2"),
+                    },
+                }),
+            )
+            .expect("hand off the completion failure");
+
+            let released = host
+                .releases()
+                .into_iter()
+                .map(|request| (request.run_id, request.attempt_id))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                released,
+                vec![
+                    (RUN_ID.to_string(), "rvw-first-1".to_string()),
+                    (RUN_ID.to_string(), "rvw-first-2".to_string()),
+                ]
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{handoff}");
+            assert_eq!(
+                fx.forge_state("pr-head"),
+                None,
+                "no PR is opened or changed"
+            );
+
+            action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "review",
+                    "error_code": "pipeline_step_failed",
+                    "error_message": "reviewer exceeded its wall clock",
+                    "run_id": "jrun-bundle",
+                    "job_input": {"task_ids": [TASK_ID, "T-BUNDLED"]},
+                    "pipeline": {"review_gate_admit": admission("rvw-bundle-1")},
+                }),
+            )
+            .expect_err("the handoff reconciles one task only");
+            assert_eq!(
+                host.releases()
+                    .last()
+                    .map(|request| request.attempt_id.as_str()),
+                Some("rvw-bundle-1"),
+                "the bundle's failed reviewer step still closed its attempt"
+            );
         },
     );
 }
@@ -452,6 +629,16 @@ impl Fixture {
         git(&self.repo, &["commit", "-m", &format!("write {file}")]);
         git(&self.repo, &["push", "-u", "origin", BRANCH]);
         self.head()
+    }
+
+    /// Land unrelated work on the base, leaving the candidate behind it.
+    fn advance_base(&self) {
+        git(&self.repo, &["checkout", BASE]);
+        fs::write(self.repo.join("base.txt"), "advanced\n").unwrap();
+        git(&self.repo, &["add", "base.txt"]);
+        git(&self.repo, &["commit", "-m", "advance base"]);
+        git(&self.repo, &["push", "origin", BASE]);
+        git(&self.repo, &["checkout", BRANCH]);
     }
 
     /// Land unrelated work on the base, then rebase and republish the
@@ -609,6 +796,7 @@ struct DeliveryHost {
     required_commands: Mutex<Vec<String>>,
     /// Attached task artifacts, by task id and path.
     artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
+    releases: Mutex<Vec<ReviewReleaseRequest>>,
 }
 
 impl DeliveryHost {
@@ -621,6 +809,7 @@ impl DeliveryHost {
             landings: Mutex::default(),
             required_commands: Mutex::default(),
             artifacts: Mutex::default(),
+            releases: Mutex::default(),
         }
     }
 
@@ -635,6 +824,25 @@ impl DeliveryHost {
             .get(&(task_id.to_string(), path.to_string()))
             .unwrap_or_else(|| panic!("{task_id} has no artifact {path}"));
         serde_json::from_slice(content).unwrap()
+    }
+
+    /// Record the task's published PR, as `pr_promote` does.
+    fn publish_pr(&self, id: &str) {
+        self.tasks
+            .lock()
+            .unwrap()
+            .get_mut(id)
+            .unwrap()
+            .external_refs
+            .push(ExternalRef {
+                system: GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(),
+                id: PR_NUMBER.to_string(),
+                url: None,
+            });
+    }
+
+    fn releases(&self) -> Vec<ReviewReleaseRequest> {
+        self.releases.lock().unwrap().clone()
     }
 
     fn set_status(&self, id: &str, status: TaskStatus) {
@@ -727,6 +935,11 @@ impl RuntimeHost for DeliveryHost {
 
     fn record_review_landing(&self, request: &ReviewLandingRequest) -> Result<(), OrbitError> {
         self.landings.lock().unwrap().push(request.clone());
+        Ok(())
+    }
+
+    fn release_review_attempt(&self, request: &ReviewReleaseRequest) -> Result<(), OrbitError> {
+        self.releases.lock().unwrap().push(request.clone());
         Ok(())
     }
 
@@ -826,6 +1039,7 @@ status() {
         success) merge_state=CLEAN; rollup=$(check success) ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
         review_required) merge_state=BLOCKED; review=REVIEW_REQUIRED; rollup=$(check success) ;;
+        dirty) merge_state=DIRTY; rollup=$(check success) ;;
         *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;
     esac
     printf '{"number":42,"state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
