@@ -36,7 +36,7 @@ use orbit_tools::ToolRegistry;
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 use regex::Regex;
 use serde_json::{Value, json};
-use tempfile::{TempDir, tempdir, tempdir_in};
+use tempfile::{TempDir, tempdir_in};
 
 const UPDATE_ENV: &str = "ORBIT_UPDATE_OUTPUT_GOLDENS";
 
@@ -105,7 +105,7 @@ impl Fixture {
     /// the host has installed, so a developer box with `claude` on `PATH`
     /// would render a default crew that a CI runner never sees.
     fn new() -> Self {
-        Self::new_with_tempdir(tempdir().expect("tempdir"))
+        Self::new_in(test_env::canonical_temp_dir())
     }
 
     fn new_in(parent: impl AsRef<Path>) -> Self {
@@ -118,9 +118,15 @@ impl Fixture {
         let empty_path = temp.path().join("empty-path");
         std::fs::create_dir_all(&home).expect("create home");
         std::fs::create_dir_all(&work).expect("create work repo");
-        let git_init = std::process::Command::new("git")
+        let mut git = std::process::Command::new("git");
+        test_env::clear_inherited_authority(|name| {
+            git.env_remove(name);
+        });
+        let git_init = git
             .args(["init", "--quiet"])
             .current_dir(&work)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
             .output()
             .expect("initialize work repo");
         assert!(
@@ -201,6 +207,51 @@ impl Fixture {
     fn redact(&self, text: &str) -> String {
         redact(text, &self.home)
     }
+
+    fn enable_dispatch(&self) {
+        // Empty-PATH init disables provider crews. Keep the worker from
+        // stopping at crew admission so the guard reaches preparation.
+        std::fs::write(
+            self.work.join(".orbit/config.toml"),
+            "[workflow]\ndefault_crew = \"isolation\"\nsystem_crew = \"isolation\"\n\n\
+             [crews.isolation]\nprovider = \"codex\"\nmodel = \"fixture\"\nenabled = true\n",
+        )
+        .expect("write fixture dispatch config");
+    }
+
+    fn wait_for_runs(&self, expected: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let history = parse_json_stdout(
+                &self.run(&["run", "history", "--no-reconcile", "--json"], &[]),
+                "fixture run history",
+            );
+            let runs = history["runs"].as_array().expect("run history rows");
+            assert_eq!(runs.len(), expected, "dispatch must persist in its fixture");
+            if runs
+                .iter()
+                .all(|run| !matches!(run["state"].as_str(), Some("pending" | "running")))
+            {
+                for run in runs {
+                    assert_eq!(run["state"], "failed", "zero-limit pilot must stop: {run}");
+                    assert_eq!(
+                        run["resolved_crew"], "isolation",
+                        "worker must resolve the fixture's crew config: {run}"
+                    );
+                }
+                assert!(
+                    self.work.join(".git/.orbit-git-fetch.lock").is_file(),
+                    "pilot preparation must acquire its Git lock inside the fixture (ORB-13940)"
+                );
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture workers did not finish before cleanup: {history}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }
 
 #[test]
@@ -216,6 +267,7 @@ fn fixture_does_not_inherit_config_when_tempdir_is_nested_in_checkout() {
 #[test]
 fn task_pilot_json_flag_selects_structured_output() {
     let fixture = Fixture::new();
+    fixture.enable_dispatch();
 
     // A zero limit makes the detached pilot worker stop during preparation,
     // before it can fan out to any agent tasks. The CLI still reports the
@@ -239,6 +291,7 @@ fn task_pilot_json_flag_selects_structured_output() {
         !json_text.contains("Workflow:"),
         "human task-pilot text leaked into --json output: {json_text}"
     );
+    fixture.wait_for_runs(2);
 }
 
 /// Replace the two sources of run-to-run non-determinism a fresh workspace
@@ -268,8 +321,15 @@ fn fixture_ignores_inherited_managed_routing_and_identity() {
         .to_str()
         .expect("sentinel registry path is UTF-8");
     let before = sentinel.run(&["task", "list", "--json"], &[]);
+    let runs_before = sentinel.run(&["run", "history", "--no-reconcile", "--json"], &[]);
+    let parent_git = sentinel.work.join(".git");
+    let parent_git = parent_git.to_str().expect("parent Git path is UTF-8");
+    let parent_work = sentinel.work.to_str().expect("parent checkout is UTF-8");
 
     let _managed_env = test_env::scoped([
+        ("GIT_DIR", Some(parent_git)),
+        ("GIT_COMMON_DIR", Some(parent_git)),
+        ("GIT_WORK_TREE", Some(parent_work)),
         ("ORBIT_ROOT", Some("/sentinel/orbit-root")),
         ("ORBIT_SESSION_ID", Some("sentinel-session")),
         ("ORBIT_TASK_ID", Some("sentinel-task")),
@@ -287,6 +347,19 @@ fn fixture_ignores_inherited_managed_routing_and_identity() {
     ]);
 
     let fixture = Fixture::new();
+
+    fixture.enable_dispatch();
+    fixture.run(&["run", "task-pilot", "--max-tasks", "0", "--json"], &[]);
+    fixture.wait_for_runs(1);
+    let runs_after = sentinel.run(&["run", "history", "--no-reconcile", "--json"], &[]);
+    assert_eq!(
+        runs_after.stdout, runs_before.stdout,
+        "fixture dispatch must never create runs in the parent store (ORB-13940)"
+    );
+    assert!(
+        !sentinel.work.join(".git/.orbit-git-fetch.lock").exists(),
+        "fixture preparation must never acquire the parent checkout's Git lock (ORB-13940)"
+    );
 
     let after = sentinel.run(&["task", "list", "--json"], &[]);
     assert_eq!(
