@@ -781,7 +781,7 @@ task ids (and `orbit run ship-sweep`) is refused with `resource_throttled`.
 Running work is never cancelled, paused or killed.
 
 ```bash
-orbit run readiness          # "Admissions throttled: memory 93% ≥ 90% since …"
+orbit run readiness          # "Admissions throttled: memory 93% (throttled at ≥ 90% since …"
 orbit run show <drain-run>   # Throttled: line from the drain's last pass
 ```
 

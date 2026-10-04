@@ -226,12 +226,26 @@ assert(concurrencyInput().placeholder === 'auto', `no limit means no numeric pla
 nullCapacity = false;
 await fetchAndRenderOperations();
 
-// A resource throttle holds every admission, so the card names the resource,
-// value, threshold and since-when; it disappears once pressure clears.
+// A resource throttle holds every admission, naming both high-water and
+// resume thresholds for resources above high and inside the hysteresis band;
+// it disappears once pressure clears.
 assert(!drainText().includes('Admissions throttled'), 'no throttle note without a throttle');
-resourceThrottle = { resources: [{ resource: 'memory', percent: 93.4, high_percent: 90, resume_percent: 80, since: '2026-10-04T08:41:00Z' }] };
+resourceThrottle = {
+  resources: [
+    { resource: 'memory', percent: 93.4, high_percent: 90, resume_percent: 80, since: '2026-10-04T08:41:00Z' },
+    { resource: 'cpu', percent: 89.0, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' },
+  ],
+};
 await fetchAndRenderOperations();
-assert(drainText().includes('Admissions throttled: memory 93% ≥ 90% since 2026-10-04T08:41:00Z'), `the throttle names resource, value, threshold and since: ${drainText()}`);
+assert(
+  drainText().includes('Admissions throttled: memory 93% (throttled at ≥ 90% since 2026-10-04T08:41:00Z') &&
+  drainText().includes('; resumes below 80%)') &&
+  drainText().includes('cpu 89% (throttled at ≥ 90% since 2026-10-04T08:40:00Z') &&
+  drainText().includes('; resumes below 75%)') &&
+  drainText().includes('Running tasks are not touched.'),
+  `the throttle names both thresholds for held resources above high and in hysteresis band: ${drainText()}`
+);
+assert(!drainText().includes('89% ≥'), 'hysteresis band reading must not render a false comparison against high threshold');
 assert(descendants(drainBody).some(node => node.getAttribute?.('role') === 'status' && node.textContent.includes('Admissions throttled')), 'the throttle note is announced as status');
 resourceThrottle = null;
 await fetchAndRenderOperations();
