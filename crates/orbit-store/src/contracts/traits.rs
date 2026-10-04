@@ -366,6 +366,19 @@ pub trait RoutineStoreBackend: Send + Sync {
 
 pub trait FrictionStoreBackend: Send + Sync {
     fn add(&self, params: FrictionAddParams) -> Result<StoredFrictionRecord, OrbitError>;
+    /// Insert `params`, or return the workspace record that already carries
+    /// `dedupe_key`.
+    ///
+    /// The lookup and the insert share one immediate write transaction, so two
+    /// callers that both missed an earlier read still resolve to one id. The
+    /// key is the exact `dedupe-key:` line in the body; that line is what a
+    /// later caller matches, and the body must contain it. The oldest match
+    /// in this workspace is the reusable record.
+    fn add_or_reuse(
+        &self,
+        dedupe_key: &str,
+        params: FrictionAddParams,
+    ) -> Result<StoredFrictionRecord, OrbitError>;
     fn list(&self, filter: &FrictionListFilter) -> Result<Vec<StoredFrictionRecord>, OrbitError>;
     fn show(&self, id: &str) -> Result<Option<StoredFrictionRecord>, OrbitError>;
     /// Workspace IDs other than this store's that already hold `id`.

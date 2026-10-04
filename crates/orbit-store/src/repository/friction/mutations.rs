@@ -1,11 +1,13 @@
 //! Friction add, update, re-home and resolve mutations.
 
+use std::path::Path;
+
 use chrono::{DateTime, Utc};
 use orbit_common::governance::friction::derive_title;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::validate_friction_id;
 use orbit_types::record::{FrictionRecord, FrictionStatus};
-use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, TransactionBehavior};
 
 use super::store::validate_workspace_id;
 use super::{
@@ -17,39 +19,46 @@ use crate::driver::file::friction_store::load_tag_taxonomy;
 
 impl FrictionStore {
     pub fn add(&self, params: FrictionAddParams) -> Result<StoredFrictionRecord, OrbitError> {
-        let model = params.model.trim().to_string();
-        if model.is_empty() {
+        let prepared = prepare_add(&self.files_root, params)?;
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                allocate_record(tx.connection(), &self.workspace_id, &prepared)
+            })
+    }
+
+    /// Insert `params` unless `dedupe_key` already identifies a record in this
+    /// workspace. The read and the insert share one immediate transaction:
+    /// a caller that lost the race to an earlier unlocked lookup reuses the
+    /// winner's id instead of allocating a second one. The oldest match wins,
+    /// which keeps the id stable once any record for the key exists.
+    pub fn add_or_reuse(
+        &self,
+        dedupe_key: &str,
+        params: FrictionAddParams,
+    ) -> Result<StoredFrictionRecord, OrbitError> {
+        if dedupe_key.is_empty() || dedupe_key.contains(['\n', '\r']) {
             return Err(OrbitError::InvalidInput(
-                "friction model must not be empty".to_string(),
+                "friction dedupe key must be a single non-empty line".to_string(),
             ));
         }
-        // Taxonomy load is file I/O; keep it outside the write transaction.
-        let taxonomy = load_tag_taxonomy(&self.files_root)?;
-        let tags = normalize_and_validate_tags(params.tags, &taxonomy)?;
-        let month = params.created_at.format("%Y-%m").to_string();
-        // Derivation runs here, not on read, so every new record carries an
-        // explicit handle its next reader can see and correct.
-        let title = params.title.clone().or_else(|| derive_title(&params.body));
-
+        // The trailing newline stops a longer key that shares this prefix
+        // from matching. Callers write that same line into the body.
+        let marker = format!("dedupe-key: {dedupe_key}\n");
+        if !params.body.contains(&marker) {
+            return Err(OrbitError::InvalidInput(
+                "friction body must contain its dedupe-key line".to_string(),
+            ));
+        }
+        let prepared = prepare_add(&self.files_root, params)?;
         self.store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
                 let conn = tx.connection();
-                let seq = queries::next_month_seq(conn, &self.workspace_id, &month)?;
-                let record = FrictionRecord {
-                    id: format!("F{month}-{seq:03}"),
-                    title,
-                    model,
-                    created_at: params.created_at,
-                    status: FrictionStatus::Open,
-                    tags,
-                    resolved_at: None,
-                    during_task: params.during_task,
-                    resolved_by_task: None,
-                    rehome_to: None,
-                    body: params.body,
-                };
-                queries::upsert_record(conn, &self.workspace_id, &record, &month, seq, None)?;
-                Ok(StoredFrictionRecord { record, path: None })
+                if let Some(existing) =
+                    queries::find_by_dedupe_marker(conn, &self.workspace_id, &marker)?
+                {
+                    return Ok(existing);
+                }
+                allocate_record(conn, &self.workspace_id, &prepared)
             })
     }
 
@@ -290,6 +299,64 @@ impl FrictionStore {
             stored.record.status == FrictionStatus::Resolved
         })
     }
+}
+
+struct PreparedAdd {
+    model: String,
+    tags: Vec<String>,
+    month: String,
+    title: Option<String>,
+    body: String,
+    during_task: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+fn prepare_add(files_root: &Path, params: FrictionAddParams) -> Result<PreparedAdd, OrbitError> {
+    let model = params.model.trim().to_string();
+    if model.is_empty() {
+        return Err(OrbitError::InvalidInput(
+            "friction model must not be empty".to_string(),
+        ));
+    }
+    // Taxonomy load is file I/O; keep it outside the write transaction.
+    let taxonomy = load_tag_taxonomy(files_root)?;
+    let tags = normalize_and_validate_tags(params.tags, &taxonomy)?;
+    let month = params.created_at.format("%Y-%m").to_string();
+    // Derivation runs here, not on read, so every new record carries an
+    // explicit handle its next reader can see and correct.
+    let title = params.title.or_else(|| derive_title(&params.body));
+    Ok(PreparedAdd {
+        model,
+        tags,
+        month,
+        title,
+        body: params.body,
+        during_task: params.during_task,
+        created_at: params.created_at,
+    })
+}
+
+fn allocate_record(
+    conn: &Connection,
+    workspace_id: &str,
+    prepared: &PreparedAdd,
+) -> Result<StoredFrictionRecord, OrbitError> {
+    let seq = queries::next_month_seq(conn, workspace_id, &prepared.month)?;
+    let record = FrictionRecord {
+        id: format!("F{}-{:03}", prepared.month, seq),
+        title: prepared.title.clone(),
+        model: prepared.model.clone(),
+        created_at: prepared.created_at,
+        status: FrictionStatus::Open,
+        tags: prepared.tags.clone(),
+        resolved_at: None,
+        during_task: prepared.during_task.clone(),
+        resolved_by_task: None,
+        rehome_to: None,
+        body: prepared.body.clone(),
+    };
+    queries::upsert_record(conn, workspace_id, &record, &prepared.month, seq, None)?;
+    Ok(StoredFrictionRecord { record, path: None })
 }
 
 fn split_friction_id(id: &str) -> Option<(String, u32)> {

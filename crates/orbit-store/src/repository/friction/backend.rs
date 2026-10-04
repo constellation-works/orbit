@@ -15,6 +15,14 @@ impl crate::contracts::FrictionStoreBackend for FrictionStore {
         Self::add(self, params)
     }
 
+    fn add_or_reuse(
+        &self,
+        dedupe_key: &str,
+        params: FrictionAddParams,
+    ) -> Result<StoredFrictionRecord, OrbitError> {
+        Self::add_or_reuse(self, dedupe_key, params)
+    }
+
     fn list(&self, filter: &FrictionListFilter) -> Result<Vec<StoredFrictionRecord>, OrbitError> {
         Self::list(self, filter)
     }
