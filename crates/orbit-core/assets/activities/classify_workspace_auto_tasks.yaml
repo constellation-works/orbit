@@ -42,7 +42,12 @@ spec:
     on this run
     (`worker_limit_source: run_control`, with the change itself in
     `worker_limit`) when one exists, otherwise the `max_active_leaf_runs` this
-    run was submitted with.
+    run was submitted with. While sustained host resource pressure holds
+    (`[workflow.resource_throttle]`), the pass admits nothing, reports the
+    held resources in `resource_throttle`, records them on the drain's last
+    pass and waits the short poll; live children are never touched. Readings
+    that cannot be used fail open and are listed in
+    `resource_telemetry_unknown`.
   input_schema_json:
     type: object
     properties:
@@ -103,5 +108,13 @@ spec:
         oneOf:
           - type: object
           - type: "null"
+      resource_throttle:
+        oneOf:
+          - type: object
+          - type: "null"
+      resource_telemetry_unknown:
+        type: array
+        items:
+          type: string
   action: classify_workspace_auto_tasks
   config: {}

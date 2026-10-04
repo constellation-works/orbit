@@ -35,6 +35,7 @@ let pullDrainRunId = null;
 let pullDrainStopped = false;
 let failReadiness = false;
 let nullCapacity = false;
+let resourceThrottle = null;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
 const requests = [];
@@ -120,6 +121,7 @@ globalThis.fetch = async (path, options = {}) => {
       ends_at: drainDeadline, running_admitted_workers: drainPhase === 'idle' ? 0 : 1,
       admitted_workers: drainPhase === 'idle' ? 0 : 2,
       ...(nullCapacity ? { active_leaf_runs: null, max_active_leaf_runs: null, free_slots: null, occupancy: null } : {}),
+      resource_throttle: resourceThrottle,
     },
     tasks: readinessTasks,
   });
@@ -223,6 +225,17 @@ assert(drainText().includes('Capacity unknown') && !drainText().includes('0 free
 assert(concurrencyInput().placeholder === 'auto', `no limit means no numeric placeholder: ${concurrencyInput().placeholder}`);
 nullCapacity = false;
 await fetchAndRenderOperations();
+
+// A resource throttle holds every admission, so the card names the resource,
+// value, threshold and since-when; it disappears once pressure clears.
+assert(!drainText().includes('Admissions throttled'), 'no throttle note without a throttle');
+resourceThrottle = { resources: [{ resource: 'memory', percent: 93.4, high_percent: 90, resume_percent: 80, since: '2026-10-04T08:41:00Z' }] };
+await fetchAndRenderOperations();
+assert(drainText().includes('Admissions throttled: memory 93% ≥ 90% since 2026-10-04T08:41:00Z'), `the throttle names resource, value, threshold and since: ${drainText()}`);
+assert(descendants(drainBody).some(node => node.getAttribute?.('role') === 'status' && node.textContent.includes('Admissions throttled')), 'the throttle note is announced as status');
+resourceThrottle = null;
+await fetchAndRenderOperations();
+assert(!drainText().includes('Admissions throttled'), 'the note clears with the throttle');
 
 // The window Start opens changes the card's state, and that change must not be
 // announced over Start's own result (the run and its completion mode).

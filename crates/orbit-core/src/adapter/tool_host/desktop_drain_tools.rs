@@ -89,8 +89,15 @@ pub(super) fn control(
                 claim.as_deref(),
                 trigger,
             )?;
-            json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
-                "completion":completion.as_input_value(),"submitted_at":run.submitted_at})
+            let mut started = json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
+                "completion":completion.as_input_value(),"submitted_at":run.submitted_at});
+            // [ORB-13901] The drain starts and holds its own waves while the
+            // host is throttled; the caller learns why it admits nothing.
+            if let Some(throttle) = runtime.admission_resource_throttle().throttle {
+                started["warning"] = json!(throttle.hold_reason());
+                started["resource_throttle"] = json!(throttle);
+            }
+            started
         }
         "stop" => {
             if ["for_seconds", "concurrency", "complete"]

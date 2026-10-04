@@ -729,6 +729,38 @@ cat /run/systemd/shutdown/scheduled   # USEC= / MODE= written by logind
 - Reboot policy (apt `Automatic-Reboot*` settings) is root territory, and
   Orbit does not change it.
 
+## Host resource pressure
+
+While CPU, memory or a checkout/worktree/global-root filesystem stays at or
+above its high mark for ten seconds (`[workflow.resource_throttle]` in
+[CONFIG.md](../CONFIG.md#workflowresource_throttle--host-pressure)), Orbit
+starts no new task work until that resource falls back below its resume mark.
+Local drain waves admit no leaves and poll for recovery, pull drains request
+no new claims but keep settling and reconciling, and `orbit run ship` without
+task ids (and `orbit run ship-sweep`) is refused with `resource_throttled`.
+Running work is never cancelled, paused or killed.
+
+```bash
+orbit run readiness          # "Admissions throttled: memory 93% ≥ 90% since …"
+orbit run show <drain-run>   # Throttled: line from the drain's last pass
+```
+
+- The drain samples the host every five seconds while it runs and records the
+  throttle on each pass; readiness, `orbit run ship` and the dashboard Drain
+  card read that record when their own process has not sampled long enough to
+  judge sustained pressure. MCP `orbit.workflow.auto` status carries
+  `capacity.resource_throttle`; `orbit.workflow.run.show` carries the drain's
+  `drain_last_pass`.
+- `orbit run auto`, MCP `orbit.workflow.auto` start, and `orbit run ship` with
+  named tasks proceed and print a warning. The drain admits nothing until the
+  pressure clears; a named ship starts at once.
+- Readings that cannot be taken (unavailable, invalid or stale) never
+  throttle. They are listed as `resource_telemetry_unknown` and logged once.
+- Each throttle and recovery is logged once under `orbit.core.host_resource`.
+- To restore the previous behaviour, set
+  `workflow.resource_throttle.enabled = false`; no pressure is then sampled
+  for admission.
+
 ## Verification
 
 On the owner:

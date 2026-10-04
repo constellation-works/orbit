@@ -2,6 +2,7 @@
 
 use clap::Args;
 use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_types::workflow::ResourceThrottle;
 use serde_json::Value;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -12,7 +13,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode."
+    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`."
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
@@ -98,6 +99,12 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     }
     if let Some(hold) = host_shutdown_hold(&capacity["host_shutdown"]) {
         lines.push(hold);
+    }
+    // [ORB-13901] Named up front like a shutdown hold: it holds every task.
+    if let Ok(throttle) =
+        serde_json::from_value::<ResourceThrottle>(capacity["resource_throttle"].clone())
+    {
+        lines.push(throttle.hold_reason());
     }
     if let Some(phases) = occupancy_phases(&capacity["occupancy"]["phases"]) {
         lines.push(format!("Occupied slots: {phases}."));

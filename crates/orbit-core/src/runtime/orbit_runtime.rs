@@ -19,7 +19,8 @@ use serde_json::Value;
 
 use super::config_path::validated_runtime_config_path;
 use super::host_resource::{
-    HostResourceMonitor, HostResourceProbe, HostResourceStatus, default_host_resource_probe,
+    HostResourceMonitor, HostResourceProbe, HostResourceStatus, ResourceAdmission,
+    default_host_resource_probe,
 };
 use super::host_signal::{
     FixedHostSignals, HostSignalProbe, ScheduledShutdown, default_host_signal_probe,
@@ -188,10 +189,13 @@ impl OrbitRuntime {
         global_root: &Path,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
     ) -> Result<Self, OrbitError> {
-        let host_resources = Arc::new(HostResourceMonitor::new(
-            default_host_resource_probe(),
-            context.settings().resource_throttle().clone(),
-        ));
+        let host_resources = Arc::new(
+            HostResourceMonitor::new(
+                default_host_resource_probe(),
+                context.settings().resource_throttle().clone(),
+            )
+            .sampled_in_background(),
+        );
         Ok(Self {
             host_resources,
             context,
@@ -238,10 +242,13 @@ impl OrbitRuntime {
             HostLifetime::ShortLived,
             builder::StateAccess::Write,
         )?;
-        let host_resources = Arc::new(HostResourceMonitor::new(
-            default_host_resource_probe(),
-            context.settings().resource_throttle().clone(),
-        ));
+        let host_resources = Arc::new(
+            HostResourceMonitor::new(
+                default_host_resource_probe(),
+                context.settings().resource_throttle().clone(),
+            )
+            .sampled_in_background(),
+        );
         Ok(Self {
             host_resources,
             context,
@@ -373,6 +380,17 @@ impl OrbitRuntime {
     /// Resource verdict for the host and filesystems used by this workspace.
     /// Admission consumers may consult it; this method changes no run state.
     pub fn host_resource_status(&self) -> HostResourceStatus {
+        self.host_resources.snapshot(&self.host_resource_paths())
+    }
+
+    /// Whether host pressure holds new admissions now [ORB-13901]. Drains,
+    /// pull drains and ship discovery start no new task while it throttles;
+    /// running work is never touched. Unknown telemetry fails open.
+    pub fn resource_admission(&self) -> ResourceAdmission {
+        self.host_resources.admission(&self.host_resource_paths())
+    }
+
+    fn host_resource_paths(&self) -> Vec<PathBuf> {
         let mut paths = vec![
             self.paths().repo_root.clone(),
             self.shared_root().join("state/worktrees"),
@@ -380,7 +398,7 @@ impl OrbitRuntime {
         ];
         paths.sort();
         paths.dedup();
-        self.host_resources.snapshot(&paths)
+        paths
     }
 
     /// Refuse control-plane work in a replica checkout.

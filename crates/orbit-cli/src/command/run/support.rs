@@ -103,7 +103,19 @@ pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
 ) -> CommandOut {
-    let doc = if runs.len() == 1 {
+    workflow_dispatch_payload_with_warning(workflow_alias, runs, None)
+}
+
+/// [`workflow_dispatch_payload`] with an admission warning the submission
+/// proceeded past, such as a host resource throttle [ORB-13901]. The warning
+/// is `.warning` in JSON and a `Warning:` line in text; the exit code is
+/// unchanged.
+pub(crate) fn workflow_dispatch_payload_with_warning(
+    workflow_alias: &'static str,
+    runs: &[WorkflowDispatchResult],
+    warning: Option<String>,
+) -> CommandOut {
+    let mut doc = if runs.len() == 1 {
         workflow_dispatch_result_to_json(&runs[0])
     } else {
         json!({
@@ -114,12 +126,15 @@ pub(crate) fn workflow_dispatch_payload(
                 .collect::<Vec<_>>(),
         })
     };
-    let text = runs
+    let mut lines = runs
         .iter()
         .flat_map(workflow_dispatch_result_lines)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let payload = Payload::detail(doc, text);
+        .collect::<Vec<_>>();
+    if let Some(warning) = warning {
+        lines.push(format!("Warning: {warning}"));
+        doc["warning"] = json!(warning);
+    }
+    let payload = Payload::detail(doc, lines.join("\n"));
     if runs
         .iter()
         .any(|run| FAILED_WAIT_STATUSES.contains(&run.state.as_str()))

@@ -10,10 +10,12 @@ spec:
     request, creating and binding the one local leaf per claim, launching it
     under the claim's trusted worker binding, and delivering a finished leaf's
     durable settlement to the owner. Then, while the window is open, no host
-    shutdown is pending and the owner's probe admits this executor, it tops the
-    free slots up with new pull requests, each persisted before it is sent. An
-    owner refusal is reconciled against the owner's receipt before the request
-    is closed. An unreachable or refusing owner is reported in `error` or
+    shutdown is pending, sustained host resource pressure is not throttling
+    admissions (`resource_throttle`, recorded on the drain's last pass) and the
+    owner's probe admits this executor, it tops the free slots up with new
+    pull requests, each persisted before it is sent. An owner refusal is
+    reconciled against the owner's receipt before the request is closed. An
+    unreachable or refusing owner is reported in `error` or
     `refusal` rather than failing the drain, because settlements of work
     already running must keep flowing. `unsettled` counts admissions still
     holding a slot; the drain runs past its window until it is zero. There is
@@ -56,6 +58,11 @@ spec:
         type: integer
       error: {}
       host_shutdown: {}
+      resource_throttle: {}
+      resource_telemetry_unknown:
+        type: array
+        items:
+          type: string
       done:
         type: boolean
       wait:

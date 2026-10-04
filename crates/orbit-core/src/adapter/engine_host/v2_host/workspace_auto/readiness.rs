@@ -16,6 +16,7 @@ use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
 use crate::adapter::engine_host::v2_host::admission::leaf_occupancy::{
     occupancy_json, read_leaf_occupancy,
 };
+use crate::application::distributed::RESOURCE_THROTTLED;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
@@ -166,8 +167,12 @@ pub fn explain_workspace_auto_readiness(
         .as_ref()
         .is_some_and(|drain| drain.admissions_stopped());
     let host_shutdown = runtime.scheduled_host_shutdown();
+    // [ORB-13901] The live drain's own throttle when this process has not
+    // sampled long enough to judge sustained pressure itself.
+    let resource = runtime.admission_resource_throttle();
     let shared_occupancy = shared_leaf_occupancy(runtime)?;
-    let free_slots = if admissions_stopped || host_shutdown.is_some() {
+    let free_slots = if admissions_stopped || host_shutdown.is_some() || resource.throttle.is_some()
+    {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -345,6 +350,12 @@ pub fn explain_workspace_auto_readiness(
                     Value::String(HOST_SHUTDOWN_SCHEDULED.to_string()),
                 );
                 object.insert("detail".to_string(), json!(shutdown.describe()));
+            } else if let Some(throttle) = resource.throttle.as_ref() {
+                object.insert(
+                    "reason".to_string(),
+                    Value::String(RESOURCE_THROTTLED.to_string()),
+                );
+                object.insert("detail".to_string(), json!(throttle.describe()));
             } else if admissions_stopped {
                 object.insert(
                     "reason".to_string(),
@@ -421,6 +432,10 @@ pub fn explain_workspace_auto_readiness(
             // [ORB-12968] A pending host shutdown or reboot; while present no
             // drain, sweep, or routine starts new work.
             "host_shutdown": host_shutdown,
+            // [ORB-13901] Sustained host resource pressure holding every new
+            // admission, and readings that could not be used (which admit).
+            "resource_throttle": resource.throttle,
+            "resource_telemetry_unknown": resource.unknown,
         },
         "tasks": tasks,
     }))

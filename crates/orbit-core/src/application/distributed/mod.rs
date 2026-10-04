@@ -50,7 +50,7 @@ pub use contract::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, DeclaredCallerContract, OWNER_COMPLETION_POLICY,
     ensure_distributed_mutation_available, owner_binary_version,
 };
-pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal};
+pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal, RESOURCE_THROTTLED};
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
 pub use probe::{AdmissionReceiptLookup, DrainProbeReport, DrainProbeSession};
 pub use serve::TaskPullResponse;

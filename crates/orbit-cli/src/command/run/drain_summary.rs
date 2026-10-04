@@ -10,7 +10,9 @@
 
 use orbit_core::JobRun;
 use orbit_core::application::job::run_error_step;
-use orbit_types::workflow::{DrainWaitingTask, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    DrainAdmissionPass, DrainWaitingTask, JobRunState, PipelineState, ResourceThrottle,
+};
 use serde_json::{Value, json};
 
 use super::format::summarize_error_message;
@@ -20,7 +22,7 @@ const DRAIN_JOB: &str = "workspace_auto_pipeline";
 /// The per-task job a drain dispatches, one run per admitted task.
 const LEAF_JOB: &str = "task_auto_pipeline";
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct DrainLeafSummary {
     pub(super) admitted: usize,
     pub(super) succeeded: usize,
@@ -48,7 +50,7 @@ pub(super) struct FailedLeaf {
 }
 
 /// Backlog tasks the drain's last admission pass left unstarted.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct WaitingBacklog {
     /// Admissible tasks not admitted in the last pass: no slot, or a lock
     /// conflict. `None` when the drain recorded no pass.
@@ -58,6 +60,9 @@ pub(super) struct WaitingBacklog {
     /// Backlog tasks the drain could not admit at all, with the reason.
     pub(super) excluded: Vec<WaitingTask>,
     pub(super) excluded_total: u64,
+    /// Host resource pressure that held the last pass [ORB-13901].
+    pub(super) resource_throttle: Option<ResourceThrottle>,
+    pub(super) recorded_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +119,7 @@ impl DrainLeafSummary {
                 "excluded": tasks(&self.waiting.excluded),
                 "excluded_total": self.waiting.excluded_total,
             },
+            "resource_throttle": self.waiting.resource_throttle,
         })
     }
 
@@ -166,6 +172,9 @@ impl DrainLeafSummary {
                 });
             }
         }
+        if let Some(throttle) = self.waiting.resource_throttle.as_ref() {
+            lines.push(throttle_line(throttle, self.waiting.recorded_at));
+        }
         if self.has_starved_tasks() {
             let queued = self.waiting.queued.unwrap_or(0);
             lines.push(format!(
@@ -190,6 +199,29 @@ impl DrainLeafSummary {
         }
         lines
     }
+}
+
+/// The `Throttled:` line for a drain whose last pass host pressure held.
+fn throttle_line(
+    throttle: &ResourceThrottle,
+    recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> String {
+    let at = recorded_at
+        .map(|at| format!(" (last pass {})", at.format("%Y-%m-%d %H:%M:%SZ")))
+        .unwrap_or_default();
+    format!(
+        "{} {}{at}",
+        crate::output::color::bold("Throttled:"),
+        throttle.hold_reason()
+    )
+}
+
+/// The `Throttled:` line for a pull drain, which has no leaf summary of its
+/// own: its owner orders the backlog [ORB-13901].
+pub(super) fn pass_throttle_line(pass: &DrainAdmissionPass) -> Option<String> {
+    pass.resource_throttle
+        .as_ref()
+        .map(|throttle| throttle_line(throttle, Some(pass.recorded_at)))
 }
 
 fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
@@ -284,5 +316,7 @@ fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
         deferred: tasks(&pass.deferred),
         excluded: tasks(&pass.excluded),
         excluded_total: pass.excluded_total,
+        resource_throttle: pass.resource_throttle.clone(),
+        recorded_at: Some(pass.recorded_at),
     }
 }

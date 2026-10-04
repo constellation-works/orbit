@@ -1875,6 +1875,20 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
   return list;
 }
 
+// Sustained host pressure holds every new admission until it clears, so the
+// card names the resource, value, threshold and since-when instead of leaving
+// an idle drain to read as an empty backlog.
+function autoDrainThrottleNote(capacity) {
+  const resources = capacity?.resource_throttle?.resources;
+  if (!Array.isArray(resources) || resources.length === 0) return null;
+  const held = resources
+    .map(item => `${item.resource} ${Math.round(Number(item.percent))}% ≥ ${item.high_percent}% since ${time(item.since)}`)
+    .join("; ");
+  const note = el("p", { class: "operation-control-note drain-throttle-note", text: `Admissions throttled: ${held}. Running tasks are not touched.` });
+  note.setAttribute("role", "status");
+  return note;
+}
+
 function renderAutoDrain(payload) {
   lastAutoDrain = payload;
   const body = $("auto-drain-body");
@@ -1884,6 +1898,8 @@ function renderAutoDrain(payload) {
   const focusKey = document.activeElement?.dataset?.drainFocus;
   body.textContent = "";
   renderAutoDrainHead(payload);
+  const throttle = autoDrainThrottleNote(payload.capacity);
+  if (throttle) body.appendChild(throttle);
   const reasons = autoDrainReasons(payload);
   if (reasons.submit) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: reasons.submit }));

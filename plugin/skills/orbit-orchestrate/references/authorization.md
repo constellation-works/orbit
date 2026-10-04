@@ -56,6 +56,13 @@ when assessing provider cost and host load. Do not start a second drain merely
 to raise capacity. Discover whether the installed version supports a live
 update, and follow its advertised command and authority requirements.
 
+Sustained host pressure throttles admissions on its own: readiness tasks read
+`resource_throttled`, and `orbit run readiness`, `orbit run show <drain>` and
+start/ship responses name the resource, value, threshold and since-when.
+Running workers continue. Report the throttle and wait for it to clear; do not
+raise `--concurrency`, start another drain, or disable
+`workflow.resource_throttle` to push work through unless the user asks.
+
 `--allow-crew` is an **allowlist**: it permits the named configured crews and
 excludes others. On an explicit `ship`, an excluded task is refused before its
 run is created; on an auto drain, excluded backlog tasks are skipped. Neither

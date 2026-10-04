@@ -138,7 +138,7 @@ pub struct DrainWaitingTask {
 /// The classifier's own output lives only inside the running loop, so this is
 /// the one durable record of the backlog a finished drain never started. It is
 /// overwritten every pass: the last one is the drain's final view.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DrainAdmissionPass {
     pub recorded_at: DateTime<Utc>,
     /// Admissible tasks the pass did not admit: no free slot, or a lock
@@ -153,6 +153,67 @@ pub struct DrainAdmissionPass {
     /// The full count behind `excluded`.
     #[serde(default)]
     pub excluded_total: u64,
+    /// Host resource pressure that held this pass's admissions [ORB-13901].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_throttle: Option<ResourceThrottle>,
+}
+
+/// One host resource whose sustained pressure holds new admissions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResourcePressure {
+    /// `cpu`, `memory`, or `disk <path>`.
+    pub resource: String,
+    pub percent: f64,
+    pub high_percent: u8,
+    pub resume_percent: u8,
+    /// When the reading crossed its high mark.
+    pub since: DateTime<Utc>,
+}
+
+/// Sustained host resource pressure holding new admissions [ORB-13901].
+///
+/// A throttle starts no new task; running work is never cancelled, paused or
+/// killed. Admission resumes once every listed resource is back below its
+/// resume mark.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResourceThrottle {
+    pub resources: Vec<ResourcePressure>,
+}
+
+impl ResourceThrottle {
+    /// `memory 93% ≥ 90% since 08:41Z; cpu 97% ≥ 90% since 08:40Z`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        self.resources
+            .iter()
+            .map(|pressure| {
+                format!(
+                    "{} {:.0}% \u{2265} {}% since {}",
+                    pressure.resource,
+                    pressure.percent,
+                    pressure.high_percent,
+                    pressure.since.format("%Y-%m-%d %H:%MZ"),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    /// The operator-facing hold sentence every surface prints.
+    #[must_use]
+    pub fn hold_reason(&self) -> String {
+        let resume = self
+            .resources
+            .iter()
+            .map(|pressure| format!("{} below {}%", pressure.resource, pressure.resume_percent))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Admissions throttled: {}. New tasks start again once {resume}; running work is not \
+             touched.",
+            self.describe()
+        )
+    }
 }
 
 /// Durable result of a job-level terminal failure activity.
