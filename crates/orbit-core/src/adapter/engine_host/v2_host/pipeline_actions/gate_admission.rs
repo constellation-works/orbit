@@ -1,5 +1,7 @@
 //! Live admission re-check at the child-dispatch boundary [ORB-11305].
 
+use std::collections::BTreeSet;
+
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_string_list_alias;
 use orbit_engine::DispatchError;
@@ -27,6 +29,10 @@ use super::action_failed;
 ///   may not start from between admission and now. The gate reports a
 ///   non-success child so `release_reservation` frees the reservation and
 ///   `require_child_success` then fails the run with the reason attached.
+/// - **claimed elsewhere** ([ORB-13918]) — a distributed pull claimed the task
+///   after the drain admitted it. The claim is the one execution; the bundle
+///   succeeds having launched nothing, exactly like a stale no-op, so the
+///   local gate neither runs it a second time nor fails over work in flight.
 ///
 /// A task that cannot be read at all stays a hard activity failure: that is a
 /// malformed bundle, not a lifecycle decision.
@@ -56,12 +62,37 @@ pub(super) fn gate_admission_stop(
         .filter(|value| !value.is_empty())
         .unwrap_or("worktree_setup");
 
+    // A live claim leaves its task `in-progress`, which workflow admission
+    // still accepts, so status alone cannot stop a gate that was queued before
+    // the claim landed.
+    let claimed: BTreeSet<String> = runtime
+        .inspect_execution_claims()
+        .map_err(|err| action_failed(action, format!("read execution claims: {err}")))?
+        .into_iter()
+        .map(|inspection| inspection.claim)
+        .filter(|claim| claim.phase.protects_footprint())
+        .map(|claim| claim.task_id)
+        .collect();
+
     let mut task_statuses = Vec::with_capacity(task_ids.len());
     let mut stale_statuses = Vec::new();
     let mut withdrawn_statuses = Vec::new();
+    let mut claimed_statuses = Vec::new();
     let mut admission_errors = Vec::new();
 
     for task_id in &task_ids {
+        if claimed.contains(task_id) {
+            let task = runtime
+                .get_task(task_id)
+                .map_err(|err| action_failed(action, format!("load task {task_id}: {err}")))?;
+            task_statuses.push(serde_json::json!({
+                "task_id": task.id,
+                "status": task.status.to_string(),
+                "admissible": false,
+            }));
+            claimed_statuses.push((task.id, "claimed".to_string()));
+            continue;
+        }
         match runtime.ensure_task_can_enter_workflow_as_system(task_id, workflow) {
             Ok(task) => {
                 task_statuses.push(serde_json::json!({
@@ -126,6 +157,31 @@ pub(super) fn gate_admission_stop(
             input,
             "failed",
             "withdrawn",
+            &reason,
+            &task_statuses,
+        )));
+    }
+
+    if !claimed_statuses.is_empty() {
+        let reason = format!(
+            "task_gate_pipeline claimed elsewhere: workflow admission for '{workflow}' skipped child \
+             dispatch because a live distributed execution claim holds {}; the claim is its one \
+             execution",
+            summarize_statuses(&claimed_statuses)
+        );
+        record_gate_admission_stop(
+            runtime,
+            action,
+            input,
+            &task_ids,
+            &task_statuses,
+            &reason,
+            "claimed_elsewhere",
+        )?;
+        return Ok(Some(gate_admission_stop_output(
+            input,
+            &wait_success_status(),
+            "claimed_elsewhere",
             &reason,
             &task_statuses,
         )));
@@ -210,9 +266,10 @@ fn parent_run_id_or_unknown(input: &Value) -> &str {
 }
 
 /// Audit an admission stop before the gate acts on it. `outcome` is
-/// `stale_noop` (already-shipped work) or `withdrawn` (a human moved the task
-/// out of automation's reach [ORB-11305]); both are recorded so a run that
-/// launched nothing is still explainable from the audit log alone.
+/// `stale_noop` (already-shipped work), `withdrawn` (a human moved the task
+/// out of automation's reach [ORB-11305]) or `claimed_elsewhere` (a live
+/// distributed claim is executing it [ORB-13918]); each is recorded so a run
+/// that launched nothing is still explainable from the audit log alone.
 fn record_gate_admission_stop(
     runtime: &OrbitRuntime,
     action: &str,

@@ -101,7 +101,11 @@ from durable owner-side grants; the input does not grant merge rights.
    returns its original outcome without new admission, history, or reservation.
 3. For a new request, select from current ready tasks in canonical order. Exclude invalid entries
    and report diagnostics. Skip candidates conflicting with status-derived locks of `in-progress`
-   or `review` tasks or active reservations; record `deferred_conflicts`.
+   or `review` tasks or active reservations; record `deferred_conflicts`. Also defer a task a live
+   owner-local delivery run carries in its `input.task_ids` (any job declaring
+   `spec.task_delivery`, such as a local drain's wrapper and its gate). A gate waiting for
+   context locks has not yet moved the task out of `backlog` or reserved its footprint, so
+   status and reservations alone would hand it out a second time [ORB-13918].
 4. For the first valid non-conflicting task, allocate an immutable claim ID. Reserve its own
    canonical non-pruned footprint with an explicit default TTL of 14,400 seconds (four hours),
    record its execution machine and drain context, transition `backlog → in-progress`, append a
@@ -224,6 +228,9 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
 ## Invariants
 
 - At most one current execution claim exists per task, and a request ID never creates two claims.
+- A task executes once at a time: pull admission skips a task a live owner-local delivery run
+  carries, and a local gate whose task came under a live claim while it waited skips dispatch as
+  a `claimed_elsewhere` no-op.
 - Transactional admission never admits an unsatisfied dependency or overlapping protected footprint.
 - The owner alone orders work; only invalid or conflicting candidates are skipped in v1.
 - A refusal creates no claim. Idle persists only its receipt and diagnostics.

@@ -48,7 +48,10 @@
 #   can be released without launching a child run; a task a human withdrew
 #   during the wait (`proposed`, `someday`, `archived`, `rejected`, `blocked`)
 #   returns a non-succeeded output instead, so the reservation is still
-#   released and the gate then fails naming the task and its status. After
+#   released and the gate then fails naming the task and its status. A task a
+#   live distributed execution claim holds (pulled by a follower while this
+#   gate waited) returns a succeeded no-op as well: the claim is its one
+#   execution (ORB-13918). After
 #   `invoke_and_wait` returns a terminal child-run status,
 #   `release_reservation` frees the reservation immediately before
 #   `require_child_success` fails the gate on a non-succeeded child. TTL

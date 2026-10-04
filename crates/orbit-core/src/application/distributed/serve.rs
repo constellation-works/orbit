@@ -24,17 +24,20 @@
 //! local-candidate handoff here: followers never run owner-local leaves, so
 //! only the owner may hand off a candidate that exists solely in its checkout.
 
+use std::collections::BTreeMap;
+
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimInvocation,
     ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
-    HandoffObservation,
+    HandoffObservation, JobRunQuery,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::handoff::{HandoffDelivery, TaskHandoff};
 use serde::Serialize;
+use serde_json::Value;
 
 use super::contract::{is_remote, session_machine_id, trusted_identity};
 use super::{ensure_distributed_mutation_available, owner_binary_version};
@@ -294,7 +297,46 @@ impl crate::OrbitRuntime {
             owner_binary_version(),
             &self.paths().repo_root,
             &self.data_root(),
+            &self.live_local_delivery_runs()?,
         )
+    }
+
+    /// Each task a live run on this owner holds the delivery slot of, mapped
+    /// to that run [ORB-13918].
+    ///
+    /// A local drain admits a task by dispatching a wrapper and gate that
+    /// carry it in `input.task_ids`; the task stays `backlog`, and reserves
+    /// nothing, until the gate gets its context locks. Those runs are the only
+    /// record of the admission, so pull admission reads them — the same
+    /// `spec.task_delivery` holders `orbit run ship` refuses a duplicate
+    /// against — rather than handing the task to a follower as well.
+    fn live_local_delivery_runs(&self) -> Result<BTreeMap<String, String>, OrbitError> {
+        let delivery_jobs = self.task_delivery_job_ids()?;
+        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            active_only: true,
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+        let mut carried = BTreeMap::new();
+        for run in runs
+            .into_iter()
+            .filter(|run| delivery_jobs.contains(&run.job_id))
+        {
+            let task_ids = run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("task_ids"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str);
+            for task_id in task_ids {
+                carried
+                    .entry(task_id.to_string())
+                    .or_insert_with(|| run.run_id.clone());
+            }
+        }
+        Ok(carried)
     }
 
     pub(crate) fn admission_boundary(&self) -> Result<TaskCommitBoundary, OrbitError> {

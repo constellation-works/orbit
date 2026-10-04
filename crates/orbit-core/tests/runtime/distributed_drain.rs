@@ -493,3 +493,123 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .count();
     assert_eq!(blocked, 1, "{after:#}");
 }
+
+/// A local drain's admission of `task` on the owner, as its gate leaves it
+/// while waiting for context locks: the wrapper and gate carry the task, and
+/// the task is still `backlog` with nothing reserved.
+fn local_drain_admission(owner: &OrbitRuntime, task: &str) -> Vec<String> {
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    ["task_auto_pipeline", "task_gate_pipeline"]
+        .into_iter()
+        .map(|job| {
+            jobs.insert_job_run(job, 1, Utc::now(), Some(json!({"task_ids": [task]})), None)
+                .expect("local run")
+                .run_id
+        })
+        .collect()
+}
+
+/// [ORB-13918] A task the owner's local drain admitted is not pulled while
+/// that admission is live, even though its gate has not yet moved it out of
+/// `backlog` or reserved its footprint; once the local runs end, it is.
+#[test]
+fn a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends() {
+    if !isolated("a_task_a_local_drain_admitted_is_not_pulled_until_that_admission_ends") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let local = local_drain_admission(&pair.wire.owner, &task);
+    let drain = pair.start_drain();
+
+    let held = pair.pass(&drain);
+    assert!(error_of(&held).is_empty(), "{held}");
+    assert!(pair.owner_claims().is_empty(), "{:#?}", pair.owner_claims());
+    assert_eq!(pair.owner_status(&task), "backlog");
+    assert!(pair.leaf_runs().is_empty());
+
+    let owner_jobs = orbit_store::compose::workspace_job_run_store(
+        pair.wire.owner.sqlite_store().unwrap(),
+        pair.wire.owner.workspace_id().unwrap(),
+    );
+    for run in &local {
+        owner_jobs
+            .finalize_job_run(
+                run,
+                orbit_types::workflow::JobRunState::Cancelled,
+                Utc::now(),
+                None,
+            )
+            .unwrap();
+    }
+    let released = pair.pass(&drain);
+    assert!(launch_refused(&released), "{released}");
+    let claims = pair.owner_claims();
+    assert_eq!(claims.len(), 1, "{claims:#?}");
+    assert_eq!(claims[0]["claim"]["task_id"], task.as_str());
+}
+
+/// [ORB-13918] While a follower's claim on a task is live, the owner's local
+/// drain neither selects it nor lets a gate that queued it before the claim
+/// landed dispatch it: the gate's pre-dispatch admission stops as a no-op and
+/// no delivery run starts.
+#[test]
+fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
+    if !isolated("a_task_under_a_live_claim_is_never_admitted_by_the_local_drain") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let drain = pair.start_drain();
+    // The owner commits the claim; the lost reply leaves it unbound and live.
+    pair.wire.lose_next_reply("orbit.task.pull");
+    let lost = pair.pass(&drain);
+    assert!(error_of(&lost).contains("dropped"), "{lost}");
+    let claims = pair.owner_claims();
+    assert_eq!(claims.len(), 1, "{claims:#?}");
+    assert_eq!(claims[0]["claim"]["phase"], "claimed");
+    let owner = &pair.wire.owner;
+
+    let wave = owner
+        .run_deterministic(
+            "classify_workspace_auto_tasks",
+            &json!({}),
+            &json!({"max_active_leaf_runs": 4}),
+            ToolContext::default(),
+        )
+        .expect("classify");
+    assert_eq!(wave["loose_task_ids"], json!([]), "{wave}");
+
+    let gate = owner
+        .run_deterministic(
+            "invoke_and_wait",
+            &json!({}),
+            &json!({
+                "job_name": "task_pr_pipeline",
+                "run_input": {"task_ids": [task]},
+                "admission_task_ids": [task],
+                "admission_workflow": "worktree_setup",
+                "timeout_seconds": 5,
+            }),
+            ToolContext::default(),
+        )
+        .expect("gate dispatch");
+    assert_eq!(gate["skipped"], true, "{gate}");
+    assert_eq!(gate["status"], "success", "{gate}");
+    assert!(gate.get("error").is_none(), "{gate}");
+    let owner_jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    assert!(
+        owner_jobs
+            .list_job_runs("task_pr_pipeline")
+            .unwrap()
+            .is_empty(),
+        "no local delivery run starts beside the claim"
+    );
+    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "claimed");
+}
