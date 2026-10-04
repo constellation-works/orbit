@@ -687,6 +687,105 @@ fn launch_refused(pass: &Value) -> bool {
     error_of(pass).contains("re-exec")
 }
 
+/// An unreadable persisted cancel request holds the whole pass until the
+/// state can be read again; it cannot probe, request or launch work.
+#[test]
+fn unreadable_cancel_state_holds_refill_and_retries() {
+    if !isolated("unreadable_cancel_state_holds_refill_and_retries") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    pair.follower
+        .cancel_job_run_with_options(&drain, "operator", "cli", None, false)
+        .expect("persist graceful cancellation");
+    let state = pair.follower.read_run_state(&drain).unwrap().unwrap();
+    assert!(state.drain_cancelling());
+    let store = pair.follower.sqlite_store().unwrap();
+    let workspace = pair.follower.workspace_id().unwrap();
+    store
+        .with_transaction(|tx| {
+            let changed = tx.connection().execute(
+                "UPDATE job_runs SET pipeline_state_json = '{' WHERE workspace_id = ?1 AND run_id = ?2",
+                [workspace.as_str(), drain.as_str()],
+            ).unwrap();
+            assert_eq!(changed, 1);
+            Ok(())
+        })
+        .unwrap();
+    let read_error = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap_err()
+        .to_string();
+
+    for expired in [false, true] {
+        let pass = pair
+            .follower
+            .run_deterministic(
+                "pull_refill",
+                &json!({}),
+                &json!({
+                    "run_id": drain,
+                    "destination": pair.destination,
+                    "window_expired": expired,
+                    "poll_sleep_seconds": 7,
+                }),
+                ToolContext::default(),
+            )
+            .expect("a read failure is reported for retry");
+        assert!(error_of(&pass).contains(&read_error), "{pass}");
+        assert_eq!(pass["admitted"], 0, "{pass}");
+        assert_eq!(pass["admitting"], false, "{pass}");
+        assert_eq!(pass["done"], false, "{pass}");
+        assert_eq!(pass["wait"], true, "{pass}");
+        assert_eq!(pass["sleep_seconds"], 7, "{pass}");
+    }
+    assert!(pair.wire.calls("orbit.drain.probe").is_empty());
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+    assert!(pair.owner_claims().is_empty());
+    assert!(pair.leaf_runs().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+
+    pair.follower.write_run_state(&drain, &state).unwrap();
+    let recovered = pair.pass(&drain);
+    assert!(recovered["error"].is_null(), "{recovered}");
+    assert_eq!(recovered["cancelling"], true, "{recovered}");
+    assert_eq!(recovered["done"], true, "{recovered}");
+    assert_eq!(pair.run_state(&drain), JobRunState::Cancelled);
+    assert!(pair.wire.calls("orbit.drain.probe").is_empty());
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+}
+
+/// A readable run state with no cancellation still probes and admits work.
+#[test]
+fn readable_state_without_cancel_permits_refill() {
+    if !isolated("readable_state_without_cancel_permits_refill") {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.start_drain();
+    assert!(
+        !pair
+            .follower
+            .read_run_state(&drain)
+            .unwrap()
+            .unwrap()
+            .drain_cancelling()
+    );
+
+    let pass = pair.pass(&drain);
+    assert!(
+        launch_refused(&pass),
+        "the admitted leaf reaches launch: {pass}"
+    );
+    assert_eq!(pass["cancelling"], false, "{pass}");
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 1);
+    assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1);
+    assert_eq!(pair.owner_claims().len(), 1);
+    assert_eq!(pair.leaf_runs().len(), 1);
+}
+
 /// A lost pull reply and then a lost bind reply are both retried under the
 /// identity the owner already committed: one request, one claim, one leaf,
 /// bound and launched once. A drain that gave up on the unanswered request
