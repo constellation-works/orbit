@@ -198,9 +198,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The ten seeded definitions
+## The nine seeded definitions
 
-`orbit workspace init` seeds all ten, disabled, except any you deleted (see
+`orbit workspace init` seeds all nine, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -234,10 +234,10 @@ plugin being removed.
   no pinned crew. Each area reviewer reads its whole area at that commit and
   files confirmed findings as bugs tagged `code-review` and `full-code-review`;
   a clean area is a successful no-op.
-- **`delivery-qa`** (`hard`) — exercises each frozen delivery batch and records
-  typed coverage evidence.
 - **`delivery-code-review`** (`hard`) — reviews each frozen delivery batch and
-  records typed coverage evidence.
+  records typed coverage evidence. Hands-on QA of recent changes is
+  `qa-sweep`; a full pre-release sign-off is `qa-full-sweep` when that
+  workspace definition is present.
 - **`doc-duties`** (`low`) — daily. Validates a small batch of the oldest
   workspace documentation against current behavior, and corrects factual drift
   and broken links. A batch whose claims are already accurate is a successful
@@ -275,8 +275,8 @@ exists. So:
 
 ## Delivery consumers: stalls, automatic replay, and reset
 
-A definition scheduled on `deliveries_landed` (the shipped `delivery-qa` and
-`delivery-code-review` pair) is not on a clock: it watches a branch, records
+A definition scheduled on `deliveries_landed` (the shipped
+`delivery-code-review` definition) is not on a clock: it watches a branch, records
 which landings it has examined, and mints an examination task when the debt is
 due. That recorded position — "observed commit X" — is what a rewritten branch
 history breaks.
@@ -311,12 +311,12 @@ Two commands clear it, and both write an audit record:
 
 ```bash
 # Retain every obligation: reconcile a rewrite the proof can verify.
-orbit auto-task recover delivery-qa --replay-history          # preview
-orbit auto-task recover delivery-qa --replay-history --reason "<why>"
+orbit auto-task recover delivery-code-review --replay-history          # preview
+orbit auto-task recover delivery-code-review --replay-history --reason "<why>"
 
 # Forget the debt: re-baseline at the current branch head.
-orbit auto-task reset delivery-qa                            # preview
-orbit auto-task reset delivery-qa --reason "<why>"
+orbit auto-task reset delivery-code-review                            # preview
+orbit auto-task reset delivery-code-review --reason "<why>"
 ```
 
 Prefer `recover`. Use `reset` when no recovery can repair the consumer — the

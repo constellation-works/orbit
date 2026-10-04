@@ -2,7 +2,7 @@
 title: Automation Triggers — Design
 owner: codex
 last_updated: 2026-09-25
-last_validated: 2026-09-25
+last_validated: 2026-10-04
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -419,6 +419,10 @@ both `schedule` and `trigger` are rejected. Provenance fields are omitted here.
 
 ```yaml
 # Proposed auto-task: QA after five actual deliveries, or one-hour pending age.
+# This candidate named coverage integrated_qa_v1. That contract is retired:
+# persisted batches, evidence and automation state still decode it, and new
+# definitions cannot select it. Hands-on QA is qa-sweep and qa-full-sweep.
+# The delivery coverage new definitions select is landed_code_review_v1.
 schemaVersion: 2
 name: qa-sweep
 description: Validate a captured integration range hands-on
@@ -428,7 +432,6 @@ trigger:
   branch: agent-main
   threshold: 5
   max_wait_minutes: 60
-  coverage: integrated_qa_v1
 batch:
   max_items: 25
   max_active: 1

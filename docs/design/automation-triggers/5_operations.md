@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_validated: 2026-09-21
+last_validated: 2026-10-04
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -14,8 +14,14 @@ approval/admission lifecycle. There is no new daemon or coverage submission tool
 ## Configuration and migration
 
 Existing `schemaVersion: 1` cron and `every_minutes` definitions retain their
-behavior. Existing `code-review` and `qa-sweep` defaults are unchanged. New
-`delivery-code-review` and `delivery-qa` defaults ship disabled, and initialization
+behavior. Existing `code-review` and `qa-sweep` defaults are unchanged.
+`delivery-code-review` ships disabled. The former `delivery-qa` default is
+retired and is not seeded; hands-on QA is `qa-sweep` and `qa-full-sweep`. An
+unmodified seeded copy of that retired default is removed by managed-asset
+refresh. A locally modified copy stays in the catalog until that refresh, and
+`orbit doctor` warns that the default is no longer shipped; refresh then keeps
+the operator's bytes under `.orbit/.retired-managed/` instead of deleting them.
+Initialization
 does not overwrite existing workspace definitions. `operation.review_policy =
 after-landing` enables `delivery-code-review` without editing its file
 [ORB-13896]; see the [review gate](../review-gate/2_design.md). The shipped defaults carry a
@@ -30,16 +36,16 @@ Use one schedule form. A delivery auto-task uses:
 
 ```yaml
 schemaVersion: 1
-name: delivery-qa
+name: delivery-code-review
 enabled: false
 schedule:
   deliveries_landed:
     branch: main  # rendered from the workspace base branch when seeded
     threshold: 3
     max_wait_minutes: 360
-    coverage: integrated_qa_v1
+    coverage: landed_code_review_v1
     max_items: 20
-    retries: 0
+    retries: 1
 # Retain the normal template, dedupe and attribution fields.
 ```
 
@@ -81,7 +87,10 @@ applied at mint time and is not part of the consumer's epoch. Under that policy
 missing, unowned, wedged, stalled, held for an operator or on a branch or crew
 that does not resolve. See the [review gate](../review-gate/2_design.md).
 
-`coverage` is `integrated_qa_v1` or `landed_code_review_v1`. Threshold must be
+The coverage a new delivery trigger may select is `landed_code_review_v1`.
+`integrated_qa_v1` is retired. Persisted batches, coverage evidence, automation
+state, and a not-yet-refreshed definition still decode it; auto-task add and a
+schedule update refuse to select it. Threshold must be
 positive and at most `max_items` (maximum 50). Maximum wait is positive and retries
 are 0–5. Defaults are 50 items and zero retries; the shipped
 `delivery-code-review` definition sets one retry, so a single unusable evidence
@@ -107,8 +116,8 @@ interval flags. MCP add/update accept the same object in `schedule`. Creation
 remains disabled. Preview a definition before enabling it:
 
 ```sh
-orbit auto-task show delivery-qa --preview --json
-orbit tool run orbit.auto_task.show --input '{"name":"delivery-qa","preview":true}'
+orbit auto-task show delivery-code-review --preview --json
+orbit tool run orbit.auto_task.show --input '{"name":"delivery-code-review","preview":true}'
 ```
 
 Preview reports the owner identity, proposed baseline and existing debt without
@@ -269,8 +278,8 @@ key replay. Restore missing source objects or repair the recorded bundle before
 retrying. Exhausted, failed and waived states are distinct from coverage; waivers are explicit through the existing definition update:
 
 ```sh
-orbit auto-task update delivery-qa --waive-batch <batch-id> --waiver-reason "<reason>"
-orbit tool run orbit.auto_task.update --input '{"name":"delivery-qa","waive_batch":{"batch_id":"<batch-id>","reason":"<reason>"}}'
+orbit auto-task update delivery-code-review --waive-batch <batch-id> --waiver-reason "<reason>"
+orbit tool run orbit.auto_task.update --input '{"name":"delivery-code-review","waive_batch":{"batch_id":"<batch-id>","reason":"<reason>"}}'
 ```
 
 Only the current settled failed/exhausted batch may be waived. The archived
@@ -290,7 +299,7 @@ file.
 Preview first; with neither operation flag the command only reads:
 
 ```sh
-orbit auto-task recover delivery-qa --json
+orbit auto-task recover delivery-code-review --json
 ```
 
 The preview reports the consumer key, the recorded and configured epoch, the
@@ -303,9 +312,9 @@ Adopt the retuned settings, then reissue an action that closed without accepted
 evidence, in one explicitly authorized request:
 
 ```sh
-orbit auto-task recover delivery-qa \
+orbit auto-task recover delivery-code-review \
   --adopt-settings --reissue-action \
-  --reason "adopt tonight's QA threshold and re-examine the unpaid landing"
+  --reason "adopt tonight's review threshold and re-examine the unpaid landing"
 ```
 
 Adoption replaces only the recorded configuration identity. The covered cursor,
@@ -344,7 +353,7 @@ batch instead; one with neither is refused as `coverage_unverifiable`.
 
 Verify a recovery from its own response, whose `applied` names exactly what
 changed, and afterwards from a fresh preview: `history` carries the audit
-record, and `orbit auto-task show delivery-qa --json` must still report the same
+record, and `orbit auto-task show delivery-code-review --json` must still report the same
 covered boundary and pending membership as before.
 
 ### Replaying a consumer after a legitimate branch rebase [ORB-12312]
@@ -353,7 +362,7 @@ Use the separate replay mode only when evaluation reports `history_diverged`.
 The flag alone is an inert preview:
 
 ```sh
-orbit auto-task recover delivery-qa --replay-history --json
+orbit auto-task recover delivery-code-review --replay-history --json
 ```
 
 The preview captures the configured branch head and consumer generation, shows
@@ -362,7 +371,7 @@ keys that will remain unpaid. Apply the already-previewed repair with an audit
 reason; settings adoption and action reissue cannot be combined with this mode:
 
 ```sh
-orbit auto-task recover delivery-qa --replay-history \
+orbit auto-task recover delivery-code-review --replay-history \
   --reason "reconcile the verified Sep 8 content-preserving rebase"
 ```
 
@@ -430,7 +439,7 @@ trigger nor a frozen batch, which recovery refuses as
 Without `--reason` it previews and writes nothing:
 
 ```sh
-orbit auto-task reset delivery-qa --json
+orbit auto-task reset delivery-code-review --json
 ```
 
 The preview names the consumer key, its generation and epoch, the debt that
@@ -439,7 +448,7 @@ and excluded landings, accepted receipts), any executing action, a recorded
 stall, and the head the consumer re-baselines at.
 
 ```sh
-orbit auto-task reset delivery-qa \
+orbit auto-task reset delivery-code-review \
   --reason "agent-main was rewritten past the observed commit"
 ```
 
@@ -499,7 +508,8 @@ not mint an examination receipt. An exclusively excluded prefix advances the
 covered cursor and leaves the pending window so later uncovered landings can
 still be observed. Interleaved exclusions travel with the next frozen batch
 as readable context (`exclusions`) and retire with that examined range.
-`integrated_qa_v1` consumers ignore exclusions entirely. A different base
+A decoded `integrated_qa_v1` record ignores exclusions entirely. New definitions
+cannot select that coverage. A different base
 tree, any later edit, an unreviewed conflict repair, task drift, missing
 objects, or an external landing race keeps the landing an ordinary
 obligation. Inspection surfaces and the dashboard list

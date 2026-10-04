@@ -73,6 +73,22 @@ fn in_scope_lookup_name(name: &str) -> bool {
     }
 }
 
+/// New schedules cannot select the retired QA coverage. Loading a definition
+/// that already names it stays allowed, so a not-yet-refreshed workspace copy
+/// does not fail every clock tick.
+fn reject_retired_delivery_coverage(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> {
+    if let AutoTaskSchedule::Deliveries { deliveries_landed } = schedule
+        && deliveries_landed.coverage
+            == orbit_types::workflow::automation::CoverageClass::IntegratedQaV1
+    {
+        return Err(OrbitError::InvalidInput(
+            "coverage `integrated_qa_v1` is retired; delivery triggers use `landed_code_review_v1`"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 impl OrbitRuntime {
     /// Create a new auto-task definition. Fails if a definition with the same
     /// name already exists (update or toggle it instead).
@@ -80,6 +96,7 @@ impl OrbitRuntime {
         &self,
         mut params: AutoTaskAddParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        reject_retired_delivery_coverage(&params.schedule)?;
         params.template.required_tools = normalize_required_tools(params.template.required_tools);
         let now = chrono::Utc::now().to_rfc3339();
         let actor = self.actor().resolve_write_label(None, None)?;
@@ -207,6 +224,10 @@ impl OrbitRuntime {
             )
             .map_err(orbit_automation::automation_error_to_orbit)?;
             return Ok(definition);
+        }
+
+        if let Some(schedule) = &params.schedule {
+            reject_retired_delivery_coverage(schedule)?;
         }
 
         self.edit_auto_task(name, |definition| {

@@ -2,7 +2,7 @@
 title: Auto-tasks — Overview
 owner: claude
 last_updated: 2026-10-04
-last_validated: 2026-09-20
+last_validated: 2026-10-04
 status: Accepted
 feature: auto-tasks
 doc_role: overview
@@ -131,9 +131,10 @@ definition of the same name.
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task
   status or dispatching work.
-- `delivery-code-review` and `delivery-qa` — disabled-by-default checks of
-  newly landed deliveries. `operation.review_policy = after-landing` enables
-  `delivery-code-review` without a toggle.
+- `delivery-code-review` — disabled-by-default review of newly landed
+  deliveries. `operation.review_policy = after-landing` enables it without a
+  toggle. The former `delivery-qa` default is retired and is not seeded;
+  hands-on QA stays with `qa-sweep` and `qa-full-sweep`.
 
 ## Workspace-authored definitions in this repo
 

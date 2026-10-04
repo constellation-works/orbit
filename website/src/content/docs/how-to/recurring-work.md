@@ -234,10 +234,10 @@ has extra controls. `recover` and `reset` preview without `--reason` and apply
 only with it:
 
 ```bash
-orbit auto-task show delivery-qa --preview                                 # baseline and observations; admits nothing
-orbit auto-task recover delivery-qa --adopt-settings --reason "cadence changed"  # resume after a settings change; keeps coverage debt
-orbit auto-task reset delivery-qa --reason "re-baseline"                   # forget coverage debt; re-baseline at the branch head
-orbit auto-task update delivery-qa --waive-batch "$BATCH_ID" --waiver-reason "flaky infra"  # waive one settled failed batch
+orbit auto-task show delivery-code-review --preview                                 # baseline and observations; admits nothing
+orbit auto-task recover delivery-code-review --adopt-settings --reason "cadence changed"  # resume after a settings change; keeps coverage debt
+orbit auto-task reset delivery-code-review --reason "re-baseline"                   # forget coverage debt; re-baseline at the branch head
+orbit auto-task update delivery-code-review --waive-batch "$BATCH_ID" --waiver-reason "flaky infra"  # waive one settled failed batch
 ```
 
 `recover` also takes `--reissue-action` and `--replay-history`. `reset --force`
