@@ -86,6 +86,31 @@ fn retarget(fixture: &Fixture, trigger: &Value) {
     ]);
 }
 
+/// A persisted definition may still name the retired coverage. Add and schedule
+/// update refuse to select it, so the doctor case plants the bytes the loader
+/// still decodes.
+fn plant_retired_coverage(fixture: &Fixture) {
+    let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+    let path = shown["definition_source"]["path"]
+        .as_str()
+        .expect("definition path");
+    let current = fs::read_to_string(path).unwrap();
+    let planted = current
+        .replace(
+            "coverage: landed_code_review_v1",
+            "coverage: integrated_qa_v1",
+        )
+        .replace(
+            "coverage: \"landed_code_review_v1\"",
+            "coverage: integrated_qa_v1",
+        );
+    assert!(
+        planted.contains("coverage: integrated_qa_v1") && planted != current,
+        "the persisted consumer must still be loadable with the retired coverage"
+    );
+    fs::write(path, planted).unwrap();
+}
+
 fn trigger() -> Value {
     json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":1})
 }
@@ -221,9 +246,7 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
     let (row, _) = doctor_row(&fixture);
     assert_eq!(row["status"], "ok", "{row}");
 
-    let mut wrong_coverage = trigger();
-    wrong_coverage["coverage"] = json!("integrated_qa_v1");
-    retarget(&fixture, &wrong_coverage);
+    plant_retired_coverage(&fixture);
     assert_doctor_fails(&fixture, "instead of `landed_code_review_v1`");
     retarget(&fixture, &trigger());
 

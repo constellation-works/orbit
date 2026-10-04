@@ -79,7 +79,7 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
         }
         let routine = root.join("routines/task_pilot.yaml");
         let auto_task = root.join("auto_tasks/friction-curation.yaml");
-        let unchanged_auto_task = root.join("auto_tasks/delivery-qa.yaml");
+        let retired_auto_task = root.join("auto_tasks/delivery-qa.yaml");
         let routine_manifest = root.join("routines/.orbit-managed-assets.json");
         let auto_manifest = root.join("auto_tasks/.orbit-managed-assets.json");
         let old_routine: Value = serde_json::from_slice(&read(&routine_manifest)).unwrap();
@@ -105,7 +105,12 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
             std::fs::write(&auto_task, edited).unwrap();
         }
         let auto_before = read(&auto_task);
-        let unchanged_auto_before = read(&unchanged_auto_task);
+        let retired_auto_before = read(&retired_auto_task);
+        assert_eq!(
+            old_auto["assets"]["delivery-qa"],
+            sha256_hex(&retired_auto_before),
+            "the historical fixture's delivery-qa digest must match its bytes"
+        );
         let output = orbit(&repo, home.path())
             .args(["workspace", "sync", "--json"])
             .assert()
@@ -194,22 +199,23 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
                 sha256_hex(&read(&auto_task))
             );
         }
-        assert_eq!(
-            read(&unchanged_auto_task),
-            unchanged_auto_before,
-            "an unchanged previous-release template remains intact"
+        assert!(
+            !retired_auto_task.exists(),
+            "an unmodified previous-release delivery-qa definition is retired on refresh"
         );
-        assert_eq!(
-            migrated_auto["assets"]["delivery-qa"],
-            old_auto["assets"]["delivery-qa"]
+        assert!(
+            migrated_auto["assets"].get("delivery-qa").is_none(),
+            "retirement drops delivery-qa provenance: {migrated_auto}"
         );
-        let paths = [
-            &routine,
-            &routine_manifest,
-            &auto_task,
-            &auto_manifest,
-            &unchanged_auto_task,
-        ];
+        assert!(
+            actions.iter().any(|action| {
+                action["kind"] == "auto_task"
+                    && action["name"] == "delivery-qa"
+                    && action["outcome"] == "retired"
+            }),
+            "{report}"
+        );
+        let paths = [&routine, &routine_manifest, &auto_task, &auto_manifest];
         let snapshot: Vec<_> = paths.iter().map(|p| read(*p)).collect();
         orbit(&repo, home.path())
             .args(["workspace", "sync", "--json"])
@@ -223,7 +229,125 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
                 path.display()
             );
         }
+        assert!(
+            !retired_auto_task.exists(),
+            "repeat sync must not reseed the retired delivery-qa definition"
+        );
     }
+}
+
+/// `delivery-qa` is no longer a shipped default. Init leaves it absent, doctor
+/// warns while a locally modified seeded copy is still in the catalog, and
+/// refresh keeps those bytes outside the active catalog instead of deleting them.
+#[test]
+fn retired_delivery_qa_is_absent_after_init_and_a_modified_copy_is_kept() {
+    use orbit_common::security::release::sha256_hex;
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/automation-v0.24.0");
+    let home = tempdir().expect("home tempdir");
+    let repo = home.path().join("workspace");
+    git_repo::init(&repo);
+    write_machine_identity(home.path());
+    orbit(&repo, home.path())
+        .args(["workspace", "init", "--name", "retired-delivery-qa"])
+        .assert()
+        .success();
+
+    let auto_tasks = repo.join(".orbit/auto_tasks");
+    let definition = auto_tasks.join("delivery-qa.yaml");
+    assert!(
+        !definition.exists(),
+        "orbit workspace init must not seed delivery-qa"
+    );
+    let manifest_path = auto_tasks.join(".orbit-managed-assets.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&read(&manifest_path)).expect("parse auto-task manifest");
+    assert!(
+        manifest["assets"].get("delivery-qa").is_none(),
+        "a fresh manifest must not record delivery-qa: {manifest}"
+    );
+
+    let original = read(fixture.join("auto_tasks/delivery-qa.yaml"));
+    let mut modified = original.clone();
+    modified.extend(b"# operator edit\n");
+    std::fs::write(&definition, &modified).expect("plant a modified retired default");
+    manifest["assets"]["delivery-qa"] = Value::String(sha256_hex(&original));
+    std::fs::write(
+        &manifest_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest")
+        ),
+    )
+    .expect("record the seeded digest");
+
+    let doctor = orbit(&repo, home.path())
+        .args(["doctor", "--json"])
+        .output()
+        .expect("run doctor");
+    let rows: Value = serde_json::from_slice(&doctor.stdout).unwrap_or_else(|_| {
+        panic!(
+            "parse doctor JSON (status {:?}): {}",
+            doctor.status,
+            String::from_utf8_lossy(&doctor.stderr)
+        )
+    });
+    let row = rows
+        .as_array()
+        .expect("doctor rows")
+        .iter()
+        .find(|row| row["check"] == "artifacts-auto-tasks")
+        .expect("auto-task artifact row");
+    assert_eq!(row["status"], "warning", "{row}");
+    let message = row["message"].as_str().expect("doctor message");
+    assert!(
+        message.contains("delivery-qa") && message.contains("no longer ships"),
+        "doctor must name the retirement: {row}"
+    );
+    assert_eq!(
+        read(&definition),
+        modified,
+        "doctor leaves a modified retired copy in place"
+    );
+
+    let synced = orbit(&repo, home.path())
+        .args(["workspace", "sync", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: Value = serde_json::from_slice(&synced).expect("parse sync JSON");
+    assert!(
+        report["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|action| {
+                action["kind"] == "auto_task"
+                    && action["name"] == "delivery-qa"
+                    && action["outcome"] == "preserved"
+                    && action["detail"].as_str().is_some_and(|detail| {
+                        detail.contains("locally modified") && detail.contains("delivery-qa")
+                    })
+            }),
+        "refresh must report that the modified copy was kept: {report}"
+    );
+    assert!(
+        !definition.exists(),
+        "refresh takes the modified copy out of the active catalog"
+    );
+    let preserved = repo.join(".orbit/.retired-managed/auto_tasks/delivery-qa.yaml");
+    assert_eq!(
+        read(&preserved),
+        modified,
+        "refresh keeps the operator's bytes instead of deleting them"
+    );
+    let migrated: Value = serde_json::from_slice(&read(&manifest_path)).expect("reread manifest");
+    assert!(
+        migrated["assets"].get("delivery-qa").is_none(),
+        "the preserved copy is no longer managed provenance: {migrated}"
+    );
 }
 
 #[test]

@@ -105,7 +105,7 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     use orbit_core::application::automation::consumer_key;
 
     let fixture = Fixture::new();
-    let mut trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"integrated_qa_v1","max_items":20,"retries":0});
+    let mut trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
     let store = runtime.automation_store().unwrap();
@@ -244,6 +244,66 @@ pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {
     String::from_utf8_lossy(&result.stdout).trim().to_string()
 }
 
+#[test]
+fn auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage() {
+    let fixture = Fixture::new();
+    let retired = r#"{"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"integrated_qa_v1","max_items":20,"retries":0}"#;
+    let review = r#"{"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0}"#;
+    fixture
+        .command(&[
+            "auto-task",
+            "add",
+            "--name",
+            "retired-coverage",
+            "--deliveries-landed",
+            retired,
+            "--title",
+            "Must not persist",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "coverage `integrated_qa_v1` is retired",
+        ));
+    assert!(
+        !fixture
+            .repo
+            .join(".orbit/auto_tasks/retired-coverage.yaml")
+            .exists()
+    );
+    fixture.json(&[
+        "auto-task",
+        "add",
+        "--name",
+        "review-coverage",
+        "--deliveries-landed",
+        review,
+        "--title",
+        "Review coverage still adds",
+        "--json",
+    ]);
+    fixture
+        .command(&[
+            "auto-task",
+            "update",
+            "review-coverage",
+            "--deliveries-landed",
+            retired,
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "coverage `integrated_qa_v1` is retired",
+        ));
+    let shown = fixture.json(&["auto-task", "show", "review-coverage", "--json"]);
+    assert_eq!(
+        shown["schedule"]["deliveries_landed"]["coverage"], "landed_code_review_v1",
+        "a refused schedule update must leave the review consumer unchanged"
+    );
+}
+
 /// An enabled delivery auto-task over a disposable `fixture-delivery` branch,
 /// baselined by one public evaluation. No landing, obligation, provider
 /// process, or action is introduced.
@@ -328,7 +388,7 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
     }
 
     let fixture = Fixture::new();
-    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"integrated_qa_v1","max_items":20,"retries":0});
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
     let store = runtime.automation_store().unwrap();

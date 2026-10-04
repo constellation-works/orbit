@@ -55,10 +55,6 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/delivery-code-review.yaml"),
     ),
     (
-        "delivery-qa",
-        include_str!("../../../assets/auto_tasks/delivery-qa.yaml"),
-    ),
-    (
         "code-review",
         include_str!("../../../assets/auto_tasks/code-review.yaml"),
     ),

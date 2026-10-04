@@ -7,11 +7,22 @@ use std::collections::BTreeMap;
 pub mod members;
 pub mod recovery;
 
-/// Supported examination contracts; QA and review never share acceptance.
+/// Examination contract stored on a delivery trigger, frozen batch, and
+/// coverage evidence.
+///
+/// [`CoverageClass::LandedCodeReviewV1`] is the coverage a new definition may
+/// select. [`CoverageClass::IntegratedQaV1`] is retired: serde still decodes
+/// it so historical batches, evidence, automation state, and a not-yet-refreshed
+/// workspace copy of the old delivery definition keep loading, and the
+/// evaluator still applies that contract (exclusions are ignored). Auto-task
+/// add, and an update that sets a schedule, refuse to select it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageClass {
+    /// Retired QA coverage. Decode-only for persisted records.
     IntegratedQaV1,
+    /// Review of landed deliveries. A passed before-PR certificate excludes
+    /// a landing from the obligations.
     LandedCodeReviewV1,
 }
 
@@ -118,7 +129,8 @@ pub struct SourcePage {
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
     /// Accepted before-PR review coverage keyed by delivery key, supplied by
     /// Core from verified certificates [ORB-11333]. Only a
-    /// `landed_code_review_v1` consumer excludes on it; QA never does.
+    /// `landed_code_review_v1` consumer excludes on it. A decoded
+    /// `integrated_qa_v1` record ignores it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub exclusions: BTreeMap<String, DeliveryExclusion>,
     pub complete: bool,
