@@ -107,6 +107,60 @@ pub enum StepRecoveryAdmission {
     Denied { reason: String },
 }
 
+/// [ORB-13907] What the engine asks a host before dispatching a job's final
+/// recovery for a failed run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalRecoveryAdmissionRequest {
+    pub task_id: String,
+    /// Top-level step whose failure exhausted step recovery.
+    pub failed_step_id: String,
+    /// Base ref a `complete_no_diff` commit must be reachable from, when the
+    /// run's worktree reported one.
+    pub base_ref: Option<String>,
+}
+
+/// [ORB-13907] The host's answer to [`FinalRecoveryAdmissionRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FinalRecoveryAdmission {
+    /// Recorded durably for the run; the hook may run, and never again.
+    Admitted,
+    /// The hook does not run; today's failure path does.
+    Skipped { reason: String },
+}
+
+/// [ORB-13907] A final-recovery decision for the host to act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalRecoveryApplication {
+    pub task_id: String,
+    pub failed_step_id: String,
+    /// The decision as the engine will act on it: a `resume` here already
+    /// names a valid step, and an invalid one arrives as `escalate`.
+    pub decision: orbit_types::workflow::FinalRecoveryDecision,
+    /// Top-level index a `resume` reruns from. Durable step checkpoints at and
+    /// after it are stale once the run goes back there.
+    pub resume_step_index: Option<u32>,
+    /// The run's assigned worktree, where a `complete_no_diff` commit is
+    /// resolved.
+    pub workspace_path: std::path::PathBuf,
+    /// Whether the run held `completion: done` authority.
+    pub completion_done: bool,
+}
+
+/// [ORB-13907] What applying a final-recovery decision did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FinalRecoveryApplied {
+    /// Recorded; the engine reruns from the decision's step.
+    Resume,
+    /// The task was settled (completed, rejected, archived, requeued, or
+    /// handed to the claim settlement); the run ends without its
+    /// `failure_activity`.
+    Settled { outcome: String },
+    /// The task is parked for a human — by the decision, by the applier's
+    /// override, or because the applier refused it; the run's
+    /// `failure_activity` follows.
+    Escalated { outcome: String },
+}
+
 /// What completion observed about a reviewed candidate's managed landing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewLandingRequest {
@@ -927,6 +981,36 @@ pub trait RuntimeHost: Send + Sync {
         _output: &Value,
     ) -> Result<(), DispatchError> {
         Ok(())
+    }
+
+    /// [ORB-13907] Admit a job's final recovery for a failed run, once.
+    ///
+    /// A host with run storage records the admission in the run's state
+    /// before answering `Admitted`, so neither a crash during the activity
+    /// nor any resume of the run invokes it again; it skips when final
+    /// recovery is disabled (an empty `workflow.final_recovery_crews`), when
+    /// the run already spent it, or when the run is no longer running. The
+    /// default skips: a host without run storage cannot promise "once".
+    fn admit_final_recovery(
+        &self,
+        _run_id: &str,
+        _request: &FinalRecoveryAdmissionRequest,
+    ) -> Result<FinalRecoveryAdmission, OrbitError> {
+        Ok(FinalRecoveryAdmission::Skipped {
+            reason: "this runtime host does not support final recovery".to_string(),
+        })
+    }
+
+    /// [ORB-13907] Act on an admitted final recovery's decision: record it,
+    /// and apply every decision but `resume` to the task through the
+    /// deterministic applier — or, for a claimed leaf, hand it to the claim
+    /// settlement instead of writing the owner's task.
+    fn apply_final_recovery(
+        &self,
+        _run_id: &str,
+        _application: &FinalRecoveryApplication,
+    ) -> Result<FinalRecoveryApplied, OrbitError> {
+        Err(unsupported_runtime_capability("apply_final_recovery"))
     }
 
     /// Persist an exact host-validated recovered rebase before reporting recovery

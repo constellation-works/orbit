@@ -14,7 +14,7 @@ const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 /// 5.1 MB and recovery exited 1 in 416 ms without running [ORB-12467]. Two
 /// 64 KiB fields leave the envelope an order of magnitude below that ceiling
 /// while still showing the agent both ends of the real diagnostic.
-const MAX_RECOVERY_ERROR_MESSAGE_BYTES: usize = 64 * 1024;
+pub(super) const MAX_RECOVERY_ERROR_MESSAGE_BYTES: usize = 64 * 1024;
 
 /// Largest serialised `failed_step_input` the recovery input may carry.
 const MAX_RECOVERY_FAILED_STEP_INPUT_BYTES: usize = 64 * 1024;
@@ -351,7 +351,7 @@ fn bind_recovery_context(
 /// names the audit blob holding its full fingerprints. It is only the copy
 /// handed to the recovery agent that is bounded, so the provider accepts the
 /// turn at all [ORB-12467].
-fn bounded_recovery_text(field: &str, run_id: &str, text: &str, limit: usize) -> String {
+pub(super) fn bounded_recovery_text(field: &str, run_id: &str, text: &str, limit: usize) -> String {
     if text.len() <= limit {
         return text.to_string();
     }
@@ -376,7 +376,7 @@ fn bounded_recovery_text(field: &str, run_id: &str, text: &str, limit: usize) ->
 /// replacing the value. An input that is still oversized once every leaf is
 /// bounded — thousands of small keys rather than one big one — degrades to a
 /// preview object, which is the only case that loses the shape.
-fn bounded_recovery_input(run_id: &str, input: Value) -> Value {
+pub(super) fn bounded_recovery_input(run_id: &str, input: Value) -> Value {
     let Ok(serialized) = serde_json::to_string(&input) else {
         return input;
     };
@@ -457,7 +457,7 @@ fn validate_bound_recovery_context(input: &Value) -> Result<(), DispatchError> {
     ))
 }
 
-fn redacted_recovery_diagnostic(message: &str) -> String {
+pub(super) fn redacted_recovery_diagnostic(message: &str) -> String {
     use orbit_common::security::redaction::{argv_redactor, redact_sensitive_env_text};
 
     let redacted = argv_redactor().apply_str(&redact_sensitive_env_text(message));
@@ -546,7 +546,7 @@ pub(super) fn attempt_failure_activity(
     }
 }
 
-fn crew_overridden_recovery_spec(
+pub(super) fn crew_overridden_recovery_spec(
     recovery: &ResolvedRecoveryActivity,
     ctx: &ExecCtx<'_>,
     input: &Value,

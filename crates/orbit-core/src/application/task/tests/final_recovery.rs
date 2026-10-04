@@ -238,14 +238,15 @@ fn requeue_returns_to_backlog_until_the_window_bound_then_escalates() {
     let task = failed_task(&runtime, "Flaky environment");
     let requeue = json!({"decision": "requeue", "reason": "bwrap now resolves"});
 
+    // Each failure is its own run; the applier applies a run's decision once.
+    let run = |attempt: usize, current: &Task| FinalRecoveryRequest {
+        run_id: format!("{RUN_ID}-{attempt}"),
+        ..request(current, root.path(), FinalRecoveryCompletion::Done)
+    };
     let bound = FinalRecoveryRequeueBound::default().max_requeues;
     for attempt in 1..=bound {
         let current = runtime.get_task(&task.id).expect("read task");
-        let outcome = apply(
-            &runtime,
-            &request(&current, root.path(), FinalRecoveryCompletion::Done),
-            requeue.clone(),
-        );
+        let outcome = apply(&runtime, &run(attempt, &current), requeue.clone());
         assert_eq!(outcome, FinalRecoveryOutcome::Requeued, "requeue {attempt}");
         assert_eq!(status(&runtime, &task.id), TaskStatus::Backlog);
         // The next run takes the task again and fails again.
@@ -261,11 +262,7 @@ fn requeue_returns_to_backlog_until_the_window_bound_then_escalates() {
     }
 
     let current = runtime.get_task(&task.id).expect("read task");
-    let outcome = apply(
-        &runtime,
-        &request(&current, root.path(), FinalRecoveryCompletion::Done),
-        requeue,
-    );
+    let outcome = apply(&runtime, &run(bound + 1, &current), requeue);
     let FinalRecoveryOutcome::Escalated {
         reason: Some(reason),
     } = outcome

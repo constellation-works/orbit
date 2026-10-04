@@ -454,6 +454,11 @@ pub struct ClaimEvidence {
     /// Set on a release whose leaf could not use its provider [ORB-13941].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_unavailable: Option<ProviderUnavailable>,
+    /// [ORB-13907] On a failure settlement only: the leaf's final-recovery
+    /// decision, which the owner applies to its task once the claim has
+    /// failed. An owner that predates the field ignores it and only blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_recovery: Option<ClaimFinalRecovery>,
 }
 
 /// A claimed leaf ended because its crew's provider could not be used on the
@@ -466,6 +471,17 @@ pub struct ProviderUnavailable {
     pub crew: Option<String>,
     /// The provider's own diagnostic, bounded.
     pub reason: String,
+}
+
+/// [ORB-13907] A claimed leaf's final-recovery decision, carried to the owner
+/// by the leaf's failure settlement instead of being written by the follower.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimFinalRecovery {
+    /// The leaf run whose final recovery decided.
+    pub run_id: String,
+    /// The decision as the leaf's agent proposed it. The owner verifies a
+    /// `complete_no_diff` commit against its own base branch.
+    pub decision: orbit_types::workflow::FinalRecoveryDecision,
 }
 
 /// Worker-owned documents and coordination metadata. Lifecycle transitions

@@ -49,6 +49,14 @@ pub struct JobV2 {
     pub failure_activity: Option<String>,
     #[serde(skip)]
     pub resolved_failure_activity: Option<ActivityV2>,
+    /// Last automated look at a failed run [ORB-13907]: invoked at most once
+    /// per run, after step recovery is exhausted and before
+    /// `failure_activity`. Its typed decision either resumes the run from an
+    /// earlier step or settles the task without the failure hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_recovery_activity: Option<String>,
+    #[serde(skip)]
+    pub resolved_final_recovery_activity: Option<ActivityV2>,
     /// Runs of this job allowed to execute at once; later submissions wait
     /// `pending` in submission order. `0` imposes no job-level ceiling, for a
     /// job whose callers already bound how many runs they start.

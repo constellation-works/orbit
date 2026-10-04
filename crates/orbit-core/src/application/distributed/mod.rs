@@ -41,6 +41,7 @@
 
 mod contract;
 mod entry;
+mod final_recovery;
 mod follower;
 mod probe;
 mod serve;
