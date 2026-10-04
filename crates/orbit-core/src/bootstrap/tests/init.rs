@@ -22,14 +22,24 @@ fn global_and_workspace_init_create_private_directory_trees_under_permissive_uma
 
     const CHILD_MARKER: &str = "ORBIT_TEST_PRIVATE_INIT_DIRECTORIES";
     if std::env::var_os(CHILD_MARKER).is_none() {
-        let status = std::process::Command::new("sh")
+        const TEST: &str = "bootstrap::tests::init::global_and_workspace_init_create_private_directory_trees_under_permissive_umask";
+        let mut command = std::process::Command::new("sh");
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        let output = command
             .args(["-c", "umask 000; exec \"$@\"", "sh"])
             .arg(std::env::current_exe().expect("current test executable"))
-            .arg("global_and_workspace_init_create_private_directory_trees_under_permissive_umask")
+            .args(["--exact", TEST])
             .env(CHILD_MARKER, "1")
-            .status()
+            .output()
             .expect("run test under permissive umask");
-        assert!(status.success(), "permissive-umask child failed");
+        orbit_common::test_env::assert_child_test_passed(
+            TEST,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
         return;
     }
 

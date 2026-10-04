@@ -1,6 +1,6 @@
-//! Ambient-process isolation for tests — environment variables and umask.
+//! Ambient-process isolation and validation of re-executed child tests.
 //!
-//! Both halves of this module exist for the same reason: a test that depends
+//! Environment variables and umask need isolation because a test that depends
 //! on ambient process state passes or fails according to *how the suite was
 //! launched* rather than what the code does. See [`unset`] for inherited env
 //! vars and [`harden_dir`] for umask-derived directory permissions.
@@ -24,7 +24,8 @@
 //! case and [`clear_inherited_authority`] applies it.
 //!
 //! Always available so integration tests and sibling crates share one
-//! implementation without changing `orbit-common`'s feature set.
+//! implementation without changing `orbit-common`'s feature set. Child-test
+//! guards reject successful libtest exits that never executed the exact filter.
 
 use std::sync::{
     Mutex, MutexGuard, OnceLock,
@@ -153,6 +154,64 @@ pub fn clear_inherited_authority(mut clear: impl FnMut(&str)) {
     for name in INHERITED_AUTHORITY_ENV {
         clear(name);
     }
+}
+
+/// Require a successful re-exec to have run exactly one test, not merely exited
+/// successfully with a missing or ignored exact filter (ORB-13911).
+///
+/// Pass captured libtest output, including its final summary. Checking the last
+/// summary prevents a nested child's result from hiding an empty outer run.
+pub fn assert_child_test_passed(
+    test_name: &str,
+    status: std::process::ExitStatus,
+    stdout: impl AsRef<[u8]>,
+    stderr: impl AsRef<[u8]>,
+) {
+    let stdout = String::from_utf8_lossy(stdout.as_ref());
+    let stderr = String::from_utf8_lossy(stderr.as_ref());
+    assert!(
+        status.success(),
+        "child test `{test_name}` failed ({status}):\n{stdout}\n{stderr}"
+    );
+    let summary = stdout
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("test result: "));
+    assert!(
+        summary.is_some_and(|line| {
+            line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")
+        }),
+        "child test `{test_name}` did not run exactly once; missing or ignored entry point:\n{stdout}\n{stderr}"
+    );
+}
+
+/// Verify the exact entry point before starting a child that will be killed or
+/// stays alive until a readiness handshake, so it cannot emit a final summary.
+///
+/// The caller must still verify a sentinel or handshake written by the child.
+/// This probe lists tests without executing fixture code, including ignored
+/// entries; callers must select ignored children with `--ignored` themselves.
+pub fn assert_child_test_exists(test_name: &str) {
+    let exe = std::env::current_exe()
+        .unwrap_or_else(|error| panic!("locate child test `{test_name}` executable: {error}"));
+    let mut command = std::process::Command::new(exe);
+    clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    command.args(["--list", "--exact", test_name, "--include-ignored"]);
+    let output = crate::process::run_bounded_capped(
+        &mut command,
+        std::time::Duration::from_secs(30),
+        64 * 1024,
+    )
+    .unwrap_or_else(|error| panic!("list child test `{test_name}`: {error}"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let entry = format!("{test_name}: test");
+    assert!(
+        output.status.success() && stdout.lines().any(|line| line == entry),
+        "missing child test entry point `{test_name}`:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Restores the variables captured by [`unset`] when dropped.

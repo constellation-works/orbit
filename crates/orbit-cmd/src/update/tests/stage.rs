@@ -88,6 +88,9 @@ fn rollback_replaces_a_running_executable_atomically() {
     std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o751))
         .expect("make previous executable runnable");
 
+    orbit_common::test_env::assert_child_test_exists(
+        "update::tests::stage::running_replacement_process_fixture",
+    );
     let mut command = Command::new(&destination);
     command
         .args([

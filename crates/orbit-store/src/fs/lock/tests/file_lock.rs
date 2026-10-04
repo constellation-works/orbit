@@ -31,6 +31,7 @@ fn sigkilled_holder_releases_lock() {
     let lock_path = dir.path().join("crash.lock");
     let ready_path = dir.path().join("ready");
 
+    orbit_common::test_env::assert_child_test_exists(CRASH_CHILD_TEST);
     let exe = std::env::current_exe().expect("current test exe");
     let mut child = std::process::Command::new(exe)
         .args(["--exact", CRASH_CHILD_TEST, "--ignored"])

@@ -71,11 +71,11 @@ fn cli_and_mcp_reach_host_backends_with_authoritative_identity() {
         ])
         .output()
         .expect("isolated fixture");
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    orbit_common::test_env::assert_child_test_passed(
+        "plugin_broker_sandbox::sandbox_fixture",
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
 }
 

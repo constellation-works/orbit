@@ -508,7 +508,11 @@ fn agent_task_deletion_is_denied_through_every_dispatch_path() {
             .get_output()
             .stdout
             .clone();
-        assert!(String::from_utf8_lossy(&output).contains("1 passed"));
+        assert!(
+            String::from_utf8_lossy(&output).contains("1 passed"),
+            "child test `mcp_roundtrip::agent_task_deletion_is_denied_through_every_dispatch_path` did not execute: {}",
+            String::from_utf8_lossy(&output)
+        );
         return;
     }
 

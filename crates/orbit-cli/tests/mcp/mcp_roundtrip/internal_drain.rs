@@ -138,7 +138,11 @@ fn isolated(test: &str) -> bool {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"),
+        "child test `{qualified}` did not execute: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     false
 }
 

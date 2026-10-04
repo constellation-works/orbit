@@ -238,9 +238,12 @@ mod read_only_observation {
     impl ExternalWriter {
         /// Re-runs this test binary as the writer. The filter below names
         /// [`external_writer_process`] by its module path; renaming that test
-        /// without updating it makes the child run nothing, and every fixture
-        /// then fails waiting for 'ready'.
+        /// without updating it fails the entry-point guard before spawning.
+        /// The ready sentinel then proves the writer actually started.
         fn start(database: &Path, control: PathBuf) -> Self {
+            crate::test_env::assert_child_test_exists(
+                "storage::tests::sqlite::read_only_observation::external_writer_process",
+            );
             fs::create_dir_all(&control).expect("create writer control directory");
             let child = Command::new(std::env::current_exe().expect("test binary path"))
                 .args([

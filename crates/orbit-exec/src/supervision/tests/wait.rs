@@ -139,6 +139,7 @@ mod escaped {
 
         /// Start an escaped holder, mark both streams, then await timeout.
         fn request(&self) -> ExecRequest {
+            orbit_common::test_env::assert_child_test_exists(HOLDER_TEST);
             let script = format!(
                 r#"{HOLDER_DIR_ENV}="$2" "$1" --exact {HOLDER_TEST} --nocapture &
 i=0

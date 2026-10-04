@@ -272,6 +272,7 @@ fn a_symlinked_authority_database_is_refused() {
 fn worker_process_binding_survives_descendants_and_forged_environment() {
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
+    const CHILD_TEST: &str = "runtime::recovery_authority::tests::worker_process_binding_survives_descendants_and_forged_environment";
     if let Some(root) = std::env::var_os("ORBIT_BINDING_FIXTURE_ROOT") {
         if std::env::var_os("ORBIT_BINDING_GRANDCHILD").is_none() {
             std::io::stdin()
@@ -297,13 +298,18 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
             orbit_common::test_env::clear_inherited_authority(|key| {
                 command.env_remove(key);
             });
-            let output = command.args(["--exact", "runtime::recovery_authority::tests::worker_process_binding_survives_descendants_and_forged_environment", "--nocapture"])
-                .env("ORBIT_BINDING_FIXTURE_ROOT", root).env("ORBIT_BINDING_GRANDCHILD", "1")
-                .env("ORBIT_RUN_ID", "forged-grandchild-run").output().expect("grandchild");
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stdout)
+            let output = command
+                .args(["--exact", CHILD_TEST, "--nocapture"])
+                .env("ORBIT_BINDING_FIXTURE_ROOT", root)
+                .env("ORBIT_BINDING_GRANDCHILD", "1")
+                .env("ORBIT_RUN_ID", "forged-grandchild-run")
+                .output()
+                .expect("grandchild");
+            orbit_common::test_env::assert_child_test_passed(
+                CHILD_TEST,
+                output.status,
+                &output.stdout,
+                &output.stderr,
             );
         }
         return;
@@ -315,10 +321,17 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
     });
-    let mut child = command.args(["--exact", "runtime::recovery_authority::tests::worker_process_binding_survives_descendants_and_forged_environment", "--nocapture"])
-        .env("HOME", root.path()).env("USERPROFILE", root.path())
-        .env("ORBIT_BINDING_FIXTURE_ROOT", root.path()).env("ORBIT_RUN_ID", "forged-run")
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("child");
+    let mut child = command
+        .args(["--exact", CHILD_TEST, "--nocapture"])
+        .env("HOME", root.path())
+        .env("USERPROFILE", root.path())
+        .env("ORBIT_BINDING_FIXTURE_ROOT", root.path())
+        .env("ORBIT_RUN_ID", "forged-run")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("child");
     authority
         .bind_worker_process(child.id(), &binding)
         .expect("bind");
@@ -335,11 +348,11 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
         .write_all(b"1")
         .expect("release child");
     let output = child.wait_with_output().expect("child output");
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    orbit_common::test_env::assert_child_test_passed(
+        CHILD_TEST,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
     assert!(
         super::current_worker_binding(root.path())
@@ -375,15 +388,21 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
     orbit_common::test_env::clear_inherited_authority(|key| {
         retry.env_remove(key);
     });
-    let output = retry.args(["--exact", "runtime::recovery_authority::tests::worker_process_binding_survives_descendants_and_forged_environment", "--nocapture"])
-        .env("HOME", root.path()).env("USERPROFILE", root.path()).env("ORBIT_BINDING_FIXTURE_ROOT", root.path())
+    let output = retry
+        .args(["--exact", CHILD_TEST, "--nocapture"])
+        .env("HOME", root.path())
+        .env("USERPROFILE", root.path())
+        .env("ORBIT_BINDING_FIXTURE_ROOT", root.path())
         .env("ORBIT_BINDING_PROC_ROOT", proc_root.path())
-        .env("ORBIT_BINDING_GRANDCHILD", "1").env("ORBIT_RUN_ID", "forged-retry")
-        .output().expect("new process with namespace binding");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
+        .env("ORBIT_BINDING_GRANDCHILD", "1")
+        .env("ORBIT_RUN_ID", "forged-retry")
+        .output()
+        .expect("new process with namespace binding");
+    orbit_common::test_env::assert_child_test_passed(
+        CHILD_TEST,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
 }
 

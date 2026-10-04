@@ -69,7 +69,11 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
             "isolated secret-sink fixture: {}\n{}",
             output.stdout, output.stderr
         );
-        assert!(output.stdout.contains("test result: ok. 1 passed;"));
+        assert!(
+            output.stdout.contains("test result: ok. 1 passed;"),
+            "child test `{TEST}` did not execute: {}",
+            output.stdout
+        );
         return;
     }
 

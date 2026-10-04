@@ -89,11 +89,11 @@ fn enter_fake_git_child(test: &str) -> bool {
         .env("PATH", std::env::join_paths(paths).expect("fake git PATH"))
         .output()
         .expect("run isolated fake-git test");
-    assert!(
-        output.status.success(),
-        "fake-git child failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    orbit_common::test_env::assert_child_test_passed(
+        &exact_test,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
     false
 }

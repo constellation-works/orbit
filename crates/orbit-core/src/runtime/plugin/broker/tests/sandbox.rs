@@ -194,8 +194,13 @@ impl Scratch {
         }
     }
 
-    /// Write a provider that runs [`broker_client`] with `env` and exits 0.
+    /// Write a provider that runs [`broker_client`] and requires its result.
     fn client_provider(&self, name: &str, env: &[(&str, &Path)]) {
+        orbit_common::test_env::assert_child_test_exists(CLIENT_TEST);
+        let result = env
+            .iter()
+            .find_map(|(key, path)| (*key == RESULT_ENV).then_some(*path))
+            .expect("broker client result sentinel");
         let mut assignments = format!("{CLIENT_ENV}=1");
         for (key, value) in env {
             assignments.push_str(&format!(" {key}={}", quote(value)));
@@ -204,9 +209,12 @@ impl Scratch {
         self.provider(
             name,
             &format!(
-                "cat > /dev/null\n{assignments} {} --ignored --exact {CLIENT_TEST} \
-                 --test-threads=1 > /dev/null 2>&1\nexit 0\n",
-                quote(&exe)
+                "set -e\ncat > /dev/null\n{assignments} {} --ignored --exact {CLIENT_TEST} \
+                 --test-threads=1 >&2\n[ -f {} ] || {{ \
+                 printf '%s\\n' 'child test {CLIENT_TEST} did not write its result sentinel' >&2; \
+                 exit 1; }}\n",
+                quote(&exe),
+                quote(result)
             ),
         );
     }

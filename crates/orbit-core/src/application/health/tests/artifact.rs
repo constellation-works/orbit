@@ -229,7 +229,7 @@ fn run_isolated_child_fixture(test_name: &str, child_flag: &str) {
     assert!(status.success(), "{output}");
     assert!(
         output.contains("test result: ok. 1 passed;"),
-        "the isolated fixture must run exactly one test: {output}"
+        "the isolated fixture must run `{module}::{test_name}` exactly once: {output}"
     );
 }
 

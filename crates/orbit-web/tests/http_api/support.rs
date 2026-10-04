@@ -49,7 +49,7 @@ pub(super) fn isolated(name: &str, body: impl FnOnce()) {
     );
     assert!(
         output.contains("test result: ok. 1 passed;"),
-        "the isolated child must execute exactly the requested test: {output}"
+        "the isolated child must execute exactly `{name}`: {output}"
     );
 }
 
@@ -169,6 +169,7 @@ impl Fixture {
     }
 
     fn server_impl(&self, operator: bool, resources: bool) -> Server {
+        orbit_common::test_env::assert_child_test_exists("server_child");
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()

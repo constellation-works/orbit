@@ -71,7 +71,7 @@ pub fn isolated(name: &str, run: impl FnOnce()) {
     assert!(status.success(), "isolated {name} failed:\n{output}");
     assert!(
         output.contains("1 passed"),
-        "isolated case must actually run: {output}"
+        "isolated case `{name}` must actually run: {output}"
     );
 }
 

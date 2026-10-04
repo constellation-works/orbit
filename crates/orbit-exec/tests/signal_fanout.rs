@@ -127,6 +127,9 @@ fn sigterm_with_default_disposition_exits_the_supervisor() {
     let _lock = TEST_LOCK.lock().expect("signal test lock");
     let dir = tempfile::tempdir().expect("tempdir");
     let marker = dir.path().join("ready");
+    orbit_common::test_env::assert_child_test_exists(
+        "sigterm_with_default_disposition_exits_the_supervisor",
+    );
     let exe = std::env::current_exe().expect("current test binary");
     let mut child = Command::new(&exe)
         .env(SIGTERM_HELPER_ENV, "1")
