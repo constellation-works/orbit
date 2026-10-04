@@ -57,7 +57,7 @@ Verify the seams against the current checkout before editing. These are the auth
 | Child lifecycle, cancellation, and cleanup | `crates/orbit-engine/src/activity_job/cli_runner/`; `crates/orbit-exec/src/supervision/` | Reuse the v2 runner and supervisor. Do not add provider-owned process spawning or cleanup. |
 | Deterministic shell input and output | `crates/orbit-engine/src/executor/automation/shell.rs` — `local_shell`, `parse_shell_config`, `compose_argv` | Keep argv in static activity config. Run an actual shell only when `shell` and `script` are declared explicitly. |
 | OS sandbox / provider home grant | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/provider_state.rs`; `crates/orbit-exec/src/macos_sandbox/provider_dirs.rs`; `crates/orbit-exec/src/macos_sandbox/compile.rs` | Give only the active provider's required state directory a write grant. Keep the activity `fsProfile` authoritative for the worktree. On macOS, a state-directory grant is not a login: Claude, Copilot, and Cursor keep their default login in the user keychain and receive a narrow `$HOME/Library/Keychains` read carve-out. |
-| End-to-end fixtures | `crates/orbit-core/tests/pi_fake_agent.rs`, `crates/orbit-core/tests/antigravity_fake_agent.rs`, `crates/orbit-core/tests/opencode_fake_agent.rs`, `crates/orbit-engine/tests/v2_local_shell.rs` | Exercise the real v2 dispatch seam with fakes; add output/error/timeout/cancellation cases. |
+| End-to-end fixtures | `crates/orbit-core/tests/provider/pi_fake_agent.rs`, `crates/orbit-core/tests/provider/antigravity_fake_agent.rs`, `crates/orbit-core/tests/provider/opencode_fake_agent.rs`, `crates/orbit-engine/tests/engine/v2_local_shell.rs` | Exercise the real v2 dispatch seam with fakes; add output/error/timeout/cancellation cases. |
 
 ## Add a CLI-agent executor
 
@@ -146,7 +146,7 @@ Run focused tests during development, replacing `<provider>` only with a real cr
 ```bash
 cargo test -p orbit-agent <provider>
 cargo test -p orbit-core --test <provider>_fake_agent
-cargo test -p orbit-engine --test v2_local_shell
+cargo test -p orbit-engine --test engine v2_local_shell::
 ./scripts/generate-doc-indexes.sh --check
 ./scripts/sync-plugin-skills.sh --check
 make ci-fast

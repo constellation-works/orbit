@@ -13,11 +13,10 @@ use orbit_common::test_env;
 use serde_json::{Value, json};
 
 use super::Fixture;
+use crate::fixture_crew;
 
-#[path = "fixture_crew.rs"]
-mod fixture_crew;
-
-const TEST: &str = "secret_sinks::seeded_secrets_stay_out_of_persistence_logs_and_children";
+const TEST: &str =
+    "plugin_secrets::secret_sinks::seeded_secrets_stay_out_of_persistence_logs_and_children";
 const CHILD: &str = "ORBIT_SECRET_SINK_FIXTURE";
 const SECRETS: &[(&str, &str)] = &[
     ("E2E_PROVIDER_TOKEN", "sk-orbitSeedProvider0123456789abcdef"),

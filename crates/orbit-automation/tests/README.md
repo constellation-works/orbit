@@ -17,7 +17,7 @@ exercise cursors, overlap admission and coverage receipts; dispatch adapters
 provide the lifecycle outcomes that Core normally supplies.
 
 Materialization is owned by Core. Its migration coverage joins the existing
-[`workspace_sync.rs`](../../orbit-cli/tests/workspace_sync.rs) integration binary
+[`workspace_sync`](../../orbit-cli/tests/workspace/workspace_sync.rs) module of the CLI `workspace` integration binary
 at the production CLI boundary, using the checked-in
 [`v0.24.0` fixture](../../orbit-cli/tests/fixtures/automation-v0.24.0/README.md).
 No production API visibility or crate dependency is changed for testing.
@@ -36,5 +36,5 @@ Focused commands:
 ```sh
 cargo test -p orbit-automation --test scheduling
 cargo test -p orbit-automation --test review_validation
-cargo test -p orbit-cli --test workspace_sync workspace_sync_upgrades_previous_release_automation_with_provenance_intact -- --exact
+cargo test -p orbit-cli --test workspace workspace_sync::workspace_sync_upgrades_previous_release_automation_with_provenance_intact -- --exact
 ```

@@ -17,7 +17,7 @@ on:
       # [ORB-13689] Activity-scoped proc.spawn must run on macOS without the
       # former Linux-only Landlock child boundary.
       - "crates/orbit-tools/src/builtin/proc/**"
-      - "crates/orbit-tools/tests/proc_spawn_lockdown.rs"
+      - "crates/orbit-tools/tests/tools/proc_spawn_lockdown.rs"
       # [ORB-11055] Child-runtime write-root inventory lives in orbit-core and
       # is compiled into the SBPL profile the macOS sandbox job enforces.
       - "crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**"
@@ -52,7 +52,7 @@ on:
       - "crates/orbit-core/src/runtime/plugin/broker/**"
       - "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs"
       - "crates/orbit-tools/tests/fixtures/plugins/uv-example/**"
-      - "crates/orbit-cli/tests/plugin_cli_group.rs"
+      - "crates/orbit-cli/tests/tool/plugin_cli_group.rs"
       - "Cargo.lock"
       - ".github/workflows/ci-macos.yml"
 
@@ -102,7 +102,7 @@ jobs:
 
       # Exercises the real-`sandbox-exec` regex regression test added by
       # ORB-00372, the existing macOS sandbox suite, the compiled SBPL goldens
-      # and the `tests/macos_sandbox.rs` enforcement test. The unit tests
+      # and the `tests/sandbox/macos_sandbox.rs` enforcement test. The unit tests
       # gated on `sandbox_exec_can_apply()` still self-skip if a runner forbids
       # `sandbox-exec`; the enforcement test skips visibly elsewhere but fails
       # here, where ORBIT_REQUIRE_SANDBOX_EXEC is set (STD-04 §R8).
@@ -164,7 +164,7 @@ jobs:
           uv --version | grep -F "${UV_VERSION}"
 
       - name: Run uv-locked Python plugin fixture test
-        run: cargo test --no-fail-fast -p orbit-cli --locked a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test plugin_cli_group -- --exact
+        run: cargo test --no-fail-fast -p orbit-cli --locked plugin_cli_group::a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test tool -- --exact
 
       # This runs only after every required macOS command above succeeds. The
       # report records the physical checkout HEAD rather than github.sha, which

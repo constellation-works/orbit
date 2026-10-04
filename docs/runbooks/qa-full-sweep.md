@@ -186,7 +186,7 @@ does not verify command execution, persistence, errors, or every argument.
 
 For direct command-path evidence from the disposable task administration and
 run observation fixtures, run
-`ORBIT_QA_TRACE_CLI=1 cargo test -p orbit-cli --test task_admin_cli --test run_observation -- --nocapture`.
+`ORBIT_QA_TRACE_CLI=1 cargo test -p orbit-cli --test task --test process -- task_admin_cli:: run_observation:: --nocapture`.
 After a successful JSON command completes, these fixtures emit a `QA_CLI`
 record containing its argv, exit code, and named test. Compare those records
 with the passing harness cases. Help-only paths and source references inside

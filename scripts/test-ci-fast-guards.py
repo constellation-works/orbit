@@ -240,17 +240,24 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
             calls,
             [
                 ["test", "-p", "orbit-core", "--test", "ci_failure_goldens"],
-                ["test", "-p", "orbit-tools", "--test", "public_tool_surface", "github_log_goldens"],
-                ["test", "-p", "orbit-tools", "--test", "mcp_definitions"],
-                ["test", "-p", "orbit-cli", "--test", "help_goldens"],
-                ["test", "-p", "orbit-cli", "--test", "output_goldens"],
+                [
+                    "test",
+                    "-p",
+                    "orbit-tools",
+                    "--test",
+                    "tools",
+                    "--",
+                    "public_tool_surface::github_log_goldens::",
+                    "mcp_definitions::",
+                ],
+                ["test", "-p", "orbit-cli", "--test", "output", "--", "help_goldens::", "output_goldens::"],
                 [
                     "test",
                     "-p",
                     "orbit-cli",
                     "--test",
-                    "mcp_roundtrip",
-                    "mcp_serve_tools_list_matches_production_snapshot",
+                    "mcp",
+                    "mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot",
                     "--",
                     "--exact",
                 ],
@@ -278,7 +285,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--update")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 8)
+        self.assertEqual(len(calls), 6)
         for call in calls:
             self.assertEqual(call["help"], "1")
             self.assertEqual(call["output"], "1")

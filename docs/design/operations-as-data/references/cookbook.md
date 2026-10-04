@@ -140,7 +140,7 @@ of matching verb by verb.
 
 Now cash in Step 0: commit the captured help files as
 `crates/orbit-cli/tests/help_goldens/<noun>/*.txt` and add each argv to `CASES`
-in `crates/orbit-cli/tests/help_goldens.rs`, which compares the binary's live
+in `crates/orbit-cli/tests/output/help_goldens.rs`, which compares the binary's live
 `--help` against them.
 
 ### Step 7. Derive the handler table

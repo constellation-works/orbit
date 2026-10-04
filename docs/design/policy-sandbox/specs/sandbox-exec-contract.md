@@ -271,7 +271,7 @@ Concrete follow-on targets, **not modified here**:
    confined-spawn seam. The current trait only validates; a wrapper must not spawn
    in `validate` and then also take the ordinary unconfined spawn path. Keep
    existing supervision and outer containment; verify attachment before exec.
-4. `orbit-tools/src/builtin/proc/spawn.rs` and `tests/proc_spawn_lockdown.rs`:
+4. `orbit-tools/src/builtin/proc/spawn.rs` and `tests/tools/proc_spawn_lockdown.rs`:
    supply the effective activity authority and use that seam; retain explicit
    path preflight as a fast diagnostic, exact allowlist, and cleared environment.
 5. Existing platform sandbox modules and Core admission: capability/attachment

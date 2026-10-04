@@ -192,9 +192,9 @@ directory or checkout, run `df --output=pcent <parent-directory>` and stop at
 80% usage. The probe also checks disk usage before creating its fixture.
 
 ```sh
-./scripts/build-budget.py -- cargo test -p orbit-core desktop
-./scripts/build-budget.py -- cargo test -p orbit-mcp --test mcp_wire_roundtrip
-./scripts/build-budget.py -- cargo test -p orbit-cli --test mcp_roundtrip desktop
+./scripts/build-budget.py -- cargo test -p orbit-core -p orbit-store desktop
+./scripts/build-budget.py -- cargo test -p orbit-mcp --test boundary mcp_wire_roundtrip::
+./scripts/build-budget.py -- cargo test -p orbit-cli --test mcp mcp_roundtrip::desktop::
 node --test crates/orbit-mcp/src/adapter/tests/task-panel.mjs
 python3 scripts/probe-mcp-apps.py --binary target/debug/orbit
 ORBIT_PANEL_RESOURCE=.orbit/tmp/mcp-apps-probe/task-panel.html node --test crates/orbit-mcp/src/adapter/tests/task-panel.mjs

@@ -38,8 +38,8 @@ ephemeral-port = { max-threads = 1 }
 filter = 'package(orbit-core) & kind(lib) & test(/^(adapter::tool_host::tests::(command_tools|task_tools|workflow_tools)::|application::job::run::tests::(owner|reconcile)::|application::routines::tests::sweep::|application::search::tests::(global|types)::|bootstrap::tests::global_defaults::|runtime::task::tests::locks::|runtime::tests::(authorization|config_path|run_input)::|runtime::workspace::tests::claim::)/)'
 test-group = 'stateful-runtime'
 
-# `web_serve_root` and `web_serve_shutdown` both pick a port with `free_port()`
-# and spawn `orbit web serve` on it.
+# The `web_serve_root` and `web_serve_shutdown` modules of the `process` binary
+# both pick a port with `free_port()` and spawn `orbit web serve` on it.
 [[profile.default.overrides]]
-filter = 'binary(/^web_serve_/)'
+filter = 'package(orbit-cli) & binary(process) & test(/^web_serve_/)'
 test-group = 'ephemeral-port'
