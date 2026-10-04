@@ -497,8 +497,8 @@ impl ConfigStore {
 
     /// Atomically write the current in-memory document to `self.path`
     /// (temp file + rename, via `orbit_common::fs::io::atomic_write_text`).
-    /// Callers should call [`Self::validate`] first: `save` does not
-    /// validate on its own.
+    /// Callers should run the validation method appropriate to this store's
+    /// scope first: `save` does not validate on its own.
     pub fn save(&self) -> Result<(), OrbitError> {
         atomic_write_text(&self.path, &self.doc.to_string()).map_err(|err| {
             OrbitError::Io(format!(
