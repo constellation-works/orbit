@@ -230,7 +230,7 @@ define_config_settings! {
     },
     workflow_auto_ship: bool => bool {
         key: "workflow.auto_ship", value_type: "bool",
-        description: "Opt-in for unattended ship dispatch via the routine/sweep scheduler.",
+        description: "Opt-in for `orbit run ship-sweep` unattended ship dispatch; the seeded ship-sweep routine does not read it.",
         section: ConfigSection::Delivery, order: 40,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },

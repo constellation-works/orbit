@@ -110,9 +110,12 @@ without the ones after it; **the reverse is not true.**
    clock, so an unchanged backlog costs nothing. See
    [Tuning which tasks task-pilot prepares](#tuning-which-tasks-task-pilot-prepares).
 3. **`ship-sweep` last, and only deliberately.** This is the one that commits,
-   pushes, and opens PRs without a human present. It also needs
-   `workflow.auto_ship = true`. Do not enable it in the same change as anything
-   above; let the earlier ones prove themselves against real traffic first.
+   pushes, and opens PRs without a human present. Its `enabled: true` is the
+   only switch: the routine does not read `workflow.auto_ship`, which gates only
+   the cross-workspace `orbit run ship-sweep` command. It never grants
+   `--complete`, so shipped work stops in `review`. Do not enable it in the same
+   change as anything above; let the earlier ones prove themselves against real
+   traffic first.
 
 ## Authoring a routine
 

@@ -169,7 +169,7 @@ crew or the workspace default.
 | `workflow.base_branch` | string | `main` | Base branch for ship, auto, and the task pilot when the registered workspace has none. |
 | `workflow.default_crew` | string | See [Crews](#crews) | Crew for a task that names none and gets no override. |
 | `workflow.system_crew` | string | `system` | Crew for system activities such as step-failure recovery and the task pilot. |
-| `workflow.auto_ship` | bool | `false` | Let the scheduler dispatch ship runs unattended. |
+| `workflow.auto_ship` | bool | `false` | Opt this workspace in to `orbit run ship-sweep`. The seeded `ship-sweep` routine does not read it; its `enabled:` flag is its switch. |
 | `workflow.low_complexity_crews` | array&lt;string&gt; | `[]` | Crew pool for low-complexity tasks with no crew. |
 | `workflow.medium_complexity_crews` | array&lt;string&gt; | `[]` | Crew pool for medium-complexity tasks with no crew. |
 | `workflow.hard_complexity_crews` | array&lt;string&gt; | `[]` | Crew pool for hard-complexity tasks with no crew. |

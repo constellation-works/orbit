@@ -258,8 +258,11 @@ in the first place, see [multi-host.md](../../orbit-setup/references/multi-host.
 
 ## Unattended shipping
 
-`ship-sweep` and the `ship-sweep` routine dispatch without a human present. Both
-require `workflow.auto_ship = true`. Before enabling either:
+`orbit run ship-sweep` and the `ship-sweep` routine dispatch without a human
+present, and neither ever grants `--complete`. The command dispatches only
+workspaces with `workflow.auto_ship = true`. The routine does not read
+`workflow.auto_ship`; its `enabled: true` is the only switch, and it ships only
+its own workspace. Before enabling either:
 
 - Confirm the registered workspace base branch (else `workflow.base_branch`) points where PRs should actually land.
 - Enable worktree GC first — unattended shipping is the fastest way to fill a
