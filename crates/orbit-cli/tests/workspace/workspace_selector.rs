@@ -11,6 +11,169 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
+fn teardown_preview_and_execution_preserve_a_foreign_catalog_partition() {
+    const TEST: &str =
+        "workspace_selector::teardown_preview_and_execution_preserve_a_foreign_catalog_partition";
+    const CHILD: &str = "ORBIT_TEST_TEARDOWN_PARTITION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let home = tempdir().expect("isolated child home");
+        let mut command = StdCommand::new(std::env::current_exe().expect("test binary"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path())
+            .output()
+            .expect("isolated teardown fixture");
+        test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+        return;
+    }
+
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let target = temp.path().join("target");
+    let foreign = temp.path().join("foreign");
+    fs::create_dir_all(&home).expect("home");
+    init_git_repo(&target);
+    init_git_repo(&foreign);
+    run_orbit(
+        &target,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "teardown-host",
+            "--task-prefix",
+            "TD",
+        ],
+    )
+    .success();
+    let global_root = home.join(".orbit");
+    let mut bundles = Vec::new();
+    for (repo, name) in [(&target, "target"), (&foreign, "foreign")] {
+        run_orbit(repo, &home, &["workspace", "init", "--name", name]).success();
+        let shown = run_orbit_json(repo, &home, &["workspace", "show", "--format", "json"]);
+        assert_eq!(
+            shown["checkout"]["repo_root"],
+            repo.canonicalize()
+                .expect("fixture checkout")
+                .to_string_lossy()
+                .as_ref(),
+            "fixture must resolve its disposable checkout before adding tasks"
+        );
+        let task = run_orbit_json(
+            repo,
+            &home,
+            &[
+                "task",
+                "add",
+                "--title",
+                name,
+                "--complexity",
+                "low",
+                "--json",
+            ],
+        );
+        bundles.push(
+            orbit_cmd::task_store_partition_path(&global_root, &format!("ws_{name}"))
+                .join(task["id"].as_str().expect("created task id")),
+        );
+    }
+    let target_partition = bundles[0].parent().expect("target partition");
+    let foreign_partition = bundles[1].parent().expect("foreign partition");
+    let foreign_envelope = bundles[1].join("task.yaml");
+    let preserved = fs::read(&foreign_envelope).expect("foreign task envelope");
+
+    // Model legacy cross-ID state: the target's catalog id names the foreign
+    // partition, while both task-registry checkout bindings remain intact.
+    let registry_path = orbit_registry::workspace_registry::registry_path_for(&global_root);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)
+        .expect("fixture catalog");
+    registry
+        .workspaces
+        .retain(|workspace| workspace.name != "foreign");
+    registry
+        .checkouts
+        .retain(|checkout| checkout.workspace_id != "ws_foreign");
+    registry
+        .workspaces
+        .iter_mut()
+        .find(|workspace| workspace.name == "target")
+        .expect("target catalog workspace")
+        .id = "ws_foreign".to_string();
+    registry
+        .checkouts
+        .iter_mut()
+        .find(|checkout| checkout.workspace_id == "ws_target")
+        .expect("target catalog checkout")
+        .workspace_id = "ws_foreign".to_string();
+    orbit_registry::workspace_registry::save_registry_to(&registry, &registry_path)
+        .expect("save cross-ID catalog");
+
+    let preview =
+        run_orbit_as_operator(temp.path(), &home, &["workspace", "teardown", "target"]).failure();
+    let stderr = String::from_utf8_lossy(&preview.get_output().stderr);
+    let partitions: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.starts_with("task-store partition:"))
+        .collect();
+    assert_eq!(
+        partitions,
+        vec![format!(
+            "task-store partition: {} (1 bundle)",
+            target_partition.display()
+        )],
+        "preview must list only the partition this teardown can delete: {stderr}"
+    );
+    assert!(bundles[0].is_dir(), "preview must preserve target bundles");
+    assert_eq!(
+        fs::read(&foreign_envelope).expect("foreign bundle after preview"),
+        preserved
+    );
+
+    run_orbit_as_operator(
+        temp.path(),
+        &home,
+        &["workspace", "teardown", "target", "--confirm"],
+    )
+    .success();
+    assert!(
+        !target_partition.exists(),
+        "target's bound partition must be removed"
+    );
+    assert!(
+        !target.join(".orbit").exists(),
+        "target data root must be removed"
+    );
+    assert!(foreign_partition.is_dir(), "foreign partition must survive");
+    assert!(
+        foreign.join(".orbit").is_dir(),
+        "foreign data root must survive"
+    );
+    assert_eq!(
+        fs::read(&foreign_envelope).expect("preserved foreign bundle"),
+        preserved
+    );
+    assert_eq!(
+        orbit_cmd::bound_partition_id(&global_root, &foreign.join(".orbit"))
+            .expect("foreign binding"),
+        Some("ws_foreign".to_string()),
+        "teardown must preserve the foreign partition's checkout binding"
+    );
+    assert_eq!(
+        orbit_cmd::bound_partition_id(&global_root, &target.join(".orbit"))
+            .expect("target binding"),
+        None,
+        "teardown must retire the target partition's checkout binding"
+    );
+}
+
+#[test]
 fn workspace_remove_deregisters_deleted_checkout_by_name_id_and_path() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
