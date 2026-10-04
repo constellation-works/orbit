@@ -1,13 +1,13 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-09-28
+last_updated: 2026-10-04
 last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
+summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none and after-landing review, and non-pruning footprints.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
 related_features: [distributed-drain, federated-mcp, host-registry]
@@ -363,6 +363,8 @@ whether a sweep or drain is running.
 
 ## V1 review policy is none
 
+**Superseded in part by:** [After-landing review is admitted; the owner's policy sets the disposition](#after-landing-review-is-admitted-the-owners-policy-sets-the-disposition) (the after-landing half). `before-pr` stays refused.
+
 **Recorded:** 2026-09 · Daniel narrowed v1 after review of the contract authored by [ORB-12488].
 **Code anchors:** `crates/orbit-core/src/application/review/gate/`, `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`
 
@@ -384,6 +386,41 @@ handoff state; completion still requires explicit authorization and verified lan
 - Default no-review execution can produce a valid handoff without pretending a review happened.
 - Cost: workspaces configured for before-PR or after-landing review must explicitly change policy
   or wait for a later version; pull never silently downgrades their policy.
+
+## After-landing review is admitted; the owner's policy sets the disposition
+
+**Recorded:** 2026-10-04 · Daniel asked for after-landing and before-PR workspaces to be admitted; [ORB-13894] covers after-landing.
+**Code anchors:** `crates/orbit-store/src/contracts/task/coordination.rs::review_policies_admissible`, `crates/orbit-types/src/workflow/handoff.rs::HandoffReview::for_policy`, `crates/orbit-core/src/application/automation/provider.rs::attribute`
+
+### Context
+
+After-landing review runs on the owner: its `deliveries_landed` consumer (`delivery-code-review`)
+batches landed deliveries and reviews them. A claimed execution produces nothing that review needs
+beyond the landing itself, so refusing these workspaces protected nothing. The alternative was to
+require the executor's policy to equal the owner's, which would refuse a follower left on `none`
+although it has no part in the review.
+
+### Decision
+
+The owner's captured policy decides the review a claim carries. A pair is admitted when the owner
+is `none` or `after-landing` and the executor declares `none`, or declares `after-landing` under an
+`after-landing` owner. An executor that expects a review the owner would never run (`after-landing`
+under `none`) is refused, never downgraded, and `before-pr` on either endpoint stays refused until
+claimed leaves carry the pre-PR gate. Admission, the follower's pull allocator and handoff
+acceptance apply the one rule. The handoff carries `{ policy: after-landing, disposition:
+deferred_to_landing }` under an after-landing owner and `{ policy: none, disposition: not_required
+}` under `none`; the owner accepts only the record its captured policy names. Neither claims a
+review happened. The owner names the task a landed pull request delivered from its accepted
+handoff (repository, landing branch and pull request number), so the review batch can blame the
+right task.
+
+### Consequences
+
+- Workspaces that review after landing can pull without changing policy, and the review batch
+  attributes follower deliveries to their owner tasks.
+- Cost: a pull request landed outside an accepted handoff (an owner-local PR delivery) is still
+  unattributed, and an owner-local `local`-mode candidate lands without a direct-landing record, so
+  attribution covers claimed pull requests only.
 
 ## Declared context survives missing filesystem targets
 

@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Overview
 owner: claude
-last_updated: 2026-09-29
+last_updated: 2026-10-04
 last_validated: 2026-09-29
 status: Draft
 feature: distributed-drain
@@ -50,8 +50,8 @@ planes over one repository, which the federated-mcp spec names an operator misco
 
 Existing roles, capability routing, reservations, and PR checks were the foundations. V1 added
 atomic admission, durable request/claim identity, routed task reads and writes, settlement, and an
-owner landing consumer. V1 supports only `review_policy = none`; implementation validation still
-runs, and declared context selectors remain protected even when their files do not exist. These
+owner landing consumer. It supports `review_policy` `none` and `after-landing` (reviewed on the
+owner after landing), not `before-pr`; implementation validation still runs, and declared context selectors remain protected even when their files do not exist. These
 were substantive integration changes. Throughput depends on file conflicts, provider limits, shared CI,
 and landing capacity as well as local build slots.
 
@@ -82,7 +82,7 @@ runs. The owner does not track host capacity.
 no longer names a pipeline, a worktree, a reservation class, or an admission rule.
 
 **Handoff.** Durable PR (or owner-local candidate), validation evidence, and a typed
-`review_policy: none` disposition, accepted by the owner atomically with promotion to `review`. Execution writes close at this boundary.
+review disposition (`not_required` under `none`, `deferred_to_landing` under `after-landing`), accepted by the owner atomically with promotion to `review`. Execution writes close at this boundary.
 
 **Landing.** An owner-side consumer verifies the pinned candidate and merges only with recorded
 completion authority, then verifies actual merge evidence before marking the task done. This

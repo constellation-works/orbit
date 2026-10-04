@@ -220,6 +220,23 @@ impl AdmissionRefusal {
     }
 }
 
+/// Whether a claim may run under this owner and executor review policy pair.
+///
+/// The owner's policy decides the handoff's review disposition: `none` hands
+/// off with no review, `after-landing` defers it to the owner's
+/// `deliveries_landed` consumer, which reviews the landing without anything
+/// from the executor. The executor may therefore declare `none` under either
+/// owner policy, or `after-landing` under an owner that reviews landings; an
+/// executor that expects a review an owner with `none` would never run is
+/// refused rather than silently downgraded. `before-pr` is refused on either
+/// endpoint until distributed drain carries its pre-PR review gate.
+pub fn review_policies_admissible(owner: &str, executor: &str) -> bool {
+    matches!(
+        (owner, executor),
+        ("none", "none") | ("after-landing", "none" | "after-landing")
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdmissionRequest {
     pub request_id: String,

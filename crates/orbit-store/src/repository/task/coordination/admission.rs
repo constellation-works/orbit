@@ -527,9 +527,8 @@ pub fn admission_refusal(
     {
         return Some(AdmissionRefusal::ShipModeUnsupported);
     }
-    // Both endpoints must say `none`; every other policy is rejected by name
-    // rather than downgraded.
-    if request.caller_review_policy != "none" || request.ship.review_policy != "none" {
+    // An unsupported pair is rejected by name rather than downgraded.
+    if !review_policies_admissible(&request.ship.review_policy, &request.caller_review_policy) {
         return Some(AdmissionRefusal::ReviewPolicyUnsupported);
     }
     None

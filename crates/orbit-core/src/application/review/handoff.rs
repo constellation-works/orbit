@@ -9,8 +9,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::handoff::{
-    AcceptedHandoff, HandoffCandidate, LandingAttempt, LandingAttemptState, LandingStartRequest,
-    LandingStartState, TaskHandoff,
+    AcceptedHandoff, HandoffCandidate, HandoffReviewDisposition, LandingAttempt,
+    LandingAttemptState, LandingStartRequest, LandingStartState, TaskHandoff,
 };
 
 use crate::OrbitRuntime;
@@ -612,14 +612,23 @@ fn handoff_json(
             "base": {"commit": candidate.base.commit, "tree": candidate.base.tree},
             "delivery": candidate.delivery,
         },
-        // v1 admits `review_policy = none` only. The typed disposition records
-        // that no review was required — it is not a review that passed, and the
-        // task's `review` status means "delivery awaiting completion authority".
+        // The typed disposition records that no review preceded the handoff:
+        // none was required, or it is deferred to the owner's after-landing
+        // consumer. Neither is a review that passed, and the task's `review`
+        // status means "delivery awaiting completion authority".
         "review": {
             "policy": accepted.handoff.review.policy,
             "disposition": accepted.handoff.review.disposition,
             "is_code_review": false,
-            "summary": "review not required (policy none) — no reviewer ran and no verdict exists",
+            "summary": match accepted.handoff.review.disposition {
+                HandoffReviewDisposition::NotRequired => {
+                    "review not required (policy none) — no reviewer ran and no verdict exists"
+                }
+                HandoffReviewDisposition::DeferredToLanding => {
+                    "review deferred to after landing (policy after-landing) — no reviewer ran \
+                     before handoff; the owner's landed-delivery review covers it once it lands"
+                }
+            },
         },
         "required_commands": accepted.required_commands,
         "validation": accepted.handoff.validation,

@@ -943,3 +943,93 @@ fn replaced_handoff_evidence_blocks_approval_and_landing() {
         }
     }
 }
+
+/// Under an owner that reviews landings, a claim captures `after-landing` and
+/// its handoff must carry the typed deferred disposition: the owner accepts
+/// that one, lists it for delivery attribution and lands it, and refuses a
+/// handoff claiming no review is required. `before-pr`, or an executor
+/// expecting a review from an owner that runs none, is refused at admission.
+#[test]
+fn after_landing_claims_hand_off_a_deferred_review_and_land() {
+    if !isolated("after_landing_claims_hand_off_a_deferred_review_and_land") {
+        return;
+    }
+    let mut after_landing = done_ship();
+    after_landing.review_policy = "after-landing".into();
+    let deferred = HandoffReview {
+        policy: ReviewTiming::AfterLanding,
+        disposition: HandoffReviewDisposition::DeferredToLanding,
+    };
+
+    let mut stale = Delivery::admit(after_landing.clone());
+    let refused = stale
+        .accept(Some(OWNER_POLICY))
+        .expect_err("not_required under after-landing");
+    assert!(
+        refused.to_string().contains("captured review policy"),
+        "{refused}"
+    );
+    stale.handoff.review = deferred.clone();
+    stale
+        .accept(Some(OWNER_POLICY))
+        .expect("the deferred disposition is accepted");
+
+    let mut delivery = Delivery::admit(after_landing);
+    delivery.handoff.review = deferred.clone();
+    delivery.accept(Some(OWNER_POLICY)).expect("handoff");
+    assert_eq!(
+        delivery.owner.task_status(&delivery.claim.task_id),
+        TaskStatus::Review
+    );
+    let accepted = delivery
+        .owner
+        .backends
+        .commit_boundary
+        .accepted_handoffs()
+        .unwrap();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].handoff.task_id, delivery.claim.task_id);
+    assert_eq!(accepted[0].handoff.review, deferred);
+    assert_eq!(delivery.owner.landing_starts().len(), 1);
+    delivery
+        .merge_intent(Some(OWNER_POLICY))
+        .expect("an after-landing handoff lands");
+
+    // A `none` claim still refuses the deferred disposition.
+    let mut none = Delivery::admit(owner_request("first").ship);
+    none.handoff.review = deferred;
+    assert!(none.accept(None).is_err(), "deferred under policy none");
+
+    for (owner_policy, caller_policy) in [
+        ("before-pr", "none"),
+        ("before-pr", "before-pr"),
+        ("after-landing", "before-pr"),
+        ("none", "after-landing"),
+    ] {
+        let root = TempDir::new().unwrap();
+        let owner = Coordinated::open(root.path());
+        owner.create_task("refused");
+        let mut request = owner_request("refused");
+        request.ship.review_policy = owner_policy.into();
+        request.caller_review_policy = caller_policy.into();
+        let refusal = owner
+            .backends
+            .commit_boundary
+            .admit_task(
+                &AdmissionIdentity::trusted_remote(ExecutionLocation {
+                    machine_id: "machine-a".into(),
+                    machine_name: None,
+                }),
+                &request,
+                "test",
+                owner.orbit_dir.parent().unwrap(),
+                &owner.orbit_dir,
+            )
+            .expect_err("refused pair");
+        assert!(
+            refusal.to_string().contains("review_policy_unsupported"),
+            "{owner_policy}/{caller_policy}: {refusal}"
+        );
+        assert!(owner.claims().is_empty());
+    }
+}

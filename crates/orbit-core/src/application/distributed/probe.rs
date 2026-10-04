@@ -35,7 +35,9 @@ pub struct DrainProbeReport {
     pub session: DrainProbeSession,
     /// Ship configuration the owner would resolve at admission.
     pub ship: AdmissionShipContract,
-    /// Whether the owner's own review policy is the only admissible one.
+    /// The owner's own review policy. `none` and `after-landing` are
+    /// admissible; under `after-landing` a handoff defers review to the
+    /// owner's landed-delivery consumer. `before-pr` is refused.
     pub review_policy: String,
     /// `true` when the caller would pass the admission ladder now.
     /// Undeclared optional caller fields are unknown and skip only the legs

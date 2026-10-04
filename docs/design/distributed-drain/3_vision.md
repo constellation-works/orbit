@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Vision
 owner: claude
-last_updated: 2026-09-18
+last_updated: 2026-10-04
 last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
@@ -43,9 +43,10 @@ they are not prerequisites hidden as future work.
    `job_run_host` on the task, a read-only `execute`-class run lookup routed to that destination is
    the obvious shape; whether the dashboard should
    aggregate it is a separate question.
-6. **Review policies beyond none.** V1 requires `review_policy = none` on owner and executor,
-   with validation evidence and a typed not-required review disposition. Before-PR and after-landing
-   review need explicit admission, artifact, and landing contracts before either can be enabled.
+6. **Before-PR review.** `none` and `after-landing` are admitted, the latter with a typed
+   deferred-to-landing disposition the owner's landed-delivery review settles. Before-PR review
+   needs the review gate, its artifacts and a reviewed-candidate contract on claimed leaves before
+   it can be enabled.
 7. **Bounded request receipt retention.** V1 compacts settled receipts to permanent tombstones and
    stops each refill pass at its first idle response. A future retired-namespace/sequence protocol
    could bound storage while rejecting every old request; random IDs and age-based deletion cannot.

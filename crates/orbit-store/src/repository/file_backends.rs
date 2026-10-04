@@ -39,6 +39,15 @@ impl TaskStoreBackend for TaskV2Store {
         self.claim_boundary()?.landing_attempts()
     }
 
+    fn accepted_handoffs(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.accepted_handoffs(),
+            None => Ok(Vec::new()),
+        }
+    }
+
     fn mutate_execution_claim(
         &self,
         context: Option<&crate::contracts::ClaimInvocation>,

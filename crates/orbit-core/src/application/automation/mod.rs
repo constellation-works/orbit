@@ -21,6 +21,9 @@ pub(crate) mod source;
 pub(crate) mod stall;
 mod task;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{
     UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,
@@ -182,6 +185,16 @@ fn auto_task_action_liveness(
     })
 }
 
+impl Host<'_> {
+    /// Handoffs this owner accepted from claimed executions; the record that
+    /// ties a landed pull request to the task it delivered.
+    fn accepted_handoffs(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::AcceptedHandoff>, AutomationError> {
+        Ok(self.runtime.stores().tasks().accepted_handoffs()?)
+    }
+}
+
 enum Action<'a> {
     Task(&'a AutoTaskDefinition),
     Job(&'a RoutineDefinition),
@@ -215,7 +228,8 @@ impl DeliveryHost for Host<'_> {
             .runtime
             .automation_store()?
             .automation_receipts(&state.consumer, 100)?;
-        let (page, record) = self.source.replay_history(branch, state, receipts.len())?;
+        let (mut page, record) = self.source.replay_history(branch, state, receipts.len())?;
+        provider::attribute(&mut page.deliveries, &self.accepted_handoffs()?);
 
         Ok(delivery::recovery::HistoryReplayInput { page, record })
     }
@@ -261,6 +275,7 @@ impl DeliveryHost for Host<'_> {
             state,
             &mut page,
         )?;
+        provider::attribute(&mut page.deliveries, &self.accepted_handoffs()?);
         // [ORB-11333] Accepted before-PR certificates become exclusions only
         // after the shared rule proves the landed trees; the evaluator then
         // applies them for review consumers alone.

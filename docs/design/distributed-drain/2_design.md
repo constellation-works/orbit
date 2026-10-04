@@ -1,13 +1,13 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-29
+last_updated: 2026-10-04
 last_validated: 2026-09-29
 status: Draft
 feature: distributed-drain
 doc_role: design
 type: design
-summary: "One owner, multiple execution hosts: idempotent claims, routed authority, manual recovery, explicit landing, retained ship sweep, none-only review, and non-pruning context footprints."
+summary: "One owner, multiple execution hosts: idempotent claims, routed authority, manual recovery, explicit landing, retained ship sweep, none and after-landing review, and non-pruning context footprints."
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
@@ -386,10 +386,13 @@ through the task journal.
 and PR identity, source branch, published candidate head SHA, validated base SHA, intended base
 and landing branch, execution summary and validation artifact references.
 
-- V1 admits only `review_policy = none`, captured at admission ([V1 review policy is
-  none](./4_decisions.md#v1-review-policy-is-none)). Review evidence is the typed
-  `{ policy: none, disposition: not_required }`, with no reviewed SHA, verdict or review artifact;
-  the PR pipeline's `gate: not_required` is adapted into it. Task status `review` means a delivery
+- The owner's `review_policy` is captured at admission; `none` and `after-landing` are admitted
+  and `before-pr` is refused ([After-landing review is admitted; the owner's policy sets the
+  disposition](./4_decisions.md#after-landing-review-is-admitted-the-owners-policy-sets-the-disposition)). Review evidence is the typed
+  `{ policy: none, disposition: not_required }`, or `{ policy: after-landing, disposition:
+  deferred_to_landing }` when the owner's `deliveries_landed` consumer reviews the landing; neither
+  carries a reviewed SHA, verdict or review artifact. The PR pipeline's `gate: not_required` is
+  adapted into it. Task status `review` means a delivery
   handoff awaiting completion authority, not that a review occurred.
 - Validation runs on the exact candidate/base pair and refuses staged, tracked or relevant
   untracked candidate changes before checks, after each check and at handoff. Artifacts must live
@@ -653,8 +656,8 @@ reports:
   mutations of it.
 
 It also reports the owner's review policy and the verdict of `orbit_store::admission_refusal`,
-without raising it: v1 admits only `none` through the claim contract, while a workspace configured
-for `before-pr` or `after-landing` keeps shipping through its legacy leaf and review gate.
+without raising it: the claim contract admits `none` and `after-landing`, while a workspace
+configured for `before-pr` keeps shipping through its legacy leaf and review gate.
 
 ### 7.4 Host shutdown hold
 
@@ -716,7 +719,7 @@ Acceptance criteria, not reported as passing.
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
 | Missing file selector, then reservation expiry | Full declared footprint stays protected |
 | Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
-| `none`, `before-pr`, `after-landing` policies | Only `none` admits; typed not-required handoff needs no reviewed SHA or artifact |
+| `none`, `before-pr`, `after-landing` policies | `none` and `after-landing` admit, `before-pr` is refused by name; the typed not-required or deferred-to-landing handoff needs no reviewed SHA or artifact, and the owner attributes the landed PR to its task |
 | Owner-local task without origin | Local candidate handoff and authorized local landing; no PR or remote credentials |
 | SSH session and managed worker invocation | Session capability gates operator actions; managed runs never propagate operator authority; payload labels cannot replace claim/run authority |
 | Revocation during a live attempt | Revoked attempt cannot bind, mutate, settle or promote; its receipt reports the revoked phase |
@@ -730,7 +733,8 @@ Acceptance criteria, not reported as passing.
 ## 9. Concerns & Honest Limitations
 
 - **Receipt metadata grows** as permanent tombstones (§2).
-- **No automatic review.** Only `review_policy = none`; other policies need a protocol extension.
+- **No pre-PR review.** `before-pr` needs the review gate on claimed leaves; only `none` and
+  `after-landing` (reviewed on the owner after landing) are admitted.
 - **Manual recovery limits availability.** A dead or unreachable follower can hold its task's
   footprint indefinitely; claim age and TTL are diagnostics, not failure detectors.
 - **Revocation cannot stop remote compute or retract external writes.** An old attempt may push

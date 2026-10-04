@@ -78,9 +78,13 @@ pub(crate) struct TaskV2Store {
 }
 
 impl TaskV2Store {
+    /// The claim journal, when this partition has activated coordination.
+    pub(crate) fn coordination_boundary(&self) -> Option<&TaskCommitBoundary> {
+        self.coordination.as_deref()
+    }
+
     pub(crate) fn claim_boundary(&self) -> Result<&TaskCommitBoundary, OrbitError> {
-        self.coordination
-            .as_deref()
+        self.coordination_boundary()
             .ok_or_else(|| OrbitError::Store("claim lifecycle unavailable".into()))
     }
 

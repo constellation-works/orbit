@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-13894, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-09-29
 ---
 
@@ -38,10 +38,11 @@ The follower never merges.
   pull is even a future option.
 - **No live host migration in this procedure.** Copy no private hostnames,
   credentials, or inventory. Use placeholders.
-- **No automatic reclamation, automatic review, fleet registry, or follower
+- **No automatic reclamation, pre-PR review, fleet registry, or follower
   merge.** Age, reservation TTL, and a missing local run are diagnostics, not
   death. `review` means a delivery handoff is waiting; it does not mean a
-  reviewer ran.
+  reviewer ran. Under `after-landing` the owner reviews the delivery only once
+  it has landed.
 - **Managed agents never become operators.** A client inside a managed run, or
   with an agent envelope, does not propagate `--operator` or `ORBIT_OPERATOR`.
 - **Seeded schedules stay as they are.** This procedure does not enable
@@ -79,15 +80,26 @@ Confirm:
   `~/.orbit/mcp-callers.toml` / `~/.orbit/mcp-ssh-acceptance/` warning that
   those files **grant nothing** (delete them; deny access by removing the
   caller's key from `~/.ssh/authorized_keys`);
-- `[operation] review_policy` is `none` on the owner.
+- `[operation] review_policy` is `none` or `after-landing` on the owner, and
+  each follower's is `none` or the owner's `after-landing`.
 
 ```bash
 orbit config get operation.review_policy
 ```
 
-v1 admits only `none`. `before-pr` and `after-landing` are refusals, not silent
-downgrades. A workspace that still ships those policies through its **legacy**
-leaf is not ready for distributed pull.
+| Owner | Follower | Admitted | Handoff review |
+|---|---|---|---|
+| `none` | `none` | yes | `not_required` |
+| `after-landing` | `none` or `after-landing` | yes | `deferred_to_landing` |
+| `none` | `after-landing` | no: the owner would never run the review the follower expects | — |
+| `before-pr` on either | any | no, until claimed leaves carry the pre-PR gate | — |
+
+Refusals are named, never silent downgrades. A `before-pr` workspace keeps
+shipping through its **legacy** leaf and is not ready for distributed pull.
+Under `after-landing` the follower does nothing extra: the owner's
+`delivery-code-review` consumer (trigger `deliveries_landed`) reviews the
+landed batch, and a follower-delivered PR appears in it with its owner task
+id, read from the handoff the owner accepted.
 
 Match crews and toolchains the same way you would for a second owner-local
 executor: every participant must resolve the workspace default crew, explicit
@@ -249,7 +261,7 @@ Expected refusals you may see (and must not work around):
 | `capability_refused` | Destination is a replica, or the session lacks agent/operator identity |
 | `version_mismatch` | Caller binary or protocol schema differs from the owner |
 | `ship_mode_unsupported` | A remote caller targeted a local-only ship workspace |
-| `review_policy_unsupported` | Owner or executor review policy is not `none` |
+| `review_policy_unsupported` | Either endpoint is `before-pr`, or the executor is `after-landing` under a `none` owner; the probe's diagnostic names which and the fix |
 
 ### 7. Receipt lookup after uncertainty
 
@@ -284,8 +296,8 @@ allocates a new request it prunes its idle and refused rows to the newest
 
 ### 8. Start the follower's pull drain
 
-Matching binaries, a replica role, a working probe, and `review_policy = none`
-are **installation**. Starting a drain is the rollout, and it is explicit. On
+Matching binaries, a replica role, a working probe, and an admitted review
+policy pair are **installation**. Starting a drain is the rollout, and it is explicit. On
 the follower, from the replica checkout:
 
 ```bash
@@ -658,7 +670,8 @@ From a follower session aimed at the owner selector, repeat the probe with
 that follower's `orbit --version`. Confirm:
 
 - versions and schema match;
-- review policy is `none` on both sides;
+- the review policy pair is admitted (`none`/`none`, or an `after-landing`
+  owner with a `none` or `after-landing` follower);
 - the probe created no task, reservation, or claim (`orbit task locks list`
   unchanged);
 - `orbit job resume` of a known claimed leaf still refuses;

@@ -24,11 +24,10 @@ use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::text::floor_char_boundary;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
-use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{
-    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
-    HandoffValidationLog, TaskHandoff,
+    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffValidationLog,
+    TaskHandoff,
 };
 use serde_json::{Value, json};
 
@@ -651,6 +650,16 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             "a typed handoff carries its captured required validation; none was supplied",
         ));
     }
+    // Review follows the owner policy this claim captured: `none` needs none,
+    // `after-landing` defers it to the owner once the delivery lands. Either
+    // way nothing reviewed this candidate, so no reviewed SHA, verdict or
+    // reviewer artifact is reported and none is invented here.
+    let review = HandoffReview::for_policy(&context.review_policy).ok_or_else(|| {
+        refused(format!(
+            "the claim captured review policy '{}', which a distributed handoff cannot carry",
+            context.review_policy
+        ))
+    })?;
     let execution_summary = handoff_execution_summary(input, &candidate)?;
 
     let handoff = TaskHandoff {
@@ -661,12 +670,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         machine_id: context.machine_id.clone(),
         run_id: context.run_id.clone(),
         candidate: candidate.clone(),
-        // Only `review_policy = none` is admitted, so there is no reviewed SHA,
-        // verdict or reviewer artifact to report and none is invented here.
-        review: HandoffReview {
-            policy: ReviewTiming::None,
-            disposition: HandoffReviewDisposition::NotRequired,
-        },
+        review,
         execution_summary,
         validation,
     };

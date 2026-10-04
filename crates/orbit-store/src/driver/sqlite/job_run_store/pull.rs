@@ -13,7 +13,7 @@ use super::queries::{
 use crate::Store;
 use crate::contracts::{
     AdmissionRequest, ClaimMutation, DrainLeafOccupancy, LocalPullAdmission, LocalPullMutation,
-    LocalPullPhase, PullDestination,
+    LocalPullPhase, PullDestination, review_policies_admissible,
 };
 use crate::driver::sqlite::migration::FeatureMigration;
 
@@ -457,8 +457,12 @@ pub(super) fn allocate(
     {
         return Err(invalid("followers cannot execute owner-local leaves"));
     }
-    if request.ship.review_policy != "none" || request.caller_review_policy != "none" {
-        return Err(invalid("pulled leaves require review policy none"));
+    if !review_policies_admissible(&request.ship.review_policy, &request.caller_review_policy) {
+        return Err(invalid(&format!(
+            "pulled leaves admit owner review policy none or after-landing, with an executor \
+             policy no stronger than the owner's; got owner '{}', executor '{}'",
+            request.ship.review_policy, request.caller_review_policy
+        )));
     }
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();

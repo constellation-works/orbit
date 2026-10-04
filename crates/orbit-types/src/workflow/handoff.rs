@@ -1,5 +1,6 @@
 //! Exact delivery evidence and owner completion authority for distributed handoffs.
-//! These records do not claim an automated review or execute a merge.
+//! These records do not claim an automated review or execute a merge; an
+//! after-landing review happens on the owner once the delivery lands.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -40,15 +41,53 @@ pub struct HandoffCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffReviewDisposition {
+    /// Review is disabled (`none`); nothing reviews this delivery.
     NotRequired,
+    /// Review is `after-landing`: the owner's `deliveries_landed` consumer
+    /// reviews the delivery once it lands. Nothing reviewed it before the
+    /// handoff.
+    DeferredToLanding,
 }
 
-/// No reviewed SHA, verdict or reviewer artifact exists when review is disabled.
+impl HandoffReviewDisposition {
+    /// The wire spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotRequired => "not_required",
+            Self::DeferredToLanding => "deferred_to_landing",
+        }
+    }
+}
+
+/// No reviewed SHA, verdict or reviewer artifact exists at handoff: review is
+/// either disabled or deferred until after the delivery lands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffReview {
     pub policy: ReviewTiming,
     pub disposition: HandoffReviewDisposition,
+}
+
+impl HandoffReview {
+    /// The one review record a handoff carries under the owner review policy
+    /// its claim captured, spelled as configuration spells it. `None` for a
+    /// policy distributed drain does not admit (`before-pr`, or anything
+    /// unknown). The executor builds its handoff from this and the owner
+    /// accepts only this, so the two cannot disagree about the disposition.
+    pub fn for_policy(policy: &str) -> Option<Self> {
+        let (policy, disposition) = match policy {
+            "none" => (ReviewTiming::None, HandoffReviewDisposition::NotRequired),
+            "after-landing" => (
+                ReviewTiming::AfterLanding,
+                HandoffReviewDisposition::DeferredToLanding,
+            ),
+            _ => return None,
+        };
+        Some(Self {
+            policy,
+            disposition,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

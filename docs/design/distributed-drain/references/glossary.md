@@ -35,7 +35,7 @@ their existing meanings and are not redefined here.
 | **Ready queue** | Logical owner-side ordered query over dependency-ready backlog tasks; no required materialized queue. [Design §2](../2_design.md#2-the-ready-queue-and-orbittaskpull) |
 | **Receipt namespace** | The original caller machine a request receipt is keyed under. A worker session reads its own; cross-attempt inspection is an operator act. [Pull spec](../specs/task-pull.md#read-only-receipt-reconciliation) |
 | **Request receipt** | Durable result for one caller/workspace/request ID; replay never creates another admission. [Pull spec](../specs/task-pull.md#idempotency-and-admission) |
-| **Review policy** | V1 supports only `none`; review task status is a handoff state, not an automated-review verdict. [Design §3.2](../2_design.md#32-durable-review-and-landing-handoff) |
+| **Review policy** | `none` and `after-landing` are admitted (`before-pr` is refused); review task status is a handoff state, not an automated-review verdict. [Design §3.2](../2_design.md#32-durable-review-and-landing-handoff) |
 | **Ship sweep** | Retained routine, wrapper, and CLI entry points, all subject to owner claim admission and explicit completion authority. [Design §7.3](../2_design.md#73-ship-sweep) |
 | **Slot** | Local capacity consumed by live leaves and pending admissions not yet counted as live leaves. [Design §3](../2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) |
 | **Version parity** | Binary/schema compatibility precondition, distinct from provider, crew, policy, and toolchain availability. [Design §4](../2_design.md#4-follower-preconditions) |

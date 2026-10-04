@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::workflow::{ReviewTiming, handoff::*};
+use orbit_types::workflow::handoff::*;
 
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, encode, invalid, row};
@@ -19,6 +19,17 @@ impl TaskCommitBoundary {
     pub fn landing_start_requests(&self) -> Result<Vec<LandingStartRequest>, OrbitError> {
         self.enter_ordinary(|| {
             self.coordination_rows(START)?
+                .iter()
+                .map(|r| decode(&r.payload_json))
+                .collect()
+        })
+    }
+
+    /// Every handoff this owner accepted. Read-only; the delivery observer
+    /// uses it to attribute a landed pull request to the task it delivered.
+    pub fn accepted_handoffs(&self) -> Result<Vec<AcceptedHandoff>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.coordination_rows(HANDOFF)?
                 .iter()
                 .map(|r| decode(&r.payload_json))
                 .collect()
@@ -212,7 +223,6 @@ impl TaskCommitBoundary {
             || handoff.claim_id != auth.claim_id
             || handoff.machine_id != bound.machine_id
             || handoff.run_id != bound.run_id
-            || handoff.review.policy != ReviewTiming::None
             || handoff.execution_summary.trim().is_empty()
             || handoff
                 .execution_summary
@@ -221,9 +231,7 @@ impl TaskCommitBoundary {
                 .map(str::trim)
                 == Some("Outcome: failed")
         {
-            return Err(invalid(
-                "invalid typed handoff identity, review policy or summary",
-            ));
+            return Err(invalid("invalid typed handoff identity or summary"));
         }
         let candidate = &handoff.candidate;
         if [
@@ -255,9 +263,20 @@ impl TaskCommitBoundary {
             return Err(invalid("claim receipt unavailable"));
         };
         let ship = receipt.request.ship;
-        if ship.review_policy != "none"
-            || receipt.request.caller_review_policy != "none"
-            || candidate.base_branch != ship.base_branch
+        // The disposition follows the owner policy the claim captured: a
+        // handoff claiming no review is required under `after-landing`, or
+        // deferring a review an owner with `none` never runs, is refused.
+        if !review_policies_admissible(&ship.review_policy, &receipt.request.caller_review_policy)
+            || HandoffReview::for_policy(&ship.review_policy).as_ref() != Some(&handoff.review)
+        {
+            return Err(invalid(&format!(
+                "handoff review {} / {} does not match the captured review policy '{}'",
+                handoff.review.policy.as_str(),
+                handoff.review.disposition.as_str(),
+                ship.review_policy
+            )));
+        }
+        if candidate.base_branch != ship.base_branch
             || candidate.landing_branch != ship.landing_branch
             || !matches!(
                 (&candidate.delivery, ship.mode.as_str()),

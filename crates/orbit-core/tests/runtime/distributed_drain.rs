@@ -196,11 +196,17 @@ struct Pair {
     tasks: Vec<String>,
 }
 
-fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
+/// A runtime for `machine` whose workspace resolves `review_policy`.
+fn open_runtime(root: &Path, machine: &str, review_policy: &str) -> (OrbitRuntime, PathBuf) {
     let global = root.join(machine).join("global");
     let repo = root.join(machine).join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    std::fs::write(
+        repo.join(".orbit/config.toml"),
+        format!("[operation]\nreview_policy = \"{review_policy}\"\n"),
+    )
+    .unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .expect("runtime")
         .with_automation_machine_identity(Some(machine.to_string()));
@@ -242,8 +248,13 @@ impl Pair {
     /// An owner with `tasks` backlog tasks, each on its own file, and a
     /// replica follower routed to it.
     fn new(tasks: usize) -> Self {
+        Self::with_review_policies(tasks, "none", "none")
+    }
+
+    /// [`Pair::new`] with each endpoint's `operation.review_policy`.
+    fn with_review_policies(tasks: usize, owner_policy: &str, follower_policy: &str) -> Self {
         let root = TempDir::new().unwrap();
-        let (owner, owner_repo) = open_runtime(root.path(), OWNER);
+        let (owner, owner_repo) = open_runtime(root.path(), OWNER, owner_policy);
         let tasks = (0..tasks)
             .map(|n| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs")))
             .collect();
@@ -253,7 +264,7 @@ impl Pair {
             calls: Mutex::default(),
             lose: Mutex::default(),
         });
-        let (follower, _repo) = open_runtime(root.path(), FOLLOWER);
+        let (follower, _repo) = open_runtime(root.path(), FOLLOWER, follower_policy);
         let follower = follower
             .with_coordination_write_owner(Some(OWNER.into()))
             .with_drain_owner_transport(wire.clone());
@@ -308,6 +319,17 @@ impl Pair {
                 ToolContext::default(),
             )
             .expect("a pass reports its errors instead of failing the drain")
+    }
+
+    /// The owner's probe answer to this follower declaring `review_policy`.
+    fn probe(&self, review_policy: &str) -> Value {
+        self.wire
+            .call(
+                "",
+                "orbit.drain.probe",
+                json!({"caller_review_policy": review_policy}),
+            )
+            .expect("probe")
     }
 
     fn owner_claims(&self) -> Vec<Value> {
@@ -492,4 +514,69 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .filter(|event| event["to_status"] == "blocked")
         .count();
     assert_eq!(blocked, 1, "{after:#}");
+}
+
+/// An owner that reviews landed deliveries admits a follower drain: the probe
+/// admits it, a pass claims a task under the captured `after-landing`
+/// contract, and the bound leaf reaches its launch. `before-pr` on either
+/// endpoint, and an executor expecting an after-landing review from an owner
+/// that runs none, are refused by name and claim nothing.
+#[test]
+fn an_after_landing_owner_admits_a_pull_and_before_pr_is_refused_by_name() {
+    if !isolated("an_after_landing_owner_admits_a_pull_and_before_pr_is_refused_by_name") {
+        return;
+    }
+    for follower_policy in ["none", "after-landing"] {
+        let pair = Pair::with_review_policies(1, "after-landing", follower_policy);
+        let probe = pair.probe(follower_policy);
+        assert_eq!(probe["admits"], true, "{probe}");
+        assert_eq!(probe["review_policy"], "after-landing", "{probe}");
+
+        let drain = pair.start_drain();
+        let pass = pair.pass(&drain);
+        assert!(launch_refused(&pass), "the leaf reached its launch: {pass}");
+        let pulls = pair.wire.calls("orbit.task.pull");
+        assert_eq!(pulls.len(), 1, "{pulls:?}");
+        assert_eq!(pulls[0]["ship"]["review_policy"], "after-landing");
+        assert_eq!(pulls[0]["caller_review_policy"], follower_policy);
+        let claims = pair.owner_claims();
+        assert_eq!(claims.len(), 1, "{claims:#?}");
+        assert_eq!(
+            claims[0]["bound_run"]["run_id"],
+            pair.leaf_runs()[0].as_str()
+        );
+    }
+
+    for (owner_policy, follower_policy, names) in [
+        ("before-pr", "none", "'before-pr' is not admitted"),
+        ("after-landing", "before-pr", "'before-pr' is not admitted"),
+        (
+            "none",
+            "after-landing",
+            "only the owner reviews landed deliveries",
+        ),
+    ] {
+        let pair = Pair::with_review_policies(1, owner_policy, follower_policy);
+        let probe = pair.probe(follower_policy);
+        assert_eq!(probe["admits"], false, "{probe}");
+        assert_eq!(probe["refusal"], "review_policy_unsupported", "{probe}");
+        assert!(
+            probe["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|line| line.as_str().is_some_and(|line| line.contains(names))),
+            "{owner_policy}/{follower_policy}: {probe}"
+        );
+
+        let drain = pair.start_drain();
+        let pass = pair.pass(&drain);
+        assert!(
+            pass.to_string().contains("review_policy_unsupported"),
+            "{owner_policy}/{follower_policy}: {pass}"
+        );
+        assert!(pair.wire.calls("orbit.task.pull").is_empty());
+        assert!(pair.owner_claims().is_empty());
+        assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    }
 }

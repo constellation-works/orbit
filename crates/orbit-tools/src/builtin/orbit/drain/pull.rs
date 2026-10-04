@@ -42,7 +42,8 @@ impl Tool for OrbitTaskPullTool {
             param(
                 "caller_review_policy",
                 "string",
-                "The executor's effective review policy. Only `none` is admitted in v1.",
+                "The executor's effective review policy: `none`, or `after-landing` when the \
+                 owner's policy is also `after-landing`.",
             ),
             param(
                 "run_context",

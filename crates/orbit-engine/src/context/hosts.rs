@@ -139,6 +139,9 @@ pub struct ClaimExecutionContext {
     pub ship_mode: String,
     pub base_branch: String,
     pub landing_branch: String,
+    /// Owner review policy the claim captured (`none` or `after-landing`); it
+    /// decides the handoff's typed review disposition.
+    pub review_policy: String,
     /// Commands the owner requires this candidate to pass. Empty is
     /// fail-closed: the owner's claim journal refuses a handoff whose
     /// requirements are unset, so the activity refuses before running one.

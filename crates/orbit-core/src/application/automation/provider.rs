@@ -3,6 +3,7 @@
 use super::source::Source;
 use orbit_automation::{AutomationError, delivery::digest};
 use orbit_types::workflow::automation::*;
+use orbit_types::workflow::handoff::{AcceptedHandoff, HandoffDelivery};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -26,7 +27,7 @@ pub(super) fn association(
         .ok_or_else(invalid)?;
 
     Ok(DeliveryAssociation {
-        key: format!("pr:{repository}:{branch}:{number}"),
+        key: pull_request_key(repository, branch, number),
         anchor,
         reference,
         landed_at,
@@ -125,4 +126,34 @@ pub(super) fn group(
     }
 
     Ok(deliveries)
+}
+
+/// The delivery identity of one merged pull request into `branch`.
+fn pull_request_key(repository: &str, branch: &str, number: u64) -> String {
+    format!("pr:{repository}:{branch}:{number}")
+}
+
+/// Name the owner tasks that landed each pull-request delivery.
+///
+/// A provider identity says which pull request merged, not which task it
+/// delivered. A claimed execution's accepted handoff does: the owner recorded
+/// the task, the repository, the landing branch and the pull request number
+/// when it accepted the delivery, so a landed pull request whose identity
+/// matches is that task's delivery. Unmatched deliveries keep whatever
+/// attribution they already carry.
+pub(super) fn attribute(deliveries: &mut [Delivery], handoffs: &[AcceptedHandoff]) {
+    for delivery in deliveries {
+        for accepted in handoffs {
+            let candidate = &accepted.handoff.candidate;
+            let HandoffDelivery::PullRequest { number } = candidate.delivery else {
+                continue;
+            };
+            if delivery.key
+                == pull_request_key(&candidate.repository, &candidate.landing_branch, number)
+                && !delivery.task_ids.contains(&accepted.handoff.task_id)
+            {
+                delivery.task_ids.push(accepted.handoff.task_id.clone());
+            }
+        }
+    }
 }

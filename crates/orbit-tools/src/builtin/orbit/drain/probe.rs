@@ -33,11 +33,11 @@ impl Tool for OrbitDrainProbeTool {
             },
             ToolParam {
                 name: "caller_review_policy".to_string(),
-                description:
-                    "Optional. The executor's effective review policy. Only `none` is supported \
-                     in v1; `before-pr` and `after-landing` are reported as refusals rather than \
-                     silently downgraded."
-                        .to_string(),
+                description: "Optional. The executor's effective review policy: `none`, or \
+                     `after-landing` when the owner's policy is also `after-landing`. `before-pr`, \
+                     and `after-landing` under an owner with `none`, are reported as refusals \
+                     rather than silently downgraded."
+                    .to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },

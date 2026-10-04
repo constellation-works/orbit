@@ -489,7 +489,7 @@
       },
       {
         "name": "caller_review_policy",
-        "description": "Optional. The executor's effective review policy. Only `none` is supported in v1; `before-pr` and `after-landing` are reported as refusals rather than silently downgraded.",
+        "description": "Optional. The executor's effective review policy: `none`, or `after-landing` when the owner's policy is also `after-landing`. `before-pr`, and `after-landing` under an owner with `none`, are reported as refusals rather than silently downgraded.",
         "param_type": "string",
         "required": false
       }
@@ -1201,7 +1201,7 @@
       },
       {
         "name": "caller_review_policy",
-        "description": "The executor's effective review policy. Only `none` is admitted in v1.",
+        "description": "The executor's effective review policy: `none`, or `after-landing` when the owner's policy is also `after-landing`.",
         "param_type": "string",
         "required": true
       },

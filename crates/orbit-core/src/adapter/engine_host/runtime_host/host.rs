@@ -322,6 +322,7 @@ impl RuntimeHost for OrbitRuntime {
             ship_mode: ship.mode.clone(),
             base_branch: ship.base_branch.clone(),
             landing_branch: ship.landing_branch.clone(),
+            review_policy: ship.review_policy.clone(),
             // The owner re-derives its own requirements when it accepts the
             // handoff, so this copy only decides what the executor runs. A
             // follower reading a different list produces evidence the owner

@@ -121,12 +121,6 @@ impl crate::OrbitRuntime {
         ship: &AdmissionShipContract,
         diagnostics: &mut Vec<String>,
     ) -> Result<Option<AdmissionRefusal>, OrbitError> {
-        if ship.review_policy != "none" {
-            diagnostics.push(format!(
-                "owner review policy is '{}'; v1 admits only 'none'",
-                ship.review_policy
-            ));
-        }
         let machine_id = session_machine_id(session).unwrap_or_else(|| "probe".to_string());
         let request = AdmissionRequest {
             // Probe placeholders: a probe declares no durable request identity
@@ -173,9 +167,9 @@ impl crate::OrbitRuntime {
                     "ship mode '{}' is not available to this caller",
                     request.ship.mode
                 ),
-                AdmissionRefusal::ReviewPolicyUnsupported => format!(
-                    "review policy must be 'none' on both endpoints; owner '{}', executor '{}'",
-                    request.ship.review_policy, request.caller_review_policy
+                AdmissionRefusal::ReviewPolicyUnsupported => review_policy_refusal(
+                    &request.ship.review_policy,
+                    &request.caller_review_policy,
                 ),
             });
         }
@@ -187,6 +181,28 @@ impl crate::OrbitRuntime {
 /// cannot report a version admission would not accept.
 pub fn owner_binary_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// Why the owner and executor review policy pair is refused, naming the fix.
+fn review_policy_refusal(owner: &str, executor: &str) -> String {
+    if owner == "before-pr" || executor == "before-pr" {
+        return format!(
+            "review policy 'before-pr' is not admitted by distributed drain yet (owner '{owner}', \
+             executor '{executor}'): the pre-PR review gate does not run on claimed leaves. Use \
+             'none' or 'after-landing' on both endpoints"
+        );
+    }
+    if owner == "none" && executor == "after-landing" {
+        return format!(
+            "executor review policy '{executor}' expects a review after landing, but the owner's \
+             policy is '{owner}' and only the owner reviews landed deliveries; set the owner to \
+             'after-landing' or the executor to 'none'"
+        );
+    }
+    format!(
+        "review policy pair is not admitted (owner '{owner}', executor '{executor}'); distributed \
+         drain admits 'none' and 'after-landing'"
+    )
 }
 
 fn review_policy_label(policy: orbit_config::ReviewPolicy) -> String {

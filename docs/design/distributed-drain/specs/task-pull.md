@@ -65,8 +65,10 @@ and caller-side managed-run restrictions remain. There is no destination callers
 proof, forced-command acceptance requirement, or replacement identity registry. Trusted runtime
 invocation context supplies attempt ownership; remote machine labels alone are attribution, not
 credentials. Owner-local drains use trusted local
-runtime identity and the same logical admission contract. V1 admits only `review_policy = none`;
-reject `before-pr` and `after-landing` before creating a claim. The read-only preflight response is
+runtime identity and the same logical admission contract. The owner admits `review_policy` `none`
+and `after-landing` ([After-landing review is admitted](../4_decisions.md#after-landing-review-is-admitted-the-owners-policy-sets-the-disposition));
+reject `before-pr`, and an executor expecting an after-landing review from a `none` owner, before
+creating a claim. The read-only preflight response is
 defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 
 ## Input
@@ -77,7 +79,7 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `request_id` | string | Durable unique ID for one intended admission; reused unchanged after uncertainty |
 | `caller_version` | string | Caller binary version |
 | `caller_schema` | integer | Caller distributed-drain wire-protocol schema version |
-| `caller_review_policy` | enum | Executor's effective review policy; only `none` is supported |
+| `caller_review_policy` | enum | Executor's effective review policy: `none`, or `after-landing` under an `after-landing` owner |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 
 The caller persists the request before sending it. One drain run uses many request IDs. There is
@@ -88,7 +90,9 @@ from durable owner-side grants; the input does not grant merge rights.
 
 1. Apply pre-admission refusals in the table order below: selector, current authorization,
    trusted invocation context, input shape, version/schema, ship mode, then review policy. Check both owner
-   policy and the executor's declared `caller_review_policy`; neither may differ from `none`.
+   policy and the executor's declared `caller_review_policy`: the owner must be `none` or
+   `after-landing`, the executor `none` or the owner's `after-landing`; `before-pr` is refused on
+   either.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
 2. Begin the owner store transaction. Its substrate is the task/reservation commit boundary
@@ -154,7 +158,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, `review_policy: none`, completion policy and optional durable authorization reference |
+| `ship` | Owner-resolved mode, base/landing branches, `review_policy` (`none` or `after-landing`), completion policy and optional durable authorization reference |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
 | `invalid_candidates[]` | Invalid dependency or lock-surface exclusions with reasons |
 | `idle` | No claim created by this request |
@@ -181,7 +185,7 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
 | `version_mismatch` | Caller binary/schema differs from owner |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
-| `review_policy_unsupported` | Owner/executor review policy is not `none` |
+| `review_policy_unsupported` | Either endpoint is `before-pr`, or the executor is `after-landing` under a `none` owner |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 | `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now; replays keep their stored contract |
@@ -200,7 +204,7 @@ store schema are implementation choices; their atomic behavior is required:
 |---|---|
 | Bind execution | Validate claim, machine, captured policy and mode; bind one host-qualified leaf run idempotently; move `claimed → running`; generic resume may not replace this run |
 | Execution mutation | Check current claim, machine/run, and phase within the write transaction; deduplicate repeated mutation IDs |
-| Accept handoff | Persist candidate/base SHAs, validation evidence, typed `{ policy: none, disposition: not_required }`, and any completion-authority reference; promote to review, close execution writes, release only this reservation atomically; authorized acceptance also records the landing-start request |
+| Accept handoff | Persist candidate/base SHAs, validation evidence, the typed review the captured policy names (`{ policy: none, disposition: not_required }` or `{ policy: after-landing, disposition: deferred_to_landing }`), and any completion-authority reference; promote to review, close execution writes, release only this reservation atomically; authorized acceptance also records the landing-start request |
 | Approve handoff | Owner operator only: deduplicate mutation ID, verify current review handoff and exact candidate/base, persist scoped authorization with approver/revocation state, and record landing-start request atomically; agent access cannot approve |
 | Revoke completion authorization | Owner operator only: invalidate pending landing permission atomically; reconcile any uncertain merge intent before reassignment |
 | Fail/cancel | Persist failure evidence, block the task, invalidate execution authority, release only this reservation atomically |
@@ -232,7 +236,8 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
 - Reservation cleanup can affect only the reservation associated with the settling claim.
 - Owner and follower drains use the same admission boundary; legacy local admission cannot bypass it.
 - Pull and task promotion do not grant merge authority; explicit handoff approval does.
-- `none` is the only review policy in v1; review status does not imply an automated review.
+- Only `none` and `after-landing` are admitted; review status does not imply an automated review,
+  and an after-landing review runs on the owner after the delivery lands.
 - Existing ship-sweep routines, wrapper, CLI, and owner-local drains cannot bypass this admission
   contract; queued/bound leaf runs and unrepresented admissions consume capacity exactly once.
 

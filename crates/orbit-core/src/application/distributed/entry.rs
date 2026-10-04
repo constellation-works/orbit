@@ -112,9 +112,9 @@ pub struct DrainEntryAdmission {
     /// The single capacity reading legacy dispatch and pull both allocate
     /// against.
     pub occupancy: orbit_store::contracts::DrainLeafOccupancy,
-    /// The owner's effective review policy. v1 admits only `none` through the
-    /// claim contract, which is why it is reported on every decision rather
-    /// than left for each surface to look up.
+    /// The owner's effective review policy. The claim contract admits `none`
+    /// and `after-landing` but not `before-pr`, which is why it is reported on
+    /// every decision rather than left for each surface to look up.
     pub review_policy: String,
     /// Whether the claim contract would admit this workspace at all — the
     /// same ordered ladder `orbit.task.pull` applies, so a preflight and a
@@ -226,7 +226,7 @@ impl crate::OrbitRuntime {
 
     /// Whether the claim contract would admit this workspace, by the spec's
     /// own ordered ladder. Reported rather than raised: a workspace whose
-    /// review policy is not `none` still ships through its legacy leaf, and
+    /// review policy is `before-pr` still ships through its legacy leaf, and
     /// saying so is what keeps the two facts from being confused.
     fn claim_contract_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
         let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
