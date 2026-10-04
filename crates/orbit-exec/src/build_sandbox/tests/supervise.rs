@@ -130,6 +130,79 @@ fn a_phase_that_outgrows_the_build_directory_cap_is_killed() {
     assert_eq!(end, BuildPhaseEnd::BuildDirCapExceeded);
 }
 
+/// A phase that crosses the cap and exits before the first polling tick is
+/// still refused; the cap cannot be evaded by a short write.
+#[cfg(unix)]
+#[test]
+fn a_fast_phase_cannot_exit_with_an_oversized_build_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env = path_env();
+    let mut log = BuildLog::default();
+    let end = run(
+        shell("head -c 8192 /dev/zero > big"),
+        (),
+        &request(dir.path(), Duration::from_secs(20), 4096, &env),
+        &mut log,
+    )
+    .expect("run");
+    assert_eq!(end, BuildPhaseEnd::BuildDirCapExceeded);
+}
+
+/// The size walk only counts entries beneath its root; a symlink cannot make
+/// Orbit inspect files outside the build directory.
+#[cfg(unix)]
+#[test]
+fn build_directory_size_does_not_follow_symlinks() {
+    use crate::build_sandbox::supervise::tree_exceeds;
+
+    let dir = tempfile::tempdir().expect("build dir");
+    let outside = tempfile::tempdir().expect("outside dir");
+    std::fs::write(outside.path().join("large"), [0u8; 16]).expect("outside file");
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).expect("symlink");
+
+    assert!(
+        !tree_exceeds(dir.path(), 0),
+        "an outside file reachable only through a symlink is not part of the build directory"
+    );
+}
+
+/// The phase runs from its requested working directory, which is the source
+/// checkout for plugin builds and may differ from the build directory root.
+#[cfg(unix)]
+#[test]
+fn a_phase_uses_its_requested_working_directory() {
+    let build_dir = tempfile::tempdir().expect("build dir");
+    let cwd = tempfile::tempdir().expect("working directory");
+    let cwd = cwd
+        .path()
+        .canonicalize()
+        .expect("physical working directory");
+    let env = path_env();
+    let mut log = BuildLog::default();
+    let request = BuildPhaseRequest {
+        sandbox: BuildSandboxSpec {
+            build_dir: build_dir.path(),
+            readable: &[],
+            home: None,
+            network: BuildPhaseNetwork::None,
+        },
+        argv: &[],
+        env: &env,
+        cwd: &cwd,
+        timeout: Duration::from_secs(20),
+        build_dir_cap_bytes: u64::MAX,
+    };
+
+    let end = run(shell("pwd"), (), &request, &mut log).expect("run");
+
+    assert_eq!(end, BuildPhaseEnd::Exited(0));
+    assert_eq!(
+        String::from_utf8_lossy(&log.render()).trim(),
+        cwd.display().to_string(),
+        "a phase must honor its requested cwd"
+    );
+}
+
 /// The phase sees only the environment it was given, and cannot dump core.
 #[cfg(unix)]
 #[test]

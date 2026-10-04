@@ -104,7 +104,7 @@ pub(super) fn run<G>(
     command
         .env_clear()
         .envs(request.env.iter().map(|(key, value)| (key, value)))
-        .current_dir(request.sandbox.build_dir)
+        .current_dir(request.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -152,7 +152,7 @@ pub(super) fn run<G>(
 
     let started = Instant::now();
     let mut next_size_check = started + SIZE_POLL_INTERVAL;
-    let end = loop {
+    let mut end = loop {
         if let Ok(chunk) = output.recv_timeout(OUTPUT_POLL_INTERVAL) {
             log.push(&chunk);
         }
@@ -177,6 +177,14 @@ pub(super) fn run<G>(
     };
     // Whatever the phase left behind in its group goes with it.
     stop(&mut child)?;
+    // The polling interval bounds how far an active writer can overshoot,
+    // but a phase can also finish between polls. Do not accept a successful
+    // build whose directory is already over the cap.
+    if matches!(end, BuildPhaseEnd::Exited(_))
+        && tree_exceeds(request.sandbox.build_dir, request.build_dir_cap_bytes)
+    {
+        end = BuildPhaseEnd::BuildDirCapExceeded;
+    }
     let drain_until = Instant::now() + DRAIN_GRACE;
     while let Some(left) = drain_until.checked_duration_since(Instant::now()) {
         match output.recv_timeout(left) {
@@ -240,12 +248,17 @@ pub(super) fn tree_exceeds(root: &Path, cap: u64) -> bool {
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(metadata) = entry.metadata() else {
+            // Do not follow a symlink out of the build directory (or back to
+            // an ancestor). Besides reading host metadata, a self-referential
+            // directory link would make this traversal loop forever and
+            // defeat the phase timeout.
+            let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
                 continue;
             };
-            if metadata.is_dir() {
+            let file_type = metadata.file_type();
+            if file_type.is_dir() {
                 pending.push(entry.path());
-            } else {
+            } else if file_type.is_file() {
                 total = total.saturating_add(metadata.len());
                 if total > cap {
                     return true;
