@@ -65,6 +65,22 @@ fn advertised_tool_names(client: &mut McpClient) -> Vec<String> {
         .collect()
 }
 
+/// Bind a real pathname socket named `name` inside `dir`, whatever the length
+/// of `dir`. Linux reaches the directory through its open descriptor, which
+/// keeps the bound string short while the socket file lands in `dir`.
+#[cfg(target_os = "linux")]
+fn bind_socket_in(dir: &Path, name: &str) -> UnixListener {
+    use std::os::fd::AsRawFd;
+    let dir_handle = std::fs::File::open(dir).expect("open socket directory");
+    let alias = format!("/proc/self/fd/{}/{name}", dir_handle.as_raw_fd());
+    UnixListener::bind(alias).expect("bind fixture broker")
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn bind_socket_in(dir: &Path, name: &str) -> UnixListener {
+    UnixListener::bind(dir.join(name)).expect("bind fixture broker")
+}
+
 #[cfg(unix)]
 #[test]
 fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
@@ -92,8 +108,12 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
     assert_eq!(direct, json!({"value": 7}));
     let audit_before = audit_count_for_tool(&workspace, "brokerfixture.echo");
 
-    let socket = workspace.home.join("fixture-broker.sock");
-    let listener = UnixListener::bind(&socket).expect("bind fixture broker");
+    // Every `orbit` child runs with the checkout as its working directory, so
+    // the clients get the socket as a bare file name. A pathname socket is
+    // bound and connected by the path string alone (`SUN_LEN`, ~104 bytes), and
+    // an absolute path below a managed run's scratch tempdir exceeds it.
+    let socket = "fixture-broker.sock";
+    let listener = bind_socket_in(&workspace.work, socket);
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
         for index in 0..7 {
@@ -123,7 +143,6 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
         }
         requests
     });
-    let socket = socket.to_str().expect("socket path");
     let cli = run_orbit_with_env(
         &workspace,
         &["tool", "run", "brokerfixture.echo", "--input", "{}"],
