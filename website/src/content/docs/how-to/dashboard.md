@@ -410,7 +410,7 @@ above Locked files. Top to bottom:
   stopped, or with no window live, the button reads **Settle pending** and
   delivers any pull settlement recorded on this replica that has not reached
   its owner (see
-  [Set Up a Distributed Drain](../distributed-drain/#6-stop-cancel-and-settle)).
+  [Set Up a Distributed Drain](../distributed-drain/#stop-cancel-and-settle)).
   Stop and Settle pending need an operator session, like Start with **Mark
   done**.
 
@@ -580,8 +580,8 @@ from a slow workspace.
 
 ## Next
 
-- [Run a Task Lifecycle](../task-lifecycle/) — create, ship, and review from
-  the CLI.
+- [First Task](../../getting-started/first-task/) — take one task from your
+  agent's request to a reviewed pull request.
 - [Schedule Recurring Work](../recurring-work/) — routines, the sweep clock,
   and auto-task definitions.
 - [Run a Delivery Window](../continuous-delivery/) — bounded

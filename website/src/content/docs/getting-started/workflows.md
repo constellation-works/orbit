@@ -1,204 +1,135 @@
 ---
 title: Delivery Workflows
-description: "The orbit run surface: shipping one task, draining a backlog, sweeping workspaces, triaging failures, and inspecting runs."
+description: "Ship one task, drain a backlog, or hand a spec to your orchestrator agent, from the dashboard, your agent, or the CLI; then let runs merge and recover the ones that fail."
 sidebar:
   order: 4
 ---
 
-Everything Orbit executes is a job run. `orbit run` gives the common ones names
-so you do not have to remember job IDs.
+Every delivery runs the same gated pipeline: an isolated worktree, a lock on
+the task's files, a sandboxed agent, then a pull request. You can start it in
+three places, and they are interchangeable:
 
-| Command | What it does |
+- **Your agent.** Ask in plain words. The `orbit-orchestrate` skill handles
+  anything bigger than one task: filing, preparing, dispatching, and following
+  up.
+- **The dashboard.** Buttons for one task, and a drain card for a window.
+- **The CLI.** `orbit run …`, for scripts and schedulers.
+
+Runs are durable and asynchronous. Starting one returns a run ID at once, and
+the run keeps going whether or not you watch it.
+
+## Hand a spec to your orchestrator
+
+The shortest path from an idea to merged code. Give your agent the outcome you
+want and ask it to orchestrate:
+
+> Here's the spec for retry support in the sync client: … Break it into Orbit
+> tasks, and once I approve them, ship them and merge what passes.
+
+With the `orbit-orchestrate` skill, the agent:
+
+1. Splits the spec into scoped tasks with acceptance criteria. They wait in
+   `proposed`.
+2. Prepares them: checks for duplicates, pins each task's files, and assigns
+   crews.
+3. Queues them in the backlog once you approve, whether in the dashboard or by
+   telling it.
+4. Starts a delivery window and follows it, diagnosing any run that fails and
+   filing a repair task when the code needs one.
+
+You come back to merged work and a record of every step. Merging happens only
+when you ask for it; see
+[Let runs merge](#completing-work-with---complete).
+
+## Ship one task
+
+| From | Do |
 |---|---|
-| [`orbit run ship`](#orbit-run-ship) | Ship selected tasks, or the ready backlog, through the gated pipeline. |
-| [`orbit run auto`](#orbit-run-auto) | Drain the backlog for a time window, several tasks at a time. |
-| [`orbit run readiness`](#orbit-run-readiness) | Explain why backlog tasks can or cannot start. |
-| [`orbit run task-pilot`](#orbit-run-task-pilot) | Preflight proposed/backlog tasks and persist validated selectors. |
-| [`orbit run ship-sweep`](#orbit-run-ship-sweep) | Dispatch ship runs across every opted-in workspace. |
-| [`orbit run job`](#direct-job-execution) | Run any job definition directly. |
+| Dashboard | Click **Ship** on a backlog task in **Tasks**, then **View run**. |
+| Agent | "Ship ABC-12." |
+| CLI | `orbit run ship ABC-12` |
 
-Every one of these is **asynchronous**. The command prints a durable run ID and
-returns; it does not know the eventual outcome. Follow up with
-[`orbit run show`](#inspecting-runs).
+A ship run uses the workspace's ship mode. In `pr` mode (the default), the run
+opens or updates a pull request and stops with the task in `review`. In
+`local` mode, it commits and merges into the base branch before the task
+reaches `review`, so `review` is not a pre-merge stop there. Set the mode with
+`orbit workspace init --ship-mode`; the CLI also takes `--mode` and `--base`
+per run.
 
-Ship workflows default `--base` to the registered workspace base branch, else
-`[workflow] base_branch` from `config.toml`, or `main` when unset. Pass
-`--base <branch>` to target a different branch.
+## Drain the backlog
 
-## `orbit run ship`
+A drain keeps several tasks in flight for a set time, starting the next ready
+task as each one finishes. Overlapping tasks wait their turn on file locks.
 
-Submit one or more named tasks — or, with no arguments, the ready backlog —
-through the gated shipment pipeline.
+| From | Do |
+|---|---|
+| Dashboard | In **Tasks**, open the **Drain** dock. Pick a window length and parallel tasks, then **Start**. |
+| Agent | "Drain the backlog for four hours, eight at a time." |
+| CLI | `orbit run auto --for 4h --concurrency 8` |
 
-```bash
-orbit run ship
-orbit run ship "$TASK_ID"
-orbit run ship "$TASK_ID" "$SECOND_TASK_ID" --mode local
-orbit run ship "$TASK_ID" --base main
-```
-
-In local mode the merge happens before review. `--mode local` delivers in
-place: it commits and merges to the configured base before the task reaches
-`review`, and may push that base as part of the same delivery, so `review` is
-not a pre-merge stop. `--mode pr` (the default) opens or updates a pull
-request, then stops with the task in `review` and the PR unmerged unless you
-authorize `--complete`. When you omit `--mode`, the mode comes from the
-workspace's registry entry, falling back to `pr`.
-
-Underlying job: `task_auto_pipeline`, which fans into `task_gate_pipeline` and
-then routes to `task_pr_pipeline` or `task_local_pipeline`.
-
-## `orbit run auto`
-
-Drain the workspace backlog for a window, keeping several tasks in flight at
-once:
-
-```bash
-orbit run auto                                  # one tick, then stop
-orbit run auto --for 4h
-orbit run auto --for 4h --concurrency 8
-```
-
-The drain re-lists the whole backlog every pass and keeps `--concurrency` tasks
-in flight (default 5), starting a replacement as each one finishes rather than
-waiting for a batch to drain. `--for` bounds only the *start* of new work: a task already being shipped
-when the window expires still finishes.
-
-Running a real delivery window — preparing work, choosing concurrency,
-restricting crews, retuning, stopping, and recovering — is covered end to end in
-[Run a Delivery Window](../../how-to/continuous-delivery/).
-
-## `orbit run readiness`
-
-A read-only snapshot explaining why backlog tasks are or are not eligible right
-now. It reserves nothing, submits nothing, and mutates nothing:
-
-```bash
-orbit run readiness
-orbit run readiness "$TASK_ID" "$SECOND_TASK_ID"
-orbit run readiness --concurrency 8 --json
-```
-
-## `orbit run task-pilot`
-
-Preflight `proposed`/`backlog` tasks and persist validated `context_files`
-selectors, without promoting or dispatching anything:
-
-```bash
-orbit run task-pilot                        # zero-input discovery
-orbit run task-pilot "$TASK_ID" "$SECOND_TASK_ID" --wait
-```
-
-Omit task IDs for automatic discovery of proposed or backlog tasks with empty
-`context_files` or unassessed complexity. An applied assessment with no
-in-workspace targets is skipped while its task and source fingerprint remain
-fresh. Changing its description, criteria, or status makes it eligible again.
-Pass explicit IDs to audit exactly those tasks. This is the named entrypoint
-for `task_pilot_pipeline` — see [Prepare proposed
-work](../../how-to/continuous-delivery/#1-prepare-proposed-work) for the full
-workflow, and [`orbit run job`](#direct-job-execution) for the equivalent
-generic form.
-
-## `orbit run ship-sweep`
-
-Dispatch a ship run in every registered workspace that has ready backlog tasks.
-Only workspaces with `[workflow] auto_ship = true` are swept; everything else is
-reported as skipped. This is the unattended entry point, intended for a
-scheduler:
-
-```bash
-orbit run ship-sweep --dry-run
-orbit run ship-sweep --json
-```
-
-A workspace is also reported as skipped when the sweep would be starting work
-beside work already running. `ship_in_flight` means this host's drain slots are
-occupied — by a live leaf run or by work already admitted for one — and the
-unattended sweep stands down rather than adding to it. `replica_checkout` means
-the workspace is a replica of another machine: backlog selection and delivery
-belong to its owner, so the sweep does nothing there.
+The window bounds only when new work starts: a task already running when it
+closes still finishes. The drain card's **Eligible now** and **Blocked by
+running** counts show what a window would start; `orbit run readiness` gives
+the same answer with reasons. [Run a Delivery Window](../../how-to/continuous-delivery/)
+covers preparing work, retuning, and stopping a window.
 
 ## Completing work with `--complete`
 
-By default a successful task ends in `review`, and a separate operator action
-takes it to `done`. `--complete` is your explicit authorization, granted on one
-invocation, for that run to finish delivery itself:
+By default a run stops at `review`, and you close the task after merging. To
+let runs finish delivery themselves, authorize completion:
+
+| From | Do |
+|---|---|
+| Dashboard | On the drain card, set **When a task finishes** to **Mark done** before **Start**. |
+| Agent | Ask it to merge what passes. Only a drain can carry this authorization, so the agent starts one. |
+| CLI | `orbit run auto --for 4h --complete`, or `orbit run ship ABC-12 --complete` |
+
+With completion, a `pr` run merges its pull request through GitHub as soon as
+branch protection allows. It never uses an administrative bypass, and the task
+moves to `done` only after the merge is verified. A `local` run reaches `done`
+only after it has committed, merged, and pushed. A closed or blocked pull
+request, or a failed merge or push, fails the run and leaves the task in
+`review`.
+
+Completion is off unless you grant it on that one run. No workspace setting,
+environment variable, or scheduled sweep turns it on. Two limits:
+
+- **A drain's completion covers its whole window**, including tasks that reach
+  the backlog after it starts. It does not carry over to any other run.
+- **It authorizes completion only.** It never approves `proposed` work into
+  the backlog, and it does not stand in for a review verdict. The task's
+  history records which run and operator authorized it.
+
+## Watch and recover runs
+
+The dashboard's **Runs** view lists every run, with **Live** and **Failed**
+filters. A run's detail shows its steps, events, and timing; a failed run opens
+on the step it stopped at and the error it recorded. From there you can
+**cancel** a running run, **Resume** a failed one from its first unfinished
+step, or **Replay run** to start it again.
+
+Or ask your agent what happened. The `orbit-orchestrate` skill reads the run's
+evidence, matches it to a known failure, and fixes the cause or files a repair
+task, rather than re-running blindly.
+
+From the terminal:
 
 ```bash
-orbit run ship "$TASK_ID" --complete
-orbit run auto --for 4h --complete
+orbit run history                      # recent runs
+orbit run show "$RUN_ID"               # state and step summary
+orbit run logs "$RUN_ID"               # raw output
+orbit run cancel "$RUN_ID" --confirm   # stop it and release its locks
 ```
 
-It is off unless you pass it. No workspace setting, environment variable, or
-unattended routine — including `orbit run ship-sweep` — turns it on.
+`orbit run events` and `orbit run trace` show a run's audit events and its tree
+of child runs.
 
-What the run then does depends on the mode:
+## More from the terminal
 
-- **`--mode local`** — without `--complete`, the bundle can commit and merge
-  before it reaches `review`; its optional push is still part of delivery, not
-  a review gate. With `--complete`, the task reaches `done` only after the
-  bundle has committed, merged, and pushed. A failed merge or push fails the
-  run with the task still in `review`.
-- **`--mode pr`** — the run opens or reuses the PR as usual, then merges it
-  through GitHub. Branch protections and required checks are respected; Orbit
-  never uses an administrative bypass. If required checks are still running it
-  enables GitHub auto-merge and keeps waiting — enabling auto-merge is not
-  success on its own. The task moves to `done` only after the PR is verified
-  merged. A closed or blocked PR, a refused auto-merge, or an expired wait
-  budget fails the run and leaves the task in `review`.
-- **Work that produced no diff** — validated `no-diff-expected` work completes
-  without needing a PR.
+| Command | What it does |
+|---|---|
+| `orbit run task-pilot` | Prepare `proposed` and `backlog` tasks by pinning the files each one touches. Promotes and dispatches nothing. |
+| `orbit run ship-sweep` | Start a ship run in every workspace with `[workflow] auto_ship = true` and ready work. Meant for a scheduler; never completes. |
+| `orbit run job <job-id>` | Run any job definition directly. `--wait` blocks until it finishes. |
 
-Two limits are worth knowing:
-
-- **`orbit run auto --complete` is blanket authorization.** It covers every task
-  the drain admits for its whole window, including work that reaches the backlog
-  *after* the run starts — not only what is visible when you submit. Work the
-  drain never admits does not inherit it, and neither does any other run.
-- **It authorizes completion only.** `--complete` grants the `review → done`
-  transition and the delivery that precedes it. It never approves `proposed`
-  work into the backlog — that is a separate human step,
-  `orbit task update <id> --approve` — and it does not stand in for an
-  independent review verdict. The transition is recorded in the task's history
-  against the authorizing run and operator.
-
-## Direct job execution
-
-For jobs without a workflow alias, invoke them by ID:
-
-```bash
-orbit job list
-orbit run job task_auto_pipeline
-orbit run job task_auto_pipeline --input mode=local
-orbit run job task_auto_pipeline --wait
-```
-
-`--wait` blocks on the submitted run instead of returning immediately, and exits
-nonzero unless the run succeeded.
-
-## Inspecting runs
-
-Every run is durable and inspectable:
-
-```bash
-orbit run history                        # recent runs
-orbit run history -j task_auto_pipeline  # one job's runs
-orbit run show "$RUN_ID"                 # state and step summary
-orbit run logs "$RUN_ID"                 # raw stdout/stderr
-orbit run events "$RUN_ID"               # audit events
-orbit run trace "$RUN_ID"                # parent/child run tree
-```
-
-`orbit run show` with no run ID shows the most recently scheduled run. Add
-`-s <step_id>` to `show`, `logs`, or `events` to narrow to a single step.
-
-To stop a run that has not reached a terminal state:
-
-```bash
-orbit run cancel "$RUN_ID" --confirm
-```
-
-Cancellation signals the owner process (TERM, then KILL), releases the run's
-task reservations, and finalizes the run as `cancelled`. It is also the
-remediation for a stuck `pending` run with no live worker. A run that already
-finished returns `already_terminal` without replacing its outcome.
+The [CLI reference](../../reference/cli/) lists every flag.

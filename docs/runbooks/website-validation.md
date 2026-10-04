@@ -186,7 +186,7 @@ console/page errors, and horizontal overflow; extend `PAGES` with the routes cha
 task:
 
 ```bash
-PAGES=(/ /getting-started/install/ /how-to/task-lifecycle/ /reference/cli/)
+PAGES=(/ /getting-started/install/ /getting-started/first-task/ /reference/cli/)
 node --input-type=module - "$PLAYWRIGHT_ROOT/node_modules/playwright/index.mjs" "$PREVIEW_URL" "${PAGES[@]}" <<'NODE'
 const [playwrightEntry, baseUrl, ...pages] = process.argv.slice(2);
 const { chromium } = await import(`file://${playwrightEntry}`);
