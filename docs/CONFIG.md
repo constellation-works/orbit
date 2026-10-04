@@ -99,6 +99,26 @@ xhard_complexity_crews = []
 | `workflow.required_validation_commands` | `[]` | Commands a distributed-drain claim must pass on its exact candidate before this owner accepts its handoff. Empty refuses every claimed handoff. |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff. `review` waits for an operator's **Approve handoff**; `done` has the owner authorize it on acceptance and land it through `task_landing_pipeline`, rechecking this key before the merge. |
 
+### `[workflow.resource_throttle]` — host pressure
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.resource_throttle.enabled` | `true` | Enable the host pressure throttle verdict. Disabling it retains resource telemetry and severity. |
+| `workflow.resource_throttle.cpu_high_percent` | `90` | CPU high-water mark. |
+| `workflow.resource_throttle.cpu_resume_percent` | `75` | Resume below this CPU percentage. |
+| `workflow.resource_throttle.memory_high_percent` | `90` | Memory high-water mark. |
+| `workflow.resource_throttle.memory_resume_percent` | `80` | Resume below this memory percentage. |
+| `workflow.resource_throttle.disk_high_percent` | `85` | High-water mark for each observed filesystem. |
+| `workflow.resource_throttle.disk_resume_percent` | `80` | Resume below this filesystem usage percentage. |
+
+Percentages are integers in `1..=100`; every resume mark must be strictly less than its high-water mark. These settings inherit per key and appear in `orbit config show`. Workspace runtimes use their resolved settings. The host dashboard uses the serving machine's global settings, sampled when its monitor first opens; restart the dashboard after changing those settings.
+
+The probe caches native reads for two seconds. Linux CPU is one-minute load divided by all online host CPUs, multiplied by 100; it can exceed 100% and includes tasks waiting for I/O. Linux memory usage is `(MemTotal - MemAvailable) / MemTotal`. macOS CPU is the busy fraction of aggregate Mach CPU tick deltas between samples (the first observation is unknown); memory subtracts free and reclaimable inactive pages from physical memory, including compressed and wired memory in usage. Speculative pages are already included in free pages; purgeable pages overlap other categories. See Apple's [VM statistics](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/vm_statistics.h) and [host CPU statistics](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/host_info.h). These are usage estimates rather than OS memory-pressure classifications. Collectors use procfs, Mach/sysctl and statvfs through fs2, without launching subprocesses.
+
+Disk usage uses space available to the current user: `(total - available) / total`. Observations cover checkout and `.orbit/state/worktrees` filesystems plus the global Orbit root (`~/.orbit`, or the serving root override). A not-yet-created worktrees directory uses its nearest existing ancestor. Separate paths on the same filesystem may show the same percentage. The host-scoped `GET /api/host/resources` observes all active registered local checkout paths, independent of `?workspace=`, and remains usable with no selected workspace. It does not query remote hosts.
+
+A value below resume is `ok`, between resume and high is `elevated`, and at or above high is `critical`. The evaluator requires high readings spanning at least ten seconds before setting `throttle=true`; it keeps each hold until that resource falls below resume. Repeated calls using the same cached timestamp do not establish sustained pressure. Gaps longer than fifteen seconds restart the observation window. Unavailable, invalid, future-dated or older-than-fifteen-second samples are explicitly `unknown` and release that resource's hold (fail open); another known resource can still hold the verdict. The API includes severity, sample time/age, thresholds, verdict and reason. The dashboard polls every five seconds and marks aging data unknown even while a request is pending. This release supplies the observation/verdict interface; admission enforcement and CLI/MCP warnings are delivered separately. It does not cancel running work or add an MCP tool.
+
 ### `[workflow.task_pilot_freshness]` — when a task is piloted again
 
 ```toml

@@ -55,6 +55,8 @@ pub struct ResolvedConfig {
     /// Opt-in for unattended ship dispatch (`[workflow] auto_ship`; defaults
     /// to `false`).
     pub workflow_auto_ship: bool,
+    /// Host pressure thresholds and the throttle enable switch.
+    pub resource_throttle: crate::registry::ResourceThrottleSettings,
     /// Named provider-model assignments from `[crews.<name>]`, disabled crews
     /// included (see [`Crew::enabled`]).
     pub crews: BTreeMap<String, Crew>,
@@ -108,6 +110,7 @@ impl ResolvedConfig {
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
+            resource_throttle: snapshot.resource_throttle(),
             crews: default_crews(),
             system_crew_alias: None,
             default_crew: snapshot.workflow_default_crew.clone(),
@@ -250,6 +253,7 @@ impl ResolvedConfig {
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
+            resource_throttle: snapshot.resource_throttle(),
             crews,
             system_crew_alias,
             default_crew: snapshot.workflow_default_crew.clone(),

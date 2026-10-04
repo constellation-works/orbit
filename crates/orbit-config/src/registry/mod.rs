@@ -184,5 +184,6 @@ pub(crate) use keys::{
 };
 pub(crate) use settings::read_optional;
 pub use settings::{
-    CONFIG_KEY_REGISTRY, ConfigSnapshot, MachineSettings, WorkerContainmentSettings,
+    CONFIG_KEY_REGISTRY, ConfigSnapshot, MachineSettings, ResourceThrottleSettings,
+    WorkerContainmentSettings,
 };

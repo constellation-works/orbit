@@ -18,6 +18,9 @@ use orbit_types::workspace::WorkspacePaths;
 use serde_json::Value;
 
 use super::config_path::validated_runtime_config_path;
+use super::host_resource::{
+    HostResourceMonitor, HostResourceProbe, HostResourceStatus, default_host_resource_probe,
+};
 use super::host_signal::{
     FixedHostSignals, HostSignalProbe, ScheduledShutdown, default_host_signal_probe,
 };
@@ -54,6 +57,7 @@ pub struct OrbitRuntime {
     /// Host lifecycle signals unattended admission consults before starting
     /// new work [ORB-12968]. The platform probe by default; tests inject one.
     host_signals: Arc<dyn HostSignalProbe>,
+    host_resources: Arc<HostResourceMonitor>,
     pub event_log: event_bus::EventLog,
     /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
     /// this runtime opened (empty `applied` when the layout was already
@@ -184,7 +188,12 @@ impl OrbitRuntime {
         global_root: &Path,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
     ) -> Result<Self, OrbitError> {
+        let host_resources = Arc::new(HostResourceMonitor::new(
+            default_host_resource_probe(),
+            context.settings().resource_throttle().clone(),
+        ));
         Ok(Self {
+            host_resources,
             context,
             write_free: false,
             workspace_binding: binding.map(Arc::new),
@@ -229,7 +238,12 @@ impl OrbitRuntime {
             HostLifetime::ShortLived,
             builder::StateAccess::Write,
         )?;
+        let host_resources = Arc::new(HostResourceMonitor::new(
+            default_host_resource_probe(),
+            context.settings().resource_throttle().clone(),
+        ));
         Ok(Self {
+            host_resources,
             context,
             write_free: false,
             workspace_binding: Some(Arc::new(binding)),
@@ -340,6 +354,33 @@ impl OrbitRuntime {
     /// left alone.
     pub fn scheduled_host_shutdown(&self) -> Option<ScheduledShutdown> {
         self.host_signals.scheduled_shutdown()
+    }
+
+    /// Replace the resource probe for deterministic pressure/unknown fixtures.
+    pub fn with_host_resource_probe(mut self, probe: Arc<dyn HostResourceProbe>) -> Self {
+        self.host_resources = Arc::new(HostResourceMonitor::new(
+            probe,
+            self.context.settings().resource_throttle().clone(),
+        ));
+        self
+    }
+
+    /// Shared sampler/evaluator for this runtime; cloning preserves hysteresis.
+    pub fn host_resource_monitor(&self) -> Arc<HostResourceMonitor> {
+        Arc::clone(&self.host_resources)
+    }
+
+    /// Resource verdict for the host and filesystems used by this workspace.
+    /// Admission consumers may consult it; this method changes no run state.
+    pub fn host_resource_status(&self) -> HostResourceStatus {
+        let mut paths = vec![
+            self.paths().repo_root.clone(),
+            self.shared_root().join("state/worktrees"),
+            self.global_root(),
+        ];
+        paths.sort();
+        paths.dedup();
+        self.host_resources.snapshot(&paths)
     }
 
     /// Refuse control-plane work in a replica checkout.

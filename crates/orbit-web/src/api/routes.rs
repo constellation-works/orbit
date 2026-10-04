@@ -14,6 +14,7 @@ pub(crate) fn request_shutdown() {
 
 pub(crate) fn router() -> Router<crate::state::DashboardState> {
     Router::new()
+        .route("/host/resources", get(host::resources))
         .route("/search", get(search::search))
         .route(
             "/tasks",

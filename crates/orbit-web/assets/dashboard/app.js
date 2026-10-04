@@ -13,6 +13,7 @@ import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, set
 import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
+import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
 import {
   renderRunDetailEmpty,
@@ -1288,7 +1289,7 @@ function activeRefreshJobs() {
   // The health strip is global; refresh on every tick alongside the active tab.
   // The per-workspace summary (/api/audit/summary) is replaced by a placeholder
   // instead of fetched in aggregate mode.
-  const jobs = [];
+  const jobs = [fetchAndRenderHostResources()];
   if (aggregate) {
     renderAggregatePlaceholders();
   } else {
@@ -1696,6 +1697,7 @@ wireTaskIdResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 $("refresh-btn").addEventListener("click", refreshDashboard);
+initHostResources();
 wireHealthStrip();
 wireReliabilityWindowSelector();
 setScopeChangeListener(() => {

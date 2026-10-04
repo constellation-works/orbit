@@ -281,6 +281,48 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.resource_throttle.cpu_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.cpu_resume_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.disk_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.disk_resume_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.memory_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.memory_resume_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.system_crew": {
       "scope": "built-in",
       "state": "default",

@@ -51,6 +51,17 @@ base_branch = "main"
 # material_fields = ["title", "description", "criteria", "plan", "selectors"]
 # source_sensitivity = "ignore"
 
+[workflow.resource_throttle]
+# Host pressure verdict: high readings sustained for 10 seconds, held until
+# below resume. Unknown/stale readings fail open and are shown distinctly.
+enabled = true
+cpu_high_percent = 90
+cpu_resume_percent = 75
+memory_high_percent = 90
+memory_resume_percent = 80
+disk_high_percent = 85
+disk_resume_percent = 80
+
 [runtime]
 # Rotation + retention for the global JSONL log (~/.orbit/state/logs/orbit.jsonl).
 # Applied opportunistically at process start. All optional; the conservative
