@@ -11,7 +11,7 @@ use orbit_tools::plugin::{
 };
 use orbit_types::plugin::{
     PluginBuildRecord, PluginDisabledLayer, PluginStatus, SemverRange, Version,
-    parse_archive_digest, remote_archive_source,
+    format_plugin_build_argv, parse_archive_digest, remote_archive_source,
 };
 
 use super::summary::{PluginSummary, list_plugins};
@@ -412,18 +412,18 @@ fn describe_build(build: &PluginBuildRecord) -> String {
     let fetch = build
         .fetch
         .as_ref()
-        .map(|argv| format!("fetch `{}`, ", argv.join(" ")))
+        .map(|argv| format!("fetch {}, ", format_plugin_build_argv(argv)))
         .unwrap_or_default();
     let landlock = build
         .landlock_abi
         .map(|abi| format!(", Landlock ABI {abi}"))
         .unwrap_or_default();
     format!(
-        "built on this host from {} at commit {}: {fetch}command `{}`; profile {}{landlock}; \
-         consented with {} at {} by {} (Orbit {}); artifact digest {}",
+        "built on this host from {:?} at commit {}: {fetch}command {}; profile {}{landlock}; \
+         consented with {} at {} by {:?} (Orbit {}); artifact digest {}",
         build.source,
         build.commit,
-        build.command.join(" "),
+        format_plugin_build_argv(&build.command),
         build.profile,
         build.consent.flag,
         build.consent.at,

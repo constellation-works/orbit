@@ -21,7 +21,7 @@ use orbit_exec::{
 };
 use orbit_types::plugin::{
     PluginBuildOutput, PluginBuildOutputRecord, PluginBuildSpec, artifact_digest_preimage,
-    render_build_argv,
+    format_plugin_build_argv, render_build_argv,
 };
 use sha2::{Digest, Sha256};
 
@@ -151,30 +151,30 @@ impl PluginBuildPlan {
     /// The plan as the consent text prints it.
     pub fn render(&self) -> String {
         let mut out = String::new();
-        let _ = writeln!(out, "  source:   {}", self.source);
+        let _ = writeln!(out, "  source:   {:?}", self.source);
         let _ = writeln!(out, "  commit:   {}", self.commit);
         for program in &self.programs {
             let _ = writeln!(
                 out,
-                "  program:  {} -> {}",
+                "  program:  {:?} -> {:?}",
                 program.name,
                 program.canonical.display()
             );
         }
         for root in &self.toolchain_roots {
-            let _ = writeln!(out, "  toolchain root (read-only): {}", root.display());
+            let _ = writeln!(out, "  toolchain root (read-only): {:?}", root.display());
         }
         if let Some(fetch) = &self.fetch {
             let _ = writeln!(
                 out,
                 "  phase fetch: {}  [network: outbound TCP to port {PLUGIN_BUILD_FETCH_PORT} only]",
-                quote_argv(fetch)
+                format_plugin_build_argv(fetch)
             );
         }
         let _ = writeln!(
             out,
             "  phase build: {}  [network: none]",
-            quote_argv(&self.command)
+            format_plugin_build_argv(&self.command)
         );
         let _ = writeln!(
             out,
@@ -184,7 +184,7 @@ impl PluginBuildPlan {
             MAX_UNPACKED_BYTES / (1024 * 1024)
         );
         for output in &self.outputs {
-            let _ = writeln!(out, "  output:   {} -> {}", output.from, output.to);
+            let _ = writeln!(out, "  output:   {:?} -> {:?}", output.from, output.to);
         }
         let _ = write!(
             out,
@@ -196,20 +196,7 @@ impl PluginBuildPlan {
 }
 
 fn quote_argv(argv: &[String]) -> String {
-    argv.iter()
-        .map(|arg| {
-            if !arg.is_empty()
-                && arg
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_./=:{}@+,".contains(c))
-            {
-                arg.clone()
-            } else {
-                format!("'{}'", arg.replace('\'', "'\\''"))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    format_plugin_build_argv(argv)
 }
 
 /// Resolve `spec`'s programs and toolchain roots for a build of `commit`.

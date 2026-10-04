@@ -13,6 +13,47 @@ use super::super::build::{
 };
 use super::super::source::ResolvedCommit;
 
+/// A repository-controlled argv must stay one visible plan line even when it
+/// contains terminal controls; the same escaping is used for output paths.
+#[test]
+fn a_build_plan_escapes_terminal_controls_in_repository_values() {
+    let checkout = tempfile::tempdir().expect("checkout");
+    let commit = ResolvedCommit {
+        id: "a".repeat(40),
+        committed_at: 1_700_000_000,
+        checkout: checkout.path().to_path_buf(),
+    };
+    let mut build = spec(&[("out\n\u{1b}[2J", "bin/out")]);
+    build.programs = vec!["/bin/sh".to_string()];
+    build.command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "true\n  source: forged\u{1b}[2J".to_string(),
+    ];
+    let plan = plan_plugin_build(
+        &build,
+        "git+https://example.test/demo.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        &commit,
+        &PluginBuildHostEnv::default(),
+        &[],
+    )
+    .expect("plan");
+
+    let rendered = plan.render();
+    assert!(
+        rendered.contains(r#""true\n  source: forged\u{1b}[2J""#),
+        "the argv is rendered with control characters escaped: {rendered:?}"
+    );
+    assert!(
+        rendered.contains(r#""out\n\u{1b}[2J" -> "bin/out""#),
+        "output paths are rendered with control characters escaped: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "a repository value must not emit terminal control bytes"
+    );
+}
+
 fn spec(outputs: &[(&str, &str)]) -> PluginBuildSpec {
     PluginBuildSpec {
         programs: vec!["sh".to_string()],

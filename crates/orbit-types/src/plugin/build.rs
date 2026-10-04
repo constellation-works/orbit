@@ -224,6 +224,13 @@ pub fn render_build_argv(argv: &[String], build_dir: &str) -> Vec<String> {
         .collect()
 }
 
+/// Render an argv vector for a terminal-facing build plan or audit row.
+/// Rust's string debug representation escapes control characters, so a
+/// manifest cannot use a newline or ANSI escape to forge consent-plan lines.
+pub fn format_plugin_build_argv(argv: &[String]) -> String {
+    format!("{argv:?}")
+}
+
 /// Whether `value` is a full Git commit object id: 40 (SHA-1) or 64
 /// (SHA-256) hex characters. An abbreviation is not one: it names whatever
 /// object the repository resolves it to at fetch time.
