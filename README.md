@@ -157,6 +157,21 @@ mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/lo
 
 Want to be walked through setup? Ask your agent to *"set up Orbit for this repo"*, and the bundled `orbit-setup` skill takes it from there.
 
+### Codex desktop
+
+You need Node.js 18+ (including `npx`) and the Codex CLI on `PATH`.
+
+1. Register the Orbit marketplace from a terminal:
+
+   ```bash
+   codex plugin marketplace add constellation-works/orbit --ref agent-main
+   ```
+
+2. Restart the desktop app. Open the **Plugins Directory**, choose the **Orbit** marketplace, and install **Orbit**.
+3. Start a new chat in your repo and ask: *"set up Orbit for this repo"*.
+
+See the [official marketplace setup guide](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
+
 ---
 
 ## MCP and authority
