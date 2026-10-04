@@ -537,6 +537,7 @@ pub(super) fn allocate(
             phase: LocalPullPhase::Requested,
             settlement: None,
             refusal: None,
+            settlement_refusal: None,
         };
         write(conn, workspace, &record)?;
         prune_terminal_rows(conn, workspace)?;
@@ -630,6 +631,8 @@ pub(super) fn mutate(
                     record.refusal = Some(reason.clone());
                 }
                 advance(&mut record, LocalPullPhase::Settling, LocalPullPhase::Settled)?;
+                // A refusal the owner answered earlier no longer stands.
+                record.settlement_refusal = None;
                 // A settled claim closes a leaf that never started. A leaf that
                 // is running is left alone: it finishes, or a forced cancel
                 // stops its process first; failing it here would orphan a live
@@ -650,6 +653,12 @@ pub(super) fn mutate(
                         }
                 }
             },
+            LocalPullMutation::DeferSettlement(refusal) => {
+                if record.phase != LocalPullPhase::Settling {
+                    return Err(invalid("only a pending settlement can be deferred"));
+                }
+                record.settlement_refusal = Some(refusal.clone());
+            }
             LocalPullMutation::Refuse(reason) => {
                 if record.phase == LocalPullPhase::Refused { return Ok(record); }
                 if record.phase != LocalPullPhase::Requested || record.receipt.is_some() {

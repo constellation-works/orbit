@@ -18,6 +18,13 @@
 //! delivered: by the leaf's own bound worker as it ends, by any later settle
 //! pass, or by this drain's next iteration, whichever gets there first.
 //!
+//! A settlement the owner refuses while it still holds the claim holds new
+//! requests too [ORB-13979]: the owner answered, and will answer the same
+//! until an operator changes it. The refusal is recorded on the admission,
+//! logged once and listed by `orbit run show`; delivery backs off (doubling to
+//! at most 15 minutes) instead of asking on every pass, and is not a failed
+//! pass. Requests resume on the pass after the owner accepts it.
+//!
 //! Sustained host resource pressure holds requests the same way a pending
 //! host shutdown does [ORB-13901]: the pass requests nothing, keeps settling,
 //! records the throttle on the drain's last pass and polls for recovery.
@@ -48,9 +55,11 @@ use serde_json::{Value, json};
 
 use super::super::cli_executor::resolve_cli_executor;
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
-use super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain};
+use super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain, RefusedDelivery};
 use crate::OrbitRuntime;
-use crate::application::distributed::{PullCrewWindow, owner_binary_version};
+use crate::application::distributed::{
+    PullCrewWindow, RefusedPullSettlement, owner_binary_version,
+};
 
 /// The job that runs this action. Recorded in each request's run context, so
 /// the owner's claim names the drain that holds it.
@@ -109,6 +118,7 @@ pub(crate) fn pull_refill(
         jobs: runtime.stores().jobs(),
         peer: &peer,
         launcher: &launcher,
+        refused_delivery: RefusedDelivery::WhenDue,
     };
     let read_pass_state = || {
         runtime.read_run_state(&run_id).map_err(|error| {
@@ -160,11 +170,21 @@ pub(crate) fn pull_refill(
     };
     let breaker_open =
         consecutive_failures.is_some_and(|count| count >= CONSECUTIVE_FAILURE_BREAKER);
+    // A settlement the owner refused holds new requests until it is
+    // accepted; this pass still delivers it once its backoff is due.
+    let settlement_held = match refused_settlements(&drain, &destination) {
+        Ok(refused) => !refused.is_empty(),
+        Err(failure) => {
+            error.get_or_insert(failure.to_string());
+            true
+        }
+    };
     let mut admitting = !degraded
         && !window_expired
         && host_shutdown.is_none()
         && resource.throttle.is_none()
         && !breaker_open
+        && !settlement_held
         && consecutive_failures.is_some();
     // Whether `refill` ran, and so already reconciled this pass.
     let mut refilled = false;
@@ -252,6 +272,12 @@ pub(crate) fn pull_refill(
     };
     let runs_nothing = crews.as_ref().is_some_and(PullCrewWindow::runs_nothing);
     admitting &= !runs_nothing;
+    // As this pass left them: one it just delivered no longer holds requests.
+    let refused = refused_settlements(&drain, &destination).unwrap_or_else(|failure| {
+        error.get_or_insert(failure.to_string());
+        Vec::new()
+    });
+    admitting &= refused.is_empty();
     // An unreadable count is not zero: the drain must not finish while it
     // cannot tell whether a settlement is still owed.
     let unsettled = match drain.unsettled(&destination) {
@@ -280,6 +306,16 @@ pub(crate) fn pull_refill(
         );
     }
     let refusal = refusal
+        .or_else(|| {
+            (!refused.is_empty()).then(|| {
+                format!(
+                    "settlement_refused: the owner refused {} recorded settlement(s) while \
+                     holding their claims, so no new claim is requested; `orbit run show \
+                     {run_id}` names the reason and the remedy",
+                    refused.len()
+                )
+            })
+        })
         .or_else(|| {
             breaker_open.then(|| {
                 format!(
@@ -313,6 +349,7 @@ pub(crate) fn pull_refill(
         "unsettled": unsettled,
         "admitting": admitting,
         "refusal": refusal,
+        "settlement_refused": refused.len(),
         "crews": crews,
         "consecutive_failures": consecutive_failures,
         "reclaimed_build_bytes": reclaimed_build_bytes,
@@ -328,6 +365,21 @@ pub(crate) fn pull_refill(
         "wait": !done && sleep_seconds > 0,
         "sleep_seconds": sleep_seconds,
     }))
+}
+
+/// The settlements for `destination` its owner refused while still holding
+/// their claims [ORB-13979].
+fn refused_settlements(
+    drain: &PullDrain<'_>,
+    destination: &PullDestination,
+) -> Result<Vec<RefusedPullSettlement>, OrbitError> {
+    Ok(drain
+        .jobs
+        .unsettled_local_pull_admissions()?
+        .iter()
+        .filter(|record| record.destination == *destination)
+        .filter_map(RefusedPullSettlement::of)
+        .collect())
 }
 
 /// One pass of a gracefully cancelled drain: release what never launched,

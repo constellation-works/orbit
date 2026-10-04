@@ -524,6 +524,29 @@ pub struct LocalPullAdmission {
     /// longer accept because it had already ended the claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
+    /// The owner's latest refusal of this `Settling` admission's settlement
+    /// while it still holds the claim [ORB-13979]. Such a refusal is an
+    /// answer, not a lost delivery — the owner declares no required
+    /// validation commands, say — so it repeats until an operator changes the
+    /// owner. Delivery backs off until `retry_after` rather than asking again
+    /// on every pass; the settlement itself stays recorded and is delivered
+    /// once the owner accepts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement_refusal: Option<SettlementRefusal>,
+}
+
+/// A pending settlement the owner refused while still holding its claim, and
+/// when delivery is next attempted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettlementRefusal {
+    /// The owner's refusal, as it answered.
+    pub reason: String,
+    /// Consecutive refused deliveries.
+    pub refusals: u32,
+    pub first_refused_at: DateTime<Utc>,
+    pub last_refused_at: DateTime<Utc>,
+    /// No automatic pass delivers before this.
+    pub retry_after: DateTime<Utc>,
 }
 
 impl LocalPullAdmission {
@@ -556,6 +579,10 @@ pub enum LocalPullMutation {
     /// landed it). The settlement can never be delivered, so the record
     /// settles locally with the refusal, and its slot is released.
     SettleObsolete(String),
+    /// Record the owner's refusal of a `Settling` admission's settlement while
+    /// it still holds the claim, and when delivery is next attempted. The
+    /// admission stays `Settling` with its settlement unchanged.
+    DeferSettlement(SettlementRefusal),
 }
 
 /// Desktop-only allowlisted mutation, committed with a payload-bound request receipt.

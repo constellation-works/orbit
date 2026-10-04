@@ -7,14 +7,16 @@ use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimEvidence, ClaimFinalRecovery,
     ClaimMutation, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase,
-    ProviderUnavailable, PullDestination,
+    ProviderUnavailable, PullDestination, SettlementRefusal,
 };
 use orbit_types::workflow::{
     FinalRecoveryCheckpoint, FinalRecoveryDecision, PROVIDER_UNAVAILABLE_MARKER,
     is_provider_unavailable,
 };
 
-use crate::application::distributed::{is_owner_refusal, is_owner_transport_failure};
+use crate::application::distributed::{
+    is_owner_refusal, is_owner_transport_failure, settlement_refusal_backoff,
+};
 
 /// Trusted owner transport, supplied by runtime composition. Implementations
 /// must check current claim/run/phase on bind and settlement; replaying a receipt
@@ -74,6 +76,20 @@ pub(crate) enum SettleScope {
     /// request the owner holds no receipt for, so the drain can finish. Live
     /// leaves are waited for.
     Cancel,
+}
+
+/// When a pass delivers a settlement the owner refused while still holding
+/// its claim [ORB-13979]. Such a refusal is an answer that repeats until an
+/// operator changes the owner, so automatic passes back off instead of asking
+/// on every one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefusedDelivery {
+    /// Once its backoff has elapsed: a drain pass, the clock sweep, a leaf's
+    /// own worker.
+    WhenDue,
+    /// Now, whatever the backoff: an operator's settle-only pass, so an
+    /// operator who fixed the owner need not wait it out.
+    Now,
 }
 
 /// A [`PullPeer`] that stops calling the owner after its first transport
@@ -153,6 +169,7 @@ pub(crate) struct PullDrain<'a> {
     pub(crate) jobs: &'a dyn JobRunStoreBackend,
     pub(crate) peer: &'a dyn PullPeer,
     pub(crate) launcher: &'a dyn PullLauncher,
+    pub(crate) refused_delivery: RefusedDelivery,
 }
 
 impl PullDrain<'_> {
@@ -268,6 +285,7 @@ impl PullDrain<'_> {
             jobs: self.jobs,
             peer: &fenced,
             launcher: self.launcher,
+            refused_delivery: self.refused_delivery,
         };
         let mut may_allocate = true;
         let mut first_error = None;
@@ -309,6 +327,7 @@ impl PullDrain<'_> {
             jobs: self.jobs,
             peer: &fenced,
             launcher: self.launcher,
+            refused_delivery: self.refused_delivery,
         };
         let mut first_error = None;
         for mut record in self.jobs.unsettled_local_pull_admissions()? {
@@ -393,8 +412,11 @@ impl PullDrain<'_> {
         }
     }
 
-    /// Returns false only for a newly reconciled idle receipt. Historical idle
-    /// records are skipped so the next polling pass can allocate a fresh ID.
+    /// Returns false for a newly reconciled idle receipt, and for a settlement
+    /// the owner refuses while holding its claim: nothing new is admitted
+    /// against an owner that will not accept what this executor already
+    /// owes it. Historical idle records are skipped so the next polling pass
+    /// can allocate a fresh ID.
     fn reconcile(&self, mut record: LocalPullAdmission) -> Result<bool, OrbitError> {
         if matches!(
             record.phase,
@@ -447,7 +469,13 @@ impl PullDrain<'_> {
                     None => return Ok(true),
                 },
                 LocalPullPhase::Settling if self.release_held(&record)? => return Ok(true),
-                LocalPullPhase::Settling => self.deliver(&record)?,
+                LocalPullPhase::Settling => {
+                    let delivered = self.deliver(&record)?;
+                    if delivered.phase == LocalPullPhase::Settling {
+                        return Ok(false);
+                    }
+                    delivered
+                }
                 LocalPullPhase::Settled | LocalPullPhase::Refused => return Ok(true),
                 LocalPullPhase::Idle => return Ok(false),
             };
@@ -489,7 +517,14 @@ impl PullDrain<'_> {
                     return Ok(());
                 }
                 LocalPullPhase::Settling if self.release_held(record)? => return Ok(()),
-                LocalPullPhase::Settling => self.deliver(record)?,
+                LocalPullPhase::Settling => {
+                    let delivered = self.deliver(record)?;
+                    if delivered.phase == LocalPullPhase::Settling {
+                        *record = delivered;
+                        return Ok(());
+                    }
+                    delivered
+                }
                 LocalPullPhase::Launched | LocalPullPhase::Launching => {
                     match self.settle_terminal_leaf(record)? {
                         Some(settling) => settling,
@@ -732,13 +767,28 @@ impl PullDrain<'_> {
     /// operator revoked it, or it failed or landed — no settlement can ever be
     /// accepted for it, so the record settles locally with the refusal and
     /// releases its slot. Retrying it would refuse forever, and every pass
-    /// would report that error instead of admitting new work. A claim the
-    /// owner still holds keeps its settlement pending, as does a lost or
-    /// uncertain delivery.
+    /// would report that error instead of admitting new work. A lost or
+    /// uncertain delivery keeps its settlement pending and is returned.
+    ///
+    /// A claim the owner still holds keeps its settlement pending too, and
+    /// the refusal is recorded on it [ORB-13979]: the owner answered, and
+    /// will answer the same until an operator changes it (an owner that
+    /// declares no required validation commands refuses every handoff).
+    /// Under [`RefusedDelivery::WhenDue`] the record is then not sent again
+    /// until its backoff has elapsed. Either way the record is returned
+    /// still `Settling`, and callers stop there.
     pub(crate) fn deliver(
         &self,
         record: &LocalPullAdmission,
     ) -> Result<LocalPullAdmission, OrbitError> {
+        if self.refused_delivery == RefusedDelivery::WhenDue
+            && record
+                .settlement_refusal
+                .as_ref()
+                .is_some_and(|refusal| chrono::Utc::now() < refusal.retry_after)
+        {
+            return Ok(record.clone());
+        }
         let refusal = match self.peer.settle(record) {
             Ok(()) => return self.update(record, LocalPullMutation::Settled),
             Err(error) if is_owner_refusal(&error) => error,
@@ -751,7 +801,9 @@ impl PullDrain<'_> {
             AdmissionLookup::Found {
                 current_claim: Some(claim),
                 ..
-            } if claim.phase.is_unsettled() => return Err(refusal),
+            } if claim.phase.is_unsettled() => {
+                return self.defer_refused_settlement(record, &refusal);
+            }
             AdmissionLookup::Found {
                 current_claim: Some(claim),
                 ..
@@ -773,6 +825,56 @@ impl PullDrain<'_> {
             "closing an undeliverable pull settlement",
         );
         self.update(record, LocalPullMutation::SettleObsolete(reason))
+    }
+
+    /// Record the owner's refusal of `record`'s settlement while it holds the
+    /// claim, and when automatic passes next deliver it: each consecutive
+    /// refusal doubles the wait, up to a cap. Logged as a warning when the
+    /// refusal is new or its reason changed, not on every repeat.
+    fn defer_refused_settlement(
+        &self,
+        record: &LocalPullAdmission,
+        refusal: &OrbitError,
+    ) -> Result<LocalPullAdmission, OrbitError> {
+        let now = chrono::Utc::now();
+        let reason = refusal.to_string();
+        let previous = record.settlement_refusal.as_ref();
+        let refusals = previous
+            .map_or(0, |previous| previous.refusals)
+            .saturating_add(1);
+        let backoff = settlement_refusal_backoff(refusals);
+        let retry_after =
+            now + chrono::Duration::from_std(backoff).unwrap_or_else(|_| chrono::Duration::zero());
+        if previous.is_none_or(|previous| previous.reason != reason) {
+            tracing::warn!(
+                target: "orbit.core.pull",
+                owner = %record.destination.selector,
+                request_id = %record.request.request_id,
+                leaf = record.leaf_run_id.as_deref().unwrap_or("-"),
+                %reason,
+                retry_after = %retry_after.to_rfc3339(),
+                "the owner refused a pending settlement while holding its claim; it stays \
+                 recorded, and delivery backs off until the owner accepts it",
+            );
+        } else {
+            tracing::debug!(
+                target: "orbit.core.pull",
+                request_id = %record.request.request_id,
+                refusals,
+                retry_after = %retry_after.to_rfc3339(),
+                "pending settlement refused again",
+            );
+        }
+        self.update(
+            record,
+            LocalPullMutation::DeferSettlement(SettlementRefusal {
+                reason,
+                refusals,
+                first_refused_at: previous.map_or(now, |previous| previous.first_refused_at),
+                last_refused_at: now,
+                retry_after,
+            }),
+        )
     }
 }
 

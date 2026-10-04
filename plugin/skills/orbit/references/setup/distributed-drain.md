@@ -148,6 +148,13 @@ returns.
   Failed passes are retried until three in a row degrade the drain; settlement
   retries continue in the degraded state. A request the owner refused and holds no receipt for closes as
   `Refused`; a committed one is carried forward.
+- A settlement the owner refuses while it still holds the claim (an owner with
+  no `workflow.required_validation_commands` refuses every handoff) stays
+  recorded, holds new requests, and is retried with a backoff of at most 15
+  minutes rather than every pass. `orbit run show <drain-run>` prints it once
+  as `Settlement refused:` with the owner's reason and remedy; fix the owner,
+  and the next due attempt settles it, or `orbit run auto --stop` retries it
+  at once.
 - The leaf's agent runs in claimed mode: the sandbox denies `~/.ssh`, so it
   has no route to the owner and needs none. It is denied `orbit.task.show` /
   `orbit.task.update` and returns its execution summary as step output;

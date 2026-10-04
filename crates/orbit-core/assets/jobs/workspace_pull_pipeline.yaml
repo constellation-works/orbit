@@ -27,6 +27,11 @@
 # leaf it cannot confirm stopped keeps its claim. A later drain for the same
 # owner carries any admission a run left behind.
 #
+# A settlement the owner refuses while it still holds the claim stays
+# recorded and holds new requests; it is retried with a backoff of at most 15
+# minutes, not every iteration, and `orbit run show` names the reason and the
+# remedy [ORB-13979].
+#
 # A breaker stops new requests after three consecutive claims this run
 # admitted settle as failures, so a systemic executor fault cannot block the
 # owner's backlog one fast-failing task per poll. It resets with a new drain.
