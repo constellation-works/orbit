@@ -23,11 +23,11 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use serde_json::{Value, json};
 
-use super::investigate::investigate;
+use super::investigate::{cancelled_without_failed_steps, investigate};
 use super::partition::{
     RunPartition, is_actionable_current_failure, is_inconclusive_cancellation, partition_runs,
-    run_branch, run_is_completed, sort_current_failures,
-    supersede_older_when_cancelled_run_is_actionable,
+    run_branch, run_is_cancelled, run_is_completed, sort_current_failures,
+    supersede_older_when_cancelled_run_is_actionable, superseded_cancellation_entry,
 };
 use super::query::{CiQueries, RemoteBranchHeads};
 use super::refs::{RefKind, derive_refs, head_json, probe_branches};
@@ -230,6 +230,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         in_flight,
         mixed_candidates,
         mut deferred,
+        cancelled_successors,
     } = partition;
 
     for failure in &mut deferred {
@@ -245,15 +246,46 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         }
     }
 
+    // A cancelled run is screened by its view alone before any investigation
+    // slot is spent. Without a failed step it is superseded when a newer run of
+    // its workflow/ref exists (concurrency cancelled it for that run) and
+    // inconclusive otherwise; either way it has nothing to repair, so it must
+    // not crowd a real failure out of the budget. A cancellation with a failed
+    // step stays a candidate and keeps its view for investigation.
     let mut inspect = Vec::new();
+    let mut inconclusive = Vec::new();
+    let mut superseded_cancellations = 0usize;
+    let mut screened_views = std::collections::BTreeMap::new();
     let mut seen_run_ids = std::collections::BTreeSet::new();
     for failure in current.iter().chain(mixed_candidates.iter()) {
         let Some(run_id) = failure.get("run_id").and_then(Value::as_u64) else {
             continue;
         };
-        if seen_run_ids.insert(run_id) {
-            inspect.push(failure.clone());
+        if !seen_run_ids.insert(run_id) {
+            continue;
         }
+        if run_is_completed(failure) && run_is_cancelled(failure) {
+            // A failed screen leaves the run to ordinary investigation, which
+            // queries and reports the view itself.
+            if let Ok(view) = queries.run_view(&run_id.to_string()) {
+                match cancelled_without_failed_steps(failure, &view) {
+                    Some(findings) => {
+                        match cancelled_successors.get(&run_id) {
+                            Some(newer) => {
+                                stale.push(superseded_cancellation_entry(failure, newer));
+                                superseded_cancellations += 1;
+                            }
+                            None => inconclusive.extend(findings),
+                        }
+                        continue;
+                    }
+                    None => {
+                        screened_views.insert(run_id, view);
+                    }
+                }
+            }
+        }
+        inspect.push(failure.clone());
     }
     sort_current_failures(&mut inspect);
     let investigation_candidates = inspect.len();
@@ -292,16 +324,20 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             findings.push(failure.clone());
             continue;
         }
+        let cached_view = failure
+            .get("run_id")
+            .and_then(Value::as_u64)
+            .and_then(|run_id| screened_views.remove(&run_id));
         findings.extend(investigate(
             queries,
             failure,
+            cached_view,
             &bounds,
             &mut checkout_log_reads,
             &mut job_log_reads,
             &mut retryable_errors,
         ));
     }
-    let mut inconclusive = Vec::new();
     let mut remaining = Vec::new();
     for finding in findings {
         if is_inconclusive_cancellation(&finding) {
@@ -349,6 +385,12 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
              inconclusive; cancellation is not a pass, but there is no failed step to repair"
         ));
     }
+    if superseded_cancellations > 0 {
+        notes.push(format!(
+            "{superseded_cancellations} cancelled run(s) had no failed steps and a newer run of \
+             the same workflow on the same branch; they are listed in stale_or_superseded"
+        ));
+    }
     let investigated_count = investigated_ids.len();
     let retryable_error_count = retryable_errors.len();
     let unverified_refs = probes.unverified.keys().cloned().collect::<Vec<_>>();
@@ -384,6 +426,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             "deferred_failure_run_ids": deferred_ids,
             "inconclusive": inconclusive_count,
             "inconclusive_run_ids": inconclusive_ids,
+            "superseded_cancellations": superseded_cancellations,
             "inconclusive_job_ids": inconclusive_job_ids,
             "retryable_errors": retryable_error_count,
         },

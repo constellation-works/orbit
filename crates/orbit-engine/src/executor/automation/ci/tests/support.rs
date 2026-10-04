@@ -19,6 +19,8 @@ pub(super) struct FakeQueries {
     /// Repository-wide run pages. Each `repository_runs` call pops the next
     /// page, so a test can make CI progress between calls.
     runs: Mutex<Vec<Vec<Value>>>,
+    /// `failed_jobs` per run id; an unscripted run has none.
+    failed_jobs: BTreeMap<String, Value>,
 }
 
 impl FakeQueries {
@@ -41,6 +43,11 @@ impl FakeQueries {
 
     pub(super) fn with_runs(self, pages: Vec<Vec<Value>>) -> Self {
         *self.runs.lock().expect("runs lock") = pages;
+        self
+    }
+
+    pub(super) fn with_failed_jobs(mut self, run_id: u64, failed_jobs: Value) -> Self {
+        self.failed_jobs.insert(run_id.to_string(), failed_jobs);
         self
     }
 }
@@ -71,8 +78,9 @@ impl CiQueries for FakeQueries {
         }
     }
 
-    fn run_view(&self, _run_id: &str) -> Result<Value, OrbitError> {
-        Ok(json!({"failed_jobs": []}))
+    fn run_view(&self, run_id: &str) -> Result<Value, OrbitError> {
+        let failed_jobs = self.failed_jobs.get(run_id).cloned();
+        Ok(json!({"failed_jobs": failed_jobs.unwrap_or_else(|| json!([]))}))
     }
 
     fn run_logs(

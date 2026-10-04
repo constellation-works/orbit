@@ -53,7 +53,12 @@ spec:
     When candidates outnumber `max_investigated_runs` the
     ranked prefix keeps all but one slot and the last slot rotates through
     the overflow by `investigation_cursor`, so a candidate below the cap is
-    investigated within one rotation instead of never. Discovery or investigation failures are
+    investigated within one rotation instead of never. A cancelled run is
+    screened from its run view before that budget is spent: with no failed
+    step it is `inconclusive`, or listed in `stale_or_superseded` when a newer
+    run of the same workflow on the same branch exists; neither takes a slot.
+    A cancelled run with a failed step stays a candidate and never hides an
+    older actionable failure. Discovery or investigation failures are
     bounded, redacted, and emitted in `retryable_errors`; the filing step
     defers affected jobs (or rejects discovery-wide gaps) so missing evidence
     cannot be mistaken for a clean result.
