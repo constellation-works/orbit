@@ -8,12 +8,15 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![cfg(unix)]
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
+
+use crate::git_repo;
 
 fn hook_script() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -66,18 +69,31 @@ fn run_hook(cwd: &Path, home: &Path) -> String {
 #[test]
 fn hook_is_silent_inside_a_workspace_that_orbit_initialized_and_warns_outside_one() {
     let temp = tempdir().expect("tempdir");
+    // The hook, like the runtime's initialized-root walk-up, accepts an Orbit
+    // root at any ancestor. Under an enclosing `.orbit` (a TMPDIR inside a
+    // checkout) it is rightly silent everywhere in the fixture, so neither its
+    // warning nor its silence would say anything about the fixture workspace.
+    if let Some(enclosing) = temp
+        .path()
+        .ancestors()
+        .map(|dir| dir.join(".orbit"))
+        .find(|dir| dir.is_dir())
+    {
+        writeln!(
+            std::io::stderr(),
+            "skipped hook workspace probe: {} encloses the fixture, so the hook cannot tell the fixture workspace from its absence",
+            enclosing.display()
+        )
+        .expect("write skip notice");
+        return;
+    }
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     let elsewhere = temp.path().join("elsewhere");
-    for dir in [&home, &work, &elsewhere] {
+    for dir in [&home, &elsewhere] {
         std::fs::create_dir_all(dir).expect("create fixture directory");
     }
-    let git = Command::new("git")
-        .args(["init", "--quiet"])
-        .current_dir(&work)
-        .output()
-        .expect("git init");
-    assert!(git.status.success(), "git init failed: {git:?}");
+    git_repo::init(&work);
 
     run_orbit(orbit(&work, &home).args([
         "init",

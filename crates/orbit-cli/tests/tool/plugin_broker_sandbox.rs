@@ -8,7 +8,7 @@
 #![cfg(unix)]
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
-use crate::fixture_crew;
+use crate::{fixture_crew, git_repo};
 
 #[cfg(target_os = "linux")]
 use std::fs;
@@ -346,7 +346,7 @@ mod authority {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
-    use super::fixture_crew;
+    use super::{fixture_crew, git_repo};
 
     /// Every child the fixtures start is bounded: a hung command fails its test
     /// instead of stalling the suite.
@@ -370,7 +370,7 @@ mod authority {
             let home = root.join("home");
             let work = root.join("work");
             std::fs::create_dir_all(&home).expect("home");
-            std::fs::create_dir_all(&work).expect("work");
+            git_repo::init(&work);
             let host = Self {
                 _temp: temp,
                 root,

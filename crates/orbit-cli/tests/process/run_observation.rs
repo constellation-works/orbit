@@ -18,7 +18,7 @@
 //! worker observer and the cancelling CLI race on the signalled worker's exit,
 //! and the run must still end `cancelled`.
 
-use crate::fixture_crew;
+use crate::{fixture_crew, git_repo};
 
 use std::fs;
 use std::io::Write as _;
@@ -47,7 +47,7 @@ impl Fixture {
         let work = temp.path().join("work");
         fs::create_dir_all(&home).expect("fixture home");
         fs::create_dir_all(home.join("empty-bin")).expect("empty child PATH");
-        fs::create_dir_all(&work).expect("fixture work");
+        git_repo::init(&work);
         let fixture = Self {
             _temp: temp,
             home,

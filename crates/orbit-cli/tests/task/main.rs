@@ -8,6 +8,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/git_repo.rs"]
+mod git_repo;
 #[path = "../support/isolated_cli_fixture.rs"]
 mod isolated_cli_fixture;
 

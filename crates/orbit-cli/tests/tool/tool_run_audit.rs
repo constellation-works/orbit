@@ -7,6 +7,8 @@ use orbit_common::fs::generation::{Access, GenerationGuard, Participant, Partici
 use orbit_common::test_env;
 use serde_json::{Value, json};
 
+use crate::git_repo;
+
 fn fixture_orbit(work: &Path, home: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -25,9 +27,11 @@ fn read_only_tool_run_persists_audit_while_joining_a_foreign_generation() {
     let home = root.path().join("home");
     let work = root.path().join("work");
     let outside = root.path().join("outside");
-    for path in [&home, &work, &outside] {
-        std::fs::create_dir_all(path).expect("fixture directory");
-    }
+    std::fs::create_dir_all(&home).expect("fixture home");
+    // Both cwds are independent checkouts, so neither resolves an enclosing
+    // checkout's Orbit root when TMPDIR sits inside one.
+    git_repo::init(&work);
+    git_repo::init(&outside);
     fixture_orbit(&work, &home)
         .args(["workspace", "init", "--name", "audit-fixture"])
         .assert()

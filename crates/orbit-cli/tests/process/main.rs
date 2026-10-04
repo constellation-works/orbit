@@ -10,6 +10,8 @@
 
 #[path = "../support/fixture_crew.rs"]
 mod fixture_crew;
+#[path = "../support/git_repo.rs"]
+mod git_repo;
 
 mod job_resume_detached;
 mod run_observation;
