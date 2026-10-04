@@ -19,6 +19,10 @@
 //! delivered: by the leaf's own bound worker as it ends, by any later settle
 //! pass, or by this drain's next iteration, whichever gets there first.
 //!
+//! Sustained host resource pressure holds requests the same way a pending
+//! host shutdown does [ORB-13901]: the pass requests nothing, keeps settling,
+//! records the throttle on the drain's last pass and polls for recovery.
+//!
 //! A graceful `orbit run cancel` puts the drain into its cancelling mode:
 //! each pass then requests nothing, releases every admission that never
 //! launched back to the owner's backlog, and waits for the launched leaves to
@@ -34,7 +38,8 @@ use orbit_store::contracts::{
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, LocalPullAdmission, PullDestination,
 };
 use orbit_types::workflow::{
-    CrewExclusion, CrewExclusionSource, DrainCancelRequest, PullCrewPreflight,
+    CrewExclusion, CrewExclusionSource, DrainAdmissionPass, DrainCancelRequest, PullCrewPreflight,
+    ResourceThrottle,
 };
 use serde_json::{Value, json};
 
@@ -125,6 +130,9 @@ pub(crate) fn pull_refill(
     // Stop admitting while a host shutdown is pending: anything started now
     // would be killed by it [ORB-12968]. Settlement still runs.
     let host_shutdown = runtime.scheduled_host_shutdown();
+    // Sustained host pressure holds new requests too [ORB-13901]; unknown
+    // telemetry admits.
+    let resource = runtime.resource_admission();
     let mut admitted = 0;
     let mut refusal = None;
     let mut error: Option<String> = None;
@@ -148,6 +156,7 @@ pub(crate) fn pull_refill(
         consecutive_failures.is_some_and(|count| count >= CONSECUTIVE_FAILURE_BREAKER);
     let mut admitting = !window_expired
         && host_shutdown.is_none()
+        && resource.throttle.is_none()
         && !breaker_open
         && consecutive_failures.is_some();
     // Whether `refill` ran, and so already reconciled this pass.
@@ -242,7 +251,7 @@ pub(crate) fn pull_refill(
     let done = window_expired && !unsettled_holding;
     let sleep_seconds = if admitted > 0 {
         0
-    } else if unsettled_holding || error.is_some() {
+    } else if unsettled_holding || error.is_some() || resource.throttle.is_some() {
         poll
     } else {
         idle
@@ -273,6 +282,7 @@ pub(crate) fn pull_refill(
                     .to_string()
             })
         });
+    record_pass(runtime, &run_id, resource.throttle.clone());
     Ok(json!({
         "admitted": admitted,
         "unsettled": unsettled,
@@ -283,6 +293,8 @@ pub(crate) fn pull_refill(
         "reclaimed_build_bytes": reclaimed_build_bytes,
         "error": error,
         "host_shutdown": host_shutdown.map(|shutdown| shutdown.describe()),
+        "resource_throttle": resource.throttle,
+        "resource_telemetry_unknown": resource.unknown,
         "cancelling": false,
         "done": done,
         "wait": !done && sleep_seconds > 0,
@@ -365,12 +377,43 @@ fn cancelling_pass(
         "reclaimed_build_bytes": reclaimed_build_bytes,
         "error": error,
         "host_shutdown": Value::Null,
+        "resource_throttle": Value::Null,
+        "resource_telemetry_unknown": [],
         "cancelling": true,
         "waiting_leaves": waiting_leaves,
         "done": done,
         "wait": !done,
         "sleep_seconds": if done { 0 } else { poll },
     })
+}
+
+/// Record this pass on the drain's own state, so readiness and `orbit run
+/// show` report a throttle the drain is holding. A pull drain queues nothing
+/// locally: the owner orders the backlog. Best effort, like the local drain's.
+fn record_pass(runtime: &OrbitRuntime, run_id: &str, resource_throttle: Option<ResourceThrottle>) {
+    let mut pass = Some(DrainAdmissionPass {
+        recorded_at: chrono::Utc::now(),
+        queued: 0,
+        deferred: Vec::new(),
+        excluded: Vec::new(),
+        excluded_total: 0,
+        resource_throttle,
+    });
+    if let Err(failure) = runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.drain_last_pass = pass.take();
+            Ok(())
+        })
+    {
+        tracing::warn!(
+            target: "orbit.core.pull",
+            run_id,
+            %failure,
+            "pull drain could not record its pass; readiness will not report its throttle",
+        );
+    }
 }
 
 /// The drain's crew window, taking and persisting its preflight on the first

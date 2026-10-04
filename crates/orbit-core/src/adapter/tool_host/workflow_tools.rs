@@ -56,13 +56,21 @@ pub(super) fn ship(
         claim_token.as_deref(),
         trigger,
     )?;
-    Ok(json!({
+    let mut shipped = json!({
         "workflow": "ship",
         "job_id": invoke.job_name,
         "run_id": invoke.run_id,
         "state": if invoke.queued { "queued" } else { "submitted" },
         "submitted_at": invoke.submitted_at,
-    }))
+    });
+    // [ORB-13901] Discovery is refused while the host is throttled; an
+    // explicit selection proceeds and says so.
+    if !task_ids.is_empty()
+        && let Some(throttle) = runtime.admission_resource_throttle().throttle
+    {
+        shipped["warning"] = json!(throttle.hold_reason());
+    }
+    Ok(shipped)
 }
 
 /// One run: the record, the child Runs it dispatched, and what it is doing
@@ -308,6 +316,11 @@ fn run_json_enriched(
     value["drain_admissions_stop"] =
         serde_json::to_value(state.and_then(|state| state.drain_admissions_stop.as_ref()))
             .map_err(serialize_error("serialize drain admissions stop"))?;
+    // [ORB-13901] A drain's last admission pass, including the host resource
+    // throttle that held it; null for every run that is not a drain.
+    value["drain_last_pass"] =
+        serde_json::to_value(state.and_then(|state| state.drain_last_pass.as_ref()))
+            .map_err(serialize_error("serialize drain last pass"))?;
     // [ORB-11354] An operator tracking an agent invocation reads it here, from
     // the same show/list surface as any other run: its distinguishable outcome,
     // a bounded preview of the answer, and the durable reference to the full

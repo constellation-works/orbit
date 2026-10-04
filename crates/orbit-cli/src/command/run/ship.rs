@@ -5,7 +5,7 @@ use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
 
 use crate::command::{CommandOut, Execute};
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_warning};
 
 const SHIP_WORKFLOW: &str = "ship";
 
@@ -118,7 +118,14 @@ impl Execute for ShipCommand {
             error_code: None,
             error_message: None,
         };
-        workflow_dispatch_payload(SHIP_WORKFLOW, &[run])
+        // [ORB-13901] Discovery is refused while throttled; an explicit
+        // selection proceeds and is warned.
+        let warning = if self.task_ids.is_empty() {
+            None
+        } else {
+            super::auto::resource_throttle_warning(runtime)
+        };
+        workflow_dispatch_payload_with_warning(SHIP_WORKFLOW, &[run], warning)
     }
 }
 

@@ -12,6 +12,8 @@
 //! launch is refused (STD-03 §R19) and no worker process starts. A claimed leaf
 //! therefore ends at its launch and its failure settlement goes to the owner in
 //! the pass that bound it: the systemic executor fault the breaker exists for.
+//!
+//! Host resource pressure is injected through the follower's resource probe.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
@@ -988,6 +990,68 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .filter(|event| event["to_status"] == "blocked")
         .count();
     assert_eq!(blocked, 1, "{after:#}");
+}
+
+/// [ORB-13901] While sustained host pressure throttles the follower, its
+/// drain requests no claim but still delivers a settlement it owes; once
+/// memory is back below its resume mark the next pass pulls again.
+#[test]
+fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
+    if !isolated("a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume") {
+        return;
+    }
+    let mut pair = Pair::new(2);
+    let probe = super::dispatch_admission::PressureProbe::calm();
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_resource_probe(probe.clone());
+    let drain = pair.start_drain();
+
+    // The first claim fails at launch and its settlement reply is lost, so
+    // the drain owes the owner that settlement.
+    pair.wire.lose_next_reply("orbit.drain.claim.settle");
+    let owed = pair.pass(&drain);
+    assert!(error_of(&owed).contains("dropped"), "{owed}");
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
+
+    probe.sustain_memory(&pair.follower, 96.0);
+    let held = pair.pass(&drain);
+    assert_eq!(held["admitting"], false, "{held}");
+    assert_eq!(held["admitted"], 0, "{held}");
+    assert_eq!(
+        held["resource_throttle"]["resources"][0]["resource"], "memory",
+        "{held}"
+    );
+    assert_eq!(held["sleep_seconds"], 30, "a throttled drain polls: {held}");
+    assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1, "no new claim");
+    assert_eq!(
+        pair.follower.pending_pull_settlements().unwrap().count,
+        0,
+        "the owed settlement is delivered while throttled"
+    );
+    assert_eq!(pair.wire.calls("orbit.drain.claim.settle").len(), 2);
+    let unclaimed = pair
+        .tasks
+        .iter()
+        .filter(|id| pair.owner_status(id) == "backlog")
+        .count();
+    assert_eq!(unclaimed, 1, "the second task stays on the owner");
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .and_then(|pass| pass.resource_throttle)
+        .expect("the pull pass records the throttle");
+    assert_eq!(recorded.resources[0].percent, 96.0);
+
+    probe.memory(70.0, Utc::now());
+    let resumed = pair.pass(&drain);
+    assert!(launch_refused(&resumed), "{resumed}");
+    assert_eq!(resumed["resource_throttle"], Value::Null, "{resumed}");
+    assert_eq!(pair.wire.calls("orbit.task.pull").len(), 2);
 }
 
 /// A local drain's admission of `task` on the owner, as its gate leaves it

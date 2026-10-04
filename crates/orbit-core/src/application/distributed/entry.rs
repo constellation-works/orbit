@@ -1,13 +1,24 @@
 //! The shared admission decision every retained drain entry point takes.
 
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
 };
+use orbit_types::workflow::{JobRunState, ResourceThrottle};
 
+use super::PULL_DRAIN_JOB;
 use super::contract::owner_binary_version;
+use crate::runtime::host_resource::ResourceAdmission;
 use crate::runtime::host_signal::{HOST_SHUTDOWN_SCHEDULED, ScheduledShutdown};
+
+/// Stable code for a hold caused by sustained host resource pressure.
+pub const RESOURCE_THROTTLED: &str = "resource_throttled";
+
+/// How recent a live drain's recorded throttle must be to speak for the host.
+/// Drains record every pass and poll at most every minute by default.
+const RECORDED_THROTTLE_MAX_AGE_SECONDS: i64 = 300;
 
 /// A retained entry point that admits workspace delivery work [ORB-12500].
 ///
@@ -41,7 +52,7 @@ impl DrainEntryPoint {
 }
 
 /// Why a retained entry point may not admit right now.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DrainEntryRefusal {
     /// This checkout is a replica. Owner coordination work — backlog
     /// selection, reservation, claim settlement — belongs to the owner, and a
@@ -64,6 +75,10 @@ pub enum DrainEntryRefusal {
     /// it; the hold lifts on its own when the schedule is cancelled or the
     /// host has restarted.
     HostShutdownScheduled { shutdown: ScheduledShutdown },
+    /// Sustained host resource pressure holds new discovery [ORB-13901]. An
+    /// explicit task selection proceeds with a warning; discovery and
+    /// unattended entry points stand down until pressure clears.
+    ResourceThrottled { throttle: ResourceThrottle },
 }
 
 impl DrainEntryRefusal {
@@ -76,6 +91,7 @@ impl DrainEntryRefusal {
             DrainEntryRefusal::Saturated { .. } => "ship_in_flight",
             DrainEntryRefusal::Claimed { .. } => "claimed_by_execution_claim",
             DrainEntryRefusal::HostShutdownScheduled { .. } => HOST_SHUTDOWN_SCHEDULED,
+            DrainEntryRefusal::ResourceThrottled { .. } => RESOURCE_THROTTLED,
         }
     }
 
@@ -101,6 +117,10 @@ impl DrainEntryRefusal {
                  '{machine_id}'; it settles or is deliberately recovered, never admitted twice"
             ),
             DrainEntryRefusal::HostShutdownScheduled { shutdown } => shutdown.hold_reason(),
+            DrainEntryRefusal::ResourceThrottled { throttle } => format!(
+                "{RESOURCE_THROTTLED}: {} Name the tasks to ship them anyway.",
+                throttle.hold_reason()
+            ),
         }
     }
 }
@@ -124,6 +144,10 @@ pub struct DrainEntryAdmission {
     /// entry point is refused for it; an explicit one is admitted with a
     /// warning, and the drain it starts still holds its own waves.
     pub host_shutdown: Option<ScheduledShutdown>,
+    /// Host resource pressure holding admissions when the decision was taken
+    /// [ORB-13901]. Discovery is refused for it; an explicit task selection or
+    /// drain start is admitted, and the surface warns.
+    pub resource_throttle: Option<ResourceThrottle>,
     pub refusal: Option<DrainEntryRefusal>,
 }
 
@@ -171,6 +195,7 @@ impl crate::OrbitRuntime {
             review_policy: ship.review_policy.clone(),
             claim_admission_refusal: self.claim_contract_refusal(&ship),
             host_shutdown: self.scheduled_host_shutdown(),
+            resource_throttle: None,
             refusal: None,
         };
         if let Some(owner_machine_id) = self.coordination_write_owner() {
@@ -216,12 +241,68 @@ impl crate::OrbitRuntime {
                 shutdown.describe(),
             );
         }
+        // Discovery would start work right away, so it stands down. An owner
+        // drain holds its own waves while throttled, and an explicit selection
+        // is the operator's call, so both proceed with a warning.
+        decision.resource_throttle = self.admission_resource_throttle().throttle;
+        if let Some(throttle) = decision.resource_throttle.as_ref() {
+            if unattended || (entry_point != DrainEntryPoint::OwnerDrain && task_ids.is_empty()) {
+                decision.refusal = Some(DrainEntryRefusal::ResourceThrottled {
+                    throttle: throttle.clone(),
+                });
+                return Ok(decision);
+            }
+            tracing::warn!(
+                target: "orbit.core.host_resource",
+                entry_point = entry_point.label(),
+                "explicit admission proceeds although {}",
+                throttle.hold_reason(),
+            );
+        }
         if unattended && decision.occupancy.occupied > 0 {
             decision.refusal = Some(DrainEntryRefusal::Saturated {
                 occupied: decision.occupancy.occupied,
             });
         }
         Ok(decision)
+    }
+
+    /// Host pressure as admission sees it [ORB-13901]: this process's own
+    /// verdict, or else the throttle a live auto or pull drain recorded on its
+    /// latest pass. Sustained pressure takes a run of samples a short-lived
+    /// CLI process never collects, so a drain that has been sampling speaks for
+    /// the host while one runs. Disabled settings report nothing.
+    pub fn admission_resource_throttle(&self) -> ResourceAdmission {
+        let mut admission = self.resource_admission();
+        if admission.throttle.is_none() && self.context.settings().resource_throttle().enabled {
+            admission.throttle = self.live_drain_resource_throttle();
+        }
+        admission
+    }
+
+    fn live_drain_resource_throttle(&self) -> Option<ResourceThrottle> {
+        let auto = crate::application::workflow::find_workflow(
+            crate::application::workflow::AUTO_WORKFLOW_ALIAS,
+        )?;
+        let cutoff = Utc::now() - chrono::Duration::seconds(RECORDED_THROTTLE_MAX_AGE_SECONDS);
+        [auto.job_id, PULL_DRAIN_JOB]
+            .into_iter()
+            .filter_map(|job| {
+                self.stores()
+                    .jobs()
+                    .list_pending_or_running_job_runs(job)
+                    .ok()
+            })
+            .flatten()
+            .filter(|run| run.state == JobRunState::Running)
+            .filter_map(|run| {
+                self.read_run_state(&run.run_id)
+                    .ok()
+                    .flatten()?
+                    .drain_last_pass
+            })
+            .filter(|pass| pass.recorded_at >= cutoff)
+            .find_map(|pass| pass.resource_throttle)
     }
 
     /// Whether the claim contract would admit this workspace, by the spec's

@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_warning};
 
 pub(super) const AUTO_WORKFLOW: &str = "auto";
 
@@ -159,7 +159,7 @@ impl Execute for AutoCommand {
                 },
                 orbit_types::workflow::JobRunTrigger::cli(),
             )?;
-            return workflow_dispatch_payload(
+            return workflow_dispatch_payload_with_warning(
                 AUTO_WORKFLOW,
                 &[WorkflowDispatchResult {
                     workflow_alias: AUTO_WORKFLOW,
@@ -174,6 +174,7 @@ impl Execute for AutoCommand {
                     error_code: None,
                     error_message: None,
                 }],
+                resource_throttle_warning(runtime),
             );
         }
         let complexity_crews = orbit_config::ComplexityCrewPools {
@@ -216,8 +217,22 @@ impl Execute for AutoCommand {
             error_code: None,
             error_message: None,
         };
-        workflow_dispatch_payload(AUTO_WORKFLOW, &[run])
+        workflow_dispatch_payload_with_warning(
+            AUTO_WORKFLOW,
+            &[run],
+            resource_throttle_warning(runtime),
+        )
     }
+}
+
+/// [ORB-13901] The drain starts either way and holds its own waves while the
+/// host is throttled; say so at start rather than leaving an idle drain to be
+/// read as an empty backlog.
+pub(super) fn resource_throttle_warning(runtime: &OrbitRuntime) -> Option<String> {
+    runtime
+        .admission_resource_throttle()
+        .throttle
+        .map(|throttle| throttle.hold_reason())
 }
 
 fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut {

@@ -1024,5 +1024,77 @@ fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
     );
 }
 
+/// [ORB-13901] A short-lived CLI cannot sample long enough to judge
+/// sustained pressure, so it reports the throttle a live drain recorded on
+/// its last pass: readiness and `run show` name the resource, value,
+/// threshold and since-when, and ship discovery stands down.
+#[test]
+fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
+    let fixture = Fixture::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let id = "jrun-cli-throttled-pull";
+    let now = chrono::Utc::now();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        params![id,fixture.workspace_id(),now.to_rfc3339(),std::process::id()],
+    ).unwrap();
+    let since = chrono::DateTime::parse_from_rfc3339("2026-10-04T08:41:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let mut state = orbit_types::workflow::PipelineState::new(
+        id.into(),
+        "workspace_pull_pipeline".into(),
+        serde_json::json!({}),
+    );
+    state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+        recorded_at: now,
+        queued: 0,
+        deferred: Vec::new(),
+        excluded: Vec::new(),
+        excluded_total: 0,
+        resource_throttle: Some(orbit_types::workflow::ResourceThrottle {
+            resources: vec![orbit_types::workflow::ResourcePressure {
+                resource: "memory".into(),
+                percent: 93.2,
+                high_percent: 90,
+                resume_percent: 80,
+                since,
+            }],
+        }),
+    });
+    runtime.write_run_state(id, &state).unwrap();
+    let held = "Admissions throttled: memory 93% \u{2265} 90% since 2026-10-04 08:41Z";
+
+    let readiness = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(readiness["capacity"]["free_slots"], 0, "{readiness:#}");
+    assert_eq!(
+        readiness["capacity"]["resource_throttle"]["resources"][0]["percent"],
+        93.2
+    );
+    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains(held), "{text}");
+
+    let shown = fixture
+        .orbit()
+        .args(["run", "show", id, "--no-reconcile"])
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(shown.contains(&format!("Throttled: {held}")), "{shown}");
+
+    let refused = fixture.failure(&["run", "ship", "--json"]);
+    assert!(
+        refused["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("resource_throttled") && error.contains(held)),
+        "{refused}"
+    );
+}
+
 #[cfg(unix)]
 mod agent_invoke;

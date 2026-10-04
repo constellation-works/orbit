@@ -88,7 +88,8 @@ pub use run_state::{
     ActivityCrewDraw, ActivityCrewPoolMember, CrewExclusion, CrewExclusionSource,
     DrainAdmissionPass, DrainAdmissionsStop, DrainCancelRequest, DrainWaitingTask,
     DrainWorkerLimit, FailureActivityCheckpoint, PROVIDER_UNAVAILABLE_ERROR_CODE,
-    PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight, is_provider_unavailable,
+    PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight, ResourcePressure,
+    ResourceThrottle, is_provider_unavailable,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

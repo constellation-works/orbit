@@ -110,6 +110,10 @@ pub(in super::super) fn classify_workspace_auto_tasks(
             shutdown.describe(),
         );
     }
+    // [ORB-13901] Sustained host pressure holds the wave the same way until
+    // every resource is back below its resume mark. Live children are never
+    // touched, and unknown telemetry admits.
+    let resource = runtime.resource_admission();
 
     // [ORB-12617] Slots are shared with pull-mode admission, so the occupancy
     // that decides this wave is the store's one reading of both paths — live
@@ -122,7 +126,8 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // drain worker yields to a pending generation switch or hands itself over
     // to a replaced installation here.
     runtime.drain_upgrade_boundary();
-    let free_slots = if admissions_stopped || host_shutdown.is_some() {
+    let free_slots = if admissions_stopped || host_shutdown.is_some() || resource.throttle.is_some()
+    {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -185,7 +190,9 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // it is idle in this sense and waits the short poll, while a genuinely
     // empty workspace waits the long one.
     let idle = !has_leaves;
-    let sleep_seconds = if pending.is_empty() {
+    // A throttled drain polls for recovery rather than settling into the
+    // long wait an empty backlog gets.
+    let sleep_seconds = if pending.is_empty() && resource.throttle.is_none() {
         idle_sleep_seconds
     } else {
         poll_sleep_seconds
@@ -208,6 +215,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
                 .collect(),
             excluded: waiting_excluded(&snapshot.excluded),
             excluded_total: snapshot.excluded.len() as u64,
+            resource_throttle: resource.throttle.clone(),
         },
     );
 
@@ -236,6 +244,8 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         "admissions_stopped": admissions_stopped,
         "admissions_stop": admissions_stop,
         "host_shutdown": host_shutdown,
+        "resource_throttle": resource.throttle,
+        "resource_telemetry_unknown": resource.unknown,
     }))
 }
 
