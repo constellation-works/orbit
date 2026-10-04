@@ -101,7 +101,7 @@ impl Tool for OrbitWorkflowRunShowTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "orbit.workflow.run.show".to_string(),
-            description: "Fetch one durable workflow run by ID.".to_string(),
+            description: "Fetch one durable workflow run by ID. The full response puts agent invocation outcome, failure reason, and any parsed answer under top-level `agent_invocation`; with `view: bounded`, find them at `run.agent_invocation`. The answer contains summary, findings, next steps, and extra result fields; stdout blob references retain the complete provider output.".to_string(),
             parameters: std::iter::once(run_id_param())
                 .chain(super::domain_control::bounded_params(&[
                     ("log_offset", "integer", "Bounded log record offset"),

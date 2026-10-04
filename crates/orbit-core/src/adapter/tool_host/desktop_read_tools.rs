@@ -226,6 +226,7 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     prefix_bound(offset, MAX_LOG_PREFIX, "log_offset")?;
     let run = runtime.show_job_run_observed(&id)?;
     let mut value = run_summary(&run);
+    let state = runtime.read_run_state(&id).ok().flatten();
     // Provider responses and original inputs are deliberately absent.
     value["steps"] =
         json!(run.steps.iter().take(MAX_PAGE).map(|s| json!({
@@ -239,6 +240,14 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     let progress = runtime
         .collect_run_execution_progress(&id)
         .unwrap_or_else(|_| RunExecutionProgress::unavailable());
+    value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
+        &run,
+        state.as_ref().map(|state| &state.step_outputs),
+        progress.provider_processes.last(),
+    ))
+    .map_err(super::json::serialize_error(
+        "serialize agent invocation result",
+    ))?;
     let execution_progress = json!({"state": progress.state,
         "active_step": progress.active_step.map(|s| json!({"step_id": s.step_id,"step_index":s.step_index,"started_at":s.started_at})),
         "provider_processes": {"limit":progress.limit,"truncated":progress.truncated,
