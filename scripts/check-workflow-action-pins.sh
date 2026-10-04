@@ -4,9 +4,8 @@
 # transposed-digit SHA (e.g. ORB-12452) cannot merge silently. Resolution
 # uses the GitHub API; set GITHUB_TOKEN to raise the rate limit.
 #
-# Soft-presence: without network access (or when rate-limited) this warns
-# and exits 0 rather than blocking offline development, mirroring the
-# cargo-deny soft-presence handling elsewhere in this script's caller.
+# Soft-presence: transient API/network failures warn and exit 0 by default.
+# Set ORBIT_STRICT_WORKFLOW_ACTION_PINS=1 to require every pin to resolve.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,6 +17,7 @@ if [[ ! -d "$workflows_dir" ]]; then
 fi
 
 api_base="https://api.github.com"
+max_attempts=3
 # Expanded as ${auth_header[@]+"${auth_header[@]}"}: bash 3.2 (macOS /bin/bash)
 # treats an empty array as unset under `set -u`.
 auth_header=()
@@ -25,33 +25,61 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   auth_header=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
 
-probe_status="$(curl -s -o /dev/null -m 5 -w '%{http_code}' ${auth_header[@]+"${auth_header[@]}"} "$api_base" 2>/dev/null || echo "000")"
-if [[ "$probe_status" == "000" ]]; then
-  echo "check-workflow-action-pins: no network access to $api_base; skipping pin resolution" >&2
-  exit 0
-fi
+strict_mode="${ORBIT_STRICT_WORKFLOW_ACTION_PINS:-0}"
+
+resolve_status() {
+  local url="$1" attempt status
+  for attempt in 1 2 3; do
+    # Keep curl's emitted status even when it exits nonzero. Appending a
+    # fallback with `|| echo 000` turns curl's emitted 000 into 000000.
+    status="$(curl -s -o /dev/null -m 10 -w '%{http_code}' ${auth_header[@]+"${auth_header[@]}"} "$url" 2>/dev/null || true)"
+    if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
+      status="000"
+    fi
+
+    case "$status" in
+      200 | 404 | 422)
+        printf '%s' "$status"
+        return
+        ;;
+    esac
+
+    if [[ "$attempt" -lt "$max_attempts" ]]; then
+      case "$attempt" in
+        1) sleep 0.25 ;;
+        2) sleep 0.5 ;;
+      esac
+    fi
+  done
+
+  printf '%s' "$status"
+}
 
 fail=0
+skipped=0
 
 # Each distinct owner/repo@sha is resolved once. Deduplication happens in the
 # producer (sort on the first two fields) rather than an associative array so
 # the script runs under bash 3.2 (macOS /bin/bash), which the guard self-tests
 # use; only the first workflow location of a repeated pin is reported.
 while IFS=$'\t' read -r owner_repo sha file line_no; do
-  status="$(curl -s -o /dev/null -m 10 -w '%{http_code}' ${auth_header[@]+"${auth_header[@]}"} "$api_base/repos/$owner_repo/commits/$sha" 2>/dev/null || echo "000")"
+  status="$(resolve_status "$api_base/repos/$owner_repo/commits/$sha")"
 
   case "$status" in
     200)
       ;;
-    403 | 429)
-      echo "check-workflow-action-pins: rate-limited resolving $owner_repo@$sha (status $status); skipping" >&2
-      ;;
-    000)
-      echo "check-workflow-action-pins: network error resolving $owner_repo@$sha; skipping" >&2
-      ;;
-    *)
+    404 | 422)
       echo "check-workflow-action-pins: $file:$line_no: uses: $owner_repo@$sha does not resolve (status $status)" >&2
       fail=1
+      ;;
+    *)
+      if [[ "$strict_mode" == "1" ]]; then
+        echo "check-workflow-action-pins: $file:$line_no: inconclusive resolving $owner_repo@$sha (status $status after $max_attempts attempts); strict mode requires resolution" >&2
+        fail=1
+      else
+        echo "check-workflow-action-pins: inconclusive resolving $owner_repo@$sha (status $status after $max_attempts attempts); skipping" >&2
+        skipped=1
+      fi
       ;;
   esac
 done < <(
@@ -61,8 +89,12 @@ done < <(
 )
 
 if [[ "$fail" -ne 0 ]]; then
-  echo "check-workflow-action-pins: one or more workflow action pins do not resolve" >&2
+  echo "check-workflow-action-pins: one or more workflow action pins failed the resolution guard" >&2
   exit 1
 fi
 
-echo "check-workflow-action-pins: all workflow action pins resolved"
+if [[ "$skipped" -ne 0 ]]; then
+  echo "check-workflow-action-pins: pin resolution completed with inconclusive results skipped" >&2
+else
+  echo "check-workflow-action-pins: all workflow action pins resolved"
+fi

@@ -317,6 +317,7 @@ class WorkflowActionPinGuardrailTests(unittest.TestCase):
             FAKE_CURL_LOG=str(self.log),
             FAKE_CURL_STATUS_MAP_FILE=str(self.status_map),
         )
+        self.env.pop("ORBIT_STRICT_WORKFLOW_ACTION_PINS", None)
         self.write_executable(self.bin / "curl", '''#!/usr/bin/env python3
 import json, os, sys
 url = sys.argv[-1]
@@ -324,11 +325,19 @@ log = os.environ.get("FAKE_CURL_LOG")
 if log:
     with open(log, "a") as f:
         f.write(url + "\\n")
+    with open(log) as f:
+        attempt = sum(line.rstrip("\\n") == url for line in f)
+else:
+    attempt = 1
 mapping = json.loads(open(os.environ["FAKE_CURL_STATUS_MAP_FILE"]).read())
 status = mapping.get(url)
-if status is None or status == "000":
-    sys.exit(1)
+if isinstance(status, list):
+    status = status[min(attempt - 1, len(status) - 1)]
+if status is None:
+    status = "000"
 sys.stdout.write(status)
+if status == "000":
+    sys.exit(1)
 ''')
 
     def write_executable(self, path, content):
@@ -346,19 +355,27 @@ sys.stdout.write(status)
         )
         (workflows / name).write_text(body)
 
-    def run_guard(self, *arguments):
+    def run_guard(self, *arguments, env_overrides=None):
         shutil.copy2(SCRIPTS / "check-workflow-action-pins.sh", self.scripts / "check-workflow-action-pins.sh")
+        env = dict(self.env)
+        if env_overrides:
+            env.update(env_overrides)
         return subprocess.run(
             ["/bin/bash", str(self.scripts / "check-workflow-action-pins.sh"), *arguments],
-            env=self.env, text=True, capture_output=True,
+            env=env, text=True, capture_output=True,
         )
+
+    def pin_url(self, owner, sha):
+        return f"https://api.github.com/repos/{owner}/commits/{sha}"
+
+    def pin_call_count(self, url):
+        return sum(line == url for line in self.log.read_text().splitlines())
 
     def test_passes_when_all_pins_resolve(self):
         good_sha = "a" * 40
         self.write_workflow("check.yml", [f"actions/checkout@{good_sha} # v1"])
         self.set_statuses({
-            "https://api.github.com": "200",
-            f"https://api.github.com/repos/actions/checkout/commits/{good_sha}": "200",
+            self.pin_url("actions/checkout", good_sha): "200",
         })
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -366,22 +383,52 @@ sys.stdout.write(status)
     def test_fails_when_a_pin_does_not_resolve(self):
         bad_sha = "b" * 40
         self.write_workflow("check.yml", [f"actions/setup-node@{bad_sha} # v7.0.0"])
-        self.set_statuses({
-            "https://api.github.com": "200",
-            f"https://api.github.com/repos/actions/setup-node/commits/{bad_sha}": "422",
-        })
-        result = self.run_guard()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"actions/setup-node@{bad_sha} does not resolve", result.stderr)
-        self.assertIn(".github/workflows/check.yml:", result.stderr)
+        url = self.pin_url("actions/setup-node", bad_sha)
+        for status in ("404", "422"):
+            with self.subTest(status=status):
+                self.log.write_text("")
+                self.set_statuses({url: status})
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"actions/setup-node@{bad_sha} does not resolve (status {status})", result.stderr)
+                self.assertIn(".github/workflows/check.yml:", result.stderr)
+                self.assertEqual(self.pin_call_count(url), 1)
 
-    def test_skips_without_network_access(self):
+    def test_retries_curl_000_then_skips_with_warning(self):
         bad_sha = "c" * 40
         self.write_workflow("check.yml", [f"actions/setup-node@{bad_sha} # v7.0.0"])
-        self.set_statuses({})
+        url = self.pin_url("actions/setup-node", bad_sha)
+        self.set_statuses({url: ["000", "000", "000"]})
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("skipping pin resolution", result.stderr)
+        self.assertIn("inconclusive resolving", result.stderr)
+        self.assertIn("status 000 after 3 attempts", result.stderr)
+        self.assertIn("skipping", result.stderr)
+        self.assertEqual(self.pin_call_count(url), 3)
+
+    def test_retries_rate_limits_and_server_errors_then_skips(self):
+        sha = "e" * 40
+        self.write_workflow("check.yml", [f"actions/checkout@{sha} # v1"])
+        url = self.pin_url("actions/checkout", sha)
+        for status in ("403", "429", "500", "503"):
+            with self.subTest(status=status):
+                self.log.write_text("")
+                self.set_statuses({url: [status, status, status]})
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"status {status} after 3 attempts", result.stderr)
+                self.assertIn("skipping", result.stderr)
+                self.assertEqual(self.pin_call_count(url), 3)
+
+    def test_strict_mode_fails_when_result_remains_inconclusive(self):
+        sha = "f" * 40
+        self.write_workflow("check.yml", [f"actions/checkout@{sha} # v1"])
+        url = self.pin_url("actions/checkout", sha)
+        self.set_statuses({url: ["403", "403", "403"]})
+        result = self.run_guard(env_overrides={"ORBIT_STRICT_WORKFLOW_ACTION_PINS": "1"})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("strict mode requires resolution", result.stderr)
+        self.assertEqual(self.pin_call_count(url), 3)
 
     def test_dedupes_repeated_pins(self):
         sha = "d" * 40
@@ -390,8 +437,7 @@ sys.stdout.write(status)
             [f"actions/checkout@{sha} # v1", f"actions/checkout@{sha} # v1"],
         )
         self.set_statuses({
-            "https://api.github.com": "200",
-            f"https://api.github.com/repos/actions/checkout/commits/{sha}": "200",
+            self.pin_url("actions/checkout", sha): "200",
         })
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stderr)
