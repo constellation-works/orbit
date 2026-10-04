@@ -2,10 +2,10 @@
 type: context
 summary: Running log of why Orbit task runs failed or got blocked, one entry per distinct cause, with the fix that closed it.
 incident_date: 2026-09-27
-last_validated: 2026-09-28
+last_validated: 2026-10-03
 tags: [incident, rca, operations, distributed-drain, sandbox]
 paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**", "crates/orbit-core/assets/executors/claude.yaml", "crates/orbit-agent/src/providers/claude/**"]
-related_artifacts: [ORB-13663, ORB-13664, ORB-13612, ORB-13463, ORB-13649, ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
+related_artifacts: [ORB-13843, ORB-13851, ORB-13852, ORB-13663, ORB-13664, ORB-13612, ORB-13463, ORB-13649, ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
 ---
 
 # Run failure log
@@ -26,6 +26,43 @@ Each entry records:
 
 Newest entries go first. When you rescue a blocked task, add its cause here before
 you close it out.
+
+## 2026-10-03: Owner moved to a new host without Bubblewrap
+
+- **Where:** Owner (`hm_9ca6004473492f06`, newly on dk-server-2, Ubuntu 26.04),
+  every agent step (`implement_one`, `pilot`) under `linux-bwrap`.
+- **Symptom:** `cli invocation failed (permanent): trusted Bubblewrap not
+  available at /usr/bin/bwrap; declare allow_fallback: true to permit bare exec`.
+  The first sweep's drain (`jrun-20261004-0123-t1`) failed all three leaves, and
+  both task-pilot runs failed.
+- **Cause:** The owner was migrated by copying `~/.orbit` and the checkouts to a
+  fresh OS install, so `orbit init` never ran there and nothing installed the
+  `bubblewrap` package or loaded the `bwrap-userns-restrict` AppArmor profile.
+  `orbit doctor` (without `providers`) did not flag it. Running `orbit init` would
+  not have fixed it either: automatic host preparation covers Ubuntu 24.04, not
+  26.04.
+- **Fix:** No code defect. The operator installed the package and loaded the
+  profile (`sudo apt install bubblewrap && sudo apparmor_parser -r
+  /etc/apparmor.d/bwrap-userns-restrict`). `orbit doctor providers` then reported
+  every provider `sandbox_ready`. When you move a host by copying it, run
+  `orbit doctor providers` before you enable the clock.
+- **Rescue:** stopped the drain with `orbit run auto --stop`, then moved the
+  blocked tasks back to `backlog`.
+- **Tasks:** ORB-13843, ORB-13851, ORB-13852.
+
+## 2026-10-03: `release_locks` rejected its own input after a gate failure
+
+- **Where:** Owner, `task_gate_pipeline` failure cleanup (`gate_invoke` →
+  deterministic `release_locks`).
+- **Symptom:** `deterministic action release_locks failed: invalid input: unknown
+  fields 'run_id', ...` on `jrun-20261004-0123-c5` (and its parent
+  `task_auto_pipeline` run `-c1`), after the child `task_pr_pipeline` failed on
+  the Bubblewrap cause above.
+- **Cause:** Not yet diagnosed. The action input carries fields its schema does
+  not accept, so a failed gate run may leave its locks for the next GC.
+  `orbit task locks list` showed no leftover locks afterwards.
+- **Fix:** open.
+- **Tasks:** the same three as the entry above.
 
 ## 2026-09-28: Stopping a follower drain strands its live leaves
 
