@@ -10,7 +10,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ProcessRunResult, Register, Timer } from 'claude-code'
 
 import type { OrbitShip, OrbitView } from '../../types'
-import { argvFor, failure, localArgv, OrbitError, ownerHost, readShown, reason, targetFrom, type Target } from './cli'
+import { argvFor, destinationsArgv, failure, federatedHosts, localArgv, OrbitError, ownerHost, readShown, reason, targetFrom, type Target } from './cli'
 import {
   card,
   changes,
@@ -91,13 +91,38 @@ async function findTarget($: EngineInterface): Promise<Target> {
   } catch {
     shown = null
   }
+  if (shown !== null && shown.role !== 'replica') {
+    target = targetFrom(shown, cwd, null, cwd)
+    return target
+  }
   let root = cwd
-  if (shown === null && settings.host !== null) {
+  if (shown === null) {
     const top = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 5000 }).catch(() => null)
     if (top !== null && top.exitCode === 0) root = top.stdout.trim()
   }
-  target = targetFrom(shown, cwd, settings.host, root)
-  return target
+  const hosts = settings.host !== null ? [settings.host] : await federated($)
+  if (hosts.length <= 1) {
+    target = targetFrom(shown, cwd, hosts[0] ?? null, root)
+    return target
+  }
+  // Several federated owners: the first that answers for the workspace owns it.
+  let failed = ''
+  for (const host of hosts) {
+    const candidate = targetFrom(shown, cwd, host, root)
+    const probe = await $.process.run(argvFor(candidate, ['task', 'list', '--status', 'review', '--json', '--limit', '1']), { cwd, timeoutMs: 15_000 }).catch(() => null)
+    if (probe !== null && probe.exitCode === 0) {
+      target = candidate
+      return target
+    }
+    failed = probe === null ? `${host} timed out` : (failure(candidate, ['task'], probe.exitCode, probe.stdout, probe.stderr) ?? '')
+  }
+  throw new OrbitError(`no federated owner answered for ${shown?.name ?? root}: ${failed}`)
+}
+
+/** The owners Orbit's federated MCP already reaches, when the ownerHost option names none. */
+async function federated($: EngineInterface): Promise<string[]> {
+  const ran = await $.process.run(destinationsArgv, { cwd, timeoutMs: 5000 }).catch(() => null)
+  return ran !== null && ran.exitCode === 0 ? federatedHosts(ran.stdout) : []
 }
 
 async function orbit($: EngineInterface, args: readonly string[], timeoutMs = 20_000): Promise<ProcessRunResult> {

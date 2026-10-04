@@ -186,3 +186,27 @@ test('the pane reads the workspace when it is drawn before session.start', async
   expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
   await ui.unmount()
 })
+
+test('an unregistered checkout reads the owner the federated MCP names when ownerHost is unset', async ($, on) => {
+  const ran: string[][] = []
+  on('process.run', (_$, e) => {
+    ran.push([...e.argv])
+    const reply = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv[0] === '/bin/sh' && (e.argv[2] ?? '').includes('mcp-destinations.toml')) return reply('[[destinations]]\nssh = "fed-box"\nmachine_id = "hm_1"\n')
+    if (e.argv[0] === 'git') return reply('/work/demo\n')
+    if (e.argv[0] === 'ssh') return reply(JSON.stringify((e.argv.at(-1) ?? '').includes("'done'") ? [] : TASKS))
+    return reply(JSON.stringify({ registered: false, workspace: null, checkout: null }))
+  })
+  stubSession(on)
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:05:00Z') })
+  await $.session.start({ cwd: '/work/demo', source: 'startup' } as never)
+  await clock.advance(0)
+
+  const remote = ran.filter(argv => argv[0] === 'ssh')
+  expect(remote.length).toBeGreaterThan(0)
+  expect(remote.every(argv => argv.includes('fed-box') && (argv.at(-1) ?? '').includes("'--workspace' 'demo'"))).toBe(true)
+  const ui = await $.ui.mount({ plugin: 'orbit', surface: 'desktop', ...PANE })
+  await ui.press({ key: 'tab:board' })
+  expect(await ui.find({ key: 'card:ORB-2' })).toBeDefined()
+  await ui.unmount()
+})
