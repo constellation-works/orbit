@@ -375,7 +375,8 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
     .unwrap();
     let ws = runtime.workspace_id().unwrap();
     // Seed the persisted shape produced before timeout accounting was fixed,
-    // deliberately omitting `decisions` to exercise compatibility.
+    // deliberately omitting `decisions` and carrying the retired repair-cycle
+    // counts to exercise compatibility.
     let lineage = format!("{ws}/{id}/main");
     let now = chrono::Utc::now();
     let ledger = json!({
@@ -384,6 +385,16 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
         "state": {"state": "settled", "verdict": "incomplete"}, "repair_cycles": 0, "elapsed_seconds": 19385}],
         "consumed_seconds": 19385, "revision": 1, "updated_at": now,
     });
+    // How that ledger reads today: the retired repair-cycle counts drop out.
+    let mut current = ledger.clone();
+    current["budget"]
+        .as_object_mut()
+        .unwrap()
+        .remove("repair_cycles");
+    current["attempts"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("repair_cycles");
     let conn = Connection::open(workspace.home.join(".orbit/orbit.db")).unwrap();
     conn.execute("INSERT INTO review_lineages(workspace_id,lineage_key,revision,ledger_json) VALUES(?1,?2,1,?3)", rusqlite::params![ws,lineage,ledger.to_string()]).unwrap();
     let persisted = || {
@@ -445,7 +456,7 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
     );
     assert_eq!(persisted(), original, "a blank decision changes nothing");
     let reset = client.call_tool_ok("orbit_task_review_reset", args);
-    assert_eq!(reset["ledger"]["attempts"], ledger["attempts"]);
+    assert_eq!(reset["ledger"]["attempts"], current["attempts"]);
     assert_eq!(reset["ledger"]["consumed_seconds"], 0);
     assert_eq!(
         reset["ledger"]["decisions"][0]["previous_consumption"]["seconds"],
@@ -461,7 +472,7 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(reset["ledger"]["budget"], ledger["budget"]);
+    assert_eq!(reset["ledger"]["budget"], current["budget"]);
     drop(client);
     let output = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
@@ -479,7 +490,7 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
             .env("ORBIT_OPERATOR", "1"),
     );
     let reset: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(reset["ledger"]["attempts"], ledger["attempts"]);
+    assert_eq!(reset["ledger"]["attempts"], current["attempts"]);
     assert_eq!(reset["ledger"]["decisions"].as_array().unwrap().len(), 2);
     assert_eq!(
         reset["ledger"]["decisions"][1]["reason"],

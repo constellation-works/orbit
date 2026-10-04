@@ -149,7 +149,7 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
         attempt_id: attempt_id.to_string(),
         verdict,
         summary: "Checked the change against the criteria.".to_string(),
-        findings: if repaired || verdict == ReviewVerdict::ChangesRequired {
+        findings: if repaired || verdict == ReviewVerdict::Reject {
             vec![ReviewFinding {
                 id: "F1".to_string(),
                 severity: "medium".to_string(),
@@ -160,6 +160,7 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
                 } else {
                     FindingDisposition::Open
                 },
+                change: repaired.then(|| "Appended the trailing note".to_string()),
             }]
         } else {
             Vec::new()
@@ -171,7 +172,7 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
             note: None,
             check: None,
         }],
-        escalation: (verdict == ReviewVerdict::ChangesRequired)
+        escalation: (verdict == ReviewVerdict::Reject)
             .then(|| "decide whether the note is required".to_string()),
     }
 }
@@ -341,24 +342,6 @@ impl Gated {
         run_id: &str,
         admission: &Value,
     ) -> Result<Value, orbit_engine::DispatchError> {
-        self.settle_with(run_id, admission, false)
-    }
-
-    /// Settle as the pipeline's pre-PR review loop does, which may send a
-    /// `changes_required` verdict back to the implementer.
-    pub(super) fn settle_in_loop(
-        &self,
-        admission: &Value,
-    ) -> Result<Value, orbit_engine::DispatchError> {
-        self.settle_with(&self.run_id, admission, true)
-    }
-
-    fn settle_with(
-        &self,
-        run_id: &str,
-        admission: &Value,
-        rework_allowed: bool,
-    ) -> Result<Value, orbit_engine::DispatchError> {
         review_gate_settle(
             &self.fixture.runtime,
             "review_gate_settle",
@@ -369,22 +352,22 @@ impl Gated {
                 "base": "main",
                 "base_sync": "local",
                 "admission": admission,
-                "rework_allowed": rework_allowed,
             }),
         )
     }
 
-    /// Commit an implementer's rework on the candidate, as the pipeline's
-    /// rework commit does, returning the new head.
-    pub(super) fn commit_rework(&self, contents: &str) -> String {
-        let repo = &self.fixture.repo;
-        fs::write(repo.join("src.txt"), contents).expect("rework");
-        git(repo, &["add", "src.txt"]);
+    /// What the reviewer does in the worktree: edit the source file, left
+    /// uncommitted for settlement to commit.
+    pub(super) fn reviewer_edits(&self, contents: &str) {
+        fs::write(self.fixture.repo.join("src.txt"), contents).expect("reviewer fix");
+    }
+
+    /// `git log -1` of `revision` in `format`.
+    pub(super) fn log(&self, revision: &str, format: &str) -> String {
         git(
-            repo,
-            &["commit", "-m", &format!("fix: rework [{}]", self.task_id)],
-        );
-        git(repo, &["rev-parse", "HEAD"])
+            &self.fixture.repo,
+            &["log", "-1", &format!("--format={format}"), revision],
+        )
     }
 
     /// The task's comments, oldest first.

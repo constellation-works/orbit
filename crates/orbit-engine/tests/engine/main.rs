@@ -1,6 +1,6 @@
 //! Activity dispatch and the engine's deterministic actions: v2 agent and
 //! local-shell dispatch, name resolution, worktree lifecycle, PR landing, the
-//! shipped PR pipeline's review rework loop and history notes.
+//! shipped PR pipeline's before-PR review fixes and history notes.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -13,7 +13,7 @@ mod commit_verifier;
 mod final_recovery;
 mod history_note;
 mod pr_landing;
-mod review_rework;
+mod review_fixes;
 mod v2_cli_agent;
 mod v2_local_shell;
 mod v2_name_resolution;

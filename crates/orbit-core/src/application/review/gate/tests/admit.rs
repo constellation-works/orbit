@@ -256,8 +256,7 @@ fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_star
                 &ReviewSettlement {
                     lineage_key: lineage,
                     attempt_id: attempt,
-                    verdict: ReviewVerdict::PassedWithoutRepairs,
-                    repair_cycles: 0,
+                    verdict: ReviewVerdict::Accept,
                     now: Utc::now(),
                 }
             )

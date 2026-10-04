@@ -185,7 +185,7 @@ fn claimed_new_path_matches(path: &str, selectors: &[String], workspace: &Path) 
     })
 }
 
-pub(super) fn ensure_candidate_ownership(
+pub(in crate::executor::automation::vcs) fn ensure_candidate_ownership(
     candidate_paths: &BTreeSet<String>,
     workspace_path: &Path,
     tasks: &[Task],

@@ -1,11 +1,11 @@
-//! Settling released attempts, drifted reports, bundle reports and the
-//! pre-PR review loop's rework decision.
+//! Settling released attempts, drifted reports, bundle reports, and the
+//! three outcomes of a reviewer that fixes its own findings [ORB-13989].
 
 use std::fs;
 
 use chrono::{Duration, Utc};
 use orbit_engine::DispatchError;
-use orbit_types::workflow::{FindingDisposition, ReviewAttemptState, ReviewVerdict};
+use orbit_types::workflow::{FindingDisposition, ReviewAttemptState, ReviewFinding, ReviewVerdict};
 use serde_json::json;
 
 use super::support::{
@@ -50,7 +50,7 @@ fn a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime
     write_report(
         &gated.fixture.runtime,
         &gated.task_id,
-        &report(&attempt_id, ReviewVerdict::PassedWithoutRepairs, false),
+        &report(&attempt_id, ReviewVerdict::Accept, false),
     );
     let settled = gated
         .settle_in(&resumed, &admission)
@@ -61,7 +61,7 @@ fn a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime
     assert_eq!(
         ledger.attempts[0].state,
         ReviewAttemptState::Settled {
-            verdict: ReviewVerdict::PassedWithoutRepairs
+            verdict: ReviewVerdict::Accept
         }
     );
     assert!(ledger.attempts[0].released_at.is_none());
@@ -74,7 +74,7 @@ fn a_failed_reviewer_step_leaves_no_open_attempt_and_is_charged_reviewer_runtime
     assert_eq!(
         gated.ledger(&admission).attempts[0].state,
         ReviewAttemptState::Settled {
-            verdict: ReviewVerdict::PassedWithoutRepairs
+            verdict: ReviewVerdict::Accept
         },
         "a release never rewrites a settled verdict"
     );
@@ -112,7 +112,10 @@ fn a_drifted_report_on_a_later_bundle_task_still_settles() {
     let settled = gated
         .settle(&admission)
         .expect("drift that keeps the report's meaning settles");
-    assert_eq!(settled["verdict"], "passed_with_repairs");
+    assert_eq!(
+        settled["verdict"], "accept_with_fixes",
+        "the pre-ORB-13989 label still reads as the same decision"
+    );
     let certificate = gated.certificate();
     assert_eq!(certificate.findings.len(), 1);
     assert_eq!(certificate.findings[0].id, "1");
@@ -130,12 +133,12 @@ fn the_most_severe_bundle_report_decides_and_refuses_without_retry() {
     write_report(
         &gated.fixture.runtime,
         &gated.bundle[0],
-        &report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false),
+        &report(attempt_id, ReviewVerdict::Accept, false),
     );
     write_report(
         &gated.fixture.runtime,
         &gated.bundle[1],
-        &report(attempt_id, ReviewVerdict::ChangesRequired, false),
+        &report(attempt_id, ReviewVerdict::Reject, false),
     );
 
     let error = gated
@@ -147,165 +150,163 @@ fn the_most_severe_bundle_report_decides_and_refuses_without_retry() {
     );
     assert!(error.to_string().contains("review_gate_blocked"), "{error}");
     let certificate = gated.certificate();
-    assert_eq!(certificate.verdict, ReviewVerdict::ChangesRequired);
-    assert!(
-        !certificate.rework_requested,
-        "only the pre-PR review loop can send findings back for rework"
-    );
+    assert_eq!(certificate.verdict, ReviewVerdict::Reject);
 }
 
-/// [ORB-13891] Inside the pre-PR review loop, `changes_required` with budget
-/// left is sent back to the implementer: the settlement hands over the open
-/// findings and the head they were raised on, records them on the task, and
-/// charges the lineage one repair cycle. Replaying the settlement reproduces
-/// it. The reworked head is then admitted as a fresh attempt and its pass is
-/// the reviewed head the PR steps publish.
+/// [ORB-13989] A reviewer with fixable findings fixes them. Settlement
+/// records the fixes as one reviewer commit on top of the untouched
+/// implementation commit, posts every finding with what changed for it as a
+/// task comment, and hands the PR steps the revalidation trigger and the
+/// "Review fixes" body section.
 #[test]
-fn changes_required_is_sent_back_for_rework_and_the_reworked_head_is_reviewed_again() {
+fn fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation() {
     let gated = gated_fixture(BEFORE_PR);
     let admission = gated.admit().expect("admit");
-    let first_attempt = admission["attempt_id"].as_str().expect("attempt");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    gated.reviewer_edits("implementation target\nimplemented\nnote\n");
     write_report(
         &gated.fixture.runtime,
         &gated.task_id,
-        &report(first_attempt, ReviewVerdict::ChangesRequired, false),
+        &report(attempt_id, ReviewVerdict::AcceptWithFixes, true),
     );
 
-    let settled = gated
-        .settle_in_loop(&admission)
-        .expect("an affordable changes_required asks for rework");
-    assert_eq!(settled["gate"], "rework_required");
-    assert_eq!(settled["verdict"], "changes_required");
+    let settled = gated.settle(&admission).expect("fixed findings accept");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["verdict"], "accept_with_fixes");
+    assert_eq!(settled["reviewer_fixed"], true);
     assert_eq!(
-        settled["reviewed_head_sha"], "",
-        "a rework request is never a reviewed head"
+        settled["implementation_head_sha"],
+        gated.implementation_sha.as_str()
     );
-    let rework = &settled["rework"];
-    assert_eq!(rework["attempt_id"], first_attempt);
-    assert_eq!(rework["head_sha"], gated.implementation_sha.as_str());
-    assert_eq!(rework["findings"].as_array().map(Vec::len), Some(1));
-    assert_eq!(rework["findings"][0]["id"], "F1");
-    assert_eq!(rework["findings"][0]["summary"], "Missing trailing note");
 
-    let ledger = gated.ledger(&admission);
+    let head = gated.log("HEAD", "%H");
+    assert_eq!(settled["reviewed_head_sha"], head.as_str());
     assert_eq!(
-        ledger.attempts[0].state,
-        ReviewAttemptState::Settled {
-            verdict: ReviewVerdict::ChangesRequired
-        }
+        gated.log("HEAD^", "%H"),
+        gated.implementation_sha,
+        "the implementation commit is never amended"
     );
-    assert_eq!(
-        ledger.attempts[0].repair_cycles, 1,
-        "the granted rework is charged as the lineage's repair cycle"
-    );
-    assert!(gated.certificate().rework_requested);
-    let comments = gated.comments();
-    let settlement = comments
-        .iter()
-        .find(|comment| comment.contains(first_attempt))
-        .expect("the settlement is recorded on the task");
     assert!(
-        settlement.contains("F1") && settlement.contains("Missing trailing note"),
-        "the task records the findings sent back: {settlement}"
+        gated.log("HEAD", "%s").starts_with("review: "),
+        "the reviewer commit is `review: <summary>`"
+    );
+    assert!(
+        gated.log("HEAD", "%an").contains("reviewer"),
+        "the reviewer commit is attributed to the reviewer, not the implementer"
+    );
+    assert!(
+        gated
+            .log("HEAD", "%(trailers:key=Orbit-Review-Crew,valueonly)")
+            .contains("reviewers"),
+        "the reviewer commit names the reviewer crew"
     );
 
-    let replayed = gated
-        .settle_in_loop(&admission)
-        .expect("a replayed settlement reconciles");
-    assert_eq!(replayed, settled);
-    assert_eq!(gated.ledger(&admission).attempts[0].repair_cycles, 1);
-
-    let reworked = gated.commit_rework("implementation target\nimplemented\nnote\n");
-    let readmission = gated.admit().expect("the reworked head is admitted");
-    let second_attempt = readmission["attempt_id"].as_str().expect("attempt");
-    assert_ne!(second_attempt, first_attempt, "a fresh reviewer start");
-    write_report(
-        &gated.fixture.runtime,
-        &gated.task_id,
-        &report(second_attempt, ReviewVerdict::PassedWithoutRepairs, false),
+    let certificate = gated.certificate();
+    assert_eq!(certificate.repair_commits.len(), 1);
+    assert_eq!(certificate.repair_commits[0].commit, head);
+    let comment = gated
+        .comments()
+        .into_iter()
+        .find(|comment| comment.contains(attempt_id))
+        .expect("the settlement posts its findings on the task");
+    for expected in ["F1", "Missing trailing note", "Appended the trailing note"] {
+        assert!(comment.contains(expected), "{expected} in {comment}");
+    }
+    let fixes = settled["review_fixes"].as_str().expect("review fixes");
+    assert!(
+        fixes.starts_with("## Review fixes"),
+        "the PR body section: {fixes}"
     );
-    let passed = gated
-        .settle_in_loop(&readmission)
-        .expect("the reworked head passes");
-    assert_eq!(passed["gate"], "passed");
-    assert_eq!(passed["reviewed_head_sha"], reworked.as_str());
-
-    let ledger = gated.ledger(&readmission);
-    assert_eq!(ledger.attempts.len(), 2);
-    assert_eq!(ledger.consumed().reviewer_starts, 2);
-    assert_eq!(ledger.consumed().repair_cycles, 1);
+    assert!(fixes.contains(&head) && fixes.contains("Appended the trailing note"));
 }
 
-/// [ORB-13891] Rework is bounded by the lineage budget. Once no repair
-/// cycle or no reviewer start is left to rework and re-review,
-/// `changes_required` refuses the settlement and blocks delivery, with every
-/// cycle's findings recorded on the task.
+/// [ORB-13989] No findings: `accept` adds no reviewer commit and asks the
+/// PR steps for no revalidation and no "Review fixes" section.
 #[test]
-fn changes_required_without_rework_budget_blocks_with_every_cycles_findings() {
-    let gated = gated_fixture(&format!("{BEFORE_PR}review_repair_cycles = 1\n"));
+fn no_findings_accepts_without_a_reviewer_commit() {
+    let gated = gated_fixture(BEFORE_PR);
     let admission = gated.admit().expect("admit");
-    let first_attempt = admission["attempt_id"].as_str().expect("attempt");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
     write_report(
         &gated.fixture.runtime,
         &gated.task_id,
-        &report(first_attempt, ReviewVerdict::ChangesRequired, false),
+        &report(attempt_id, ReviewVerdict::Accept, false),
     );
-    let settled = gated.settle_in_loop(&admission).expect("first rework");
-    assert_eq!(settled["gate"], "rework_required");
 
-    gated.commit_rework("implementation target\nimplemented\nnote\n");
-    let readmission = gated.admit().expect("re-admit");
-    let second_attempt = readmission["attempt_id"].as_str().expect("attempt");
-    let mut second = report(second_attempt, ReviewVerdict::ChangesRequired, false);
-    second.findings[0].id = "F2".to_string();
-    second.findings[0].summary = "Note is in the wrong place".to_string();
-    write_report(&gated.fixture.runtime, &gated.task_id, &second);
+    let settled = gated.settle(&admission).expect("accept");
+    assert_eq!(settled["verdict"], "accept");
+    assert_eq!(settled["reviewer_fixed"], false);
+    assert_eq!(settled["review_fixes"], "");
+    assert_eq!(
+        settled["reviewed_head_sha"],
+        gated.implementation_sha.as_str()
+    );
+    assert_eq!(gated.log("HEAD", "%H"), gated.implementation_sha);
+    assert!(gated.certificate().repair_commits.is_empty());
+    assert!(
+        gated
+            .comments()
+            .iter()
+            .any(|comment| comment.contains(attempt_id)),
+        "an accept is recorded on the task too"
+    );
+}
 
-    let error = gated
-        .settle_in_loop(&readmission)
-        .expect_err("no repair cycle is left to rework");
+/// [ORB-13989] A finding the reviewer cannot fix is `reject`: settlement
+/// refuses without retry so the failure handoff blocks the task, nothing
+/// goes back to an implementer, and the candidate keeps the implementation
+/// commit plus the reviewer's commit for whatever it did fix.
+#[test]
+fn an_unfixable_finding_rejects_and_preserves_both_commits() {
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+    let mut rejected = report(attempt_id, ReviewVerdict::Reject, true);
+    rejected.findings.push(ReviewFinding {
+        id: "F2".to_string(),
+        severity: "high".to_string(),
+        summary: "The approach contradicts the acceptance criteria".to_string(),
+        paths: vec!["src.txt".to_string()],
+        disposition: FindingDisposition::Open,
+        change: None,
+    });
+    write_report(&gated.fixture.runtime, &gated.task_id, &rejected);
+
+    let error = gated.settle(&admission).expect_err("reject blocks");
     assert!(
         matches!(error, DispatchError::DeterministicActionRefused { .. }),
-        "{error}"
+        "a reject is a decision, not a retryable fault: {error}"
     );
-    let message = error.to_string();
-    assert!(
-        message.contains("review_gate_blocked")
-            && message.contains("review_rework_exhausted: review_repair_cycles_exhausted"),
-        "{message}"
-    );
+    assert!(error.to_string().contains("review_gate_blocked"), "{error}");
     let certificate = gated.certificate();
-    assert!(!certificate.rework_requested);
-    assert_eq!(gated.ledger(&readmission).consumed().repair_cycles, 1);
-    let comments = gated.comments().join("\n");
-    for (attempt, finding, summary) in [
-        (first_attempt, "F1", "Missing trailing note"),
-        (second_attempt, "F2", "Note is in the wrong place"),
+    assert_eq!(certificate.verdict, ReviewVerdict::Reject);
+    assert_eq!(certificate.findings.len(), 2);
+    assert_eq!(
+        gated.log("HEAD^", "%H"),
+        gated.implementation_sha,
+        "the implementation commit is preserved under the reviewer commit"
+    );
+    assert_eq!(
+        certificate.repair_commits[0].commit,
+        gated.log("HEAD", "%H")
+    );
+    let ledger = gated.ledger(&admission);
+    assert_eq!(
+        ledger.consumed().reviewer_starts,
+        1,
+        "one review start per candidate"
+    );
+    let comment = gated
+        .comments()
+        .into_iter()
+        .find(|comment| comment.contains(attempt_id))
+        .expect("the findings comment");
+    for finding in [
+        "F1",
+        "F2",
+        "The approach contradicts the acceptance criteria",
     ] {
-        assert!(
-            comments.contains(attempt) && comments.contains(finding) && comments.contains(summary),
-            "the task records cycle {attempt}'s findings: {comments}"
-        );
+        assert!(comment.contains(finding), "{finding} in {comment}");
     }
-
-    let gated = gated_fixture(&format!("{BEFORE_PR}review_reviewer_starts = 1\n"));
-    let admission = gated.admit().expect("admit");
-    write_report(
-        &gated.fixture.runtime,
-        &gated.task_id,
-        &report(
-            admission["attempt_id"].as_str().expect("attempt"),
-            ReviewVerdict::ChangesRequired,
-            false,
-        ),
-    );
-    let error = gated
-        .settle_in_loop(&admission)
-        .expect_err("no reviewer start is left to review a rework");
-    assert!(
-        error
-            .to_string()
-            .contains("review_rework_exhausted: review_starts_exhausted"),
-        "{error}"
-    );
 }

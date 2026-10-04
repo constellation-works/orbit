@@ -1,9 +1,8 @@
-//! Check the reviewer's claims against the repository, the task scope and
-//! the budget, and render the verdict comment.
+//! Check the reviewer's claims against the repository and the task scope,
+//! and render the findings comment and the PR's review-fixes section.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
 use orbit_automation::review::{
     combined_task_meaning_digest, task_meaning_digest, validation_evidence, validation_role_counts,
 };
@@ -15,7 +14,7 @@ use orbit_engine::review_gate::{
 use orbit_types::task::{Task, TaskArtifact};
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
-    ReviewAttempt, ReviewCertificate, ReviewLedger, ReviewReport, ReviewVerdict, ReviewerIdentity,
+    ReviewAttempt, ReviewCertificate, ReviewReport, ReviewVerdict, ReviewerIdentity,
 };
 
 use super::super::automation_error;
@@ -24,7 +23,7 @@ use crate::application::task::TaskUpdateParams;
 
 use super::context::GateContext;
 
-/// The reviewer's claims, checked against the repository and the budget.
+/// The reviewer's claims, checked against the repository and the task scope.
 pub(super) struct Judgement {
     pub(super) verdict: ReviewVerdict,
     pub(super) findings: Vec<orbit_types::workflow::ReviewFinding>,
@@ -137,7 +136,9 @@ impl Judgement {
         Ok(())
     }
 
-    /// Commit whatever the reviewer changed as its own attributed work.
+    /// Commit whatever the reviewer changed as its own attributed work: the
+    /// candidate's one reviewer commit, `review: <summary>`, on top of the
+    /// untouched implementation commits [ORB-13989].
     ///
     /// An out-of-selector path listed on a repaired finding is a declared
     /// coupled repair: the gate widens `context_files` the same way the
@@ -310,33 +311,21 @@ impl Judgement {
     }
 
     /// Cross-check the claimed verdict against what actually happened.
-    pub(super) fn reconcile_verdict(
-        &mut self,
-        ledger: &ReviewLedger,
-        repair: Option<&CommitIdentity>,
-    ) {
+    pub(super) fn reconcile_verdict(&mut self, repair: Option<&CommitIdentity>) {
         let open_findings = open_findings(&self.findings).count();
         match self.verdict {
-            ReviewVerdict::PassedWithoutRepairs if repair.is_some() => self.downgrade(
-                "verdict_inconsistent: the reviewer reported no repairs but changed the worktree",
+            ReviewVerdict::Accept if repair.is_some() => self.downgrade(
+                "verdict_inconsistent: the reviewer reported no fixes but changed the worktree",
             ),
-            ReviewVerdict::PassedWithRepairs if repair.is_none() => self.downgrade(
-                "verdict_inconsistent: the reviewer reported repairs but changed nothing",
-            ),
-            ReviewVerdict::PassedWithRepairs if ledger.remaining().repair_cycles == 0 => self
-                .downgrade(
-                    "review_repair_cycles_exhausted: the lineage has no repair cycle left for \
-                     these reviewer repairs",
-                ),
-            ReviewVerdict::PassedWithoutRepairs | ReviewVerdict::PassedWithRepairs
-                if open_findings > 0 =>
-            {
+            ReviewVerdict::AcceptWithFixes if repair.is_none() => self
+                .downgrade("verdict_inconsistent: the reviewer reported fixes but changed nothing"),
+            ReviewVerdict::Accept | ReviewVerdict::AcceptWithFixes if open_findings > 0 => {
                 self.downgrade(&format!(
-                    "verdict_inconsistent: {open_findings} finding(s) remain open under a pass"
+                    "verdict_inconsistent: {open_findings} finding(s) remain open under an accept"
                 ));
             }
-            ReviewVerdict::ChangesRequired if self.escalation.is_none() => {
-                self.escalation = Some("changes_required".to_string());
+            ReviewVerdict::Reject if self.escalation.is_none() => {
+                self.escalation = Some("reject".to_string());
             }
             _ => {}
         }
@@ -350,55 +339,6 @@ impl Judgement {
                 Err(defect) => self.downgrade(&defect.reason()),
             }
         }
-    }
-
-    /// Whether a settled `changes_required` verdict goes back to the
-    /// implementer for rework within this run [ORB-13891].
-    ///
-    /// Rework needs an open finding to act on, a reviewer start left for the
-    /// re-review, a repair cycle left after this attempt's own reviewer
-    /// repair, and reviewer minutes left. `ledger` is the lineage while this
-    /// attempt was still open, so a replayed settlement decides exactly as
-    /// the first one did. A refusal is recorded in the escalation, and
-    /// delivery stops as for any other non-pass verdict.
-    pub(super) fn request_rework(
-        &mut self,
-        ledger: &ReviewLedger,
-        reviewer_repair_cycles: u32,
-        now: DateTime<Utc>,
-    ) -> bool {
-        if self.verdict != ReviewVerdict::ChangesRequired {
-            return false;
-        }
-        let remaining = ledger.remaining_at(now);
-        let budget = ledger.budget;
-        let refusal = if open_findings(&self.findings).next().is_none() {
-            "review_rework_unavailable: changes_required names no open finding for the \
-             implementer to rework"
-                .to_string()
-        } else if remaining.reviewer_starts == 0 {
-            format!(
-                "review_rework_exhausted: review_starts_exhausted: all {} reviewer start(s) of \
-                 the lineage are spent, so a rework could not be re-reviewed",
-                budget.reviewer_starts
-            )
-        } else if remaining.repair_cycles <= reviewer_repair_cycles {
-            format!(
-                "review_rework_exhausted: review_repair_cycles_exhausted: all {} repair \
-                 cycle(s) of the lineage are spent",
-                budget.repair_cycles
-            )
-        } else if remaining.seconds == 0 {
-            format!(
-                "review_rework_exhausted: review_minutes_exhausted: the lineage's {} reviewer \
-                 minute(s) are spent",
-                budget.minutes
-            )
-        } else {
-            return true;
-        };
-        self.escalate(&refusal);
-        false
     }
 
     fn downgrade(&mut self, reason: &str) {
@@ -453,9 +393,9 @@ fn merge_reports(reports: Vec<ReviewReport>) -> Option<ReviewReport> {
 
 fn verdict_severity(verdict: ReviewVerdict) -> u8 {
     match verdict {
-        ReviewVerdict::PassedWithoutRepairs => 0,
-        ReviewVerdict::PassedWithRepairs => 1,
-        ReviewVerdict::ChangesRequired => 2,
+        ReviewVerdict::Accept => 0,
+        ReviewVerdict::AcceptWithFixes => 1,
+        ReviewVerdict::Reject => 2,
         ReviewVerdict::Incomplete => 3,
     }
 }
@@ -559,37 +499,46 @@ pub(super) fn repair_author_label(reviewer: &ReviewerIdentity) -> String {
     format!("{} / {}", reviewer.provider, reviewer.model)
 }
 
+/// The task comment a settlement posts [ORB-13989]: the verdict, every
+/// finding with what the reviewer changed for it, then the evidence.
 pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
     let assurance = certificate
         .assurance
         .map(|assurance| assurance.as_str().to_string())
         .unwrap_or_else(|| "none".to_string());
-    let repairs = if certificate.repair_commits.is_empty() {
+    let reviewer_commit = if certificate.repair_commits.is_empty() {
         "none".to_string()
     } else {
         certificate
             .repair_commits
             .iter()
-            .map(|commit| format!("`{}` by {}", commit.commit, commit.author))
+            .map(|commit| {
+                format!(
+                    "`{}` `{}` by {}",
+                    commit.commit,
+                    one_line(&commit.subject),
+                    commit.author
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
     format!(
-        "before-PR review gate settled attempt `{}`: verdict **{}** (assurance: {}).\n\n\
+        "before-PR review settled attempt `{}`: verdict **{}** (assurance: {}).\n\n\
+         {}\n\n\
          - Reviewer: crew `{}` ({} / {}){}\n\
-         - Reviewed candidate: `{}` on base `{}` ({} implementation commit(s))\n\
+         - Implementation: `{}` on base `{}` ({} commit(s), unchanged by review)\n\
+         - Reviewer commit: {}\n\
          - Final candidate: `{}`\n\
-         - Reviewer repair commits: {}\n\
-         - Selectors widened from repaired findings: {}\n\
-         - Findings: {} ({} open)\n\
+         - Selectors widened for reviewer-changed paths: {}\n\
          - Validation on final candidate: {} record(s) [{}], complete: {}\n\
-         - Consumed: {} reviewer start(s), {} repair cycle(s), {}s of {} min\n\
-         - Escalation: {}{}{}\n\n\
-         Reviewer repairs were validated but not independently reviewed; this verdict is \
-         review evidence, not task approval or merge permission.",
+         - Consumed: {} reviewer start(s), {}s of {} min\n\
+         - Escalation: {}\n\n\
+         {}",
         certificate.attempt_id,
         certificate.verdict.as_str(),
         assurance,
+        finding_lines(&certificate.findings),
         certificate.reviewer.crew,
         certificate.reviewer.provider,
         certificate.reviewer.model,
@@ -601,71 +550,114 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
         certificate.reviewed_candidate.commit,
         certificate.base.commit,
         certificate.implementation_commits.len(),
+        reviewer_commit,
         certificate.final_candidate.commit,
-        repairs,
         if certificate.selectors_widened.is_empty() {
             "none".to_string()
         } else {
             certificate.selectors_widened.join(", ")
         },
-        certificate.findings.len(),
-        open_findings(&certificate.findings).count(),
         certificate.validation.len(),
         validation_roles(&certificate.validation),
         certificate.validation_complete,
         certificate.consumed.reviewer_starts,
-        certificate.consumed.repair_cycles,
         certificate.consumed.seconds,
         certificate.budget.minutes,
         certificate.escalation.as_deref().unwrap_or("none"),
-        rework_line(certificate),
-        finding_lines(&certificate.findings),
+        verdict_consequence(certificate.verdict),
     )
 }
 
-/// The rework decision a `changes_required` verdict carries [ORB-13891].
-fn rework_line(certificate: &ReviewCertificate) -> &'static str {
-    match (certificate.verdict, certificate.rework_requested) {
-        (ReviewVerdict::ChangesRequired, true) => {
-            "\n- Rework: requested; the implementer addresses the open findings in this run and \
-             the new head is reviewed again"
+/// What the verdict means for delivery, in one paragraph.
+fn verdict_consequence(verdict: ReviewVerdict) -> &'static str {
+    match verdict {
+        ReviewVerdict::Accept => {
+            "Accepted as implemented; the PR carries the implementation commit(s) only. This \
+             verdict is review evidence, not task approval or merge permission."
         }
-        (ReviewVerdict::ChangesRequired, false) => {
-            "\n- Rework: not requested; delivery stops for a recorded decision"
+        ReviewVerdict::AcceptWithFixes => {
+            "Accepted with the reviewer's fixes as a separate commit. Owner validation and the \
+             ownership check run again on that head before the PR opens; a failure there blocks \
+             the task as `reject`. The fixes were validated but not independently reviewed, and \
+             this verdict is not task approval or merge permission."
         }
-        _ => "",
+        ReviewVerdict::Reject | ReviewVerdict::Incomplete => {
+            "Delivery stops: no PR is opened, the task is blocked, and the candidate branch keeps \
+             every commit for final recovery or an operator decision. There is no second review \
+             round."
+        }
     }
 }
 
-/// Every finding of the attempt, one line each, so the task keeps each
-/// review cycle's findings even after a later attempt replaces the
-/// certificate artifact.
+/// Every finding of the attempt with its disposition and, for a fix, what
+/// the reviewer changed and where.
 fn finding_lines(findings: &[orbit_types::workflow::ReviewFinding]) -> String {
-    let mut lines = String::new();
+    if findings.is_empty() {
+        return "Findings: none.".to_string();
+    }
+    let mut lines = String::from("Findings:");
     for finding in findings {
         let disposition = match &finding.disposition {
             FindingDisposition::Open => "open".to_string(),
-            FindingDisposition::Repaired => "repaired".to_string(),
+            FindingDisposition::Repaired => "fixed".to_string(),
             FindingDisposition::Disposed { reason } => format!("disposed: {}", one_line(reason)),
         };
-        let paths = if finding.paths.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", finding.paths.join(", "))
-        };
         lines.push_str(&format!(
-            "\n  - `{}` [{}, {}] {}{}",
+            "\n- `{}` [{}, {}] {}",
             finding.id,
             finding.severity,
             disposition,
             one_line(&finding.summary),
-            paths
         ));
+        if let Some(change) = finding_change(finding) {
+            lines.push_str(&format!("\n  - Changed: {change}"));
+        }
     }
-    if lines.is_empty() {
-        return lines;
+    lines
+}
+
+/// What a fixed finding changed, with its paths; `None` for any other
+/// disposition.
+fn finding_change(finding: &orbit_types::workflow::ReviewFinding) -> Option<String> {
+    if finding.disposition != FindingDisposition::Repaired {
+        return None;
     }
-    format!("\n\nFindings:{lines}")
+    let change = finding
+        .change
+        .as_deref()
+        .map(one_line)
+        .filter(|change| !change.is_empty())
+        .unwrap_or_else(|| "not described by the reviewer".to_string());
+    Some(if finding.paths.is_empty() {
+        change
+    } else {
+        format!("{change} ({})", finding.paths.join(", "))
+    })
+}
+
+/// The PR body's "Review fixes" section: present only when the reviewer
+/// committed fixes, listing each fixed finding and what changed.
+pub(super) fn review_fixes_section(certificate: &ReviewCertificate) -> Option<String> {
+    let commit = certificate.repair_commits.first()?;
+    let mut section = format!(
+        "## Review fixes\n\nThe before-PR reviewer (crew `{}`) fixed its findings in `{}` \
+         (`{}`), a separate commit on top of the implementation. Owner validation reran on \
+         that head.\n",
+        certificate.reviewer.crew,
+        commit.commit,
+        one_line(&commit.subject),
+    );
+    for finding in &certificate.findings {
+        if let Some(change) = finding_change(finding) {
+            section.push_str(&format!(
+                "\n- `{}` [{}] {} — {change}",
+                finding.id,
+                finding.severity,
+                one_line(&finding.summary),
+            ));
+        }
+    }
+    Some(section)
 }
 
 fn one_line(text: &str) -> String {

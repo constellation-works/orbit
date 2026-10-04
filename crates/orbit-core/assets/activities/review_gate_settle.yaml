@@ -6,15 +6,17 @@ spec:
   type: deterministic
   description: >
     Settle the admitted before-PR review attempt: read the reviewer's
-    persisted report, commit any reviewer changes as separately attributed
-    repair commits, cross-check the claimed verdict against the repository,
-    validation records, task meaning, and the lineage budget, then issue the
-    certificate and settle the ledger. A pass returns the reviewed head and
-    base the PR steps recheck. With `rework_allowed`, a changes_required
-    verdict the lineage can still afford returns `gate: rework_required` and
-    the open findings for the implementer to rework, charging one repair
-    cycle. Any other verdict fails the step so the failure handoff preserves
-    the candidate without publishing a PR.
+    persisted report, commit the reviewer's changes as the candidate's one
+    reviewer commit (`review: <summary>`, attributed to the reviewer) over the
+    untouched implementation, cross-check the claimed verdict against the
+    repository, validation records, task meaning, and the lineage budget,
+    post the findings and what changed for each as a task comment, then issue
+    the certificate and settle the ledger. `accept` and `accept_with_fixes`
+    return the reviewed head and base the PR steps recheck; with fixes,
+    `reviewer_fixed` asks the pipeline to revalidate the new head and
+    `review_fixes` carries the PR body section. `reject` and `incomplete`
+    fail the step so the failure handoff preserves the candidate without
+    publishing a PR.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids, workspace_path, admission]
@@ -35,20 +37,16 @@ spec:
       admission:
         type: object
         description: The review_gate_admit output for this run.
-      rework_allowed:
-        type: boolean
-        description: >
-          Whether a changes_required verdict may be sent back to the
-          implementer within this run instead of stopping delivery.
   output_schema_json:
     type: object
     required: [gate, reviewed_head_sha, reviewed_base_sha]
     properties:
       gate:
         type: string
-        enum: [passed, not_required, rework_required]
+        enum: [passed, not_required]
       verdict:
         type: string
+        enum: [accept, accept_with_fixes]
       assurance:
         type: string
       attempt_id:
@@ -57,13 +55,16 @@ spec:
         type: string
       reviewed_base_sha:
         type: string
+      implementation_head_sha:
+        type: string
+        description: The implementation head the reviewer examined, before its commit.
       final_candidate_tree:
         type: string
-      rework:
-        type: object
-        description: >
-          Present with `gate: rework_required`: the attempt, the head and base
-          the findings were raised on, the open findings, the escalation, and
-          the remaining repair cycles and reviewer starts.
+      reviewer_fixed:
+        type: boolean
+        description: Whether the reviewer committed fixes that owner validation must rerun on.
+      review_fixes:
+        type: string
+        description: The PR body's "Review fixes" section; empty without reviewer fixes.
   action: review_gate_settle
   config: {}

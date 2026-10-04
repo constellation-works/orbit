@@ -24,7 +24,6 @@ pub(super) fn settle_attempt(
     ledger: &mut ReviewLedger,
     attempt_id: &str,
     verdict: ReviewVerdict,
-    repair_cycles: u32,
     now: DateTime<Utc>,
 ) -> bool {
     let Some(attempt) = ledger
@@ -40,7 +39,6 @@ pub(super) fn settle_attempt(
     };
     let charge = stop_reviewer(attempt, now);
     attempt.state = ReviewAttemptState::Settled { verdict };
-    attempt.repair_cycles = repair_cycles;
     attempt.elapsed_seconds = Some(charge);
     ledger.consumed_seconds = ledger
         .consumed_seconds
@@ -185,7 +183,6 @@ pub(super) fn reserve_new_in(
         candidate: request.candidate.clone(),
         started_at: request.now,
         state: ReviewAttemptState::Open,
-        repair_cycles: 0,
         elapsed_seconds: None,
         released_at: None,
         reviewer_seconds: 0,

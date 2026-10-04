@@ -8,10 +8,11 @@
 #   preparation, base synchronization, required validation, push, PR
 #   creation/reuse, and promotion are independent durable steps, so recovery
 #   resumes at the failed phase.
-# - A before-PR `changes_required` verdict the review budget can afford is
-#   reworked by the implementer and re-reviewed inside the `review_gate`
-#   loop; any other non-pass verdict, or an exhausted budget, stops delivery
-#   through the failure handoff with every cycle's findings on the task.
+# - The before-PR reviewer fixes its findings in one reviewer commit on top of
+#   the implementation; `review_validate` reruns owner validation and the
+#   ownership check on that head. A `reject` verdict, or fixes that fail
+#   there, stop delivery through the failure handoff with the findings on the
+#   task. Nothing goes back to the implementer and there is no second review.
 # - When the run itself terminalizes before PR completion, its recoverable
 #   candidate is published and the task is blocked for reconciliation. Once a
 #   PR was published and the task promoted to review, a completion-stage merge
@@ -170,107 +171,79 @@ spec:
     # checked no-diff exemption. Transient gate and reviewer failures retry,
     # then get one diagnosed recovery before the run fails.
     #
-    # ORB-13891: a `changes_required` verdict the lineage can still afford
-    # settles as `gate: rework_required`. The implementer then reworks the
-    # open findings in this worktree, the rework is committed and validated,
-    # and the loop admits a fresh reviewer for the new head. Any other
-    # non-pass verdict, or a rework the lineage cannot afford, refuses
-    # `review_gate_settle` (no retry): the failure handoff closes the attempt
-    # and preserves the candidate without opening a PR. The lineage budget —
-    # one reviewer start per pass, one repair cycle per rework — bounds the
-    # loop; `max_iterations` is the largest configurable reviewer-start
-    # budget, and `pr_open` refuses a gate still asking for rework.
-    - id: review_gate
-      loop:
-        max_iterations: 10
-        break_when: "{{ steps.review_gate_settle.output.gate }} != rework_required"
-        steps:
-          - id: review_gate_admit
-            retry:
-              max_attempts: 3
-              initial_backoff_ms: 1000
-              backoff_cap_ms: 10000
-              backoff_strategy: exponential
-            recovery_activity: step_failure_recovery
-            target: activity:review_gate_admit
-            default_input:
-              job_run_id: "{{ steps.worktree.output.job_run_id }}"
-              completed_task_ids: "{{ input.task_ids }}"
-              workspace_path: "{{ steps.worktree.output.workspace_path }}"
-              base: "{{ input.base_branch }}"
-              base_sync: "{{ input.base_sync }}"
-              mode: pr
-              skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+    # ORB-13989: one fresh reviewer per candidate fixes what it finds. The
+    # settlement commits its changes as the candidate's reviewer commit
+    # (`review: <summary>`) over the untouched implementation commit and posts
+    # the findings on the task. `reject` or `incomplete` refuses
+    # `review_gate_settle` (no retry): the failure handoff preserves the
+    # candidate and blocks the task without opening a PR.
+    - id: review_gate_admit
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        mode: pr
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
 
-          - id: review
-            when: "{{ steps.review_gate_admit.output.applies }} == true"
-            retry:
-              max_attempts: 2
-              initial_backoff_ms: 5000
-              backoff_cap_ms: 5000
-              backoff_strategy: linear
-            recovery_activity: step_failure_recovery
-            target: activity:agent_review_repair
-            default_input:
-              task_id: "{{ steps.review_gate_admit.output.first_task_id }}"
-              task_ids: "{{ input.task_ids }}"
-              workspace_path: "{{ steps.worktree.output.workspace_path }}"
-              repo_root: "{{ steps.worktree.output.workspace_path }}"
-              attempt_id: "{{ steps.review_gate_admit.output.attempt_id }}"
-              lineage_key: "{{ steps.review_gate_admit.output.lineage_key }}"
-              manifest_artifact: "{{ steps.review_gate_admit.output.manifest_artifact }}"
-              report_artifact: "{{ steps.review_gate_admit.output.report_artifact }}"
-              crew: "{{ steps.review_gate_admit.output.reviewer.crew }}"
+    - id: review
+      when: "{{ steps.review_gate_admit.output.applies }} == true"
+      retry:
+        max_attempts: 2
+        initial_backoff_ms: 5000
+        backoff_cap_ms: 5000
+        backoff_strategy: linear
+      recovery_activity: step_failure_recovery
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.review_gate_admit.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.review_gate_admit.output.attempt_id }}"
+        lineage_key: "{{ steps.review_gate_admit.output.lineage_key }}"
+        manifest_artifact: "{{ steps.review_gate_admit.output.manifest_artifact }}"
+        report_artifact: "{{ steps.review_gate_admit.output.report_artifact }}"
+        crew: "{{ steps.review_gate_admit.output.reviewer.crew }}"
 
-          - id: review_gate_settle
-            retry:
-              max_attempts: 3
-              initial_backoff_ms: 1000
-              backoff_cap_ms: 10000
-              backoff_strategy: exponential
-            recovery_activity: step_failure_recovery
-            target: activity:review_gate_settle
-            default_input:
-              job_run_id: "{{ steps.worktree.output.job_run_id }}"
-              completed_task_ids: "{{ input.task_ids }}"
-              workspace_path: "{{ steps.worktree.output.workspace_path }}"
-              base: "{{ input.base_branch }}"
-              base_sync: "{{ input.base_sync }}"
-              admission: "{{ steps.review_gate_admit.output }}"
-              rework_allowed: true
+    - id: review_gate_settle
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        admission: "{{ steps.review_gate_admit.output }}"
 
-          - id: rework
-            when: "{{ steps.review_gate_settle.output.gate }} == rework_required"
-            recovery_activity: step_failure_recovery
-            target: activity:agent_rework
-            default_input:
-              task_id: "{{ steps.review_gate_admit.output.first_task_id }}"
-              task_ids: "{{ input.task_ids }}"
-              workspace_path: "{{ steps.worktree.output.workspace_path }}"
-              repo_root: "{{ steps.worktree.output.workspace_path }}"
-              review: "{{ steps.review_gate_settle.output.rework }}"
-
-          # Pinned to the head the findings were raised on: a rework that
-          # changed nothing has nothing to commit and fails here.
-          - id: rework_commit
-            when: "{{ steps.review_gate_settle.output.gate }} == rework_required"
-            recovery_activity: step_failure_recovery
-            target: activity:git_commit
-            default_input:
-              job_run_id: "{{ steps.worktree.output.job_run_id }}"
-              scope: all
-              workspace_path: "{{ steps.worktree.output.workspace_path }}"
-              base_sha: "{{ steps.review_gate_settle.output.rework.head_sha }}"
-
-          - id: rework_validate
-            when: "{{ steps.review_gate_settle.output.gate }} == rework_required"
-            recovery_activity: step_failure_recovery
-            target: activity:candidate_validate
-            default_input:
-              job_run_id: "{{ steps.worktree.output.job_run_id }}"
-              completed_task_ids: "{{ input.task_ids }}"
-              workspace_path: "{{ steps.worktree.output.workspace_path }}"
-              base_sha: "{{ steps.sync_base.output.base_sha }}"
+    # ORB-13989: the owner revalidates a reviewer commit before publishing it:
+    # the required validation commands on the new head, and task ownership of
+    # every path the reviewer changed since the implementation head. A failure
+    # is the review's `reject`: no step recovery and no second review round;
+    # the failure handoff blocks the task with the candidate preserved.
+    - id: review_validate
+      when: "{{ steps.review_gate_settle.output.reviewer_fixed }} == true"
+      target: activity:candidate_validate
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.sync_base.output.base_sha }}"
+        ownership_base_sha: "{{ steps.review_gate_settle.output.implementation_head_sha }}"
 
     - id: push
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
@@ -301,9 +274,9 @@ spec:
         base_sync: "{{ input.base_sync }}"
         landing_branch: "{{ input.landing_branch }}"
         head: "{{ steps.sync_base.output.head }}"
-        review_gate: "{{ steps.review_gate_settle.output.gate }}"
         reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
         reviewed_base_sha: "{{ steps.review_gate_settle.output.reviewed_base_sha }}"
+        review_fixes: "{{ steps.review_gate_settle.output.review_fixes }}"
         body: "{{ input.body }}"
         title: "{{ input.title }}"
 
@@ -419,6 +392,19 @@ spec:
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
         admission: "{{ steps.re_review_gate_admit.output }}"
+
+    # ORB-13989: a reviewer commit on the rebased head is revalidated exactly
+    # like `review_validate` before it is republished; a failure keeps the
+    # published PR and the task in review.
+    - id: re_review_validate
+      when: "{{ steps.re_review_gate_settle.output.reviewer_fixed }} == true"
+      target: activity:candidate_validate
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.complete_pr.output.rebased.base_sha }}"
+        ownership_base_sha: "{{ steps.re_review_gate_settle.output.implementation_head_sha }}"
 
     - id: re_push
       when: "{{ steps.re_review_gate_admit.output.applies }} == true"

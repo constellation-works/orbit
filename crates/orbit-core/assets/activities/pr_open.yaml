@@ -50,6 +50,12 @@ spec:
         type: string
       body:
         type: string
+      review_fixes:
+        type: string
+        description: >
+          The before-PR review settlement's "Review fixes" section, present
+          when the reviewer committed fixes. It is appended to the PR body,
+          generated or supplied; empty adds nothing.
       # A claimed leaf's implement-step output. Under the claim's worker
       # binding the delivery gate judges its summary, not the owner's
       # stored one; any other run ignores it.

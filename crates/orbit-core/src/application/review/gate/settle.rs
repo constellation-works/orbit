@@ -10,8 +10,8 @@ use orbit_store::contracts::ReviewSettlement;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, ReviewAttemptState,
-    ReviewCertificate, ReviewerIdentity,
+    REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, ReviewAttemptState, ReviewCertificate,
+    ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -21,17 +21,19 @@ use crate::application::task::TaskUpdateParams;
 
 use super::admit::reviewer_identity;
 use super::context::GateContext;
-use super::judgement::{Judgement, repair_author_label, verdict_comment, write_artifact};
+use super::judgement::{
+    Judgement, repair_author_label, review_fixes_section, verdict_comment, write_artifact,
+};
 
 /// Close the admitted attempt with an honest verdict.
 ///
-/// A pass returns the reviewed head and base the PR steps must recheck. A
-/// `changes_required` verdict the lineage can still afford to rework returns
-/// `gate: rework_required` with the open findings, so the pipeline's review
-/// loop hands them to the implementer and reviews the new head [ORB-13891].
-/// Any other non-pass refuses the step — a settled verdict is not retried —
-/// so the pipeline's failure handoff preserves the candidate and blocks the
-/// task with the escalation.
+/// An accept returns the reviewed head and base the PR steps must recheck.
+/// With the reviewer's fixes committed it also reports `reviewer_fixed`, so
+/// the pipeline reruns owner validation and the ownership check on that head
+/// before publishing, and the PR body's "Review fixes" section [ORB-13989].
+/// Any other verdict refuses the step — a settled verdict is not retried and
+/// never goes back to the implementer — so the pipeline's failure handoff
+/// preserves the candidate and blocks the task with the escalation.
 pub(crate) fn review_gate_settle(
     runtime: &OrbitRuntime,
     action: &str,
@@ -48,6 +50,8 @@ pub(crate) fn review_gate_settle(
             "reason": admission_output.get("reason").cloned().unwrap_or(Value::Null),
             "reviewed_head_sha": "",
             "reviewed_base_sha": "",
+            "reviewer_fixed": false,
+            "review_fixes": "",
         }));
     }
     let mut settle_input = input.clone();
@@ -73,28 +77,15 @@ pub(crate) fn review_gate_settle(
     let reviewer = reviewer_identity(runtime, &context, &admission_output)
         .map_err(|error| failed(error.to_string()))?;
 
-    // Only the pre-PR review loop can rework; a re-review of a published
-    // head has no implementer step to send findings to.
-    let rework_allowed = input.get("rework_allowed").and_then(Value::as_bool) == Some(true);
     let outcome = settle(
         runtime,
         &mut context,
         &attempt_id,
         reviewer,
         &admission_output,
-        rework_allowed,
     );
     let (status, decision, error) = match &outcome {
         Ok(Settled::Passed(value)) => (AuditEventStatus::Success, value.clone(), None),
-        Ok(Settled::Rework(value)) => (
-            AuditEventStatus::Success,
-            json!({
-                "verdict": value["verdict"],
-                "gate": value["gate"],
-                "open_findings": value["rework"]["findings"].as_array().map_or(0, Vec::len),
-            }),
-            None,
-        ),
         Ok(Settled::Blocked { certificate }) => (
             AuditEventStatus::Failure,
             json!({
@@ -128,7 +119,7 @@ pub(crate) fn review_gate_settle(
         .map_err(|error| failed(error.to_string()))?;
 
     match outcome {
-        Ok(Settled::Passed(value) | Settled::Rework(value)) => Ok(value),
+        Ok(Settled::Passed(value)) => Ok(value),
         Ok(Settled::Blocked { certificate }) => Err(DispatchError::DeterministicActionRefused {
             action: action.to_string(),
             message: format!(
@@ -148,11 +139,7 @@ pub(crate) fn review_gate_settle(
 
 enum Settled {
     Passed(Value),
-    /// `changes_required`, sent back to the implementer within the run.
-    Rework(Value),
-    Blocked {
-        certificate: Box<ReviewCertificate>,
-    },
+    Blocked { certificate: Box<ReviewCertificate> },
 }
 
 fn settle(
@@ -161,7 +148,6 @@ fn settle(
     attempt_id: &str,
     reviewer: ReviewerIdentity,
     admission_output: &Value,
-    rework_allowed: bool,
 ) -> Result<Settled, OrbitError> {
     let store = runtime.review_store()?;
     // The admission names the lineage it reserved in; a resumed run reuses
@@ -277,37 +263,17 @@ fn settle(
         None if recorded.is_some() => None,
         None => judgement.commit_repairs(runtime, context, &reviewer, &attempt)?,
     };
-    let reviewer_repair_cycles = u32::from(repair.is_some());
 
-    // A resumed settlement judges against the ledger as it stood before its
-    // own charge, with the elapsed time it already recorded.
-    let judged_ledger = if recorded.is_some() || released {
-        ledger.before_settling(attempt_id)
-    } else {
-        Some(ledger.clone())
-    }
-    .ok_or_else(|| {
-        OrbitError::Execution(format!(
-            "review_gate_stale: attempt {attempt_id} is not part of lineage '{lineage_key}'"
-        ))
-    })?;
-    judgement.reconcile_verdict(&judged_ledger, repair.as_ref());
+    judgement.reconcile_verdict(repair.as_ref());
     let now = Utc::now();
-    // A granted rework is the lineage's next repair cycle, charged with the
-    // attempt that asked for it so the bound survives a resume.
-    let rework_requested =
-        rework_allowed && judgement.request_rework(&judged_ledger, reviewer_repair_cycles, now);
-    let repair_cycles = reviewer_repair_cycles + u32::from(rework_requested);
 
     let settled = match recorded {
         Some(verdict) => {
-            if verdict != judgement.verdict || attempt.repair_cycles != repair_cycles {
+            if verdict != judgement.verdict {
                 return Err(OrbitError::Execution(format!(
                     "review_gate_stale: settlement_diverged: attempt {attempt_id} settled {} \
-                     with {} repair cycle(s) but its evidence now judges {} with {repair_cycles}{}; \
-                     a fresh reviewer start is required",
+                     but its evidence now judges {}{}; a fresh reviewer start is required",
                     verdict.as_str(),
-                    attempt.repair_cycles,
                     judgement.verdict.as_str(),
                     judgement
                         .escalation
@@ -327,7 +293,6 @@ fn settle(
                 lineage_key: &lineage_key,
                 attempt_id,
                 verdict: judgement.verdict,
-                repair_cycles,
                 now,
             },
         )?,
@@ -362,7 +327,6 @@ fn settle(
         budget: settled.budget,
         escalation: judgement.escalation.clone(),
         selectors_widened: judgement.selectors_widened.clone(),
-        rework_requested,
         issued_at: now,
     };
     store.review_certificate_record(&context.workspace_id, &certificate)?;
@@ -455,8 +419,6 @@ fn publish_certificate(
 fn settled_outcome(certificate: ReviewCertificate) -> Settled {
     if certificate.verdict.passed() {
         Settled::Passed(passed_output(&certificate))
-    } else if certificate.rework_requested {
-        Settled::Rework(rework_output(&certificate))
     } else {
         Settled::Blocked {
             certificate: Box::new(certificate),
@@ -464,36 +426,9 @@ fn settled_outcome(certificate: ReviewCertificate) -> Settled {
     }
 }
 
-/// What the implementer's rework step receives: the open findings to
-/// address and the head they were found on, which the rework commit pins.
-/// `reviewed_head_sha` stays empty and `gate` names the rework, so nothing
-/// downstream can mistake this for a reviewed candidate.
-fn rework_output(certificate: &ReviewCertificate) -> Value {
-    let open = certificate
-        .findings
-        .iter()
-        .filter(|finding| finding.disposition == FindingDisposition::Open)
-        .collect::<Vec<_>>();
-    json!({
-        "gate": "rework_required",
-        "verdict": certificate.verdict.as_str(),
-        "attempt_id": certificate.attempt_id,
-        "reviewed_head_sha": "",
-        "reviewed_base_sha": "",
-        "rework": {
-            "attempt_id": certificate.attempt_id,
-            "head_sha": certificate.final_candidate.commit,
-            "base_sha": certificate.base.commit,
-            "findings": open,
-            "escalation": certificate.escalation,
-            "repair_commits": certificate.repair_commits.iter().map(|c| &c.commit).collect::<Vec<_>>(),
-            "remaining_repair_cycles": certificate.budget.repair_cycles.saturating_sub(certificate.consumed.repair_cycles),
-            "remaining_reviewer_starts": certificate.budget.reviewer_starts.saturating_sub(certificate.consumed.reviewer_starts),
-            "certificate_artifact": REVIEW_GATE_ARTIFACT,
-        },
-    })
-}
-
+/// What the PR steps read from an accept. `reviewer_fixed` gates the owner
+/// revalidation of the reviewer's commit, whose paths are checked from
+/// `implementation_head_sha`; `review_fixes` is the PR body section.
 fn passed_output(certificate: &ReviewCertificate) -> Value {
     json!({
         "gate": "passed",
@@ -502,9 +437,12 @@ fn passed_output(certificate: &ReviewCertificate) -> Value {
         "attempt_id": certificate.attempt_id,
         "reviewed_head_sha": certificate.final_candidate.commit,
         "reviewed_base_sha": certificate.base.commit,
+        "implementation_head_sha": certificate.reviewed_candidate.commit,
         "final_candidate_tree": certificate.final_candidate.tree,
         "implementation_commits": certificate.implementation_commits.iter().map(|c| &c.commit).collect::<Vec<_>>(),
         "repair_commits": certificate.repair_commits.iter().map(|c| &c.commit).collect::<Vec<_>>(),
+        "reviewer_fixed": !certificate.repair_commits.is_empty(),
+        "review_fixes": review_fixes_section(certificate).unwrap_or_default(),
         "findings": certificate.findings.len(),
         "consumed": certificate.consumed,
         "certificate_artifact": REVIEW_GATE_ARTIFACT,

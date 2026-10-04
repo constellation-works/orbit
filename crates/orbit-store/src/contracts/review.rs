@@ -34,7 +34,6 @@ pub struct ReviewSettlement<'a> {
     pub lineage_key: &'a str,
     pub attempt_id: &'a str,
     pub verdict: ReviewVerdict,
-    pub repair_cycles: u32,
     pub now: DateTime<Utc>,
 }
 

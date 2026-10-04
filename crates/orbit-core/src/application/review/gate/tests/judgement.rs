@@ -84,7 +84,6 @@ fn the_minutes_budget_refuses_new_starts_but_not_an_admitted_reviewer() {
                 candidate: &candidate,
                 budget: ReviewBudget {
                     reviewer_starts: 3,
-                    repair_cycles: 2,
                     minutes: 1,
                 },
                 now: started,
@@ -103,18 +102,14 @@ fn the_minutes_budget_refuses_new_starts_but_not_an_admitted_reviewer() {
     write_report(
         &gated.fixture.runtime,
         &gated.task_id,
-        &report(
-            &attempt.attempt_id,
-            ReviewVerdict::PassedWithoutRepairs,
-            false,
-        ),
+        &report(&attempt.attempt_id, ReviewVerdict::Accept, false),
     );
     let settled = gated
         .settle(&admission)
         .expect("an admitted reviewer settles on its evidence, not on the leftover minutes");
     assert_eq!(settled["gate"], "passed");
     let certificate = gated.certificate();
-    assert_eq!(certificate.verdict, ReviewVerdict::PassedWithoutRepairs);
+    assert_eq!(certificate.verdict, ReviewVerdict::Accept);
     assert_eq!(certificate.consumed.seconds, 120);
 
     let error = gated

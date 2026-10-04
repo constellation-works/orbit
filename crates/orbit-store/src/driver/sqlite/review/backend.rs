@@ -153,7 +153,6 @@ impl ReviewStoreBackend for Store {
                 &mut ledger,
                 settlement.attempt_id,
                 settlement.verdict,
-                settlement.repair_cycles,
                 settlement.now,
             ) {
                 return Err(OrbitError::Store(format!(

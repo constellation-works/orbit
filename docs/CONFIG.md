@@ -495,8 +495,7 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 | `operation.review_policy` | `none` | Automatic review: `none`, `before-pr` (hold PR creation for a fresh reviewer, refused for local-only delivery) or `after-landing` (minted by the `delivery-code-review` auto-task with its own template crew). See [review-gate design](design/review-gate/2_design.md). |
 | `operation.review_crew` | unset | Reviewer crew for `before-pr`. |
 | `operation.review_reviewer_starts` | `2` | Fresh reviewer invocations per delivery candidate lineage (1–10). |
-| `operation.review_repair_cycles` | `2` | Repair/validation cycles per lineage (0–10). |
-| `operation.review_minutes` | `30` | Before-PR review, repair and final-validation minutes per lineage (1–1440). |
+| `operation.review_minutes` | `30` | Before-PR review, fix and final-validation minutes per lineage (1–1440). `operation.review_repair_cycles` is retired: the reviewer fixes its findings in one commit and nothing is reworked, so the key is ignored with a warning. |
 | `tasks.id_start` | unset | Forward-only floor for this machine's task-ID allocator, raised on every runtime build and never lowered, so machines can hold disjoint ranges. For the first seed prefer `orbit workspace init --task-id-start N`. See [task migration](design/task-migration/1_overview.md). |
 | `automation.stall_window_minutes` | `60` | How long a delivery-automation consumer may sit on a stuck deferral (`history_diverged`, `repository_changed`, `provider_identity_missing`, `state_missing`) before a warning and one deduped friction (1–1440). Transient backpressure never escalates. See [auto-tasks](../plugin/skills/orbit-setup/references/auto-tasks.md). |
 | `scoring.enabled` | `true` | Record per-agent scoreboard metrics for task runs. |

@@ -772,7 +772,8 @@ fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
 
 /// Run the shipped completion/re-review steps as one job graph. The
 /// deterministic completion stub reports that the published, reviewed head
-/// needs rebasing; the fake reviewer then certifies the new head before the
+/// needs rebasing; the fake reviewer then fixes and certifies the new head,
+/// owner validation reruns on the reviewer commit [ORB-13989], and the
 /// pipeline republishes and completes it. This catches broken step wiring or
 /// template references that action-level tests cannot see.
 #[test]
@@ -821,6 +822,7 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
             "test_stub_review_gate_admit",
             "test_stub_agent_review_repair",
             "test_stub_review_gate_settle",
+            "test_stub_candidate_validate",
             "test_stub_git_push",
             "test_stub_pr_complete",
         ],
@@ -844,6 +846,22 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
     assert_eq!(reviewer_inputs.len(), 2);
     assert_eq!(reviewer_inputs[0]["attempt_id"], "rvw-first");
     assert_eq!(reviewer_inputs[1]["attempt_id"], "rvw-re-review");
+
+    let revalidations = calls
+        .iter()
+        .filter(|(action, _)| action == "test_stub_candidate_validate")
+        .map(|(_, input)| input.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        revalidations.len(),
+        1,
+        "only the re-review's reviewer commit is revalidated"
+    );
+    assert_eq!(revalidations[0]["base_sha"], "rebased-base");
+    assert_eq!(
+        revalidations[0]["ownership_base_sha"],
+        "rebased-implementation"
+    );
 
     let completion_inputs = calls
         .iter()
@@ -958,8 +976,12 @@ fn shipped_review_step_job() -> orbit_types::workflow::JobV2 {
     let shipped = load_job_asset(&shipped)
         .expect("the shipped PR pipeline loads")
         .spec;
-    let mut review =
-        shipped_step(&shipped.steps, "review").expect("the shipped PR pipeline has a review step");
+    let mut review = shipped
+        .steps
+        .iter()
+        .find(|step| step.id == "review")
+        .cloned()
+        .expect("the shipped PR pipeline has a review step");
     let retry = review
         .retry
         .as_mut()
@@ -995,23 +1017,6 @@ fn shipped_review_step_job() -> orbit_types::workflow::JobV2 {
     job
 }
 
-/// The shipped step `id`, at the top level or inside a `loop:` body such as
-/// the before-PR `review_gate`.
-fn shipped_step(
-    steps: &[orbit_types::workflow::JobV2Step],
-    id: &str,
-) -> Option<orbit_types::workflow::JobV2Step> {
-    steps.iter().find_map(|step| {
-        if step.id == id {
-            return Some(step.clone());
-        }
-        match &step.body {
-            orbit_types::workflow::JobV2StepBody::Loop { loop_ } => shipped_step(&loop_.steps, id),
-            _ => None,
-        }
-    })
-}
-
 /// The shipped pipeline slice that reaches completion and can enter its
 /// re-review branch, with all external activities resolved to the test host.
 fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
@@ -1023,7 +1028,11 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
         .expect("the shipped PR pipeline loads")
         .spec;
     let find_step = |id: &str| {
-        shipped_step(&shipped.steps, id)
+        shipped
+            .steps
+            .iter()
+            .find(|step| step.id == id)
+            .cloned()
             .unwrap_or_else(|| panic!("the shipped PR pipeline has `{id}`"))
     };
     let stub = |id: &str| {
@@ -1037,7 +1046,14 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
     // task-store effects with deterministic stub activities.
     let prefix = stubs(&["worktree", "commit", "prepare_branch", "sync_base"]);
     let mut job = job_asset(json!(prefix));
-    job.steps.push(find_step("review_gate"));
+    for id in [
+        "review_gate_admit",
+        "review",
+        "review_gate_settle",
+        "review_validate",
+    ] {
+        job.steps.push(find_step(id));
+    }
     let middle = stubs(&["push", "pr_open", "promote_tasks"]);
     job.steps.extend(job_asset(json!(middle)).steps);
     job.steps.push(find_step("complete_pr"));
@@ -1045,6 +1061,7 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
         "re_review_gate_admit",
         "re_review",
         "re_review_gate_settle",
+        "re_review_validate",
         "re_push",
         "complete_reviewed_pr",
     ] {
@@ -1060,8 +1077,6 @@ fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
         "review_gate_admit",
         REVIEWER,
         "review_gate_settle",
-        "agent_rework",
-        "git_commit",
         "candidate_validate",
         "push",
         "git_push",
@@ -1158,17 +1173,21 @@ impl RuntimeHost for CompletionReviewHost {
                 })
             }
             "test_stub_agent_review_repair" => {
-                json!({ "summary": "reviewed", "verdict": "passed_without_repairs" })
+                json!({ "summary": "reviewed", "verdict": "accept" })
             }
             "test_stub_review_gate_settle" => {
                 let attempt = input
                     .pointer("/admission/attempt_id")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+                let re_review = attempt == "rvw-re-review";
                 json!({
                     "gate": "passed",
-                    "reviewed_head_sha": if attempt == "rvw-re-review" { "rebased-head" } else { "candidate" },
-                    "reviewed_base_sha": if attempt == "rvw-re-review" { "rebased-base" } else { "base-sha" },
+                    "reviewed_head_sha": if re_review { "rebased-head" } else { "candidate" },
+                    "reviewed_base_sha": if re_review { "rebased-base" } else { "base-sha" },
+                    "implementation_head_sha": if re_review { "rebased-implementation" } else { "candidate" },
+                    "reviewer_fixed": re_review,
+                    "review_fixes": "",
                 })
             }
             "test_stub_push" => json!({ "local_sha": "candidate" }),
@@ -1183,6 +1202,7 @@ impl RuntimeHost for CompletionReviewHost {
                 json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" })
             }
             "test_stub_promote_tasks" => json!({ "promoted": true }),
+            "test_stub_candidate_validate" => json!({ "decision": "passed" }),
             "test_stub_pr_complete"
                 if input.get("reviewed_head_sha").and_then(Value::as_str) == Some("candidate") =>
             {
@@ -1277,9 +1297,7 @@ impl RuntimeHost for ReviewerHost {
                 self.calls.lock().expect("call log").push(REVIEWER);
                 let mut failures_left = self.failures_left.lock().expect("failures");
                 if *failures_left == 0 {
-                    return Ok(
-                        json!({ "summary": "reviewed", "verdict": "passed_without_repairs" }),
-                    );
+                    return Ok(json!({ "summary": "reviewed", "verdict": "accept" }));
                 }
                 *failures_left = failures_left.saturating_sub(1);
                 Err(DispatchError::CliInvocationFailed(

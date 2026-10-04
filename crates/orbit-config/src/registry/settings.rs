@@ -180,12 +180,6 @@ define_config_settings! {
         section: ConfigSection::Operation, order: 10,
         resolve: |raw: Option<String>| operation::admit_review_policy(raw),
     },
-    operation_review_repair_cycles: Option<u32> => u32 {
-        key: "operation.review_repair_cycles", value_type: "integer",
-        description: "Repair/validation cycles allowed per delivery run lineage: each reviewer repair commit, and each changes_required verdict sent back to the implementer for rework and re-review, takes one. Once spent, a changes_required verdict blocks the task with every cycle's findings recorded (0..=10, default 2).",
-        section: ConfigSection::Operation, order: 40,
-        resolve: |raw: Option<u32>| operation::review_repair_cycles(raw),
-    },
     operation_review_reviewer_starts: Option<u32> => u32 {
         key: "operation.review_reviewer_starts", value_type: "integer",
         description: "Fresh reviewer starts allowed per delivery run lineage. Retrying a failed reviewer step continues its start; a review of a changed candidate, including a completion rebase, takes a new one (1..=10, default 3).",
