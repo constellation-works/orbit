@@ -355,6 +355,56 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
     )
 }
 
+/// `operation.review_policy = after-landing` is carried out by one delivery
+/// consumer alone, `delivery-code-review` [ORB-13896]. A policy that cannot
+/// run here reviews nothing while every other surface looks healthy, so
+/// anything short of a healthy consumer is an error, not a warning: missing,
+/// owned by another machine, wedged, stalled, held for an operator, watching a
+/// branch that does not resolve, or naming a crew that does not. Under any
+/// other policy the row is skipped.
+pub(super) fn doctor_check_after_landing_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "review-after-landing";
+    let health = match orbit_core::application::automation::after_landing_health(
+        runtime,
+        chrono::Utc::now(),
+    ) {
+        Ok(Some(health)) => health,
+        Ok(None) => {
+            return check(
+                CHECK,
+                WorkspaceDoctorStatus::Skipped,
+                format!(
+                    "operation.review_policy is `{}`, not after-landing",
+                    runtime.operation_policy().review_policy.value.as_str()
+                ),
+            );
+        }
+        Err(error) => {
+            return actionable_check(
+                CHECK,
+                WorkspaceDoctorStatus::Error,
+                format!("cannot establish whether after-landing review runs here: {error}"),
+                "Resolve the error, then rerun `orbit doctor`.".to_string(),
+            );
+        }
+    };
+    if health.healthy() {
+        return check(CHECK, WorkspaceDoctorStatus::Ok, health.line());
+    }
+    actionable_check(
+        CHECK,
+        WorkspaceDoctorStatus::Error,
+        health.line(),
+        format!(
+            "After-landing review runs only through `{consumer}` on the machine that owns this \
+             workspace. Fix each problem named above (`orbit auto-task show {consumer} \
+             --preview` shows the consumer), or set `operation.review_policy` to `none` or \
+             `before-pr`; then rerun `orbit doctor`.",
+            consumer = health.consumer
+        ),
+    )
+}
+
 /// Task relation/dependency targets that no longer resolve to a registered
 /// task bundle — the "grandfathered" relations that make a generated task
 /// index fail to rebuild against its relation validator, forcing an unbounded

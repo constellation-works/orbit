@@ -17,6 +17,10 @@ pub(super) fn mint(
     attempt: &BatchAttempt,
 ) -> Result<String, OrbitError> {
     let mut params = crate::application::auto_tasks::scheduler::template_params(definition);
+    // [ORB-13896] After-landing review is reviewed by `operation.review_crew`.
+    if let Some(crew) = super::after_landing::review_crew_override(runtime, definition) {
+        params.crew = Some(crew);
+    }
 
     let invalid = |e: serde_json::Error| OrbitError::InvalidInput(e.to_string());
     let frozen_input = serde_json::to_string_pretty(attempt).map_err(invalid)?;

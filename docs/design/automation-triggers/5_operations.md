@@ -16,7 +16,9 @@ approval/admission lifecycle. There is no new daemon or coverage submission tool
 Existing `schemaVersion: 1` cron and `every_minutes` definitions retain their
 behavior. Existing `code-review` and `qa-sweep` defaults are unchanged. New
 `delivery-code-review` and `delivery-qa` defaults ship disabled, and initialization
-does not overwrite existing workspace definitions. The shipped defaults carry a
+does not overwrite existing workspace definitions. `operation.review_policy =
+after-landing` enables `delivery-code-review` without editing its file
+[ORB-13896]; see the [review gate](../review-gate/2_design.md). The shipped defaults carry a
 `__ORBIT_BASE_BRANCH__` placeholder for `branch`; `orbit workspace init` and
 `orbit workspace sync` render it to the workspace's registered base branch, so a
 `main`-based workspace observes `main` rather than another repository's
@@ -71,10 +73,13 @@ Reassigning ownership is a definition change: retain and settle the old owner's
 debt and preview the new baseline first.
 
 A delivery review definition mints its tasks with the crew named in its own
-template, exactly like any other auto-task. `operation.review_crew` is a
-different setting: it selects the reviewer for `before-pr` review only and does
-not apply to `after-landing` review, which runs through this definition. See
-the [review gate](../review-gate/2_design.md).
+template, exactly like any other auto-task, with one exception: while
+`operation.review_policy` is `after-landing` and `operation.review_crew` is set,
+`delivery-code-review` mints with that crew instead [ORB-13896]. The crew is
+applied at mint time and is not part of the consumer's epoch. Under that policy
+`orbit doctor` also fails its `review-after-landing` row while this consumer is
+missing, unowned, wedged, stalled, held for an operator or on a branch or crew
+that does not resolve. See the [review gate](../review-gate/2_design.md).
 
 `coverage` is `integrated_qa_v1` or `landed_code_review_v1`. Threshold must be
 positive and at most `max_items` (maximum 50). Maximum wait is positive and retries

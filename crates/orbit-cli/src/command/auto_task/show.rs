@@ -35,6 +35,8 @@ impl Execute for AutoTaskShowArgs {
         doc["plugin_inactive"] = Value::Bool(listed.inactive_plugin.is_some());
         doc["inactive_plugin"] = json!(listed.inactive_plugin);
         doc["skipped_reason"] = json!(listed.skipped_reason);
+        let enabled_by_policy = runtime.auto_task_enabled_by_review_policy(&definition);
+        doc["enabled_by_review_policy"] = Value::Bool(enabled_by_policy);
         let definition_root = runtime.local_root();
         let source_path = definition_path(&definition_root, &self.name);
         doc["definition_source"] = json!({
@@ -90,6 +92,8 @@ impl Execute for AutoTaskShowArgs {
             definition.name,
             if listed.inactive_plugin.is_some() {
                 "inactive"
+            } else if enabled_by_policy {
+                "enabled by operation.review_policy = after-landing"
             } else if definition.enabled {
                 "enabled"
             } else {

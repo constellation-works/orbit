@@ -30,11 +30,14 @@ impl Execute for ConfigShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.scope == ConfigScopeArg::Effective {
             let effective = load_effective_config(&runtime_config_roots(runtime))?;
-            return Ok(Payload::detail(
-                effective_json(runtime, effective.values()),
-                effective_text(runtime, effective.values(), self.all),
-            )
-            .into());
+            let review = after_landing_review(runtime);
+            let mut json = effective_json(runtime, effective.values());
+            json["review_after_landing"] = review.json;
+            let mut text = effective_text(runtime, effective.values(), self.all);
+            if let Some(line) = review.line {
+                text.push_str(&format!("\nReview after landing: {line}\n"));
+            }
+            return Ok(Payload::detail(json, text).into());
         }
 
         let store = open_store_for_scope(runtime, self.scope)?;
@@ -46,6 +49,39 @@ impl Execute for ConfigShowArgs {
             scoped_text(runtime, &store, &snapshot, &settings, self.all),
         )
         .into())
+    }
+}
+
+/// The after-landing review consumer's health, beside the policy that
+/// configures it [ORB-13896]: `null` and no text line under any other policy.
+struct AfterLandingReview {
+    json: JsonValue,
+    line: Option<String>,
+}
+
+fn after_landing_review(runtime: &OrbitRuntime) -> AfterLandingReview {
+    match orbit_core::application::automation::after_landing_health(runtime, chrono::Utc::now()) {
+        Ok(None) => AfterLandingReview {
+            json: JsonValue::Null,
+            line: None,
+        },
+        Ok(Some(health)) => {
+            let line = health.line();
+            let mut json = serde_json::to_value(&health).unwrap_or(JsonValue::Null);
+            json["healthy"] = JsonValue::Bool(health.healthy());
+            json["line"] = JsonValue::String(line.clone());
+            AfterLandingReview {
+                json,
+                line: Some(line),
+            }
+        }
+        Err(error) => {
+            let line = format!("unknown: {error}");
+            AfterLandingReview {
+                json: json!({"healthy": false, "line": line}),
+                line: Some(line),
+            }
+        }
     }
 }
 

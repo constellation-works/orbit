@@ -213,7 +213,7 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
 
 /// Run one git command in the fixture repository, isolated from the caller's
 /// configuration, and return its trimmed stdout.
-fn git(fixture: &Fixture, args: &[&str]) -> String {
+pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {
     let result = std::process::Command::new("git")
         .args([
             "-c",

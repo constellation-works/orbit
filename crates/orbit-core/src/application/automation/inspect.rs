@@ -43,7 +43,7 @@ pub fn unresolvable_delivery_branches(
         else {
             continue;
         };
-        if !definition.enabled
+        if !runtime.auto_task_enabled(&definition)
             || !ownership::resolve(runtime, declared.owner_machine.as_deref()).owned_here
         {
             continue;
@@ -148,7 +148,7 @@ pub fn delivery_ownership_refusal(
     else {
         return None;
     };
-    if !definition.enabled {
+    if !runtime.auto_task_enabled(definition) {
         return None;
     }
 
@@ -228,7 +228,7 @@ pub fn wedged_delivery_consumers(
 
 /// The reason evaluation would defer with when `branch` does not resolve,
 /// or `None` when it does. Only a local ref lookup: no history, no provider.
-fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<String> {
+pub(super) fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<String> {
     source.verify_branch(branch).err().map(|error| match error {
         AutomationError::Deferred(reason) => reason,
         other => other.to_string(),
@@ -262,7 +262,7 @@ pub fn inspect_auto_task(
             epoch: &epoch,
             trigger: &trigger,
             ownership,
-            enabled: definition.enabled,
+            enabled: runtime.auto_task_enabled(definition),
             admission_deferred,
         },
         now,
