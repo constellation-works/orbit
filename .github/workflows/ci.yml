@@ -192,7 +192,7 @@ jobs:
         run: cargo llvm-cov report --summary-only
 
       - name: Upload lcov report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: coverage-lcov
           path: lcov.info
@@ -312,19 +312,23 @@ jobs:
       # ORB-00418 symlink-resolution tests), orbit-tools' runtime
       # fs-enforcement integration tests (the only enforcement layer on Linux
       # — there is no kernel sandbox), and orbit-exec's Linux fail-closed
-      # contract tests. Live plugin-sandbox tests are ignored in the portable
-      # suite, then selected explicitly here: an ubuntu-latest runner without
-      # the required Landlock support fails this named gate instead of
-      # reporting those tests as passed after an early return.
+      # contract tests. The live Bubblewrap boundary tests are ignored in the
+      # portable suite, then selected explicitly here: an ubuntu-latest runner
+      # without working user namespaces fails this named gate (their probe
+      # asserts availability) instead of reporting those tests as passed after
+      # an early return.
       # [DANI-10428] This used to be a separate job that compiled the three
       # crates under `cargo test -p` feature resolution — a second build of
       # the same crates. The nextest filterset below selects them out of the
       # exact `--workspace --lib --bins --tests` artifacts the guardrails step
       # already built and ran, so the gate costs a re-run and no compile.
-      # [ORB-12881] The ignored leg also carries orbit-exec's ruleset
-      # descriptor-contract tests, which need a host that enforces Landlock
-      # for the same reason the plugin-sandbox tests do. It runs over the same
-      # artifact set as the line above it so neither leg triggers a rebuild.
+      # [ORB-12881] The ignored leg selects orbit-exec's Linux sandbox
+      # integration binary (`linux_sandbox::`), which needs a host with working
+      # Bubblewrap namespaces. It runs over the same artifact set as the line
+      # above it so neither leg triggers a rebuild. nextest exits 4 when the
+      # filterset matches nothing, so a refactor that retires or renames these
+      # tests fails the gate instead of passing on an empty selection; never
+      # add `--no-tests` here.
       # The uv-locked Python plugin fixture runs in the portable suite above:
       # the pinned uv binary is installed before Run CI guardrails.
       # A prior failure in this job (including `Run CI guardrails`) skips this
@@ -335,7 +339,7 @@ jobs:
             -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
           cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
             --run-ignored only \
-            -E 'test(/plugin::tests::(backend|mcp|tool)::/) | test(/linux_landlock::ruleset::tests::/)'
+            -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage
