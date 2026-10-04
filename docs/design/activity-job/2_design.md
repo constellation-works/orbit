@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Design"
 owner: codex
 last_updated: 2026-09-24
-last_validated: 2026-09-08
+last_validated: 2026-10-04
 status: Draft
 feature: activity-job
 doc_role: design
@@ -215,7 +215,7 @@ Direct single-activity runtime helpers:
 1. Read YAML from disk.
 2. Parse via `load_activity_asset(...)`.
 3. Build audit sinks and run id with `system` as the v2 envelope `agent_identity`.
-5. Dispatch the concrete `ActivityV2Spec`.
+4. Dispatch the concrete `ActivityV2Spec`.
 
 Job runs:
 

@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Decisions"
 owner: codex
 last_updated: 2026-08-11
-last_validated: 2026-09-11
+last_validated: 2026-10-04
 status: Draft
 feature: task-artifacts
 doc_role: decisions
