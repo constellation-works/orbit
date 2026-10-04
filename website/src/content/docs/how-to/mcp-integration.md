@@ -150,6 +150,16 @@ Each task is a full record by default, descriptions and plans included, so a lon
 listing can be large. Pass `fields` (a string or array of `orbit_task_show` field
 names, such as `["id", "title", "status"]`) to get objects holding only those
 fields, then fetch details for the few tasks that matter with `orbit_task_show`.
+`orbit_task_eligible` (and `orbit task eligible --json`) returns
+`{ tasks, total, truncated }` plus, with `explain: true`, `conflicting`. Each
+entry in `tasks` is `{ id, title, type, status, priority, complexity }` for a
+`backlog` or `proposed` task whose lock surface overlaps no `in-progress` or
+`review` task's, in automatic-dispatch order (critical and corrective work
+first, then priority and age). `total` counts every eligible task and
+`truncated` reports whether `limit` cut the list. Each `conflicting` entry has
+the same fields plus `conflicts`, a list of `{ requested_file, locking_task_id }`
+naming the candidate's overlapping selector and the in-flight task holding it;
+`conflicting` is not limited.
 The task-write tools — `orbit_task_add`, `orbit_task_update`, and
 `orbit.task.reject` — omit `comments` and `history` unless you request them
 with `fields` (or `field`).

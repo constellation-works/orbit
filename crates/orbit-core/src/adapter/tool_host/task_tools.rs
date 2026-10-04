@@ -10,7 +10,9 @@ use orbit_types::task::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskAddParams, TaskUpdateParams, compute_task_add_warnings};
+use crate::application::task::{
+    TaskAddParams, TaskEligibilityQuery, TaskUpdateParams, compute_task_add_warnings,
+};
 
 use super::input::{
     empty_string_to_none, optional_bool_alias, parse_artifacts, parse_assessed_task_complexity,
@@ -115,6 +117,72 @@ pub(super) fn delete(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
     let force = optional_bool_alias(&input, &["force"])?.unwrap_or(false);
     runtime.delete_task_guarded(&id, force)?;
     Ok(json!({ "id": id, "deleted": true }))
+}
+
+/// `orbit.task.eligible`: candidates whose lock surface overlaps no
+/// `in-progress` / `review` task's surface. `conflicting` is present only with
+/// `explain`.
+pub(super) fn eligible(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+    let statuses = optional_csv_or_string_list_alias(&input, &["status"])?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| parse_task_status("status", &value))
+        .collect::<Result<Vec<_>, _>>()?;
+    let path = optional_string(&input, "path")?;
+    let limit = super::input::task_list_limit(&input)?;
+    let explain = optional_bool_alias(&input, &["explain"])?.unwrap_or(false);
+    let eligibility = runtime.task_eligibility(&TaskEligibilityQuery {
+        statuses,
+        path,
+        limit,
+    })?;
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "tasks".to_string(),
+        eligibility
+            .eligible
+            .iter()
+            .map(eligible_task_json)
+            .collect(),
+    );
+    payload.insert("total".to_string(), json!(eligibility.total));
+    payload.insert(
+        "truncated".to_string(),
+        json!(eligibility.eligible.len() < eligibility.total),
+    );
+    if explain {
+        let conflicting = eligibility
+            .conflicting
+            .iter()
+            .map(|conflict| {
+                let mut row = eligible_task_json(&conflict.task);
+                row["conflicts"] = conflict
+                    .overlaps
+                    .iter()
+                    .map(|overlap| {
+                        json!({
+                            "requested_file": overlap.requested_file,
+                            "locking_task_id": overlap.locking_task_id,
+                        })
+                    })
+                    .collect();
+                row
+            })
+            .collect();
+        payload.insert("conflicting".to_string(), conflicting);
+    }
+    Ok(Value::Object(payload))
+}
+
+fn eligible_task_json(task: &orbit_types::task::Task) -> Value {
+    json!({
+        "id": task.id,
+        "title": task.title,
+        "type": task.task_type.to_string(),
+        "status": task.status.to_string(),
+        "priority": task.priority.to_string(),
+        "complexity": task.complexity.map(|value| value.to_string()),
+    })
 }
 
 pub(super) fn lint(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {

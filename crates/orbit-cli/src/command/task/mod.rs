@@ -4,6 +4,7 @@ pub(crate) mod artifact;
 pub mod artifacts;
 pub(crate) mod blocked_next_step;
 mod command;
+mod eligible;
 mod export;
 pub(crate) mod flow;
 mod import;

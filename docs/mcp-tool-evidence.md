@@ -1,13 +1,13 @@
 ---
 type: context
 summary: "Behavioral evidence matrix for the advertised MCP tools and their verified limits."
-last_updated: 2026-10-03
+last_updated: 2026-10-04
 last_validated: 2026-10-03
 ---
 
 # MCP behavioral evidence
 
-This matrix covers the exact 25 modern advertised names in `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` after removal of the five deterministic drain operations and the consolidation of narrow tools into the tools that now carry their modes (friction listing into `orbit_search`, friction moves into `orbit_friction_update`, auto-task enable/disable into `orbit_auto_task_update`, drain resizing into `orbit_workflow_auto`, delivery evidence into `orbit_task_show`, crew discovery into `orbit_workspace_list`). It is a map of demonstrated behavior, not a claim that every argument, state, provider, or remote deployment was exercised. Retired desktop tool aliases are neither advertised nor callable. Clients and destinations must use the current domain contracts; no older-client translation is performed.
+This matrix covers the exact 26 modern advertised names in `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` after removal of the five deterministic drain operations and the consolidation of narrow tools into the tools that now carry their modes (friction listing into `orbit_search`, friction moves into `orbit_friction_update`, auto-task enable/disable into `orbit_auto_task_update`, drain resizing into `orbit_workflow_auto`, delivery evidence into `orbit_task_show`, crew discovery into `orbit_workspace_list`). It is a map of demonstrated behavior, not a claim that every argument, state, provider, or remote deployment was exercised. Retired desktop tool aliases are neither advertised nor callable. Clients and destinations must use the current domain contracts; no older-client translation is performed.
 
 `S` means the production Orbit binary over real stdio and disposable stores. `W` means the MCP transport kernel over an in-memory wire or loopback fixture. `I` means registered runtime tools or application integration with temporary stores. Application-only evidence is labeled explicitly. A dash means this review has no named evidence for that dimension; it does not mean that behavior is unsupported. Persistence means an asserted durable readback or byte-preserving refusal, not merely a successful response.
 
@@ -27,6 +27,7 @@ This matrix covers the exact 25 modern advertised names in `crates/orbit-cli/tes
 | orbit_task_add | S-records, S-guarded | S-context | S-guarded | S-replica, S-selector | Guarded proposed create and ordinary authoring |
 | orbit_task_artifact_get | S-artifact | I-artifact-denial | S-artifact-write | S-artifact | Text/raster fixtures; no external download |
 | orbit_task_artifact_put | S-artifact-write | S-artifact-write, I-artifact-authority | S-artifact-write | S-artifact-write, I-artifact-authority | Exact UTF-8 bytes after server restart; path and workspace refusals |
+| orbit_task_eligible | S-eligible | S-eligible | — | — | Lock-overlap split and conflict explanation proved through `orbit tool run` in the CLI suite; stdio proves the schema, read-only hint, a call and refusals |
 | orbit_task_list | S-records | S-selector | S-guarded | S-selector | Field projections, bounded pages |
 | orbit_task_show | S-records, S-guarded, S-delivery | S-selector, S-delivery | S-guarded | S-selector, S-delivery | Global ID and explicit workspace filter; `field: "delivery"` reads bounded delivery evidence without run access |
 | orbit_task_update | S-records, S-guarded | S-context, S-guarded | S-guarded | S-selector | Restart receipts and stale revision refusal |
@@ -54,6 +55,7 @@ All `S` proofs are in `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs` or its indic
 - **S-federated**: `federated_mcp_serve_lists_and_routes_local_workspaces_without_destinations` (including the local row's own crews under `include: ["crews"]`) and `direct_and_federated_local_calls_record_equivalent_audit_contexts`.
 - **S-rehome**: `mcp_friction_rehome_moves_a_record_into_its_registered_owner` asserts that an update with `rehome_to` leaves the target copy and source disposition, and that a repeat is refused.
 - **S-context**: `mcp_task_add_and_update_validate_context_selectors`.
+- **S-eligible**: `mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio` checks the advertised schema and read-only hint, lists a task that holds nothing, and refuses a holder status and an unknown filter. The lock-overlap split itself (held-back candidates with their file and holder, a listed task with an unmet dependency) is proved through `orbit tool run orbit.task.eligible` by the CLI test `task_eligible::eligible_lists_candidates_clear_of_in_flight_locks_and_explains_the_rest`, which is not a stdio proof.
 - **S-search / S-search-denial**: `task_mutations_are_immediately_searchable_from_the_cli_and_mcp` / `mcp_search_without_query_or_tag_keeps_its_refusal_message`.
 - **S-artifact-write**: `transport_operations::stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape` attaches exact bytes, restarts the server, reads them back, and proves source/destination escapes and unknown workspace cannot alter the artifact projection.
 - **S-auto-crud**: `transport_operations::stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state` adds/updates/disables (with a checked `expected_enabled`, whose stale repeat is refused)/reloads a definition, mints a proposed task, proves a wrong-workspace update preserves bytes, shows MCP has no delete while the CLI refuses an open-mint deletion and forces one that keeps the minted task, and asserts no run was dispatched.

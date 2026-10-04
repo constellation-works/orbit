@@ -71,6 +71,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.add",
             "orbit.task.artifact.get",
             "orbit.task.artifact.put",
+            "orbit.task.eligible",
             "orbit.task.list",
             "orbit.task.show",
             "orbit.task.update",
@@ -207,6 +208,7 @@ fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
     };
 
     for name in [
+        "orbit.task.eligible",
         "orbit.task.list",
         "orbit.task.show",
         "orbit.task.artifact.get",

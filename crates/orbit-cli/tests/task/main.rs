@@ -22,6 +22,7 @@ mod friction_lifecycle_cli;
 mod local_read_projections_cli;
 mod shared_root_task_isolation;
 mod task_admin_cli;
+mod task_eligible;
 mod task_list;
 mod task_publication;
 mod task_recheck_blocked_cli;

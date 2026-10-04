@@ -7,6 +7,7 @@ use crate::command::{CommandOut, Execute};
 use super::add::TaskAddArgs;
 use super::archive::TaskArchiveArgs;
 use super::artifact::TaskArtifactCommand;
+use super::eligible::TaskEligibleArgs;
 use super::export::TaskExportArgs;
 use super::flow::TaskFlowArgs;
 use super::import::TaskImportArgs;
@@ -20,7 +21,7 @@ use super::update::TaskUpdateArgs;
 
 /// Grouped `orbit task` help, rendered the same way `orbit run` and the root
 /// command render theirs: a hand-rolled template, because clap's derive has no
-/// per-variant `help_heading`. Fourteen ungrouped rows read as a wall; the
+/// per-variant `help_heading`. Fifteen ungrouped rows read as a wall; the
 /// sections say which of them you are looking for. Keep the variant order in
 /// `TaskSubcommand` matching the section order below — the order decides where
 /// a command would land if it were ever missing from the template.
@@ -34,6 +35,7 @@ Tasks:
   update       Update task fields; `--approve` takes the next approval step
   archive      Archive a task
   list         List tasks with optional filters
+  eligible     List backlog/proposed tasks that collide with no in-flight work
   show         Show one task in detail, by ID, across registered workspaces
   artifact     Manage task artifact files
 
@@ -91,6 +93,15 @@ pub enum TaskSubcommand {
     Archive(TaskArchiveArgs),
     /// List tasks with optional filters
     List(TaskListArgs),
+    /// List backlog/proposed tasks you can pick up without colliding with work
+    /// in flight
+    ///
+    /// A task is eligible when its context-file lock surface overlaps no
+    /// in-progress or review task's surface — the same lock test automatic
+    /// dispatch applies. Nothing else is checked: not dependencies, complexity,
+    /// groups or crew, and candidates are not checked against each other.
+    /// Read-only: nothing is reserved, reconciled or changed.
+    Eligible(TaskEligibleArgs),
     /// Show detailed information about a task, found by ID with an optional
     /// workspace filter
     Show(TaskShowArgs),
@@ -122,6 +133,7 @@ impl Execute for TaskSubcommand {
             TaskSubcommand::Update(args) => args.execute(runtime),
             TaskSubcommand::Archive(args) => args.execute(runtime),
             TaskSubcommand::List(args) => args.execute(runtime),
+            TaskSubcommand::Eligible(args) => args.execute(runtime),
             TaskSubcommand::Show(args) => args.execute(runtime),
             TaskSubcommand::Artifact(cmd) => cmd.execute(runtime),
             TaskSubcommand::Lint(args) => args.execute(runtime),

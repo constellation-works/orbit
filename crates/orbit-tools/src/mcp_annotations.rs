@@ -28,6 +28,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.friction.tags"
         | "orbit.search"
         | "orbit.task.artifact.get"
+        | "orbit.task.eligible"
         | "orbit.task.list"
         | "orbit.task.show"
         | "orbit.workflow.run.list"

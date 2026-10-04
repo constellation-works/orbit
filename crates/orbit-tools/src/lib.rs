@@ -161,6 +161,7 @@ pub enum OrbitBuiltinAction {
     TaskAdd,
     TaskArtifactGet,
     TaskDelete,
+    TaskEligible,
     TaskLint,
     TaskList,
     TaskLocks,

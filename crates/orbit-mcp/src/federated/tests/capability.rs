@@ -24,6 +24,7 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.task.add", McpToolClass::ControlPlane),
     ("orbit.task.artifact.get", McpToolClass::ControlPlane),
     ("orbit.task.artifact.put", McpToolClass::ControlPlane),
+    ("orbit.task.eligible", McpToolClass::ControlPlane),
     ("orbit.task.list", McpToolClass::ControlPlane),
     ("orbit.task.show", McpToolClass::ControlPlane),
     ("orbit.task.update", McpToolClass::ControlPlane),

@@ -306,6 +306,7 @@ impl Commands {
                         ),
                     },
                     TaskSubcommand::List(_) => ("list", None, None),
+                    TaskSubcommand::Eligible(_) => ("eligible", None, None),
                     TaskSubcommand::Flow(_) => ("flow", None, None),
                     TaskSubcommand::Show(args) => ("show", Some("task"), Some(args.id.as_str())),
                     TaskSubcommand::Lint(args) => ("lint", Some("task"), args.id.as_deref()),
@@ -355,7 +356,11 @@ impl Commands {
                         },
                         TaskArtifactSubcommand::Put(_) => RuntimeNeed::Required,
                     },
-                    TaskSubcommand::List(_) | TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
+                    // `eligible` promises to reconcile nothing, so it opens
+                    // without the stale-run reconciliation a required runtime runs.
+                    TaskSubcommand::List(_)
+                    | TaskSubcommand::Eligible(_)
+                    | TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
                     TaskSubcommand::Lint(args) if !args.restore_pruned => RuntimeNeed::ReadOnly,
                     TaskSubcommand::RecheckBlocked(args) if !args.confirm => RuntimeNeed::ReadOnly,
                     // Every other task verb keeps cwd (or `--workspace`) as its
