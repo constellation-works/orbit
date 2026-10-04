@@ -197,13 +197,13 @@ impl DrainOwnerTransport for Wire {
                 ..ToolContext::default()
             },
         )?;
-        if name == "orbit.drain.probe" {
-            if let Some(revision) = *self.protocol.lock().unwrap() {
-                answer["protocol_schema"] = json!(revision);
-                answer["admits"] = json!(false);
-                answer["refusal"] = json!("version_mismatch");
-                answer["diagnostics"] = json!(["older owner requires protocol revision 1"]);
-            }
+        if name == "orbit.drain.probe"
+            && let Some(revision) = *self.protocol.lock().unwrap()
+        {
+            answer["protocol_schema"] = json!(revision);
+            answer["admits"] = json!(false);
+            answer["refusal"] = json!("version_mismatch");
+            answer["diagnostics"] = json!(["older owner requires protocol revision 1"]);
         }
         let mut lose = self.lose.lock().unwrap();
         if let Some(at) = lose.iter().position(|tool| *tool == name) {
@@ -597,6 +597,181 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
             updated_at: None,
         })
         .expect("executor");
+}
+
+/// [ORB-13964] The owner can execute final recovery after a follower settles
+/// its failed claim, without importing the follower's run or pipeline state.
+#[test]
+#[cfg(unix)]
+fn a_settled_follower_failure_is_recovered_with_the_recovery_runs_own_crew_draw() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use orbit_core::application::task::{
+        BLOCKED_TASK_RECOVERY_JOB, BlockedRecoveryInput, EpisodeDisposition, FinalRecoveryRecord,
+        FinalRecoveryTaskRevision,
+    };
+    use orbit_types::workflow::{ExecutorSandboxKind, FINAL_RECOVERY_CREWS_KEY};
+
+    if !isolated("a_settled_follower_failure_is_recovered_with_the_recovery_runs_own_crew_draw") {
+        return;
+    }
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task_id = pair.claimed_task(&leaf);
+    let failure = "validation failed; preserved candidate branch: fixture/candidate";
+    pair.leaf_fails_with(&leaf, failure);
+    pair.pass(&drain);
+    assert_eq!(pair.owner_status(&task_id), "blocked");
+    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "failed");
+
+    let owner_repo = pair.wire.owner.paths().repo_root.clone();
+    std::fs::write(owner_repo.join(".gitignore"), ".orbit/\n").unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["add", ".gitignore", "src"],
+        vec![
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@orbit.invalid",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "base",
+        ],
+        vec!["branch", "fixture/candidate"],
+    ] {
+        let output = orbit_common::fs::git::run_git(&owner_repo, &args).expect("seed owner Git");
+        assert!(output.success, "{args:?}: {}", output.stderr);
+    }
+    std::fs::write(
+        owner_repo.join(".orbit/config.toml"),
+        r#"[workflow]
+default_crew = "recovery_a"
+final_recovery_crews = ["recovery_a:7", "recovery_b:3"]
+
+[crews.sol]
+provider = "codex"
+model = "fixture-task"
+
+[crews.recovery_a]
+provider = "codex"
+model = "fixture-a"
+
+[crews.recovery_b]
+provider = "codex"
+model = "fixture-b"
+"#,
+    )
+    .unwrap();
+    orbit_core::bootstrap::init::init_workspace_at_root(
+        &pair.wire.owner.global_root(),
+        orbit_core::bootstrap::init::InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            ..Default::default()
+        },
+    )
+    .expect("seed shipped recovery job and activities");
+    let owner =
+        OrbitRuntime::from_roots(&pair.wire.owner.global_root(), &owner_repo.join(".orbit"))
+            .unwrap()
+            .with_automation_machine_identity(Some(OWNER.into()));
+    assert!(owner.read_run_state(&leaf).unwrap().is_none());
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    assert!(jobs.get_job_run(&leaf).unwrap().is_none());
+
+    // The real dispatcher selects the crew and injects execution identity;
+    // only the provider's decision is deterministic in this fixture.
+    let provider = pair._root.path().join("codex");
+    std::fs::write(
+        &provider,
+        "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"decision\":\"requeue\",\"reason\":\"fixture prerequisite repaired\"},\"error\":null}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
+    follower_cli(&owner, "codex", "sh");
+    let mut executor = owner.get_executor_def("codex").unwrap().unwrap();
+    executor.command = Some(provider.to_string_lossy().to_string());
+    executor.sandbox = Some(ExecutorSandboxKind::Off);
+    owner.upsert_executor_def(&executor).unwrap();
+
+    let views = owner.blocked_recovery_view(Utc::now()).unwrap();
+    assert_eq!(views.len(), 1);
+    let view = &views[0];
+    assert_eq!(view.disposition, EpisodeDisposition::Eligible);
+    assert_eq!(view.episode.failed_run_id.as_deref(), Some(leaf.as_str()));
+    let input = BlockedRecoveryInput {
+        task_id: task_id.clone(),
+        episode_key: view.episode.key(),
+        block_source: view.episode.source.as_str().to_string(),
+        failed_run_id: view.episode.failed_run_id.clone(),
+        observed: FinalRecoveryTaskRevision::of(&owner.get_task(&task_id).unwrap()),
+    };
+    let job = owner
+        .show_job_catalog_entry(BLOCKED_TASK_RECOVERY_JOB)
+        .unwrap();
+    let recovery = owner
+        .run_job_v2_from_yaml(&job.path, input.to_json())
+        .unwrap();
+    assert!(recovery.success, "{recovery:#?}");
+    let prepared = &recovery.pipeline["prepare"]["recovery"];
+    assert_eq!(prepared["run_id"], leaf);
+    assert!(
+        prepared["error_message"]
+            .as_str()
+            .unwrap()
+            .contains(failure),
+        "the owner supplies the settled diagnostic, including available candidate evidence: {prepared}"
+    );
+    assert!(!Path::new(prepared["workspace_path"].as_str().unwrap()).exists());
+    let state = owner.read_run_state(&recovery.run_id).unwrap().unwrap();
+    let frozen = &state.activity_crew_draws[FINAL_RECOVERY_CREWS_KEY];
+    assert_eq!(
+        frozen
+            .eligible_pool
+            .iter()
+            .map(|member| (member.name.as_str(), member.weight))
+            .collect::<Vec<_>>(),
+        [("recovery_a", 7), ("recovery_b", 3)]
+    );
+    let config = owner
+        .agent_crew_config_for_input(&json!({
+            "run_id": leaf,
+            "job_run_id": recovery.run_id,
+            "crew_config_key": FINAL_RECOVERY_CREWS_KEY,
+        }))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        config,
+        owner
+            .agent_crew_config_for_input(&json!({"crew": frozen.crew}))
+            .unwrap()
+            .unwrap()
+    );
+    assert_eq!(
+        owner.get_task(&task_id).unwrap().status.to_string(),
+        "backlog"
+    );
+    let record = FinalRecoveryRecord::last(&owner.get_task_comments(&task_id).unwrap()).unwrap();
+    assert_eq!(record.run_id, recovery.run_id);
+    assert_eq!(record.decision, "requeue");
+    assert_eq!(record.outcome, "requeued");
+    assert!(owner.read_run_state(&leaf).unwrap().is_none());
+    assert!(jobs.get_job_run(&leaf).unwrap().is_none());
+    let candidate =
+        orbit_common::fs::git::run_git(&owner_repo, &["rev-parse", "fixture/candidate"]).unwrap();
+    assert!(candidate.success, "candidate evidence is preserved");
+    assert_eq!(
+        candidate.stdout.trim(),
+        prepared["base_sha"].as_str().unwrap()
+    );
 }
 
 /// A stand-in leaf worker: on Unix it leads its own process group, and is

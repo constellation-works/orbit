@@ -108,6 +108,10 @@ pub(super) fn crew_overridden_spec(
         return Ok(None);
     };
     let rendered_input = inject_system_crew_input(ctx.host, rendered_input)?;
+    // Crew selection precedes dispatch. A stateful pool draw needs the same
+    // executing identity here that dispatch supplies when `run_id` names a
+    // different, originating run (such as a failed follower claim).
+    let rendered_input = super::super::dispatcher::inject_run_id(&rendered_input, &ctx.run_id);
     let Some(resolved) = resolve_crew_settings(ctx.host, inline_spec, &rendered_input, &ctx.input)?
     else {
         return Ok(None);

@@ -390,7 +390,10 @@ impl OrbitRuntime {
 
 impl OrbitRuntime {
     /// The crew a `final_recovery` activity runs as: one draw from
-    /// `workflow.final_recovery_crews`, frozen in the run's state.
+    /// `workflow.final_recovery_crews`, frozen in the executing run's state.
+    /// Dispatch supplies that identity as `job_run_id` when an explicit
+    /// `run_id` names the originating failure; otherwise `run_id` is the
+    /// executing run. A follower's originating state need not exist here.
     ///
     /// The first dispatch draws over the enabled members this run's
     /// `allowed_crews` permits and records the choice in the same run-state
@@ -405,13 +408,14 @@ impl OrbitRuntime {
     ) -> Result<Crew, OrbitError> {
         let source = FINAL_RECOVERY_CREWS_KEY;
         let run_id = input
-            .get("run_id")
+            .get("job_run_id")
+            .or_else(|| input.get("run_id"))
             .and_then(Value::as_str)
             .and_then(non_empty)
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!(
-                    "an activity crew drawn from `{source}` needs the input's `run_id` to freeze \
-                     the draw"
+                    "an activity crew drawn from `{source}` needs the input's executing \
+                     `job_run_id` or `run_id` to freeze the draw"
                 ))
             })?;
         let allowlist = self.crew_allowlist_from_input(input)?;
