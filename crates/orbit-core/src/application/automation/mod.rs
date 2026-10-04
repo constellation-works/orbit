@@ -218,7 +218,8 @@ impl DeliveryHost for Host<'_> {
             .runtime
             .automation_store()?
             .automation_receipts(&state.consumer, 100)?;
-        let (page, record) = self.source.replay_history(branch, state, receipts.len())?;
+        let (mut page, record) = self.source.replay_history(branch, state, receipts.len())?;
+        provider::attribute(self.runtime, &mut page.deliveries)?;
 
         Ok(delivery::recovery::HistoryReplayInput { page, record })
     }
@@ -264,6 +265,7 @@ impl DeliveryHost for Host<'_> {
             state,
             &mut page,
         )?;
+        provider::attribute(self.runtime, &mut page.deliveries)?;
         // [ORB-11333] Accepted before-PR certificates become exclusions only
         // after the shared rule proves the landed trees; the evaluator then
         // applies them for review consumers alone.

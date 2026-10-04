@@ -528,6 +528,7 @@ fn replay_plan(
             }
             let mut replacement = new.clone();
             replacement.task_ids = old.task_ids.clone();
+            replacement.unattributed = old.unattributed.clone();
             pending.push(replacement);
         } else {
             pending.push(old.clone());
