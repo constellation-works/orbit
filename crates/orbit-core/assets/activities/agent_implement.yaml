@@ -190,19 +190,20 @@ spec:
         verify that commit and current acceptance checks. On first attempt or
         retry, do not manufacture a change: attach `already-landed.json` and
         each validation log through `orbit.task.artifact.put` before success.
+        The already-landed report needs schema_version 1, task_id, run_id,
+        tested_head, covering_commit, covering_task_id (this task or covering
+        sibling), scope (title, description, acceptance_criteria, plan,
+        context_files, tags, relations, required_tools, type, comments),
+        required_commands, criteria_evidence, validation. Use flat
+        validation[] objects with sibling fields command, outcome, role,
+        log_artifact.
         After required checks pass, for a genuine no-op, attach `no-diff.json`
         and validation logs via `orbit.task.artifact.put`, using the schema in
-        the Orbit task-execution reference.
-        The report needs schema_version 1,
-        task_id, run_id, tested_head, covering_commit, covering_task_id (this
-        task or covering sibling), scope (title, description,
-        acceptance_criteria, plan, context_files, tags, relations,
-        required_tools, type, comments), required_commands, criteria_evidence,
-        validation. Use flat validation[] objects with sibling fields command,
-        outcome, role, log_artifact. Attach each referenced JSON log with
-        run_id, tested_head, command, exit_code, captured output. Old, missing,
-        failed, or unavailable checks disqualify this path; report a
-        validation blocker.
+        the Orbit task-execution reference (schema_version 1, task_id, run_id,
+        tested_head, reason, validation[command, exit_code, log_artifact]).
+        Attach each referenced JSON log with run_id, tested_head, command,
+        exit_code, captured output. Old, missing, failed, or unavailable
+        checks disqualify this path; report a validation blocker.
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
         and merge. Follow item 10's scratch policy. Delivery refuses untracked

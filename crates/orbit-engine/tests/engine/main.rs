@@ -9,6 +9,7 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod commit_verifier;
 mod history_note;
 mod pr_landing;
 mod v2_cli_agent;
