@@ -400,19 +400,29 @@ pub(crate) fn run_deterministic(
             update_run_waiting_reasons(runtime, input, None, non_empty(waiting_on_locks), action)?;
             Ok(output)
         }
-        // Thin passthrough over `orbit.task.locks.release` so workflows
-        // can free admission-window reservations after child runs finish.
-        CoreDeterministicAction::ReleaseLocks => runtime
-            .run_tool_with_context_and_role(
-                "orbit.task.locks.release",
-                input.clone(),
-                Role::Admin,
-                tool_context,
-            )
-            .map_err(|err| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("{err}"),
-            }),
+        CoreDeterministicAction::ReleaseLocks => {
+            // The activity dispatcher adds execution context to core action
+            // input. It is not part of the task tool's argument contract.
+            // Strip only those fields so unknown tool arguments still fail
+            // validation, and retain the trusted owner in tool_context.
+            let mut args = input.clone();
+            if let Some(object) = args.as_object_mut() {
+                for field in ["run_id", "job_run_id", "step_id"] {
+                    object.remove(field);
+                }
+            }
+            runtime
+                .run_tool_with_context_and_role(
+                    "orbit.task.locks.release",
+                    args,
+                    Role::Admin,
+                    tool_context,
+                )
+                .map_err(|err| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("{err}"),
+                })
+        }
         // Submit a child v2 Job and block on its terminal state.
         // Chains `orbit.pipeline.invoke` + `orbit.pipeline.wait` so
         // workflows can model "dispatch and join" as a single step

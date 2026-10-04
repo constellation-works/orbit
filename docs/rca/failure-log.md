@@ -58,10 +58,21 @@ you close it out.
   fields 'run_id', ...` on `jrun-20261004-0123-c5` (and its parent
   `task_auto_pipeline` run `-c1`), after the child `task_pr_pipeline` failed on
   the Bubblewrap cause above.
-- **Cause:** Not yet diagnosed. The action input carries fields its schema does
-  not accept, so a failed gate run may leave its locks for the next GC.
-  `orbit task locks list` showed no leftover locks afterwards.
-- **Fix:** open.
+- **Cause:** The v2 activity dispatcher injects `run_id` (or `job_run_id`
+  when the input already names a run) and `step_id` into core deterministic
+  action input on both success and failure paths. `release_locks` forwarded
+  that object unchanged to `orbit.task.locks.release`, whose strict tool-input
+  validation rejects those context fields before releasing anything. This
+  was not specific to child failures. Terminal-run finalization independently
+  releases run-owned reservations, which can explain why the lock listing was
+  empty afterwards; the historical release reason has not been verified.
+- **Fix:** ORB-13854. Strip only the dispatcher context fields at the
+  `release_locks` tool boundary, preserving strict validation of all other
+  fields. A CLI boundary regression drives the shipped gate with a real failed
+  child and a successful child, checks explicit release before terminal
+  cleanup, and checks `orbit task locks list` for remaining reservations.
+  `task_claimed_local_pipeline` has no lock-release activity: claim settlement
+  owns its reservation release.
 - **Tasks:** the same three as the entry above.
 
 ## 2026-09-28: Stopping a follower drain strands its live leaves
