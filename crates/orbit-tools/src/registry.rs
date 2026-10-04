@@ -179,7 +179,10 @@ impl ToolRegistry {
             .tools
             .get(name)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
-        if name.starts_with("orbit.task.") && tool.plugin.is_none() {
+        if name.starts_with("orbit.task.")
+            && tool.plugin.is_none()
+            && !is_preloaded_artifact_payload(name, &input)
+        {
             validate_task_arguments(&input, &tool.tool.schema())?;
         }
         tool.tool.execute(ctx, input)
@@ -275,6 +278,14 @@ impl ToolRegistry {
         validate_mcp_tool_definitions(&definitions)?;
         Ok(definitions)
     }
+}
+
+/// A spoke broker sends `orbit.task.artifact.put` a path-free `artifacts`
+/// payload that is deliberately absent from the public schema. The handler
+/// admits that shape only from the authenticated ssh-mcp connector and checks
+/// its fields itself, so the public-schema check must not refuse it first.
+fn is_preloaded_artifact_payload(name: &str, input: &Value) -> bool {
+    name == "orbit.task.artifact.put" && input.get("artifacts").is_some()
 }
 
 /// Task argument shapes are checked before a handler can ignore a mistyped

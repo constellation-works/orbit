@@ -112,15 +112,22 @@ def pull_request_paths() -> list[str]:
     return entries
 
 
-def filtered_cargo_tests() -> list[tuple[str, str]]:
-    commands: list[tuple[str, str]] = []
+# A filter whose tests compile only on Darwin carries this marker. The Linux
+# guardrail cannot list them, so it reports the skip; on Darwin (the macOS job
+# itself) a zero match is still an error.
+DARWIN_ONLY_MARKER = "# check-ci-macos: darwin-only"
+
+
+def filtered_cargo_tests() -> list[tuple[str, str, bool]]:
+    commands: list[tuple[str, str, bool]] = []
 
     for line in lines:
         if "cargo test" not in line or line.lstrip().startswith("#"):
             continue
 
+        darwin_only = DARWIN_ONLY_MARKER in line
         try:
-            tokens = shlex.split(line.strip())
+            tokens = shlex.split(line.split(DARWIN_ONLY_MARKER)[0].strip())
         except ValueError as error:
             print(f"check-ci-macos: cannot parse workflow command {line!r}: {error}", file=sys.stderr)
             raise SystemExit(1) from error
@@ -153,7 +160,7 @@ def filtered_cargo_tests() -> list[tuple[str, str]]:
         package_index = cargo_args.index(package)
         positional = [token for token in cargo_args[package_index + 1:] if not token.startswith("-")]
         if positional:
-            commands.append((package, positional[0]))
+            commands.append((package, positional[0], darwin_only))
 
     return commands
 
@@ -234,7 +241,10 @@ def list_filtered_tests(package: str, test_filter: str) -> str | None:
 
 executables = workspace_test_executables() if workspace_build and filtered_tests else {}
 
-for package, test_filter in filtered_tests:
+for package, test_filter, darwin_only in filtered_tests:
+    if darwin_only and platform.system() != "Darwin":
+        print(f"check-ci-macos: {package} {test_filter} is Darwin-only; listed by the macOS job")
+        continue
     listing = list_filtered_tests(package, test_filter)
     if listing is None:
         continue
