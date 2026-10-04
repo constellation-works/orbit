@@ -9,15 +9,16 @@ doc_role: design
 type: design
 summary: Shipped review contract — captured timing, the before-PR gate, what validation records establish, lineage budgets, managed completion, delivery coverage, surfaces, and rollback.
 tags: [review-gate, review-policy, automation, delivery, operations]
-paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
+paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13896]
 ---
 
 # Review Gate — Design [ORB-11333]
 
-This file describes what shipped. A preference edit changes no schedule and
-grants no authority; a verdict grants no merge permission.
+This file describes what shipped. A preference edit grants no authority and
+changes no schedule except the one `after-landing` names (§1); a verdict grants
+no merge permission.
 
 ## 1. Preferences: the `[operation]` review keys
 
@@ -29,7 +30,7 @@ keeps loading.
 | Key | Values (default) |
 | --- | --- |
 | `operation.review_policy` | `none` (default), `after-landing`, `before-pr` |
-| `operation.review_crew` | crew name (before-PR review only) |
+| `operation.review_crew` | crew name (before-PR reviewer; crew of after-landing review tasks) |
 | `operation.review_reviewer_starts` | 1..=10 (2) |
 | `operation.review_repair_cycles` | 0..=10 (2) |
 | `operation.review_minutes` | 1..=1440 (30) |
@@ -39,13 +40,36 @@ provenance and the layer that supplied each effective value.
 
 `before-pr` holds PR creation for a fresh reviewer (§3); it needs an explicit
 `review_crew`, and admission escalates `review_crew_unconfigured` until one is
-set. `review_crew` applies to that before-PR reviewer only: `after-landing`
-review is not run by this policy but by the `delivery-code-review` auto-task,
-which mints its tasks with the crew in its own template, so setting
-`review_crew` does not change who reviews landed work (see [delivery
-automation operations](../automation-triggers/5_operations.md)). The three
-`review_*` budgets bound one delivery candidate lineage. The resolved-policy
-version is 2; a version-1 snapshot fails closed and must be replaced.
+set.
+
+`after-landing` is carried out by the workspace's shipped `delivery-code-review`
+delivery auto-task [ORB-13896]. The policy is its switch: while the policy is
+`after-landing` that consumer is enabled whatever its own `enabled` field says,
+so it freezes landed base-branch deliveries into batches and mints one review
+task per batch at its threshold or maximum wait. `orbit auto-task list` and
+`show` report it as enabled by the policy, and toggling it off does not stop it;
+setting the policy to `none` or `before-pr` does. When `review_crew` is set it
+is the crew of every review task the consumer mints; unset, the definition's
+template crew (`system`) applies. Changing `review_crew` changes only future
+mints, never the consumer's epoch or its retained debt. The consumer admits only
+on the machine that owns the workspace (see [delivery automation
+operations](../automation-triggers/5_operations.md)).
+
+Because nothing else performs after-landing review, `orbit doctor` reports a
+`review-after-landing` row whenever the policy is `after-landing`, and
+`orbit config show` prints the same line (`review_after_landing` in `--json`):
+whether the consumer is present and enabled, whether this host owns it, whether
+it is wedged on a closed action or stalled, whether its branch and review crew
+resolve, its scheduling state, and when its last batch was minted or covered.
+Anything short of healthy — the definition missing, owned by another machine or
+by none, wedged, stalled, held for an operator (`definition_changed`,
+`needs_attention`, `retry_deadline_expired`), on a branch that does not resolve,
+or naming a crew that does not — is an `error`, so `orbit doctor` exits nonzero.
+Under any other policy the row is `skipped`.
+
+The three `review_*` budgets bound one delivery candidate lineage. The
+resolved-policy version is 2; a version-1 snapshot fails closed and must be
+replaced.
 
 ## 2. Captured timing
 
@@ -255,7 +279,8 @@ Existing runs without a `review` snapshot behave exactly as before. The
 seeded cron `code-review` auto-task and any custom definition stay untouched;
 migrating to delivery-triggered review remains the explicit edit described in
 [delivery automation operations](../automation-triggers/5_operations.md).
-To roll back, set `review_policy` to `none` or `after-landing`: future
+To roll back, set `review_policy` to `none` or `after-landing` (which also
+enables the `delivery-code-review` consumer, §1): future
 submissions capture the new timing, admitted runs keep their gate, and
 certificates, ledgers, and landings stay readable. An older binary cannot settle an
 in-flight gate; drain gated runs with a supporting binary before downgrading.

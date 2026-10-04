@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-09-24
+last_updated: 2026-10-04
 last_validated: 2026-09-20
 status: Accepted
 feature: auto-tasks
@@ -132,7 +132,8 @@ definition of the same name.
   tasks. Its execution summary recommends human follow-up without changing task
   status or dispatching work.
 - `delivery-code-review` and `delivery-qa` — disabled-by-default checks of
-  newly landed deliveries.
+  newly landed deliveries. `operation.review_policy = after-landing` enables
+  `delivery-code-review` without a toggle.
 
 ## Workspace-authored definitions in this repo
 

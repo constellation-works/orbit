@@ -123,13 +123,16 @@ fn auto_task_rows(runtime: &OrbitRuntime) -> Result<Vec<Value>, OrbitError> {
     let cursors = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir))?;
     runtime.auto_task_listing(true)?.iter().map(|s|{
         let d=&s.definition;
+        let enabled_by_review_policy=runtime.auto_task_enabled_by_review_policy(d);
+        let effective_enabled=runtime.auto_task_enabled(d);
         let cursor=cursors.definitions.get(&d.name);
         let baseline=cursor.and_then(|c|chrono::DateTime::parse_from_rfc3339(&c.baseline_at).ok()).map(|d|d.with_timezone(&Utc));
         let next=next_scheduled_slot(&d.schedule,baseline,Utc::now())?;
-        let state=if s.inactive_plugin.is_some(){"plugin_inactive"}else if !d.enabled{"disabled"}else if matches!(d.schedule,AutoTaskSchedule::Deliveries{..}){"waiting"}else if cursor.is_none(){"never_observed"}else if next.is_some(){"scheduled"}else{"unavailable"};
+        let state=if s.inactive_plugin.is_some(){"plugin_inactive"}else if !effective_enabled{"disabled"}else if matches!(d.schedule,AutoTaskSchedule::Deliveries{..}){"waiting"}else if cursor.is_none(){"never_observed"}else if next.is_some(){"scheduled"}else{"unavailable"};
         Ok(json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"schedule":d.schedule,
             "state":state,"next_due":if state=="scheduled"{next}else{None},
             "target":text(&d.template.title),"dedupe":d.dedupe,"skip_reason":s.skipped_reason,
+            "enabled_by_review_policy":enabled_by_review_policy,"effective_enabled":effective_enabled,
             "toggle_available":s.inactive_plugin.is_none(),"mint_available":s.inactive_plugin.is_none(),
             "updated_at":d.updated_at}))
     }).collect()
@@ -197,7 +200,9 @@ pub(super) fn control(
                 boolean(&input, "expected_enabled")?,
                 boolean(&input, "enabled")?,
             )?;
-            json!({"enabled":d.enabled})
+            json!({"enabled":d.enabled,
+                "enabled_by_review_policy":runtime.auto_task_enabled_by_review_policy(&d),
+                "effective_enabled":runtime.auto_task_enabled(&d)})
         }
         ("auto_task", "mint") => {
             if !boolean(&input, "acknowledge_unconditional")? {

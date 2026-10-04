@@ -38,7 +38,8 @@ pub enum ReviewPolicy {
     /// Hold PR creation for a fresh reviewer with scoped repairs [ORB-11333].
     #[serde(rename = "before-pr")]
     BeforePr,
-    /// Accumulate uncovered landed deliveries for a scheduled review.
+    /// Review landed deliveries in batches: enables the workspace's
+    /// `delivery-code-review` consumer without a separate toggle [ORB-13896].
     #[serde(rename = "after-landing")]
     AfterLanding,
 }
@@ -230,7 +231,8 @@ pub struct OperationPolicy {
     pub version: u32,
     /// Automatic review timing.
     pub review_policy: OperationField<ReviewPolicy>,
-    /// Crew selected for automatic review.
+    /// Crew selected for automatic review: the before-PR reviewer and the
+    /// crew of minted after-landing review tasks.
     pub review_crew: OperationField<Option<String>>,
     /// Reviewer starts allowed per delivery candidate lineage.
     pub review_reviewer_starts: OperationField<u32>,

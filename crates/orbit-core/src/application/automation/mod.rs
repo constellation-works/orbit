@@ -8,6 +8,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 
+mod after_landing;
 mod direct;
 pub(crate) mod incidents;
 mod inspect;
@@ -21,6 +22,7 @@ pub(crate) mod source;
 pub(crate) mod stall;
 mod task;
 
+pub use after_landing::{AfterLandingHealth, after_landing_health};
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{
     UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,
@@ -75,7 +77,7 @@ pub fn evaluate_auto_task(
             consumer: &consumer_key(runtime, "auto-task", &definition.name)?,
             epoch: &epoch,
             trigger: &trigger,
-            enabled: definition.enabled,
+            enabled: runtime.auto_task_enabled(definition),
             dry_run,
             now,
         },

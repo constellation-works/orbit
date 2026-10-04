@@ -164,7 +164,7 @@ define_config_settings! {
     },
     operation_review_crew: Option<String> => String {
         key: "operation.review_crew", value_type: "string",
-        description: "Crew selected for before-PR automatic review. After-landing review runs from its delivery auto-task and uses that definition's template crew.",
+        description: "Crew for automatic review: the before-PR reviewer, and the crew of every review task the after-landing delivery-code-review consumer mints (unset, that definition's template crew).",
         section: ConfigSection::Operation, order: 20,
         resolve: |raw: Option<String>| operation::review_crew(raw),
     },
@@ -176,7 +176,7 @@ define_config_settings! {
     },
     operation_review_policy: Option<String> => String {
         key: "operation.review_policy", value_type: "string",
-        description: "Automatic review timing: none (default), before-pr, or after-landing. before-pr holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery.",
+        description: "Automatic review timing: none (default), before-pr, or after-landing. before-pr holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery. after-landing enables the delivery-code-review auto-task, which reviews landed deliveries in batches; orbit doctor fails while that consumer cannot run here.",
         section: ConfigSection::Operation, order: 10,
         resolve: |raw: Option<String>| operation::admit_review_policy(raw),
     },
