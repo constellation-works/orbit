@@ -47,6 +47,13 @@ pub fn recover_auto_task(
 
     let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
     let by = runtime.actor().resolve_write_label(None, None)?;
+    let store = runtime.automation_store()?;
+    let action_liveness = super::auto_task_action_liveness(
+        runtime,
+        definition,
+        store.automation_state(&consumer)?.as_ref(),
+        now,
+    );
     let operation = recovery::Recovery {
         consumer: &consumer,
         epoch: &epoch,
@@ -57,9 +64,10 @@ pub fn recover_auto_task(
         by: &by,
         now,
         replay: None,
+        action_terminal: action_liveness.terminal,
+        action_failed_without_evidence: action_liveness.failed_without_evidence,
     };
 
-    let store = runtime.automation_store()?;
     let replay = if request.replay_history {
         let state = store
             .automation_state(&consumer)?

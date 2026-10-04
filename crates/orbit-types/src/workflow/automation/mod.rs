@@ -399,6 +399,11 @@ pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
     }
 }
 
+/// Task artifact carrying an action's [`CoverageEvidence`]. The artifact Store
+/// refuses bytes that do not parse as that schema, so the submitter sees the
+/// parse error while it can still fix and re-put the file.
+pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
+
 /// Reserved Store-authored artifact; callers cannot supply its contents.
 pub const EVIDENCE_AUTHORITY_ARTIFACT: &str = "automation-evidence-authority.json";
 

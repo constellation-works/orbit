@@ -9,7 +9,7 @@ schedule:
     max_wait_minutes: 360
     coverage: landed_code_review_v1
     max_items: 20
-    retries: 0
+    retries: 1
 template:
   title: Review a frozen delivery batch
   description: |-

@@ -177,6 +177,55 @@ pub fn unadmittable_delivery_definitions(
         .collect())
 }
 
+/// A delivery auto-task whose admitted action stopped without evidence its
+/// settlement would accept — usually a task closed with missing or malformed
+/// coverage. The next evaluation settles it; one still reported means none is
+/// running here, and the consumer admits nothing until it does or an operator
+/// recovers or resets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WedgedConsumer {
+    pub definition: String,
+    /// The stopped action: the task the consumer is still waiting on.
+    pub action_id: String,
+    /// The last validation reason recorded against its evidence, if any.
+    pub reason: Option<String>,
+}
+
+/// Every delivery auto-task here holding a stopped admitted action, in
+/// definition order, by the same rule reset and recovery accept.
+pub fn wedged_delivery_consumers(
+    runtime: &OrbitRuntime,
+    now: DateTime<Utc>,
+) -> Result<Vec<WedgedConsumer>, OrbitError> {
+    if runtime.automation_machine_identity().is_none() {
+        return Ok(vec![]);
+    }
+    let store = runtime.automation_store()?;
+    let mut wedged = Vec::new();
+    for listed in runtime.auto_task_listing(false)? {
+        let definition = listed.definition;
+        if !matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
+            continue;
+        }
+        let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
+        let state = store.automation_state(&consumer)?;
+        if !super::auto_task_action_liveness(runtime, &definition, state.as_ref(), now)
+            .failed_without_evidence
+        {
+            continue;
+        }
+        if let Some(active) = state.and_then(|state| state.active) {
+            wedged.push(WedgedConsumer {
+                definition: definition.name.clone(),
+                action_id: active.action_id.unwrap_or_default(),
+                reason: active.reason,
+            });
+        }
+    }
+
+    Ok(wedged)
+}
+
 /// The reason evaluation would defer with when `branch` does not resolve,
 /// or `None` when it does. Only a local ref lookup: no history, no provider.
 fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<String> {

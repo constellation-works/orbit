@@ -13,6 +13,10 @@ pub struct EvidenceFacts {
     pub artifact_digest: String,
     pub authorized: bool,
     pub source_verified: bool,
+    /// Core proved the action stopped (its task is terminal, its run ended),
+    /// so these bytes are final: invalid evidence settles the attempt rather
+    /// than waiting for a resubmission that can no longer arrive.
+    pub action_stopped: bool,
 }
 
 pub fn validate(

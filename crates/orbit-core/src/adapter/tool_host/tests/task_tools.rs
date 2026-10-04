@@ -242,3 +242,73 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         .expect("remote artifact");
     assert_eq!(remote_art.origin, None);
 }
+
+/// Coverage evidence is read only after its action stops, when nobody can fix
+/// it, so a file that does not parse as the schema is refused at put with the
+/// exact parse error and stores nothing; a well-formed file is accepted.
+#[test]
+fn artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error() {
+    use super::super::test_support::run_tool_as_operator;
+
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "coverage evidence task",
+        "receives automation coverage evidence",
+        TaskStatus::InProgress,
+        &[],
+    );
+    let put = |content: &str| {
+        let source = repo_root.join("automation-coverage-fixture.json");
+        std::fs::write(&source, content).expect("write coverage fixture");
+        let result = run_tool_as_operator(
+            &runtime,
+            "orbit.task.artifact.put",
+            json!({
+                "id": task.id,
+                "source_path": source.to_string_lossy(),
+                "path": "automation-coverage.json",
+                "model": "codex",
+            }),
+        );
+        std::fs::remove_file(&source).ok();
+        result
+    };
+
+    let error = put(r#"{"schema_version":1,"batch_id":{}}"#).expect_err("malformed evidence");
+    let orbit_common::OrbitError::InvalidInput(message) = error else {
+        panic!("expected invalid input, got {error}");
+    };
+    assert!(
+        message.contains("invalid type: map, expected a string at line 1 column"),
+        "the caller needs serde's exact error to fix the file: {message}"
+    );
+    assert!(
+        runtime
+            .get_task_artifact(&task.id, "automation-coverage.json")
+            .expect("read artifact")
+            .is_none()
+    );
+
+    let revision = json!({"commit": "c1", "tree": "t1"});
+    put(&json!({
+        "schema_version": 1,
+        "batch_id": "batch",
+        "consumer": "consumer",
+        "epoch": "epoch",
+        "input_digest": "digest",
+        "action_id": task.id,
+        "attempt": 1,
+        "coverage": "landed_code_review_v1",
+        "from_exclusive": revision,
+        "through_inclusive": revision,
+        "examined_commits": ["c1"],
+        "examined_deliveries": ["pr:owner/repo:1"],
+        "examination_complete": true,
+        "checks": [{"subject": "range", "method": "review", "observation": "examined"}],
+        "findings": [],
+    })
+    .to_string())
+    .expect("well-formed evidence is stored");
+}
