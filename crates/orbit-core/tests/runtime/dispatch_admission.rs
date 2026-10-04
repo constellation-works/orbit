@@ -757,14 +757,14 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
 /// A host whose CPU and memory readings and sample time a test sets; every
 /// filesystem reads 10%.
 pub(super) struct PressureProbe {
-    reading: Mutex<(Option<f64>, f64, DateTime<Utc>)>,
+    reading: Mutex<(Option<f64>, Option<f64>, DateTime<Utc>)>,
     samples: AtomicUsize,
 }
 
 impl PressureProbe {
     pub(super) fn calm() -> Arc<Self> {
         Arc::new(Self {
-            reading: Mutex::new((Some(10.0), 10.0, Utc::now())),
+            reading: Mutex::new((Some(10.0), Some(10.0), Utc::now())),
             samples: AtomicUsize::new(0),
         })
     }
@@ -772,7 +772,7 @@ impl PressureProbe {
     /// Memory at `percent`, observed at `at`.
     pub(super) fn memory(&self, percent: f64, at: DateTime<Utc>) {
         let mut reading = self.reading.lock().unwrap();
-        reading.1 = percent;
+        reading.1 = Some(percent);
         reading.2 = at;
     }
 
@@ -806,7 +806,7 @@ impl HostResourceProbe for PressureProbe {
         HostResourceSample {
             sampled_at: at,
             cpu_percent: cpu,
-            memory_percent: Some(memory),
+            memory_percent: memory,
             disks: paths
                 .iter()
                 .map(|path| DiskSample {
@@ -856,6 +856,154 @@ fn readiness_task<'a>(readiness: &'a Value, task: &str) -> &'a Value {
         .iter()
         .find(|entry| entry["task_id"] == task)
         .expect("task in readiness")
+}
+
+/// A separate probe process establishes sustained pressure without any drain.
+/// Fresh ship and sweep runtimes must recover it before pipeline submission.
+#[test]
+fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
+    const TEST: &str = "fresh_runtime_discovery_recovers_host_pressure_without_a_drain";
+    const WARM_ROOT: &str = "ORBIT_TEST_PRESSURE_WARM_ROOT";
+    if !isolated(TEST) {
+        return;
+    }
+    if let Some(root) = std::env::var_os(WARM_ROOT) {
+        let root = PathBuf::from(root);
+        let probe = PressureProbe::calm();
+        let runtime = OrbitRuntime::from_roots(&root.join("global"), &root.join("repo/.orbit"))
+            .unwrap()
+            .with_host_resource_probe(probe.clone());
+        probe.sustain_memory(&runtime, 95.0);
+        assert!(runtime.resource_admission().throttle.is_some());
+        return;
+    }
+
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let qualified = format!("dispatch_admission::{TEST}");
+    let mut warm = std::process::Command::new(std::env::current_exe().unwrap());
+    warm.args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
+        .env(WARM_ROOT, root.path());
+    let output = orbit_common::process::run_bounded_capped(&mut warm, CHILD_DEADLINE, 64 * 1024)
+        .expect("bounded independent probe process");
+    orbit_common::test_env::assert_child_test_passed(
+        &qualified,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+
+    let probe = PressureProbe::calm();
+    probe.memory(95.0, Utc::now());
+    let open = |workspace: &Path| {
+        OrbitRuntime::from_roots(&global, workspace)
+            .unwrap()
+            .with_host_resource_probe(probe.clone())
+    };
+    let runtime = open(&workspace);
+    let queued = seed(&runtime, Seed::default());
+    let refused = ship(&runtime, None);
+    assert!(
+        matches!(refused, OrbitError::PolicyDenied(ref reason) if reason.starts_with("resource_throttled:")),
+        "fresh discovery must refuse before looking up/submitting its pipeline: {refused}"
+    );
+    // Sweep opens its own runtime too, and shares history across workspace roots.
+    let other_workspace = root.path().join("other/.orbit");
+    std::fs::create_dir_all(&other_workspace).unwrap();
+    let sweep = open(&other_workspace);
+    let decision = sweep
+        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+        .unwrap();
+    assert_eq!(decision.refusal.unwrap().code(), "resource_throttled");
+    for runtime in [&runtime, &sweep] {
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            runtime.sqlite_store().unwrap(),
+            runtime.workspace_id().unwrap(),
+        );
+        for job in [
+            "task_auto_pipeline",
+            "workspace_auto_pipeline",
+            "workspace_pull_pipeline",
+        ] {
+            assert!(
+                jobs.list_job_runs(job).unwrap().is_empty(),
+                "no submitted pipeline or active drain"
+            );
+        }
+    }
+    let explicit = runtime
+        .drain_entry_admission(
+            DrainEntryPoint::ExplicitShip,
+            std::slice::from_ref(&queued.id),
+            false,
+        )
+        .unwrap();
+    assert!(explicit.refusal.is_none());
+    assert!(
+        explicit.resource_throttle.is_some(),
+        "explicit selection carries the throttle warning"
+    );
+    let explicit_submission = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&queued.id),
+            CompletionPolicy::Review,
+            &[],
+            Some("test"),
+            None,
+            JobRunTrigger::cli(),
+        )
+        .expect_err("the fixture has no delivery job asset");
+    assert!(matches!(explicit_submission, OrbitError::NotFound { .. }));
+
+    // Hysteresis survives a fresh open but recovery is immediate below resume.
+    probe.memory(85.0, Utc::now());
+    assert!(open(&workspace).resource_admission().throttle.is_some());
+    probe.memory(70.0, Utc::now());
+    assert!(open(&workspace).resource_admission().throttle.is_none());
+
+    // Re-establish a hold, then prove unknown/stale readings clear shared history.
+    probe.sustain_memory(&runtime, 95.0);
+    assert!(runtime.resource_admission().throttle.is_some());
+    {
+        let mut reading = probe.reading.lock().unwrap();
+        reading.0 = None;
+        reading.1 = None;
+    }
+    let unknown = open(&workspace).admission_resource_throttle();
+    assert!(unknown.throttle.is_none());
+    assert!(
+        unknown
+            .unknown
+            .iter()
+            .any(|reason| reason == "memory unavailable")
+    );
+    assert!(
+        runtime
+            .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+            .unwrap()
+            .refusal
+            .is_none()
+    );
+    assert!(matches!(
+        ship(&open(&workspace), None),
+        OrbitError::NotFound { .. }
+    ));
+    probe.cpu(Some(10.0));
+    probe.sustain_memory(&runtime, 95.0);
+    assert!(runtime.resource_admission().throttle.is_some());
+    probe.memory(95.0, Utc::now() - chrono::Duration::seconds(20));
+    let stale = open(&workspace).admission_resource_throttle();
+    assert!(stale.throttle.is_none());
+    assert!(stale.unknown.iter().any(|reason| reason == "memory stale"));
+    assert!(matches!(
+        ship(&open(&workspace), None),
+        OrbitError::NotFound { .. }
+    ));
 }
 
 /// Sustained memory pressure holds the local drain's wave, ship discovery

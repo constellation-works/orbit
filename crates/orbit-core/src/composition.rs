@@ -434,5 +434,6 @@ pub fn host_resource_monitor(
     Ok(crate::runtime::host_resource::HostResourceMonitor::new(
         crate::runtime::host_resource::default_host_resource_probe(),
         snapshot.resource_throttle(),
-    ))
+    )
+    .with_shared_history(global_root))
 }

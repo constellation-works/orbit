@@ -760,10 +760,16 @@ orbit run readiness          # "Admissions throttled: memory 93% â‰¥ 90% since â
 orbit run show <drain-run>   # Throttled: line from the drain's last pass
 ```
 
-- The drain samples the host every five seconds while it runs and records the
-  throttle on each pass; readiness, `orbit run ship` and the dashboard Drain
-  card read that record when their own process has not sampled long enough to
-  judge sustained pressure. MCP `orbit.workflow.auto` status carries
+- Sampling monitors share recent pressure history in
+  `<global-root>/cache/host-resource-pressure.json`, independently of drain
+  records and workspace. A fresh `orbit run ship` or `ship-sweep` evaluates
+  its sample against that history using its configured thresholds. Unknown
+  readings, observation gaps over fifteen seconds and changed thresholds
+  reset the affected resource's history; a first high sample alone does not
+  prove sustained pressure. If history is unavailable, evaluation uses local
+  observations. Drains sample every five seconds and also record the throttle
+  on each pass; readiness and the dashboard Drain card can read that record.
+  MCP `orbit.workflow.auto` status carries
   `capacity.resource_throttle`; `orbit.workflow.run.show` carries the drain's
   `drain_last_pass`.
 - `orbit run auto`, MCP `orbit.workflow.auto` start, and `orbit run ship` with
