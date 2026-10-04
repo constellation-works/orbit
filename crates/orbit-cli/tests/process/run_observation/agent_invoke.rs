@@ -25,6 +25,78 @@ fn plant_invoke_provider(fixture: &Fixture, body: &str) {
 }
 
 #[test]
+fn agent_wait_redacts_sensitive_warning_content_in_progress_and_output() {
+    let fixture = Fixture::init();
+    plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));
+    let submission = operator_json(
+        &fixture,
+        &[
+            "run",
+            "agent",
+            "probe",
+            "--wait",
+            "--timeout",
+            "30s",
+            "--provider-sandbox",
+            "danger-full-access",
+            "--json",
+        ],
+    );
+    // Mark an observed warning as a sensitive env value to exercise the real
+    // CLI boundary without pinning its prose or injecting production warnings.
+    let sensitive = submission["warnings"][0].as_str().unwrap();
+    for as_json in [false, true] {
+        let mut command = fixture.orbit();
+        command
+            .env("ORBIT_OPERATOR", "1")
+            .env("RUST_LOG", "off")
+            .env("ORBIT_TEST_WARNING_SECRET", sensitive)
+            .args([
+                "run",
+                "agent",
+                "probe",
+                "--wait",
+                "--timeout",
+                "30s",
+                "--provider-sandbox",
+                "danger-full-access",
+            ]);
+        if as_json {
+            command.arg("--json");
+        }
+        let output = command
+            .timeout(std::time::Duration::from_secs(30))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        for rendered in [&stdout, &stderr] {
+            assert!(
+                !rendered.contains(sensitive),
+                "submission warnings must not expose sensitive env values: {rendered}"
+            );
+            assert!(rendered.contains("[REDACTED_ENV]"), "{rendered}");
+        }
+        if as_json {
+            let result: Value = serde_json::from_str(&stdout).unwrap();
+            assert_eq!(result["state"], "success");
+            assert_eq!(result["answer"]["summary"], "fixture answer");
+            assert_eq!(result["provider_sandbox"], "codex:danger-full-access");
+            assert_eq!(result["warnings"].as_array().unwrap().len(), 1);
+            assert!(
+                result["warnings"][0]
+                    .as_str()
+                    .unwrap()
+                    .contains("[REDACTED_ENV]")
+            );
+        } else {
+            assert!(stdout.contains("fixture answer"), "{stdout}");
+        }
+    }
+}
+
+#[test]
 fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
     let fixture = Fixture::init();
     plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));
