@@ -5,8 +5,8 @@
 //! path without an SSH host: everything the mux sends is accepted and nothing
 //! is ever answered.
 
-use super::super::probe::DestinationSession;
-use super::fixtures::{OWNER_MACHINE, destination};
+use super::super::super::probe::DestinationSession;
+use super::super::fixtures::{OWNER_MACHINE, destination};
 use orbit_common::OrbitError;
 
 use serde_json::json;
