@@ -70,6 +70,8 @@ in member manifests with `workspace = true`.
   - `review` runs the before-PR review gate (admit, settle, certificates, landing verification).
   - `landing` is the owner-side landing consumer for distributed drains, dispatched from the coordination outbox.
   - `config` projects `orbit-config` as structured data for the dashboard. Writes go through the same `ConfigStore`.
+  - `task/desktop` separates bounded snapshot projections, authorization and completion checks, idempotent writes, review evidence and PR-head observation. Shared input validation lives in `validation`; its sibling `tests` directory preserves isolated mutable fixtures.
+  - `search` keeps its public contracts and exports at the module root. `runtime` coordinates workspace queries, `candidates` owns filtered task retrieval and BM25 paging, `friction` builds friction results, and `merge` combines branches. Conversion, filters, federation and path matching keep their existing modules.
 - **orbit-cmd** composes the application for the CLI and web. It joins Core to Registry and holds command groups, runtime assembly, routines, and managed-worker transports. `update` is the one group that composes outward: it handles release download, integrity checks, binary replacement, and post-install convergence.
 - **orbit-mcp** implements the MCP transport over `rmcp`: stdio and TCP transports, tool discovery, per-call traces, the SSH stdio proxy, and the federated mux, which routes host-qualified `hm_*/ws_*` selectors and fails closed. Core owns validation and auditing.
 - **orbit-web** serves the HTTP API and embedded dashboard, plus `web connect` over an SSH tunnel.
