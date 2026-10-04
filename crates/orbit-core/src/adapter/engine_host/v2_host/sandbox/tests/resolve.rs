@@ -4,6 +4,7 @@ use orbit_exec::{
     compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic, prepare_linux_bwrap_write_grants,
 };
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::adapter::engine_host::v2_host::sandbox::resolve::{
     append_orbit_child_runtime_write_roots, deny_registered_auto_task_definition_writes,
     resolve_fs_profile_absolute,

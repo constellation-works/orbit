@@ -274,11 +274,14 @@ dependency bump raises the floor, bump `rust-version` and the workflow's
 
 Windows is supported through WSL2. Native Windows is compile-checked only:
 `.github/workflows/ci-windows.yml` runs `cargo check --workspace --locked
---target x86_64-pc-windows-msvc` (library and binary targets, not tests) on
-`windows-latest`. It is advisory, not a required status check. Code that needs
-Unix-only APIs (`libc`, `std::os::fd`, `std::os::unix`) must sit behind
-`#[cfg(unix)]`. Its `#[cfg(not(unix))]` counterpart must return an explicit
-unsupported error or `Unknown`; it must not invent Windows semantics.
+--all-targets --target x86_64-pc-windows-msvc` on `windows-latest`, so test
+targets must compile there too; tests never run on Windows. It is advisory, not
+a required status check. Code that needs Unix-only APIs (`libc`, `std::os::fd`,
+`std::os::unix`) must sit behind `#[cfg(unix)]`. Its `#[cfg(not(unix))]`
+counterpart must return an explicit unsupported error or `Unknown`; it must not
+invent Windows semantics. A test that needs those APIs, or drives a `#!/bin/sh`
+fake, is gated `#[cfg(unix)]` at the narrowest sensible level: the test, its
+module, or `#![cfg(unix)]` for a wholly POSIX file. Gate it; never delete it.
 
 ## Supply-chain (cargo-deny)
 

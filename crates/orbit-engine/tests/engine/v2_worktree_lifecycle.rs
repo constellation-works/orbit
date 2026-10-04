@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -327,6 +328,7 @@ fn git_rebase_decision_follows_the_checkout_state() {
 // pr_conflict_recovery
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
 #[test]
 fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
     isolated(
@@ -886,6 +888,7 @@ fn git(current_dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+#[cfg(unix)]
 fn write_executable(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();

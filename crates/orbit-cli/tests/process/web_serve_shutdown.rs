@@ -17,6 +17,8 @@
 //! It then confirms a fresh server on a new port serves `/healthz` normally,
 //! proving the fix does not leave shutdown half-done.
 
+// SIGTERM delivery is the behaviour under test.
+#![cfg(unix)]
 #![allow(missing_docs)]
 // Integration fixtures use expect/unwrap for concise failure diagnostics.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
