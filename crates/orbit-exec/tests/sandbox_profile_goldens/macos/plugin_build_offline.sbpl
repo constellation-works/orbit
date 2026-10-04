@@ -1,6 +1,7 @@
 (version 1)
 (deny default)
 (allow file-read-metadata)
+(allow file-read-data (literal "/"))
 (allow process-fork)
 (allow process-info* (target same-sandbox))
 (allow signal (target same-sandbox))

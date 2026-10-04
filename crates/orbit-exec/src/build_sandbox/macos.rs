@@ -49,6 +49,11 @@ pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
     // directory and the toolchain roots. Metadata is not content; listing a
     // directory or reading a file still needs the allows below.
     profile.push_str("(allow file-read-metadata)\n");
+    // macOS 26 process startup reads the root directory itself: without it
+    // every exec, even `/usr/bin/true`, aborts with SIGABRT before `main`
+    // (kernel log: `deny(1) file-read-data /`). `literal` grants `/` only —
+    // its entry names — never a file or directory below it.
+    profile.push_str("(allow file-read-data (literal \"/\"))\n");
     profile.push_str("(allow process-fork)\n");
     profile.push_str("(allow process-info* (target same-sandbox))\n");
     profile.push_str("(allow signal (target same-sandbox))\n");
