@@ -1,5 +1,6 @@
 use clap::Args;
 use orbit_cmd::task_owner::{WorkspaceIdentity, bound_workspace_identity};
+use orbit_core::application::task::FinalRecoveryRecord;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::{TaskRelationType, is_task_show_projection_field};
 use serde_json::{Value, json};
@@ -236,6 +237,30 @@ impl Execute for TaskShowArgs {
                 let _ = writeln!(out, "{} {}", bold("Next:"), next.line());
                 if let Some(object) = doc.as_object_mut() {
                     object.insert("next_step".to_string(), next.to_json());
+                }
+            }
+            // The last automated final-recovery decision, from its audit
+            // comment. Additive in JSON.
+            if let Some(record) = FinalRecoveryRecord::last(&projection.comments) {
+                let _ = writeln!(
+                    out,
+                    "{} {} ({}) by run {} at {}",
+                    bold("Final Recovery:"),
+                    record.decision,
+                    record.outcome,
+                    record.run_id,
+                    record.at.to_rfc3339()
+                );
+                if let Some(object) = doc.as_object_mut() {
+                    object.insert(
+                        "final_recovery".to_string(),
+                        json!({
+                            "run_id": record.run_id,
+                            "decision": record.decision,
+                            "outcome": record.outcome,
+                            "at": record.at,
+                        }),
+                    );
                 }
             }
             if let Some(ref pr_status) = task.pr_status {

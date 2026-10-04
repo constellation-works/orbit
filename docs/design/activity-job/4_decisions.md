@@ -1587,9 +1587,46 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 
 ### Consequences
 
-- This change ships the layer only: the activity, the contract, the applier and the pool. Planned: the delivery pipelines dispatch `final_recovery` once step recovery is exhausted, and a backstop covers tasks blocked outside pipelines; both call this applier.
+- This change ships the layer only: the activity, the contract, the applier and the pool. Planned: the delivery pipelines dispatch `final_recovery` once step recovery is exhausted and call this applier. Tasks blocked outside pipelines are covered by the backstop below, which calls it too.
 - An unsure agent still produces a `blocked` task, now with a diagnosis and a named human action.
 - `Cost:` a final-recovery run is a frontier-model session per terminally failed run; `[]` turns it off.
+
+## A backstop recovers tasks blocked outside pipelines
+
+**Recorded:** 2026-10-04 · [ORB-13898]
+**Paths:** `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
+
+### Context
+
+Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of a run that crashed, timed out, was interrupted or failed before its first step (`workflow_run_failed`, `workflow_run_interrupted`); a claimed leaf whose settlement failed (`claim_failed`); and a `task_gate_pipeline` or `task_auto_pipeline` run that blocked its task before a leaf ran. Each waits for a human.
+
+### Decision
+
+1. A *block episode* is the history entry that last moved the task to `blocked`, keyed `<task>@<entry time>`. Only those four events open an episode the backstop owns; a block set by hand does not.
+2. The owner's sweep tick runs the backstop after auto-tasks. It stands down in a claimed worker, in a replica checkout that does not own its task records, and when `workflow.final_recovery_crews` is empty. It skips an episode that:
+   - already has a final-recovery decision comment;
+   - was touched after the block by an actor other than Orbit's automation (`system`, a machine id, the task pilot, an agent label), through a comment, a history entry or an artifact;
+   - was written after the block by a change with no recorded actor: the task's `updated_at` is newer than its newest attributed write (history, comment or artifact). A field-only edit records no history, so the backstop cannot rule out a human and fails closed;
+   - is older than 72 h, which also bounds the first tick after an upgrade.
+3. Each remaining episode gets one `blocked_task_recovery_pipeline` run, admitted under the episode key, with at most two live at once.
+   - `prepare_blocked_task_recovery` re-checks the episode against the revision the tick observed, gathers the failed run's step and error, and opens a detached linked worktree of the base. The declared worktree pair refuses the primary checkout.
+   - `final_recovery` runs there with a crew from `workflow.final_recovery_crews`.
+   - `apply_blocked_task_recovery` calls `OrbitRuntime::apply_final_recovery` and removes the checkout. A verified `complete_no_diff` moves the task to `review`.
+4. The backstop never resumes. A blocked task has no live run, so `resume` is applied as `escalate`; `requeue` is how work restarts, and it shares the applier's requeue bound.
+5. A recovery run that ends without applying a decision — agent failure, timeout, a dead worker — is settled on a later tick as an `escalate` carrying that run's id. Every dispatched episode therefore ends with exactly one recorded decision.
+6. `orbit task show` prints the last final-recovery decision (JSON `final_recovery`). `orbit doctor` reports the `blocked-task-recovery` row: tasks still blocked after a decision, counts of pending, human-held and expired episodes, and the tasks held for an unattributed edit.
+
+### Rejected alternatives
+
+- *A seeded routine.* Routines are seeded disabled, and the trigger must be on by default wherever the pool is non-empty.
+- *A second decision or apply path for blocked tasks.* The same applier keeps the base-branch check, the requeue bound and the human-wins revision check in one place.
+- *Running the agent in the primary checkout.* The declared worktree pair refuses it, and the primary may hold unrelated work.
+
+### Consequences
+
+- Opt out with `workflow.final_recovery_crews = []`, which also disables in-pipeline final recovery.
+- A field-only edit records no actor, so any unattributed write after the block holds the episode for a human, whoever made it. That includes Orbit's own field-only writes. Once a run is dispatched, the applier's revision check refuses its decision if the task changed.
+- `Cost:` at most one frontier-model session per block episode, two at a time.
 
 ## Task References
 
@@ -1687,5 +1724,6 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 - [ORB-10603] — derive the durable `execution_summary` from the delivered change when the implementing agent persisted none.
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
+- [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

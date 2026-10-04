@@ -27,6 +27,7 @@ macro_rules! deterministic_action_catalog {
     ($declare:ident) => {
         $declare! {
             core {
+                ApplyBlockedTaskRecovery => "apply_blocked_task_recovery",
                 ApplyTaskPilotResults => "apply_task_pilot_results",
                 ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
                 ConsolidateCodeScanningTasks => "consolidate_code_scanning_tasks",
@@ -41,6 +42,7 @@ macro_rules! deterministic_action_catalog {
                 OrbitToolCall => "orbit_tool_call",
                 PipelineSuccessGuard => "pipeline_success_guard",
                 PluginToolCall => "plugin.tool_call",
+                PrepareBlockedTaskRecovery => "prepare_blocked_task_recovery",
                 PrepareTaskPilot => "prepare_task_pilot",
                 PromoteAgentMain => "promote_agent_main",
                 PullRefill => "pull_refill",

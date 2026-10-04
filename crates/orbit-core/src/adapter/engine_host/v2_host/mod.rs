@@ -8,6 +8,7 @@
 //! `orbit-engine`, so this module never names orbit-agent types.
 
 pub(super) mod admission;
+pub(super) mod blocked_recovery;
 pub(super) mod child_dispatch;
 pub(super) mod ci_failure;
 pub(super) mod cli_executor;
@@ -20,4 +21,6 @@ pub(super) mod task_context;
 pub(super) mod task_pilot;
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+mod tests;
 pub(super) mod workspace_auto;

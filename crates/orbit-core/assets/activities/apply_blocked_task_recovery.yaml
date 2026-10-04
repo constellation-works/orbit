@@ -1,0 +1,43 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: apply_blocked_task_recovery
+spec:
+  type: deterministic
+  description: >
+    Applies the final-recovery backstop's decision through the same
+    deterministic applier the delivery pipelines use, then removes the run's
+    detached checkout. A resume decision becomes an escalation, because a
+    blocked task has no live run to resume; requeue is how work restarts and
+    shares the applier's requeue bound. The applier refuses the decision when
+    the task changed since the trigger observed it, and records every decision
+    as a task comment carrying this run's id.
+  input_schema_json:
+    type: object
+    required: [prepared]
+    properties:
+      prepared:
+        type: object
+      # The final_recovery step's output. Missing or malformed escalates.
+      result:
+        oneOf:
+          - type: object
+          - type: "null"
+  output_schema_json:
+    type: object
+    required: [status, task_id, decision, outcome]
+    properties:
+      status:
+        type: string
+        enum: [succeeded]
+      task_id:
+        type: string
+      decision:
+        oneOf:
+          - type: string
+          - type: "null"
+      outcome:
+        type: string
+        enum: [resume, completed, rejected, archived, requeued, escalated, refused]
+  action: apply_blocked_task_recovery
+  config: {}
