@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use orbit_cmd::{bound_partition_id, remove_checkout_task_stores, task_store_partition_path};
+use orbit_cmd::{checkout_task_store_partitions, remove_checkout_task_stores};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
@@ -67,7 +67,7 @@ impl WorkspaceTeardownArgs {
                 )));
             }
 
-            let partitions = planned_task_store_partitions(
+            let partitions = checkout_task_store_partitions(
                 &global_root,
                 &orbit_dir,
                 Some(workspace_id.as_str()),
@@ -207,27 +207,6 @@ fn refuse_if_cwd_belongs_to_another_checkout(
     Err(OrbitError::InvalidInput(format!(
         "workspace selector does not match the checkout containing the current directory ('{cwd_name}'); cd into the target checkout or pass that workspace's name, id, or absolute path"
     )))
-}
-
-fn planned_task_store_partitions(
-    global_root: &Path,
-    orbit_dir: &Path,
-    catalog_workspace_id: Option<&str>,
-) -> Result<Vec<PathBuf>, OrbitError> {
-    let mut paths = Vec::new();
-    if let Some(bound) = bound_partition_id(global_root, orbit_dir)? {
-        let path = task_store_partition_path(global_root, &bound);
-        if path.is_dir() {
-            paths.push(path);
-        }
-    }
-    if let Some(catalog_id) = catalog_workspace_id {
-        let path = task_store_partition_path(global_root, catalog_id);
-        if path.is_dir() && !paths.iter().any(|existing| existing == &path) {
-            paths.push(path);
-        }
-    }
-    Ok(paths)
 }
 
 fn format_teardown_plan(

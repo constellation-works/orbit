@@ -228,17 +228,7 @@ pub fn remove_checkout_task_stores(
     catalog_workspace_id: Option<&str>,
 ) -> Result<Vec<PathBuf>, OrbitError> {
     let tasks = open_task_registry(global_root)?;
-    let mut targets: Vec<String> = Vec::new();
-
-    if let Some(bound) = tasks.find_checkout_by_orbit_dir(orbit_dir)? {
-        targets.push(bound.partition_id);
-    }
-    if let Some(catalog_id) = catalog_workspace_id
-        && !targets.iter().any(|id| id == catalog_id)
-        && !bound_to_another_checkout(&tasks, catalog_id, orbit_dir)?
-    {
-        targets.push(catalog_id.to_string());
-    }
+    let targets = checkout_task_store_targets(&tasks, orbit_dir, catalog_workspace_id)?;
 
     let mut removed = Vec::new();
     for partition_id in targets {
@@ -247,6 +237,46 @@ pub fn remove_checkout_task_stores(
         }
     }
     Ok(removed)
+}
+
+/// Existing task-store directories eligible for a checkout's teardown.
+///
+/// Uses the same ownership decision as [`remove_checkout_task_stores`]: a
+/// catalog-id partition bound to another checkout is preserved and omitted
+/// from the preview, even when it contains task bundles.
+pub fn checkout_task_store_partitions(
+    global_root: &Path,
+    orbit_dir: &Path,
+    catalog_workspace_id: Option<&str>,
+) -> Result<Vec<PathBuf>, OrbitError> {
+    let tasks = open_task_registry(global_root)?;
+    Ok(
+        checkout_task_store_targets(&tasks, orbit_dir, catalog_workspace_id)?
+            .into_iter()
+            .map(|id| task_store_partition_path(global_root, &id))
+            .filter(|path| path.is_dir())
+            .collect(),
+    )
+}
+
+fn checkout_task_store_targets(
+    tasks: &TaskRegistryStore,
+    orbit_dir: &Path,
+    catalog_workspace_id: Option<&str>,
+) -> Result<Vec<String>, OrbitError> {
+    let mut targets: Vec<String> = Vec::new();
+
+    if let Some(bound) = tasks.find_checkout_by_orbit_dir(orbit_dir)? {
+        targets.push(bound.partition_id);
+    }
+    if let Some(catalog_id) = catalog_workspace_id
+        && !targets.iter().any(|id| id == catalog_id)
+        && !bound_to_another_checkout(tasks, catalog_id, orbit_dir)?
+    {
+        targets.push(catalog_id.to_string());
+    }
+
+    Ok(targets)
 }
 
 /// Partition the checkout at `orbit_dir` binds its task state to, when it is

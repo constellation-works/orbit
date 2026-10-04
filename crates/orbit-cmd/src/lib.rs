@@ -40,8 +40,8 @@ pub use doctor::{
 };
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 pub use task_store::{
-    bound_partition_id, remove_checkout_task_stores, retain_task_store_on_catalog_remove,
-    task_store_partition_path,
+    bound_partition_id, checkout_task_store_partitions, remove_checkout_task_stores,
+    retain_task_store_on_catalog_remove, task_store_partition_path,
 };
 
 mod worker_coordination;
