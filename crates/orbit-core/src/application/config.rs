@@ -213,8 +213,16 @@ pub fn set_key(
     let old_value = effective_value(runtime, key)?;
     let mut store = open_store_for_write(runtime, scope, init)?;
     store.set_value(key, &toml_literal(value)?)?;
-    store.validate()?;
-    store.validate_for_set(key)?;
+    match scope {
+        ConfigScope::Global => {
+            store.validate()?;
+            store.validate_for_set(key)?;
+        }
+        ConfigScope::Workspace => {
+            let global_root = runtime.global_root();
+            store.validate_workspace_for_set(key, &global_root)?;
+        }
+    }
     store.save()?;
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
 }
@@ -234,7 +242,7 @@ pub fn unset_key(
             scope.label()
         )));
     }
-    store.validate()?;
+    validate_store(runtime, scope, &store)?;
     store.save()?;
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
 }
@@ -271,9 +279,15 @@ pub fn set_crew(
             store.set_value(&key, &toml_literal(value)?)?;
         }
     }
-    store.validate()?;
+    validate_store(runtime, scope, &store)?;
     for key in &keys {
-        store.validate_for_set(key)?;
+        match scope {
+            ConfigScope::Global => store.validate_for_set(key)?,
+            ConfigScope::Workspace => {
+                let global_root = runtime.global_root();
+                store.validate_workspace_for_set(key, &global_root)?;
+            }
+        }
     }
     store.save()?;
     write_outcome(runtime, scope, &store, old_value, &keys)
@@ -316,7 +330,7 @@ pub fn delete_crew(
             scope.label()
         )));
     }
-    store.validate()?;
+    validate_store(runtime, scope, &store)?;
     store.save()?;
     write_outcome(runtime, scope, &store, old_value, &[])
 }
@@ -425,6 +439,17 @@ fn path_rows_json(runtime: &OrbitRuntime, config_path: Option<&Path>) -> JsonVal
 
 fn config_roots(runtime: &OrbitRuntime) -> ConfigRoots {
     ConfigRoots::new(runtime.global_root(), runtime.shared_root())
+}
+
+fn validate_store(
+    runtime: &OrbitRuntime,
+    scope: ConfigScope,
+    store: &ConfigStore,
+) -> Result<(), OrbitError> {
+    match scope {
+        ConfigScope::Global => store.validate(),
+        ConfigScope::Workspace => store.validate_workspace_with_global(&runtime.global_root()),
+    }
 }
 
 fn global_config_path(runtime: &OrbitRuntime) -> PathBuf {

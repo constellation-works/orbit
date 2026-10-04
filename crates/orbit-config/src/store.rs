@@ -2,9 +2,9 @@
 //!
 //! [`ConfigStore`] wraps a single `config.toml` file as a `toml_edit::DocumentMut`
 //! so `orbit config set` can edit one key without disturbing any other part of
-//! the file's formatting or hand-written comments. Validation goes through the
-//! same single-document admission pipeline used after runtime layers have been
-//! merged, so a `set` cannot produce a malformed value for its target file.
+//! the file's formatting or hand-written comments. Validation uses the same
+//! layer-aware admission pipeline as runtime loads, so workspace writes see
+//! global definitions and still refuse a malformed effective config.
 
 use std::fs;
 use std::io::Read;
@@ -407,8 +407,8 @@ impl ConfigStore {
 
     /// Validate a staged workspace document with the current global config
     /// layered beneath it. Workspace plugin toggles use this before saving so
-    /// a pool may refer to a crew defined only in the global file. Generic
-    /// `orbit config set` retains its existing single-document validation.
+    /// a pool may refer to a crew defined only in the global file. Workspace
+    /// writes use this same layer-aware admission path as runtime loads.
     pub fn validate_workspace_with_global(&self, global_root: &Path) -> Result<(), OrbitError> {
         if self.scope != ConfigScope::Workspace {
             return Err(OrbitError::InvalidInput(
@@ -419,7 +419,28 @@ impl ConfigStore {
             OrbitError::InvalidInput("workspace config path has no parent directory".to_string())
         })?;
         let roots = ConfigRoots::new(global_root, workspace_root);
-        validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())
+        validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string()).map(|_| ())
+    }
+
+    /// Validate a staged workspace write and the specific value being set
+    /// against the effective config formed by the global and workspace files.
+    pub fn validate_workspace_for_set(
+        &self,
+        key: &str,
+        global_root: &Path,
+    ) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Workspace {
+            return Err(OrbitError::InvalidInput(
+                "layered workspace validation requires a workspace config store".to_string(),
+            ));
+        }
+        let workspace_root = self.path.parent().ok_or_else(|| {
+            OrbitError::InvalidInput("workspace config path has no parent directory".to_string())
+        })?;
+        let roots = ConfigRoots::new(global_root, workspace_root);
+        let resolved =
+            validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())?;
+        self.validate_set_target(key, &resolved)
     }
 
     /// A workspace file may not carry `[machine]` at all, and the global file
@@ -447,6 +468,10 @@ impl ConfigStore {
     pub fn validate_for_set(&self, key: &str) -> Result<(), OrbitError> {
         self.reject_workspace_machine_table()?;
         let resolved = self.resolved()?;
+        self.validate_set_target(key, &resolved)
+    }
+
+    fn validate_set_target(&self, key: &str, resolved: &ResolvedConfig) -> Result<(), OrbitError> {
         if let Some(ignored) = resolved
             .ignored_crew_properties
             .iter()
@@ -472,8 +497,8 @@ impl ConfigStore {
 
     /// Atomically write the current in-memory document to `self.path`
     /// (temp file + rename, via `orbit_common::fs::io::atomic_write_text`).
-    /// Callers should call [`Self::validate`] first: `save` does not
-    /// validate on its own.
+    /// Callers should run the validation method appropriate to this store's
+    /// scope first: `save` does not validate on its own.
     pub fn save(&self) -> Result<(), OrbitError> {
         atomic_write_text(&self.path, &self.doc.to_string()).map_err(|err| {
             OrbitError::Io(format!(
