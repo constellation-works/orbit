@@ -624,6 +624,14 @@ impl OrbitRuntime {
                 .rev()
                 .find(|step| step.error_code.is_some() || step.error_message.is_some())
         });
+        // A claimed leaf lives on its follower. Its failure settlement leaves
+        // the diagnostic on the owner's task, without copying the run state.
+        let settled_failure = if episode.source == BlockSource::ClaimFailed && failed_run.is_none()
+        {
+            Some(self.get_task(&input.task_id)?.execution_summary)
+        } else {
+            None
+        };
         let (base_ref, base_sha) = self.recovery_base()?;
         let checkout = self.create_recovery_checkout(recovery_run_id, &base_sha)?;
         Ok(BlockedRecoveryPreparation::Ready(PreparedBlockedRecovery {
@@ -641,6 +649,7 @@ impl OrbitRuntime {
             error_message: failed_step
                 .and_then(|step| step.error_message.clone())
                 .filter(|message| !message.trim().is_empty())
+                .or_else(|| settled_failure.filter(|message| !message.trim().is_empty()))
                 .unwrap_or_else(|| episode.note.clone()),
         }))
     }

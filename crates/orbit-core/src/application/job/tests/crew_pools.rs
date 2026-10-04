@@ -82,8 +82,9 @@ fn final_recovery_crew_is_drawn_once_and_frozen_for_the_run() {
         return;
     }
     let (_root, runtime) = runtime_with_pool(r#"["sol:100", "opus:20"]"#);
+    let failed_run_id = persisted_run(&runtime);
     let run_id = persisted_run(&runtime);
-    let input = json!({ "run_id": run_id });
+    let input = json!({ "run_id": failed_run_id, "job_run_id": run_id });
 
     assert_eq!(
         draw(&runtime, &input, OPUS_TICKET).expect("first draw"),
@@ -101,6 +102,15 @@ fn final_recovery_crew_is_drawn_once_and_frozen_for_the_run() {
         "a later dispatch reuses the frozen crew"
     );
     assert_eq!(calls.get(), 0, "a frozen draw never rolls again");
+    assert!(
+        runtime
+            .read_run_state(&failed_run_id)
+            .expect("read originating state")
+            .expect("originating state exists")
+            .activity_crew_draws
+            .is_empty(),
+        "ORB-13964: recovery never freezes its draw in the originating run"
+    );
 
     let state = runtime
         .read_run_state(&run_id)
