@@ -3,8 +3,8 @@ summary: "Task Artifacts — Vision"
 type: design
 title: "Task Artifacts — Vision"
 owner: codex
-last_updated: 2026-08-29
-last_validated: 2026-09-11
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: task-artifacts
 doc_role: vision
@@ -29,7 +29,7 @@ This document captures open questions for the task-artifacts reset, prior work t
 2. Unique in one synced repository registry.
 3. Unique across hosted Orbit Team.
 
-The v2 design picks the narrowest authority that serves the product surface being implemented. For OSS local-first, one machine-local allocator across all local workspaces is enough. For task sync, repository-registry-global is enough. Hosted Team may later introduce org-global or tenant-global allocation. A bare `ORB-00000` is therefore scoped by its authority; cross-authority references need registry or workspace context.
+The v2 design uses the narrowest authority for the implemented surface: one machine-local allocator across local workspaces. A repository-global allocator belonged to the retired Task Sync proposal; current task publication preserves the declaring host's authority. Hosted Team may later introduce org-global or tenant-global allocation. A bare `ORB-00000` is therefore scoped by its authority; cross-authority references need registry or workspace context.
 
 ### 1.2 What happens beyond five digits?
 
@@ -124,11 +124,11 @@ Most issue trackers optimize for human triage and reporting. Orbit tasks optimiz
 
 ### 3.2 Local-first with an upgrade path to shared authority
 
-The same task format should work in a single local workspace, an opt-in git registry, and a hosted team product. That is why ID allocation is explicit and why local execution bindings should not be baked into portable task identity.
+The same task format should work in local workspaces and in authority-owned published snapshots, with a hosted team product as a possible future surface. That is why ID allocation is explicit and why local execution bindings should not be baked into portable task identity.
 
 ### 3.3 Searchable prose with structured edges
 
-The design treats prose as Markdown, not as unstructured junk. Search and semantic indexing read it field-by-field. Relations are structured separately so agents can traverse dependencies and lineage without text-parsing prose.
+The design treats prose as Markdown, not as unstructured junk. Task search indexes its prose field-by-field; relations are structured separately so agents can traverse dependencies and lineage without text-parsing prose.
 
 ### 3.4 Audit without making YAML unreadable
 

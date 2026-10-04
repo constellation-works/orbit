@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls"
 tags: ["auditability"]
-last_validated: 2026-09-11
+last_validated: 2026-10-04
 ---
 
 # Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls
