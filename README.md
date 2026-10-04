@@ -1,6 +1,13 @@
-# Orbit
+<p align="center">
+  <a href="https://orbit-cli.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/orbit-lockup-on-dark.svg" />
+      <img src="docs/assets/orbit-lockup-on-light.svg" alt="Orbit" width="340" />
+    </picture>
+  </a>
+</p>
 
-**Your agent files the work. Orbit ships it. You review the pull request.**
+<h3 align="center">Agents write. Orbit delivers.</h3>
 
 <p align="center">
   <a href="https://github.com/constellation-works/orbit/releases"><img src="https://img.shields.io/github/v/release/constellation-works/orbit" alt="Release" /></a>

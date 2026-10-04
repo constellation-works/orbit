@@ -11,11 +11,19 @@ next: false
 <section class="orbit-hero">
   <div class="orbit-hero-copy">
     <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>See what shipped in the latest release</span><span aria-hidden="true">→</span></a>
-    <h1 id="_top" class="orbit-hero-headline">Your agent files the work. Orbit ships it. <span class="orbit-hero-headline-muted">You review the pull request.</span></h1>
+    <h1 id="_top" class="orbit-hero-headline">Agents write. Orbit delivers.</h1>
     <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask for a change in the agent you already use; Orbit turns it into a scoped task, runs it in an isolated worktree, and hands back a pull request with every step on the record.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Get started →</a>
       <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
+    </div>
+    <div class="orbit-hero-install">
+      <code><span class="orbit-hero-install-prompt" aria-hidden="true">$</span>npm install -g @orbit-tools/cli</code>
+      <button type="button" class="orbit-hero-install-copy" data-copy="npm install -g @orbit-tools/cli" aria-label="Copy install command">
+        <svg class="orbit-icon-copy" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>
+        <svg class="orbit-icon-check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>
+      </button>
+      <span class="orbit-hero-install-status" role="status" aria-live="polite"></span>
     </div>
     <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
     <div class="orbit-hero-providers">
@@ -30,7 +38,7 @@ next: false
         <li>OpenCode</li>
         <li>Pi</li>
       </ul>
-      <p class="orbit-hero-providers-note">Gemini CLI remains as a legacy executor. <a href="/concepts/agents/">How agents are invoked →</a></p>
+      <p class="orbit-hero-providers-note"><a href="/concepts/agents/">How agents are invoked →</a></p>
     </div>
   </div>
 
@@ -40,6 +48,28 @@ next: false
       <figcaption class="orbit-demo-caption">Captured from the real dashboard on a live workspace, 2026-10-03. Counts are from that day.</figcaption>
     </figure>
     <script>
+      {
+        // Copy the hero install command. Clipboard access needs a secure
+        // context; without it, select the command so the reader can copy it.
+        const button = document.querySelector('.orbit-hero-install-copy');
+        const status = document.querySelector('.orbit-hero-install-status');
+        let timer;
+        button?.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(button.dataset.copy);
+          } catch {
+            getSelection().selectAllChildren(button.previousElementSibling);
+            return;
+          }
+          button.classList.add('is-copied');
+          status.textContent = 'Copied';
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            button.classList.remove('is-copied');
+            status.textContent = '';
+          }, 1600);
+        });
+      }
       {
         // Autoplay is the default; a reader who asks for reduced motion gets the
         // poster frame and the native controls instead.
@@ -58,11 +88,11 @@ next: false
 <section class="orbit-guarantees" aria-label="What Orbit guarantees">
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
-    <div><h2>Nothing runs until you approve</h2><p>New tasks land in <code>proposed</code>. Approval into the backlog is its own step, so your agent has to ask.</p></div>
+    <div><h2>Nothing runs until you approve</h2><p>New tasks land in <code>proposed</code>. Your agent can file all it likes; work enters the backlog only on your say-so.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M8.5 6H12a3.5 3.5 0 0 1 3.5 3.5"/></svg></div>
-    <div><h2>Nothing merges without you</h2><p>A ship run stops at <code>review</code> with the pull request open. Finishing delivery is an explicit <code>--complete</code> on one run, never a default.</p></div>
+    <div><h2>Nothing merges unless you ask</h2><p>By default a run stops at <code>review</code> with the pull request open. Merging takes an explicit <code>--complete</code>, and still waits for your branch protection.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11"/><path d="M4 12h11"/><path d="M4 19h7"/><path d="m16 18 2 2 4-4"/></svg></div>
@@ -74,43 +104,43 @@ next: false
   <div class="orbit-section-head">
     <div class="orbit-section-intro">
       <p class="orbit-section-eyebrow">How it works</p>
-      <h2 class="orbit-section-heading">From one sentence to a pull request, without leaving your agent.</h2>
+      <h2 class="orbit-section-heading">From a spec to merged code. You set the direction and judge the result.</h2>
     </div>
-    <p class="orbit-section-lede">Your agent talks to Orbit over MCP. Every task moves through the same states, and you decide at the two gates that matter: approving the work, and accepting it.</p>
+    <p class="orbit-section-lede">Hand a spec to an orchestrator agent in the session you already use. It splits the work into tasks and queues them on your say-so. Orbit ships them in parallel and merges each one as soon as your branch protection allows, so you come back to results, not a queue of pull requests.</p>
   </div>
 
   <ol class="orbit-rail" aria-label="Task lifecycle">
     <li><span class="orbit-rail-state">proposed</span></li>
-    <li><span class="orbit-rail-state">backlog</span></li>
+    <li><span class="orbit-rail-state">backlog</span><span class="orbit-rail-note">on your say-so</span></li>
     <li><span class="orbit-rail-state">in-progress</span></li>
-    <li class="is-stop"><span class="orbit-rail-state">review</span><span class="orbit-rail-note">ship stops here · PR open, not merged</span></li>
-    <li class="is-later"><span class="orbit-rail-state">done</span></li>
+    <li><span class="orbit-rail-state">review</span></li>
+    <li class="is-stop"><span class="orbit-rail-state">done</span><span class="orbit-rail-note">merged · you review the outcome</span></li>
   </ol>
 
   <div class="orbit-card-grid orbit-card-grid-4">
-    <a class="orbit-card" data-tag="01 · Ask" href="/how-to/mcp-integration/">
-      <h3>Say what you want</h3>
-      <p>Describe the change in Claude Code, Codex, or any supported agent. One command connects Orbit to it.</p>
+    <a class="orbit-card" data-tag="01 · Spec" href="/how-to/mcp-integration/">
+      <h3>You write the spec</h3>
+      <p>Describe the outcome, not the steps: what should exist when it's done, and how you'll know. One command connects Orbit to the agent you already use.</p>
       <div class="orbit-card-cmd">orbit workspace init --mcp</div>
     </a>
-    <a class="orbit-card" data-tag="02 · File" href="/concepts/tasks/">
-      <h3>Your agent files a task</h3>
-      <p>A title, a complexity, and acceptance criteria: the finish line the work is checked against. It waits in <code>proposed</code>.</p>
+    <a class="orbit-card" data-tag="02 · Plan" href="/concepts/tasks/">
+      <h3>Your orchestrator files the tasks</h3>
+      <p>It splits the spec into scoped tasks, each with acceptance criteria, and queues them in the backlog on your say-so.</p>
       <div class="orbit-card-cmd">orbit.task.add</div>
     </a>
-    <a class="orbit-card" data-tag="03 · Ship" href="/how-to/task-lifecycle/">
-      <h3>You say go. Orbit ships it.</h3>
-      <p>Orbit reserves the files the task may touch, runs it in its own worktree and sandbox, checks it against your gates, and opens a pull request.</p>
-      <div class="orbit-card-cmd">orbit.workflow.ship</div>
+    <a class="orbit-card" data-tag="03 · Deliver" href="/how-to/continuous-delivery/">
+      <h3>Orbit ships and merges</h3>
+      <p>Tasks run in parallel, each in its own worktree and sandbox with a lock on the files it touches. Each is checked against your gates, optionally reviewed by a second agent, and merged as soon as branch protection allows.</p>
+      <div class="orbit-card-cmd">orbit run auto --complete</div>
     </a>
-    <a class="orbit-card is-stop" data-tag="04 · Review" href="/how-to/task-lifecycle/">
-      <h3>You review and merge</h3>
-      <p>Read the diff, CI, and the execution summary. Merge on your terms, then approve the task to close it.</p>
-      <div class="orbit-card-cmd">orbit task update "$TASK_ID" --approve</div>
+    <a class="orbit-card is-stop" data-tag="04 · Review" href="/how-to/dashboard/">
+      <h3>You review the outcome</h3>
+      <p>Judge what landed against the spec: the merged changes, what the reviewer fixed, and every agent turn and tool call behind them. Anything off becomes the next task.</p>
+      <div class="orbit-card-cmd">orbit web serve</div>
     </a>
   </div>
 
-  <p class="orbit-walk-next">Orbit and GitHub stay independent: approving a task never merges its pull request, and merging never closes the task. Prefer the CLI? <a href="/getting-started/first-task/">Ship your first task by hand</a>.</p>
+  <p class="orbit-walk-next">Turn on second-agent review with <code>operation.review_policy</code> in your <a href="/reference/config/#settable-keys">workspace config</a>. Rather merge yourself? Leave off <code>--complete</code> and every run stops at <code>review</code> with the pull request open, or <a href="/getting-started/first-task/">ship your first task by hand</a>.</p>
 </section>
 
 <section class="orbit-section">
