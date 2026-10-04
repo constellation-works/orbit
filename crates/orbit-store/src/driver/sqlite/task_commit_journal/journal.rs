@@ -1,8 +1,6 @@
 //! Prepare, settle and list task commit journal rows.
 
 use orbit_common::OrbitError;
-#[cfg(test)]
-use rusqlite::OptionalExtension;
 use rusqlite::{TransactionBehavior, params};
 
 use crate::Store;
@@ -146,34 +144,6 @@ impl Store {
                 });
             }
             Ok(records)
-        })
-    }
-
-    /// Read one journal row's state. Test-only: production callers read the
-    /// unsettled set, never a single row's label.
-    #[cfg(test)]
-    pub(crate) fn task_commit_journal_state(
-        &self,
-        journal_id: &str,
-    ) -> Result<Option<TaskCommitJournalState>, OrbitError> {
-        self.with_read_connection(|conn| {
-            let state: Option<String> = conn
-                .query_row(
-                    "SELECT state FROM task_commit_journal WHERE journal_id = ?1",
-                    params![journal_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
-            state
-                .map(|state| {
-                    TaskCommitJournalState::parse(&state).ok_or_else(|| {
-                        OrbitError::Store(format!(
-                            "task commit journal '{journal_id}' has unknown state '{state}'"
-                        ))
-                    })
-                })
-                .transpose()
         })
     }
 }

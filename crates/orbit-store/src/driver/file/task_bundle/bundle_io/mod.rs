@@ -18,13 +18,9 @@ use jsonl::scan_jsonl_records;
 use read::read_required_text;
 
 pub(crate) use artifacts::copy_artifact_blobs;
-#[cfg(test)]
-pub(crate) use artifacts::take_artifact_payload_reads;
-#[cfg(test)]
-pub(crate) use commit::inject_bundle_write_faults;
 pub(crate) use commit::{
-    BundleWriteFault, PENDING_WRITE_FILE_NAME, PendingWriteGuard, fail_if_injected,
-    publish_envelope, recover_pending_bundle_at, truncate_jsonl_file,
+    PENDING_WRITE_FILE_NAME, PendingWriteGuard, publish_envelope, recover_pending_bundle_at,
+    truncate_jsonl_file,
 };
 pub(crate) use jsonl::append_jsonl_row;
 pub(crate) use read::{

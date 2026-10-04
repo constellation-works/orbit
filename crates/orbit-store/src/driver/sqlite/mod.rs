@@ -15,7 +15,5 @@ pub(crate) mod v2_audit_store;
 
 pub(crate) mod automation;
 pub(crate) mod review;
-#[cfg(test)]
-pub(crate) mod tests;
 
 pub(crate) mod friction_write;

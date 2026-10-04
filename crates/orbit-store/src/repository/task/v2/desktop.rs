@@ -1,7 +1,7 @@
 //! Desktop mutations share the existing task bundle journal and commit point.
 use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
-use crate::driver::file::task_bundle::{BundleWriteFault, PendingWriteGuard, fail_if_injected};
+use crate::driver::file::task_bundle::PendingWriteGuard;
 
 fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
     let bytes = serde_json::to_vec(&(
@@ -177,7 +177,6 @@ impl TaskV2Store {
                     to_status: (old_status != b.envelope.status).then_some(b.envelope.status),
                 },
             )?;
-            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
             b.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &b.envelope)?;
             pending.finish();

@@ -59,19 +59,6 @@ pub fn import_workspace_frictions(
     workspace_id: &str,
     source_root: &Path,
 ) -> Result<FrictionImportReport, OrbitError> {
-    import_with_canonicalizer(store, workspace_id, source_root, |path| {
-        std::fs::canonicalize(path)
-    })
-}
-
-/// [`import_workspace_frictions`] with the corpus-root canonicalization
-/// injectable, so tests can reproduce an I/O failure resolving the root.
-pub(crate) fn import_with_canonicalizer(
-    store: &Store,
-    workspace_id: &str,
-    source_root: &Path,
-    canonicalize: impl Fn(&Path) -> io::Result<PathBuf>,
-) -> Result<FrictionImportReport, OrbitError> {
     let source_key = source_key(source_root);
     if let Some(report) =
         store.with_read_connection(|conn| completed_marker(conn, workspace_id, &source_key))?
@@ -86,7 +73,7 @@ pub(crate) fn import_with_canonicalizer(
         if let Some(report) = completed_marker(conn, workspace_id, &source_key)? {
             return Ok(report);
         }
-        let canonical_root = resolve_import_root(source_root, &canonicalize)?;
+        let canonical_root = resolve_import_root(source_root)?;
         run_import(
             conn,
             workspace_id,
@@ -150,17 +137,14 @@ fn completed_marker(
 /// symlink loop, an I/O error) is propagated: committing a zero-record marker
 /// for a corpus that is only temporarily unreadable would make the import
 /// report complete and never retry once access returns.
-fn resolve_import_root(
-    source_root: &Path,
-    canonicalize: impl Fn(&Path) -> io::Result<PathBuf>,
-) -> Result<Option<PathBuf>, OrbitError> {
+fn resolve_import_root(source_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let absent = |error: &io::Error| {
         matches!(
             error.kind(),
             io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
         )
     };
-    let canonical_root = match canonicalize(source_root) {
+    let canonical_root = match std::fs::canonicalize(source_root) {
         Ok(root) => root,
         Err(error) if absent(&error) => return Ok(None),
         Err(error) => {

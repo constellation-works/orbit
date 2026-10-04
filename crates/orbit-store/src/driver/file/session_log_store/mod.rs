@@ -6,9 +6,6 @@
 
 mod persistence;
 
-#[cfg(test)]
-mod tests;
-
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;

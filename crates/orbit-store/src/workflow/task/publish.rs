@@ -563,9 +563,6 @@ impl PublicationCache {
         commit: &str,
         observed_tip: Option<&str>,
     ) -> Result<(), OrbitError> {
-        #[cfg(test)]
-        run_before_push_hook();
-
         let git_dir = self.git_dir_str()?;
         let lease = compare_and_swap_lease(&request.publication_branch, observed_tip);
         let refspec = format!("{commit}:{}", request.publication_branch);
@@ -862,32 +859,6 @@ fn compare_and_swap_lease(branch: &str, observed_tip: Option<&str>) -> String {
 
 fn runner() -> GitRunner<'static> {
     GitRunner::new(PUBLISH_LABEL)
-}
-
-#[cfg(test)]
-thread_local! {
-    static BEFORE_PUSH: std::cell::RefCell<Option<Box<dyn FnOnce() + 'static>>> =
-        std::cell::RefCell::new(None);
-}
-
-/// Install a one-shot callback that runs after the pending record is written
-/// and immediately before the compare-and-swap push. Tests use this to mutate
-/// the remote between observation and push.
-#[cfg(test)]
-pub(crate) fn set_before_push_hook(hook: impl FnOnce() + 'static) {
-    BEFORE_PUSH.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
-}
-
-#[cfg(test)]
-pub(crate) fn clear_before_push_hook() {
-    BEFORE_PUSH.with(|cell| cell.borrow_mut().take());
-}
-
-#[cfg(test)]
-fn run_before_push_hook() {
-    if let Some(hook) = BEFORE_PUSH.with(|cell| cell.borrow_mut().take()) {
-        hook();
-    }
 }
 
 fn redact_remote(message: &str, remote: &str) -> String {

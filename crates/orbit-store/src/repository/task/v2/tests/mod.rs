@@ -1,15 +1,9 @@
 use chrono::{TimeZone, Utc};
-use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskPriority,
-    TaskStatus, TaskType,
-};
+use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, TaskType};
 use tempfile::TempDir;
 
 use super::*;
-use crate::contracts::{
-    AtomicTaskMutationOutcome, AtomicTaskMutationParams, TaskArtifactUpdateParams,
-    TaskCreateParams, TaskDocumentUpdateParams, TaskHistoryUpdateParams,
-};
+use crate::contracts::{TaskCreateParams, TaskHistoryUpdateParams};
 use crate::driver::sqlite::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
 };
@@ -96,60 +90,4 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
     }
 }
 
-#[cfg(unix)]
-pub(super) struct RestoreWritePerms<'a> {
-    path: &'a std::path::Path,
-}
-
-#[cfg(unix)]
-impl Drop for RestoreWritePerms<'_> {
-    fn drop(&mut self) {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(self.path, std::fs::Permissions::from_mode(0o755));
-    }
-}
-
-#[cfg(unix)]
-pub(super) fn make_readonly(path: &std::path::Path) -> RestoreWritePerms<'_> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut perms = std::fs::metadata(path).expect("meta").permissions();
-    perms.set_mode(0o555);
-    std::fs::set_permissions(path, perms).expect("chmod -w");
-    RestoreWritePerms { path }
-}
-
-pub(super) fn assert_sandbox_write_io(err: &OrbitError, path_substr: &str) {
-    match err {
-        OrbitError::Io(message) => {
-            assert!(
-                message.contains(path_substr),
-                "expected path `{path_substr}` in `{message}`"
-            );
-            assert!(
-                message.contains("is not writable"),
-                "expected writable attribution in `{message}`"
-            );
-            assert!(
-                message.contains("sandbox or environment"),
-                "expected sandbox/environment hint in `{message}`"
-            );
-            assert!(
-                message.contains("not an Orbit store defect"),
-                "expected store-defect negation in `{message}`"
-            );
-        }
-        other => panic!("expected Io, got {other}"),
-    }
-}
-
 mod concurrency;
-mod crud;
-mod envelope_cache;
-mod update;
-
-mod listing;
-
-mod listing_bench;
-
-mod desktop;

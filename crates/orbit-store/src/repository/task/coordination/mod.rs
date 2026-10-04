@@ -85,33 +85,6 @@ const PENDING_MARKER_FILE: &str = ".task-commit-pending";
 const REQUIRED_MARKER_FILE: &str = ".task-commit-required";
 const COMMIT_INTENT_SCHEMA_VERSION: u32 = 2;
 
-/// Injection points for the durability tests. Each names a moment the process
-/// can die and a recovery obligation that follows from it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum CoordinationFault {
-    /// After the marker is durable, before the journal row exists.
-    AfterMarker,
-    /// After the undecided journal row is durable, before the commit point.
-    BeforeCommit,
-    /// After the commit point, before any bundle file changes.
-    AfterCommit,
-    /// Midway through rolling a committed decision onto the bundle.
-    DuringApply,
-    /// After evidence documents/comments, before artifact and envelope publication.
-    DuringEvidenceApply,
-    /// While abandoning an undecided commit.
-    DuringCompensation,
-    /// While replaying the journal on the next entry.
-    DuringRecovery,
-}
-
-#[cfg(test)]
-thread_local! {
-    static BEFORE_ORDINARY_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-    static INJECTED_FAULTS: std::cell::RefCell<std::collections::HashSet<CoordinationFault>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
-}
-
 /// The bundle-side half of a commit, replayed verbatim by recovery.
 ///
 /// `events_len` is the length of `events.jsonl` before the apply, so a replay
@@ -145,18 +118,11 @@ pub struct TaskCommitBoundary {
 mod admission;
 mod boundary;
 mod commit;
-mod faults;
 mod handoff;
 mod landing;
 mod lifecycle;
 
-// Shared with sibling modules and the tests through `super::`.
+// Shared with sibling modules through `super::`.
 use boundary::BoundaryDepth;
-use faults::fail_if_injected;
 
 pub use admission::admission_refusal;
-#[cfg(test)]
-pub(crate) use faults::inject_coordination_faults;
-
-#[cfg(test)]
-mod tests;

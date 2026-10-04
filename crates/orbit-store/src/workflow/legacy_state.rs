@@ -75,9 +75,7 @@ pub fn import_legacy_v2_state(
     Ok(report)
 }
 
-// Widened to pub(crate) so sibling `workflow/tests/legacy_state.rs` can
-// assert the import marker after the test-layout migration.
-pub(crate) fn import_marker_key(workspace_id: &str) -> String {
+fn import_marker_key(workspace_id: &str) -> String {
     format!("v2_state_imported_at:{workspace_id}")
 }
 

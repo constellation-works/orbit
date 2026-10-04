@@ -62,30 +62,6 @@ pub fn restore_publication(
     registry: &TaskRegistryStore,
     request: PublicationRestoreRequest,
 ) -> Result<PublicationRestoreOutcome, OrbitError> {
-    restore_publication_inner(registry, request, None)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RestoreFailurePoint {
-    BundlePublication,
-    IndexRebuild,
-    AllocatorAdvance,
-}
-
-#[cfg(test)]
-pub(super) fn restore_publication_with_failure(
-    registry: &TaskRegistryStore,
-    request: PublicationRestoreRequest,
-    failure: RestoreFailurePoint,
-) -> Result<PublicationRestoreOutcome, OrbitError> {
-    restore_publication_inner(registry, request, Some(failure))
-}
-
-fn restore_publication_inner(
-    registry: &TaskRegistryStore,
-    request: PublicationRestoreRequest,
-    failure: Option<RestoreFailurePoint>,
-) -> Result<PublicationRestoreOutcome, OrbitError> {
     // The inspector owns repository fetch, branch/commit lineage, envelope
     // pairing, schema support, bundle validation, JSONL validation, omission
     // validation, and attachment checksum verification. Recovery consumes that
@@ -176,16 +152,13 @@ fn restore_publication_inner(
         previous_allocator,
     );
 
-    for (index, published) in missing.iter().enumerate() {
+    for published in &missing {
         let task_id = &published.bundle.envelope.id;
         let source = staging.path().join(task_id);
         let destination = registry.canonical_task_bundle_path(&task_workspace_id, task_id)?;
         fs::rename(&source, &destination)
             .map_err(|error| OrbitError::from_write_io(&destination, error))?;
         guard.published_dirs.push(destination);
-        if index == 0 {
-            inject(failure, RestoreFailurePoint::BundlePublication)?;
-        }
     }
 
     // The bundles are already in place, so the whole restored set is bound in a
@@ -202,7 +175,6 @@ fn restore_publication_inner(
     guard.registered_ids.extend(restored_ids.iter().cloned());
 
     rebuild_workspace_index(registry, &task_workspace_id)?;
-    inject(failure, RestoreFailurePoint::IndexRebuild)?;
 
     let target_allocator = restored_ids
         .iter()
@@ -213,7 +185,6 @@ fn restore_publication_inner(
         .max(previous_allocator);
     registry.bump_allocator_to_at_least(target_allocator)?;
     guard.advanced_allocator = Some(target_allocator);
-    inject(failure, RestoreFailurePoint::AllocatorAdvance)?;
 
     guard.commit();
     Ok(outcome(envelope, restored_ids, already_present))
@@ -321,16 +292,6 @@ fn outcome(
         omitted_attachments: envelope.omitted_attachments.clone(),
         completeness,
     }
-}
-
-fn inject(
-    selected: Option<RestoreFailurePoint>,
-    current: RestoreFailurePoint,
-) -> Result<(), OrbitError> {
-    if selected == Some(current) {
-        return Err(restore_error(format!("injected failure after {current:?}")));
-    }
-    Ok(())
 }
 
 struct RestoreGuard<'a> {

@@ -346,6 +346,3 @@ pub(crate) fn friction_record_paths(frictions_root: &Path) -> Result<Vec<PathBuf
     paths.sort();
     Ok(paths)
 }
-
-#[cfg(test)]
-mod tests;

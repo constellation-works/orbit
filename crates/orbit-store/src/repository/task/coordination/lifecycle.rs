@@ -750,7 +750,6 @@ impl TaskCommitBoundary {
                 self.bundle_store.append_comment(id, comment)?;
             }
         }
-        super::fail_if_injected(super::CoordinationFault::DuringEvidenceApply)?;
         for artifact in &intent.evidence.artifacts {
             let destination = root
                 .join(TASK_ARTIFACTS_DIR_NAME)

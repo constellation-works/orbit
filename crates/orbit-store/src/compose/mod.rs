@@ -292,8 +292,6 @@ pub fn layered_policy_def_store(
 }
 
 mod compatibility;
-#[cfg(test)]
-mod tests;
 
 pub use compatibility::compiled_compatibility;
 

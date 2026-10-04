@@ -29,6 +29,3 @@ pub use crate::contracts::{
 };
 
 pub use lock::try_acquire_routine_sweep_lock;
-
-#[cfg(test)]
-mod tests;

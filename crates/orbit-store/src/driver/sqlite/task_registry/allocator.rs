@@ -113,9 +113,8 @@ pub(super) fn task_prefix_is_registered(
     Ok(exists != 0)
 }
 
-/// The range probe behind [`task_prefix_is_registered`], named so
-/// `relation_subgraph_query_stays_indexed` can check its plan.
-pub(super) const TASK_PREFIX_PROBE_SQL: &str = "SELECT EXISTS(
+/// The range probe behind [`task_prefix_is_registered`].
+const TASK_PREFIX_PROBE_SQL: &str = "SELECT EXISTS(
      SELECT 1 FROM task_bundle_bindings
      WHERE task_id >= ?1 AND task_id < ?2
  )";

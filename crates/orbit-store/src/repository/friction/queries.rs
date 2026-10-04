@@ -22,17 +22,6 @@ use crate::driver::sqlite::connection::{UNICODE_LOWER_SQL, unicode_lower};
 const RECORD_COLUMNS: &str = "friction_id, title, model, status, created_at, resolved_at, \
      during_task, resolved_by_task, tags_json, body, legacy_path, rehome_to";
 
-// Counts rows this process decoded into a `StoredFrictionRecord`.
-//
-// Thread-local so each `#[test]` observes only its own decodes; the counter is
-// how the bounded-page tests prove SQLite — not Rust — dropped the rows outside
-// the requested window.
-#[cfg(test)]
-thread_local! {
-    pub(crate) static DECODED_RECORDS: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
-
 /// Canonical, fixed-width, lexicographically ordered timestamp encoding.
 ///
 /// Ordering and range predicates run against the stored text directly, so the
@@ -219,9 +208,6 @@ pub(super) fn foreign_owners_of(
 pub(crate) use crate::driver::sqlite::friction_write::{next_month_seq, upsert_record};
 
 fn decode_record(row: &Row<'_>) -> Result<StoredFrictionRecord, OrbitError> {
-    #[cfg(test)]
-    DECODED_RECORDS.with(|count| count.set(count.get() + 1));
-
     let get_text = |index: usize| -> Result<String, OrbitError> {
         row.get::<_, String>(index)
             .map_err(|error| OrbitError::Store(error.to_string()))

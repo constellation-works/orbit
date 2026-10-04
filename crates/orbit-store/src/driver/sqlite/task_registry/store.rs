@@ -129,11 +129,6 @@ impl TaskRegistryStore {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn reader_pool_for_test(&self) -> Option<&ReadPool> {
-        self.readers.as_deref()
-    }
-
     /// Root directory that holds per-workspace canonical bundle trees
     /// (`<global>/tasks/workspaces`). Used by task-migration tooling to locate
     /// and enumerate on-disk bundles for a workspace.

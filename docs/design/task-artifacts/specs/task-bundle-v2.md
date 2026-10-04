@@ -370,47 +370,16 @@ integrity audit added.
 
 ### Reproducing the bounded-read measurements
 
-The ignored `task_list_io_benchmark` store test generates three temporary
-workspaces, each containing `ORBIT_TASK_BENCH_SIZE` tasks (100, 1000 or 10000).
-Each task has a roughly 8 KB description, a nonempty plan, eight comments,
-twelve history events and a 1 KB artifact. Every tenth task has the selective
-tag. It measures unfiltered and selective limit-50 reads, detail, and the
-global newest-50 aggregate. `ORBIT_TASK_BENCH_MODE=baseline` uses the frozen
-settled-index read algorithm from `424529c518d59631bb55e1df579454ff5e10307a`;
-`candidate` uses the bounded store query. Counters distinguish full bundle
-loads from envelope-only freshness reads (each full bundle also reads an
-envelope). Residual and rebuild costs are covered separately by the listing
-regression tests.
-
-For example, after building test binaries outside the checkout:
-
-```sh
-export CARGO_TARGET_DIR=/tmp/orbit-task-bench-target
-export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-ORBIT_TASK_BENCH_SIZE=1000 ORBIT_TASK_BENCH_MODE=candidate \
-ORBIT_TASK_BENCH_ROOT=/tmp/orbit-task-bench-1000 \
-cargo test -p orbit-store task_list_io_benchmark -- --ignored --nocapture
-
-```
-
-The fixture root must be new and temporary. Omitting it from the store test
-automatically removes the generated corpus after the measurement. To compare
-the historical HTTP measurements, recover the retired harness from commit
-`2b4e371fa241965de71725753d9bd0a6cccacf0b`: the file
-`crates/orbit-web/src/api/tests/task_response_bench.rs`, its test-module
-registration and the isolated child launcher it calls from
-`crates/orbit-web/src/api/tests/test_support.rs`. It is no longer part of the
-current unit suite. Archive each implementation into a separate temporary
-checkout and add the identical harness to each. Run
-`cargo test -p orbit-web task_response_benchmark -- --ignored --nocapture` on
-the same retained corpus, setting the mode label to `baseline` or `candidate`.
-The harness
-measures in a child
-of the test binary with inherited Orbit authority cleared, and the parent
-re-emits the child's JSON report lines. Build both binaries first, then run
-benchmarks serially without compilation overlap. HTTP measurements include
-response serialization and an unrelated workspace request under four
-concurrent lists on one Tokio worker.
+The ORB-11205 measurements came from an ignored `task_list_io_benchmark`
+store test and the dashboard's ignored `task_response_benchmark` harness. The
+store harness was retired with the store unit tests. To reproduce the
+measurements, check out `630bc95d241c1441de9c31f980bc016948b84f5d`, the last
+commit with `crates/orbit-store/src/repository/task/v2/tests/listing_bench.rs`,
+and follow that file's module docs. It generated three temporary workspaces of
+`ORBIT_TASK_BENCH_SIZE` tasks (100, 1000 or 10000), with
+`ORBIT_TASK_BENCH_MODE=baseline` running the frozen settled-index read
+algorithm from `424529c518d59631bb55e1df579454ff5e10307a` and `candidate` the
+bounded store query.
 
 Both harnesses warm each operation before eleven timed samples, reporting the
 median and nearest-rank p95 (the maximum with eleven samples). Linux `VmHWM`

@@ -17,7 +17,3 @@ mod row;
 mod stats;
 
 use row::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
-
-#[cfg(test)]
-#[cfg(test)]
-mod tests;

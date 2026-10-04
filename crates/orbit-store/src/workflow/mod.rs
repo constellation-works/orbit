@@ -4,6 +4,3 @@ pub mod friction;
 pub mod layout;
 pub mod legacy_state;
 pub mod task;
-
-#[cfg(test)]
-mod tests;

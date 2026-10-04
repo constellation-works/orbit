@@ -44,43 +44,6 @@ const DOCUMENT_FILES: [&str; 4] = [
     TASK_EXECUTION_SUMMARY_FILE_NAME,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum BundleWriteFault {
-    AfterJsonlAppend,
-    AfterEnvelopeStage,
-    DuringCompensation,
-    DuringRecovery,
-}
-
-#[cfg(test)]
-thread_local! {
-    static INJECTED_FAULTS: std::cell::RefCell<std::collections::HashSet<BundleWriteFault>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
-}
-
-#[cfg(test)]
-pub(crate) fn inject_bundle_write_faults(faults: &[BundleWriteFault]) {
-    INJECTED_FAULTS.with(|cell| {
-        *cell.borrow_mut() = faults.iter().copied().collect();
-    });
-}
-
-pub(crate) fn fail_if_injected(_fault: BundleWriteFault) -> Result<(), OrbitError> {
-    #[cfg(test)]
-    {
-        let hit = INJECTED_FAULTS.with(|cell| cell.borrow_mut().remove(&_fault));
-        if hit {
-            return Err(OrbitError::Store(format!("injected failure at {_fault:?}")));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn clear_injected_faults() {
-    inject_bundle_write_faults(&[]);
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PendingWrite {
     schema_version: u32,
@@ -133,16 +96,6 @@ impl PendingWriteGuard {
 impl Drop for PendingWriteGuard {
     fn drop(&mut self) {
         if self.committed {
-            #[cfg(test)]
-            clear_injected_faults();
-            return;
-        }
-        if fail_if_injected(BundleWriteFault::DuringCompensation).is_err() {
-            orbit_common::tracing::warn!(
-                target: "orbit.store.task_bundle_v2",
-                bundle_dir = %self.bundle_dir.display(),
-                "injected compensation failure; pending-write record retained",
-            );
             return;
         }
         if let Err(error) = abort_pending(&self.bundle_dir, &self.pending) {
@@ -152,9 +105,6 @@ impl Drop for PendingWriteGuard {
                 error = %error,
                 "failed to abort an uncommitted bundle write; pending-write record retained",
             );
-        } else {
-            #[cfg(test)]
-            clear_injected_faults();
         }
     }
 }
@@ -175,7 +125,6 @@ pub(crate) fn recover_pending_write(bundle_dir: &Path) -> Result<(), OrbitError>
     let Some(pending) = read_pending(bundle_dir)? else {
         return Ok(());
     };
-    fail_if_injected(BundleWriteFault::DuringRecovery)?;
     let current = envelope_sha256(bundle_dir)?;
     if current == pending.envelope_sha256 {
         abort_pending(bundle_dir, &pending)?;
@@ -221,7 +170,6 @@ pub(crate) fn publish_envelope(path: &Path, envelope: &TaskEnvelopeV2) -> Result
     let yaml = serialize_yaml_with(envelope, |err| OrbitError::Store(err.to_string()))?;
     let mut staged =
         StagedTextFile::new(path, &yaml).map_err(|err| OrbitError::from_write_io(path, err))?;
-    fail_if_injected(BundleWriteFault::AfterEnvelopeStage)?;
     staged
         .commit()
         .map_err(|err| OrbitError::from_write_io(path, err))

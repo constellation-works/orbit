@@ -113,7 +113,7 @@ impl<'a> GitRunner<'a> {
             .env_remove("GIT_CONFIG_COUNT")
             .env_remove("GIT_CONFIG_PARAMETERS")
             .env_remove("GIT_ATTR_SOURCE");
-        let output = match run_bounded(&mut command, self.deadline()) {
+        let output = match run_bounded(&mut command, PUBLICATION_GIT_DEADLINE) {
             Ok(output) => output,
             Err(OrbitError::ProcessTimeout { timeout_ms, .. }) => {
                 return Err(OrbitError::ProcessTimeout {
@@ -135,14 +135,6 @@ impl<'a> GitRunner<'a> {
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
-    }
-
-    fn deadline(&self) -> Duration {
-        #[cfg(test)]
-        if let Some(deadline) = publication_git_deadline_override() {
-            return deadline;
-        }
-        PUBLICATION_GIT_DEADLINE
     }
 
     /// Single Git parent of `commit`. Publication history must stay linear, so
@@ -175,22 +167,6 @@ impl<'a> GitRunner<'a> {
     pub(super) fn error(&self, message: impl Into<String>) -> OrbitError {
         OrbitError::InvalidInput(format!("{}: {}", self.label, message.into()))
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    static GIT_DEADLINE_OVERRIDE: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
-}
-
-/// Shorten or restore the publication Git deadline for the current test thread.
-#[cfg(test)]
-pub(crate) fn set_publication_git_deadline(deadline: Option<Duration>) {
-    GIT_DEADLINE_OVERRIDE.with(|cell| cell.set(deadline));
-}
-
-#[cfg(test)]
-fn publication_git_deadline_override() -> Option<Duration> {
-    GIT_DEADLINE_OVERRIDE.with(|cell| cell.get())
 }
 
 fn git_dir_from_args<'a>(args: &'a [&'a str]) -> Option<&'a Path> {

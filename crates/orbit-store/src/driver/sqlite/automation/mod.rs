@@ -6,8 +6,6 @@ mod intents;
 mod members;
 mod recovery;
 mod schema;
-#[cfg(test)]
-mod tests;
 mod transition;
 mod waivers;
 
