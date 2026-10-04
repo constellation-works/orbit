@@ -33,6 +33,8 @@ import { pane } from './views/pane'
 const PANE = 'orbit'
 const AFTER_TURN_MIN_MS = 30_000
 const RETRY_EMPTY_MS = 5000
+const RETRY_FAILED_MS = 30_000
+const DEFAULT_COLUMNS = 100
 const SHIP_POLL_MS = 5000
 const TASK_UPDATE = /(^|__)orbit_task_update$/
 const TASK_ID = /^[A-Z][A-Z0-9]{1,11}-\d{1,9}$/
@@ -70,6 +72,7 @@ let locating: Promise<Target> | null = null
 let inFlight = false
 let lastRefreshAt = 0
 let shipTimer: Timer | null = null
+let refreshTimer: Timer | null = null
 
 /** Which workspace this session's checkout belongs to, and where its tasks are read. */
 async function locate($: EngineInterface): Promise<Target> {
@@ -111,10 +114,11 @@ async function publishStatus($: EngineInterface): Promise<void> {
 
 /** Reads the workspace's open tasks and recent completions; toasts what moved since the last read. */
 async function refresh($: EngineInterface): Promise<void> {
-  if (inFlight || cwd === '' || configError !== null) return
+  if (inFlight || configError !== null) return
   inFlight = true
   lastRefreshAt = await $.clock.now()
   try {
+    await bind($)
     const [open, done] = await Promise.all([
       orbit($, ['task', 'list', '--status', 'proposed,backlog,in-progress,review,blocked', '--json', '--limit', '500']),
       orbit($, ['task', 'list', '--status', 'done', '--json', '--limit', '40']),
@@ -136,16 +140,31 @@ async function refresh($: EngineInterface): Promise<void> {
 }
 
 /**
- * Reads the workspace when nothing has been read yet. The read session.start
- * starts can finish before the session is bound and its write go nowhere, so
- * the band, the pane and the commands each ask again while the snapshot is empty.
+ * The session's checkout and the refresh timer, from whichever hook runs first:
+ * a resumed desktop session can draw the band and the pane before this load
+ * sees session.start.
+ */
+async function bind($: EngineInterface): Promise<void> {
+  if (cwd === '') cwd = await $.session.cwd()
+  refreshTimer ??= $.clock.every(settings.refreshMs, () => void refresh($))
+}
+
+/**
+ * Reads the workspace while the board is empty. The read session.start starts
+ * can finish before the session is bound and its write go nowhere, and an
+ * error stored by an earlier load outlives it in the session's state, so the
+ * band, the pane and the commands each ask again: soon while nothing is
+ * known, every 30 seconds while the last read failed.
  */
 async function ensureLoaded($: EngineInterface): Promise<void> {
   if (inFlight || configError !== null) return
-  if ((await read($, snapshotAtom)) !== null || (await read($, errorAtom)) !== null) return
-  if ((await $.clock.now()) - lastRefreshAt < RETRY_EMPTY_MS) return
+  if ((await read($, snapshotAtom)) !== null) return
+  const wait = (await read($, errorAtom)) === null ? RETRY_EMPTY_MS : RETRY_FAILED_MS
+  if ((await $.clock.now()) - lastRefreshAt < wait) return
   void refresh($)
 }
+
+const columnsOf = (bodyColumns: number | undefined): number => (typeof bodyColumns === 'number' && bodyColumns > 0 ? bodyColumns : DEFAULT_COLUMNS)
 
 async function say($: EngineInterface, text: string | null): Promise<void> {
   await update($, flashAtom, () => text)
@@ -346,8 +365,9 @@ export const register: Register = (on, options) => {
     }
     cwd = e.cwd
     target = null
+    // An error stored by an earlier load (another cwd, options since changed) is not this load's.
+    await update($, errorAtom, () => null)
     void refresh($)
-    $.clock.every(settings.refreshMs, () => void refresh($))
     if (isInFlight(await read($, shipAtom))) watchShip($)
     return started
   })
@@ -428,10 +448,8 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || settings.band === 'off' || (await read($, isBandHiddenAtom))) return next(e)
     const snapshot = await read($, snapshotAtom)
     const error = configError ?? (await read($, errorAtom))
-    if (snapshot === null && error === null) {
-      await ensureLoaded($)
-      return next(e)
-    }
+    if (snapshot === null) await ensureLoaded($)
+    if (snapshot === null && error === null) return next(e)
     return band(
       $.ui.resolve(e),
       {
@@ -440,7 +458,7 @@ export const register: Register = (on, options) => {
         active: await read($, activeAtom),
         ship: await read($, shipAtom),
         now: await $.clock.now(),
-        columns: e.props.bodyColumns,
+        columns: columnsOf(e.props.bodyColumns),
         isCompact: settings.band === 'compact',
       },
       actionsFor($),
@@ -461,7 +479,7 @@ export const register: Register = (on, options) => {
         ship: await read($, shipAtom),
         flash: await read($, flashAtom),
         now: await $.clock.now(),
-        columns: e.props.bodyColumns,
+        columns: columnsOf(e.props.bodyColumns),
       },
       actionsFor($),
       'Svg' in table ? table.Svg : undefined,

@@ -60,7 +60,7 @@ export function targetFrom(shown: { name: string; role: string } | null, cwd: st
     if (host === null) throw new OrbitError(`${shown.name} is a replica here; set the plugin's ownerHost option to read its owner`)
     return { workspace: shown.name, cwd, host }
   }
-  if (host === null) throw new OrbitError('no Orbit workspace here')
+  if (host === null) throw new OrbitError(`no Orbit workspace at ${root}; register it, or set the plugin's ownerHost option to read its owner`)
   const name = root.split('/').filter(Boolean).pop() ?? ''
   if (!NAME.test(name)) throw new OrbitError(`no Orbit workspace for ${root}`)
   return { workspace: name, cwd, host }
