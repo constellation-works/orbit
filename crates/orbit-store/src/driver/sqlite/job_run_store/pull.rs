@@ -408,11 +408,6 @@ fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
     }
 }
 
-/// Each leaf definition's own `max_active_runs`, which a pulled admission is
-/// bound by exactly as a dispatched one is. Mirrors the `max_active_runs: 10`
-/// the four leaf job assets declare.
-const MAX_ACTIVE_LEAF_RUNS_PER_PIPELINE: usize = 10;
-
 pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
 pub(crate) const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
 
@@ -489,10 +484,9 @@ pub(super) fn allocate(
         let ceiling = state
             .effective_max_active_leaf_runs(u32::try_from(ceiling).unwrap_or(u32::MAX))
             as usize;
-        let occupancy = occupancy(conn, workspace)?;
-        if occupancy.occupied >= ceiling
-            || occupancy.for_pipeline(pipeline(request)?) >= MAX_ACTIVE_LEAF_RUNS_PER_PIPELINE
-        {
+        // The drain's worker limit is the only ceiling: the leaf definitions
+        // declare no active-run limit of their own [ORB-13893].
+        if occupancy(conn, workspace)?.occupied >= ceiling {
             return Ok(None);
         }
         let record = LocalPullAdmission {

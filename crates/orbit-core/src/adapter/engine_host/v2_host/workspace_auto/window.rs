@@ -3,14 +3,10 @@ use orbit_engine::DispatchError;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
 
 use super::action_failed;
 use super::drains::live_admissions_stop;
-
-/// Longest drain window a caller may request, in seconds (24h). The window is
-/// the caller's, not a safety property, but an unbounded deadline would let a
-/// typo hold `workspace_auto_pipeline`'s single active-run slot indefinitely.
-const MAX_DRAIN_WINDOW_SECONDS: f64 = 86_400.0;
 
 /// Open or re-read a drain window [ORB-10819].
 ///
@@ -113,7 +109,7 @@ fn window_seconds(action: &str, input: &Value) -> Result<f64, DispatchError> {
             ));
         }
     };
-    if !seconds.is_finite() || !(0.0..=MAX_DRAIN_WINDOW_SECONDS).contains(&seconds) {
+    if !seconds.is_finite() || !(0.0..=MAX_DRAIN_WINDOW_SECONDS as f64).contains(&seconds) {
         return Err(action_failed(
             action,
             format!("`for_seconds` must be between 0 and {MAX_DRAIN_WINDOW_SECONDS}"),

@@ -42,7 +42,7 @@ spec:
     for_seconds: 0
     # Claimed leaves allowed at once on this executor. Read through the same
     # run-control path `orbit run concurrency` writes, so it can be retuned
-    # live. Each claimed leaf definition also declares `max_active_runs: 10`.
+    # live. The claimed leaf definitions declare no ceiling of their own.
     max_active_leaf_runs: 5
     # Waited when leaves are in flight or a pass did not complete.
     poll_sleep_seconds: 30

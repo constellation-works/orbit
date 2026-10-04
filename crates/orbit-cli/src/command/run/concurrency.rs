@@ -9,13 +9,15 @@ use crate::command::{CommandOut, Execute, Payload};
 #[derive(Args)]
 #[command(
     about = "Change how many tasks a running drain keeps in flight",
-    after_help = "Adjusts the worker ceiling of a live `orbit run auto` window in place. The \
-run ID, its deadline, its completion authorization, and every child it has already dispatched \
-are preserved — this is the supported alternative to cancelling the drain and submitting a \
-replacement.\n\nRaising the ceiling takes effect on the next admission pass. Lowering it stops \
-new admissions until enough children finish; it never cancels or shortens a task already in \
-flight.\n\n`--if-revision` makes the change conditional: pass the revision `orbit run show` \
-reported and a concurrent adjustment is refused rather than overwritten.\n\nExamples:\n  \
+    after_help = "Adjusts the worker ceiling of a live `orbit run auto` window, or of a replica's \
+`orbit run auto --pull` drain, in place. The run ID, its deadline, its completion authorization, \
+and every child it has already dispatched are preserved — this is the supported alternative to \
+cancelling the drain and submitting a replacement. The ceiling is the only bound on the drain's \
+tasks; the delivery jobs impose none of their own.\n\nRaising the ceiling takes effect on the \
+next admission pass. Lowering it stops new admissions until enough children finish; it never \
+cancels or shortens a task already in flight.\n\n`--if-revision` makes the change conditional: \
+pass the revision `orbit run show` reported and a concurrent adjustment is refused rather than \
+overwritten.\n\nExamples:\n  \
 orbit run concurrency jrun-20260905-0546 --set 7\n  orbit run concurrency jrun-20260905-0546 \
 --set 3 --reason 'provider rate limited'\n  orbit run concurrency jrun-20260905-0546 --set 7 \
 --if-revision 2 --json"
@@ -64,7 +66,6 @@ impl Execute for RunConcurrencyArgs {
             "previous_concurrency": change.previous_max_active_leaf_runs,
             "concurrency": change.max_active_leaf_runs,
             "revision": change.revision,
-            "hard_limit": change.hard_limit,
         });
         let text = if change.outcome == "unchanged" {
             format!(

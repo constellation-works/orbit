@@ -142,7 +142,9 @@ returns.
   its summary. Inspect the run itself on the follower (`orbit run show <run>`).
   A later claimed retry is judged on its own implementer's summary, so that
   stale `Outcome: failed` needs no hand-clearing before re-dispatch.
-- `orbit run concurrency <run-id> --set N` retunes the slot ceiling live.
+- `orbit run concurrency <run-id> --set N` retunes the slot ceiling live. It is
+  the only ceiling: the claimed leaf jobs declare no active-run limit of their
+  own, so size it to what the follower can carry.
 
 ## Read-only owner surface
 

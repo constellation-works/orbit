@@ -943,5 +943,86 @@ fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
     assert_eq!(fixture.run_state(id), "running");
 }
 
+/// A drain's worker limit is the only ceiling on the delivery jobs it
+/// dispatches. With nineteen delivery wrappers already running — past the ten
+/// the job once allowed — a twentieth is admitted to run at once instead of
+/// waiting `pending` behind a job-level limit while it holds a drain slot. The
+/// detached worker is substituted, so nothing beyond admission executes.
+#[test]
+fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
+    let fixture = Fixture::init();
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+    for index in 0..19 {
+        fixture.db().execute(
+            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'task_auto_pipeline',1,'running',?3,?3,?3,?4)",
+            params![format!("jrun-cli-wrapper-{index}"),fixture.workspace_id(),now,std::process::id()],
+        ).unwrap();
+    }
+
+    let twentieth = runtime
+        .submit_pipeline_run(
+            "task_auto_pipeline",
+            serde_json::json!({"task_ids": []}),
+            None,
+            Some("fixture"),
+        )
+        .unwrap();
+
+    assert!(!twentieth.queued, "{twentieth:?}");
+    assert_eq!(twentieth.queue_position, None);
+}
+
+/// `orbit run concurrency` retunes a replica's pull drain the same way it
+/// does an auto drain, to any positive ceiling, and still refuses a run that
+/// is not a drain.
+#[test]
+fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
+    let fixture = Fixture::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let id = "jrun-cli-pull-workers";
+    let input = serde_json::json!({"max_active_leaf_runs": 5});
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running',?3,?4,?4,?4,?5)",
+        params![id,fixture.workspace_id(),input.to_string(),now,std::process::id()],
+    ).unwrap();
+    runtime
+        .write_run_state(
+            id,
+            &orbit_types::workflow::PipelineState::new(
+                id.into(),
+                "workspace_pull_pipeline".into(),
+                input.clone(),
+            ),
+        )
+        .unwrap();
+
+    let changed = fixture.json(&["run", "concurrency", id, "--set", "24", "--json"]);
+
+    assert_eq!(changed["outcome"], "updated");
+    assert_eq!(changed["job_id"], "workspace_pull_pipeline");
+    assert_eq!(changed["previous_concurrency"], 5);
+    assert_eq!(changed["concurrency"], 24);
+    let state = runtime.read_run_state(id).unwrap().unwrap();
+    assert_eq!(state.effective_max_active_leaf_runs(5), 24);
+    assert_eq!(runtime.show_job_run(id).unwrap().input, Some(input));
+
+    let refused = fixture.failure(&["run", "concurrency", FAILED, "--set", "24", "--json"]);
+    assert!(
+        refused["error"].as_str().unwrap().contains("fixture_job"),
+        "{refused}"
+    );
+}
+
 #[cfg(unix)]
 mod agent_invoke;
