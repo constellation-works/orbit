@@ -142,6 +142,28 @@ impl OrbitRuntime {
         )
     }
 
+    /// Deterministic task machinery writes as the system, even when the
+    /// runtime was opened by a human. Keep run ownership separate from the
+    /// mutation's author; agent-facing writes use `update_task_with_owner`.
+    pub(crate) fn update_task_as_system(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        owner: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                actor_override: Some(SYSTEM_ACTOR_LABEL.to_string()),
+                artifact_owner: owner,
+                status_authority: StatusAuthority::Lifecycle,
+                ..Default::default()
+            },
+        )
+    }
+
     pub(crate) fn update_task_with_owner(
         &self,
         id: &str,

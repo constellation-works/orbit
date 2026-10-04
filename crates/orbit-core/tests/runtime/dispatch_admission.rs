@@ -5,6 +5,8 @@
 //!   and exclusion of work whose files an active task holds.
 //! - The operator's exclusive workspace claim [ORB-10709]: workflow
 //!   submission refuses everyone but the holder until the claim expires.
+//! - Review admission and settlement provenance [ORB-13916]: deterministic
+//!   evidence is system-authored while reviewer writes retain their identity.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -506,4 +508,235 @@ fn an_expired_workspace_claim_stops_gating_dispatch() {
         matches!(after, OrbitError::NotFound { .. }),
         "an expired claim must stop gating dispatch, got {after:?}"
     );
+}
+
+/// ORB-13916: deterministic gate evidence must not look like a human
+/// intervention, including replay and the coupled-repair selector write.
+#[test]
+fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
+    if !isolated("review_gate_writes_system_provenance_without_borrowing_the_operator") {
+        return;
+    }
+    use chrono::Utc;
+    use orbit_core::ActorIdentity;
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_types::workflow::{
+        REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
+        REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewCertificate, ReviewVerdict,
+    };
+
+    for verdict in [
+        ReviewVerdict::PassedWithoutRepairs,
+        ReviewVerdict::ChangesRequired,
+        ReviewVerdict::PassedWithRepairs,
+    ] {
+        let root = TempDir::new().unwrap();
+        let global = root.path().join("home/.orbit");
+        let repo = root.path().join("repo");
+        let workspace = repo.join(".orbit");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("config.toml"),
+            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\n",
+        )
+        .unwrap();
+        let runtime = OrbitRuntime::from_roots(&global, &workspace)
+            .unwrap()
+            .with_actor(ActorIdentity::human("human:daniel"));
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.name", "Orbit Test"]);
+        git(&["config", "user.email", "orbit-test@example.com"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(repo.join(".gitignore"), ".orbit/\n").unwrap();
+        std::fs::write(repo.join("src.txt"), "before\n").unwrap();
+        std::fs::write(repo.join("coupled.txt"), "before\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "seed"]);
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Review provenance fixture".into(),
+                description: "Exercise the deterministic review gate.".into(),
+                acceptance_criteria: vec!["System evidence has system provenance.".into()],
+                plan: "Change src.txt.".into(),
+                context_files: vec!["file:src.txt".into()],
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            })
+            .unwrap();
+        git(&["checkout", "-b", "candidate"]);
+        std::fs::write(repo.join("src.txt"), "implemented\n").unwrap();
+        git(&["add", "src.txt"]);
+        git(&["commit", "-m", &format!("feat: implement [{}]", task.id)]);
+        let policy = runtime.operation_policy();
+        let admission = ReviewAdmission {
+            contract_version: REVIEW_CONTRACT_VERSION,
+            policy_version: policy.version,
+            timing: policy.review_policy.value.timing(),
+            timing_source: policy.review_policy.source.label().into(),
+            crew: policy.review_crew.value.clone(),
+            crew_source: policy.review_crew.source.label().into(),
+            budget: policy.review_budget(),
+            captured_at: Utc::now(),
+        };
+        let run = runtime
+            .insert_job_run(
+                "task_pr_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({"review": admission})),
+                None,
+            )
+            .unwrap();
+        runtime
+            .update_task_with_identity(
+                &task.id,
+                TaskUpdateParams {
+                    job_run_id: Some(Some(run.run_id.clone())),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+        let history_before = runtime.get_task_history(&task.id).unwrap();
+        let mut input = json!({
+            "job_run_id": run.run_id,
+            "completed_task_ids": [task.id],
+            "workspace_path": repo.canonicalize().unwrap(),
+            "base": "main",
+            "base_sync": "local",
+            "mode": "pr",
+            "allowed_crews": [],
+        });
+        let admitted = runtime
+            .run_deterministic(
+                "review_gate_admit",
+                &json!({}),
+                &input,
+                ToolContext::default(),
+            )
+            .unwrap();
+        assert_eq!(admitted["applies"], true);
+        let repaired = verdict == ReviewVerdict::PassedWithRepairs;
+        if repaired {
+            std::fs::write(repo.join("coupled.txt"), "reviewer repair\n").unwrap();
+        }
+        let report = json!({
+            "schema_version": REVIEW_CONTRACT_VERSION,
+            "attempt_id": admitted["attempt_id"],
+            "verdict": verdict,
+            "summary": "Checked the fixture.",
+            "findings": if repaired || verdict == ReviewVerdict::ChangesRequired {
+                json!([{
+                    "id": "F1", "severity": "medium", "summary": "Coupled repair",
+                    "paths": ["coupled.txt"],
+                    "disposition": {"kind": if repaired { "repaired" } else { "open" }},
+                }])
+            } else { json!([]) },
+            "validation": [{"command": "fixture check", "outcome": "passed", "role": "required"}],
+            "escalation": null,
+        });
+        // The public agent tools share the owner-write helper with the old
+        // gate implementation; they must keep attributing reviewer writes.
+        let scratch = workspace.join("tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let report_path = scratch.join(REVIEW_REPORT_ARTIFACT);
+        std::fs::write(&report_path, report.to_string()).unwrap();
+        runtime
+            .run_tool(
+                "orbit.task.artifact.put",
+                json!({
+                    "id": task.id, "model": "codex", "path": REVIEW_REPORT_ARTIFACT,
+                    "source_path": report_path,
+                }),
+            )
+            .unwrap();
+        runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({
+                    "id": task.id, "model": "codex", "comment": "Reviewer report ready.",
+                }),
+            )
+            .unwrap();
+        input["admission"] = admitted;
+        for _ in 0..2 {
+            let settled = runtime.run_deterministic(
+                "review_gate_settle",
+                &json!({}),
+                &input,
+                ToolContext::default(),
+            );
+            assert_eq!(settled.is_ok(), verdict.passed(), "{settled:?}");
+        }
+        let certificate: ReviewCertificate = serde_json::from_slice(
+            &runtime
+                .get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)
+                .unwrap()
+                .unwrap()
+                .content,
+        )
+        .unwrap();
+        assert_eq!(certificate.verdict, verdict, "{certificate:?}");
+        assert_eq!(certificate.reviewer.crew, "reviewers");
+        assert_eq!(
+            certificate.selectors_widened,
+            if repaired {
+                vec!["file:coupled.txt".to_string()]
+            } else {
+                vec![]
+            }
+        );
+        let manifest = runtime.get_task_artifact_manifest(&task.id).unwrap();
+        for (path, author) in [
+            (REVIEW_MANIFEST_ARTIFACT, "system"),
+            (REVIEW_GATE_ARTIFACT, "system"),
+            (REVIEW_REPORT_ARTIFACT, "codex"),
+        ] {
+            assert_eq!(
+                manifest
+                    .iter()
+                    .find(|file| file.path == path)
+                    .unwrap()
+                    .created_by,
+                author,
+                "ORB-13916: {path} must retain its actual writer"
+            );
+            assert_eq!(
+                runtime
+                    .get_task_artifact(&task.id, path)
+                    .unwrap()
+                    .unwrap()
+                    .created_by
+                    .as_deref(),
+                Some(author)
+            );
+        }
+        let comments = runtime.get_task_comments(&task.id).unwrap();
+        assert_eq!(comments.len(), 2, "replay must not duplicate settlement");
+        assert_eq!(comments[0].by, "codex");
+        assert_eq!(
+            comments[1].by, "system",
+            "ORB-13916: gate is not a human intervention"
+        );
+        // Gate settlement does not create synthetic history stubs. Existing
+        // human creation history must survive without new human entries.
+        assert_eq!(runtime.get_task_history(&task.id).unwrap(), history_before);
+        if repaired {
+            assert_eq!(
+                runtime.get_task(&task.id).unwrap().context_files,
+                ["file:src.txt", "file:coupled.txt"]
+            );
+        }
+    }
 }

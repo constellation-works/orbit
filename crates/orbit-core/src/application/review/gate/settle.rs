@@ -384,12 +384,13 @@ fn publish_certificate(
             .iter()
             .any(|existing| existing.message.trim() == comment.trim());
         if !disclosed {
-            runtime.update_task(
+            runtime.update_task_as_system(
                 &task.id,
                 TaskUpdateParams {
                     comment: Some(comment.clone()),
                     ..TaskUpdateParams::default()
                 },
+                None,
             )?;
         }
     }

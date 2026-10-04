@@ -276,12 +276,13 @@ impl Judgement {
         }
         for (task, updated) in context.tasks.iter().zip(updated) {
             if updated {
-                runtime.update_task(
+                runtime.update_task_as_system(
                     &task.id,
                     TaskUpdateParams {
                         context_files: Some(task.context_files.clone()),
                         ..TaskUpdateParams::default()
                     },
+                    None,
                 )?;
             }
         }
@@ -541,20 +542,18 @@ pub(super) fn write_artifact(
     path: &str,
     content: &[u8],
 ) -> Result<(), OrbitError> {
-    runtime.update_task_with_owner(
+    runtime.update_task_as_system(
         task_id,
         TaskUpdateParams {
             upsert_artifacts: vec![TaskArtifact {
                 path: path.to_string(),
                 content: content.to_vec(),
                 media_type: "application/json".to_string(),
-                created_by: Some("system".to_string()),
+                // The record writer derives provenance from the write actor.
+                created_by: None,
             }],
             ..TaskUpdateParams::default()
         },
-        None,
-        None,
-        None,
         Some(run_id.to_string()),
     )?;
     Ok(())
