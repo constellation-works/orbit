@@ -4,9 +4,11 @@
 // Integration fixtures exercise public behavior and unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-//! PR landing and merge gating through the engine's deterministic actions.
+//! PR landing and merge gating through the engine's deterministic actions,
+//! and the required validation that gates a candidate before it is published.
 //!
-//! Each test drives the shipped `pr_open` and `pr_complete` actions through
+//! Each test drives the shipped `candidate_validate`, `pr_open` and
+//! `pr_complete` actions through
 //! [`execute_deterministic_action`]. The host keeps tasks in memory but does
 //! not replace the provider boundary: the engine's own adapter runs `gh` and
 //! `git` as it does in production. A substitute `gh` first on `PATH` stands in
@@ -285,6 +287,101 @@ fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate() {
 }
 
 // ---------------------------------------------------------------------------
+// Required validation before publication
+// ---------------------------------------------------------------------------
+
+/// The owner path's required validation runs every command on the exact
+/// synchronized candidate. A command that fails refuses the candidate before
+/// anything is pushed, with its output in the error and its log — beside the
+/// passing log of the command before it — attached to the task. A repair left
+/// uncommitted is refused, because the result would not describe the committed
+/// candidate. Once the repair is committed, as step recovery does, the retry
+/// passes on the new head and replaces the logs.
+#[test]
+fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes() {
+    isolated(
+        "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let format_check = "grep -qx formatted src/feature.txt || \
+                 { echo 'src/feature.txt: not formatted' >&2; exit 3; }";
+            host.require_commands(&["echo suite-ok", format_check]);
+            let remote_before = fx.remote_tip(BRANCH);
+
+            let error = action(&host, "candidate_validate", &fx.validate_input())
+                .expect_err("an unformatted candidate must be refused");
+
+            let message = error.to_string();
+            assert!(
+                message.contains("required validation")
+                    && message.contains(&fx.candidate)
+                    && message.contains("src/feature.txt: not formatted"),
+                "the refusal names the candidate and carries the output: {message}"
+            );
+            let passed = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(passed["command"], "echo suite-ok");
+            assert_eq!(passed["exit_code"], 0);
+            assert_eq!(passed["output"], "suite-ok");
+            let failed = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
+            assert_eq!(failed["exit_code"], 3);
+            assert_eq!(failed["tested_head"], fx.candidate.as_str());
+            assert_eq!(failed["base_sha"], fx.base_sha.as_str());
+            assert_eq!(failed["output"], "src/feature.txt: not formatted");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+
+            fs::write(fx.repo.join("src/feature.txt"), "formatted\n").unwrap();
+            let dirty = action(&host, "candidate_validate", &fx.validate_input())
+                .expect_err("an uncommitted repair is not the candidate");
+            assert!(
+                dirty
+                    .to_string()
+                    .contains("staged, tracked, or untracked changes"),
+                "{dirty}"
+            );
+
+            git(&fx.repo, &["commit", "-am", "format feature"]);
+            let repaired = fx.head();
+            let validated = action(&host, "candidate_validate", &fx.validate_input())
+                .expect("the committed repair passes");
+
+            assert_eq!(validated["decision"], "passed");
+            assert_eq!(validated["tested_head"], repaired.as_str());
+            assert_eq!(
+                validated["commands"],
+                json!(["echo suite-ok", format_check])
+            );
+            assert_eq!(validated["validation"].as_array().unwrap().len(), 2);
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
+            assert_eq!(log["exit_code"], 0, "the retry replaces the failing log");
+            assert_eq!(log["tested_head"], repaired.as_str());
+        },
+    );
+}
+
+/// Without `workflow.required_validation_commands` the step changes nothing:
+/// no command runs, no evidence is attached, and even a checkout that would be
+/// refused is passed through as today.
+#[test]
+fn required_validation_without_commands_is_a_no_op() {
+    isolated(
+        "required_validation_without_commands_is_a_no_op",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            fs::write(fx.repo.join("untracked.txt"), "left behind\n").unwrap();
+
+            let validated = action(&host, "candidate_validate", &fx.validate_input())
+                .expect("no requirement is no gate");
+
+            assert_eq!(validated["decision"], "skipped_no_required_commands");
+            assert_eq!(validated["validation"], json!([]));
+            assert!(host.artifacts.lock().unwrap().is_empty());
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
@@ -388,6 +485,17 @@ impl Fixture {
                 &format!("refs/heads/{branch}"),
             ],
         )
+    }
+
+    /// The validation step as the owner pipeline hands it the synchronized
+    /// candidate.
+    fn validate_input(&self) -> Value {
+        json!({
+            "workspace_path": self.repo,
+            "job_run_id": RUN_ID,
+            "completed_task_ids": [TASK_ID],
+            "base_sha": self.base_sha,
+        })
     }
 
     fn open_input(&self, reviewed_head: &str, reviewed_base: &str) -> Value {
@@ -498,6 +606,9 @@ struct DeliveryHost {
     comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
     completion_notes: Mutex<Vec<String>>,
     landings: Mutex<Vec<ReviewLandingRequest>>,
+    required_commands: Mutex<Vec<String>>,
+    /// Attached task artifacts, by task id and path.
+    artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
 }
 
 impl DeliveryHost {
@@ -508,7 +619,22 @@ impl DeliveryHost {
             comments: Mutex::default(),
             completion_notes: Mutex::default(),
             landings: Mutex::default(),
+            required_commands: Mutex::default(),
+            artifacts: Mutex::default(),
         }
+    }
+
+    fn require_commands(&self, commands: &[&str]) {
+        *self.required_commands.lock().unwrap() =
+            commands.iter().map(ToString::to_string).collect();
+    }
+
+    fn validation_log(&self, task_id: &str, path: &str) -> Value {
+        let artifacts = self.artifacts.lock().unwrap();
+        let content = artifacts
+            .get(&(task_id.to_string(), path.to_string()))
+            .unwrap_or_else(|| panic!("{task_id} has no artifact {path}"));
+        serde_json::from_slice(content).unwrap()
     }
 
     fn set_status(&self, id: &str, status: TaskStatus) {
@@ -606,6 +732,30 @@ impl RuntimeHost for DeliveryHost {
 
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
+    }
+
+    fn required_validation_commands(&self) -> Vec<String> {
+        self.required_commands.lock().unwrap().clone()
+    }
+
+    /// Like the task store, accept evidence only from the run owning the task.
+    fn attach_task_validation_log(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        path: &str,
+        content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        if self.get_task(task_id)?.job_run_id.as_deref() != Some(run_id) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "run {run_id} does not own {task_id}"
+            )));
+        }
+        self.artifacts
+            .lock()
+            .unwrap()
+            .insert((task_id.to_string(), path.to_string()), content);
+        Ok(())
     }
 }
 

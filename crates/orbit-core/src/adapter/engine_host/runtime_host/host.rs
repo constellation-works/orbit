@@ -352,6 +352,36 @@ impl RuntimeHost for OrbitRuntime {
         .map(|_| ())
     }
 
+    fn attach_task_validation_log(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        path: &str,
+        content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        orbit_types::task::validate_relative_artifact_path(path)?;
+        let task = self.get_task(task_id)?;
+        if task.job_run_id.as_deref() != Some(run_id) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "run '{run_id}' does not own task '{task_id}'; it cannot attach validation evidence"
+            )));
+        }
+        self.update_task_as_system(
+            task_id,
+            crate::application::task::TaskUpdateParams {
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact {
+                    path: path.to_string(),
+                    content,
+                    media_type: "application/json".to_string(),
+                    created_by: None,
+                }],
+                ..Default::default()
+            },
+            Some(run_id.to_string()),
+        )
+        .map(|_| ())
+    }
+
     fn record_claim_handoff(
         &self,
         handoff: &orbit_types::workflow::handoff::TaskHandoff,
@@ -414,6 +444,10 @@ impl RuntimeHost for OrbitRuntime {
             return Ok(());
         }
         apply_locked_task_automation_update(self, task_id, update)
+    }
+
+    fn required_validation_commands(&self) -> Vec<String> {
+        self.workflow_required_validation_commands().to_vec()
     }
 
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {

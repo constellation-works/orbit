@@ -156,7 +156,7 @@ pub(super) fn load_handoff_context<H: RuntimeHost + ?Sized>(
     })
 }
 
-fn completed_task_ids_from_input(input: &Value) -> Option<Vec<String>> {
+pub(super) fn completed_task_ids_from_input(input: &Value) -> Option<Vec<String>> {
     let ids = input
         .get("completed_task_ids")?
         .as_array()?

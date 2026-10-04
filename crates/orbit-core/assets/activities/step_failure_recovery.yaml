@@ -194,8 +194,8 @@ spec:
          that summary is the implement checkpoint's own `execution_summary`
          output, not the owner's task record); and
        - failed_step_id is a delivery-tail step: commit, prepare_branch,
-         sync_base, push, or pr_open (including their corresponding activity
-         names).
+         sync_base, validate, push, or pr_open (including their corresponding
+         activity names).
 
        Each of those conditions is re-derived from durable state — the persisted
        task record and the run's own checkpoints — not from anything an earlier
@@ -230,6 +230,17 @@ spec:
        do stop you are the identity ones: the run is cancelled, a claimed
        task refuses writes, or the checked-out branch / pre-rewrite HEAD does
        not match the failed step's checkpoint.
+
+       A failed `validate` step (`candidate_validate`) means a command in
+       `workflow.required_validation_commands` did not pass on the committed
+       candidate; the error carries its output and the task holds its log.
+       Repair the candidate so the command passes (for example apply the
+       formatter it names), run the command yourself to confirm, and commit
+       the repair on the checked-out task branch as a new commit, leaving the
+       worktree clean: the retry validates the exact committed HEAD and
+       refuses uncommitted changes. Never edit, skip, or weaken the required
+       command, and never rewrite the branch's existing commits. A failure
+       outside the candidate's changes (a red base) is a blocker to report.
 
     5. For an already-terminal source run, prefer repairing for resume over
        direct delivery when the checkpointed remaining steps can run. You
