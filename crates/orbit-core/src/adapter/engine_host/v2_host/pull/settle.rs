@@ -24,6 +24,10 @@
 //! - **A new drain** for the same owner, whose refill carries every earlier
 //!   admission for that owner forward, whichever drain made it.
 //!
+//! Once settled, a leaf's `target/` build output is reclaimed by the drain's
+//! next pass ([`OrbitRuntime::reclaim_settled_leaf_build_output`]); its
+//! checkout is left to worktree GC.
+//!
 //! Delivery stays the idempotent owner mutation it always was — one mutation
 //! ID per claim, receipt reconciliation of a refusal, `stale_claim` closing a
 //! settlement the owner already ended — so two processes settling the same
@@ -32,15 +36,16 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
+use orbit_engine::run_worktree_has_build_output;
 use orbit_store::contracts::{
-    LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
+    JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
-use super::drain::{PullDrain, SettleScope, is_owner_transport_failure, leaf_failure_settlement};
+use super::drain::{PullDrain, SettleScope, leaf_failure_settlement};
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry,
+    PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, is_owner_transport_failure,
 };
 
 impl OrbitRuntime {
@@ -264,6 +269,79 @@ impl OrbitRuntime {
             entries.push(classify(&record, carried, error));
         }
         entries
+    }
+
+    /// Reclaim the `target/` build output each settled claimed leaf left in
+    /// its worktree, and return the bytes freed [ORB-13920].
+    ///
+    /// A claimed leaf's Cargo `target/` runs to gigabytes, and a follower's
+    /// disk must not wait on an external GC schedule for it: once a claim is
+    /// settled, the owner holds the leaf's delivery and the build output is
+    /// only a cache. The drain calls this every pass rather than at the
+    /// moment of settlement, because the leaf's own worker usually delivers
+    /// its settlement while it is still alive, and target-only collection
+    /// keeps a live worker's output; the next pass finds it exited. The
+    /// checkout itself stays for worktree GC. Best-effort: a failure is
+    /// logged and the next pass tries again.
+    pub(crate) fn reclaim_settled_leaf_build_output(&self) -> u64 {
+        let jobs = self.stores().jobs();
+        let admissions = match jobs.local_pull_admissions() {
+            Ok(admissions) => admissions,
+            Err(error) => {
+                tracing::warn!(target: "orbit.core.pull", %error, "pull admissions unreadable; no build output reclaimed");
+                return 0;
+            }
+        };
+        let repo_root = &self.paths().repo_root;
+        // Cheap probes first, so a pass over a long settled history costs a
+        // row read and a stat per leaf, and Git runs only where there is
+        // something to reclaim.
+        let leaves = admissions
+            .into_iter()
+            .filter(|record| record.phase == LocalPullPhase::Settled)
+            .filter_map(|record| record.leaf_run_id)
+            .filter(|leaf| {
+                jobs.get_job_run(leaf).ok().flatten().is_some_and(|run| {
+                    run.state.is_terminal() && run_worktree_has_build_output(repo_root, &run)
+                })
+            })
+            .collect::<Vec<_>>();
+        if leaves.is_empty() {
+            return 0;
+        }
+        // Every run, so the collector still sees a path two runs share.
+        let runs = match jobs.list_job_runs_filtered(&JobRunQuery {
+            include_steps: false,
+            ..JobRunQuery::default()
+        }) {
+            Ok(runs) => runs,
+            Err(error) => {
+                tracing::warn!(target: "orbit.core.pull", %error, "job runs unreadable; no build output reclaimed");
+                return 0;
+            }
+        };
+        let mut reclaimed = 0u64;
+        for leaf in leaves {
+            match self.reclaim_run_build_output(&runs, &leaf) {
+                Ok(result) => {
+                    reclaimed = reclaimed.saturating_add(result.bytes_reclaimed);
+                    for report in result.reports {
+                        tracing::info!(
+                            target: "orbit.core.pull",
+                            leaf = %leaf,
+                            path = %report.path.display(),
+                            action = %report.action,
+                            bytes = report.bytes_reclaimed,
+                            "settled claimed leaf build output",
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(target: "orbit.core.pull", leaf = %leaf, %error, "could not reclaim a settled leaf's build output; the next pass retries");
+                }
+            }
+        }
+        reclaimed
     }
 
     /// Destinations a live pull drain is carrying. A drain's refill carries

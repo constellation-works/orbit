@@ -350,6 +350,17 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - The run outlives its window until every admission has settled, so a leaf
   that finishes late still hands off, and a later drain for the same owner
   carries anything an earlier drain left behind.
+- Each iteration reclaims the `target/` build output of every settled leaf
+  whose worker has exited (`reclaimed_build_bytes` in the iteration output)
+  and keeps its checkout. A leaf's `target/` runs to gigabytes, so follower
+  disk does not wait on a GC schedule. `orbit gc worktrees --confirm` on the
+  follower then removes settled leaves' checkouts on the strength of the
+  local settled admission alone; other claimed worktrees are judged by their
+  task's status, read from the owner over the claim's route. A worktree kept
+  as `skipped:owner_unreachable` carries the transport error in `detail`;
+  `skipped:no_owner_route` means the follower has no route to ask (owner
+  missing from `~/.orbit/mcp-destinations.toml`, or an unregistered
+  checkout), not that the owner is down.
 
 Operate it with the ordinary run commands: `orbit run show <run-id>`,
 `orbit run concurrency <run-id> --set N` (MCP: `orbit_workflow_auto` with

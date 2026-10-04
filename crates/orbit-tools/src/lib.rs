@@ -102,6 +102,14 @@ pub trait DrainOwnerTransport: Send + Sync {
     /// Deliver `name` to the owner workspace `selector` names.
     fn call(&self, selector: &str, name: &str, input: Value) -> Result<Value, OrbitError>;
 
+    /// Read `orbit.task.show` from the owner workspace `selector` names.
+    ///
+    /// The drain protocol route carries only the drain's own rows, so a
+    /// follower that must read a task — worktree GC deciding whether a
+    /// claimed leaf's task has settled — asks over the owner's ordinary tool
+    /// surface instead [ORB-13920].
+    fn show_task(&self, selector: &str, input: Value) -> Result<Value, OrbitError>;
+
     /// The coordinator a claimed leaf bound to this transport's owner routes
     /// its worker reads and writes through.
     fn worker_coordinator(&self) -> std::sync::Arc<dyn OwnerCoordinator>;

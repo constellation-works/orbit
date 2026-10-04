@@ -30,7 +30,7 @@ use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
     DispatchError, ResolvedCliExecutor, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
-    V2DispatchInput, dispatch_v2_activity, execute_deterministic_action,
+    V2DispatchInput, WorktreeGcTaskLookup, dispatch_v2_activity, execute_deterministic_action,
 };
 use orbit_types::task::{ExternalRef, Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
@@ -194,6 +194,107 @@ fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
             }
             assert!(hand_made.exists(), "a hand-made worktree survives gc");
             assert!(registered_worktrees(&fixture.repo).contains(&canonical(&hand_made)));
+        },
+    );
+}
+
+/// [ORB-13920] A replica's GC: a settled claim licenses removal without any
+/// task answer; a missing owner route and an owner transport failure are told
+/// apart and each carries its reason; a directory Git does not list as a
+/// worktree is kept with its remedy.
+#[test]
+fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() {
+    isolated(
+        "replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            let setup = |run_id: &str, task_id: &str| {
+                host.add_task(task_id, TaskStatus::Backlog);
+                let input = setup_input(&[task_id], run_id);
+                let setup = action(&host, "worktree_setup", &input).expect("worktree setup");
+                host.add_run(job_run(run_id, JobRunState::Success, input));
+                Checkout::from_setup(&setup)
+            };
+
+            // The owner would not answer about this task; its settled claim
+            // is enough.
+            let settled = setup("jrun-claim-settled", "T-CLAIM-SETTLED");
+            host.settle_claim(
+                "jrun-claim-settled",
+                "claim settled with its owner hm_owner/ws",
+            );
+            host.answer(
+                "T-CLAIM-SETTLED",
+                WorktreeGcTaskLookup::OwnerUnreachable("asked anyway".into()),
+            );
+            let no_route = setup("jrun-claim-no-route", "T-CLAIM-NO-ROUTE");
+            host.answer(
+                "T-CLAIM-NO-ROUTE",
+                WorktreeGcTaskLookup::NoOwnerRoute("no federated owner route".into()),
+            );
+            let unreachable = setup("jrun-claim-unreachable", "T-CLAIM-UNREACHABLE");
+            host.answer(
+                "T-CLAIM-UNREACHABLE",
+                WorktreeGcTaskLookup::OwnerUnreachable("ssh: Connection timed out".into()),
+            );
+            // A settled task's checkout that Git no longer lists.
+            let moved = setup("jrun-claim-moved", "T-CLAIM-MOVED");
+            host.set_status("T-CLAIM-MOVED", TaskStatus::Done);
+            git(
+                &fixture.repo,
+                &["worktree", "remove", "--force", path_str(&moved.path)],
+            );
+            fs::create_dir_all(&moved.path).unwrap();
+            fs::write(moved.path.join("notes.txt"), "left behind").unwrap();
+
+            let cases = [
+                (
+                    "jrun-claim-settled",
+                    "removed",
+                    "claim settled with its owner",
+                ),
+                (
+                    "jrun-claim-no-route",
+                    "skipped:no_owner_route",
+                    "no federated owner route",
+                ),
+                (
+                    "jrun-claim-unreachable",
+                    "skipped:owner_unreachable",
+                    "Connection timed out",
+                ),
+                (
+                    "jrun-claim-moved",
+                    "skipped:not_registered_worktree",
+                    "git worktree repair",
+                ),
+            ];
+            for (run_id, expected_action, expected_detail) in cases {
+                let result = action(&host, "worktree_gc", &json!({"target_run_id": run_id}))
+                    .expect("worktree gc");
+                let report = &result["reports"][0];
+                assert_eq!(report["run_id"], run_id, "{result:#}");
+                assert_eq!(report["action"], expected_action, "{run_id}: {report:#}");
+                assert!(
+                    report["detail"]
+                        .as_str()
+                        .is_some_and(|detail| detail.contains(expected_detail)),
+                    "{run_id}: the report says why: {report:#}"
+                );
+            }
+            assert!(
+                !settled.path.exists(),
+                "the settled claim's checkout is removed"
+            );
+            assert!(
+                git(&fixture.repo, &["branch", "--list", &settled.branch]).is_empty(),
+                "and its branch"
+            );
+            for kept in [&no_route, &unreachable] {
+                assert!(registered_worktrees(&fixture.repo).contains(&kept.path));
+            }
+            assert!(moved.path.join("notes.txt").exists(), "never removed by GC");
         },
     );
 }
@@ -654,6 +755,10 @@ struct LifecycleHost {
     runs: Mutex<Vec<JobRun>>,
     admitted: Mutex<Vec<String>>,
     checkpoints: Mutex<Vec<(String, String, Value)>>,
+    /// A replica owner's answer per task, overriding the local task store.
+    owner_answers: Mutex<BTreeMap<String, WorktreeGcTaskLookup>>,
+    /// Claimed runs whose claim is settled, with the settlement's account.
+    settled_claims: Mutex<BTreeMap<String, String>>,
 }
 
 impl LifecycleHost {
@@ -688,6 +793,20 @@ impl LifecycleHost {
 
     fn add_run(&self, run: JobRun) {
         self.runs.lock().unwrap().push(run);
+    }
+
+    fn answer(&self, task_id: &str, lookup: WorktreeGcTaskLookup) {
+        self.owner_answers
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), lookup);
+    }
+
+    fn settle_claim(&self, run_id: &str, settlement: &str) {
+        self.settled_claims
+            .lock()
+            .unwrap()
+            .insert(run_id.to_string(), settlement.to_string());
     }
 
     fn admitted(&self) -> Vec<String> {
@@ -751,6 +870,23 @@ impl RuntimeHost for LifecycleHost {
 
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
         Ok(self.runs.lock().unwrap().clone())
+    }
+
+    fn lookup_task_for_worktree_gc(&self, _run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
+        if let Some(answer) = self.owner_answers.lock().unwrap().get(task_id) {
+            return answer.clone();
+        }
+        match self.get_task(task_id) {
+            Ok(task) => WorktreeGcTaskLookup::Found {
+                status: task.status,
+                pr_status: task.pr_status,
+            },
+            Err(_) => WorktreeGcTaskLookup::Unresolved,
+        }
+    }
+
+    fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
+        self.settled_claims.lock().unwrap().get(run_id).cloned()
     }
 
     fn checkpoint_rebase_recovery(

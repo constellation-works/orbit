@@ -22,7 +22,8 @@ impl Execute for GcCommand {
 /// or execution contract.
 #[derive(Subcommand)]
 pub enum GcTarget {
-    /// Reap job-run worktrees whose associated task has settled to rejected, archived, or done
+    /// Reap job-run worktrees whose associated task has settled to rejected, archived, or done,
+    /// or whose claim this follower has settled with its owner
     Worktrees(WorktreeGcArgs),
 }
 
@@ -85,7 +86,7 @@ impl Execute for WorktreeGcArgs {
             lines.push("No worktrees matched.".to_string());
         }
         for report in &result.reports {
-            lines.push(format!(
+            let mut line = format!(
                 "path={} run_id={} run_state={} task_id={} task_status={} pr_status={} action={} bytes_reclaimed={}",
                 report.path.display(),
                 report.run_id.as_deref().unwrap_or("-"),
@@ -103,7 +104,11 @@ impl Execute for WorktreeGcArgs {
                 report.pr_status.as_deref().unwrap_or("-"),
                 report.action,
                 report.bytes_reclaimed
-            ));
+            );
+            if let Some(detail) = &report.detail {
+                line.push_str(&format!(" detail={detail}"));
+            }
+            lines.push(line);
         }
         if !result.reports.is_empty() {
             lines.push(format!("total_bytes_reclaimed={}", result.bytes_reclaimed));
