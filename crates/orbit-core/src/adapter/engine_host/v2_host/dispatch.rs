@@ -24,7 +24,7 @@ use crate::runtime::task::locks::{
 use super::admission::{backlog_exclusion, scan_unresolved};
 use super::ci_failure::filing as ci_failure_filing;
 use super::dependabot::{consolidate as dependabot_consolidate, filing as dependabot_filing};
-use super::{pipeline_actions, task_pilot, workspace_auto};
+use super::{blocked_recovery, pipeline_actions, task_pilot, workspace_auto};
 
 /// Whether `action` is dispatchable by this runtime — the capability probe
 /// behind `RuntimeHost::has_deterministic_action` [ORB-10385].
@@ -296,6 +296,15 @@ pub(crate) fn run_deterministic(
         // Validate all agent proposals before writing, then replace only the
         // exact prepared tasks' context_files fields.
         CoreDeterministicAction::ApplyTaskPilotResults => task_pilot::apply(runtime, action, input),
+        // Re-check one blocked task's episode and open a detached base
+        // checkout for final recovery, then apply its decision through the
+        // shared final-recovery applier and remove that checkout.
+        CoreDeterministicAction::PrepareBlockedTaskRecovery => {
+            blocked_recovery::prepare(runtime, action, input, recovery_run_id(&tool_context))
+        }
+        CoreDeterministicAction::ApplyBlockedTaskRecovery => {
+            blocked_recovery::apply(runtime, action, input, recovery_run_id(&tool_context))
+        }
         // [ORB-11333] Reserve a fresh reviewer start for the committed,
         // base-synchronized candidate and hand it a pinned manifest; then
         // settle the reviewer's report into an honest verdict, reviewer-
@@ -694,4 +703,11 @@ fn update_run_waiting_reasons(
 
 fn non_empty(values: Vec<String>) -> Option<Vec<String>> {
     (!values.is_empty()).then_some(values)
+}
+
+fn recovery_run_id(tool_context: &ToolContext) -> Option<&str> {
+    tool_context
+        .reservation_owner
+        .as_ref()
+        .map(|owner| owner.owner_run_id.as_str())
 }

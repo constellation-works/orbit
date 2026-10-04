@@ -69,6 +69,29 @@ copy. Run `orbit routine list` to see their names on this host.
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `ship-sweep` | every 20m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. |
 
+## Built in: final recovery of blocked tasks
+
+This one is not a routine and needs no enablement. On the workspace owner,
+every clock sweep looks at tasks that a failed, timed-out or interrupted run,
+a failed gate or auto run, or a failed claim settlement left `blocked`. It
+dispatches one `blocked_task_recovery_pipeline` run per block, with at most
+two at a time. The `final_recovery` agent proposes `complete_no_diff`,
+`reject`, `archive`, `requeue` or `escalate`, and Orbit's deterministic
+applier acts on it. Each decision is a task comment with the run id.
+`orbit task show` prints the last one, and `orbit doctor` lists tasks still
+blocked after one in its `blocked-task-recovery` row.
+
+It leaves a block alone when someone other than Orbit's automation has
+commented on the task, changed its status or attached an artifact since the
+block, when the block already has a decision, and when the block is older
+than 72 hours. A field-only edit (description, plan, selectors) records no
+actor, so any such edit after the block also leaves it to a human; `orbit
+doctor` names those tasks. It never runs on a follower or inside a claimed
+worker.
+
+The crew comes from `workflow.final_recovery_crews`. To opt out, set it to
+`[]`; this also turns off final recovery inside the delivery pipelines.
+
 ## Recommended enablement order
 
 Enable in this order and stop wherever the value runs out. Each step is safe
