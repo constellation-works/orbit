@@ -478,6 +478,93 @@ fn pull_admission_is_bound_only_by_the_drains_live_limit() {
     );
 }
 
+/// A claimed leaf waiting for retry still owns one drain slot, while terminal
+/// leaf history releases its slot and does not affect the capacity reading.
+#[test]
+fn retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not() {
+    if !isolated("retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not") {
+        return;
+    }
+    const CEILING: usize = 1;
+    let root = TempDir::new().unwrap();
+    let store = Store::open(&root.path().join("pull.db")).unwrap();
+    let jobs = workspace_job_run_store(store.clone(), "ws");
+    let parent = jobs
+        .insert_job_run("workspace_pull_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    let mut state = PipelineState::new(
+        parent.run_id.clone(),
+        parent.job_id.clone(),
+        serde_json::json!({}),
+    );
+    assert!(state.set_drain_worker_limit(CEILING as u32, CEILING as u32, "cli".into(), None, None));
+    jobs.write_run_state(&parent.run_id, &state).unwrap();
+
+    let retrying = jobs
+        .insert_job_run(
+            "task_claimed_local_pipeline",
+            1,
+            Utc::now(),
+            Some(serde_json::json!({"task_ids": ["ORB-TEST"]})),
+            None,
+        )
+        .unwrap();
+    let terminal = jobs
+        .insert_job_run(
+            "task_claimed_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(serde_json::json!({"task_ids": ["ORB-OLD"]})),
+            None,
+        )
+        .unwrap();
+    finish(jobs.as_ref(), &terminal.run_id);
+    let retrying_run_id = retrying.run_id.clone();
+    store
+        .with_transaction(|tx| {
+            let changed = tx
+                .connection()
+                .execute(
+                    "UPDATE job_runs SET state = 'retrying' WHERE workspace_id = ?1 AND run_id = ?2",
+                    ["ws", retrying_run_id.as_str()],
+                )
+                .unwrap();
+            assert_eq!(changed, 1, "retrying fixture run exists");
+            Ok(())
+        })
+        .unwrap();
+
+    let occupancy = jobs.drain_leaf_occupancy().unwrap();
+    assert_eq!(
+        occupancy.occupied, CEILING,
+        "the retrying leaf occupies capacity and the terminal leaf is excluded"
+    );
+    assert_eq!(
+        occupancy.per_pipeline.get("task_claimed_local_pipeline"),
+        Some(&1),
+        "retrying claimed leaves count toward their pipeline"
+    );
+    assert_eq!(
+        occupancy.per_pipeline.get("task_claimed_pr_pipeline"),
+        None,
+        "terminal leaf history does not count"
+    );
+
+    let destination = PullDestination {
+        owner_machine_id: "owner".into(),
+        owner_workspace_id: "ws".into(),
+        selector: "owner/ws".into(),
+        execution_machine_id: "owner".into(),
+    };
+    let request = pull_request(&parent.run_id, "retrying-leaf-at-capacity");
+    assert!(
+        jobs.allocate_pull_request(&destination, &request, CEILING)
+            .unwrap()
+            .is_none(),
+        "a retrying claimed leaf prevents admission at the ceiling"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Coordinated admission and handoff
 // ---------------------------------------------------------------------------
