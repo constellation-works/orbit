@@ -284,7 +284,7 @@ fn a_fetch_phase_is_refused_on_macos() {
     assert_nothing_installed(&fixture);
 }
 
-/// §3.7: a committed pin whose source would build is reported unsatisfied
+/// §3.7: a pin whose source would build is reported unsatisfied
 /// by sync, and nothing is built or installed.
 #[cfg(unix)]
 #[test]

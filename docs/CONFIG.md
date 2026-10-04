@@ -565,10 +565,10 @@ Full log rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock 
 
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 
-Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`). Enable state and grants are host-local. A repository commits only its pin file, and `orbit plugin sync` installs what the pins name. The full operator guide is the orbit-setup [plugins reference](../crates/orbit-core/assets/skills/orbit-setup/references/plugins.md), and the manifest spec is the [plugin standard](design/plugins/1_scope.md).
+Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`). Enable state and grants are host-local. A checkout keeps only its pin file, which git ignores with the rest of `.orbit/`, and `orbit plugin sync` installs what the pins name. The full operator guide is the orbit-setup [plugins reference](../crates/orbit-core/assets/skills/orbit-setup/references/plugins.md), and the manifest spec is the [plugin standard](design/plugins/1_scope.md).
 
 ```yaml
-# .orbit/plugins.yaml — committed
+# .orbit/plugins.yaml — per-checkout, gitignored
 schemaVersion: 1
 plugins:
   - name: graph

@@ -41,8 +41,8 @@ A plugin source keeps its plugin in a `.orbit-plugin/` directory that holds
 `plugin add`, `validate`, `test`, `sync`, and `upgrade` refuse a top-level
 `plugin.yaml`, with no fallback: move `plugin.yaml` and its tree into
 `.orbit-plugin/`, or run `orbit plugin scaffold` to create the current layout.
-Plugins install once per machine; a workspace pins the plugins it uses in
-`.orbit/plugins.yaml`.
+Plugins install once per machine; a checkout pins the plugins it uses in
+`.orbit/plugins.yaml`, which git ignores with the rest of `.orbit/`.
 
 ## Knowledge
 

@@ -1,4 +1,4 @@
-//! Where plugins live on this host, and the workspace's committed pin file.
+//! Where plugins live on this host, and the workspace's pin file.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ pub fn plugin_secret_store_dir(global_root: &Path) -> PathBuf {
     global_root.join(orbit_tools::plugin::PLUGIN_SECRET_STORE_DIR)
 }
 
-/// The workspace's committed pin file, when it has one.
+/// The workspace's pin file, when it has one.
 pub fn read_pin_file(orbit_dir: &Path) -> Result<Option<PluginPinFile>, OrbitError> {
     let Ok(path) = validated_pin_file_path(orbit_dir) else {
         return Ok(None);

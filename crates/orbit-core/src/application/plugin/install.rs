@@ -639,8 +639,8 @@ fn refuse_in_repository_source(
     }
     Err(OrbitError::InvalidInput(format!(
         "refusing to install '{}': it is inside the repository at {}. Orbit plugins are \
-         global-install-only — the host installs once under `~/.orbit/plugins/` and the \
-         repository commits only `.orbit/plugins.yaml`, so a plugin tree is never vendored \
+         global-install-only — the host installs once under `~/.orbit/plugins/` and a \
+         checkout only pins them in `.orbit/plugins.yaml`, so a plugin tree is never vendored \
          into a checkout. Move the plugin outside the repository and add it from there, or \
          pin it in `.orbit/plugins.yaml` and run `orbit plugin sync`.",
         source_root.display(),
