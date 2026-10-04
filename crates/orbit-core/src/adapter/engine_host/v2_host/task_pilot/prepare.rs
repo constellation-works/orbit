@@ -1,13 +1,9 @@
 //! Task-pilot preparation: discover and partition the tasks a run assesses.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-
 use orbit_engine::DispatchError;
-use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{TaskComplexity, TaskEnvelopeV2, TaskStatus};
-use orbit_types::workflow::JobRunState;
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskListFilter;
@@ -23,7 +19,6 @@ const HARD_MAX_PARTITION_SIZE: usize = 5;
 const DEFAULT_MAX_TASKS: usize = 50;
 const HARD_MAX_TASKS: usize = 500;
 const NO_DIFF_TAGS: [&str; 2] = ["no-diff-needed", "no-diff-expected"];
-const TASK_PILOT_JOB_ID: &str = "task_pilot_pipeline";
 /// Cap on individually itemized `excluded` entries in routine discovery output.
 /// Automatic-mode exclusions still carry full counts by reason; this bounds
 /// only the per-task sample so evidence size stops scaling with terminal
@@ -64,7 +59,9 @@ pub(in super::super) fn prepare(
     )?;
     let explicit_task_ids = string_array(input, "task_ids", action)?;
     let explicit_mode = !explicit_task_ids.is_empty();
-    let active_preparations = active_task_pilot_preparations(runtime, action, &workspace_root)?;
+    let active_preparations =
+        crate::application::automation::preparation::active_task_pilot_preparations(runtime)
+            .map_err(|error| action_failed(action, error.to_string()))?;
     let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
         .map_err(|error| action_failed(action, error.to_string()))?;
 
@@ -77,6 +74,7 @@ pub(in super::super) fn prepare(
             .map(|task| (task.id.as_str(), task))
             .collect::<BTreeMap<_, _>>();
         let mut seen = BTreeSet::new();
+        let mut excluded = ExcludedEvidence::default();
         let selected = explicit_task_ids
             .iter()
             .map(|task_id| {
@@ -91,21 +89,20 @@ pub(in super::super) fn prepare(
                         action,
                         format!("task {task_id} does not exist in the selected workspace"),
                     )
-                }).and_then(|task| {
-                    if let Some(run_ids) = active_preparations.get(task_id) {
-                        Err(action_failed(
-                            action,
-                            format!(
-                                "task {task_id} is already prepared by active task-pilot run(s) {}; inspect or resume that durable run instead of starting duplicate pilot work",
-                                run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
-                            ),
-                        ))
-                    } else {
-                        Ok(task)
-                    }
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let selected = selected
+            .into_iter()
+            .filter(|task| {
+                if active_preparations.contains_key(&task.id) {
+                    excluded.record(&task.id, "already_preparing", &active_preparations);
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect::<Vec<_>>();
         let task_ids = selected
             .iter()
             .map(|task| task.id.clone())
@@ -123,12 +120,7 @@ pub(in super::super) fn prepare(
                 )
             })
             .collect::<Vec<_>>();
-        (
-            "explicit",
-            task_ids,
-            task_snapshots,
-            ExcludedEvidence::default(),
-        )
+        ("explicit", task_ids, task_snapshots, excluded)
     } else {
         // Envelopes exclude terminal and already scoped work before any task
         // hydration. Remaining candidates may need their last applied pilot
@@ -173,7 +165,7 @@ pub(in super::super) fn prepare(
                 reason
             };
             match reason {
-                Some(reason) => excluded.record(envelope, reason, &active_preparations),
+                Some(reason) => excluded.record(&envelope.id, reason, &active_preparations),
                 None => selected.push(envelope),
             }
         }
@@ -332,104 +324,26 @@ struct ExcludedEvidence {
 impl ExcludedEvidence {
     fn record(
         &mut self,
-        envelope: &TaskEnvelopeV2,
+        task_id: &str,
         reason: &'static str,
         active_preparations: &BTreeMap<String, BTreeSet<String>>,
     ) {
         self.total += 1;
         *self.by_reason.entry(reason).or_default() += 1;
-        if self.sample.len() >= MAX_EXCLUDED_SAMPLE {
+        // Explicit selections report every held task; only automatic discovery
+        // samples exclusions from potentially unbounded workspace history.
+        if reason != "already_preparing" && self.sample.len() >= MAX_EXCLUDED_SAMPLE {
             return;
         }
-        let mut entry = json!({ "task_id": envelope.id, "reason": reason });
-        if reason == "active_pilot_prepared"
-            && let Some(run_ids) = active_preparations.get(&envelope.id)
+        let mut entry = json!({ "task_id": task_id, "reason": reason });
+        if matches!(reason, "active_pilot_prepared" | "already_preparing")
+            && let Some(run_ids) = active_preparations.get(task_id)
             && let Value::Object(fields) = &mut entry
         {
             fields.insert("prepared_by_run_ids".to_string(), json!(run_ids));
         }
         self.sample.push(entry);
     }
-}
-
-fn active_task_pilot_preparations(
-    runtime: &OrbitRuntime,
-    action: &str,
-    workspace_root: &Path,
-) -> Result<BTreeMap<String, BTreeSet<String>>, DispatchError> {
-    let mut prepared_by_task = BTreeMap::<String, BTreeSet<String>>::new();
-    for state in [
-        JobRunState::Pending,
-        JobRunState::Running,
-        JobRunState::Retrying,
-    ] {
-        let runs = runtime
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some(TASK_PILOT_JOB_ID.to_string()),
-                state: Some(state),
-                terminal_only: false,
-                created_since: None,
-                limit: None,
-                ..Default::default()
-            })
-            .map_err(|error| {
-                action_failed(action, format!("list active task-pilot runs: {error}"))
-            })?;
-        for run in runs {
-            let run = runtime.show_job_run(&run.run_id).map_err(|error| {
-                action_failed(
-                    action,
-                    format!("reconcile active task-pilot run {}: {error}", run.run_id),
-                )
-            })?;
-            if run.state.is_terminal() {
-                continue;
-            }
-            let Some(state) = runtime.read_run_state(&run.run_id).map_err(|error| {
-                action_failed(
-                    action,
-                    format!("read active task-pilot run {} state: {error}", run.run_id),
-                )
-            })?
-            else {
-                continue;
-            };
-            let Some(task_ids) = state.step_outputs.iter().find_map(|(step_index, output)| {
-                (state.step_states.get(step_index) == Some(&JobRunState::Success))
-                    .then(|| prepared_task_ids(output, workspace_root))
-                    .flatten()
-            }) else {
-                continue;
-            };
-            for task_id in task_ids {
-                prepared_by_task
-                    .entry(task_id)
-                    .or_default()
-                    .insert(run.run_id.clone());
-            }
-        }
-    }
-    Ok(prepared_by_task)
-}
-
-fn prepared_task_ids(output: &Value, workspace_root: &Path) -> Option<Vec<String>> {
-    let object = output.as_object()?;
-    let prepared_workspace = object.get("workspace_path")?.as_str()?;
-    if Path::new(prepared_workspace) != workspace_root
-        || !object.get("partitions")?.is_array()
-        || !object.get("tasks")?.is_array()
-        || !matches!(object.get("mode")?.as_str(), Some("automatic" | "explicit"))
-    {
-        return None;
-    }
-    object
-        .get("task_ids")?
-        .as_array()?
-        .iter()
-        .map(|task_id| task_id.as_str().map(ToOwned::to_owned))
-        .collect()
 }
 
 fn automatic_exclusion_reason(
