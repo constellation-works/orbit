@@ -18,7 +18,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
@@ -574,6 +574,7 @@ impl Coordinated {
                 "test",
                 self.orbit_dir.parent().unwrap(),
                 &self.orbit_dir,
+                &BTreeMap::new(),
             )
             .expect("pull");
         match lookup {

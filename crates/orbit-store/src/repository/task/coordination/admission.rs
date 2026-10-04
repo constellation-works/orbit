@@ -185,6 +185,12 @@ impl TaskCommitBoundary {
     /// One internal owner admission. Identity and resolved ship authority are
     /// trusted arguments supplied after authorization, never payload identity.
     /// No local run, worktree, branch or public pull endpoint is created here.
+    ///
+    /// `local_deliveries` maps each task a live owner-local delivery run is
+    /// carrying to that run. Such a task is deferred even while it is still
+    /// `backlog`: a local drain's gate waiting for context locks has neither
+    /// moved the task nor reserved its footprint yet, so status and
+    /// reservations alone would hand it out a second time [ORB-13918].
     pub fn admit_task(
         &self,
         identity: &AdmissionIdentity,
@@ -192,9 +198,12 @@ impl TaskCommitBoundary {
         owner_version: &str,
         repo_root: &Path,
         orbit_dir: &Path,
+        local_deliveries: &BTreeMap<String, String>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
-        self.with_admission(|| self.admit_locked(identity, request, repo_root, orbit_dir))
+        self.with_admission(|| {
+            self.admit_locked(identity, request, repo_root, orbit_dir, local_deliveries)
+        })
     }
 
     fn admit_locked(
@@ -203,6 +212,7 @@ impl TaskCommitBoundary {
         request: &AdmissionRequest,
         repo_root: &Path,
         orbit_dir: &Path,
+        local_deliveries: &BTreeMap<String, String>,
     ) -> Result<AdmissionLookup, OrbitError> {
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
             let previous = decode::<StoredReceipt>(&row.payload_json)?;
@@ -276,6 +286,7 @@ impl TaskCommitBoundary {
                 .iter()
                 .filter(|task| {
                     task.status == TaskStatus::Backlog
+                        && !local_deliveries.contains_key(&task.id)
                         && task
                             .dependencies()
                             .iter()
@@ -296,6 +307,13 @@ impl TaskCommitBoundary {
                 receipt.invalid_candidates.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: "dependency is missing or not done".into(),
+                });
+                continue;
+            }
+            if let Some(run_id) = local_deliveries.get(&task.id) {
+                receipt.deferred_conflicts.push(AdmissionDiagnostic {
+                    task_id: task.id.clone(),
+                    reason: format!("live local delivery run {run_id} is carrying it"),
                 });
                 continue;
             }
