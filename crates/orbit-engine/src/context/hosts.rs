@@ -538,7 +538,27 @@ pub trait RuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability("record_claim_handoff"))
     }
 
+    /// Attach one captured required-validation log to a task the calling run
+    /// owns, as owner-side evidence of the candidate it validated
+    /// [ORB-13915]. The host refuses a task this run does not own.
+    fn attach_task_validation_log(
+        &self,
+        _task_id: &str,
+        _run_id: &str,
+        _path: &str,
+        _content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability("attach_task_validation_log"))
+    }
+
     // ── Config accessors (implementors provide these) ──────────────────
+
+    /// Commands every delivered candidate must pass
+    /// (`workflow.required_validation_commands`). Empty means the owner
+    /// delivery path validates nothing and claimed handoffs are refused.
+    fn required_validation_commands(&self) -> Vec<String> {
+        Vec::new()
+    }
 
     /// Returns provider-agnostic key-value configuration that is forwarded
     /// to the selected provider factory so it can decode any provider-specific

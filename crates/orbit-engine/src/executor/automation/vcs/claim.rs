@@ -1,4 +1,6 @@
-//! Executable steps of a claimed distributed leaf [ORB-12616].
+//! Executable steps of a claimed distributed leaf [ORB-12616], and the
+//! required-validation runner it shares with the owner's own delivery path
+//! [ORB-13915].
 //!
 //! A claimed leaf never merges and never completes its task. It implements,
 //! commits, publishes where its ship mode requires it, and then stops at a
@@ -17,6 +19,17 @@
 //! from [`RuntimeHost::claim_execution_context`], which the runtime derives
 //! from the process worker binding; a payload that disagrees with what Git and
 //! that binding say is a refusal, never an override.
+//!
+//! `workflow.required_validation_commands` is the list of commands a workspace
+//! requires every delivered candidate to pass. [`candidate_validate`] runs it
+//! on the owner's own delivery path, after the candidate is synchronized onto
+//! its base and before it is published or landed: an agent's report that it
+//! ran the commands is not evidence; this step is. Both steps run each command
+//! through [`run_required_command`], so they see the same shell, environment,
+//! timeout, output capture and failure text. The owner step fails like any
+//! other deterministic step, so a workflow can attach `step_failure_recovery`
+//! to repair the candidate (for example commit a formatting fix) before the
+//! one post-recovery attempt reruns every command.
 
 use std::path::Path;
 
@@ -33,23 +46,15 @@ use orbit_types::workflow::handoff::{
 use serde_json::{Value, json};
 
 use crate::context::{ClaimExecutionContext, RuntimeHost};
-use crate::executor::automation::input::input_string_field;
+use crate::executor::automation::input::{input_string_field, required_job_run_id};
 
 use super::git::{
     BaseSyncMode, git_command_success, git_output, git_output_raw, git_success,
     resolve_worktree_start_point,
 };
-use super::handoff::reports_failure;
+use super::handoff::{completed_task_ids_from_input, reports_failure};
 use super::pr::{DeliveryPin, PrMergeState, classify_pr_state};
 use super::review_gate::revision;
-
-/// Ceiling for one required validation command. Long enough for a real
-/// repository check suite, short enough that a wedged command settles the
-/// claim instead of holding it open indefinitely.
-pub(super) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
-/// Captured output kept per command. The log is owner-read evidence, not a
-/// build log archive, so a runaway command cannot balloon the task bundle.
-const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
 
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::PolicyDenied(message.into())
@@ -270,39 +275,17 @@ fn observe(
     Ok(candidate)
 }
 
-/// Git's candidate tree is the committed HEAD only when the checked-out
-/// branch still points there and no tracked or untracked input differs from
-/// it. Ignored build output is intentionally outside this check.
+/// The claimed candidate must still be the clean checkout it was observed as.
 fn require_clean_candidate(
     workspace_path: &Path,
     candidate: &HandoffCandidate,
 ) -> Result<(), OrbitError> {
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    if branch != candidate.source_branch {
-        return Err(refused(format!(
-            "the checked-out source branch moved from '{}' to '{branch}'; rerun validation",
-            candidate.source_branch
-        )));
-    }
-    let head = git_output(workspace_path, &["rev-parse", "HEAD"])?;
-    if head != candidate.candidate.commit {
-        return Err(refused(format!(
-            "the checked-out HEAD moved from validated candidate {} to {head}; rerun validation",
-            candidate.candidate.commit
-        )));
-    }
-    if !git_output_raw(
+    require_clean_checkout(
         workspace_path,
-        &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
-    )?
-    .is_empty()
-    {
-        return Err(refused(
-            "the claimed candidate has staged, tracked, or untracked changes; commit or remove \
-             them and rerun validation on the exact candidate",
-        ));
-    }
-    Ok(())
+        &candidate.source_branch,
+        &candidate.candidate.commit,
+        "the claimed candidate",
+    )
 }
 
 /// The run's sync mode, which every other claimed-leaf step already honors.
@@ -535,37 +518,12 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     let candidate = observe(&workspace_path, &context, input)?;
     require_clean_candidate(&workspace_path, &candidate)?;
 
-    // A repository check suite is not a Git invocation: it gets the same
-    // allow-listed child environment an agent subprocess would, so a command
-    // that needs a configured toolchain variable can still find it.
-    let environment = host.agent_subprocess_environment(&[]);
     let mut logs = Vec::new();
     let mut commands = Vec::new();
     for (index, command) in context.required_commands.iter().enumerate() {
-        let command = command.trim();
-        if command.is_empty() {
-            return Err(refused(
-                "owner required validation contains an empty command",
-            ));
-        }
-        let outcome = run_process(
-            &ExecRequest {
-                program: "/bin/sh".to_string(),
-                args: vec!["-c".to_string(), command.to_string()],
-                current_dir: Some(workspace_path.to_string_lossy().into_owned()),
-                timeout_ms: Some(VALIDATION_TIMEOUT_MS),
-                stdin_mode: StdinMode::Null,
-                environment_mode: EnvironmentMode::ClearAndSet(environment.clone()),
-                debug: false,
-            },
-            &NoSandbox,
-        )?;
-        let output = capture(&outcome.stdout, &outcome.stderr);
-        if outcome.timed_out || !outcome.success {
-            return Err(OrbitError::Execution(format!(
-                "required validation '{command}' did not pass on candidate {}: {output}",
-                candidate.candidate.commit
-            )));
+        let run = run_required_command(host, &workspace_path, command)?;
+        if !run.passed {
+            return Err(run.failure(&candidate.candidate.commit));
         }
         require_clean_candidate(&workspace_path, &candidate)?;
         let log = HandoffValidationLog {
@@ -577,15 +535,15 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
             run_id: context.run_id.clone(),
             candidate: candidate.clone(),
             tested_head: candidate.candidate.commit.clone(),
-            command: command.to_string(),
+            command: run.command.clone(),
             exit_code: 0,
-            output,
+            output: run.output,
         };
         let content = serde_json::to_vec(&log)
             .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
         let path = format!("validation/{}/{index}.json", context.claim_id);
         logs.push((path, content));
-        commands.push(command.to_string());
+        commands.push(run.command);
     }
 
     // A later required command must not invalidate logs from an earlier one.
@@ -809,10 +767,232 @@ fn bounded_summary(text: &str) -> String {
     )
 }
 
+/// Ceiling for one required validation command. Long enough for a real
+/// repository check suite, short enough that a wedged command settles the
+/// step instead of holding it open indefinitely.
+const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
+/// Captured output kept per command. The log is reader evidence, not a build
+/// log archive, so a runaway command cannot balloon the task bundle.
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
+
+/// One required command's captured result on the candidate.
+struct RequiredCommandRun {
+    command: String,
+    exit_code: i32,
+    timed_out: bool,
+    passed: bool,
+    output: String,
+}
+
+impl RequiredCommandRun {
+    /// The refusal both validation steps report for a command that did not
+    /// pass, carrying its captured output.
+    fn failure(&self, candidate: &str) -> OrbitError {
+        OrbitError::Execution(format!(
+            "required validation '{}' did not pass on candidate {candidate}: {}",
+            self.command, self.output
+        ))
+    }
+}
+
+/// Run one required command in `workspace_path`.
+///
+/// A repository check suite is not a Git invocation: it gets the same
+/// allow-listed child environment an agent subprocess would, so a command
+/// that needs a configured toolchain variable can still find it.
+fn run_required_command<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    command: &str,
+) -> Result<RequiredCommandRun, OrbitError> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Err(OrbitError::PolicyDenied(
+            "owner required validation contains an empty command".to_string(),
+        ));
+    }
+    let outcome = run_process(
+        &ExecRequest {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), command.to_string()],
+            current_dir: Some(workspace_path.to_string_lossy().into_owned()),
+            timeout_ms: Some(VALIDATION_TIMEOUT_MS),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::ClearAndSet(host.agent_subprocess_environment(&[])),
+            debug: false,
+        },
+        &NoSandbox,
+    )?;
+    Ok(RequiredCommandRun {
+        command: command.to_string(),
+        exit_code: outcome
+            .exit_code
+            .unwrap_or(if outcome.success { 0 } else { -1 }),
+        timed_out: outcome.timed_out,
+        passed: outcome.success && !outcome.timed_out,
+        output: capture(&outcome.stdout, &outcome.stderr),
+    })
+}
+
+/// The tree a validation result describes is the committed HEAD only while
+/// the named branch still points there and no tracked or untracked input
+/// differs from it. Ignored build output is intentionally outside this check.
+fn require_clean_checkout(
+    workspace_path: &Path,
+    branch: &str,
+    commit: &str,
+    subject: &str,
+) -> Result<(), OrbitError> {
+    let observed = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if observed != branch {
+        return Err(OrbitError::PolicyDenied(format!(
+            "the checked-out source branch moved from '{branch}' to '{observed}'; rerun validation"
+        )));
+    }
+    let head = git_output(workspace_path, &["rev-parse", "HEAD"])?;
+    if head != commit {
+        return Err(OrbitError::PolicyDenied(format!(
+            "the checked-out HEAD moved from validated candidate {commit} to {head}; rerun \
+             validation"
+        )));
+    }
+    if !git_output_raw(
+        workspace_path,
+        &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+    )?
+    .is_empty()
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "{subject} has staged, tracked, or untracked changes; commit or remove them and \
+             rerun validation on the exact candidate"
+        )));
+    }
+    Ok(())
+}
+
+/// Run the workspace's required commands on the owner's committed candidate
+/// and attach one captured log per command to every task the run delivers.
+///
+/// An empty requirement list is a no-op. Otherwise the candidate must be a
+/// clean checkout of a named branch that contains the `base_sha` this run
+/// synchronized onto, and must stay exactly that while the suite runs. A
+/// failing command fails the step with its output after its log — and those
+/// of the commands that passed before it — is attached.
+pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+) -> Result<Value, OrbitError> {
+    let commands = host.required_validation_commands();
+    if commands.is_empty() {
+        return Ok(json!({
+            "phase": "validate",
+            "decision": "skipped_no_required_commands",
+            "commands": [],
+            "validation": [],
+        }));
+    }
+    let run_id = required_job_run_id(input, "candidate_validate")?.to_string();
+    let task_ids = completed_task_ids_from_input(input).ok_or_else(|| {
+        OrbitError::InvalidInput(
+            "candidate_validate requires the run's completed_task_ids to attach its logs to"
+                .to_string(),
+        )
+    })?;
+    let workspace_path = input_string_field(input, "workspace_path")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| OrbitError::InvalidInput("workspace_path is required".to_string()))?;
+
+    let branch = git_output(&workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if branch.trim().is_empty() || branch == "HEAD" {
+        return Err(OrbitError::PolicyDenied(
+            "required validation runs on a named candidate branch; this checkout has a \
+             detached HEAD"
+                .to_string(),
+        ));
+    }
+    let candidate = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
+    let base_sha = input_string_field(input, "base_sha");
+    if let Some(base_sha) = base_sha.as_deref()
+        && !git_command_success(
+            &workspace_path,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                "--end-of-options",
+                base_sha,
+                &candidate,
+            ],
+        )?
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "candidate '{candidate}' does not descend from synchronized base '{base_sha}'"
+        )));
+    }
+    require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+
+    let mut logs = Vec::new();
+    let mut passed = Vec::new();
+    for (index, command) in commands.iter().enumerate() {
+        let run = run_required_command(host, &workspace_path, command)?;
+        let content = serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "run_id": run_id,
+            "task_ids": task_ids,
+            "branch": branch,
+            "tested_head": candidate,
+            "base_sha": base_sha,
+            "command": run.command,
+            "exit_code": run.exit_code,
+            "timed_out": run.timed_out,
+            "output": run.output,
+        }))
+        .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
+        logs.push((format!("validation/{run_id}/{index}.json"), content));
+        if !run.passed {
+            // The failing log is the evidence a recovery agent or reader
+            // repairs from, so it is attached before the step fails.
+            attach_logs(host, &task_ids, &run_id, &logs)?;
+            return Err(run.failure(&candidate));
+        }
+        require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+        passed.push(run.command);
+    }
+
+    let references = attach_logs(host, &task_ids, &run_id, &logs)?;
+    Ok(json!({
+        "phase": "validate",
+        "decision": "passed",
+        "commands": passed,
+        "branch": branch,
+        "tested_head": candidate,
+        "validation": serde_json::to_value(&references)
+            .map_err(|error| OrbitError::Execution(error.to_string()))?,
+    }))
+}
+
+fn attach_logs<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_ids: &[String],
+    run_id: &str,
+    logs: &[(String, Vec<u8>)],
+) -> Result<Vec<HandoffArtifactRef>, OrbitError> {
+    let mut references = Vec::new();
+    for (path, content) in logs {
+        for task_id in task_ids {
+            host.attach_task_validation_log(task_id, run_id, path, content.clone())?;
+        }
+        references.push(HandoffArtifactRef {
+            path: path.clone(),
+            sha256: sha256_hex(content),
+        });
+    }
+    Ok(references)
+}
+
 /// Interleave what the command said, bounded. Truncation is reported inside
 /// the captured text so a reader never mistakes a clipped log for the whole
 /// output.
-pub(super) fn capture(stdout: &str, stderr: &str) -> String {
+fn capture(stdout: &str, stderr: &str) -> String {
     let mut combined = String::new();
     if !stdout.trim().is_empty() {
         combined.push_str(stdout.trim_end());

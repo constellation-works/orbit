@@ -5,8 +5,9 @@
 # - If `implement_one` fails, earlier commits remain on the bundle branch.
 # - While the run is still alive, tasks stay `in-progress`: a mid-bundle step
 #   failure that the run recovers from does not block anything. Commit, branch
-#   preparation, base synchronization, push, PR creation/reuse, and promotion
-#   are independent durable steps, so recovery resumes at the failed phase.
+#   preparation, base synchronization, required validation, push, PR
+#   creation/reuse, and promotion are independent durable steps, so recovery
+#   resumes at the failed phase.
 # - When the run itself terminalizes before PR completion, its recoverable
 #   candidate is published and the task is blocked for reconciliation. Once a
 #   PR was published and the task promoted to review, a completion-stage merge
@@ -121,6 +122,24 @@ spec:
         remote_sha: "{{ steps.prepare_branch.output.remote_sha }}"
         commits_behind: "{{ steps.prepare_branch.output.commits_behind }}"
         sync_required: "{{ steps.prepare_branch.output.sync_required }}"
+
+    # ORB-13915: `workflow.required_validation_commands` run deterministically
+    # on the exact synchronized candidate, before review and publication. An
+    # agent's report that it ran them is not evidence; this step's attached
+    # logs are. A failing command fails here, so step recovery can repair the
+    # candidate (committing the fix) and the post-recovery attempt reruns the
+    # whole suite on the new head. It precedes the review gate so such a
+    # repair is reviewed and pinned like any other candidate change. An empty
+    # list is a no-op.
+    - id: validate
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
+      recovery_activity: step_failure_recovery
+      target: activity:candidate_validate
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.sync_base.output.base_sha }}"
 
     # ORB-11333: the before-PR review gate sits after the final planned base
     # synchronization and before push/PR creation. `review_gate_admit` and

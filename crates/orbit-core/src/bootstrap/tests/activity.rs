@@ -5,15 +5,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_engine::activity_job::load_activity_asset;
+use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_policy::PolicyEngine;
 use orbit_tools::{ToolContext, ToolRegistry};
 use orbit_types::policy::{FsProfile, PolicyDef};
 use orbit_types::workflow::ActivityV2Spec;
+use orbit_types::workflow::activity_job::JobV2StepBody;
 use serde_json::json;
 use tempfile::tempdir;
 
-use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
+use crate::runtime::assets::{DEFAULT_ACTIVITY_FILES, DEFAULT_JOB_FILES};
 
 /// [ORB-12103] Recovery once "repaired" a failed push by adding an `origin`
 /// that pointed at the primary checkout a linked worktree shares its
@@ -90,6 +91,51 @@ fn step_failure_recovery_cannot_write_persistent_git_configuration() {
                 .to_string()
                 .contains("persistent repository configuration"),
             "read-only git inspection must not hit the configuration boundary: {error}"
+        );
+    }
+}
+
+/// [ORB-13915] An owner delivery merged a candidate whose only validation
+/// evidence was the implementer's own report; it failed `cargo fmt --check`
+/// and turned the integration branch red. Each owner delivery job must run
+/// `candidate_validate` on the candidate after its last rewrite and before it
+/// leaves the worktree, under step recovery so a repairable failure is
+/// repaired and retried rather than terminal.
+#[test]
+fn owner_delivery_jobs_validate_the_candidate_before_it_leaves_the_worktree() {
+    for (job, last_rewrite, publication) in [
+        ("task_pr_pipeline", "sync_base", "push"),
+        ("task_local_pipeline", "commit", "merge"),
+    ] {
+        let (_, yaml) = DEFAULT_JOB_FILES
+            .iter()
+            .find(|(name, _)| *name == job)
+            .unwrap_or_else(|| panic!("{job} is seeded"));
+        let steps = load_job_asset(yaml)
+            .unwrap_or_else(|error| panic!("parse {job}: {error}"))
+            .spec
+            .steps;
+        let position = |id: &str| {
+            steps
+                .iter()
+                .position(|step| step.id == id)
+                .unwrap_or_else(|| panic!("{job} has a {id} step"))
+        };
+        let validate = &steps[position("validate")];
+        assert!(
+            matches!(&validate.body, JobV2StepBody::TargetRef(target)
+                if target.target == "activity:candidate_validate"),
+            "{job}: validate runs the deterministic candidate_validate activity"
+        );
+        assert_eq!(
+            validate.recovery_activity.as_deref(),
+            Some("step_failure_recovery"),
+            "{job}: a failed validation is repairable"
+        );
+        assert!(
+            position(last_rewrite) < position("validate")
+                && position("validate") < position(publication),
+            "{job}: validation runs after {last_rewrite} and before {publication}"
         );
     }
 }

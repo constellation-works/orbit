@@ -15,7 +15,7 @@ mod resume;
 pub mod review_gate;
 mod worktree;
 
-pub(super) use claim::{claim_handoff, claim_validate};
+pub(super) use claim::{candidate_validate, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
 pub use commit::validate_claim_new_paths;
 pub(super) use failure::pr_failure_handoff;

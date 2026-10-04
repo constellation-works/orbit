@@ -96,7 +96,7 @@ xhard_complexity_crews = []
 | `workflow.system_crew` | `system` | Crew for runtime-synthesized system work such as step-failure recovery. |
 | `workflow.low_complexity_crews`, `medium_…`, `hard_…`, `xhard_…` | `[]` | Crew pools a crew-less task draws from at creation, by complexity. Empty means "use `default_crew`". See [pools](#automatic-crew-pools-by-complexity). |
 | `workflow.auto_ship` | `false` | Opt in to unattended ship dispatch from the sweep/routine scheduler. While `false`, the ship sweep skips with `auto_ship_disabled`. |
-| `workflow.required_validation_commands` | `[]` | Commands a distributed-drain claim must pass on its exact candidate before this owner accepts its handoff. Empty refuses every claimed handoff. |
+| `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass. `task_pr_pipeline` and `task_local_pipeline` run them on the exact candidate before push or merge and attach each log to the task; a failure goes to step recovery. A distributed-drain claim must pass them before this owner accepts its handoff. Empty skips the owner-path check and refuses every claimed handoff. |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff. `review` waits for an operator's **Approve handoff**; `done` has the owner authorize it on acceptance and land it through `task_landing_pipeline`, rechecking this key before the merge. |
 
 ### `[workflow.resource_throttle]` — host pressure
