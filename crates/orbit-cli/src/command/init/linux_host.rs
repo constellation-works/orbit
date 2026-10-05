@@ -28,47 +28,67 @@ enum PackageManager {
     Apt,
     Dnf,
     Pacman,
+    Zypper,
+}
+
+impl PackageManager {
+    fn for_family(id: &str) -> Option<Self> {
+        match id {
+            "ubuntu" | "debian" => Some(Self::Apt),
+            "fedora" | "rhel" | "rocky" | "almalinux" | "centos" => Some(Self::Dnf),
+            "arch" => Some(Self::Pacman),
+            "opensuse" | "opensuse-leap" | "opensuse-tumbleweed" | "suse" | "sles" => {
+                Some(Self::Zypper)
+            }
+            _ => None,
+        }
+    }
+
+    fn command(self, host: &impl Host) -> &'static str {
+        match self {
+            Self::Apt => "/usr/bin/apt-get",
+            Self::Dnf if host.has_command("/usr/bin/dnf5") => "/usr/bin/dnf5",
+            Self::Dnf => "/usr/bin/dnf",
+            Self::Pacman => "/usr/bin/pacman",
+            Self::Zypper => "/usr/bin/zypper",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Distribution {
     id: String,
     version: String,
-    /// `None` for a distribution without an automatic package path; only the
+    /// `None` when no supported package manager is present; only the
     /// bundled Bubblewrap can prepare it.
     manager: Option<PackageManager>,
     ubuntu_profile: bool,
 }
 
 impl Distribution {
-    fn detect(release: &str) -> Self {
+    fn detect(release: &str, host: &impl Host) -> Self {
         let id = os_release_value(release, "ID").unwrap_or_default();
         let version = os_release_value(release, "VERSION_ID").unwrap_or_default();
-        let major = version.split('.').next().unwrap_or_default();
-        let (manager, ubuntu_profile) = match (id.as_str(), version.as_str(), major) {
-            ("ubuntu", "24.04", _) => (Some(PackageManager::Apt), true),
-            ("debian", "13", _) => (Some(PackageManager::Apt), false),
-            ("fedora", _, "43" | "44" | "45") => (Some(PackageManager::Dnf), false),
-            ("rhel" | "rocky" | "almalinux" | "centos", _, "10") => {
-                (Some(PackageManager::Dnf), false)
-            }
-            ("arch", _, _) => (Some(PackageManager::Pacman), false),
-            _ => (None, false),
-        };
+        let id_like = os_release_value(release, "ID_LIKE").unwrap_or_default();
+        // Prefer the host's family when several managers are installed, but
+        // availability decides the install path. Versions never gate support.
+        let manager = std::iter::once(id.as_str())
+            .chain(id_like.split_whitespace())
+            .filter_map(PackageManager::for_family)
+            .chain([
+                PackageManager::Apt,
+                PackageManager::Dnf,
+                PackageManager::Pacman,
+                PackageManager::Zypper,
+            ])
+            .find(|manager| host.has_command(manager.command(host)));
+        let ubuntu_profile = id == "ubuntu";
         Self {
             id,
             version,
             manager,
             ubuntu_profile,
         }
-    }
-
-    fn unsupported(&self, detail: &str) -> OrbitError {
-        OrbitError::Execution(format!(
-            "Linux sandbox preparation does not support distribution {} {} for this failure: {detail}; \
-             no package or security-policy changes were made. See docs/runbooks/linux-sandbox.md",
-            self.id, self.version
-        ))
     }
 }
 
@@ -104,28 +124,37 @@ struct RealHost {
 
 impl RealHost {
     fn new() -> Result<Self, OrbitError> {
-        let probe_user = if unsafe { libc::geteuid() } == 0 {
-            let uid = std::env::var("SUDO_UID")
-                .ok()
-                .and_then(|value| value.parse::<u32>().ok());
-            let gid = std::env::var("SUDO_GID")
-                .ok()
-                .and_then(|value| value.parse::<u32>().ok());
-            match (uid, gid) {
-                (Some(uid), Some(gid)) if uid != 0 => Some((uid, gid)),
-                _ => return Err(OrbitError::Execution(
-                    "root installation cannot identify the intended unprivileged Orbit user; run the installer from that account (sudo will authenticate only for package/profile changes), or set ORBIT_SKIP_HOST_PREREQUISITES=1 when an image build or administrator owns the host's sandbox packages"
-                        .to_string(),
-                )),
-            }
-        } else {
-            None
-        };
+        let probe_user = intended_probe_user(
+            unsafe { libc::geteuid() },
+            std::env::var("SUDO_UID").ok().as_deref(),
+            std::env::var("SUDO_GID").ok().as_deref(),
+        )?;
         Ok(Self {
             authorized: false,
             probe_user,
             staged: None,
         })
+    }
+}
+
+/// Refuse root preparation before any host operation unless sudo identifies
+/// the unprivileged account whose namespace capability must be checked.
+fn intended_probe_user(
+    euid: u32,
+    sudo_uid: Option<&str>,
+    sudo_gid: Option<&str>,
+) -> Result<Option<(u32, u32)>, OrbitError> {
+    if euid != 0 {
+        return Ok(None);
+    }
+    let uid = sudo_uid.and_then(|value| value.parse::<u32>().ok());
+    let gid = sudo_gid.and_then(|value| value.parse::<u32>().ok());
+    match (uid, gid) {
+        (Some(uid), Some(gid)) if uid != 0 => Ok(Some((uid, gid))),
+        _ => Err(OrbitError::Execution(
+            "root installation cannot identify the intended unprivileged Orbit user; run the installer from that account (sudo will authenticate only for package/profile changes), or set ORBIT_SKIP_HOST_PREREQUISITES=1 when an image build or administrator owns the host's sandbox packages"
+                .to_string(),
+        )),
     }
 }
 
@@ -283,45 +312,31 @@ fn run_privileged(
 
 fn install_packages(
     host: &mut impl Host,
-    distro: &Distribution,
     manager: PackageManager,
     commands: &mut Vec<String>,
 ) -> Result<(), OrbitError> {
+    let command = manager.command(host);
+    require_command(host, command)?;
     match manager {
         PackageManager::Apt => {
-            let apt = "/usr/bin/apt-get";
-            require_command(host, apt)?;
-            run_privileged(host, commands, apt, &["update"])?;
-            if distro.ubuntu_profile {
-                run_privileged(
-                    host,
-                    commands,
-                    apt,
-                    &["install", "--yes", "bubblewrap", "apparmor-profiles"],
-                )
-            } else {
-                run_privileged(host, commands, apt, &["install", "--yes", "bubblewrap"])
-            }
+            run_privileged(host, commands, command, &["update"])?;
+            run_privileged(host, commands, command, &["install", "--yes", "bubblewrap"])
         }
         PackageManager::Dnf => {
-            let dnf = if host.has_command("/usr/bin/dnf5") {
-                "/usr/bin/dnf5"
-            } else {
-                "/usr/bin/dnf"
-            };
-            require_command(host, dnf)?;
-            run_privileged(host, commands, dnf, &["-y", "install", "bubblewrap"])
+            run_privileged(host, commands, command, &["-y", "install", "bubblewrap"])
         }
-        PackageManager::Pacman => {
-            let pacman = "/usr/bin/pacman";
-            require_command(host, pacman)?;
-            run_privileged(
-                host,
-                commands,
-                pacman,
-                &["-S", "--needed", "--noconfirm", "bubblewrap"],
-            )
-        }
+        PackageManager::Pacman => run_privileged(
+            host,
+            commands,
+            command,
+            &["-S", "--needed", "--noconfirm", "bubblewrap"],
+        ),
+        PackageManager::Zypper => run_privileged(
+            host,
+            commands,
+            command,
+            &["--non-interactive", "install", "bubblewrap"],
+        ),
     }
 }
 
@@ -330,7 +345,7 @@ fn require_command(host: &impl Host, path: &str) -> Result<(), OrbitError> {
         Ok(())
     } else {
         Err(OrbitError::Execution(format!(
-            "Linux sandbox preparation requires {path} on this distribution"
+            "Linux sandbox preparation requires {path}, but that command was not found"
         )))
     }
 }
@@ -343,6 +358,24 @@ fn require_command(host: &impl Host, path: &str) -> Result<(), OrbitError> {
 fn namespace_creation_denied(detail: &str) -> bool {
     detail.contains("No permissions to create new namespace")
         || detail.contains("Creating new namespace failed")
+}
+
+fn probe_error(detail: &str) -> OrbitError {
+    if namespace_creation_denied(detail) {
+        OrbitError::Execution(format!(
+            "Linux sandbox namespace creation is denied by the kernel or enclosing container: {detail}; \
+             prepare a native host with unprivileged user namespaces enabled"
+        ))
+    } else {
+        OrbitError::Execution(format!(
+            "Linux sandbox is not ready for the current unprivileged user: {detail}; \
+             check package features, AppArmor, and kernel/container user-namespace policy"
+        ))
+    }
+}
+
+fn ubuntu_uid_map_denied(distro: &Distribution, detail: &str) -> bool {
+    distro.ubuntu_profile && detail.contains("setting up uid map: Permission denied")
 }
 
 fn profile_is_loaded(profiles: &str) -> bool {
@@ -471,24 +504,16 @@ fn prepare_inner(
     }
     // A package/profile install cannot grant the missing outer authority.
     if namespace_creation_denied(&initial.detail) {
-        return Err(OrbitError::Execution(format!(
-            "Linux sandbox namespace creation is denied by the kernel or enclosing container: {}; \
-             prepare a native host with unprivileged user namespaces enabled",
-            initial.detail
-        )));
+        return Err(probe_error(&initial.detail));
     }
-    let distro = Distribution::detect(&host.os_release()?);
+    let distro = Distribution::detect(&host.os_release()?, host);
     let needs_package = needs_capable_wrapper(&initial.detail);
-    let Some(manager) = distro.manager else {
-        if !needs_package {
-            return Err(distro.unsupported(&initial.detail));
-        }
-        install_bundled(host, non_interactive, commands)?;
-        return ready_after_bundled_install(host, &distro);
-    };
     if needs_package {
+        let Some(manager) = distro.manager else {
+            return prepare_bundled(host, &distro, non_interactive, commands, &initial.detail);
+        };
         host.authorize(non_interactive)?;
-        install_packages(host, &distro, manager, commands)?;
+        install_packages(host, manager, commands)?;
     }
     let mut current = host.probe();
     if current.available {
@@ -499,29 +524,29 @@ fn prepare_inner(
             wrapper_in_use(&current)
         ));
     }
-    if needs_capable_wrapper(&current.detail) {
-        install_bundled(host, non_interactive, commands)?;
-        return ready_after_bundled_install(host, &distro);
-    }
     if namespace_creation_denied(&current.detail) {
-        return Err(OrbitError::Execution(format!(
-            "Linux sandbox namespace creation remains denied by the kernel or enclosing container after package installation: {}",
-            current.detail
-        )));
+        return Err(probe_error(&current.detail));
+    }
+    if needs_capable_wrapper(&current.detail) {
+        return prepare_bundled(host, &distro, non_interactive, commands, &current.detail);
     }
     // The packaged AppArmor rule is a remedy for Ubuntu's specific UID-map
     // denial. Other probe failures may be kernel/container policy or a broken
     // binary; installing a profile for them would change host policy without
     // evidence that it can help.
-    if distro.ubuntu_profile
-        && current
-            .detail
-            .contains("setting up uid map: Permission denied")
-    {
+    if ubuntu_uid_map_denied(&distro, &current.detail) {
         let mut source = host.root_file(PROFILE_SOURCE)?;
-        if source.is_none() && !needs_package {
+        if source.is_none() {
             host.authorize(non_interactive)?;
-            install_packages(host, &distro, manager, commands)?;
+            let apt = "/usr/bin/apt-get";
+            require_command(host, apt)?;
+            run_privileged(host, commands, apt, &["update"])?;
+            run_privileged(
+                host,
+                commands,
+                apt,
+                &["install", "--yes", "apparmor-profiles"],
+            )?;
             source = host.root_file(PROFILE_SOURCE)?;
             current = host.probe();
             if current.available {
@@ -529,6 +554,11 @@ fn prepare_inner(
                     "ready for the current unprivileged user after package installation"
                         .to_string(),
                 );
+            }
+            // Installing the package may have changed the failure. Never
+            // load a profile unless the fresh probe still has its signature.
+            if !ubuntu_uid_map_denied(&distro, &current.detail) {
+                return Err(probe_error(&current.detail));
             }
         }
         let source = source.ok_or_else(|| OrbitError::Execution(format!(
@@ -579,16 +609,30 @@ fn prepare_inner(
     }
     let final_probe = host.probe();
     if !final_probe.available {
-        return Err(OrbitError::Execution(format!(
-            "Linux sandbox is not ready for the current unprivileged user on {} {}: {}; \
-             check package features, AppArmor, and kernel/container user-namespace policy",
-            distro.id, distro.version, final_probe.detail
-        )));
+        return Err(probe_error(&final_probe.detail));
     }
     Ok(format!(
         "ready for the current unprivileged user on {} {}; Bubblewrap capability probe passed",
         distro.id, distro.version
     ))
+}
+
+fn prepare_bundled(
+    host: &mut impl Host,
+    distro: &Distribution,
+    non_interactive: bool,
+    commands: &mut Vec<String>,
+    gap: &str,
+) -> Result<String, OrbitError> {
+    install_bundled(host, non_interactive, commands).map_err(|error| {
+        let manager_gap = if distro.manager.is_none() {
+            "no supported package manager was found (apt-get, dnf5/dnf, pacman or zypper); "
+        } else {
+            ""
+        };
+        OrbitError::Execution(format!("{gap}; {manager_gap}{error}"))
+    })?;
+    ready_after_bundled_install(host, distro)
 }
 
 fn ready_after_bundled_install(
