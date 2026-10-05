@@ -960,6 +960,10 @@ Catalog load enforces this: `validate_job` (`crates/orbit-engine/src/activity_jo
 
 That shared-guard exemption is relative to execution order, not mere set membership (ORB-11361). `when:` is evaluated before the step body, so a step does not sit under its own guard when its condition is rendered: a container `when:` that reads a nested body or worker output, and a step `when:` that reads that same step's output, are rejected even though the referenced step's recorded chain includes the reader id. `break_when` is the opposite — it is evaluated after the loop body — so a guarded loop may still read an earlier body step. A later sibling `when:` that shares an enclosing guard with the referenced step remains valid.
 
+Fan-in `collect` aliases carry the producing fan-out step's guard chain too. A condition reading `steps.<collect>.output` is rejected if the fan-out can be skipped independently of the reader; the diagnostic names the reader, the producing step, and the alias. A guarded worker does not make the collected output skippable: a fan-out that runs still records the collection, including an empty collection when there are no items. If several steps write the same output key, validation conservatively checks every producer's guards so a later writer cannot hide an unsafe reference.
+
+Step IDs must be unique throughout a job, including parallel branches, fan-out worker templates, and loop bodies. `validate_job` rejects a duplicate and names the ID before checking conditions. A fan-in `collect` alias may equal its own fan-out step's ID; it is another name for that output, not another step.
+
 The retry wrapper re-runs the whole step body up to `max_attempts`, with exponential or linear backoff. Some errors bypass retry:
 
 - tool denial
