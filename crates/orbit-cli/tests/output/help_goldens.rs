@@ -38,6 +38,8 @@ const CASES: &[(&[&str], &str)] = &[
     (&["plugin", "test"], "plugin/test.txt"),
     (&["mcp", "listen"], "mcp/listen.txt"),
     (&["tool", "run"], "tool/run.txt"),
+    (&["web", "serve"], "web/serve.txt"),
+    (&["web", "connect"], "web/connect.txt"),
 ];
 
 fn golden_path(relative: &str) -> PathBuf {

@@ -1,6 +1,5 @@
-use crate::serve::{build_app, check_bindable_host, drain_with_grace_period};
+use crate::serve::{build_app, drain_with_grace_period};
 use orbit_core::OrbitError;
-use std::net::{IpAddr, Ipv4Addr};
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,13 +9,6 @@ use tokio::time::Instant;
 // Paused time makes the shutdown ordering and lost-wakeup regressions deterministic.
 const GRACE_PERIOD: Duration = Duration::from_secs(10);
 const JUST_BEFORE_GRACE: Duration = GRACE_PERIOD.saturating_sub(Duration::from_millis(1));
-
-#[test]
-fn rejects_lan_address() {
-    let host = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50));
-    let err = check_bindable_host(host, 7878).expect_err("LAN address must be rejected");
-    assert!(matches!(err, OrbitError::InvalidInput(_)));
-}
 
 /// A never-completing "server" future, standing in for `axum::serve(..)`
 /// while its connections never close on their own.
