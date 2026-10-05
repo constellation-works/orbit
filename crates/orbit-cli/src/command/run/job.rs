@@ -150,6 +150,9 @@ fn single_line(value: &str) -> String {
 pub struct JobReplayArgs {
     /// Source job run ID to replay from step 0.
     pub run_id: String,
+    /// Workspace claim token held by this caller.
+    #[arg(long)]
+    pub claim_token: Option<String>,
     /// Output replay result as JSON.
     #[arg(long)]
     pub json: bool,
@@ -158,7 +161,8 @@ pub struct JobReplayArgs {
 impl Execute for JobReplayArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let source_run_id = self.run_id;
-        let result = runtime.replay_job_run(&source_run_id)?;
+        let result =
+            runtime.replay_job_run_with_claim(&source_run_id, self.claim_token.as_deref())?;
         let doc = json!({
             "run_id": result.run_id,
             "source_run_id": source_run_id,

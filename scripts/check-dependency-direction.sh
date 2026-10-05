@@ -58,7 +58,7 @@ allowed_internal_deps() {
       echo "orbit-common orbit-registry orbit-tools orbit-types"
       ;;
     orbit-web)
-      echo "orbit-common orbit-cmd orbit-core orbit-registry orbit-types"
+      echo "orbit-common orbit-cmd orbit-core orbit-registry orbit-types orbit-store"
       ;;
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state
@@ -73,6 +73,9 @@ allowed_internal_deps() {
 
 allowed_dev_only_deps() {
   case "$1" in
+    orbit-web)
+      echo "orbit-store"
+      ;;
     orbit-cli)
       echo "orbit-engine orbit-exec orbit-tools"
       ;;

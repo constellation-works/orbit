@@ -26,6 +26,12 @@ Child tests have a 60-second deadline, server readiness has a 10-second
 deadline, and HTTP requests (including SSE reads) have a 5-second timeout.
 Process guards kill and reap servers even after an assertion fails.
 
+Submission fixtures normally substitute a harmless worker stub. The replay
+fixture instead re-executes the exact ignored `replay_worker_child` entry point
+against its disposable registry and calls the real pipeline worker. A sleep
+longer than the HTTP timeout proves that replay returns before execution finishes;
+the fixture waits for terminal run state before dropping its temporary roots.
+
 The security table discovers literal paths from API router registrations and
 uses HTTP `Allow` responses to enumerate their mutating methods. It checks
 origin/Host protection on every mutation and operator admission on governed

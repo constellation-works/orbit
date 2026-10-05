@@ -27,3 +27,10 @@ mod workflows;
 fn server_child() {
     support::serve_fixture();
 }
+
+/// Executes the submitted job in a separate process against the fixture store.
+#[test]
+#[ignore = "replay worker child entry point"]
+fn replay_worker_child() {
+    support::execute_replay_worker();
+}

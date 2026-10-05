@@ -33,10 +33,10 @@ impl OrbitRuntime {
     }
     /// Persist a pipeline run and hand it to a detached worker.
     ///
-    /// `resume` distinguishes the two submission shapes: `None` is a fresh
-    /// attempt with a blank pipeline; `Some(plan)` links the new run to its
-    /// source, seeds it with that source's checkpoints, and reconciles the
-    /// lineage's task ownership before the worker can reach `worktree_setup`.
+    /// A fresh attempt starts with a blank pipeline. Replay links its source
+    /// while keeping that blank state; `resume: Some(plan)` instead seeds the
+    /// source's checkpoints and reconciles the lineage's task ownership before
+    /// the worker can reach `worktree_setup`.
     pub(crate) fn submit_persisted_pipeline_run(
         &self,
         submission: PipelineSubmission<'_>,
@@ -69,6 +69,7 @@ impl OrbitRuntime {
             definition,
             input,
             resume,
+            replay_source_run_id,
             actor,
             action_key,
             retry_key,
@@ -199,7 +200,7 @@ impl OrbitRuntime {
                         1,
                         submitted_at,
                         Some(input.clone()),
-                        None,
+                        replay_source_run_id.map(ToOwned::to_owned),
                     )?,
                 };
                 self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;

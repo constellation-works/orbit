@@ -466,3 +466,196 @@ fn run_state(fixture: &Fixture, run_id: &str) -> JobRunState {
         .map(|run| run.state)
         .unwrap_or_else(|| panic!("missing run {run_id}"))
 }
+
+#[test]
+fn replay_returns_a_durable_receipt_while_the_job_runs_in_a_detached_worker() {
+    isolated(
+        "workflows::replay_returns_a_durable_receipt_while_the_job_runs_in_a_detached_worker",
+        || {
+            use std::time::{Duration, Instant};
+            let fixture = Fixture::new();
+            // Longer than the HTTP client's five-second timeout: foreground
+            // execution cannot return a receipt for this job in time.
+            fixture.sleep_job("replay_fixture", 6);
+            let mut source =
+                fixture.seed_run("jrun-replay-source", "replay_fixture", JobRunState::Success);
+            source.input = Some(json!({
+                "marker": "preserved", "completion": "done",
+                "trusted_host_admission": {"authorized_by": "old operator"},
+                "review": {"contract_version": 0},
+            }));
+            fixture.save_run(&source);
+            let source_before = fixture.runtime.show_job_run(&source.run_id).unwrap();
+            let mut source_state =
+                PipelineState::new(source.run_id.clone(), source.job_id.clone(), json!({}));
+            source_state.step_states.insert(0, JobRunState::Success);
+            source_state.next_step_index = 1;
+            fixture
+                .runtime
+                .write_run_state(&source.run_id, &source_state)
+                .unwrap();
+            let server = fixture.replay_server();
+            let receipt = json_ok(server.send(
+                "POST",
+                &format!("/api/runs/{}/replay?workspace={WS}", source.run_id),
+                json!({}),
+            ));
+            assert_eq!(receipt["state"], "submitted");
+            let run_id = receipt["run_id"].as_str().unwrap();
+            assert_ne!(run_id, source.run_id);
+            let replay = fixture.runtime.show_job_run(run_id).unwrap();
+            assert!(
+                matches!(replay.state, JobRunState::Pending | JobRunState::Running),
+                "{replay:?}"
+            );
+            assert_eq!(
+                replay.retry_source_run_id.as_deref(),
+                Some(source.run_id.as_str())
+            );
+            assert_eq!(replay.attempt, 1);
+            assert_eq!(replay.input.as_ref().unwrap()["marker"], "preserved");
+            assert_eq!(replay.input.as_ref().unwrap()["completion"], "done");
+            assert!(
+                replay
+                    .input
+                    .as_ref()
+                    .unwrap()
+                    .get("trusted_host_admission")
+                    .is_none()
+            );
+            assert!(replay.input.as_ref().unwrap().get("review").is_none());
+
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                let run = fixture.runtime.show_job_run(run_id).unwrap();
+                if run.state == JobRunState::Running {
+                    assert_ne!(
+                        run.pid,
+                        Some(server.pid()),
+                        "execution belongs to the detached worker"
+                    );
+                    break;
+                }
+                assert!(
+                    !run.state.is_terminal() && Instant::now() < deadline,
+                    "worker never ran: {run:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            loop {
+                let run = fixture.runtime.show_job_run(run_id).unwrap();
+                if run.state.is_terminal() {
+                    assert_eq!(run.state, JobRunState::Success, "{run:?}");
+                    break;
+                }
+                assert!(Instant::now() < deadline, "worker did not finish: {run:?}");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let replay_state = fixture.runtime.read_run_state(run_id).unwrap().unwrap();
+            assert_eq!(
+                replay_state.trigger,
+                Some(orbit_types::workflow::JobRunTrigger::dashboard())
+            );
+            assert!(
+                replay_state.pipeline["nap"]["slept_seconds"]
+                    .as_f64()
+                    .unwrap()
+                    >= 6.0,
+                "replay must execute even a checkpointed source step"
+            );
+            assert_eq!(
+                fixture.runtime.show_job_run(&source.run_id).unwrap(),
+                source_before
+            );
+            assert_eq!(
+                fixture
+                    .runtime
+                    .read_run_state(&source.run_id)
+                    .unwrap()
+                    .unwrap(),
+                source_state
+            );
+        },
+    );
+}
+
+#[test]
+fn replay_requires_workspace_operator_and_the_workspace_claim_token() {
+    isolated(
+        "workflows::replay_requires_workspace_operator_and_the_workspace_claim_token",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("replay_fixture");
+            let mut source =
+                fixture.seed_run("jrun-replay-source", "replay_fixture", JobRunState::Success);
+            source.input = Some(json!({"completion": "done"}));
+            fixture.save_run(&source);
+            let operator = fixture.replay_server();
+            let agent = fixture.server(false);
+            let path = format!("/api/runs/{}/replay?workspace={WS}", source.run_id);
+            let before = run_ids(&fixture);
+            error_code(
+                operator.send(
+                    "POST",
+                    &format!("/api/runs/{}/replay", source.run_id),
+                    json!({}),
+                ),
+                400,
+                "workspace_required",
+            );
+            let denial = error_code(
+                agent.send("POST", &path, json!({})),
+                403,
+                "authorization_denied",
+            );
+            assert_eq!(denial["operation"], "job.run");
+            assert_parse_error(
+                operator.send("POST", &path, json!({"claim_token": 1})),
+                "invalid type",
+            );
+            let grant = fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .acquire_workspace_claim(&orbit_store::contracts::WorkspaceClaimAcquireParams {
+                    workspace_orbit_dir: fixture
+                        .runtime
+                        .paths()
+                        .orbit_dir
+                        .to_string_lossy()
+                        .into_owned(),
+                    workspace_id: Some(WS.into()),
+                    actor: "codex".into(),
+                    ttl_seconds: 60,
+                    machine_id: Some("fixture".into()),
+                    session_id: Some("holder".into()),
+                })
+                .unwrap();
+            for body in [json!({}), json!({"claim_token": "wrong"})] {
+                error_code(
+                    operator.send("POST", &path, body),
+                    409,
+                    "workspace_claim_held",
+                );
+            }
+            assert_eq!(
+                run_ids(&fixture),
+                before,
+                "refusals cannot persist replay runs"
+            );
+            let receipt =
+                json_ok(operator.send("POST", &path, json!({"claim_token": grant.claim_token})));
+            let run_id = receipt["run_id"].as_str().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let run = fixture.runtime.show_job_run(run_id).unwrap();
+                if run.state.is_terminal() {
+                    assert_eq!(run.state, JobRunState::Success);
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{run:?}");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        },
+    );
+}

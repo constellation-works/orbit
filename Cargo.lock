@@ -2114,6 +2114,7 @@ dependencies = [
  "orbit-common",
  "orbit-core",
  "orbit-registry",
+ "orbit-store",
  "orbit-types",
  "reqwest",
  "serde",

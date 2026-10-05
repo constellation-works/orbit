@@ -35,6 +35,8 @@ pub enum DrainEntryPoint {
     /// `orbit run ship`, `orbit.workflow.ship`, and the dashboard endpoint —
     /// the explicit shipment surfaces, with or without named tasks.
     ExplicitShip,
+    /// Whole-run replay from the CLI or dashboard.
+    Replay,
     /// The independent registry-driven `orbit run ship-sweep` CLI, which
     /// dispatches per workspace without a workspace runtime of its own.
     ShipSweep,
@@ -46,6 +48,7 @@ impl DrainEntryPoint {
         match self {
             DrainEntryPoint::OwnerDrain => "orbit.workflow.auto",
             DrainEntryPoint::ExplicitShip => "orbit.workflow.ship",
+            DrainEntryPoint::Replay => "orbit.job.replay",
             DrainEntryPoint::ShipSweep => "orbit.run.ship-sweep",
         }
     }

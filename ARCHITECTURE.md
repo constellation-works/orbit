@@ -33,13 +33,17 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-mcp` | internal | common, registry, tools, types |
 | `orbit-core` | internal | automation, common, config, engine, exec, policy, search, store, tools, types |
 | `orbit-cmd` | internal | common, config, core, engine, mcp, registry, store, tools, types |
-| `orbit-web` | internal | cmd, common, core, registry, types |
+| `orbit-web` | internal | cmd, common, core, registry, types (dev: store) |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
 
 Core exposes Exec's shared Bubblewrap capability probe to CLI onboarding and
 diagnostics. The CLI's dev-only edges to Engine, Exec and Tools support the real
 sandbox broker integration test, which pairs the host runtime with the built
 CLI and MCP transport.
+
+The dashboard's dev-only Store edge seeds workspace claims directly in isolated
+HTTP fixtures, so replay admission can be exercised without routing fixture
+setup through an agent tool surface.
 
 The `orbit-core` → `orbit-exec` edge supports the Linux host probe and sandbox
 regression tests. The dependency-direction guard
