@@ -24,5 +24,6 @@ mod host_os_routing;
 mod host_resources;
 mod local_route_before_pr;
 
+mod task_delivery;
 mod task_pilot;
 mod task_pr_closure;

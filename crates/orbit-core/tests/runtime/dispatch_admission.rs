@@ -18,7 +18,7 @@
 #![allow(missing_docs)]
 
 use std::collections::BTreeSet;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -49,6 +49,16 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(120);
 /// cleared and a disposable `HOME`; `true` inside that child. The parent
 /// waits up to [`CHILD_DEADLINE`] and reaps the child on any exit.
 pub(super) fn isolated(test: &str) -> bool {
+    isolated_with_ignored(test, false)
+}
+
+/// The same isolation for an opt-in measurement selected with `--ignored`.
+#[cfg(target_os = "linux")]
+pub(super) fn isolated_ignored(test: &str) -> bool {
+    isolated_with_ignored(test, true)
+}
+
+fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
     const MARKER: &str = "ORBIT_TEST_DISPATCH_ADMISSION_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
@@ -78,6 +88,9 @@ pub(super) fn isolated(test: &str) -> bool {
         .stdin(std::process::Stdio::null())
         .stdout(std::fs::File::create(&stdout_path).unwrap())
         .stderr(std::fs::File::create(&stderr_path).unwrap());
+    if ignored {
+        command.arg("--ignored");
+    }
     let mut child = ChildGuard(command.spawn().unwrap());
     let started = Instant::now();
     let status = loop {
@@ -101,7 +114,10 @@ pub(super) fn isolated(test: &str) -> bool {
     let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
     let status = status
         .unwrap_or_else(|| panic!("`{test}` ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    orbit_common::test_env::assert_child_test_passed(&qualified, status, stdout, stderr);
+    orbit_common::test_env::assert_child_test_passed(&qualified, status, &stdout, &stderr);
+    if ignored {
+        std::io::stdout().write_all(stdout.as_bytes()).unwrap();
+    }
     false
 }
 
