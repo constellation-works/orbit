@@ -18,6 +18,7 @@ use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 use super::*;
 
 mod import;
+mod publish;
 
 fn open_registry(global: &Path) -> TaskRegistryStore {
     TaskRegistryStore::open(&task_registry_path(global)).expect("open registry")
