@@ -1,4 +1,5 @@
-// Runs against shipped modules in both the Node DOM harness and Chromium.
+// Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
+// the required dashboard-operations-browser scenario in the QA sweep inventory.
 const { setWorkspace } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the

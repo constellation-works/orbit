@@ -3,10 +3,10 @@
 //
 // The scenario drives the *shipped* `distributed.js` against a fetch stub, so
 // what is asserted is what the dashboard paints and what it sends — not an
-// implementation shape. It runs unchanged in two places: on the keyboard DOM
-// adapter under `cargo test`, and inside a real Chromium via
-// `dashboard_distributed_browser.mjs`, which is why every interaction goes
-// through `press()` and every lookup through class selectors both support.
+// implementation shape. It runs in Chromium via
+// `dashboard_distributed_browser.mjs`, the required dashboard-distributed-browser
+// scenario in the QA sweep inventory. Interactions go through `press()` and
+// lookups use class selectors.
 //
 // What it has to prove, in the order an operator meets it:
 //
@@ -28,8 +28,8 @@
 //    expires, a settled claim reads released rather than expired, and a failed
 //    read says so with a way to retry.
 
-// Runs against the shipped modules in both the Node DOM harness and Chromium,
-// so the assertions are plain functions rather than a Node import.
+// Assertions run inside the browser page, so they use plain functions rather
+// than a Node import.
 const fail = (message) => { throw new Error(message); };
 const assert = {
   ok: (condition, message) => { if (!condition) fail(message || "expected a truthy value"); },
@@ -595,8 +595,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(buttons(block).length, 0, "an unauthorized session gets no action buttons");
   const denied = block.querySelector(".claim-action-denied");
   assert.ok(denied, "the reason is shown rather than the action silently vanishing");
-  // `title` is the reflected property in both harnesses; the stub DOM sets it
-  // as a property rather than an attribute.
+  // The tooltip and visible text both explain the denied action.
   assert.ok(String(denied.title).includes("operator"), String(denied.title));
   // ...and the reason is not tooltip-only: it is text an operator can read.
   assert.ok(denied.textContent.includes("requires operator"), denied.textContent);
