@@ -1009,6 +1009,7 @@ fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -
 /// [ORB-12865]. Also the read boundary the credential depends on — neither the
 /// live sessions nor the grant witnesses are readable from inside the
 /// sandbox (design §4.2, §4.3) [ORB-12798].
+// Linux: Landlock and real setsid descendants prove callback authority survives session escape.
 #[cfg(target_os = "linux")]
 #[test]
 #[allow(clippy::print_stderr)]
@@ -1487,6 +1488,7 @@ fn write_probe_plugin(home: &Path, namespace: &str) -> PathBuf {
 /// authorization ceiling in `mcp-callers.toml`, and the workspace's install
 /// pin. Each of those is denied here by the kernel, while the callback the
 /// grant exists for still runs [ORB-12777].
+// Linux: Landlock denies writes to Orbit authority roots while permitted callbacks still execute.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots() {

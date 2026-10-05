@@ -81,9 +81,9 @@ impl Fixture {
         run_orbit_with_closed_stdout(&self.work, &self.home, args, env)
     }
 
-    #[cfg(target_os = "linux")]
-    fn run_full_stdout(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
-        run_orbit_with_full_stdout(&self.work, &self.home, args, env)
+    #[cfg(unix)]
+    fn run_unwritable_stdout(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        run_orbit_with_unwritable_stdout(&self.work, &self.home, args, env)
     }
 }
 
@@ -142,22 +142,40 @@ fn run_orbit_with_closed_stdout(
     child.wait_with_output().expect("wait with output")
 }
 
-#[cfg(target_os = "linux")]
-fn run_orbit_with_full_stdout(
+#[cfg(unix)]
+fn run_orbit_with_unwritable_stdout(
     cwd: &Path,
     home: &Path,
     args: &[&str],
     env: &[(&str, &str)],
 ) -> Output {
-    use std::fs::OpenOptions;
+    use std::fs::File;
+    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
-    let dev_full = OpenOptions::new()
-        .write(true)
-        .open("/dev/full")
-        .expect("open /dev/full");
+    let unwritable = File::create(home.join("stdout-at-size-limit")).expect("stdout file");
     let mut command = orbit_command(cwd, home, args, env);
-    command.stdout(Stdio::from(dev_full)).stderr(Stdio::piped());
+    command
+        .stdout(Stdio::from(unwritable))
+        .stderr(Stdio::piped());
+    // SAFETY: only async-signal-safe libc calls run between fork and exec.
+    // The resource limit and signal disposition affect this isolated child.
+    // Ignoring SIGXFSZ lets the renderer report EFBIG instead of dying by signal.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::signal(libc::SIGXFSZ, libc::SIG_IGN) == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            let limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let child = command.spawn().expect("spawn orbit");
     child.wait_with_output().expect("wait with output")
 }
@@ -451,16 +469,16 @@ fn failing_command_with_closed_stdout_preserves_failure_exit_semantics() {
 
 /// Non-EPIPE stdout write or flush failures remain failures and report on stderr.
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure() {
     let fixture = Fixture::bare();
     let args = ["tool", "list", "--format", "ndjson"];
-    let output = fixture.run_full_stdout(&args, &[]);
+    let output = fixture.run_unwritable_stdout(&args, &[]);
     let error = json_failure(&args, &output, 1);
     assert_eq!(error["code"], "execution_failed", "{args:?}: {error}");
     let message = error["error"].as_str().unwrap_or_default();
     assert!(
-        message.contains("No space left on device") || message.contains("os error 28"),
+        message.contains("File too large") || message.contains("os error 27"),
         "error message should report the underlying write failure: {message}"
     );
 }

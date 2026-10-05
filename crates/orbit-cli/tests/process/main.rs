@@ -10,6 +10,9 @@
 
 #[path = "../support/fixture_crew.rs"]
 mod fixture_crew;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "../support/generation_fixture.rs"]
+mod generation_fixture;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
 

@@ -4712,6 +4712,7 @@ fn serve_mcp_from(cwd: &Path, home: &Path, initialize: Value) -> McpClient {
 /// read-only mount while their linked checkout remains writable. Exercise the
 /// production CLI and MCP entry points inside that mount namespace rather than
 /// approximating the boundary with permission bits.
+// Linux: Bubblewrap read-only mounts prove CLI/MCP reads preserve real EROFS state and WAL data.
 #[cfg(target_os = "linux")]
 #[test]
 fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
@@ -4959,7 +4960,7 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
 /// CLI tool dispatch may request a writable runtime before it knows the tool
 /// is a read. A denied, absent canonical partition must not refuse that read,
 /// nor may the fallback silently allow a subsequent mutation.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
     use std::os::unix::fs::PermissionsExt;
@@ -5036,6 +5037,7 @@ fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
 /// into the sandbox, so only the scrub — not the mount — can keep the child
 /// off it: `--bind / /` leaves everything outside `canonical_root` and
 /// `workspace_state_root` fully writable.
+// Linux: Bubblewrap mount isolation proves inherited worker authority cannot redirect a read-only child.
 #[cfg(target_os = "linux")]
 #[test]
 fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
@@ -5427,7 +5429,7 @@ fn readonly_orbit_command(
     command
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn snapshot_fixture_state(roots: &[&Path]) -> BTreeSet<(PathBuf, Option<Vec<u8>>)> {
     let mut state = BTreeSet::new();
 
@@ -5438,7 +5440,7 @@ fn snapshot_fixture_state(roots: &[&Path]) -> BTreeSet<(PathBuf, Option<Vec<u8>>
     state
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn snapshot_fixture_state_at(root: &Path, state: &mut BTreeSet<(PathBuf, Option<Vec<u8>>)>) {
     for entry in std::fs::read_dir(root).expect("read protected fixture state directory") {
         let entry = entry.expect("read protected fixture state entry");
@@ -5472,7 +5474,7 @@ fn assert_command_succeeded(label: &str, output: &std::process::Output) {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn assert_readonly_mutation_failed(
     label: &str,
     canonical_root: &Path,
@@ -5495,7 +5497,7 @@ fn assert_readonly_mutation_failed(
 
 /// The denial must name the task partition the write actually targeted, not
 /// a stale pre-layout-v3 lock path.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn assert_readonly_diagnostic(
     label: &str,
     canonical_root: &Path,

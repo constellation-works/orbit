@@ -6,7 +6,7 @@ name: macOS Platform
 # tests are compiled out entirely — which is how ORB-00366's `(?i)` SBPL
 # breakage (ORB-00372) reached agent-main undetected. This leg runs them on a
 # real macOS runner. Path-filtered so the (cost-weighted) macOS runner only
-# fires on PRs that touch sandbox-relevant code.
+# fires on PRs that touch sandbox or portable process-boundary code.
 
 on:
   push:
@@ -26,6 +26,10 @@ on:
       - "crates/orbit-policy/**"
       - "crates/orbit-common/src/fs/**"
       - "crates/orbit-cli/tests/workspace/generation_root.rs"
+      - "crates/orbit-cli/tests/process/**"
+      - "crates/orbit-cli/tests/mcp/**"
+      - "crates/orbit-cli/tests/output/error_output.rs"
+      - "crates/orbit-cli/tests/support/generation_fixture.rs"
       - "crates/orbit-types/src/policy/**"
       # [ORB-11067] Managed-child logging must use the registry root authorized
       # by the macOS sandbox rather than the provider-specific HOME.
@@ -36,6 +40,7 @@ on:
       - "crates/orbit-core/src/application/job/run/owner.rs"
       - "crates/orbit-core/src/application/job/run/tests/actions.rs"
       - "crates/orbit-core/src/application/job/run/tests/owner.rs"
+      - "crates/orbit-core/src/application/plugin/tests/build.rs"
       - "scripts/check-ci-macos.sh"
       - "scripts/qa-full-sweep-inventory.json"
       - "scripts/test-qa-full-sweep.py"
@@ -146,6 +151,17 @@ jobs:
         run: |
           cargo test --no-fail-fast -p orbit-cli --locked generation_root::
 
+      # Shared process behavior uses locked participant records, FIFO
+      # rendezvous and a file-size limit instead of /proc and /dev/full.
+      - name: Run portable process-boundary tests
+        run: |
+          cargo test --no-fail-fast -p orbit-cli --locked update:: --test process
+          cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
+          cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
+          cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp
+          cargo test --no-fail-fast -p orbit-cli --locked absent_unwritable_partition_keeps_cli_tool_reads_observational --test mcp
+          cargo test --no-fail-fast -p orbit-cli --locked non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure --test output
+
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
       - name: Run process identity and job-run owner tests
@@ -153,6 +169,9 @@ jobs:
           cargo test --no-fail-fast -p orbit-common --locked process::tests::identity -- --nocapture # check-ci-macos: darwin-only
           cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::owner -- --nocapture
           cargo test --no-fail-fast -p orbit-core --locked application::job::run::tests::actions -- --nocapture
+
+      - name: Run macOS plugin fetch refusal
+        run: cargo test --no-fail-fast -p orbit-core --locked a_fetch_phase_is_refused_on_macos -- --nocapture # check-ci-macos: darwin-only
 
       # [ORB-13017] A Python exec backend with a uv-locked dependency must
       # certify, install and follow a lockfile upgrade under the sandbox-exec

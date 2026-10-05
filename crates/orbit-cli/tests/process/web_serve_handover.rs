@@ -9,11 +9,13 @@
 #![allow(missing_docs)]
 // Integration fixtures use expect/unwrap for concise failure diagnostics.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::generation_fixture;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -43,20 +45,17 @@ fn a_replaced_dashboard_execs_the_installed_executable_and_keeps_serving() {
     assert!(http_get(port, "/healthz").contains("ok"));
 
     let candidate = temp.path().join("candidate");
-    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &candidate).expect("candidate copy");
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&candidate)
-        .expect("open candidate")
-        .write_all(b"\ndashboard-handover-candidate\n")
-        .expect("distinct executable");
+    generation_fixture::distinct_copy(Path::new(env!("CARGO_BIN_EXE_orbit")), &candidate);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
     let staged = install.join("orbit.staged");
     std::fs::copy(&candidate, &staged).expect("stage replacement");
     std::fs::rename(&staged, &installed).expect("replace installation");
 
     wait_until(
-        || running_digest(pid).as_deref() == Some(&new_digest),
+        || {
+            generation_fixture::running_digest(&home.join(".orbit"), pid).as_deref()
+                == Some(&new_digest)
+        },
         "handover",
     );
     assert!(
@@ -79,10 +78,6 @@ fn a_replaced_dashboard_execs_the_installed_executable_and_keeps_serving() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-}
-
-fn running_digest(pid: u32) -> Option<String> {
-    executable_generation(&PathBuf::from(format!("/proc/{pid}/exe"))).ok()
 }
 
 fn wait_until(mut ready: impl FnMut() -> bool, what: &str) {
@@ -114,8 +109,7 @@ fn spawn_dashboard(program: &Path, home: &Path, port: u16) -> Child {
         .stderr(Stdio::null());
     // The copy was just written. Retry only ExecutableFileBusy; every other
     // spawn error still fails on the first attempt.
-    orbit_common::test_process::retry_executable_busy(|| command.spawn())
-        .expect("spawn orbit web serve")
+    generation_fixture::launch(|| command.spawn()).expect("spawn orbit web serve")
 }
 
 fn http_get(port: u16, path: &str) -> String {

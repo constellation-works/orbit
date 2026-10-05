@@ -64,6 +64,7 @@ fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
     assert!(message.contains("staging file was removed"), "{message}");
 }
 
+// Linux: ETXTBSY forbids truncating a running image; rollback must replace it atomically.
 #[cfg(target_os = "linux")]
 #[test]
 fn rollback_replaces_a_running_executable_atomically() {
@@ -144,6 +145,7 @@ fn rollback_replaces_a_running_executable_atomically() {
     }
 }
 
+// Linux: child keeps the executable mapped while rollback exercises the kernel ETXTBSY boundary.
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "subprocess fixture for rollback_replaces_a_running_executable_atomically"]
