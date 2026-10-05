@@ -6,7 +6,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::validate_machine_id;
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, git_remote_identity,
-    redact_git_remote, validate_source_repository_fingerprint,
+    git_remotes_equivalent, redact_git_remote, validate_source_repository_fingerprint,
 };
 use std::path::PathBuf;
 
@@ -88,8 +88,9 @@ pub struct WorkspaceSourceRemoteRebind {
 /// Reconcile a detected origin during explicit initialization of an existing workspace.
 ///
 /// Only the declared local owner can establish a missing source identity.
-/// Equivalent origins preserve the registered URL (and publication fingerprint);
-/// a changed or non-portable registration requires the audited rebind command.
+/// Exact matches preserve even non-portable registered origins. Equivalent portable
+/// origins preserve the registered URL (and publication fingerprint); changing a
+/// registered source requires the audited rebind command.
 /// All validation precedes mutation. An absent origin leaves the identity intact.
 pub fn reconcile_workspace_source_remote(
     registry: &mut WorkspaceRegistry,
@@ -100,22 +101,22 @@ pub fn reconcile_workspace_source_remote(
     let Some(remote) = detected_remote else {
         return Ok(());
     };
-    validate_source_repository_fingerprint(remote)
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-    let repository_identity =
-        git_remote_identity(remote).map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
     let workspace = super::find_workspace_by_id(registry, workspace_id)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.to_string()))?;
     if let Some(registered_remote) = workspace.git_remote.as_deref() {
-        if validate_source_repository_fingerprint(registered_remote).is_ok()
-            && git_remote_identity(registered_remote).ok().as_deref() == Some(&repository_identity)
+        if registered_remote == remote
+            || (validate_source_repository_fingerprint(registered_remote).is_ok()
+                && validate_source_repository_fingerprint(remote).is_ok()
+                && git_remotes_equivalent(registered_remote, remote).unwrap_or(false))
         {
             return Ok(());
         }
         return Err(OrbitError::WorkspaceError(format!(
-            "workspace '{workspace_id}' already has a different or non-portable registered source remote; inspect it with `orbit --workspace {workspace_id} workspace source-remote show --json`, then use `orbit --workspace {workspace_id} workspace source-remote rebind --remote <URL>` on the declared owner machine"
+            "workspace '{workspace_id}' already has a different registered source remote; inspect it with `orbit --workspace {workspace_id} workspace source-remote show --json`, then use `orbit --workspace {workspace_id} workspace source-remote rebind --remote <URL>` on the declared owner machine"
         )));
     }
+    validate_source_repository_fingerprint(remote)
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
     validate_source_remote_owner(registry, workspace, local_machine_id)?;
     let workspace = registry
         .workspaces
