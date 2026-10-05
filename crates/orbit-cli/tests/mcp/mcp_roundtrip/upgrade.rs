@@ -22,6 +22,19 @@ fn spawn_copied_orbit(command: &mut Command) -> std::io::Result<Child> {
     }
 }
 
+/// [`spawn_copied_orbit`] for a command run to completion.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn output_copied_orbit(command: &mut Command) -> std::io::Result<std::process::Output> {
+    #[cfg(target_os = "linux")]
+    {
+        orbit_common::test_process::retry_executable_busy(|| command.output())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        command.output()
+    }
+}
+
 fn preflight(workspace: &McpWorkspace) -> std::process::Output {
     McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args(["update", "--preflight", "--json"])
@@ -457,11 +470,10 @@ struct Drain {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn candidate_ok(workspace: &McpWorkspace, program: &Path, args: &[&str]) -> std::process::Output {
-    let output = McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("orbit launch");
+    let mut command =
+        McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home);
+    command.args(args).stdin(Stdio::null());
+    let output = output_copied_orbit(&mut command).expect("orbit launch");
     assert!(
         output.status.success(),
         "{args:?} must be admitted beside the live processes: {output:?}"
@@ -1021,4 +1033,164 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
         running_digest(&workspace, pid).as_deref(),
         Some(new_digest.as_str())
     );
+}
+
+/// `orbit update --local-candidate` is the same guarded replacement as a
+/// release. While an initialized stdio MCP session (with a request whose
+/// reply is still unread), the dashboard and a drain coordinator run the
+/// installed build, it refuses before the executable, the generation record
+/// or any store changes, and every client carries on — the drain keeps its
+/// run and owner rather than being interrupted for resume. Once they exit it
+/// installs, and each client kind starts again from the installed candidate.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_local_candidate_refuses_live_clients_untouched_and_serves_them_once_they_reconnect() {
+    const COMMIT: &str = "0d0e0a0d0b0e0e0f0d0e0a0d0b0e0e0f0d0e0a0d";
+    let workspace = McpWorkspace::init();
+    let install = workspace.home.join("installation");
+    std::fs::create_dir_all(&install).expect("installation");
+    let installed = install.join("orbit");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
+    let old_digest = executable_generation(&installed).expect("old digest");
+    let candidate = distinct_candidate(&workspace);
+    let manifest = workspace.home.join("candidate.json");
+    let (candidate_arg, manifest_arg, installed_arg) = (
+        candidate.to_string_lossy().into_owned(),
+        manifest.to_string_lossy().into_owned(),
+        installed.to_string_lossy().into_owned(),
+    );
+    candidate_ok(
+        &workspace,
+        &candidate,
+        &[
+            "update",
+            "--local-candidate",
+            &candidate_arg,
+            "--source-commit",
+            COMMIT,
+            "--write-candidate-manifest",
+            &manifest_arg,
+        ],
+    );
+    let local_update = || {
+        McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
+            .env("ORBIT_INSTALL_DIR", &install)
+            .args([
+                "update",
+                "--local-candidate",
+                &candidate_arg,
+                "--candidate-manifest",
+                &manifest_arg,
+                "--source-commit",
+                COMMIT,
+                "--install-target",
+                &installed_arg,
+                "--json",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .expect("local candidate update")
+    };
+    let serve = |program: &Path| {
+        let mut command =
+            McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home);
+        command
+            .args([
+                "mcp",
+                "serve",
+                "--operator",
+                "--workspace",
+                "ws_mcp-roundtrip",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut client = McpClient::new(spawn_copied_orbit(&mut command).expect("mcp serve"));
+        workspace.initialize(&mut client);
+        client
+    };
+
+    let mut client = serve(&installed);
+    client.call_tool_ok("orbit_workspace_list", json!({}));
+    let stores = store_bytes(&workspace);
+    let record = generation_record(&workspace);
+    assert_refused(&local_update());
+    assert_eq!(
+        store_bytes(&workspace),
+        stores,
+        "refusal touched store/layout bytes"
+    );
+    // The session's own writes race a byte snapshot once a request is in
+    // flight, so from here the generation record and executable stand witness.
+    client.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 9001,
+        "method": "tools/call",
+        "params": {"name": "orbit_task_list", "arguments": {}},
+    }));
+
+    let (mut dashboard, port) = spawn_dashboard(&workspace, &installed);
+    let drain = start_drain(&workspace, &installed);
+    assert_refused(&local_update());
+    assert_eq!(generation_record(&workspace), record);
+    assert_eq!(
+        executable_generation(&installed).expect("installed"),
+        old_digest
+    );
+    assert!(!install.join("orbit.previous").exists());
+
+    // Every client is still served by the build it started on.
+    let reply = loop {
+        let line = client
+            .lines
+            .recv_timeout(RESPONSE_TIMEOUT)
+            .expect("the unread reply");
+        let message: Value = serde_json::from_str(line.trim()).expect("JSON-RPC");
+        if message["id"] == 9001 {
+            break message;
+        }
+    };
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    let task = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"Written beside a refused local candidate", "description":"Same live authority", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(task["title"], "Written beside a refused local candidate");
+    assert!(http_get(port, "/healthz").contains("ok"));
+    let run = run_show(&workspace, &drain.run_id);
+    assert_eq!(run["run"]["state"], "running", "{run}");
+    assert_eq!(run["run"]["pid"].as_u64(), Some(u64::from(drain.pid)));
+    assert_eq!(
+        running_digest(&workspace, drain.pid).as_deref(),
+        Some(old_digest.as_str())
+    );
+
+    drop(client);
+    stop(&mut dashboard);
+    cancel_drain(&workspace, &drain);
+    let output = local_update();
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
+    assert_eq!(report["outcome"], "updated", "{report}");
+    assert_eq!(report["local_candidate"]["source_commit"]["value"], COMMIT);
+    assert_eq!(
+        std::fs::read(&installed).expect("installed"),
+        std::fs::read(&candidate).expect("candidate")
+    );
+
+    // Each client kind reconnects to the installed candidate.
+    let mut client = serve(&installed);
+    let tasks = client.call_tool_ok("orbit_task_list", json!({}));
+    assert_eq!(tasks["total"], 1, "{tasks}");
+    let (mut dashboard, port) = spawn_dashboard(&workspace, &installed);
+    assert!(http_get(port, "/healthz").contains("ok"));
+    candidate_ok(&workspace, &installed, &["clock", "tick"]);
+    let drain = start_drain(&workspace, &installed);
+    assert_eq!(
+        running_digest(&workspace, drain.pid),
+        Some(executable_generation(&candidate).expect("candidate digest"))
+    );
+    drop(client);
+    stop(&mut dashboard);
+    cancel_drain(&workspace, &drain);
 }

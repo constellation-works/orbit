@@ -487,8 +487,8 @@ fn a_stale_writer_and_an_older_binary_never_displace_a_newer_install() {
     let _ = child;
 }
 
-struct ReapedChild {
-    child: Option<Child>,
+pub(super) struct ReapedChild {
+    pub(super) child: Option<Child>,
 }
 
 impl Drop for ReapedChild {
@@ -503,7 +503,7 @@ impl Drop for ReapedChild {
 /// Rendezvous with the mirror reader without a blocking opener thread or
 /// Linux's non-portable read/write FIFO open. ENXIO means no reader yet.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn open_fifo_writer(path: &Path, child: &mut Child, deadline: Instant) -> File {
+pub(super) fn open_fifo_writer(path: &Path, child: &mut Child, deadline: Instant) -> File {
     loop {
         assert_waiting(child, deadline, "open the mirror");
         match OpenOptions::new()
@@ -524,22 +524,22 @@ fn open_fifo_writer(path: &Path, child: &mut Child, deadline: Instant) -> File {
 fn assert_waiting(child: &mut Child, deadline: Instant, what: &str) {
     if Instant::now() >= deadline {
         let _ = child.kill();
-        panic!("timed out waiting for the stale update to {what}");
+        panic!("timed out waiting for the update to {what}");
     }
-    if let Some(status) = child.try_wait().expect("poll stale update") {
-        panic!("stale update exited before it could {what}: {status}");
+    if let Some(status) = child.try_wait().expect("poll update") {
+        panic!("update exited before it could {what}: {status}");
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::ExitStatus {
+pub(super) fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::ExitStatus {
     loop {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let status = child.wait().expect("reap timed-out update");
-            panic!("stale update did not finish before the deadline: {status}");
+            panic!("update did not finish before the deadline: {status}");
         }
-        if let Some(status) = child.try_wait().expect("poll stale update") {
+        if let Some(status) = child.try_wait().expect("poll update") {
             return status;
         }
         std::thread::sleep(WAIT_SLICE);
@@ -547,7 +547,7 @@ fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::ExitStatus {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn mkfifo(path: &Path) {
+pub(super) fn mkfifo(path: &Path) {
     let name = CString::new(path.as_os_str().as_bytes()).expect("fifo path");
     let rc = unsafe { libc::mkfifo(name.as_ptr(), 0o644) };
     assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
@@ -677,7 +677,7 @@ fn tar_gz_named(members: &[(&str, &[u8])]) -> Vec<u8> {
     encoder.finish().expect("finish gzip")
 }
 
-fn staging_remains(directory: &Path) -> bool {
+pub(super) fn staging_remains(directory: &Path) -> bool {
     fs::read_dir(directory)
         .expect("read install dir")
         .filter_map(Result::ok)
@@ -688,7 +688,7 @@ fn staging_remains(directory: &Path) -> bool {
         })
 }
 
-fn backup_path(executable: &Path) -> PathBuf {
+pub(super) fn backup_path(executable: &Path) -> PathBuf {
     let mut name = executable.as_os_str().to_os_string();
     name.push(".previous");
     PathBuf::from(name)

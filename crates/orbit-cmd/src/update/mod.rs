@@ -20,6 +20,10 @@
 //! rule inverts: `.orbit/` may already be partly migrated, so recovery is
 //! forward — re-running `orbit update` re-enters at the convergence steps,
 //! which are the same idempotent operations the operator would run by hand.
+//!
+//! `--local-candidate` runs the same pipeline for an operator-built executable
+//! identified by its digest and an operator-attested source commit instead of
+//! a signed release version; see [`local_candidate`].
 
 mod admission;
 pub mod bundled_bwrap;
@@ -27,6 +31,7 @@ pub mod channel;
 pub mod converge;
 mod environment;
 mod flow;
+pub mod local_candidate;
 pub mod lock;
 mod report;
 pub mod source;
@@ -37,6 +42,10 @@ pub mod version;
 pub use admission::{acquire_admissions, admission_authorities};
 pub use environment::{UpdateEnvironment, UpdateWorkspace};
 pub use flow::{UpdateRequest, run_update};
+pub use local_candidate::{
+    CandidateManifestRequest, LocalCandidateRequest, run_local_candidate_update,
+    write_candidate_manifest,
+};
 pub use report::{EXIT_NEEDS_RECOVERY, EXIT_UPDATE_AVAILABLE, UpdateOutcome, UpdateReport};
 
 #[cfg(test)]
