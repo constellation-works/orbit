@@ -711,6 +711,13 @@ fn decide_action(
         .last_success
         .as_ref()
         .is_some_and(|last| last.commit == tip.commit);
+    // The branch is still the parent this push was based on, so the push never
+    // landed. A rebind clears last_success; this record is then the only local
+    // evidence, and it proves the opposite of an authority conflict.
+    let pending_never_landed = !pending_landed
+        && pending.as_ref().is_some_and(|pending| {
+            pending.previous_publication.as_deref() == Some(tip.commit.as_str())
+        });
     if pending_landed && !recorded {
         // Keep the pending record: the caller records this outcome only after
         // we return, so a failed save must be able to reconcile again. It is
@@ -745,15 +752,20 @@ fn decide_action(
                 request.publication_branch, tip.commit, last.commit, last.generation
             )));
         }
-        // No local record: the matching envelope is the only authority evidence,
-        // so an unmatched pending push means someone else moved the branch.
-        None if pending.is_some() => {
+        // No local record. A pending push that landed reconciles above. One
+        // whose parent is still the tip never landed: drop it and publish from
+        // that tip. Any other tip is neither this owner's commit nor that parent.
+        None if pending.is_some() && !pending_never_landed => {
             return Err(publish_error(format!(
                 "publication branch '{}' is at {}, which is not the commit this owner pushed; resolve the publication authority before publishing again",
                 request.publication_branch, tip.commit
             )));
         }
-        None => {}
+        None => {
+            if pending_never_landed {
+                cache.remove_pending()?;
+            }
+        }
     }
 
     let generation = tip.envelope.generation.checked_add(1).ok_or_else(|| {
@@ -836,6 +848,8 @@ fn assert_outside_source_checkout(
 /// by the owner. It lets the next run reconcile by commit id instead of
 /// publishing a duplicate or divergent generation, and it survives
 /// reconciliation until a request's last success names the landed commit.
+/// A record whose `previous_publication` is still the branch tip never landed
+/// and is discarded so a later publish can continue from that tip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PendingPublication {
