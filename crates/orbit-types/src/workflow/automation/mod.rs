@@ -385,6 +385,12 @@ pub struct AutomationDiagnostic {
     /// delivery consumers and when nothing is due.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub batch: Vec<members::BatchMember>,
+    /// Why an edited delivery definition was not adopted automatically, in
+    /// the `recover` refusal vocabulary. Present only with
+    /// `definition_changed`, and only where the evaluator would otherwise
+    /// adopt the edit itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refusals: Vec<String>,
 }
 
 /// Core-verified writer authority for exact artifact bytes; this is not coverage.

@@ -264,6 +264,7 @@ pub fn inspect_auto_task(
             ownership,
             enabled: runtime.auto_task_enabled(definition),
             admission_deferred,
+            adopts_settings: true,
         },
         now,
     )
@@ -300,6 +301,7 @@ pub fn inspect_routine(
             ownership,
             enabled: definition.enabled,
             admission_deferred: false,
+            adopts_settings: false,
         },
         now,
     )
@@ -315,6 +317,8 @@ struct Inspection<'a> {
     ownership: DeliveryOwnership,
     enabled: bool,
     admission_deferred: bool,
+    /// The evaluator adopts a compatible edit of this kind on its own.
+    adopts_settings: bool,
 }
 
 fn inspect(
@@ -330,6 +334,7 @@ fn inspect(
         ownership,
         enabled,
         admission_deferred,
+        adopts_settings,
     } = request;
 
     let consumer = super::consumer_key(runtime, kind, name)?;
@@ -340,10 +345,22 @@ fn inspect(
         .as_ref()
         .is_some_and(|state| state.epoch != epoch || state.branch != trigger.branch);
 
+    // An owned, enabled auto-task adopts a compatible edit at its next tick,
+    // so only an edit the evaluator would refuse holds the consumer, and the
+    // diagnostic names the refusals `recover` would report.
+    let adoptable = adopts_settings && enabled && ownership.owned_here;
+    let refusals = match &state {
+        Some(state) if definition_changed && adoptable => {
+            adoption_refusals(runtime, store.as_ref(), state, epoch, trigger)?
+        }
+        _ => Vec::new(),
+    };
+    let definition_held = definition_changed && (!adoptable || !refusals.is_empty());
+
     // Mirrors the evaluator's precedence without advancing any state. An
     // edited definition comes first: it has to be restored before any owner
     // question matters.
-    let reason = if definition_changed {
+    let reason = if definition_held {
         delivery::DEFINITION_CHANGED.into()
     } else if !enabled {
         "disabled".into()
@@ -366,6 +383,7 @@ fn inspect(
         state,
         ownership: Some(ownership),
         batch: Vec::new(),
+        refusals,
         waivers: store.automation_waivers(&consumer, 20)?,
         receipts: store
             .automation_receipts(&consumer, 20)?
@@ -373,6 +391,30 @@ fn inspect(
             .map(Into::into)
             .collect(),
     })
+}
+
+/// The evaluator's adoption refusals for `state`, against the repository the
+/// configured branch resolves to now. A branch that does not resolve is
+/// reported on its own; judged against the recorded repository, the edit
+/// reads as the tick that resolves the branch again would find it.
+fn adoption_refusals(
+    runtime: &OrbitRuntime,
+    store: &dyn orbit_store::contracts::AutomationStoreBackend,
+    state: &AutomationState,
+    epoch: &str,
+    trigger: &DeliveryTrigger,
+) -> Result<Vec<String>, OrbitError> {
+    let repository = if state.branch == trigger.branch {
+        Source::new(&runtime.paths().repo_root)
+            .head(&trigger.branch)
+            .map(|(repository, _)| repository)
+            .unwrap_or_else(|_| state.repository.clone())
+    } else {
+        state.repository.clone()
+    };
+
+    delivery::adopt::refusals(store, state, epoch, trigger, &repository, None)
+        .map_err(orbit_automation::automation_error_to_orbit)
 }
 
 /// Why a baselined consumer owned here is or is not due, read from persisted

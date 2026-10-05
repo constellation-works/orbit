@@ -384,4 +384,7 @@ pub mod refusal {
     pub const HISTORY_HEAD_CHANGED: &str = "history_head_changed";
     /// A reset was requested while an action is executing, without `--force`.
     pub const ACTION_EXECUTING: &str = "action_executing";
+    /// The consumer is stalled for an operator, so the evaluator adopts no
+    /// edited definition over it on its own.
+    pub const CONSUMER_STALLED: &str = "consumer_stalled";
 }

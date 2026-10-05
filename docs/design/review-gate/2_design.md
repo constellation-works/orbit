@@ -58,7 +58,8 @@ present, whether this host owns it, whether it is wedged on a closed action
 or stalled, whether its branch and review crew resolve, its scheduling state,
 and when its last batch was minted or covered. Anything short of healthy — the
 definition missing, owned by another machine or by none, wedged, stalled, held
-for an operator (`definition_changed`, `needs_attention`,
+for an operator (`definition_changed` for an edit the evaluator would not adopt
+automatically, which the row names; `needs_attention`;
 `retry_deadline_expired`), on a branch that does not resolve, or naming a crew
 that does not — is an `error`, so `orbit doctor` exits nonzero. So is
 before-PR review switched on without a resolvable `review_crew`.

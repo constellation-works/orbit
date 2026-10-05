@@ -364,8 +364,16 @@ pub fn after_landing_health(
         health.stall = Some(stall.reason.clone());
     }
     if BLOCKING_STATES.contains(&diagnostic.reason.as_str()) {
+        let refused = if diagnostic.refusals.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (not adopted automatically: {})",
+                diagnostic.refusals.join(", ")
+            )
+        };
         health.problems.push(format!(
-            "consumer state is `{}`; inspect it with `orbit auto-task recover {AFTER_LANDING_CONSUMER}`",
+            "consumer state is `{}`{refused}; inspect it with `orbit auto-task recover {AFTER_LANDING_CONSUMER}`",
             diagnostic.reason
         ));
     }

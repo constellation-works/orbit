@@ -241,8 +241,11 @@ Read-only inspection reports persisted scheduling reasons including
 `awaiting_baseline`, `disabled`, `owned_elsewhere`, `ownership_unresolved`,
 `definition_changed`, `open_instance`, `threshold_reached`, `max_wait_reached`,
 `batch_pending`, `retry_backoff`, `retry_deadline_expired`, `needs_attention`,
-and `evidence_unavailable`. It does not fetch source or provider evidence: source
-history failures are reported by an evaluation run, not fabricated by inspection.
+and `evidence_unavailable`. A delivery auto-task whose edit the next tick would
+adopt automatically reports the reason it will have once adopted; one held at
+`definition_changed` also carries `refusals`, naming why it was not adopted. It
+does not fetch source or provider evidence: source history failures are reported
+by an evaluation run, not fabricated by inspection.
 The one source fact inspection does read is whether the configured branch
 resolves: a consumer that has no baseline yet and whose branch git cannot
 resolve reports that failure in place of `awaiting_baseline`, because no tick
@@ -297,12 +300,31 @@ code as neighboring context.
 
 ### Recovering a consumer stalled by a settings change [ORB-12295]
 
-Retuning a threshold, wait, batch size, retry count, template or crew moves the
-definition's epoch, so the consumer reports `definition_changed` and admits
-nothing while every obligation it already holds stays retained. `orbit auto-task
-recover` is the supported way forward for a delivery auto-task. It never waives
-a batch, advances the covered cursor, reopens a terminal task or edits a state
-file.
+Retuning a threshold, wait, batch size, retry count, template, crew or dedupe
+moves the definition's epoch. For an enabled delivery auto-task owned here, the
+next evaluation adopts such a settings-only edit itself [ORB-14033]: it runs the
+same refusals and the same audited recovery as `--adopt-settings`, under a
+recovery record attributed to `system:automation` whose reason names the
+changed settings, and keeps every covered, pending, unresolved, waived and
+excluded landing and every receipt. It logs one warning (`<name>: settings
+changed (threshold) — adopted automatically, coverage debt retained`), files one
+friction deduplicated on the consumer and its old and new identity, and
+continues the same pass, so the consumer keeps admitting and `orbit doctor`
+stays healthy. Later ticks see the adopted identity and repeat nothing.
+
+The evaluator never adopts an edit `--adopt-settings` would refuse — a changed
+branch, repository, owner machine or coverage class, or an action still claimed
+or admitted — nor one it cannot judge alone: legacy state with no recorded
+trigger (`coverage_unverifiable`), a state-member consumer, or a consumer
+already stalled for an operator (`consumer_stalled`). Those still report
+`definition_changed` and admit nothing while every obligation stays retained.
+`orbit auto-task show --json` carries the refusals, and the `review` doctor row
+names them (`not adopted automatically: branch_changed`). Delivery routines are
+never adopted automatically.
+
+For those cases, `orbit auto-task recover` is the supported way forward for a
+delivery auto-task. It never waives a batch, advances the covered cursor,
+reopens a terminal task or edits a state file.
 
 Preview first; with neither operation flag the command only reads:
 
@@ -723,7 +745,9 @@ enabled one with nothing to prepare reports `fresh`. Timing and eligibility
 edits retain active budgets — an eligibility edit re-fingerprints pending
 members and withholds the ones it no longer admits. Changes to trigger kind,
 owner, target or branch return `definition_changed`; restore the original
-definition to settle it rather than deleting state. Rollback disables
+definition to settle it rather than deleting state. (Delivery auto-tasks, by
+contrast, adopt a settings-only edit automatically; see
+[Recovering a consumer stalled by a settings change](#recovering-a-consumer-stalled-by-a-settings-change-orb-12295).) Rollback disables
 new admissions and preserves receipts; a binary without state-trigger support
 rejects the unknown configuration key, and one that predates `batch_size`
 rejects that key. Automatic host/epoch transfer and automatic promotion are not
