@@ -251,18 +251,27 @@ impl OrbitRuntime {
         open_invocation_store(self)?.list_tool_invocation_metrics()
     }
 
+    /// Lists invocation records. A run id only names a run within one
+    /// workspace, so a `job_run_id` filter without a workspace is scoped to
+    /// this runtime's.
     pub fn invocation_records(
         &self,
-        filter: InvocationQuery,
+        mut filter: InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError> {
+        if filter.job_run_id.is_some() && filter.workspace_id.is_none() {
+            filter.workspace_id = Some(self.stores().jobs().workspace_id().to_string());
+        }
         open_invocation_store(self)?.list_invocation_records(&filter)
     }
 
+    /// Records an invocation under this runtime's workspace, whatever
+    /// workspace the caller-supplied params claim to come from.
     pub fn insert_invocation_trace_record(
         &self,
         params: &InvocationInsertParams,
     ) -> Result<(), OrbitError> {
-        open_invocation_store(self)?.insert_invocation_trace_record(params)
+        open_invocation_store(self)?
+            .insert_invocation_trace_record(self.stores().jobs().workspace_id(), params)
     }
 
     /// Refreshes the read-side token scoreboard from persisted invocation telemetry.

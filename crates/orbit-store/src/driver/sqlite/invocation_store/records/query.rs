@@ -120,6 +120,9 @@ fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn
     if let Some(until) = &filter.until {
         query.push_filter("i.ts <= ?", until.to_rfc3339());
     }
+    if let Some(workspace_id) = &filter.workspace_id {
+        query.push_filter("i.workspace_id = ?", workspace_id.clone());
+    }
     if let Some(job_run_id) = &filter.job_run_id {
         query.push_filter("i.job_run_id = ?", job_run_id.clone());
     }

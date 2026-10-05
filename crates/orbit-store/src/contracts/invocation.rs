@@ -7,6 +7,11 @@ use orbit_types::telemetry::InvocationTrace;
 pub struct InvocationQuery {
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
+    /// Workspace the invocations were recorded under. Run ids are minted per
+    /// workspace, so a `job_run_id` filter only names one run together with
+    /// this. Rows recorded before invocations carried a workspace, and whose
+    /// run could not be attributed to exactly one workspace, never match.
+    pub workspace_id: Option<String>,
     pub job_run_id: Option<String>,
     pub activity_id: Option<String>,
     pub task_id: Option<String>,

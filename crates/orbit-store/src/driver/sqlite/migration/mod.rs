@@ -35,7 +35,10 @@ use host_registry::{
     apply_host_registry_core, apply_hub_registry_metadata, apply_workspace_coordination_projections,
 };
 use introspect::table_exists;
-use invocation::{apply_invocation_telemetry_columns, apply_invocations_ts_index};
+use invocation::{
+    apply_invocation_telemetry_columns, apply_invocation_workspace_scope,
+    apply_invocations_ts_index,
+};
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
     apply_job_run_id_allocations, apply_job_runs_created_index,

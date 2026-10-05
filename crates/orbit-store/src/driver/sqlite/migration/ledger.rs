@@ -354,12 +354,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_plugin_build_record,
     },
+    // Run ids are only unique within a workspace, yet invocations were keyed
+    // by run id alone, so a run-id collision across workspaces read the other
+    // workspace's invocations into run detail and reliability counts.
+    Migration {
+        version: 36,
+        name: "invocation_workspace_scope",
+        // An older writer records invocations without a workspace, and no
+        // workspace-scoped read matches those rows.
+        compat: MigrationCompatibility::ReadCompatible,
+        apply: super::apply_invocation_workspace_scope,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 35;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 36;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

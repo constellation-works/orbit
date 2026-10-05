@@ -248,6 +248,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0035".to_string(),
                 "plugin_build_record".to_string()
             ),
+            (
+                "migration.v0036".to_string(),
+                "invocation_workspace_scope".to_string()
+            ),
         ]
     );
 }
@@ -508,4 +512,44 @@ fn v1_upgrade_and_fresh_database_have_identical_columns() {
         schema_column_fingerprint(&legacy),
         schema_column_fingerprint(&fresh)
     );
+}
+
+/// v36 attributes a legacy invocation only when exactly one workspace ever
+/// held its run id; a colliding or orphaned run id leaves it unattributed so
+/// no workspace-scoped read picks it up.
+#[test]
+fn invocation_workspace_backfill_attributes_only_unambiguous_runs() {
+    let conn = Connection::open_in_memory().expect("open legacy database");
+    let before = ledger::MIGRATIONS
+        .iter()
+        .position(|m| m.name == "invocation_workspace_scope")
+        .expect("v36 registered");
+    ledger::run_migrations(&conn, &ledger::MIGRATIONS[..before]).expect("migrate to v35");
+    conn.execute_batch(
+        r#"
+            INSERT INTO job_run_id_allocations(workspace_id, run_id) VALUES
+                ('ws_a', 'jrun-only-a'),
+                ('ws_a', 'jrun-shared'),
+                ('ws_b', 'jrun-shared');
+            INSERT INTO invocations(ts, job_run_id, activity_id, agent) VALUES
+                ('2026-10-04T00:00:00Z', 'jrun-only-a', 'implement_one', 'claude'),
+                ('2026-10-04T00:00:00Z', 'jrun-shared', 'implement_one', 'claude'),
+                ('2026-10-04T00:00:00Z', 'jrun-gone', 'implement_one', 'claude');
+        "#,
+    )
+    .expect("seed legacy invocations");
+
+    ledger::run_migrations(&conn, ledger::MIGRATIONS).expect("apply v36");
+
+    let workspace_of = |run_id: &str| -> Option<String> {
+        conn.query_row(
+            "SELECT workspace_id FROM invocations WHERE job_run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .expect("read invocation workspace")
+    };
+    assert_eq!(workspace_of("jrun-only-a").as_deref(), Some("ws_a"));
+    assert_eq!(workspace_of("jrun-shared"), None);
+    assert_eq!(workspace_of("jrun-gone"), None);
 }
