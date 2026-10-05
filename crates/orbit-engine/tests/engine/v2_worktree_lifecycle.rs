@@ -487,6 +487,133 @@ fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
     );
 }
 
+/// [ORB-14101] `branch_prefix` is a Git namespace, not a path. `..` and a
+/// leading `-` are refused before any checkout exists. A slash stays in the
+/// branch ref and becomes one directory component, including when
+/// `ORBIT_WORKTREE_ROOT` relocates the root. GC still matches that checkout.
+#[test]
+fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
+    isolated(
+        "worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+
+            let refuse = |prefix: &str, run_id: &str, task_id: &str| {
+                host.add_task(task_id, TaskStatus::Backlog);
+                let mut input = setup_input(&[task_id], run_id);
+                input["branch_prefix"] = json!(prefix);
+                let error = action(&host, "worktree_setup", &input)
+                    .expect_err("unsafe branch_prefix is refused");
+                match error {
+                    OrbitError::InvalidInput(message) => {
+                        assert!(
+                            message.contains("branch_prefix") && message.contains(prefix),
+                            "refusal names the prefix: {message}"
+                        );
+                    }
+                    other => panic!("refused before checkout creation, got {other}"),
+                }
+            };
+            // `../../../tmp/esc` joined under `.orbit/state/worktrees` would
+            // land at `<repo>/tmp/esc-<run>`, outside the worktree root.
+            refuse("../../../tmp/esc", "jrun-escape", "T-ESCAPE");
+            refuse("-hidden", "jrun-dash", "T-DASH");
+            refuse("///", "jrun-slashes", "T-SLASHES");
+
+            assert!(
+                host.admitted().is_empty(),
+                "a refused prefix admits no task"
+            );
+            assert!(
+                !fixture.repo.join("tmp").exists(),
+                "ORB-14101: traversal prefix must not create <repo>/tmp"
+            );
+            assert!(
+                !fixture.repo.join(".orbit").exists(),
+                "a refused prefix creates no worktree root"
+            );
+            let primary = canonical(&fixture.repo);
+            for path in registered_worktrees(&fixture.repo) {
+                assert_eq!(
+                    canonical(&path),
+                    primary,
+                    "ORB-14101: refused prefix registered an extra worktree"
+                );
+            }
+
+            let configured = fixture.root.path().join("configured-worktrees");
+            let _env = orbit_common::test_env::scoped([(
+                "ORBIT_WORKTREE_ROOT",
+                Some(path_str(&configured)),
+            )]);
+            let checkout_root = configured.join(fixture.repo.file_name().expect("repo name"));
+            let run_id = "jrun-prefix-slash";
+            host.add_task("T-PREFIX", TaskStatus::Backlog);
+            let mut input = setup_input(&["T-PREFIX"], run_id);
+            input["branch_prefix"] = json!("team/x");
+            let setup = action(&host, "worktree_setup", &input).expect("slash prefix setup");
+            let checkout = Checkout::from_setup(&setup);
+
+            assert_eq!(
+                checkout.path.parent(),
+                Some(checkout_root.as_path()),
+                "checkout is one child of the configured worktree root"
+            );
+            assert_eq!(
+                checkout.path.file_name().and_then(|name| name.to_str()),
+                Some("team-x-jrun-prefix-slash"),
+                "a slash in the prefix is a hyphen in the directory name"
+            );
+            assert!(
+                !checkout_root.join("team").exists(),
+                "the prefix must not create a nested team/ directory"
+            );
+            let canonical_root = canonical(&checkout_root);
+            let canonical_checkout = canonical(&checkout.path);
+            assert_eq!(
+                canonical_checkout.parent().map(Path::to_path_buf),
+                Some(canonical_root.clone()),
+                "canonical checkout stays under the configured root"
+            );
+            assert!(
+                registered_worktrees(&fixture.repo)
+                    .iter()
+                    .any(|path| canonical(path) == canonical_checkout),
+                "git registered the contained checkout"
+            );
+            assert!(
+                checkout.branch.starts_with("team/x/T-PREFIX-"),
+                "the branch namespace keeps the slash: {}",
+                checkout.branch
+            );
+            assert_eq!(host.admitted(), ["T-PREFIX"]);
+
+            host.set_status("T-PREFIX", TaskStatus::Done);
+            host.add_run(job_run(run_id, JobRunState::Success, input));
+            let result = action(&host, "worktree_gc", &json!({})).expect("worktree gc");
+            let reports = result["reports"].as_array().expect("gc reports");
+            let report = reports
+                .iter()
+                .find(|report| report["run_id"] == run_id)
+                .expect("gc report for the slash-prefix run");
+            assert_eq!(report["action"], "removed", "{report:#}");
+            assert_eq!(
+                Path::new(report["path"].as_str().expect("report path")),
+                checkout.path,
+                "gc resolves the sanitized directory setup created"
+            );
+            assert!(!checkout.path.exists(), "gc removes the contained checkout");
+            assert!(
+                reports
+                    .iter()
+                    .all(|report| report["action"] != "skipped:unrecognized"),
+                "a sanitized prefix is not an unrecognized nested directory: {result:#}"
+            );
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // worktree_setup: stale-checkout refusal
 // ---------------------------------------------------------------------------
