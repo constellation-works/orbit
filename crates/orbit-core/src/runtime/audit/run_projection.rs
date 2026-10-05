@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::run::{
     MAX_RECOVERY_ATTEMPTS, RunAuditEvent, RunAuditStep, RunProviderProcess, RunRecoveryAttempt,
-    RunRecoveryAttempts,
+    RunRecoveryAttempts, RunRecoveryDecision,
 };
 
 const MAX_RECOVERY_DIAGNOSTIC_CHARS: usize = 1024;
@@ -426,6 +426,25 @@ fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<Run
         .map_or((None, false), |(diagnostic, truncated)| {
             (Some(diagnostic), truncated)
         });
+    let decision = event.raw.get("decision").and_then(|decision| {
+        Some((
+            RunRecoveryDecision {
+                status: decision.get("status")?.as_str()?.to_string(),
+                verdict: decision
+                    .get("verdict")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                detail: decision
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .map(|detail| bounded_recovery_diagnostic(detail).0),
+            },
+            decision.get("retry_admitted")?.as_bool()?,
+        ))
+    });
+    // A historical or slotless completion kept the single re-attempt.
+    let retry_admitted =
+        recovery_succeeded && decision.as_ref().is_none_or(|(_, admitted)| *admitted);
 
     Some(RunRecoveryAttempt {
         run_id: event
@@ -450,6 +469,8 @@ fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<Run
             .map(str::to_string),
         diagnostic,
         diagnostic_truncated,
+        decision: decision.map(|(decision, _)| decision),
+        retry_admitted,
     })
 }
 

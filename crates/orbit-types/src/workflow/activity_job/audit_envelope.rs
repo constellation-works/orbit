@@ -102,8 +102,14 @@ pub enum V2AuditEventKind {
         error_message: Option<String>,
         /// Bounded, redacted output reported by the recovery dispatch.
         /// Absent on historical events or when dispatch never returned.
+        /// Advisory diagnostics only: nothing reads it to admit a retry.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<serde_json::Value>,
+        /// [ORB-14152] The host's reading of the decision file the activity
+        /// wrote. Absent on historical events, unsuccessful dispatches, and
+        /// recoveries that ran without a decision slot.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<StepRecoveryDecisionRecord>,
     },
     /// The failed step's single re-attempt after recovery completed.
     StepPostRecoveryAttempt {
@@ -376,6 +382,22 @@ impl V2AuditEventKind {
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }
     }
+}
+
+/// How the executor read a recovery invocation's durable decision file.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StepRecoveryDecisionRecord {
+    /// `verified`, `absent` (nothing written), `invalid` (present but not a
+    /// decision for this invocation) or `unavailable` (could not be read).
+    pub status: String,
+    /// `retry` or `not_recovered`; present only when `verified`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    /// Whether the executor admitted its single post-recovery attempt.
+    pub retry_admitted: bool,
+    /// The decision's bounded, redacted reason, or why it was refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

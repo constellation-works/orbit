@@ -8,7 +8,8 @@ use orbit_engine::{
     CrewConfig, DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, PluginBrokerHandle, PluginBrokerRun,
     RebaseRecoveryAttemptScope, ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox,
-    ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
+    ResolvedShellExecutor, RuntimeHost, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
+    StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -748,6 +749,20 @@ impl RuntimeHost for OrbitRuntime {
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
         self.apply_run_final_recovery(run_id, application)
+    }
+
+    fn allocate_step_recovery_decision(
+        &self,
+        request: &StepRecoveryDecisionRequest,
+    ) -> Result<Option<StepRecoveryDecisionSlot>, OrbitError> {
+        crate::runtime::recovery_decision::allocate(request).map(Some)
+    }
+
+    fn read_step_recovery_decision(
+        &self,
+        slot: &StepRecoveryDecisionSlot,
+    ) -> Result<StepRecoveryDecisionRead, OrbitError> {
+        crate::runtime::recovery_decision::read(slot)
     }
 
     fn begin_rebase_recovery_attempt(

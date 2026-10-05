@@ -313,8 +313,9 @@ fn final_recovery_input(
 }
 
 /// Keep each recovery and post-recovery record, oldest first, with bounded
-/// diagnostics and dispatch output. Filter the run even when a host's audit
-/// sink returns a broader snapshot. Historical records have no output.
+/// diagnostics, dispatch output and the read-back recovery decision. Filter
+/// the run even when a host's audit sink returns a broader snapshot.
+/// Historical records have no output or decision.
 fn step_recovery_attempts(ctx: &ExecCtx<'_>) -> Result<Vec<Value>, String> {
     let mut events = ctx
         .audit
@@ -330,6 +331,10 @@ fn step_recovery_attempts(ctx: &ExecCtx<'_>) -> Result<Vec<Value>, String> {
     let attempts = events
         .into_iter()
         .filter_map(|event| {
+            let decision = match &event.kind {
+                V2AuditEventKind::StepRecoveryAttempted { decision, .. } => decision.clone(),
+                _ => None,
+            };
             let (step_id, activity, phase, outcome, failure_phase, error_message, output) =
                 match event.kind {
                     V2AuditEventKind::StepRecoveryAttempted {
@@ -339,6 +344,7 @@ fn step_recovery_attempts(ctx: &ExecCtx<'_>) -> Result<Vec<Value>, String> {
                         failure_phase,
                         error_message,
                         output,
+                        ..
                     } => (
                         step_id,
                         recovery_activity,
@@ -382,6 +388,7 @@ fn step_recovery_attempts(ctx: &ExecCtx<'_>) -> Result<Vec<Value>, String> {
                     "failure_phase": failure_phase,
                     "error_message": error_message,
                     "output": output,
+                    "decision": decision,
                 }),
             ))
         })

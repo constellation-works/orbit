@@ -118,6 +118,73 @@ pub struct RebaseRecoveryAttemptScope {
     pub target_base_sha: String,
 }
 
+/// Schema version of the decision file a `step_failure_recovery` invocation
+/// writes into its [`StepRecoveryDecisionSlot`].
+pub const STEP_RECOVERY_DECISION_SCHEMA_VERSION: u32 = 1;
+
+/// The one `step_failure_recovery` invocation a decision slot is allocated
+/// for: its run, failed step, failed attempt and assigned worktree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepRecoveryDecisionRequest {
+    pub run_id: String,
+    pub failed_step_id: String,
+    pub attempt: u32,
+    pub workspace_path: String,
+}
+
+/// A host-allocated, run-local file one recovery invocation may write its
+/// decision to [ORB-14152].
+///
+/// The engine holds the slot in memory between dispatch and read-back, so
+/// neither the agent nor any store it can write selects the path or the
+/// binding. The nonce is fresh per invocation, so a decision written for any
+/// other invocation cannot name this one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepRecoveryDecisionSlot {
+    pub run_id: String,
+    pub failed_step_id: String,
+    pub attempt: u32,
+    pub nonce: String,
+    /// Canonical root of the assigned worktree the slot lives under.
+    pub workspace_root: std::path::PathBuf,
+    /// Absolute path of the decision file, beneath `workspace_root`.
+    pub path: std::path::PathBuf,
+}
+
+/// What a verified decision file tells the executor to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepRecoveryVerdict {
+    /// Make the single post-recovery attempt of the failed step.
+    Retry,
+    /// Recovery could not repair the failure; return the original failure.
+    NotRecovered,
+}
+
+impl StepRecoveryVerdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Retry => "retry",
+            Self::NotRecovered => "not_recovered",
+        }
+    }
+}
+
+/// The host's reading of one decision slot after its invocation completed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepRecoveryDecisionRead {
+    /// Nothing was written; the legacy retry-on-success admission applies.
+    Absent,
+    /// A well-formed decision bound to exactly this invocation.
+    Verified {
+        verdict: StepRecoveryVerdict,
+        reason: Option<String>,
+    },
+    /// Something is at the slot but it is not a decision for this invocation:
+    /// malformed, oversized, a link or non-regular file, or bound to another
+    /// run, step, attempt or nonce. It authorizes nothing.
+    Invalid { diagnostic: String },
+}
+
 /// [ORB-13907] What the engine asks a host before dispatching a job's final
 /// recovery for a failed run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -564,6 +631,29 @@ pub trait RuntimeHost: Send + Sync {
         _elapsed_seconds: u64,
     ) -> Result<(), OrbitError> {
         Ok(())
+    }
+    /// Allocate the run-local file one `step_failure_recovery` invocation
+    /// writes its decision to, beneath the assigned worktree's scratch
+    /// directory [ORB-14152]. Hosts without the capability return `Ok(None)`:
+    /// the invocation runs without a slot and keeps the legacy admission, one
+    /// post-recovery attempt whenever recovery completes. An error refuses
+    /// the recovery before its provider launches.
+    fn allocate_step_recovery_decision(
+        &self,
+        _request: &StepRecoveryDecisionRequest,
+    ) -> Result<Option<StepRecoveryDecisionSlot>, OrbitError> {
+        Ok(None)
+    }
+    /// Read back and verify the decision a completed invocation left in
+    /// `slot`. An error means the slot could not be read and authorizes no
+    /// post-recovery attempt.
+    fn read_step_recovery_decision(
+        &self,
+        _slot: &StepRecoveryDecisionSlot,
+    ) -> Result<StepRecoveryDecisionRead, OrbitError> {
+        Err(unsupported_runtime_capability(
+            "read_step_recovery_decision",
+        ))
     }
     /// Revalidate the live owner immediately before a recovery hook asks the
     /// host process to mutate Git metadata. Agent subprocesses cannot confer

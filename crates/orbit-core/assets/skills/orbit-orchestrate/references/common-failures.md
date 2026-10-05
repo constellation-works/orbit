@@ -132,6 +132,7 @@ rg -n 'step_failure_recovery|semantic.db|orbit.db' .orbit/state/audit/v2_loop/<r
 
 Solution:
 
+- Check the attempt's `decision` in `orbit run show`: a verified `retry` is the activity's claim of repair, not proof of it — the retried step's own outcome decides.
 - Identify the store actually used by the failing runtime path before accepting recovery success.
 - Reindex or repair the actual store, then rerun.
 - Report recovery success as misleading if it repaired a non-participating DB.
