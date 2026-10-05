@@ -93,6 +93,12 @@ If the run's final recovery already settled the task (for example archived or
 requeued it), the failure handoff did not run; read that decision on the task
 before acting.
 
+A follower delivery whose pull request already merged at a head other than its
+reviewed candidate cannot be re-gated: the merged head is immutable. Reconcile
+it with `orbit task reconcile-review`, as described in the
+[distributed drain runbook](./distributed-drain.md). A reconciliation is a
+separate owner record, not a review-gate certificate.
+
 ## 4. Verify
 
 After the next delivery run, `orbit task show <task-id> --json | jq .review.verdict`

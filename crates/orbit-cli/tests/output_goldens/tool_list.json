@@ -1250,6 +1250,64 @@
     ]
   },
   {
+    "name": "orbit.task.reconcile_review",
+    "description": "Reconcile the already-merged head of a recovered follower delivery whose pull request merged at a head other than the handed-off candidate: run required validation and an independent read-only review of exactly that head and record owner-held evidence the desktop review can complete from. `inspect` shows eligibility, `submit` admits a run (resubmitting the same request_key replays it), `status` reports outcomes and next steps, `accept_baseline` records an operator disposition of a failure the base already had. Requires trusted operator authority; unavailable to managed runs.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Explicit workspace selector from discovery",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "action",
+        "description": "inspect, submit, status, or accept_baseline",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "id",
+        "description": "Task in review whose foreign delivery merged",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "request_key",
+        "description": "submit: operator-chosen key; resubmitting it replays the same reconciliation",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reconciliation_id",
+        "description": "status, accept_baseline: the reconciliation to act on",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "command",
+        "description": "accept_baseline: the required command whose failure reproduced at the base",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "remediation_commit",
+        "description": "accept_baseline: landed commit on the landing branch that remediates that failure",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "accept_baseline: why the baseline failure is accepted",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.task.review_reset",
     "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
     "enabled": true,

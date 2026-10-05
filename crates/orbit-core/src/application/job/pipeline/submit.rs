@@ -22,6 +22,10 @@ pub(crate) struct PipelineSubmission<'a> {
     /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
     /// input; every other submission is refused for supplying it.
     pub(crate) trusted_host: bool,
+    /// Whether this submission is the governed review reconciliation
+    /// admission. Only it may carry
+    /// [`REVIEW_RECONCILIATION_ADMISSION_KEY`](orbit_types::workflow::REVIEW_RECONCILIATION_ADMISSION_KEY).
+    pub(crate) reconciliation: bool,
     /// How this run was submitted [ORB-12255].
     pub(crate) trigger: JobRunTrigger,
 }
@@ -73,6 +77,7 @@ impl<'a> PipelineSubmission<'a> {
             action_key: None,
             retry_key: None,
             trusted_host: false,
+            reconciliation: false,
             trigger: JobRunTrigger::cli(),
         }
     }

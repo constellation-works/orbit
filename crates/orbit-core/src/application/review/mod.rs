@@ -28,6 +28,7 @@ mod gate;
 mod handoff;
 mod landing;
 mod projection;
+pub(crate) mod reconciliation;
 mod switches;
 
 pub(crate) use admission::{

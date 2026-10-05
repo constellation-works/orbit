@@ -1,0 +1,37 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: review_reconciliation_validate
+spec:
+  type: deterministic
+  description: >
+    Runs every owner-required validation command at the reconciled merged
+    head in a detached checkout, with the same runner delivery validation
+    uses, and reruns each failing command at the pull request's base to
+    attribute baseline failures. Every outcome and log is recorded on the
+    reconciliation and as task artifacts; a failure never stops the others,
+    and an already recorded validation is kept.
+  input_schema_json:
+    type: object
+    required: [task_id, reconciliation_id]
+    properties:
+      task_id:
+        type: string
+        minLength: 1
+      reconciliation_id:
+        type: string
+        minLength: 1
+  output_schema_json:
+    type: object
+    required: [recorded, complete]
+    properties:
+      recorded:
+        type: boolean
+      complete:
+        type: boolean
+      failed:
+        type: array
+        items:
+          type: string
+  action: review_reconciliation_validate
+  config: {}

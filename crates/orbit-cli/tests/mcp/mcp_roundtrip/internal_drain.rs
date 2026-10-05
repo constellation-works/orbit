@@ -64,10 +64,10 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             names.len(),
-            27,
+            28,
             "the reviewed 37-tool surface loses five protocol tools and seven tools \
-             folded into their siblings, then gains `orbit_task_eligible` and \
-             `orbit_task_review_reset`"
+             folded into their siblings, then gains `orbit_task_eligible`, \
+             `orbit_task_review_reset` and `orbit_task_reconcile_review`"
         );
         for name in OPERATIONS {
             let advertised = orbit_types::tool::mcp_advertised_tool_name(name);

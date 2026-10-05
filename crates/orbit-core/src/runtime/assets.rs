@@ -170,6 +170,22 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/review_gate_settle.yaml"),
     ),
     (
+        "review_reconciliation_prepare",
+        include_str!("../../assets/activities/review_reconciliation_prepare.yaml"),
+    ),
+    (
+        "review_reconciliation_review",
+        include_str!("../../assets/activities/review_reconciliation_review.yaml"),
+    ),
+    (
+        "review_reconciliation_settle",
+        include_str!("../../assets/activities/review_reconciliation_settle.yaml"),
+    ),
+    (
+        "review_reconciliation_validate",
+        include_str!("../../assets/activities/review_reconciliation_validate.yaml"),
+    ),
+    (
         "prepare_blocked_task_recovery",
         include_str!("../../assets/activities/prepare_blocked_task_recovery.yaml"),
     ),
@@ -280,6 +296,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "task_pr_pipeline",
         include_str!("../../assets/jobs/task_pr_pipeline.yaml"),
+    ),
+    (
+        "task_review_reconciliation_pipeline",
+        include_str!("../../assets/jobs/task_review_reconciliation_pipeline.yaml"),
     ),
     (
         "workspace_ship_pipeline",

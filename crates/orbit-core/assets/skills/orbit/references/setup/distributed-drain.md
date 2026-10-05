@@ -279,6 +279,24 @@ them: do not invent one, do not ship the same task again, and do not treat
 refuses all three with `replica_checkout`. A returning worker after revocation
 receives `stale_claim`.
 
+A recovered follower pull request that merged at a head other than its
+handed-off candidate completes only after an operator reconciles that merged
+head on the owner. Run `orbit task reconcile-review inspect <task-id>`, then
+`orbit task reconcile-review submit <task-id> --request <key>`, and follow it
+with `orbit task reconcile-review status <task-id>`. The submitted run
+validates and reviews exactly that head under the contract `submit` froze: the
+accepted handoff's captured commands (or, when that acceptance explicitly
+required none, the owner's configured commands, labelled as such) and the
+review crew. Later configuration edits apply only to a new request key.
+`status` names the next step,
+including `accept-baseline` for a failure the base already had. Agents
+cannot submit or dispose a reconciliation.
+
+`accept-baseline` reruns the same required check at the named landed
+remediation commit in a detached checkout and records its output. It refuses
+the disposition unless that check passes; merged-head validation stays
+recorded as incomplete.
+
 ## Leftover epic and review state
 
 There is no epic execution path. Gather evidence with ordinary commands:

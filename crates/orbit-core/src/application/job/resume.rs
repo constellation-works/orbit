@@ -155,6 +155,17 @@ impl OrbitRuntime {
         if source
             .input
             .as_ref()
+            .is_some_and(orbit_types::workflow::run_input_declares_review_reconciliation)
+        {
+            return Err(OrbitError::JobValidation(format!(
+                "job run '{source_run_id}' was an operator-admitted review reconciliation and \
+                 cannot be resumed; its admission covered that attempt only. Submit its request \
+                 key again with `orbit task reconcile-review submit` to admit another attempt"
+            )));
+        }
+        if source
+            .input
+            .as_ref()
             .is_some_and(run_input_declares_trusted_host)
         {
             return Err(OrbitError::JobValidation(format!(

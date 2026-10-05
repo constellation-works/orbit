@@ -48,4 +48,6 @@ tracing.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+# Integration tests substitute the detached pipeline worker (`test_support`).
+orbit-core = { path = ".", features = ["test-support"] }
 tracing-subscriber.workspace = true

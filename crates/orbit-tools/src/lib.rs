@@ -177,6 +177,7 @@ pub enum OrbitBuiltinAction {
     TaskLocksReserve,
     TaskPull,
     TaskReject,
+    TaskReconcileReview,
     TaskReviewReset,
     TaskShow,
     TaskUpdate,

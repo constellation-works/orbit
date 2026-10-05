@@ -153,6 +153,18 @@ pub(super) fn execute(
             persisted_task_id = Some(written.persisted_id);
             Ok(written.response)
         }
+        OrbitBuiltinAction::TaskReconcileReview => {
+            let result = crate::application::review::reconciliation::reconcile_review(
+                runtime,
+                session_context,
+                &input,
+            )?;
+            persisted_task_id = result
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            Ok(result)
+        }
         OrbitBuiltinAction::TaskReviewReset => {
             let result = crate::application::review::reset_review(runtime, &input)?;
             persisted_task_id = result

@@ -567,6 +567,71 @@ one. From then on:
 Do not merge follower pull requests on the provider by hand. That skips the
 owner's validation gate, and the owner still has to settle the claim.
 
+If a follower's pull request was merged by hand anyway ([ORB-14175]), revoke the
+handoff and use **Recover claim → blocked** on the owner. Then move the task
+through `in-progress` back to `review` and complete it with an operator's
+evidence-bound desktop review. The task keeps the follower's `job_run_id` and
+`job_run_machine`. Completion reads the recovered claim and the accepted
+handoff for that exact host and run, takes the pull request from the handoff,
+reads it by number, and requires it to be merged into the landing branch.
+
+If the merged head is not the handed-off candidate (for example, after a base
+merge or a fix pushed by hand), the candidate's validation and review do not
+carry over, and the review gate cannot run on an already-merged head.
+Reconcile that head instead, as an operator on the owner (the owner checkout
+must hold the merged head and merge commit; `git fetch origin` there first):
+
+```bash
+orbit task reconcile-review inspect <task-id>
+orbit task reconcile-review submit <task-id> --request <key>
+orbit task reconcile-review status <task-id>
+```
+
+`inspect` shows the binding (run, host, claim, handoff, pull request, merged
+head and base) and the `contract` a new key would freeze. It refuses with the
+next step while a claim is live, the pull request is open or names another
+repository or landing branch, there is no command to validate with, or
+`operation.review_crew` is unset or does not resolve.
+
+The contract's `required_commands` are the accepted handoff's captured list
+(`commands_source: accepted_handoff`). An accepted handoff always captures one,
+so an empty list means that acceptance explicitly required no check; the
+reconciliation then adopts the owner's `workflow.required_validation_commands`
+at submission as its own contract (`commands_source:
+owner_configuration_at_submission`, with `accepted_commands: []`) rather than
+claiming the delivery was held to it. `review_crew` is `operation.review_crew`
+at submission.
+
+`submit` freezes that contract into the record and admits one run of
+`task_review_reconciliation_pipeline`: it runs every contract command at the
+merged head (and each failure again at the base), has the contract's reviewer
+inspect exactly that head read-only, and settles the reconciliation. Editing
+the owner's configuration afterwards changes nothing for that record: every
+attempt, including one admitted after a stopped run, uses the frozen contract.
+If the frozen crew no longer resolves, the attempt fails and resubmitting the
+key refuses until the crew is restored; a new key adopts the current
+configuration. Resubmitting the same `--request` key replays a live or settled
+reconciliation without running anything again; a new key starts a new
+reconciliation. The
+record lives in the owner's review store, separate from review-gate
+certificates, and never changes the original run's identity or the merged pull
+request. Agents cannot submit or dispose one.
+
+`status` names the outcome and the exact next step:
+
+- `accepted`: complete the task from review.
+- `refused`: the reviewer left open findings (they are filed as one follow-up
+  task), a command fails only at the merged head, or the delivery changed while
+  the run ran. Fix forward through the follow-up, or submit a new key for the
+  current head.
+- `awaiting_disposition`: every failing command also fails at the base. Once a
+  commit on the landing branch remediates it, record the decision. The command
+  reruns that same required check at the named commit in a detached checkout;
+  it records the output and refuses the disposition unless the check passes:
+  `orbit task reconcile-review accept-baseline <task-id> --reconciliation <id> --command '<command>' --remediation <commit> --reason '<why>'`.
+  The outcome becomes `accepted_with_disposition`; validation stays incomplete
+  in the record.
+
 On the dashboard, **approve** on a review task that has a handed-off claim
 sends **Approve handoff** for the exact candidate. A plain status write would
 be refused with `active execution claim requires a claim-scoped mutation`.

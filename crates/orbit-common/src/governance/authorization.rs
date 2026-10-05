@@ -383,6 +383,12 @@ pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     GovernedOperation {
+        id: "orbit.task.reconcile_review",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "reconciliation produces the owner-held review and validation evidence that lets a changed merged head complete",
+    },
+    GovernedOperation {
         id: "orbit.task.review_reset",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
