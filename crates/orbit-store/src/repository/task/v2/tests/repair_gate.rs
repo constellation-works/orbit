@@ -161,23 +161,26 @@ fn ran_in_child(test: &str) -> bool {
     command
         .args(["--exact", &path, "--test-threads=1"])
         .env(CHILD, test);
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     let output = orbit_common::process::run_bounded_capped(
         &mut command,
         std::time::Duration::from_secs(120),
         1024 * 1024,
     )
     .expect("run isolated child");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success() && stdout.contains("1 passed"),
-        "{path}: {stdout}\n{}",
-        String::from_utf8_lossy(&output.stderr)
+    orbit_common::test_env::assert_child_test_passed(
+        &path,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
     true
 }
 
-/// Warnings the task store emits while `op` runs on this thread.
-fn store_warnings<T>(op: impl FnOnce() -> T) -> (T, u64) {
+/// A subscriber and shared warning count the test can install on reader threads.
+fn warning_dispatch() -> (tracing::Dispatch, Arc<AtomicU64>) {
     struct CountWarnings(Arc<AtomicU64>);
     impl<S: tracing::Subscriber> Layer<S> for CountWarnings {
         fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
@@ -191,7 +194,13 @@ fn store_warnings<T>(op: impl FnOnce() -> T) -> (T, u64) {
     }
     let count = Arc::new(AtomicU64::new(0));
     let subscriber = Registry::default().with(CountWarnings(Arc::clone(&count)));
-    let value = tracing::subscriber::with_default(subscriber, op);
+    (tracing::Dispatch::new(subscriber), count)
+}
+
+/// Warnings the task store emits while `op` runs on this thread.
+fn store_warnings<T>(op: impl FnOnce() -> T) -> (T, u64) {
+    let (dispatch, count) = warning_dispatch();
+    let value = tracing::dispatcher::with_default(&dispatch, op);
     (value, count.load(Ordering::SeqCst))
 }
 
@@ -275,11 +284,15 @@ fn repeated_reads_while_degraded_attempt_one_rebuild_and_stay_correct() {
 
 #[test]
 fn concurrent_readers_across_store_instances_share_one_attempt() {
+    if ran_in_child("concurrent_readers_across_store_instances_share_one_attempt") {
+        return;
+    }
     const READERS: usize = 8;
     const ROUNDS: u64 = 3;
     let fixture = degraded_fixture();
     let registered = fixture.registered();
     let barrier = Barrier::new(READERS);
+    let (dispatch, warnings) = warning_dispatch();
 
     let reads = std::thread::scope(|scope| {
         let handles = (0..READERS)
@@ -287,15 +300,18 @@ fn concurrent_readers_across_store_instances_share_one_attempt() {
                 let store = fixture.reopened_store();
                 let barrier = &barrier;
                 let fixture = &fixture;
+                let dispatch = dispatch.clone();
                 scope.spawn(move || {
-                    barrier.wait();
-                    let mut reads = 0;
-                    for _ in 0..ROUNDS {
-                        let (ids, scanned) = bundle_reads(|| active_ids(&store));
-                        assert_eq!(ids, vec![fixture.in_progress.clone()]);
-                        reads += scanned;
-                    }
-                    reads
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        barrier.wait();
+                        let mut reads = 0;
+                        for _ in 0..ROUNDS {
+                            let (ids, scanned) = bundle_reads(|| active_ids(&store));
+                            assert_eq!(ids, vec![fixture.in_progress.clone()]);
+                            reads += scanned;
+                        }
+                        reads
+                    })
                 })
             })
             .collect::<Vec<_>>();
@@ -306,6 +322,11 @@ fn concurrent_readers_across_store_instances_share_one_attempt() {
     });
 
     assert_eq!(fixture.gate().attempts(), 1);
+    assert_eq!(
+        warnings.load(Ordering::SeqCst),
+        1,
+        "concurrent failed repair emits one warning"
+    );
     assert!(
         reads.iter().all(|reads| *reads == ROUNDS * registered),
         "every degraded read scans each bundle exactly once: {reads:?}"
@@ -314,6 +335,9 @@ fn concurrent_readers_across_store_instances_share_one_attempt() {
 
 #[test]
 fn degraded_reads_still_fail_on_task_field_corruption() {
+    if ran_in_child("degraded_reads_still_fail_on_task_field_corruption") {
+        return;
+    }
     let fixture = degraded_fixture();
     assert_eq!(
         active_ids(&fixture.store),
@@ -356,6 +380,9 @@ fn degraded_reads_still_fail_on_task_field_corruption() {
 
 #[test]
 fn removing_the_edge_through_a_supported_update_repairs_on_the_next_read() {
+    if ran_in_child("removing_the_edge_through_a_supported_update_repairs_on_the_next_read") {
+        return;
+    }
     let fixture = degraded_fixture();
     // A second stale row keeps the index unusable after the source's own
     // index row is rewritten, so recovery has to come from the gate.
@@ -426,6 +453,9 @@ fn removing_the_edge_through_a_supported_update_repairs_on_the_next_read() {
 
 #[test]
 fn restoring_the_target_repairs_on_the_next_read() {
+    if ran_in_child("restoring_the_target_repairs_on_the_next_read") {
+        return;
+    }
     let fixture = degraded_fixture();
     assert_eq!(
         active_ids(&fixture.store),
@@ -463,6 +493,9 @@ fn restoring_the_target_repairs_on_the_next_read() {
 
 #[test]
 fn rebuild_refusal_names_the_canonical_source_edge() {
+    if ran_in_child("rebuild_refusal_names_the_canonical_source_edge") {
+        return;
+    }
     let fixture = degraded_fixture();
     let envelopes = fixture
         .store
