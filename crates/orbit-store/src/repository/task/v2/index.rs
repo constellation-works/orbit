@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
 use crate::contracts::{IndexedTaskRow, TaskCompletionByComplexity};
 
@@ -32,7 +33,9 @@ impl TaskV2Store {
 
     /// One-time rebuild after `complexity` was added as a nullable column.
     /// Indexed unset is `''`; leftover `NULL` means the row has not been
-    /// rewritten from its bundle yet.
+    /// rewritten from its bundle yet. Best effort: the projection reads what
+    /// the index holds either way, so a refused or failed repair never fails
+    /// it.
     fn ensure_complexity_indexed(&self) -> Result<(), OrbitError> {
         if !self
             .registry
@@ -40,54 +43,38 @@ impl TaskV2Store {
         {
             return Ok(());
         }
-        let _ = self.rebuild_index_best_effort("complexity column unpopulated");
+        if let Some(ticket) = self.admit_index_repair()?
+            && let Ok(bundles) = self.bundle_store.list_bundles()
+        {
+            self.attempt_index_repair(ticket, &bundles, "complexity column unpopulated");
+        }
         Ok(())
     }
 
-    pub(super) fn indexed_tasks(
+    /// The tasks an index query selects, in index order — or, when the index
+    /// cannot serve, every settled task from the bundle scan, newest first.
+    /// Callers re-apply their predicates, so either answer is correct.
+    pub(super) fn tasks_for_index_filter(
         &self,
         filter: TaskIndexFilter,
-    ) -> Result<Option<Vec<Task>>, OrbitError> {
-        let Some(bundles) = self.indexed_bundles(filter)? else {
-            return Ok(None);
-        };
-        bundles
+    ) -> Result<Vec<Task>, OrbitError> {
+        if self.validate_index()?.is_some() {
+            let ids = self
+                .registry
+                .indexed_task_ids_filtered(&self.workspace_id, &filter)?;
+            return self
+                .bundles_from_ids(ids)?
+                .into_iter()
+                .map(|bundle| self.task_from_bundle(bundle))
+                .collect();
+        }
+        let mut tasks = self
+            .scan_and_repair_index("missing or stale index")?
             .into_iter()
             .map(|bundle| self.task_from_bundle(bundle))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Some)
-    }
-
-    /// The bundles behind an index query, in index order. `None` when the
-    /// index is not usable and the caller must scan bundles instead.
-    pub(super) fn indexed_bundles(
-        &self,
-        filter: TaskIndexFilter,
-    ) -> Result<Option<Vec<TaskBundleV2>>, OrbitError> {
-        if !self.index_is_usable()? {
-            return Ok(None);
-        }
-        let ids = self
-            .registry
-            .indexed_task_ids_filtered(&self.workspace_id, &filter)?;
-        self.bundles_from_ids(ids).map(Some)
-    }
-
-    /// Decide whether the generated index still matches the bundles on disk.
-    ///
-    /// Two properties matter under concurrency (ORB-10988 / F2026-07-119).
-    /// First, this compares envelopes, not whole bundles: the index only
-    /// projects envelope fields, so assembling every task's seven-file bundle
-    /// on every list was pure cost. Second, a task whose bundle a concurrent
-    /// writer currently holds is *skipped* rather than propagated as an error —
-    /// validating the index for task B must not fail because task A is being
-    /// created or deleted at that instant.
-    fn index_is_usable(&self) -> Result<bool, OrbitError> {
-        if self.validate_index()?.is_some() {
-            Ok(true)
-        } else {
-            self.rebuild_index_best_effort("missing or stale index")
-        }
+            .collect::<Result<Vec<_>, _>>()?;
+        sort_by_created_desc_id_asc(&mut tasks, |task| &task.created_at, |task| &task.id);
+        Ok(tasks)
     }
 
     /// The freshness scan: compare every registered task's index row with its
@@ -162,34 +149,107 @@ impl TaskV2Store {
         Ok(Some(row.matches(&envelope)))
     }
 
-    /// Rebuild the generated index from the bundles, degrading to `false` (use
-    /// the bundle scan instead) on any failure. Listing-triggered rebuild uses
+    /// Read every settled bundle for a read the index cannot serve, and
+    /// rebuild the index from them when the [`RepairGate`] admits it.
+    ///
+    /// The scan is strict: a task-field error in any bundle fails the read
+    /// rather than hiding behind a degraded index. Only the rebuild is
+    /// best effort, since every caller reaches it from a read. Listing uses
     /// the lightweight bundle read (task fields only); explicit
-    /// `reindex_workspace` still hashes artifact payloads. Every caller
-    /// reaches this from a *read*, so a rebuild that cannot run must not fail
-    /// that read.
-    fn rebuild_index_best_effort(&self, reason: &str) -> Result<bool, OrbitError> {
-        let rebuilt = self.bundle_store.list_bundles().and_then(|bundles| {
-            let envelopes = bundles
-                .into_iter()
-                .map(|bundle| bundle.envelope)
-                .collect::<Vec<_>>();
-            self.registry
-                .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
-        });
-        match rebuilt {
-            Ok(()) => Ok(true),
-            Err(err) => {
-                orbit_common::tracing::warn!(
-                    target: "orbit.store.task_v2",
-                    workspace_id = %self.workspace_id,
-                    reason,
-                    error = %err,
-                    "generated task index rebuild failed; falling back to bundle scan",
-                );
-                Ok(false)
+    /// `reindex_workspace` still hashes artifact payloads.
+    pub(super) fn scan_and_repair_index(
+        &self,
+        reason: &str,
+    ) -> Result<Vec<TaskBundleV2>, OrbitError> {
+        let ticket = self.admit_index_repair()?;
+        let bundles = self.bundle_store.list_bundles()?;
+        if let Some(ticket) = ticket {
+            self.attempt_index_repair(ticket, &bundles, reason);
+        }
+        Ok(bundles)
+    }
+
+    /// Ask the gate whether this read may attempt a rebuild. The evidence is
+    /// one metadata probe per registered task, taken before the bundles are
+    /// read; a recorded failure's unresolved targets are re-resolved so that
+    /// restoring one re-admits the repair.
+    fn admit_index_repair(&self) -> Result<Option<RepairTicket>, OrbitError> {
+        let gate = self.repair_gate();
+        let mut evidence = RepairEvidence::default();
+        for binding in self.registry.tasks_for_workspace(&self.workspace_id)? {
+            let stamp = self
+                .envelope_cache
+                .stamp(&self.bundle_store.envelope_path(&binding.task_id)?);
+            evidence.envelopes.insert(binding.task_id, stamp);
+        }
+        let mut target_restored = false;
+        for target in gate.unresolved_targets() {
+            if self.registry.find_task_binding(&target)?.is_some() {
+                target_restored = true;
+                break;
             }
         }
+        Ok(gate.admit(evidence, target_restored))
+    }
+
+    /// Publish the index from `bundles`, recording a refusal with the gate.
+    /// The validator stays strict: a dangling edge keeps the index stale and
+    /// the warning names every canonical edge that blocks it.
+    fn attempt_index_repair(&self, ticket: RepairTicket, bundles: &[TaskBundleV2], reason: &str) {
+        let envelopes = bundles
+            .iter()
+            .map(|bundle| bundle.envelope.clone())
+            .collect::<Vec<_>>();
+        let Err(error) = self
+            .registry
+            .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
+        else {
+            ticket.succeeded();
+            return;
+        };
+        let unresolved = self
+            .registry
+            .unresolved_relation_targets(&self.workspace_id, &envelopes)
+            .unwrap_or_default();
+        let rejected = !matches!(error, OrbitError::Store(_) | OrbitError::Io(_));
+        let suppressed_reads = ticket.failed(
+            rejected,
+            unresolved
+                .iter()
+                .map(|edge| edge.target_task_id.clone())
+                .collect(),
+        );
+        let unresolved = unresolved
+            .iter()
+            .map(|edge| {
+                format!(
+                    "{} {} -> {}{}",
+                    edge.source_task_id,
+                    edge.relation_type,
+                    edge.target_task_id,
+                    if edge.indexed {
+                        ""
+                    } else {
+                        " (missing from generated index)"
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        orbit_common::tracing::warn!(
+            target: "orbit.store.task_v2",
+            workspace_id = %self.workspace_id,
+            reason,
+            %error,
+            unresolved,
+            suppressed_reads,
+            remediation = "drop each unresolved edge through orbit.task.update relations or restore its target task; `orbit doctor` lists them",
+            "generated task index repair failed; reads serve from a bundle scan and retry once a bundle or target changes",
+        );
+    }
+
+    fn repair_gate(&self) -> RepairGate {
+        RepairGate::new(self.registry.workspaces_dir(), &self.workspace_id)
     }
 
     /// Materialize indexed ids into tasks, dropping any whose bundle a

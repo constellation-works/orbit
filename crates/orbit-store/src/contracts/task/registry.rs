@@ -130,6 +130,10 @@ pub struct DanglingRelationTarget {
     pub source_task_id: String,
     pub relation_type: String,
     pub target_task_id: String,
+    /// Whether the generated relation index holds this edge. `false` means
+    /// only the canonical bundle names it — the index is stale or missing
+    /// the row the failed rebuild could not publish.
+    pub indexed: bool,
 }
 
 /// Outcome of seeding the task-id allocator.

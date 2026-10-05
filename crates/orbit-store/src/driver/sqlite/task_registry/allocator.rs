@@ -36,8 +36,8 @@ fn set_allocator_next_number(conn: &Connection, value: u32) -> Result<(), OrbitE
 /// Every prefix this registry recognizes, materialized in full.
 ///
 /// Only callers that already scan the registry want this — the audit in
-/// [`TaskRegistryStore::dangling_relation_targets`] tests many rows against the
-/// set, and [`TaskRegistryStore::known_task_prefixes`] exposes it. A write-path
+/// [`TaskRegistryStore::unresolved_relation_targets`] tests many edges against
+/// the set, and [`TaskRegistryStore::known_task_prefixes`] exposes it. A write-path
 /// caller checking one target's prefix must use
 /// [`task_prefix_is_registered`] instead, which resolves the same predicate
 /// without reading every binding.

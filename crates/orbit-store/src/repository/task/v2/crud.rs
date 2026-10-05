@@ -150,18 +150,7 @@ impl TaskV2Store {
     /// Materialize tasks on the lightweight bundle path: no artifact hashing.
     pub(crate) fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
         self.ensure_recovered()?;
-        if let Some(tasks) = self.indexed_tasks(TaskIndexFilter::default())? {
-            return Ok(tasks);
-        }
-
-        let mut tasks = self
-            .bundle_store
-            .list_bundles()?
-            .into_iter()
-            .map(|bundle| self.task_from_bundle(bundle))
-            .collect::<Result<Vec<_>, _>>()?;
-        sort_by_created_desc_id_asc(&mut tasks, |task| &task.created_at, |task| &task.id);
-        Ok(tasks)
+        self.tasks_for_index_filter(TaskIndexFilter::default())
     }
 
     pub(crate) fn list_tasks_filtered(
@@ -174,15 +163,12 @@ impl TaskV2Store {
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
         self.ensure_recovered()?;
-        let mut tasks = match self.indexed_tasks(TaskIndexFilter {
+        let mut tasks = self.tasks_for_index_filter(TaskIndexFilter {
             statuses: status.into_iter().collect(),
             priority,
             job_run_id: job_run_id.map(ToOwned::to_owned),
             ..Default::default()
-        })? {
-            Some(tasks) => tasks,
-            None => self.list_tasks()?,
-        };
+        })?;
         tasks.retain(|task| {
             status.is_none_or(|value| task.status == value)
                 && priority.is_none_or(|value| task.priority == value)
@@ -208,13 +194,12 @@ impl TaskV2Store {
         if required_tags.is_empty() {
             return self.list_tasks();
         }
-        if let Some(tasks) = self.indexed_tasks(TaskIndexFilter {
+        // The index answers the tag filter itself; a bundle scan returns
+        // every task, so the predicate is re-applied either way.
+        let mut tasks = self.tasks_for_index_filter(TaskIndexFilter {
             tags: required_tags.clone(),
             ..Default::default()
-        })? {
-            return Ok(tasks);
-        }
-        let mut tasks = self.list_tasks()?;
+        })?;
         tasks.retain(|task| {
             required_tags
                 .iter()

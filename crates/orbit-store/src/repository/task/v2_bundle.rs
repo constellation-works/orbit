@@ -415,7 +415,16 @@ fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Listing-path bundle reads on this thread, so tests can bound what a
+    /// read costs while the generated index is degraded.
+    pub(crate) static LISTING_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBundleV2>, OrbitError> {
+    #[cfg(test)]
+    LISTING_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     match read_bundle_lightweight_consistently(bundle_dir) {
         Ok(bundle) => Ok(Some(bundle)),
         Err(err) => skip_if_in_flight(bundle_dir, err),

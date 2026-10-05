@@ -83,6 +83,7 @@ mod manifest;
 mod publication;
 mod publish;
 mod reindex;
+mod relation_audit;
 mod restore;
 
 #[cfg(test)]
@@ -122,6 +123,7 @@ pub use publish::{
     PublicationPublishRequest, PublicationPublishStatus, publish_task_snapshot,
 };
 pub use reindex::{ReindexOutcome, reindex_workspace};
+pub use relation_audit::audit_relation_targets;
 pub use restore::{
     PublicationRecoveryCompleteness, PublicationRestoreMode, PublicationRestoreOutcome,
     PublicationRestoreRequest, restore_publication,
