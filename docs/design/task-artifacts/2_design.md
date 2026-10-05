@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-28
+last_validated: 2026-09-28
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -39,18 +39,16 @@ The v2 task bundle is status-neutral. The canonical bundle lives in the user's l
           files/
 ```
 
-Each checkout has a small workspace binding and symlink projection:
+Each checkout has only the workspace identity binding needed for canonical lookup:
 
 ```text
 .orbit/
   config.yaml
-  tasks/
-    ORB-00000 -> ~/.orbit/tasks/workspaces/orbit-a3f9c2/ORB-00000
 ```
 
 Status lives in `task.yaml`. Directory moves are not part of lifecycle transitions. Read-side indexes or generated views present status groupings, terminal-month views, and dashboard counts for humans.
 
-The canonical task directory is outside the checkout. `.orbit/tasks/` should remain ignored by Git and treated as a projection that Orbit can rebuild. ADRs and design docs remain committed project memory.
+The canonical task directory is outside the checkout. Task and artifact reads and writes resolve it through `index.sqlite`; no task bundle is projected into `.orbit/`. ADRs and design docs remain committed project memory.
 
 ## 2. Envelope Schema
 
@@ -73,7 +71,7 @@ relations:
   - type: resolves
     target: F2026-05-007
 context_files:
-  - file:crates/orbit-store/src/file/task_store/v2_bundle.rs
+  - file:crates/orbit-store/src/repository/task/v2_bundle.rs
 external_refs: []
 created_by: codex:gpt-5.5
 planned_by: null
@@ -139,7 +137,7 @@ files:
 
 Manifest paths are stored in canonical relative form: slash-separated, no absolute paths, no `..`, no `.`, and no leading `./`. Writers that ingest hand-authored manifests should normalize a leading `./` before validation. SHA-256 values are lowercase hex; writer code should format digest bytes with lowercase hex (`{:x}`).
 
-Text artifacts may still be rendered inline by `orbit.task.show --field artifacts`, but storage and API DTOs must not require UTF-8.
+Task artifact discovery surfaces (`orbit.task.show --field artifacts`, `orbit task artifacts --task <ID>`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
 
 ## 5a. Image Artifacts, Presentation, and Retrieval
 
@@ -159,7 +157,7 @@ Metadata listing stays compact and payloads are fetched on demand:
 | view | CLI | `orbit task artifact get <ID> <PATH> [--out FILE]` |
 | view | dashboard | task detail → click the artifact row |
 
-The listing never carries binary payloads, so a task with a large screenshot stays cheap to inspect. `orbit.task.artifact.get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
+The listing never carries artifact payloads, so a task with a large screenshot or log stays cheap to inspect. `orbit.task.artifact.get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
 
 ### Supported formats and the presentation classes
 
@@ -192,7 +190,9 @@ To avoid spending the payload twice, the JSON text mirror is replaced with a one
 
 ### `source_path` is caller-local, and paths do not travel
 
-`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd, then confined to that machine's workspace checkout after symlink resolution. Absolute paths and in-workspace symlinks that escape the checkout are rejected as `invalid_input`. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd, then confined to that machine's workspace checkout after symlink resolution. Absolute paths and in-workspace symlinks that escape the checkout are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+
+Attachment accepts only task `id`, `source_path`, optional artifact `path`, `model` attribution, and the transport `workspace` / `_meta` wrappers. The local path and artifact path have compatibility aliases. The authenticated spoke payload replaces the source and path fields with `artifacts`; it accepts the same identity and transport fields. Other task update fields, including `title`, `status`, and `plan`, are rejected before the task host is called. Task metadata changes belong on `orbit.task.update`.
 
 The consequence is the lesson from ORB-11364: **an operator-host path is not a portable worker reference.** An image attached from the operator checkout is stored successfully and confirmed by `task_show`, and a worker on another host still cannot open the original local path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact.get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
 
@@ -200,7 +200,7 @@ Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact
 
 Attachment is not injection: storing an artifact on a task does not push it into an already-running worker's context. A worker picks it up on its next read.
 
-## 6. Local Task Store and Symlink Projection
+## 6. Local Task Store and Canonical Lookup
 
 Local-first Orbit uses `~/.orbit/tasks/` as the canonical store for task artifacts. `index.sqlite` owns allocation and local operational metadata; `workspaces/<workspace-id>/` owns the actual bundles:
 
@@ -231,9 +231,9 @@ workspace_id: orbit-a3f9c2
 
 `workspace_id` is assigned once in canonical `ws_<name>` form; legacy installations may use `<slug>-<6char>`. It survives repo renames and moves because Orbit reads it from `.orbit/config.yaml`, not from the directory name, remote URL, or path hash.
 
-The workspace projection under `.orbit/tasks/<task-id>` is a symlink to the canonical bundle. Task writes through either the canonical path or the projection update the same files; there is no second writable copy and no bundle-level divergence protocol. If `.orbit/tasks/` is deleted, Orbit rebuilds the symlinks from `.orbit/config.yaml` and `index.sqlite`. If `.orbit/config.yaml` is lost, Orbit prompts to rebind by matching the current path, repo root, and optional remote fingerprints against `index.sqlite`; if no confident match exists, the user chooses or creates a workspace binding.
+Task tools resolve the workspace binding through `.orbit/config.yaml` and `index.sqlite`, then read or mutate the canonical bundle directly. If `.orbit/config.yaml` is lost, Orbit prompts to rebind by matching the current path, repo root, and optional remote fingerprints against `index.sqlite`; if no confident match exists, the user chooses or creates a workspace binding.
 
-Task delete first verifies that any projection entry is a symlink, then unregisters the binding from `index.sqlite`, deletes the canonical home bundle, and removes the projection. Generated index rows and relation edges involving the deleted task are removed with the binding. If deletion is interrupted after unregistering, the remaining bundle is orphaned storage rather than a listed task and a retry may finish cleanup.
+Task delete publishes a canonical-bundle tombstone, unregisters the binding from `index.sqlite`, and removes the tombstone. Generated index rows and relation edges involving the deleted task are removed with the binding. If deletion is interrupted after unregistering, reindex detects the tombstone and finishes cleanup.
 
 ## 7. Generated Local Indexes
 
@@ -243,7 +243,7 @@ The bundle remains canonical. The registry maintains generated projections from 
 - `task_bundle_tags`: normalized tag rows with AND-style filtering semantics.
 - `task_bundle_relations`: directed `(source_task_id, relation_type, target_id)` rows plus an inverse lookup index for task targets.
 
-Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly. Full-text search still scans task content until the Phase 5 lexical/semantic indexes land.
+Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly. Task search uses the optional workspace lexical index for BM25 over title, description, plan, execution summary, and acceptance criteria. The bundle matcher supplements those hits with comments, external references, artifact manifest paths, and tasks without indexed chunks; without task chunks, the bundle matcher is the only source. Neither source opens artifact payloads. The bundle matcher judges the caller's status, tag, and path filters from the index-validated envelopes before reading anything, prunes each remaining task from its envelope, its four documents, its comments, and its manifest (never its event log), reads whole only the tasks that can match, and stops as soon as the candidate budget fills. A damaged event log that a search did not need therefore does not fail it; a damaged document still does.
 
 That comparison also supplies the metadata candidate selection filters and orders by, so it runs against every registered envelope. To keep it from re-parsing unchanged files, each process holds the parsed envelopes in memory and re-proves one against its file's stamp — filesystem identity, length, and modification time — before reusing it; anything the stamp cannot vouch for is read and parsed again. A stamp is evidence that a file was not rewritten rather than proof that its bytes are unchanged, so it never stands alone: the `updated_at` comparison above still runs on every reused envelope, and explicit reindex re-reads and re-validates every bundle from disk.
 
@@ -278,7 +278,7 @@ The local OSS authority is one `~/.orbit/tasks/index.sqlite` allocator shared ac
 
 ### 9.2 Flat storage
 
-Canonical task bundles live under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`; projected workspace paths live at `.orbit/tasks/<task-id>`. The initial design deliberately avoids numeric partition directories. Expected local and small-team task counts do not justify the extra path complexity, and a later ADR can add fanout with a migration if a real corpus hits filesystem limits.
+Canonical task bundles live under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`. The initial design deliberately avoids numeric partition directories. Expected local and small-team task counts do not justify the extra path complexity; fanout can be added with a migration if a real corpus hits filesystem limits.
 
 ### 9.3 Allocation authority
 
@@ -288,7 +288,7 @@ Uniqueness requires an authority:
 - Synced workspaces allocate against the task registry before materializing a bundle.
 - Hosted team mode allocates through the hosted API.
 
-The implementation should not claim authority-scoped uniqueness by scanning one workspace's `.orbit/tasks/` tree. Allocation reserves an ID. Workspace binding, symlink projection, sync upload, and hosted publication are separate APIs.
+The implementation should not claim authority-scoped uniqueness by scanning filesystem directories. Allocation reserves an ID. Workspace binding, canonical materialization, sync upload, and hosted publication are separate APIs.
 
 ### 9.4 No legacy aliases
 
@@ -315,26 +315,11 @@ The public `Task` DTO should not embed legacy relation fields (`parent_id`, `dep
 
 ## 11. Search and Indexing
 
-Lexical and semantic search should index each logical field independently:
-
-- `title`
-- `description`
-- `acceptance`
-- `plan`
-- `execution_summary`
-- `comments`
-- `external_refs` (system and id)
-- artifact paths plus selected artifact text, when media type permits
-
-This preserves field-aware semantic search while making file boundaries visible in snippets. The embedding index should store field names that match the v2 logical document names; `execution-summary.md` is exposed as `execution_summary` to match the tool/API field.
-
-The current Phase 5 implementation is intentionally asymmetric while indexes are still being wired. Lexical search scans the broader set above. Semantic search indexes task title, description, acceptance, plan, and execution summary; semantic parity for comments, external refs, and artifacts remains Phase 5 follow-up work.
-
-Until generated full-text indexes land, the working implementation performs O(N x files-per-task) lexical scans by reading every registered bundle and any candidate text artifact files. That is acceptable only as a cutover bridge; generated search rows will replace the per-query artifact reads.
+Task search is lexical-only. The optional workspace lexical index stores task chunks for `title`, `description`, `plan`, `execution_summary`, and `acceptance`; FTS5/BM25 ranks those chunks. The bundle matcher supplements indexed hits with `comments`, `external_refs`, artifact manifest paths, and tasks without indexed chunks. Without task chunks, the bundle matcher is the only source. Neither search path opens artifact payloads. `OrbitRuntime::search_reindex` rebuilds task chunks from the task collection. The MCP search tool rejects the retired semantic and embedding-model parameters.
 
 Relations need their own generated index. The bundle stores directed relation entries; local indexes materialize `(source_task_id, relation_type, target_task_id)` and optional inverse views for efficient lineage queries. The initial relation type set is `blocked_by`, `child_of`, `spawned_from`, `regression_from`, `supersedes`, and `related_to`. Types are source-implied: a task that depends on another stores `blocked_by -> dependency`, and a subtask stores `child_of -> parent`. Writers validate relation types, reject self-edges and duplicates, and reject cycles for hierarchy and blocking relation families.
 
-Status and retention views are also generated indexes. Terminal tasks remain in `.orbit/tasks/<task-id>/`, but CLI/list surfaces can group by terminal month using status-transition events. Compaction is out of scope for the reset, but the index must preserve the old ergonomic affordance of listing active tasks and closed tasks separately.
+Status and retention views are generated indexes. CLI/list surfaces can group terminal tasks by month using status-transition events. Compaction is out of scope for the reset, but the index must preserve the old ergonomic affordance of listing active tasks and closed tasks separately.
 
 ---
 
@@ -346,7 +331,7 @@ The reset should be a one-time cutover rather than a long-lived compatibility la
 2. Allocate or derive a canonical `ORB-00000` ID for every existing task.
 3. Record the authority allocation and workspace binding in `~/.orbit/tasks/index.sqlite`.
 4. Materialize each task into `~/.orbit/tasks/workspaces/<workspace-id>/<canonical-id>/`.
-5. Create `.orbit/tasks/<canonical-id>` as a symlink to the canonical bundle.
+5. Register and index the canonical bundle for authoritative task and artifact lookup.
 6. Move `description` from `task.yaml` to `description.md`.
 7. Render `acceptance_criteria` into `acceptance.md`.
 8. Keep existing `plan.md` and `execution-summary.md`.
@@ -355,7 +340,7 @@ The reset should be a one-time cutover rather than a long-lived compatibility la
 11. Leave any legacy review-thread sidecars outside the active v2 model.
 12. Rewrite `task.yaml` as the v2 envelope without old IDs or embedded prose.
 13. Rewrite task-lock reservations from old IDs to canonical IDs or release stale reservations with an audit event.
-14. Rebuild task tag, semantic, status, terminal-month, and relation indexes from disk.
+14. Rebuild task tag, lexical-search, status, terminal-month, and relation indexes from disk.
 
 The cutover command may emit a human-readable mapping from old IDs to new IDs, but Orbit should not persist that mapping as a lookup surface.
 
@@ -367,13 +352,13 @@ The cutover command may emit a human-readable mapping from old IDs to new IDs, b
 
 Markdown acceptance criteria are friendlier to authors but weaker than typed checks. Automation gates that require structured checks should add a future `checks.yaml` instead of keeping the old YAML array alive.
 
-Status-neutral directories simplify sync but make filesystem browsing less convenient. Humans lose the quick `ls .orbit/tasks/review` view unless Orbit generates indexes or CLI views. The reset must ship those generated views for active/status and terminal-month grouping, because lifecycle state belongs in the record but humans still need fast browsing.
+Status-neutral directories simplify sync but make filesystem browsing less convenient. CLI and dashboard indexes provide active/status and terminal-month grouping because lifecycle state belongs in the record.
 
 Append-only logs improve merge behavior but add more files per task. Small tasks become slightly noisier on disk. The benefit is that high-traffic tasks stop rewriting one large YAML file for every comment or event.
 
 Binary artifacts increase storage flexibility and require stronger validation. Checksums, media type inference, size limits, and redaction rules become part of the artifact contract instead of being avoided by UTF-8-only writes.
 
-`.orbit/config.yaml` becomes load-bearing for binding a checkout to its canonical task store. If it is lost, Orbit can try to rebind by path and repo fingerprints, but ambiguous matches require a user decision. Symlink projection also needs a fallback on platforms or filesystems where symlink creation is restricted.
+`.orbit/config.yaml` is load-bearing for binding a checkout to its canonical task store. If it is lost, Orbit can try to rebind by path and repo fingerprints, but ambiguous matches require a user decision.
 
 ---
 

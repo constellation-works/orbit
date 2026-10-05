@@ -70,14 +70,12 @@ const MAX_INSPECTED_BASE_COMMITS: usize = 25;
 /// cannot see: a base deliberately kept off `origin`, or a live base whose
 /// commits repeat an already-landed task id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::executor::automation) enum BaseObsolescenceMode {
+enum BaseObsolescenceMode {
     Enforce,
     Ignore,
 }
 
-pub(super) fn base_obsolescence_mode_from_input(
-    input: &Value,
-) -> Result<BaseObsolescenceMode, OrbitError> {
+fn base_obsolescence_mode_from_input(input: &Value) -> Result<BaseObsolescenceMode, OrbitError> {
     match input
         .as_object()
         .and_then(|map| map.get("base_obsolescence"))
@@ -94,7 +92,7 @@ pub(super) fn base_obsolescence_mode_from_input(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum BaseStatus {
+enum BaseStatus {
     /// Work merged into this base can still reach the landing branch.
     Live,
     /// The base branch is gone from `origin`.
@@ -146,7 +144,7 @@ pub(in crate::executor::automation) fn ensure_base_can_still_land(
     }
 }
 
-pub(super) fn classify_base(
+fn classify_base(
     repo_root: &Path,
     base: &str,
     base_sha: &str,

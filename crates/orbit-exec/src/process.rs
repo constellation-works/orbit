@@ -4,6 +4,104 @@ use orbit_common::OrbitError;
 
 use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
 
+/// An already-open descriptor the parent hands a child at a fixed number.
+///
+/// This is how a credential reaches a child that must not be able to re-open
+/// it by path: the mapping is applied between `fork` and `exec`, `dup2` clears
+/// close-on-exec on the target, and every descendant that does not close the
+/// number inherits it. A descendant that closes it holds nothing, which is the
+/// point — identity travels on the descriptor, not on the environment or the
+/// process tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InheritedFd {
+    /// The parent's descriptor. The caller keeps it open until `spawn`
+    /// returns; `exec` closes the parent's own copy in the child.
+    pub source: i32,
+    /// The number the child sees it at.
+    pub target: i32,
+}
+
+/// Map `fds` into the child before `exec`.
+///
+/// Registered as a `pre_exec` callback, so it runs after `std` has put the
+/// standard streams on 0, 1 and 2. A target that collides with one of the
+/// parent's own close-on-exec descriptors only closes it early, which `exec`
+/// would have done anyway; a caller therefore picks a target above the
+/// standard streams and keeps sources clear of it.
+#[cfg(unix)]
+pub(crate) fn attach_inherited_fds(command: &mut Command, fds: &[InheritedFd]) {
+    use std::os::unix::process::CommandExt;
+
+    if fds.is_empty() {
+        return;
+    }
+    let fds = fds.to_vec();
+    // SAFETY: the closure runs in the forked child before exec and issues only
+    // async-signal-safe syscalls on descriptors the parent still holds open.
+    unsafe {
+        command.pre_exec(move || {
+            for fd in &fds {
+                if fd.source != fd.target && libc::dup2(fd.source, fd.target) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // `dup2` clears close-on-exec on the descriptor it creates, but
+                // a source that already *is* the target keeps whatever flags it
+                // had, so the flag is cleared explicitly either way.
+                if libc::fcntl(fd.target, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Descriptor inheritance is a Unix contract; nothing Orbit sandboxes runs
+/// anywhere else.
+#[cfg(not(unix))]
+pub(crate) fn attach_inherited_fds(_command: &mut Command, _fds: &[InheritedFd]) {}
+
+/// Move `fd` above every number [`attach_inherited_fds`] overwrites.
+///
+/// A descriptor the parent opened for its *own* use in the child — the
+/// Landlock ruleset is the only one today — is read after the remap has
+/// already run, because `std` invokes `pre_exec` hooks in registration order.
+/// Sitting on a target number therefore means the hook reads the credential
+/// instead of what it opened, and the syscall refuses a descriptor of the
+/// wrong kind: `landlock_restrict_self` answers `EBADFD`.
+///
+/// The collision is not a remote possibility, it is the likely case. A
+/// callback session lifts its credential clear of the target number and drops
+/// the low duplicates it made getting there, which leaves the target free;
+/// the ruleset the host opens next takes the lowest free number and lands in
+/// exactly that hole. Relocating once, before either hook is registered,
+/// removes the overlap for good rather than leaving it to descriptor luck.
+#[cfg(all(unix, any(target_os = "linux", test)))]
+pub(crate) fn relocate_clear_of_targets(
+    fd: std::os::fd::OwnedFd,
+    fds: &[InheritedFd],
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let Some(ceiling) = fds.iter().map(|fd| fd.target).max() else {
+        return Ok(fd);
+    };
+    if fd.as_raw_fd() > ceiling {
+        return Ok(fd);
+    }
+    // SAFETY: `fd` is an open descriptor this scope owns. `F_DUPFD_CLOEXEC`
+    // returns the lowest free number at or above `ceiling + 1`, close-on-exec
+    // already set, so the duplicate keeps the flag the original was created
+    // with and never leaks into an unrelated child.
+    let moved = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, ceiling + 1) };
+    if moved < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `moved` is a freshly duplicated descriptor owned by this scope;
+    // the original closes when `fd` drops at the end of the call.
+    Ok(unsafe { OwnedFd::from_raw_fd(moved) })
+}
+
 /// Build the child process description shared by every spawn path, so a
 /// sandbox that confines the child cannot drift from the unconfined one.
 pub(crate) fn command(req: &ExecRequest) -> Command {
@@ -46,7 +144,26 @@ pub(crate) fn command(req: &ExecRequest) -> Command {
 }
 
 pub(crate) fn spawn(req: &ExecRequest) -> Result<Child, OrbitError> {
-    command(req)
+    spawn_with_inherited_fds(req, &[])
+}
+
+/// Spawn `req` with no Orbit sandbox, handing the child `fds` at their fixed
+/// numbers.
+///
+/// The unconfined counterpart of the sandboxed spawns: a plugin whose
+/// manifest opted out of confinement still needs its callback credential, and
+/// the credential must not depend on which boundary the host applied.
+pub fn spawn_with_inherited_fds(
+    req: &ExecRequest,
+    fds: &[InheritedFd],
+) -> Result<Child, OrbitError> {
+    let mut command = command(req);
+    attach_inherited_fds(&mut command, fds);
+    command
         .spawn()
         .map_err(|e| OrbitError::Execution(format!("failed to spawn `{}`: {e}", req.program)))
 }
+
+#[cfg(all(test, unix))]
+#[path = "tests/process.rs"]
+mod tests;

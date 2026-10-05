@@ -36,13 +36,16 @@ mod audit_middleware;
 mod command;
 mod output;
 mod parse;
+mod plugin_cli;
+mod root_check;
+mod usage_error;
 
 use clap::{Arg, ArgMatches, Command, CommandFactory, FromArgMatches};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_common::fs::generation::ParticipantRole;
 use orbit_core::ActorIdentity;
+use orbit_core::composition::pin_executable_generation_as;
 
-#[cfg(test)]
-use crate::command::init::InitCommand;
 use crate::command::operation::{CommandOperation, DispatchContext, RuntimeNeed};
 use crate::output::sink::{FormatArg, OutputMode, OutputSink};
 
@@ -66,9 +69,10 @@ fn format_arg() -> Arg {
 
 /// Whether this command already declares a `--format` of its own.
 ///
-/// `orbit audit export` and `orbit hook pretooluse` do, with their own value
-/// types. Those two keep their meaning; the global flag is simply not offered
-/// there.
+/// `orbit audit export` does, naming its export file's serialization with its
+/// own value type. It keeps that meaning; the global flag is simply not
+/// offered there, and its help says so. `crate::tests::cli_format` pins the
+/// list of such commands.
 fn declares_format(command: &Command) -> bool {
     command
         .get_arguments()
@@ -127,8 +131,8 @@ fn requested_format(matches: &ArgMatches) -> Option<FormatArg> {
 /// machine-readable form".
 ///
 /// `--ops` is here alongside `--json` because it is the same rung wearing a
-/// different name: on `task list`, `job list`, and `activity list` it selects a
-/// narrower record shape and has always forced JSON. Leaving it out would make
+/// different name: on `task list` and `job list` it selects a narrower record
+/// shape and has always forced JSON. Leaving it out would make
 /// `orbit task list --ops` render a table on a terminal.
 const LEGACY_JSON_ARG_IDS: [&str; 2] = ["json", "ops"];
 
@@ -185,27 +189,184 @@ fn repair_crew_flag_suggestion(mut err: clap::error::Error) -> clap::error::Erro
     err
 }
 
+/// Long-lived commands that must reap JSONL archives even when the active
+/// file is within budget. `--help` never reaches here: clap exits in
+/// [`parse_cli`]. Short-lived commands rotate only if a later JSONL write
+/// finds an oversized active file (one `metadata()` check, no directory walk).
+fn command_rotates_jsonl_on_start(command: &command::Commands) -> bool {
+    match command {
+        command::Commands::Mcp(mcp) => matches!(
+            mcp.command,
+            command::mcp::McpSubcommand::Serve(_) | command::mcp::McpSubcommand::Listen(_)
+        ),
+        command::Commands::Web(web) => {
+            matches!(web.command, command::web::WebSubcommand::Serve(_))
+        }
+        command::Commands::Sweep(_) => true,
+        command::Commands::Clock(clock) => {
+            matches!(clock.command, command::clock::ClockSubcommand::Tick(_))
+        }
+        _ => false,
+    }
+}
+
+/// What this process is while it participates in upgrade admission, so a
+/// breaking upgrade can name it and long-lived processes know to yield.
+fn participant_role(command: &command::Commands) -> ParticipantRole {
+    use command::Commands;
+    match command {
+        Commands::Mcp(mcp) if matches!(mcp.command, command::mcp::McpSubcommand::Serve(_)) => {
+            ParticipantRole::McpServe
+        }
+        Commands::Web(web) if matches!(web.command, command::web::WebSubcommand::Serve(_)) => {
+            ParticipantRole::Dashboard
+        }
+        Commands::Job(job)
+            if matches!(
+                job.command,
+                command::job::JobSubcommand::RunPipelineWorker(_)
+            ) =>
+        {
+            ParticipantRole::Drain
+        }
+        command if is_clock_tick(command) => ParticipantRole::Clock,
+        _ => ParticipantRole::Command,
+    }
+}
+
+fn is_clock_tick(command: &command::Commands) -> bool {
+    matches!(command, command::Commands::Sweep(_))
+        || matches!(command, command::Commands::Clock(clock)
+            if matches!(clock.command, command::clock::ClockSubcommand::Tick(_)))
+}
+
+/// Where an explicitly chosen Orbit root came from, if it was chosen at all.
+fn explicit_root_source(root_override: Option<&std::path::Path>) -> Option<&'static str> {
+    if root_override.is_some() {
+        return Some("--root");
+    }
+    std::env::var("ORBIT_ROOT")
+        .is_ok_and(|value| !value.trim().is_empty())
+        .then_some("ORBIT_ROOT")
+}
+
+/// The Orbit root this invocation will use, read from argv before clap runs.
+///
+/// The derived CLI cannot answer this yet: the tree it would parse against
+/// is the one the plugin groups still have to be added to. `--root` is the
+/// only argument that changes *which* plugins those are, so it is the only
+/// one read here, with the same precedence `resolve_generation_root` applies
+/// afterwards (`--root`, then `ORBIT_ROOT`, then the host-global root).
+fn plugin_root_override() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        let arg = arg.to_string_lossy().into_owned();
+        if let Some(value) = arg.strip_prefix("--root=") {
+            return Some(std::path::PathBuf::from(value));
+        }
+        if arg == "--root" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+    }
+    None
+}
+
+/// The `orbit <ns>` groups this host's enabled plugins contribute (§4.6).
+///
+/// A host with no plugin install directory answers with one `stat` and no
+/// store or config read, so the common case pays nothing for a surface it
+/// does not use. Any failure below that is this host's plugin problem, not
+/// this command's: the built-in CLI must stay usable, so it is logged and
+/// the groups are simply absent (§4.9).
+fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
+    let Ok(root) = orbit_core::runtime::resolve_generation_root(plugin_root_override().as_deref())
+    else {
+        return Vec::new();
+    };
+    if !root.join("plugins").is_dir() {
+        return Vec::new();
+    }
+    match orbit_core::adapter::command::host_plugin_cli_groups(&root) {
+        Ok(groups) => groups,
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.cli.plugin",
+                error = %error,
+                "omitting plugin command groups from the CLI surface"
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// The command tree `orbit` parses argv against: the derived CLI, the given
+/// plugin groups, and the global `--format`.
+///
+/// `main` and the help goldens both build it here, so a golden pins the help
+/// the binary prints rather than the bare derive.
+fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Command {
+    let root = plugin_cli::augment(command::Cli::command(), groups);
+    let root = if groups.is_empty() {
+        root
+    } else {
+        // The hand-rolled top-level template lists commands by section, so a
+        // plugin group is listed in its own section rather than left out of
+        // `orbit --help` entirely.
+        root.help_template(command::ROOT_HELP_TEMPLATE.replace(
+            "\nOptions:",
+            &format!("{}\nOptions:", plugin_cli::help_section(groups)),
+        ))
+    };
+    install_format_arg(root)
+}
+
 /// Parse argv into the derived CLI plus the two inputs to mode resolution.
 fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
-    let args = command::mcp::normalize_ssh_login_shell_args(std::env::args_os());
-    let matches = install_format_arg(command::Cli::command())
-        .try_get_matches_from(args)
-        .unwrap_or_else(|err| repair_crew_flag_suggestion(err).exit());
+    let groups = plugin_cli_groups();
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let matches = cli_command(&groups)
+        .try_get_matches_from(&args)
+        .unwrap_or_else(|err| {
+            let (requested, legacy) = usage_error::pre_parse_format(&args);
+            usage_error::exit(
+                usage_error::suggest_help_flag(repair_crew_flag_suggestion(err)),
+                requested,
+                legacy,
+            )
+        });
     let requested = requested_format(&matches);
     let legacy = legacy_json(&matches);
-    let cli = command::Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
+    let cli = match plugin_cli::invocation_from_matches(&groups, &matches) {
+        // A plugin group is not a `Commands` variant clap can build, so the
+        // two global arguments are read here and the rest of the invocation
+        // is the tool call the group reduced to.
+        Some(invocation) => command::Cli {
+            root: matches.get_one::<std::path::PathBuf>("root").cloned(),
+            workspace: matches.get_one::<String>("workspace").cloned(),
+            command: command::Commands::PluginGroup(Box::new(invocation)),
+        },
+        None => command::Cli::from_arg_matches(&matches)
+            .unwrap_or_else(|err| usage_error::exit(err, requested, legacy)),
+    };
     (cli, requested, legacy)
 }
 
 fn main() {
-    // Verify, then reinforce, the kernel state established by the generated
-    // credential-changing Tier 2 launcher. This is deliberately first, but the
-    // pre-userspace boundary is exec itself rather than this Rust call.
-    command::mcp::verify_ssh_acceptance_launch_boundary();
-    orbit_common::observability::logging::init_default_subscriber("warn");
+    // This is the production entry point for CLI, MCP, sweep clock, and the
+    // dashboard (`orbit web serve`). Test harnesses never execute this main.
+    orbit_core::mark_process_as_pipeline_worker_binary();
+    // Provider lines are retained for `run logs --follow`, while diagnostics
+    // stay quiet on stderr. An explicit RUST_LOG still overrides both defaults.
+    orbit_common::observability::logging::init_subscriber_with_file_filter(
+        "warn",
+        "warn,orbit_engine::activity_job::cli_runner::supervisor=info",
+    );
     output::pipe::install_handler();
 
     let (cli, requested_format, legacy_json) = parse_cli();
+    if command_rotates_jsonl_on_start(&cli.command) {
+        orbit_common::observability::logging::rotate_global_jsonl_best_effort();
+    }
     // Resolved once per invocation, before dispatch, and passed to the one
     // renderer that consumes it. Nothing downstream re-derives these answers.
     let sink = OutputSink::from_process(requested_format, legacy_json);
@@ -218,17 +379,109 @@ fn main() {
         progress_allowed = sink.progress_allowed(),
         "resolved output sink"
     );
+    // Update owns exclusive admission and pins its candidate before convergence.
+    // Read-only commands may join a live generation without rewriting the
+    // record when store schema matches. Everything else pins the exact running
+    // inode before any bootstrap. This also covers all MCP transports, managed
+    // workers and automatic migrations. `--root` / `ORBIT_ROOT` isolate that
+    // pin so a read-only unpinned `~/.orbit` cannot block scratch init. A
+    // managed macOS child joins its parent's host registry pin even when
+    // ORBIT_ROOT selects workspace data; update still checks both roots.
+    let inspection =
+        matches!(&cli.command, command::Commands::Migrate(command) if !command.confirm);
     let root_override = cli.root.clone();
     let workspace_selector = cli.workspace.clone();
     let actor = ActorIdentity::from_env();
     let CommandOperation {
         runtime_need,
+        task_owner_id,
         audit_meta,
         json_error_preference,
         suppress_errors,
         dispatch,
         governed,
+        plugin_callback_entry_point,
     } = cli.command.operation().attribute_to(&actor);
+    // ORB-12876: a recognized plugin backend reaches Orbit only through a tool
+    // call, which the callback allowlist gates against the plugin's
+    // `permissions.orbit_tools`. Refuse it the rest of the CLI here — before
+    // generation pinning, runtime bootstrap and dispatch — so no plain command
+    // reads governed data around that allowlist.
+    if !plugin_callback_entry_point
+        && let Err(error) = refuse_plugin_child_cli(&audit_meta, root_override.as_deref())
+    {
+        print_error(&error, &sink, json_error_preference);
+        std::process::exit(1);
+    }
+    let clock_tick = is_clock_tick(&cli.command);
+    let quiet_clock_tick =
+        clock_tick && !matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
+    let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
+        None
+    } else {
+        let root =
+            match orbit_core::runtime::resolve_process_generation_root(root_override.as_deref()) {
+                Ok(root) => root,
+                Err(error) => {
+                    print_error(&error, &sink, None);
+                    std::process::exit(1);
+                }
+            };
+        let root_source = explicit_root_source(root_override.as_deref());
+        let root_existed = root.exists();
+        if let Some(source) = root_source
+            && let Err(error) = root_check::validate_explicit_root(&root, source)
+        {
+            print_error(&error, &sink, None);
+            std::process::exit(1);
+        }
+        match pin_executable_generation_as(
+            &root,
+            matches!(
+                runtime_need,
+                RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly
+            ),
+            participant_role(&cli.command),
+        ) {
+            Ok(guard) => {
+                if clock_tick
+                    && let Ok(digest) = orbit_common::fs::generation::process_generation()
+                    && let Ok(Some(summary)) =
+                        orbit_common::fs::generation::finish_clock_generation_hold(
+                            &root,
+                            digest,
+                            chrono::Utc::now(),
+                        )
+                {
+                    eprintln!("{summary}");
+                }
+                Some(guard)
+            }
+            Err(error) => {
+                if clock_tick
+                    && orbit_common::fs::generation::is_clock_generation_hold(&error)
+                    && let Ok(digest) = orbit_common::fs::generation::process_generation()
+                    && orbit_common::fs::generation::record_clock_generation_hold(
+                        &root,
+                        digest,
+                        chrono::Utc::now(),
+                    )
+                    .is_ok()
+                    && quiet_clock_tick
+                {
+                    std::process::exit(1);
+                }
+                let error = match root_source {
+                    Some(source) if !root_existed => {
+                        root_check::missing_root_error(&root, source, &error)
+                    }
+                    _ => error,
+                };
+                print_error(&error, &sink, None);
+                std::process::exit(1);
+            }
+        }
+    };
 
     let bootstrapped = match &runtime_need {
         RuntimeNeed::Forbidden => {
@@ -241,7 +494,10 @@ fn main() {
             );
             let result = dispatch(
                 cli.command,
-                DispatchContext::without_runtime(root_override.as_deref()),
+                DispatchContext::without_runtime(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                ),
             );
             finish_command(result, &sink, suppress_errors, json_error_preference);
             return;
@@ -250,10 +506,35 @@ fn main() {
             root_override.as_deref(),
             workspace_selector.as_deref(),
         ),
-        RuntimeNeed::ReadOnly => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
-            root_override.as_deref(),
-            workspace_selector.as_deref(),
-        ),
+        RuntimeNeed::SelectedWorkspace { selector } => {
+            RegisteredRuntimeFactory::initialize_with_overrides(
+                root_override.as_deref(),
+                Some(selector),
+            )
+        }
+        RuntimeNeed::PipelineWorker => {
+            RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+            )
+        }
+        RuntimeNeed::ReadOnly => match task_owner_id.as_deref() {
+            Some(task_id) => orbit_cmd::task_owner::initialize_for_task_show(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+                task_id,
+            ),
+            None => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+            ),
+        },
+        RuntimeNeed::PluginReadOnly => {
+            RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+            )
+        }
         RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
             root_override.as_deref(),
             workspace_selector.as_deref(),
@@ -273,7 +554,11 @@ fn main() {
     }
     .with_actor(actor);
 
-    let context = DispatchContext::with_runtime(&runtime, root_override.as_deref());
+    let context = DispatchContext::with_runtime(
+        &runtime,
+        root_override.as_deref(),
+        workspace_selector.as_deref(),
+    );
     // ORB-10453: the CLI's single authorization chokepoint. Every command
     // traverses it before dispatch, so a governed operation cannot be reached
     // by adding a subcommand that forgets its own guard.
@@ -283,17 +568,45 @@ fn main() {
         }
         None => Ok(()),
     };
+    let skip_audit = _generation
+        .as_ref()
+        .is_some_and(orbit_common::fs::generation::GenerationGuard::joined_foreign_generation);
     let result = match audit_meta {
-        Some(meta) => {
+        Some(meta) if !skip_audit => {
             let mut guard = audit_middleware::AuditGuard::new(&runtime, meta);
             let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
             guard.mark_result(&result);
             result
         }
-        None => authorize(&runtime).and_then(|()| dispatch(cli.command, context)),
+        _ => authorize(&runtime).and_then(|()| dispatch(cli.command, context)),
     };
 
     finish_command(result, &sink, suppress_errors, json_error_preference);
+}
+
+/// Refuse this invocation if a plugin backend is the caller [ORB-12876].
+///
+/// The root is the one the command itself will use, so `--root` cannot pick a
+/// different Orbit to be judged against than the one about to be read. A root
+/// that does not resolve is not skipping the gate: the command has no Orbit
+/// state to read either, and `main` fails it a few lines below.
+///
+/// The decision is `orbit_core`'s, taken from the host-issued callback session
+/// rather than from anything the child controls.
+fn refuse_plugin_child_cli(
+    audit_meta: &Option<command::operation::CommandMeta>,
+    root_override: Option<&std::path::Path>,
+) -> Result<(), orbit_core::OrbitError> {
+    let Ok(root) = orbit_core::runtime::resolve_generation_root(root_override) else {
+        return Ok(());
+    };
+    let invocation = audit_meta
+        .as_ref()
+        .map(|meta| match meta.subcommand.as_deref() {
+            Some(subcommand) => format!("{} {subcommand}", meta.command),
+            None => meta.command.clone(),
+        });
+    orbit_core::adapter::command::refuse_plugin_child_cli_command(&root, invocation.as_deref())
 }
 
 /// Render what the command returned, or report why it failed.

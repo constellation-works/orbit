@@ -20,9 +20,6 @@ use std::thread;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
-#[cfg(all(test, unix))]
-use std::cell::RefCell;
-
 #[cfg(unix)]
 pub(super) const RUN_OWNER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 #[cfg(unix)]
@@ -112,6 +109,157 @@ pub(super) fn signal_run_owner_process(run: &JobRun) -> Result<String, OrbitErro
 #[cfg(not(unix))]
 pub(super) fn signal_run_owner_process(_run: &JobRun) -> Result<String, OrbitError> {
     Ok("unsupported_platform".to_string())
+}
+
+/// Why a running run's worker cannot be stopped and seen gone from here, or
+/// `None` when it can — or is already gone. Asked before anything is decided
+/// on the strength of the stop, such as releasing the claim the run works
+/// for.
+#[cfg(unix)]
+pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str> {
+    let pid = run.pid?;
+    if pid == std::process::id() {
+        return Some("its worker is this process");
+    }
+    match classify_run_owner(run) {
+        OwnerIdentity::Missing | OwnerIdentity::Mismatch => None,
+        OwnerIdentity::Verified => match owner_process_group_id(pid) {
+            Some(pgid) if pgid == unsafe { libc::getpgrp() } => {
+                Some("its worker shares this process's group")
+            }
+            _ => None,
+        },
+        OwnerIdentity::LegacyLiveUnverified | OwnerIdentity::ProbeUnavailable => {
+            Some("its worker's process identity cannot be verified")
+        }
+        OwnerIdentity::ForeignPidNamespace => Some("its worker runs in another PID namespace"),
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn run_owner_unstoppable_reason(run: &JobRun) -> Option<&'static str> {
+    run.pid.map(|_| "this platform cannot stop a run's worker")
+}
+
+/// [`signal_run_owner_process`], failing unless the worker is seen gone
+/// afterwards: an outcome that signalled nothing it could verify (another
+/// PID namespace, an unverifiable identity, this process) is an error, so
+/// the cancellation stops before the run is finalized.
+pub(super) fn signal_run_owner_confirmed(run: &JobRun) -> Result<String, OrbitError> {
+    let outcome = signal_run_owner_process(run)?;
+    let stopped = matches!(
+        outcome.as_str(),
+        "terminated_process_group"
+            | "killed_process_group"
+            | "terminated_owner"
+            | "killed_owner"
+            | "already_exited"
+            | "no_pid"
+    );
+    if stopped || run_owner_liveness(run) == RunOwnerLiveness::Stopped {
+        return Ok(outcome);
+    }
+    Err(OrbitError::Execution(format!(
+        "could not confirm that the worker of run {} stopped (signal outcome {outcome})",
+        run.run_id
+    )))
+}
+
+/// What became of one provider child a cancellation went looking for.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProviderStop {
+    /// The provider was alive, verified as the recorded process, and is gone.
+    Stopped,
+    /// Nothing to stop: the recorded process had already exited (or its pid
+    /// now belongs to a different process).
+    NotRunning,
+    /// Liveness or identity could not be established, so nothing was signalled.
+    Unverified,
+}
+
+/// Stop a provider child recorded on a run's audit trail (TERM, then KILL).
+///
+/// Provider CLIs are spawned in their own process group, so signalling the
+/// run owner's group never reaches them; without this a cancelled run leaves
+/// its agent editing the worktree and spending provider budget after its
+/// reservations were released. Only a process whose recorded start token
+/// still matches is signalled, so a recycled pid is never touched.
+#[cfg(unix)]
+pub(super) fn stop_provider_process(
+    pid: u32,
+    pid_start_time: Option<&str>,
+) -> Result<ProviderStop, OrbitError> {
+    stop_provider_process_with_probe(
+        pid,
+        pid_start_time,
+        orbit_common::process::identity::probe_process_liveness,
+    )
+}
+
+#[cfg(unix)]
+fn stop_provider_process_with_probe<P>(
+    pid: u32,
+    pid_start_time: Option<&str>,
+    probe: P,
+) -> Result<ProviderStop, OrbitError>
+where
+    P: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
+{
+    use orbit_common::process::identity::ProcessLiveness;
+
+    if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
+        return Ok(ProviderStop::Unverified);
+    }
+    match probe(pid, pid_start_time) {
+        ProcessLiveness::Exited => return Ok(ProviderStop::NotRunning),
+        ProcessLiveness::Unknown => return Ok(ProviderStop::Unverified),
+        ProcessLiveness::Alive => {}
+    }
+    // An unversioned token cannot prove the pid still names the provider.
+    if !pid_start_time.is_some_and(is_stable_token) {
+        return Ok(ProviderStop::Unverified);
+    }
+
+    // Signal the whole group only when the provider leads its own (which is
+    // how Orbit spawns it); otherwise a shared group would take unrelated
+    // processes down with it.
+    let pgid = owner_process_group_id(pid)
+        .filter(|pgid| *pgid as u32 == pid && *pgid != unsafe { libc::getpgrp() });
+    let stopped = |pid: u32, pgid: Option<libc::pid_t>| match pgid {
+        Some(pgid) => !process_group_is_alive(pgid),
+        None => !process_is_alive(pid),
+    };
+    let signal = |signal: libc::c_int| match pgid {
+        Some(pgid) => match send_signal_to_process_group(pgid, signal) {
+            Err(error) if error.raw_os_error() != Some(libc::ESRCH) => Err(OrbitError::Execution(
+                format!("failed to signal provider process group {pgid}: {error}"),
+            )),
+            _ => Ok(()),
+        },
+        None => send_signal_to_pid(pid, signal),
+    };
+    let wait = |timeout: Duration| {
+        let started = Instant::now();
+        while started.elapsed() < timeout {
+            if stopped(pid, pgid) {
+                return true;
+            }
+            thread::sleep(RUN_OWNER_TERMINATION_POLL);
+        }
+        stopped(pid, pgid)
+    };
+
+    signal(libc::SIGTERM)?;
+    if !wait(RUN_OWNER_TERMINATION_GRACE) {
+        signal(libc::SIGKILL)?;
+        if !wait(RUN_OWNER_TERMINATION_GRACE) {
+            return Err(OrbitError::Execution(format!(
+                "provider process {pid} survived SIGTERM and SIGKILL"
+            )));
+        }
+    }
+    Ok(ProviderStop::Stopped)
 }
 
 #[cfg(unix)]
@@ -214,6 +362,12 @@ pub(super) fn running_run_owner_is_stale(run: &JobRun) -> bool {
 /// its owner liveness is probed exactly like a running run's.
 pub(super) const PENDING_RUN_UNCLAIMED_GRACE_MINUTES: i64 = 30;
 
+/// A worker can dispatch a child before another process can reliably probe
+/// its newly recorded PID. Give that running owner a short window to settle
+/// before an orphan sweep is allowed to finalize it.
+#[cfg(unix)]
+pub(super) const RUNNING_RUN_STARTUP_GRACE_SECONDS: i64 = 2;
+
 /// Why a `pending` run is conclusively orphaned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PendingStaleReason {
@@ -307,6 +461,12 @@ pub(super) fn running_run_owner_stale_reason(run: &JobRun) -> Option<OwnerIdenti
     if run.state != JobRunState::Running {
         return None;
     }
+    if run.started_at.is_some_and(|started_at| {
+        chrono::Utc::now().signed_duration_since(started_at)
+            < chrono::Duration::seconds(RUNNING_RUN_STARTUP_GRACE_SECONDS)
+    }) {
+        return None;
+    }
     match classify_run_owner(run) {
         identity @ (OwnerIdentity::Mismatch | OwnerIdentity::Missing) => Some(identity),
         OwnerIdentity::Verified
@@ -317,7 +477,6 @@ pub(super) fn running_run_owner_stale_reason(run: &JobRun) -> Option<OwnerIdenti
 }
 
 #[cfg(not(unix))]
-#[allow(dead_code)]
 pub(super) fn running_run_owner_stale_reason(_run: &JobRun) -> Option<()> {
     None
 }
@@ -334,8 +493,8 @@ pub(super) fn running_run_owner_stale_reason(_run: &JobRun) -> Option<()> {
 ///   be re-derived under either environment, but `kill(pid, 0)` confirms the
 ///   PID is still alive. Stays Running; cancellation still refuses to signal
 ///   it (PID-reuse protection).
-/// - `ProbeUnavailable` — the `ps` invocation itself failed (spawn error,
-///   IO error, etc.) and `kill(pid, 0)` confirms the PID is still alive.
+/// - `ProbeUnavailable` — kernel data could not be read or the fallback
+///   `ps` invocation failed, and `kill(pid, 0)` confirms the PID is still alive.
 ///   A transient probe failure must never terminalize a live worker.
 /// - `Missing` — no PID recorded, or both the probe and `kill(pid, 0)`
 ///   agree the PID is gone. Stale.
@@ -357,16 +516,32 @@ pub(super) enum OwnerIdentity {
 
 #[cfg(unix)]
 pub(super) fn classify_run_owner(run: &JobRun) -> OwnerIdentity {
-    #[cfg(test)]
-    record_classify_owner_snapshot(run);
     classify_run_owner_with_probes(
         run.pid,
         run.pid_start_time.as_deref(),
         pid_namespace_scope(run.pid_start_time.as_deref()),
-        probe_process_start_identity,
+        start_identity_probe,
         |pid| legacy_lstart_matches(pid, run.pid_start_time.as_deref().unwrap_or_default()),
         process_is_alive,
     )
+}
+
+/// Completion only blocks on a running run whose recorded PID and start-time
+/// token identify the process still executing it. An unknown or unverified owner
+/// is not proof that this particular implementation is alive.
+#[cfg(unix)]
+pub(crate) fn running_run_has_verified_owner(run: &JobRun) -> bool {
+    run.state == JobRunState::Running && classify_run_owner(run) == OwnerIdentity::Verified
+}
+
+#[cfg(not(unix))]
+pub(crate) fn running_run_has_verified_owner(_run: &JobRun) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn start_identity_probe(pid: u32) -> ProbeOutcome {
+    probe_process_start_identity(pid)
 }
 
 /// Inner, testable form of [`classify_run_owner`] with the probes injected.
@@ -393,7 +568,7 @@ where
     A: FnOnce(u32) -> bool,
 {
     // [ORB-10594] Ordered ahead of every probe: inside a private PID namespace
-    // both `ps` and `kill(pid, 0)` answer confidently and wrongly about a PID
+    // both the identity probe and `kill(pid, 0)` answer wrongly about a PID
     // that belongs to another namespace.
     if scope == PidNamespaceScope::Foreign {
         return OwnerIdentity::ForeignPidNamespace;
@@ -416,7 +591,7 @@ where
             ProbeOutcome::Token(_) => OwnerIdentity::Mismatch,
             ProbeOutcome::NoProcess => {
                 if is_alive(pid) {
-                    // Race: `ps` returned no-process but `kill(pid, 0)` still
+                    // Race: the probe returned no-process but `kill(pid, 0)` still
                     // sees the PID. Defer finalization until the probe agrees.
                     OwnerIdentity::ProbeUnavailable
                 } else {
@@ -470,7 +645,7 @@ pub(crate) enum RunOwnerLiveness {
 pub(crate) fn run_owner_liveness(run: &JobRun) -> RunOwnerLiveness {
     match classify_run_owner(run) {
         // `ProbeUnavailable` reaches here only when `kill(pid, 0)` succeeded,
-        // so some process holds the PID even though `ps` could not confirm the
+        // so some process holds the PID even though the probe could not confirm the
         // identity token. That is enough to refuse to treat the owner as gone.
         OwnerIdentity::Verified
         | OwnerIdentity::LegacyLiveUnverified
@@ -530,44 +705,4 @@ pub(super) fn stale_job_run_message(run: &JobRun, _reason: Option<()>) -> String
             .unwrap_or_else(|| "-".to_string()),
         run.pid_start_time.as_deref().unwrap_or("-")
     )
-}
-
-/// One `classify_run_owner` observation, used by list/history counting fixtures
-/// to prove a single list/history call classifies an unchanged owner snapshot
-/// at most once. Stale finalization may classify again after rereading.
-#[cfg(all(test, unix))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ClassifyOwnerSnapshot {
-    pub run_id: String,
-    pub state: JobRunState,
-    pub pid: Option<u32>,
-    pub pid_start_time: Option<String>,
-}
-
-#[cfg(all(test, unix))]
-thread_local! {
-    static CLASSIFY_OWNER_SNAPSHOTS: RefCell<Vec<ClassifyOwnerSnapshot>> =
-        const { RefCell::new(Vec::new()) };
-}
-
-#[cfg(all(test, unix))]
-fn record_classify_owner_snapshot(run: &JobRun) {
-    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| {
-        snapshots.borrow_mut().push(ClassifyOwnerSnapshot {
-            run_id: run.run_id.clone(),
-            state: run.state,
-            pid: run.pid,
-            pid_start_time: run.pid_start_time.clone(),
-        });
-    });
-}
-
-#[cfg(all(test, unix))]
-pub(super) fn reset_classify_owner_snapshots() {
-    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| snapshots.borrow_mut().clear());
-}
-
-#[cfg(all(test, unix))]
-pub(super) fn classify_owner_snapshots() -> Vec<ClassifyOwnerSnapshot> {
-    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| snapshots.borrow().clone())
 }

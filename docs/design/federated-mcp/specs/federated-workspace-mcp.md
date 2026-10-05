@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-08-29
+last_validated: 2026-09-19
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
@@ -49,8 +49,8 @@ If a valid configured row already names the accepting machine's `machine_id`, th
 
 ## Selector identity
 
-1. The host-qualified selector is **structured, caller-uninterpreted**. Encoding `hm_<id>/ws_*` is normative (example: `hm_<id>/ws_orbit`). The stable key is `machine_id` (`hm_…`), not renameable `host_id`.
-2. Callers must not parse the token and must not construct it from `host_id` or by concatenating remembered identifiers. The only caller-facing way to obtain a selector is to copy the `selector` field from federated `orbit_workspace_list`.
+1. The machine-qualified selector is **structured, caller-uninterpreted**. Encoding `hm_<id>/ws_*` is normative (example: `hm_<id>/ws_orbit`). The stable key is `machine_id` (`hm_…`), not the renameable `machine.name`.
+2. Callers must not parse the token and must not construct it from `machine.name` or by concatenating remembered identifiers. The only caller-facing way to obtain a selector is to copy the `selector` field from federated `orbit_workspace_list`.
 3. Display names such as `orbit-linux/ws_orbit` are not selectors.
 4. The selector is addressing data, not a path, URL, logical-only workspace ID, or authorization credential. Possession of a selector is not authorization.
 5. Every workspace-scoped federated tool accepts the selector. The gateway routes that call to the encoded destination. Federated `tools/list` advertises that callers must copy `selector` from federated `orbit.workspace.list` and must not treat cwd, a registered name, or a bare `ws_*` as valid. Federated `orbit.task.show` requires the host-qualified selector and does not inherit the v1 id-only default.
@@ -64,7 +64,7 @@ Capability class is assigned by **what the tool does**, not by a per-tool regist
 
 | Class | Rule | Examples (not an exhaustive registry) |
 |---|---|---|
-| `control_plane` | Task issuance and coordination-store writes | `orbit_task_add`, `orbit.task.update`, `orbit.task.start` |
+| `control_plane` | Task issuance and coordination-store writes | `orbit_task_add`, `orbit.task.update` |
 | `execute` | Anything that touches runs, logs, or scheduler state | job-run inspect/cancel, log read, routine/scheduler mutations |
 | unclassified | Discovery and list tools | `orbit_workspace_list` (federated), other list/discovery tools |
 
@@ -116,7 +116,7 @@ Implemented in [ORB-11014] as `orbit mcp serve --mode federated`
 file; the accepting machine is always prepended. Every list call then probes
 each destination live — local in-process, remotes over the v1 SSH argv — and
 caches nothing. The response envelope is `{"workspaces": [...]}` — no envelope
-`machine_id`. After [ORB-11015] the mux advertises the canonical 23-tool
+`machine_id`. After [ORB-11015] the mux advertises the canonical 21-tool
 surface: this list stays session-unbound and answered by the mux, and every
 workspace-scoped tool is delivered to the destination encoded in the copied
 selector.
@@ -131,15 +131,15 @@ Federated list does **not** inherit that envelope or that filter:
    | Field | Meaning |
    |---|---|
    | `selector` | Structured, caller-uninterpreted host-qualified route token (`hm_<id>/ws_*`). Copy this field; do not parse it. |
-   | `host` | Destination display identity (renameable `host_id`; display only) |
+   | `machine_name` | Destination display identity (renameable `machine.name`; display only) |
    | `machine_id` | Destination stable identity (`hm_…`) |
    | `reachability` | Whether the configured destination answers: `reachable` or `unreachable` |
    | `checkout_health` | Repo-root presence at that destination: `active`, `invalid`, or `unknown` if the host cannot be probed |
    | `capabilities` | Classes the destination currently **advertises** for that workspace (a hint; see Capabilities vs checkout roles) |
 
-   `host` is the accepting machine's `host_id` for the implicit local destination. For configured remotes it is the operator's `ssh` target: the v1 discovery envelope carries no `host_id`, so that alias is the only display identity the mux can honestly attribute to a remote.
+   `machine_name` is the accepting machine's `machine.name` for the implicit local destination. For configured remotes it is the operator's `ssh` target: the v1 discovery envelope carries no display name, so that alias is the only display identity the mux can honestly attribute to a remote. [ORB-12725] renamed this key from `host`, retiring *host* for the machine sense across Orbit.
 
-   The federated-only keys are exactly `selector`, `host`, `machine_id`, `reachability`, `checkout_health`, and `capabilities`. `capabilities` is an array whose values are `control_plane` and/or `execute`. These names are protocol keys; implementations must not substitute a combined `health` key or the prose labels used to describe them.
+   The federated-only keys are exactly `selector`, `machine_name`, `machine_id`, `reachability`, `checkout_health`, and `capabilities`. `capabilities` is an array whose values are `control_plane` and/or `execute`. These names are protocol keys; implementations must not substitute a combined `health` key or the prose labels used to describe them.
 
 3. **Do not overload one `health` field** with SSH/MCP reachability and repo-root presence.
 4. **Include unreachable and inactive destinations.** Configured workspaces on unreachable or inactive destinations are included, not omitted. A down destination appears with an explicit unreachable (and, if checkout cannot be probed, unknown/unhealthy) projection. Omission makes every later call a stale-route surprise.
@@ -180,6 +180,8 @@ Unreachable wins over capability and stale because those are undecidable without
 Classification and delivery are budgeted separately [ORB-11023]. SSH setup, the handshake, discovery, and `tools/list` share one probe budget; the routed `tools/call` is stamped with its own, larger budget when its request is written. Routed tools include long-running mutating ones, so the time spent choosing a destination must not be deducted from the time the tool gets to run.
 
 Once that request is written the call may already have executed and committed on the destination, and killing the transport does not undo it. A lost answer there is therefore `outcome_unknown`, never `unreachable_destination`: the latter means a delivery miss and invites the retry that would duplicate the write. This is a post-dispatch outcome and does **not** enter the precedence ladder above — everything in that ladder is decided before the destination sees the call.
+
+Both budgets bound writing a request as well as awaiting its answer, and unrelated messages the destination emits never extend them. A write still blocked at its deadline ends the session: `unreachable_destination` if the request line never fully left, otherwise `outcome_unknown` for a routed `tools/call`.
 
 | Class | Error identity | When |
 |---|---|---|

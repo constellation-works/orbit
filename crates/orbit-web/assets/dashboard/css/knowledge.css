@@ -1,0 +1,487 @@
+/* Knowledge tab: friction list, filters, detail pane, and controls. */
+
+.friction-filter-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-dim);
+  font-size: 13px;
+}
+
+#friction-status-filter {
+  min-width: 116px;
+  height: 32px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 28px 0 10px;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+#friction-status-filter:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+@media (max-width: 520px) {
+  #friction-search { flex: 1 1 100%; }
+  .friction-filter-control { flex: 1 1 100%; }
+  #friction-status-filter { flex: 1; }
+}
+
+.friction-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+.friction-stats .tile {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 16px;
+}
+.friction-stats .tile + .tile { border-left: 1px solid var(--hair); }
+.friction-stats .value { font-size: 20px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.friction-stats .label { font-size: 13px; color: var(--fg-dim); }
+@media (max-width: 800px) {
+  .friction-stats { grid-template-columns: 1fr; }
+  .friction-row { grid-template-columns: 120px minmax(0, 1fr) 76px; }
+  .friction-row .tags,
+  .friction-row .reported { display: none; }
+}
+.friction-row {
+  display: grid;
+  gap: 12px;
+  padding: 9px 16px;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  grid-template-columns: 130px minmax(220px, 1.2fr) minmax(150px, 0.8fr) 104px 120px;
+}
+.friction-row:hover { background: rgba(255, 255, 255, 0.03); }
+.friction-row.active { background: rgba(110, 159, 255, 0.06); }
+.friction-row.header {
+  color: var(--fg-dim);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: default;
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  z-index: 1;
+}
+.friction-row .id,
+.friction-row .title,
+.friction-row .reported {
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.friction-row .title { color: var(--fg); }
+.friction-row .tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.knowledge-detail-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.friction-detail-body {
+  margin: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow: auto;
+}
+.friction-control-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.4fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 800px) {
+  .friction-control-grid { grid-template-columns: 1fr; }
+}
+.friction-control {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.friction-control-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.friction-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.friction-tag-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--fg);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.friction-tag-option input {
+  accent-color: var(--accent);
+}
+
+.knowledge-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  font-family: var(--font-sans);
+}
+.knowledge-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.knowledge-row.active {
+  background: rgba(255, 255, 255, 0.03);
+  border-left-color: var(--fg-dim);
+}
+.knowledge-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.knowledge-row .top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.knowledge-row .id,
+.knowledge-row .when {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.knowledge-row .spacer { flex: 1; }
+.friction-row-toggle {
+  display: none;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.knowledge-row .title {
+  font-size: 13px;
+  color: var(--fg);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knowledge-row .summary {
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.knowledge-row .meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-dim);
+}
+.knowledge-row .meta .dot,
+.knowledge-detail-head .sub .dot {
+  color: rgba(255, 255, 255, 0.15);
+}
+.knowledge-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  background: var(--bg);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.knowledge-pill::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+}
+.knowledge-pill.active::before,
+.knowledge-pill.accepted::before,
+.knowledge-pill.resolved::before { background: var(--status-done); }
+.knowledge-pill.proposed::before,
+.knowledge-pill.open::before { background: var(--status-proposed); }
+.knowledge-pill.triaged::before { background: var(--status-in-progress); }
+.knowledge-pill.superseded::before { background: var(--fg-dim); }
+
+.knowledge-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.knowledge-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+}
+.knowledge-tag.path,
+.knowledge-tag.feature {
+  color: var(--fg);
+}
+.knowledge-tag.dim {
+  color: var(--fg-dim);
+  opacity: 0.75;
+}
+
+/* The friction list is long enough to
+   scroll the page well past the detail pane, which used to carry the
+   reader out of view mid-read. The detail panel sticks below the fixed
+   chrome (header 61px + tabs 49px + health strip 60px = 170px) and is
+   bounded to the remaining viewport, so its body scrolls internally
+   instead of being clipped when the detail is taller than the screen. */
+/* The content column scrolls under a fixed 60px top bar, so the pane
+   pins just inside the column's padding and fills what is left of it. */
+#friction-detail-panel {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 124px);
+  display: flex;
+  flex-direction: column;
+}
+#friction-detail-panel > .body {
+  overflow-y: auto;
+  min-height: 0;
+}
+.friction-accordion-detail {
+  display: none;
+}
+
+/* At the same breakpoint where Knowledge becomes one column, reuse the
+   Tasks interaction pattern: the selected row owns an inline detail
+   immediately beneath it, and the separate pane leaves the layout. */
+@media (max-width: 1000px) {
+  #friction-detail-panel {
+    display: none;
+  }
+  .friction-row-toggle {
+    display: inline-flex;
+  }
+  .friction-accordion-detail {
+    display: flex;
+    flex-direction: column;
+    background: #050505;
+    border-bottom: 1px solid var(--hair);
+    animation: fadeIn 0.3s ease;
+  }
+  .friction-accordion-detail .knowledge-detail-body {
+    overflow-y: visible;
+  }
+}
+#friction-detail {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #050505;
+}
+.knowledge-detail-head {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  display: grid;
+  gap: 8px;
+}
+.knowledge-detail-head .crumb,
+.knowledge-detail-head .sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.knowledge-detail-head .crumb .id {
+  color: var(--fg);
+}
+.knowledge-detail-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 1.35;
+}
+.knowledge-detail-head .actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.knowledge-btn {
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  cursor: pointer;
+}
+.knowledge-btn::first-letter { text-transform: uppercase; }
+.knowledge-btn:hover:not(:disabled) {
+  border-color: var(--fg-dim);
+}
+.knowledge-btn.primary {
+  border-color: var(--fg-dim);
+  background: transparent;
+}
+.knowledge-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* The detail pane is a column beside the list, so its body and metadata
+   stack: side by side they left the report ~140px wide. */
+.knowledge-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.knowledge-body {
+  padding: 18px 22px 28px;
+  min-width: 0;
+}
+.knowledge-body .markdown-body {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--fg);
+}
+.knowledge-side {
+  border-top: 1px solid var(--hair);
+  padding: 18px 22px 24px;
+  background: var(--bg);
+  overflow-y: auto;
+}
+.knowledge-side-group {
+  margin-bottom: 18px;
+}
+.knowledge-side-group:last-child {
+  margin-bottom: 0;
+}
+.knowledge-side-group h4 {
+  margin: 0 0 8px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg);
+  text-transform: capitalize;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+.knowledge-side-group .empty {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  opacity: 0.65;
+}
+.knowledge-side .meta-list {
+  display: grid;
+  gap: 6px;
+}
+.knowledge-side .meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding-bottom: 5px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+}
+.knowledge-side .meta-row:last-child {
+  border-bottom: none;
+}
+.knowledge-side .meta-row .k {
+  color: var(--fg-dim);
+}
+.knowledge-side .meta-row .v {
+  color: var(--fg);
+  text-align: right;
+}
+.knowledge-link-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg-elev);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg);
+  text-align: left;
+}
+.knowledge-link-row:hover {
+  border-color: var(--fg-dim);
+}
+.knowledge-side .friction-control-grid {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 1400px) {
+  .knowledge-detail-body {
+    grid-template-columns: 1fr;
+  }
+  .knowledge-side {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}

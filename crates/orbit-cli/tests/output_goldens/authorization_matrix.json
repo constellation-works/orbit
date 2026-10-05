@@ -1,0 +1,899 @@
+[
+  {
+    "surface": "cli_command",
+    "operation": "audit prune",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
+    "operation": "gc worktrees",
+    "required_any": [
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
+    "operation": "workspace remove",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
+    "operation": "workspace teardown",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "auto_drain.complete",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "auto_drain.stop",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "auto_task.mint",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "auto_task.toggle",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "claim.recover",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "clock.cadence",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "clock.service",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "config.set",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "handoff.approve",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "handoff.revoke",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "job.run",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "plugin.disable",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "plugin.enable",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "routine.toggle",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "github.auth.status",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "github.pr.list",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "github.run.list",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "github.run.logs",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "github.run.view",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.agent.invoke",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.auto_task.add",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.auto_task.list",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.auto_task.mint",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.auto_task.show",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.auto_task.update",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.command.exec",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.drain.claim.bind",
+    "required_any": [
+      "agent",
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.drain.claim.settle",
+    "required_any": [
+      "agent",
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.drain.claims",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.drain.probe",
+    "required_any": [
+      "agent",
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.drain.receipt.lookup",
+    "required_any": [
+      "agent",
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.friction.add",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.friction.list",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.friction.rehome",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.friction.resolve",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.friction.show",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.friction.stats",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.friction.tags",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.friction.update",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.pipeline.invoke",
+    "required_any": [
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.pipeline.wait",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.routine.control",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.search",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.add",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.artifact.get",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.artifact.put",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.delete",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.eligible",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.lint",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.list",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.locks",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.locks.release",
+    "required_any": [
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.locks.reserve",
+    "required_any": [
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.pull",
+    "required_any": [
+      "agent",
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.reject",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.review_reset",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.show",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.update",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.workflow.auto",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.workflow.run.list",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.workflow.run.resume",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.workflow.run.show",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.workflow.ship",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.workspace.claim.acquire",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.workspace.claim.release",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.workspace.claim.show",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "plugin.tool.mutating",
+    "required_any": [
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "plugin.tool.read_only",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "proc.spawn",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  }
+]

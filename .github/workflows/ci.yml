@@ -5,6 +5,12 @@ on:
     branches: [main, agent-main]
   pull_request:
 
+# Superseded PR heads must not compete with their replacement. Every non-PR
+# run gets its own group, preserving independent push and scheduled runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -26,47 +32,14 @@ env:
   CARGO_DENY_LINUX_SHA256: f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af
   LLVM_COV_VERSION: 0.8.7
   LLVM_COV_LINUX_SHA256: 9a75fe29538d3800b3da57f6f6efb64cba5c720a257bf0cb8b51f39d495a9168
+  # [ORB-13017] The uv-locked Python plugin fixture runs its backend through
+  # uv. Keep in sync with UV_VERSION in ci-macos.yml.
+  UV_VERSION: 0.11.28
+  UV_LINUX_SHA256: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
   # Keep in sync with [workspace.package] rust-version in Cargo.toml.
   MSRV: "1.89"
 
 jobs:
-  # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg. The main
-  # `ci` job already compiles and runs these crates inside the workspace-wide
-  # nextest pass, but this job makes the sandbox/policy enforcement suite an
-  # explicit, named gate on Linux: orbit-policy's evaluation matrix
-  # (incl. the ORB-00418 symlink-resolution tests), orbit-tools'
-  # runtime fs-enforcement integration tests (the only enforcement layer on
-  # Linux — there is no kernel sandbox), and orbit-exec's Linux fail-closed
-  # contract tests. Tests that need host capabilities self-skip at runtime
-  # (skip-with-message) rather than relying on compile-time cfg alone, so the
-  # suite stays honest on any ubuntu runner.
-  linux-sandbox:
-    name: Linux Sandbox & Policy Enforcement
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # PR head SHA, not the branch name GitHub deletes on merge, and
-          # not github.sha (the ephemeral merge commit).
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-linux-sandbox-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-linux-sandbox-
-            ${{ runner.os }}-cargo-
-
-      - name: Run Linux sandbox/policy enforcement tests
-        run: cargo test --no-fail-fast -p orbit-exec -p orbit-policy -p orbit-tools --locked
-
   # [ORB-10010] MSRV floor: `rust-version` in [workspace.package] (Cargo.toml).
   # Evidence for 1.89: edition 2024 requires >= 1.85, the highest
   # `rust-version` declared by any dependency in the locked graph is 1.88
@@ -77,27 +50,26 @@ jobs:
   msrv:
     name: MSRV (cargo check on pinned minimum)
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # Observed ~1 minute; allows cold cache and runner variance.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # PR head SHA, not the branch name GitHub deletes on merge, and
-          # not github.sha (the ephemeral merge commit).
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }}
+          # On pull_request, use the PR head SHA: not the branch name
+          # GitHub deletes on merge, and not github.sha (the ephemeral
+          # merge commit). On push, use github.sha directly so a run that
+          # sat queued still builds and reports on the commit that
+          # triggered it, not whatever the branch points to once it starts.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
         with:
           toolchain: "1.89"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-msrv-
+      # [DANI-10428] rust-cache keys on the rustc version, so this 1.89 check
+      # cache can never collide with the stable jobs; it prunes stale
+      # registry/target entries before saving instead of growing to the cap.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Check workspace on MSRV toolchain
         run: |
@@ -113,6 +85,7 @@ jobs:
   coverage:
     name: Coverage (informational)
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # Observed ~15 minutes; allows cold instrumented builds.
     steps:
       # [ORB-10126] Reclaim ~25-30 GB of preinstalled runner bloat before the
       # instrumented build. No maintained free-disk action is pinned in this
@@ -135,27 +108,28 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # PR head SHA, not the branch name GitHub deletes on merge, and
-          # not github.sha (the ephemeral merge commit).
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }}
+          # On pull_request, use the PR head SHA: not the branch name
+          # GitHub deletes on merge, and not github.sha (the ephemeral
+          # merge commit). On push, use github.sha directly so a run that
+          # sat queued still builds and reports on the commit that
+          # triggered it, not whatever the branch points to once it starts.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
         with:
           components: llvm-tools-preview
 
-      # [ORB-10126] Deps-only cache: the instrumented target/ is dropped from
-      # the cache path (it churns near actions/cache's ~10 GB cap and its
-      # restore competes with fresh instrumented artifacts + profraw for disk).
-      # Only the immutable registry/git deps are cached here.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # [ORB-10126] Deps-only cache: the instrumented target/ is not cached
+      # (it churns near the ~10 GB cap and its restore competes with fresh
+      # instrumented artifacts + profraw for disk). Only the registry/git deps
+      # are cached, pruned to the crates Cargo.lock still references. This
+      # cannot share the ci job's archive: GitHub scopes a cache entry to its
+      # path list, so a deps-only entry and a deps+target entry never match.
+      # [DANI-10428]
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-coverage-deps-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-coverage-deps-
+          cache-targets: false
 
       # Same pinned-tarball convention as the nextest install in the ci job.
       - name: Install cargo-llvm-cov
@@ -170,10 +144,46 @@ jobs:
           rm -f "$archive"
           cargo llvm-cov --version
 
+      # [ORB-13655] Coverage runs its tests through nextest, the same pinned
+      # runner as the ci job; see "Collect workspace coverage" below.
+      - name: Install cargo-nextest
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          archive="$(mktemp)"
+          mkdir -p "$cargo_bin"
+          curl -LsSf "https://get.nexte.st/${NEXTEST_VERSION}/linux" -o "$archive"
+          echo "${NEXTEST_LINUX_SHA256}  ${archive}" | sha256sum -c -
+          tar zxf "$archive" -C "$cargo_bin"
+          rm -f "$archive"
+          cargo nextest --version
+
+      # [ORB-13017] Same pinned-tarball convention as nextest. Only the uv
+      # binary comes from the network; the plugin fixture's dependency is a
+      # wheel inside the fixture, so the test itself never reaches PyPI.
+      - name: Install uv
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          archive="$(mktemp)"
+          mkdir -p "$cargo_bin"
+          curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" -o "$archive"
+          echo "${UV_LINUX_SHA256}  ${archive}" | sha256sum -c -
+          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" uv-x86_64-unknown-linux-gnu/uv
+          rm -f "$archive"
+          uv --version | grep -F "${UV_VERSION}"
+
       # --no-report runs the instrumented tests once; the two `report` calls
       # below render lcov + a human-readable summary from the same profdata.
+      # [ORB-13655] Run through nextest with the ci job's target set, so each
+      # test gets its own process and the `.config/nextest.toml` test groups
+      # apply. Under libtest, a binary's tests shared one process: a sibling's
+      # fork could hold a freshly written executable open (ETXTBSY), and the
+      # `web_serve_*` tests raced each other for a `free_port()` port.
       - name: Collect workspace coverage
-        run: cargo llvm-cov --workspace --locked --no-report
+        run: |
+          cargo llvm-cov nextest --workspace --locked --no-report \
+            --no-fail-fast --lib --bins --tests
 
       - name: Render lcov report
         run: cargo llvm-cov report --lcov --output-path lcov.info
@@ -182,7 +192,7 @@ jobs:
         run: cargo llvm-cov report --summary-only
 
       - name: Upload lcov report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: coverage-lcov
           path: lcov.info
@@ -197,6 +207,7 @@ jobs:
   ci:
     name: Check / Clippy / Test
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # Observed ~12 minutes; allows cold builds and slower test hosts.
     steps:
       # [ORB-10126] Same runner-bloat reclaim as the coverage job; the ci job
       # compiles the whole workspace from the same target/ and sits close to
@@ -218,24 +229,29 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # PR head SHA, not the branch name GitHub deletes on merge, and
-          # not github.sha (the ephemeral merge commit).
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref_name }}
+          # On pull_request, use the PR head SHA: not the branch name
+          # GitHub deletes on merge, and not github.sha (the ephemeral
+          # merge commit). On push, use github.sha directly so a run that
+          # sat queued still builds and reports on the commit that
+          # triggered it, not whatever the branch points to once it starts.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
         with:
           components: rustfmt, clippy
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # [DANI-10428] Stable-toolchain build cache. rust-cache prunes target/
+      # to dependency artifacts and the registry to crates Cargo.lock still
+      # references before saving, so the archive stays far below the 10 GB
+      # repo cap instead of evicting every other entry; `shared-key` names the
+      # toolchain rather than the job so any stable job that needs the same
+      # artifacts (the sandbox gate below used to be one) restores this entry.
+      # Dependencies stay valid when a test fails, so save on failure too.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          shared-key: stable
+          cache-on-failure: true
 
       - name: Install cargo-nextest
         run: |
@@ -271,8 +287,135 @@ jobs:
           command -v rg >/dev/null 2>&1 || sudo apt-get install -y --no-install-recommends ripgrep
           rg --version | head -1
 
+      # [ORB-13017] Same pinned-tarball convention as nextest. Only the uv
+      # binary comes from the network; the plugin fixture's dependency is a
+      # wheel inside the fixture, so the test itself never reaches PyPI.
+      - name: Install uv
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          archive="$(mktemp)"
+          mkdir -p "$cargo_bin"
+          curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" -o "$archive"
+          echo "${UV_LINUX_SHA256}  ${archive}" | sha256sum -c -
+          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" uv-x86_64-unknown-linux-gnu/uv
+          rm -f "$archive"
+          uv --version | grep -F "${UV_VERSION}"
+
       - name: Run CI guardrails
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/ci-guardrails.sh
+
+      # [ORB-13884] The ubuntu-latest image does not ship Bubblewrap, and Ubuntu
+      # 24.04 restricts unprivileged user namespaces through AppArmor, so the
+      # live boundary tests below need the prerequisite prepared the way
+      # docs/runbooks/linux-sandbox.md prepares a host: distro `bubblewrap`,
+      # and only if the real probe still fails with the AppArmor UID-map
+      # denial, the packaged narrow `bwrap-userns-restrict` profile. The
+      # global `kernel.apparmor_restrict_unprivileged_userns` control is never
+      # touched. The step ends with the exact namespace-and-mount probe Orbit
+      # runs, as the unprivileged runner user, and fails with a diagnostic when
+      # it does not pass; the tests' own assertions are unchanged. The profile
+      # lives on this ephemeral runner only.
+      - name: Prepare and probe Bubblewrap for the Linux boundary tests
+        run: |
+          set -euo pipefail
+          profile_src=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          profile_dst=/etc/apparmor.d/bwrap-userns-restrict
+          probe_err="$(mktemp)"
+
+          fail() {
+            echo "::error title=Bubblewrap unavailable::$1"
+            echo "--- diagnostics ---"
+            echo "user: $(id)"
+            echo "kernel.apparmor_restrict_unprivileged_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>&1 || true)"
+            echo "kernel.unprivileged_userns_clone=$(sysctl -n kernel.unprivileged_userns_clone 2>&1 || true)"
+            echo "user.max_user_namespaces=$(sysctl -n user.max_user_namespaces 2>&1 || true)"
+            ls -l /usr/bin/bwrap 2>&1 || true
+            /usr/bin/bwrap --version 2>&1 || true
+            echo "bwrap probe stderr: $(cat "$probe_err" 2>/dev/null || true)"
+            sudo grep -E '^bwrap ' /sys/kernel/security/apparmor/profiles 2>&1 || echo "no bwrap AppArmor profile loaded (or the profile list is unreadable)"
+            exit 1
+          }
+
+          # The same checks Orbit's capability probe makes: the trusted path,
+          # the --bind-fd feature, then a real user+mount namespace.
+          probe() {
+            local help
+            : >"$probe_err"
+            if [ ! -x /usr/bin/bwrap ]; then
+              echo "trusted Bubblewrap not available at /usr/bin/bwrap" >"$probe_err"
+              return 1
+            fi
+            help="$(/usr/bin/bwrap --help 2>&1)" || true
+            if ! grep -Fq -- '--bind-fd' <<<"$help"; then
+              echo "Bubblewrap does not support the required --bind-fd" >"$probe_err"
+              return 1
+            fi
+            /usr/bin/bwrap --die-with-parent --new-session --unshare-all --share-net \
+              --ro-bind / / -- /bin/true 2>"$probe_err"
+          }
+
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles
+
+          if probe; then
+            echo "Bubblewrap probe passed without an AppArmor profile"
+          else
+            detail="$(cat "$probe_err")"
+            echo "Bubblewrap probe failed: ${detail}"
+            case "$detail" in
+              *"setting up uid map: Permission denied"*) ;;
+              *) fail "probe failed for a reason the packaged AppArmor profile does not address: ${detail}" ;;
+            esac
+            [ -f "$profile_src" ] || fail "apparmor-profiles did not provide $profile_src"
+            if sudo grep -Eq '^bwrap ' /sys/kernel/security/apparmor/profiles; then
+              fail "a bwrap AppArmor profile is already loaded but the probe fails; refusing to replace it"
+            fi
+            [ ! -e "$profile_dst" ] || fail "$profile_dst already exists; refusing to overwrite it"
+            sudo install -m 0644 "$profile_src" "$profile_dst"
+            sudo /usr/sbin/apparmor_parser -r "$profile_dst"
+            sudo grep -Eq '^bwrap ' /sys/kernel/security/apparmor/profiles \
+              || fail "AppArmor did not report the packaged bwrap profile as loaded"
+            probe || fail "probe still fails after loading the packaged bwrap profile: $(cat "$probe_err")"
+            echo "Bubblewrap probe passed after loading the packaged bwrap-userns-restrict profile"
+          fi
+
+      # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg: an
+      # explicit, named gate for orbit-policy's evaluation matrix (incl. the
+      # ORB-00418 symlink-resolution tests), orbit-tools' runtime
+      # fs-enforcement integration tests (the only enforcement layer on Linux
+      # — there is no kernel sandbox), and orbit-exec's Linux fail-closed
+      # contract tests. The live Bubblewrap boundary tests are ignored in the
+      # portable suite, then selected explicitly here: an ubuntu-latest runner
+      # without working user namespaces fails this named gate (their probe
+      # asserts availability) instead of reporting those tests as passed after
+      # an early return.
+      # [DANI-10428] This used to be a separate job that compiled the three
+      # crates under `cargo test -p` feature resolution — a second build of
+      # the same crates. The nextest filterset below selects them out of the
+      # exact `--workspace --lib --bins --tests` artifacts the guardrails step
+      # already built and ran, so the gate costs a re-run and no compile.
+      # [ORB-12881] The ignored leg selects orbit-exec's Linux sandbox
+      # integration binary (`linux_sandbox::`), which needs a host with working
+      # Bubblewrap namespaces. It runs over the same artifact set as the line
+      # above it so neither leg triggers a rebuild. nextest exits 4 when the
+      # filterset matches nothing, so a refactor that retires or renames these
+      # tests fails the gate instead of passing on an empty selection; never
+      # add `--no-tests` here.
+      # The uv-locked Python plugin fixture runs in the portable suite above:
+      # the pinned uv binary is installed before Run CI guardrails.
+      # A prior failure in this job (including `Run CI guardrails`) skips this
+      # gate; if this step is missing, the gate did not pass.
+      - name: Linux sandbox/policy enforcement gate
+        run: |
+          cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
+            -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
+          cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
+            --run-ignored only \
+            -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage

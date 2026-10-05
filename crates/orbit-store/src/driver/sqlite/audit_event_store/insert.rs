@@ -1,0 +1,269 @@
+//! Audit-event inserts, on the Store connection or inside a caller's
+//! transaction.
+
+use orbit_common::OrbitError;
+use orbit_types::telemetry::canonical_actor_for_role_label;
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+
+use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use crate::driver::sqlite::migration::{SUPPORTED_SCHEMA_VERSION, current_schema_version};
+use crate::{Store, StoreTx, now_string};
+
+impl Store {
+    /// Append an audit row without opening the rest of the store for writes.
+    ///
+    /// Foreign-generation readers use this narrow path while retaining their
+    /// read-only state handles. It never creates or migrates a database, changes
+    /// file permissions, or writes a schema this binary does not support exactly.
+    pub fn append_audit_event_at_path(
+        path: &Path,
+        params: &AuditEventInsertParams,
+        invocation: AuditInvocationFields<'_>,
+    ) -> Result<(), OrbitError> {
+        let path = validated_audit_append_path(path)?;
+        if std::fs::metadata(&path)?.permissions().readonly() {
+            return Err(OrbitError::Store("audit database is read-only".into()));
+        }
+        let mut conn = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        conn.busy_timeout(Duration::from_millis(u64::from(
+            orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+        )))
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        // Hold the writer lock across the schema check and insert so another
+        // process cannot migrate the database between them.
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let version = current_schema_version(&tx)?;
+        if version != SUPPORTED_SCHEMA_VERSION {
+            return Err(OrbitError::Migration(format!(
+                "cannot append audit event: store schema {version} differs from supported schema {SUPPORTED_SCHEMA_VERSION}"
+            )));
+        }
+        insert_audit_event_record_on_connection(&tx, params, invocation)?;
+        tx.commit()
+            .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+
+    pub fn insert_audit_event_record(
+        &self,
+        params: &AuditEventInsertParams,
+    ) -> Result<(), OrbitError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+
+        insert_audit_event_record_on_connection(&conn, params, AuditInvocationFields::default())
+    }
+
+    /// Insert a canonical audit row with the transport-neutral invocation
+    /// fields carried by a tool session. The legacy insert DTO remains stable
+    /// for non-tool producers; new invocation producers use this focused seam.
+    pub fn insert_audit_event_record_with_invocation(
+        &self,
+        params: &AuditEventInsertParams,
+        invocation: AuditInvocationFields<'_>,
+    ) -> Result<(), OrbitError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+
+        insert_audit_event_record_on_connection(&conn, params, invocation)
+    }
+}
+
+/// Resolve the configured audit database through its existing parent and
+/// require it to already be a regular file.
+///
+/// The database may live in a caller-selected state root, so the root stays
+/// caller-owned; traversal and symlink redirection are not part of that
+/// contract. Nothing is created here — appending never creates a store — and
+/// the open below still uses `SQLITE_OPEN_NOFOLLOW`, so the check and the open
+/// cannot be raced into a different file.
+fn validated_audit_append_path(path: &Path) -> Result<PathBuf, OrbitError> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "audit database path '{}' must not contain parent-directory traversal",
+            path.display()
+        )));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "audit database path '{}' must name a database file",
+            path.display()
+        ))
+    })?;
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+        OrbitError::Store(format!(
+            "resolve audit database directory '{}': {error}",
+            parent.display()
+        ))
+    })?;
+    let canonical_path = canonical_parent.join(file_name);
+    if !canonical_path.starts_with(&canonical_parent) {
+        return Err(OrbitError::InvalidInput(format!(
+            "audit database path '{}' escapes its parent directory",
+            path.display()
+        )));
+    }
+    let metadata = std::fs::symlink_metadata(&canonical_path).map_err(|error| {
+        OrbitError::Store(format!(
+            "inspect audit database '{}': {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(OrbitError::InvalidInput(format!(
+            "audit database must not be a symlink: {}",
+            path.display()
+        )));
+    }
+    if !metadata.is_file() {
+        return Err(OrbitError::InvalidInput(format!(
+            "audit database must be a regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(canonical_path)
+}
+
+impl StoreTx<'_> {
+    /// Insert one canonical audit row inside the caller's existing Store
+    /// transaction. Vertical features use this when their domain mutation and
+    /// its audit outcome must commit or roll back together.
+    pub fn insert_audit_event_record(
+        &mut self,
+        params: &AuditEventInsertParams,
+    ) -> Result<(), OrbitError> {
+        insert_audit_event_record_on_connection(
+            self.connection(),
+            params,
+            AuditInvocationFields::default(),
+        )
+    }
+}
+
+fn insert_audit_event_record_on_connection(
+    conn: &rusqlite::Connection,
+    params: &AuditEventInsertParams,
+    invocation: AuditInvocationFields<'_>,
+) -> Result<(), OrbitError> {
+    let capabilities_json = serde_json::to_string(&params.effective_capabilities)
+        .map_err(|error| OrbitError::Store(format!("serialize MCP capability set: {error}")))?;
+    // Plugin provenance columns are recorded evidence: a serialization failure
+    // must fail the insert rather than store an empty, unparseable value.
+    let plugin_grants_json = invocation
+        .plugin
+        .map(|plugin| serde_json::to_string(&plugin.grants))
+        .transpose()
+        .map_err(|error| OrbitError::Store(format!("serialize plugin grants: {error}")))?;
+    let plugin_secrets_json = (!invocation.plugin_secrets.is_empty())
+        .then(|| serde_json::to_string(invocation.plugin_secrets))
+        .transpose()
+        .map_err(|error| OrbitError::Store(format!("serialize plugin secret names: {error}")))?;
+    let plugin_secret_updates_json = invocation
+        .plugin_secret_updates
+        .filter(|updates| !updates.is_empty())
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| OrbitError::Store(format!("serialize plugin secret updates: {error}")))?;
+    // ORB-10888: the canonical actor is derived from the same label the row
+    // stores, by the same alias map the backfill uses, so new rows and
+    // migrated rows land in identical aggregate buckets.
+    //
+    // ORB-10890: `invocation.self_reported_actor` is deliberately NOT an input
+    // here. The trusted projection is a function of `role` alone, so a caller's
+    // claim cannot reach any column an authorization or trust decision reads.
+    let actor = canonical_actor_for_role_label(&params.role);
+
+    conn.execute(
+        r#"INSERT INTO audit_events(
+            execution_id, timestamp, command, subcommand, tool_name,
+            target_type, target_id, role, status, exit_code,
+            duration_ms, working_directory, arguments_json,
+            stdout_truncated, stderr_truncated, error_message,
+            host, pid, session_id, workspace_id, caller_machine_id,
+            caller_machine_name, process_machine_id, process_machine_name, transport,
+            capabilities_json, origin_session_id, mcp_call_id, lease_id,
+            task_id, job_run_id, activity_id, step_index, trace_id, caller_ip,
+            actor_kind, actor_id, actor_vendor, actor_family, actor_model,
+            actor_alias_version, self_reported_actor,
+            plugin_name, plugin_version, plugin_manifest_digest, plugin_grants,
+            plugin_secrets, plugin_secret_updates, brokered, peer_pid
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50)"#,
+        rusqlite::params![
+            params.execution_id,
+            now_string(),
+            params.command,
+            params.subcommand,
+            params.tool_name,
+            params.target_type,
+            params.target_id,
+            params.role,
+            params.status.to_string(),
+            params.exit_code,
+            params.duration_ms,
+            params.working_directory,
+            params.arguments_json,
+            params.stdout_truncated,
+            params.stderr_truncated,
+            params.error_message,
+            params.host,
+            params.pid,
+            params.session_id,
+            params.workspace_id,
+            params.caller_machine_id,
+            params.caller_machine_name,
+            params.process_machine_id,
+            params.process_machine_name,
+            params.transport.map(|transport| transport.to_string()),
+            capabilities_json,
+            params.origin_session_id,
+            params.mcp_call_id,
+            params.lease_id,
+            params.task_id,
+            params.job_run_id,
+            params.activity_id,
+            params.step_index,
+            invocation.trace_id,
+            invocation.caller_ip,
+            actor.kind.as_str(),
+            actor.id,
+            actor.vendor,
+            actor.family,
+            actor.model,
+            actor.alias_version,
+            invocation.self_reported_actor,
+            invocation.plugin.map(|plugin| plugin.name.as_str()),
+            invocation.plugin.map(|plugin| plugin.version.as_str()),
+            invocation.plugin.map(|plugin| plugin.manifest_digest.as_str()),
+            plugin_grants_json,
+            plugin_secrets_json,
+            plugin_secret_updates_json,
+            // A brokered row stores 1; every other row leaves both NULL, as
+            // rows written before the columns existed read.
+            invocation.brokered_peer_pid.map(|_| 1_i64),
+            invocation.brokered_peer_pid,
+        ],
+    )
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+    Ok(())
+}

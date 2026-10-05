@@ -1,8 +1,10 @@
 use clap::Args;
-use orbit_config::{ConfigScope, ConfigStore, WorkspaceInitMode};
+use orbit_config::{ConfigScope, ConfigStore, WorkspaceInitMode, admit_config_key};
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::support::{global_config_path, workspace_config_path};
 
@@ -29,6 +31,12 @@ pub struct ConfigSetArgs {
 
 impl Execute for ConfigSetArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        // Reject an unknown key before deciding whether a missing workspace
+        // config needs seeding: a typo should never push an operator into
+        // creating a security-relevant config file just to learn the key
+        // doesn't exist.
+        admit_config_key(&self.key)?;
+
         let mut store = if self.global {
             ConfigStore::open(ConfigScope::Global, global_config_path(runtime))?
         } else {
@@ -47,15 +55,21 @@ impl Execute for ConfigSetArgs {
         };
 
         store.set_value(&self.key, &self.value)?;
-        store.validate()?;
+        match store.scope() {
+            ConfigScope::Global => store.validate_for_set(&self.key)?,
+            ConfigScope::Workspace => {
+                let global_root = runtime.global_root();
+                store.validate_workspace_for_set(&self.key, &global_root)?;
+            }
+        }
         store.save()?;
 
-        println!(
-            "set {} ({} config: {})",
-            self.key,
-            store.scope().label(),
-            store.path().to_string_lossy()
-        );
-        Ok(CommandOutput::Silent)
+        let scope = store.scope().label();
+        let path = store.path().to_string_lossy().into_owned();
+        Ok(Payload::detail(
+            json!({ "key": self.key, "scope": scope, "path": path }),
+            format!("set {} ({scope} config: {path})", self.key),
+        )
+        .into())
     }
 }

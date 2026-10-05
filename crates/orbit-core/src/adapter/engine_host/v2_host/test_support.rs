@@ -1,13 +1,11 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::Utc;
-use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAddParams;
 
 pub(crate) fn seed_executor(
     runtime: &OrbitRuntime,
@@ -34,12 +32,6 @@ pub(crate) fn seed_executor(
         .expect("seed executor");
 }
 
-pub(crate) fn seeded_runtime_with_executor(sandbox: Option<ExecutorSandboxKind>) -> OrbitRuntime {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    seed_executor(&runtime, "codex", sandbox);
-    runtime
-}
-
 pub(crate) fn runtime_with_workspace_layout() -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
     runtime_with_workspace_config(None)
 }
@@ -61,43 +53,4 @@ pub(crate) fn runtime_with_workspace_config(
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
     let repo_root = root.path().join("repo");
     (root, runtime, repo_root)
-}
-
-pub(crate) fn write_workspace_file(repo_root: &Path, relative_path: &str) {
-    let path = repo_root.join(relative_path);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("create parent dir");
-    }
-    std::fs::write(
-        path,
-        "test fixture
-",
-    )
-    .expect("write workspace file");
-}
-
-pub(crate) fn seed_list_backlog_task(
-    runtime: &OrbitRuntime,
-    title: &str,
-    status: TaskStatus,
-    priority: TaskPriority,
-    task_type: TaskType,
-    parent_id: Option<String>,
-    context_files: Vec<&str>,
-) -> Task {
-    runtime
-        .add_task(TaskAddParams {
-            parent_id,
-            title: title.to_string(),
-            description: format!("Fixture task: {title}"),
-            acceptance_criteria: vec!["Fixture task is observable.".to_string()],
-            plan: "Fixture plan.".to_string(),
-            context_files: context_files.into_iter().map(str::to_string).collect(),
-            workspace_path: Some(".".to_string()),
-            priority,
-            task_type: Some(task_type),
-            status: Some(status),
-            ..Default::default()
-        })
-        .expect("seed task")
 }

@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Draft
 feature: mcp-bridge
 doc_role: design
@@ -24,9 +24,8 @@ The v1 design rests on six invariants:
 3. The client-side proxy is byte-transparent and policy-free.
 4. Every tools/call enters Core's dispatch and audit boundary exactly once,
    including global discovery, unknown raw names, and setup failures.
-5. A forwarded caller label is audit metadata; destination-side caller policy,
-   not that label, grants remote authority. A forced-command SSH acceptance can
-   bind the label to the key sshd authenticated.
+5. The destination serves the authority its argv requests. A forwarded caller
+   label is self-asserted audit metadata and does not grant or restrict authority.
 6. Direct local, remote, and socket calls use the same server implementation;
    federated mode is a separate mux that delivers to those destination servers.
 
@@ -37,7 +36,7 @@ The v1 design rests on six invariants:
 The framing kernel owns MCP framing, advertised-name translation, structured
 responses, canonical surface composition, per-call trace creation, server
 identity context, and the TCP listener. The crate also owns the direct SSH
-stdio proxy, destination-side caller policy, and the explicit federated mux.
+stdio proxy and the explicit federated mux.
 Its `McpHost` boundary accepts canonical tool calls with a trusted session
 context; runtime opening remains in `orbit-cli`, while Core enforces effective
 capabilities and governed operations.
@@ -69,14 +68,11 @@ with its small machine-local discovery surface rather than redeclaring schemas.
 
 The client starts `orbit mcp serve` and speaks MCP over the process's stdio.
 
-1. The server resolves the global Orbit root and its own process identity. For
-   an SSH-originated session, it also resolves the destination's
-   `~/.orbit/mcp-callers.toml` policy; the caller's requested authority is capped
-   by that grant.
-2. MCP initialization may establish a workspace selector for the session. A
-   forced-command acceptance may additionally bind the remote caller identity
-   to the key sshd authenticated; the ordinary forwarded label remains
-   self-asserted.
+1. The server resolves the global Orbit root, its own process identity, and the
+   session authority its argv asked for. An SSH-originated session is resolved
+   the same way as a local one [ORB-12564]; the forwarded caller label only
+   marks the transport and names the calling machine.
+2. MCP initialization may establish a workspace selector for the session.
 3. Tool discovery returns the canonical composed surface.
 4. For each `tools/call`, the adapter creates a fresh `trace_id` and combines it
    with server-established session context. Audit fields in tool input are not
@@ -117,10 +113,9 @@ host verification, encryption, and access to the remote shell.
 
 The remote `orbit mcp serve` process then follows the local request flow. It also
 marks the session as `ssh-mcp` and reads the first field of `SSH_CONNECTION` as a
-best-effort caller IP. Under the ordinary path the supplied machine label is
-self-asserted audit data and the destination's callers file is the authority
-ceiling. A generated forced-command acceptance can instead provide a key-bound
-caller identity; the observed IP remains audit data.
+best-effort caller IP. The supplied machine label and the observed IP are audit
+data; the session's authority comes from the argv the proxy composed, which
+carries `--operator` when the proxy itself was started with it [ORB-12564].
 
 If SSH cannot start or exits unsuccessfully, the proxy reports that transport
 failure. It does not retry or replay tool calls because it cannot know whether a
@@ -135,7 +130,14 @@ orbit mcp listen [ADDR] [--allow-non-loopback]
 The listener binds before it accepts, so the bind policy is applied and the
 assigned address is known before any client can arrive. A non-loopback address is
 refused unless the operator asked for it explicitly, because the socket
-authenticates no client: whoever reaches it reaches the accepting machine's full
+authenticates no client: local processes can reach its agent tool surface even
+when it binds loopback. A browser page can send HTTP requests to loopback, so
+the listener closes a connection unless its first byte is `{`. This check runs
+before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body.
+rmcp buffers a message until its newline with no ceiling of its own, so the
+listener also closes a session whose single message exceeds 8 MiB
+(`DEFAULT_MAX_MCP_MESSAGE_BYTES`) rather than let an unauthenticated peer grow
+the process without bound.
 
 Each accepted connection is served on its own task with its own server instance.
 That isolation is load-bearing rather than defensive. The adapter's session state
@@ -145,7 +147,7 @@ response computed against the other client's workspace. Every session also mints
 its own origin session id, since a listener-wide id would collapse concurrent
 clients into one audit identity.
 
-Past that point the session follows the direct local request flow exactly: the
+Past that framing check the session follows the direct local request flow: the
 same host, the same workspace resolution, and the same single Core dispatch and
 audit boundary. The listener adds no broker, checkout preflight, placement
 decision, capability filter, or authorization step of its own; it is hardcoded
@@ -193,36 +195,35 @@ not depend on recognition or outcome.
 | Field | Source | V1 meaning |
 |---|---|---|
 | `trace_id` | MCP adapter, fresh per call | Correlates one invocation |
-| `caller_machine_id` | Local server identity, SSH proxy label, or forced-command caller identity | Audit correlation; a forced-command value is also the identity selected for destination policy |
+| `caller_machine_id` | Local server identity, or the SSH proxy's forwarded label | Audit correlation only |
 | `caller_ip` | First field of `SSH_CONNECTION`, or the accepted peer address | Best-effort network observation |
 | `process_machine_id` | Accepting machine registry | Machine executing the call |
 | `process_host_id` | Accepting machine registry | Host executing the call |
 | `transport` | Accepting server mode | `local` or `ssh-mcp`; a listener session is `local` |
-| `effective_capabilities` | Destination policy intersected with requested session authority | Capabilities Core may enforce for this call |
-| `remote_caller_grant` | Destination callers file, on remote sessions | Grant, scope, and identity proof used to cap the session |
+| `effective_capabilities` | The accepting server's `--operator` argv, resolved once at start | Capabilities Core may enforce for this call |
 
 The adapter prevents caller-supplied tool input from replacing trusted session
-context. A forwarded caller label and caller IP are not credentials; a
-destination-generated forced command can make the caller identity key-bound.
+context. A forwarded caller label and caller IP are not credentials and are not
+read as any part of an authorization decision.
 
 ## 8. Authorization boundary
 
-For direct SSH sessions, the destination resolves `~/.orbit/mcp-callers.toml`.
-The caller's `--operator` flag is only a request; effective session authority is
-the intersection of that request with the destination's row or default grant,
-and workspace narrowing is re-evaluated at the existing governance chokepoint.
-Tier 1 identifies a row from a self-asserted machine label. Tier 2 is optional:
-the destination's generated forced command names the caller next to a key sshd
-authenticated, and Orbit records that key-bound proof. `agent_invoke` is a
-separate, workspace-scoped grant and is not implied by `operator`.
+For direct SSH sessions, the destination serves the authority the argv asks for,
+exactly as it does locally [ORB-12564]. Orbit is a single-user tool and an SSH
+login to a destination is ownership of it: anyone who can start
+`orbit mcp serve --operator` there can equally set `ORBIT_OPERATOR=1` on any
+other command, so a destination-side ceiling would only be a file the caller can
+rewrite. The client decides — a proxy or mux started with `--operator`
+propagates it, and one running as an agent never does. `orbit_agent_invoke` is
+admitted on `operator` like every other governed operation.
 
 Core enforces the resulting capabilities and governed operations after the
 accepting server has resolved the session. A proxy or UI may not grant authority,
 because either can be bypassed by reaching the server directly. The TCP listener
-does not consult the SSH callers file: it authenticates no client and is served
-with agent authority only. Federated destinations apply their own callers-file
-policy independently, in addition to the mux's destination and checkout-class
-checks.
+is the one place that ignores its process's authority and serves `agent` only:
+it authenticates no client, so a socket peer has not demonstrated the SSH login
+the argv rule rests on. Federated destinations additionally enforce the mux's
+destination and checkout-class checks.
 
 ## 9. Separate web transport
 
@@ -238,8 +239,9 @@ contract to source and focused tests. The important behavioral gates are:
 - exact tool-surface snapshot;
 - protocol and production MCP round trips;
 - direct SSH command construction and inherited stdio;
-- the listener bind policy, and a loopback listener round trip that shows the
-  accepted peer's IP reaching the audit context;
+- the listener bind policy, a loopback MCP round trip that shows the accepted
+  peer's IP reaching the audit context, and an HTTP POST that is closed before
+  any JSON-RPC body line is dispatched;
 - server identity and SSH caller-IP parsing;
 - discovery and unknown-name denial through one Core audit boundary; and
 - crate dependency-direction checks.

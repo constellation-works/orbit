@@ -8,6 +8,10 @@ pub enum AutomationError {
     Evidence(String),
     #[error("automation deferred: {0}")]
     Deferred(String),
+    /// An explicit operator operation the current state forbids, naming every
+    /// refusal that applies. Nothing was changed.
+    #[error("recovery refused: {0}")]
+    Refused(String),
     #[error(transparent)]
     Boundary(#[from] OrbitError),
 }
@@ -20,6 +24,9 @@ pub fn automation_error_to_orbit(error: AutomationError) -> OrbitError {
         }
         AutomationError::Deferred(reason) => {
             OrbitError::Execution(format!("automation_deferred: {reason}"))
+        }
+        AutomationError::Refused(reasons) => {
+            OrbitError::InvalidInput(format!("recovery_refused: {reasons}"))
         }
         AutomationError::Boundary(error) => error,
     }

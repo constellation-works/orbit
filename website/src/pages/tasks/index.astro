@@ -1,0 +1,63 @@
+---
+// Landing for the task links Orbit mints into pull-request descriptions
+// (`[pr] task_url_template`). Task records are workspace-local and are not
+// published, so `/tasks/<id>` used to be a dead surface. `public/_redirects`
+// sends those links here with the ID as a query parameter; the page explains
+// what the ID is and where the delivery can actually be found.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'This task lives in an Orbit workspace',
+    description:
+      'Orbit task IDs in pull requests point at workspace-local records. Find the delivery on GitHub instead.',
+    tableOfContents: false,
+    // A utility landing for redirected pull-request links, not documentation:
+    // keep it out of search results and the ⌘K index.
+    pagefind: false,
+    head: [{ tag: 'meta', attrs: { name: 'robots', content: 'noindex' } }],
+  }}
+>
+  <p>
+    Orbit links each pull request to the task it delivered, so a merged change traces back to the
+    request behind it. Task records stay on the machine that owns the workspace and are not
+    published here. You can still trace the change.
+  </p>
+  <p class="orbit-task-lookup" hidden>
+    You followed the link for <code data-task-id></code>.
+  </p>
+  <div class="orbit-card-grid">
+    <a
+      class="orbit-card"
+      data-task-search
+      href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged"
+    >
+      <h2>Find its pull request</h2>
+      <p>Search merged pull requests on GitHub for the task ID.</p>
+    </a>
+    <a class="orbit-card" href="/changelog/">
+      <h2>See the release</h2>
+      <p>For Orbit's own tasks, the changelog lists the task IDs each release shipped.</p>
+    </a>
+  </div>
+  <h2>Own the workspace?</h2>
+  <p>
+    Run <code>orbit task show &lt;id&gt;</code> on the owning machine for the full record: description,
+    acceptance criteria, and audit history. See <a href="/concepts/tasks/">Tasks</a> for what a record
+    contains.
+  </p>
+</StarlightPage>
+
+<script>
+  // The redirect carries the original ID as `?id=`. Only a well-formed task ID
+  // is echoed back into the page, and only into text and a URL-encoded query.
+  const id = new URLSearchParams(window.location.search).get('id') ?? '';
+  const lookup = document.querySelector<HTMLElement>('.orbit-task-lookup');
+  const search = document.querySelector<HTMLAnchorElement>('[data-task-search]');
+  if (lookup && search && /^[A-Z][A-Z0-9]{1,15}-\d{1,8}$/.test(id)) {
+    lookup.querySelector('[data-task-id]')!.textContent = id;
+    search.href = `https://github.com/constellation-works/orbit/pulls?q=${encodeURIComponent(`is:pr is:merged "${id}"`)}`;
+    lookup.hidden = false;
+  }
+</script>

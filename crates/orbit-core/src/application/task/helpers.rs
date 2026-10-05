@@ -1,9 +1,29 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::identity::{normalize_attribution_label, normalize_optional_attribution_label};
-use orbit_types::task::{Task, TaskComment, TaskStatus};
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
+
+use crate::application::job::crew_pools::CreationCrewAssignment;
+use crate::context::resolve_write_actor_label;
 
 pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
+
+/// Provenance for the crew a task was assigned when it was created, or when an
+/// operator cleared the field and the pools chose again [ORB-12717]. Updates
+/// that change the stored crew append their own history entry.
+pub(crate) fn crew_assigned_history(assignment: &CreationCrewAssignment) -> TaskHistoryEntry {
+    TaskHistoryEntry {
+        at: Utc::now(),
+        by: SYSTEM_ACTOR_LABEL.to_string(),
+        event: "crew_assigned".to_string(),
+        note: Some(format!(
+            "assigned crew `{}` from {}",
+            assignment.crew, assignment.source
+        )),
+        from_status: None,
+        to_status: None,
+    }
+}
 
 pub(crate) struct TaskAttributionInput<'a> {
     pub(crate) default_actor_label: &'a str,
@@ -19,6 +39,7 @@ pub(crate) struct TaskAttributionInput<'a> {
 
 pub(crate) struct TaskAttribution {
     pub(crate) actor: String,
+    pub(crate) authored_role_label: String,
     pub(crate) planned_by: Option<Option<String>>,
     pub(crate) implemented_by: Option<Option<String>>,
 }
@@ -26,20 +47,19 @@ pub(crate) struct TaskAttribution {
 /// Assemble mutation and authored-role attribution for human and automation updates.
 ///
 /// The mutation actor is an explicit override (automation uses `system`) or,
-/// otherwise, model > agent > runtime actor. Explicit authored-role mutations
-/// win; inferred role labels use model > agent > runtime model identity >
-/// mutation actor, while inferred `implemented_by` preserves an existing value.
-/// `implemented_by` inference is applied only while entering review or done.
+/// otherwise, the shared write-path resolver (canonical family, else the
+/// process actor). Explicit authored-role mutations win; inferred role labels
+/// use model > agent > runtime model identity > mutation actor, while inferred
+/// `implemented_by` preserves an existing value. `implemented_by` inference is
+/// applied only while entering review or done.
 pub(crate) fn assemble_task_attribution(
     task: &Task,
     input: TaskAttributionInput<'_>,
-) -> TaskAttribution {
-    let actor = input
-        .actor_override
-        .map(|label| normalize_attribution_label(label, None))
-        .unwrap_or_else(|| {
-            effective_actor_label(input.default_actor_label, input.agent, input.model)
-        });
+) -> Result<TaskAttribution, OrbitError> {
+    let actor = match input.actor_override {
+        Some(label) => normalize_attribution_label(label, None),
+        None => effective_actor_label(input.default_actor_label, input.agent, input.model)?,
+    };
     let authored_role_label = normalize_optional_attribution_label(input.model, input.model)
         .or_else(|| normalize_optional_attribution_label(input.agent, input.model))
         .or_else(|| normalize_optional_attribution_label(input.runtime_model_identity, None))
@@ -59,11 +79,12 @@ pub(crate) fn assemble_task_attribution(
         })
     });
 
-    TaskAttribution {
+    Ok(TaskAttribution {
         actor,
+        authored_role_label,
         planned_by,
         implemented_by,
-    }
+    })
 }
 
 pub(super) fn build_task_comments(
@@ -105,13 +126,8 @@ pub(super) fn effective_actor_label(
     default_label: &str,
     agent: Option<&str>,
     model: Option<&str>,
-) -> String {
-    let label = match (agent, model) {
-        (_, Some(model)) => model.to_string(),
-        (Some(agent), None) => agent.to_string(),
-        (None, None) => default_label.to_string(),
-    };
-    normalize_attribution_label(&label, model)
+) -> Result<String, OrbitError> {
+    resolve_write_actor_label(default_label, agent, model)
 }
 
 pub(super) fn implementation_label(

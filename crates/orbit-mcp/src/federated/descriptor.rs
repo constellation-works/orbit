@@ -1,16 +1,19 @@
 //! The federated workspace descriptor — the pinned wire shape of the mux list.
 //!
 //! A descriptor is a v1 workspace record as one destination reported it, plus
-//! exactly six federated keys: `selector`, `host`, `machine_id`,
+//! exactly six federated keys: `selector`, `machine_name`, `machine_id`,
 //! `reachability`, `checkout_health`, and `capabilities`. Those names are
 //! protocol, so reachability and checkout presence stay two separate fields
 //! rather than one merged `health`, and `machine_id` sits on every descriptor
-//! instead of on the envelope the way v1 keys it.
+//! instead of on the envelope the way v1 keys it. A list called with
+//! `include: ["crews"]` adds the destination's own `crews` (or `crews_error`)
+//! to each row it reported.
 
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde::Serialize;
+use serde_json::{Map, Value};
 
-use super::config::{Destination, HostQualifiedSelector};
+use super::config::{Destination, MachineQualifiedSelector};
 
 /// Whether the configured destination answered this call's live probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -22,7 +25,7 @@ pub enum Reachability {
 
 /// Repo-root presence for one workspace at its destination.
 ///
-/// Kept separate from [`Reachability`]: a host that never answered tells us
+/// Kept separate from [`Reachability`]: a machine that never answered tells us
 /// nothing about its checkouts, and collapsing the two would make that silence
 /// indistinguishable from a broken repo root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -55,17 +58,21 @@ pub struct WorkspaceDescriptor {
     workspace: Option<Workspace>,
     /// Structured, caller-uninterpreted route token. `None` when no workspace
     /// was observed, or when the destination reported a workspace ID that is
-    /// not host-qualifiable.
+    /// not machine-qualifiable.
     selector: Option<String>,
     /// Destination display identity. Local destinations use the accepting
-    /// machine's `host_id`. Remotes use the operator's configured SSH target:
-    /// the v1 discovery envelope carries no `host_id`.
-    host: String,
+    /// machine's `machine.name`. Remotes use the operator's configured SSH
+    /// target: the v1 discovery envelope carries no display name.
+    machine_name: String,
     /// Destination stable identity, as pinned by the operator's config.
     machine_id: String,
     reachability: Reachability,
     checkout_health: CheckoutHealth,
     capabilities: Vec<Capability>,
+    /// The `crews` or `crews_error` key the destination attached to this
+    /// workspace, verbatim. Empty unless the caller asked for crews.
+    #[serde(flatten)]
+    crews: Map<String, Value>,
 }
 
 impl WorkspaceDescriptor {
@@ -81,45 +88,54 @@ impl WorkspaceDescriptor {
         );
         Self {
             selector: selector_for(&destination.machine_id, &workspace.id),
-            host: destination.host_display().to_string(),
+            machine_name: destination.machine_name_display().to_string(),
             machine_id: destination.machine_id.clone(),
             reachability: Reachability::Reachable,
             checkout_health,
             capabilities,
             workspace: Some(workspace),
+            crews: Map::new(),
         }
+    }
+
+    /// Attach the crew keys the destination reported for this workspace.
+    pub(super) fn with_crews(mut self, crews: Map<String, Value>) -> Self {
+        self.crews = crews;
+        self
     }
 
     /// The placeholder row for a destination that answered nothing.
     ///
     /// Every configured destination contributes at least one row: omitting a
-    /// down host would hide it from the caller and turn each later routed call
-    /// into a stale-route surprise.
+    /// down machine would hide it from the caller and turn each later routed
+    /// call into a stale-route surprise.
     pub(super) fn unreachable(destination: &Destination) -> Self {
         Self {
             workspace: None,
             selector: None,
-            host: destination.host_display().to_string(),
+            machine_name: destination.machine_name_display().to_string(),
             machine_id: destination.machine_id.clone(),
             reachability: Reachability::Unreachable,
             checkout_health: CheckoutHealth::Unknown,
             capabilities: Vec::new(),
+            crews: Map::new(),
         }
     }
 
     /// The row for a destination that answered but reported no workspaces.
     ///
-    /// The host is up and its checkouts are simply not visible to discovery,
-    /// which is a different fact from "the host never answered".
+    /// The machine is up and its checkouts are simply not visible to
+    /// discovery, which is a different fact from "the machine never answered".
     pub(super) fn workspaceless(destination: &Destination) -> Self {
         Self {
             workspace: None,
             selector: None,
-            host: destination.host_display().to_string(),
+            machine_name: destination.machine_name_display().to_string(),
             machine_id: destination.machine_id.clone(),
             reachability: Reachability::Reachable,
             checkout_health: CheckoutHealth::Unknown,
             capabilities: Vec::new(),
+            crews: Map::new(),
         }
     }
 }
@@ -128,7 +144,7 @@ impl WorkspaceDescriptor {
 ///
 /// This is a hint derived from identity alone; the destination's own Core is
 /// the enforcement boundary and may still refuse a class it appears to hold.
-/// A workspace whose record omits `owner_machine_id` predates host identity and
+/// A workspace whose record omits `owner_machine_id` predates machine identity and
 /// is therefore never a control-plane authority.
 fn advertised_capabilities(
     destination_machine_id: &str,
@@ -147,7 +163,7 @@ fn advertised_capabilities(
 /// workspace is still listed, just not addressable by a federated selector.
 fn selector_for(machine_id: &str, workspace_id: &str) -> Option<String> {
     format!("{machine_id}/{workspace_id}")
-        .parse::<HostQualifiedSelector>()
+        .parse::<MachineQualifiedSelector>()
         .ok()
         .map(|selector| selector.to_string())
 }

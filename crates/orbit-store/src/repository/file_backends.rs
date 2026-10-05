@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_types::policy::PolicyDef;
@@ -9,7 +9,8 @@ use orbit_types::task::{
 use orbit_types::workflow::ExecutorDef;
 
 use crate::contracts::{
-    ExecutorDefStoreBackend, PolicyDefStoreBackend, TaskArtifactStoreBackend,
+    AtomicTaskMutationOutcome, AtomicTaskMutationParams, ExecutorDefStoreBackend,
+    PolicyDefStoreBackend, RegisteredTaskResolution, TaskArtifactStoreBackend,
     TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend, TaskDocumentUpdateParams,
     TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
 };
@@ -19,6 +20,53 @@ use crate::repository::task::TaskV2Store;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
+    fn find_accepted_handoff(
+        &self,
+        claim_id: &str,
+    ) -> Result<Option<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
+        self.claim_boundary()?.find_accepted_handoff(claim_id)
+    }
+
+    fn landing_start_requests(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::LandingStartRequest>, OrbitError> {
+        self.claim_boundary()?.landing_start_requests()
+    }
+
+    fn landing_attempts(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        self.claim_boundary()?.landing_attempts()
+    }
+
+    fn mutate_execution_claim(
+        &self,
+        context: Option<&crate::contracts::ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &crate::contracts::ClaimMutation,
+    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+        self.claim_boundary()?
+            .mutate_execution_claim(context, mutation_id, mutation)
+    }
+    fn inspect_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?.inspect_execution_claims()
+    }
+    fn resolve_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?.resolve_execution_claims()
+    }
+    fn lookup_admission(
+        &self,
+        identity: &crate::contracts::AdmissionIdentity,
+        request_id: &str,
+    ) -> Result<crate::contracts::AdmissionLookup, OrbitError> {
+        self.claim_boundary()?
+            .lookup_admission(identity, request_id)
+    }
+
     fn create_task_idempotent(
         &self,
         params: TaskCreateParams,
@@ -32,7 +80,7 @@ impl TaskStoreBackend for TaskV2Store {
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
     ) -> Result<crate::contracts::TaskCandidates, OrbitError> {
-        self.task_candidates(filter, limit)
+        self.in_boundary(|| self.task_candidates(filter, limit))
     }
     fn query_task_rows(
         &self,
@@ -40,14 +88,14 @@ impl TaskStoreBackend for TaskV2Store {
         limit: usize,
         residual: crate::contracts::TaskResidualFilter<'_>,
     ) -> Result<crate::contracts::TaskPage, OrbitError> {
-        self.query_task_rows(filter, limit, residual)
+        self.in_boundary(|| self.query_task_rows(filter, limit, residual))
     }
     fn get_task_row(
         &self,
         id: &str,
         list_read: bool,
     ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
-        self.get_task_row(id, list_read)
+        self.in_boundary(|| self.get_task_row(id, list_read))
     }
 
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
@@ -55,15 +103,34 @@ impl TaskStoreBackend for TaskV2Store {
     }
 
     fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
-        self.list_tasks()
+        self.in_boundary(|| self.list_tasks())
     }
 
     fn task_status_index(&self) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
-        self.task_status_index()
+        self.in_boundary(|| self.task_status_index())
+    }
+
+    fn task_status_index_for(
+        &self,
+        workspace_id: &str,
+        targets: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+        self.in_boundary(|| TaskV2Store::task_status_index_for(self, workspace_id, targets))
+    }
+
+    fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
+        self.in_boundary(|| TaskV2Store::registered_task(self, id))
+    }
+
+    fn registered_task_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        self.in_boundary(|| TaskV2Store::registered_task_history(self, id))
     }
 
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
-        self.list_tasks_by_tags(tags)
+        self.in_boundary(|| self.list_tasks_by_tags(tags))
     }
 
     fn list_tasks_filtered(
@@ -75,26 +142,38 @@ impl TaskStoreBackend for TaskV2Store {
         external_ref: Option<&ExternalRef>,
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
-        self.list_tasks_filtered(
-            status,
-            priority,
-            parent_id,
-            job_run_id,
-            external_ref,
-            has_external_ref_system,
-        )
+        self.in_boundary(|| {
+            self.list_tasks_filtered(
+                status,
+                priority,
+                parent_id,
+                job_run_id,
+                external_ref,
+                has_external_ref_system,
+            )
+        })
     }
 
     fn get_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
-        resolve::<Task, _>(self, id)
+        self.in_boundary(|| resolve::<Task, _>(self, id))
     }
 
     fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
-        self.search_tasks(query)
+        self.in_boundary(|| self.search_tasks(query))
     }
 
     fn search_tasks_filtered(&self, query: &str, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
-        self.search_tasks_filtered(query, tags)
+        self.in_boundary(|| self.search_tasks_filtered(query, tags))
+    }
+
+    fn search_tasks_visit(
+        &self,
+        query: &str,
+        tags: &[String],
+        admit: &dyn Fn(&Task) -> bool,
+        visit: &mut dyn FnMut(Task) -> bool,
+    ) -> Result<(), OrbitError> {
+        self.in_boundary(|| self.search_tasks_visit(query, tags, admit, visit))
     }
 
     fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
@@ -109,14 +188,47 @@ impl TaskStoreBackend for TaskV2Store {
         self.with_task_lock(id, op)
     }
 
+    fn apply_atomic_task_mutation(
+        &self,
+        id: &str,
+        params: &AtomicTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        self.apply_atomic_task_mutation(id, params)
+    }
+
+    fn create_desktop_task(
+        &self,
+        params: TaskCreateParams,
+        key: &str,
+        digest: &str,
+    ) -> Result<(Task, bool), OrbitError> {
+        self.create_desktop_task(params, key, digest)
+    }
+    fn lookup_desktop_creation(&self, key: &str, digest: &str) -> Result<Option<Task>, OrbitError> {
+        self.lookup_desktop_creation(key, digest)
+    }
+    fn read_desktop_task(&self, id: &str) -> Result<crate::contracts::DesktopTaskRead, OrbitError> {
+        self.read_desktop_task(id)
+    }
+    fn desktop_task_revision(&self, id: &str) -> Result<String, OrbitError> {
+        self.desktop_task_revision(id)
+    }
+    fn apply_desktop_task_mutation(
+        &self,
+        id: &str,
+        params: &crate::contracts::DesktopTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        self.apply_desktop_task_mutation(id, params)
+    }
+
     fn task_completion_by_complexity(
         &self,
     ) -> Result<Vec<crate::contracts::TaskCompletionByComplexity>, OrbitError> {
-        self.task_completion_by_complexity()
+        self.in_boundary(|| self.task_completion_by_complexity())
     }
 
     fn task_complexity_by_id(&self) -> Result<BTreeMap<String, String>, OrbitError> {
-        self.task_complexity_by_id()
+        self.in_boundary(|| self.task_complexity_by_id())
     }
 }
 
@@ -148,11 +260,11 @@ impl TaskDocumentStoreBackend for TaskV2Store {
 
 impl TaskHistoryStoreBackend for TaskV2Store {
     fn get_task_comments(&self, id: &str) -> Result<Option<Vec<TaskComment>>, OrbitError> {
-        self.get_task_comments(id)
+        self.in_boundary(|| self.get_task_comments(id))
     }
 
     fn get_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
-        self.get_task_history(id)
+        self.in_boundary(|| self.get_task_history(id))
     }
 
     fn update_task_history(
@@ -169,15 +281,15 @@ impl TaskArtifactStoreBackend for TaskV2Store {
         &self,
         id: &str,
     ) -> Result<Option<Vec<ArtifactManifestFileV2>>, OrbitError> {
-        self.get_task_artifact_manifest(id)
+        self.in_boundary(|| self.get_task_artifact_manifest(id))
     }
 
     fn get_task_artifacts(&self, id: &str) -> Result<Option<Vec<TaskArtifact>>, OrbitError> {
-        self.get_task_artifacts(id)
+        self.in_boundary(|| self.get_task_artifacts(id))
     }
 
     fn get_task_artifact(&self, id: &str, path: &str) -> Result<Option<TaskArtifact>, OrbitError> {
-        self.get_task_artifact(id, path)
+        self.in_boundary(|| self.get_task_artifact(id, path))
     }
 
     fn upsert_task_artifacts(

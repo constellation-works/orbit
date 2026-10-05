@@ -1,4 +1,3 @@
-# Mirror paths: source-tree/orbit-core/assets/activities/task_pilot.yaml and .orbit/resources/activities/task_pilot.yaml; guarded by scripts/sync-activity-assets.sh --check.
 schemaVersion: 2
 kind: Activity
 metadata:
@@ -41,6 +40,12 @@ spec:
         type: number
       crew:
         type: string
+      repair_attempt:
+        type: boolean
+      validation_errors:
+        type: array
+        items:
+          type: string
   # Agent-returned data is advisory until apply_task_pilot_results validates
   # the complete fan-in, so keep fields optional at this boundary (no
   # `required` list at any level) and let that validation step — not this
@@ -81,7 +86,22 @@ spec:
               type: string
             recommended_complexity:
               type: string
-              enum: [low, medium, hard]
+              enum: [low, medium, hard, xhard, unassessed]
+            assessment_rationale:
+              type: string
+            confidence:
+              type: string
+              enum: [high, medium, low]
+            evidence_gaps:
+              type: array
+              items:
+                type: string
+            validation_approach:
+              type: string
+            reassessment_triggers:
+              type: array
+              items:
+                type: string
             blocked_by:
               type: array
               items:
@@ -134,6 +154,12 @@ spec:
 
     For every task:
 
+    If `repair_attempt` is true, this is the single targeted repair attempt for
+    an assessment rejected by deterministic apply. Reassess only the supplied
+    task IDs at the original `source_revision`, and correct every exact message
+    in `validation_errors`. Do not revisit successful siblings or resolve a new
+    source revision. The repaired output is validated through the same boundary.
+
     1. Call `orbit.task.show` and read its title, description, acceptance
        criteria, plan, tags, relations, status, and exact current
        `context_files`. Use `orbit.search` for the task ID and relevant design
@@ -154,6 +180,15 @@ spec:
        `workspace_path` at `source_revision` when that field is set; omit
        read-for-context files and working-tree-only or later-commit paths.
        Preserve the exact current list as `context_files_before`.
+       Derive the modification targets from evidence, never by sweeping a
+       directory or a crate. For a removal or a rename, the targets are the
+       files that actually reference the symbol — enumerate them
+       (`rg -l '<symbol>'` at `source_revision`) and propose those — not every
+       module in the crate that owns it. Deterministic apply attaches an
+       over-attachment finding when a proposal exceeds the selector budget for
+       its recommended complexity, and still applies the list: a genuinely
+       wide repair stays proposable, while a swept one is visible to the
+       orchestrator.
     4. If the task genuinely requires no repository diff, return an empty
        `context_files_after`, disposition `verified_no_diff`, and concrete
        `evidence`. For host-operational work use `host_operational` with
@@ -177,7 +212,55 @@ spec:
        a wrong dependency requirement, a broken manifest, a packaging script
        bug — is ordinary work, so return its selectors and leave
        `release_action_required` null.
-    5. Report recommendations only; do not apply them:
+    5. Check the task's acceptance criteria against the lane that would run
+       them. A criterion is infeasible when it requires a tool over a transport
+       that does not advertise it (an MCP session reaches only MCP-advertised
+       tools, so `proc.spawn` is CLI-only), when it names a tool outside the
+       implementation activity's allowlist that the task's immutable
+       `required_tools` never declared, or when it requires an
+       operator-reserved governed operation an implementing agent cannot
+       perform. Report each contradiction in `utility_warnings`, naming the
+       tool and the repair — declare it at creation, restate the transport, or
+       hand that validation to an operator. Never recommend widening the MCP
+       surface, relaxing an allowlist, or setting an authority environment
+       variable to make a criterion reachable. A criterion that expects a
+       refusal is a correct negative test, and a tool name inside a quoted
+       example is not a requirement; report neither.
+    6. Assess the bounded logical repair, not alert severity, alert count, file
+       count, version increment, or expected wall-clock time. Evaluate repair
+       certainty, behavioral change, component coupling, and validation
+       difficulty. Record `assessment_rationale`, `confidence` (`high`,
+       `medium`, or `low`), `evidence_gaps`, `validation_approach`, and
+       `reassessment_triggers` for every assessment. A known compatible
+       dependency bump with direct validation can be low; a caller migration
+       is often medium; a trust-boundary or cross-subsystem redesign can be
+       hard. These are policy examples, not proof of live-model classification
+       accuracy. `xhard` is the top tier, routing work to the most capable and
+       most expensive crews, so recommend it only for a repair `hard` genuinely
+       understates. A task that already carries `xhard` keeps that tier
+       whatever this assessment recommends — lowering it out of the top pool
+       is an operator decision — and its selectors apply normally.
+       Whenever the pilot has produced selectors and a rationale, return an
+       assessed complexity (`low`, `medium`, `hard`, or `xhard`) with an appropriate
+       `confidence` level (`high`, `medium`, or `low`) expressing uncertainty.
+       Reserve `unassessed` strictly for tasks where the pilot cannot identify
+       the bounded repair at all, proposing the smallest bounded investigation
+       through selectors and validation approach.
+       Define `evidence_gaps` strictly as rating-changing unknowns only
+       (such as unknown fixture semantics, unresolved architecture choices, or
+       missing failure signatures that could change which complexity rating applies).
+       When `confidence` is `high`, `evidence_gaps` must be empty; when `confidence`
+       is `medium` or `low`, list those rating-changing unknowns in `evidence_gaps`.
+       Explicitly exclude 'validation not executed in this read-only assessment'
+       style entries: this lane is a read-only preflight and never builds, tests,
+       or runs validation commands (`proc.spawn` is CLI-only, so an MCP-transport
+       session does not advertise it at all). The structural absence of test
+       execution is never an evidence gap and must not be listed in `evidence_gaps`,
+       nor used to return `unassessed`. Name the checks that would establish the repair
+       in `validation_approach` / `reassessment_triggers`, and report missing validation
+       authority or readiness blockers in `utility_warnings`. Complexity,
+       urgency, and readiness are separate decisions.
+    7. Report recommendations only; do not apply them:
        `recommended_crew`, `recommended_complexity`, real `blocked_by` task IDs,
        `duplicate_of`, `already_landed`, `release_action_required`,
        `adr_conflicts` (a legacy output field name kept for consumer
@@ -220,7 +303,12 @@ spec:
         "disposition":"selectors|verified_no_diff|host_operational",
         "evidence":"required when context_files_after is empty",
         "recommended_crew":"<crew configured in this workspace>",
-        "recommended_complexity":"low|medium|hard",
+        "recommended_complexity":"low|medium|hard|xhard|unassessed",
+        "assessment_rationale":"why evidence supports the rating or investigation",
+        "confidence":"high|medium|low",
+        "evidence_gaps":[],
+        "validation_approach":"validation that would establish the repair",
+        "reassessment_triggers":[],
         "blocked_by":[],
         "duplicate_of":null,
         "already_landed":null,
@@ -233,15 +321,50 @@ spec:
     },"error":null}
 
     Copy `partition_index` and `task_ids` exactly from the input and return one
-    task assessment per input ID. If any task cannot be assessed, return a
-    failed envelope for the whole partition; never omit it or claim success.
-  tools:
-    - orbit.task.show
-    - orbit.task.list
-    - orbit.search
-    - proc.spawn
-  proc_allowed_programs:
-    - git
-    - rg
+    task assessment per input ID. Whenever you have produced selectors and a
+    rationale, return an assessed complexity (`low|medium|hard|xhard`) with an
+    appropriate `confidence` level (`high|medium|low`). Reserve `unassessed`
+    strictly for tasks where the bounded repair cannot be identified at all.
+    Define `evidence_gaps` as rating-changing unknowns only, leaving it empty
+    for `high` confidence, and never populate it with unexecuted validation
+    checks or read-only lane limitations.
+  tool_disallow_list:
+    - orbit.agent.invoke
+    - orbit.auto_task.add
+    - orbit.auto_task.mint
+    - orbit.auto_task.update
+    - orbit.command.exec
+    - orbit.pipeline.invoke
+    - orbit.workflow.run.resume
+    - orbit.workflow.ship
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.put
+    - orbit.friction.add
+    - orbit.friction.update
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
   on_denial: terminate
   wall_clock_timeout_seconds: 1800

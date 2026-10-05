@@ -1,5 +1,127 @@
 # Changelog
 
+## 0.26.0
+
+### Breaking Changes
+
+- **Public MCP tool surface consolidated**: `orbit_crew_list`, `orbit_friction_list`, `orbit_friction_rehome`, `orbit_auto_task_toggle`, `orbit_auto_task_delete`, and `orbit_workflow_run_workers` are gone. Use `orbit_workspace_list` with `include: ["crews"]`, `orbit_search` with `kind: "friction"`, `rehome_to` on `orbit_friction_update`, `enabled` on `orbit_auto_task_update`, and `orbit_workflow_auto` with `action: "resize"`. ([ORB-13809])
+- **Distributed-drain tools removed from MCP**: `orbit_task_pull` and the `orbit_drain_*` probe, receipt, bind, and settle tools are no longer public, and calls to them are refused. `orbit run auto --pull` is unchanged. ([ORB-13806])
+- **Older-client desktop compatibility removed**: the desktop MCP server no longer answers MCP peers that predate the guarded desktop contracts. Upgrade the desktop client to this release.
+- **Desktop controls moved to guarded domain contracts**: desktop task, auto-task, and drain controls go through guarded MCP contracts, and guarded `orbit_task_*` fields are refused on older MCP peers. Upgrade MCP peers with the server.
+
+### Highlights
+
+- **Orbit mod for Claude Code**: the Claude Code plugin adds a band above the prompt, a status line, and an Orbit pane with Board, Ship, and Map tabs, so you can act on tasks and watch a ship without leaving the session. ([ORB-13862])
+- **Desktop control center**: the desktop app gains a control center with guarded task review, and its Tasks list groups tasks by status, defaults to active ones, and carries the task controls. ([ORB-13843])
+- **No bare agent spawns**: dispatch now refuses when a shipped agent executor has no sandbox backend for the host OS instead of running it unsandboxed. ([ORB-13857])
+- **Disabled external tools stay manageable**: a disabled external tool remains listed and inspectable, and can be re-enabled.
+- **Workspace-safe dashboard**: task edits, approvals, run actions, friction results, and plugin toggles made around a workspace switch no longer land on, or display under, the wrong workspace.
+
+## 0.25.1
+
+### Highlights
+
+- **Cancel stops the agent**: `orbit run cancel` now stops the provider CLIs a run spawned, not just its owner, and `orbit run ship` refuses a task the pipeline cannot start from instead of reporting it submitted.
+- **Symlinked homes and checkouts**: an Orbit home or workspace reached through a symlink (macOS `/tmp` and `/var`, a symlinked `~/workspace`) no longer breaks auto-task edits, plugin enablement, routine disables or `workspace remove`, and the plugin write-root containment check resolves `..` as the kernel does.
+- **Tighter sandboxing and secret masking**: CLI workers inherit the sandbox on Linux and macOS, onboarding prepares the Linux sandbox prerequisites, and delivered plugin secrets and credential-bearing dotenv files are masked. ([ORB-13689])
+- **MCP annotations and field projection**: `tools/list` advertises read-only, destructive and open-world hints so clients can auto-approve read-only tools, and `orbit_task_list` accepts `fields` to return only the fields you need.
+- **Faster listings, search and dashboard**: filtered `task list`, search, the dashboard scoreboard and auto-drain readiness read task metadata instead of whole task bundles, cutting them from hundreds of milliseconds to tens at about 1,500 tasks.
+- **Clearer runs and drains**: `orbit run show` summarizes a drain's leaf outcomes and names the holder of a waited-on lock, blocked tasks name their next step, and every confirmation command honours `--format json`.
+
+## 0.25.0
+
+### Breaking Changes
+
+- **Plugin source root moved**: plugin sources must live under `.orbit-plugin/`; a top-level `plugin.yaml` is refused by `orbit plugin add`, `validate`, `test`, `sync`, and `upgrade`, with no fallback. Move `plugin.yaml` and its tree into `.orbit-plugin/` → `orbit plugin scaffold` creates the new shape. ([ORB-13626])
+
+### Highlights
+
+- **Follower pull**: `orbit run auto --pull` lets a follower machine pull one owner-admitted task at a time, run it, and hand the result back; the owner keeps landing authority. ([ORB-13625])
+- **Plugin secrets and Python backends**: plugins declare secrets that the host stores, delivers to backends, and rotates, and exec backends can be written in Python. ([ORB-13080])
+- **Brokered plugin calls and per-workspace enablement**: sandboxed agents call plugin tools through a broker, and plugins are enabled per workspace from the CLI or dashboard. ([ORB-13249])
+- **New recurring auto-tasks**: disabled-by-default documentation, run-failure, and backlog-hygiene auto-tasks, plus delete and restore for shipped defaults with a durable opt-out. ([ORB-12930])
+- **Deny-list agent policy**: shipped agent activities now name the operations they deny instead of allow-listing tools; custom allow-list activities keep working, and strict worker containment is opt-in. ([ORB-13315])
+- **Safer upgrades**: upgrade admission checks store and layout compatibility, so an older binary can read but no longer write a store migrated by a newer one. ([ORB-13631])
+
+## 0.24.0
+
+### Breaking Changes
+
+- **Activity, executor, and policy commands removed**: `orbit activity`, `orbit executor`, and `orbit policy` are gone with no aliases and now fail as unknown subcommands. `job`, `tool`, and `plugin` only moved in help. ([ORB-12893])
+- **Operation mode removed**: the `orbit operation` CLI group, `orbit run auto --grant`, and the `orbit.operation.*` tools are gone. Store migration v26 drops operation grants, so older binaries fail against an upgraded store. ([ORB-12770])
+- **Docs command and tools removed**: `orbit docs` and the five `orbit.docs.*` tools are gone. A leftover `[docs]` config section is ignored with a one-time warning → delete it. ([ORB-12741])
+- **Host renamed to machine**: `orbit host` is removed; `~/.orbit/host.toml` moves into `[machine]` in global `config.toml` (copied automatically this release), and `host` fields become `machine_name` / `job_run_machine`. Migration v23 renames audit columns, so older binaries fail against an upgraded store. ([ORB-12725])
+- **Semantic and hybrid search removed**: `orbit semantic`, `orbit search similar`, `--hybrid`, and the `semantic` / `hybrid` inputs on `orbit.search` are gone. Lexical `orbit search` / `orbit.search` is unchanged. ([ORB-12742])
+
+### Highlights
+
+- **Plugin standard**: `plugin.yaml` v2 plugins install and manage through `orbit plugin`, run under enforced grants in a sandboxed exec or `mcp` backend, and can ship tools, jobs, routines, auto-tasks, skills, and a schema-derived `orbit <ns> <verb>` CLI. ([ORB-12735])
+- **Distributed drain v1**: drains across machines admit work atomically through durable claims with replayable receipts, pull and bind leaves uniquely, and hand results back to the owning workspace. ([ORB-12493])
+- **Complexity crew pools**: a new `xhard` tier, weighted `name:weight` pool entries, and pool routing for ordinary `orbit run ship` admission; the drawn crew is fixed when the task is created. ([ORB-12605])
+- **State-triggered task-pilot**: task-pilot runs as a `preparation_eligible` state routine and batches due tasks into one run instead of polling on a cron. ([ORB-12745])
+- **Dashboard Config tab and runnable jobs**: the dashboard shows effective config grouped with provenance and inline edits, and the Jobs pane can start runs. ([ORB-12724])
+- **Bounded worker runs**: on Linux, pipeline worker runs execute inside a bounded cgroup, so a runaway run cannot run the host out of memory. ([ORB-12903])
+
+## 0.23.0
+
+### Breaking Changes
+
+- **MCP task-write response projections**: `orbit.task.add`, `orbit.task.update`, and `orbit.task.reject` no longer include `comments` and `history` by default; request those fields explicitly with `fields` or `field`. ([DANI-10379])
+
+### Highlights
+
+- **Federated semantic search**: search fans out concurrently across workspaces, reuses one query embedder, and batches embedding and reindex work for faster large-corpus queries. ([DANI-10365])
+- **Workflow failure recovery**: agent-declared failed envelopes now enter step recovery instead of sending otherwise recoverable tasks directly to `blocked`. ([DANI-10438])
+- **Safer process supervision**: execution cleanup validates process-group identity before signaling, preventing PID reuse from killing an unrelated process group. ([DANI-10447])
+- **Reliable worktree cleanup**: garbage collection can continue cleaning stale worktrees whose large build directories exceed a single cleanup window. ([DANI-10448])
+- **Actionable job diagnostics**: strict job catalog reads now surface malformed job files instead of silently hiding them from listing, inspection, and execution. ([DANI-10500])
+
+## 0.22.1
+
+### Highlights
+
+- **`orbit run task-pilot`**: named entrypoint for `task_pilot_pipeline`, matching `orbit run triage` for on-demand discovery or explicit task IDs. ([ORB-12437])
+- **`make install` targets `~/.orbit/bin`**: the source-checkout install now lands in the same directory as `install.sh` (override with `INSTALL_BIN_DIR`), so a stale `~/.cargo/bin/orbit` can no longer shadow the deployed binary on `PATH`.
+- **Dashboard: force any task status**: a human can force any task to any status from the dashboard, matching the CLI's `--force` escape hatch. ([ORB-12445])
+- **Forward-compatible store opens**: Orbit no longer hard-fails when a workspace's store schema or layout version is newer than the running binary supports; it opens read-only or auto-migrates instead. ([ORB-12434])
+
+## 0.22.0
+
+### Breaking Changes
+
+- **Task start and approve tools consolidated**: `orbit task start` CLI command and `orbit.task.start` / `orbit.task.approve` MCP tools are removed in favor of `orbit.task.update`. ([ORB-12268])
+- **Operation tools withdrawn from MCP**: all five `orbit.operation.*` tools are removed from the MCP surface; operations are managed via the Orbit CLI. ([ORB-12267])
+- **MCP task listing response shape updated**: `orbit.task.list` returns `{ tasks, total, truncated }` instead of `{ items }`; update MCP callers to consume the `tasks` array. ([ORB-12195])
+- **Routine hosts and source role configuration removed**: routine `hosts:` pins and `[routines] role = "source"` configuration schemas are removed in favor of host clock consolidation. ([ORB-12236])
+
+### Highlights
+
+- **Dashboard inline task editors**: the expanded task detail edits complexity, description, tags, acceptance criteria, and context files in place, each saved as a single-field `PATCH /api/tasks/:id` with inline errors and an allow-missing-context escape. ([ORB-12235])
+- **Unified host clock consolidation**: `orbit clock tick` evaluates routines and auto-tasks in a single host loop, retiring separate auto-task schedulers and simplifying multi-host execution. ([ORB-12237])
+- **Owner-wins cross-host task sync**: cross-host synchronization safely imports foreign-prefix task bundles while preserving local task state and preventing overwrites. ([ORB-12126])
+- **Delivery auto-task reset and self-healing**: added `auto-task reset` and automated replay proof for diverged history recovery instead of silent per-tick deferrals. ([ORB-12346])
+- **Effective provider sandbox visibility**: `orbit.agent.invoke` surfaces the active execution sandbox and warns when running under full-access mode. ([ORB-12249])
+
+## 0.21.0
+
+### Breaking Changes
+
+- **Layout-v3 checkout task projections removed**: `.orbit/tasks` symlink projections and projection fields are removed in favor of canonical storage; stop older binaries before running layout migration v3 to prevent recreating obsolete links. ([ORB-11994], [ORB-12078])
+- **Worktree GC activity schema updated**: custom `worktree_gc` invocations and automations must supply `target_run_id` instead of `run_id` for single-run scoping. ([ORB-11998])
+- **Public config path Result API**: `OrbitRuntime::config_path` now returns `Result<PathBuf, OrbitError>` instead of an infallible `PathBuf`; callers must handle config validation errors. ([ORB-12023])
+- **Linux runtime sandbox requires descriptor mounts**: Linux runtime write sandboxes now require Bubblewrap `--bind-fd` support; environments lacking descriptor-binding cannot mount writable runtime roots. ([ORB-12042], [ORB-12063])
+- **Task-pilot admission contract enforced**: automatic and explicit implementation admission now withhold unassessed tasks until complexity is evaluated, while `no-diff-expected` tasks are exempt. ([ORB-11991], [ORB-12053], [ORB-12118])
+- **Task complexity required on update**: human and agent `task.update` surfaces now reject `complexity: unassessed` with the create-time validation error; only automated system pipelines may assign unassessed status. ([ORB-12116])
+- **Strict new-file delivery declarations**: task delivery now enforces explicit new-file intent declarations and rejects unknown untracked paths before index mutation; declare new files via `file:` selectors. ([ORB-12050])
+
+### Highlights
+
+- **Read-only observational Orbit modes**: SQLite databases can be safely observed without write locks even when uncheckpointed WAL frames exist, and workspaces can start without requiring semantic indexing. ([ORB-12090], [ORB-12092], [ORB-12093])
+- **Rust path-validation and descriptor hardening**: file inspection and sandbox directory creation hold file descriptors through verification and mount operations, closing race conditions across runtime roots. ([ORB-12048], [ORB-12051], [ORB-12054], [ORB-12065])
+- **Task-pilot automated repair assessment**: code-scanning tasks are minted without speculative selectors, while task-pilot evaluates repair complexity and persists modification targets atomically before implementation. ([ORB-11991], [ORB-12118])
+- **CLI and MCP surface reliability**: fixes across tool execution, workspace filtering, MCP caller authorization, routine naming, credential redaction, and CLI output consistency improve agent ergonomics. ([ORB-12104], [ORB-12106], [ORB-12108], [ORB-12113])
+- **End-to-end full-QA coverage**: comprehensive QA verification suites, deterministic process fixtures, and browser capability evidence retention ensure stability across supported platforms. ([ORB-12010], [ORB-12047], [ORB-12062], [ORB-12085], [ORB-12086])
+
 ## 0.20.0
 
 ### Breaking Changes

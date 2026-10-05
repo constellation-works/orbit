@@ -336,12 +336,6 @@ pub struct AgentResponseEnvelope {
     pub duration_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentCommitRequest {
-    pub message: String,
-    pub files: Vec<String>,
-}
-
 /// A single step within a job definition.
 ///
 /// `Default::default()` matches serde defaults for all fields:
@@ -432,6 +426,117 @@ pub struct Job {
     pub updated_at: DateTime<Utc>,
 }
 
+/// How a job run was submitted [ORB-12255].
+///
+/// Stored on the run's pipeline document and projected on every operator-facing
+/// run JSON so MCP, CLI, and audit agree on provenance. Older runs have none.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobRunTriggerKind {
+    Routine,
+    Cli,
+    Mcp,
+    Child,
+    /// Submitted from the `orbit web serve` dashboard [ORB-13016].
+    Dashboard,
+}
+
+impl JobRunTriggerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Routine => "routine",
+            Self::Cli => "cli",
+            Self::Mcp => "mcp",
+            Self::Child => "child",
+            Self::Dashboard => "dashboard",
+        }
+    }
+}
+
+impl Display for JobRunTriggerKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobRunTrigger {
+    pub kind: JobRunTriggerKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine: Option<String>,
+    /// Cron slot of a scheduled routine fire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    /// Automation consumer that admitted a state-triggered routine run
+    /// [ORB-13016].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumer: Option<String>,
+}
+
+impl JobRunTrigger {
+    fn of_kind(kind: JobRunTriggerKind) -> Self {
+        Self {
+            kind,
+            routine: None,
+            slot: None,
+            consumer: None,
+        }
+    }
+
+    pub fn cli() -> Self {
+        Self::of_kind(JobRunTriggerKind::Cli)
+    }
+
+    pub fn mcp() -> Self {
+        Self::of_kind(JobRunTriggerKind::Mcp)
+    }
+
+    pub fn child() -> Self {
+        Self::of_kind(JobRunTriggerKind::Child)
+    }
+
+    pub fn dashboard() -> Self {
+        Self::of_kind(JobRunTriggerKind::Dashboard)
+    }
+
+    /// A scheduled (cron) routine fire for `slot`.
+    pub fn routine(name: impl Into<String>, slot: impl Into<String>) -> Self {
+        Self {
+            routine: Some(name.into()),
+            slot: Some(slot.into()),
+            ..Self::of_kind(JobRunTriggerKind::Routine)
+        }
+    }
+
+    /// A run admitted by a state-triggered routine's automation `consumer`
+    /// [ORB-13016]. It has no cron slot.
+    pub fn state_routine(name: impl Into<String>, consumer: impl Into<String>) -> Self {
+        Self {
+            routine: Some(name.into()),
+            consumer: Some(consumer.into()),
+            ..Self::of_kind(JobRunTriggerKind::Routine)
+        }
+    }
+
+    /// Value written on the v2 `run.started` audit event's `job_name`.
+    pub fn audit_job_name(&self, job_name: &str) -> String {
+        match self.kind {
+            JobRunTriggerKind::Routine => {
+                let name = self
+                    .routine
+                    .as_deref()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(job_name);
+                format!("routine:{name}")
+            }
+            JobRunTriggerKind::Mcp => format!("mcp:{job_name}"),
+            JobRunTriggerKind::Child => format!("child:{job_name}"),
+            JobRunTriggerKind::Cli => format!("cli:{job_name}"),
+            JobRunTriggerKind::Dashboard => format!("dashboard:{job_name}"),
+        }
+    }
+}
+
 /// Per-step execution record stored in a step file inside the run bundle directory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobRunStep {
@@ -469,6 +574,9 @@ pub struct KnowledgeRunMetrics {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobRun {
+    /// Immutable runtime identity at insertion; pre-existing rows remain unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_on: Option<crate::task::ExecutionLocation>,
     pub run_id: OrbitId,
     pub job_id: OrbitId,
     pub attempt: u32,

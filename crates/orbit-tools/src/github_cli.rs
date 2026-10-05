@@ -38,11 +38,18 @@ pub use crate::builtin::github::pr_list::{
 pub use crate::builtin::github::repo::{
     build_exec_request as repo_view_request, project_repo_view,
 };
-pub use crate::builtin::github::run_list::{build_exec_request as run_list_request, project_run};
-pub use crate::builtin::github::run_view::{
+pub use crate::builtin::github::run::jobs::{
+    build_exec_request as run_jobs_request, project_job_labels,
+};
+pub use crate::builtin::github::run::list::{build_exec_request as run_list_request, project_run};
+pub use crate::builtin::github::run::view::{
     build_exec_request as run_view_request, project_run_view,
 };
+pub use crate::builtin::github::task_prs::{
+    authenticated_login as authenticated_login_request,
+    close_pull_request as close_pull_request_request,
+    open_pull_requests as open_pull_requests_request,
+};
 pub use crate::builtin::github::{
-    BoundedLog, CheckoutEvidence, StreamedLog, StreamedLogCollector, bound_log_text, parse_gh_json,
-    scan_checkout_evidence, strip_ansi_sequences,
+    CheckoutEvidence, StreamedLog, StreamedLogCollector, parse_gh_json, strip_ansi_sequences,
 };

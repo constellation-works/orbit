@@ -8,8 +8,8 @@ use crate::executor::automation::input::{canonicalize_existing_dir, input_string
 
 use super::super::git::{
     BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
-    git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
-    resolve_worktree_start_point,
+    git_command_success, git_failure_error, git_output, git_output_raw, git_run, git_success,
+    git_timeout_error, normalize_base_branch, resolve_worktree_start_point,
 };
 use super::super::handoff::rebase_in_progress;
 use super::resolve_shared_worktree_path;
@@ -40,7 +40,11 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
         ));
     }
 
-    let base = input_string_field(input, "base").unwrap_or_else(|| DEFAULT_BASE.to_string());
+    // Same spelling rule as the worktree start point: `origin/main` names the
+    // local `main` branch this step lands on, not a detached remote ref.
+    let base = normalize_base_branch(
+        &input_string_field(input, "base").unwrap_or_else(|| DEFAULT_BASE.to_string()),
+    )?;
     let base_sync_mode = base_sync_mode_from_input(input)?;
     let base_checkout = checkout_holding_branch(&repo_root, &base)?.unwrap_or(repo_root.clone());
     ensure_clean_checkout(&base_checkout, "base branch checkout")?;
@@ -184,9 +188,8 @@ fn merge_with_rebase_retry(
 
 /// Locate the linked worktree that already has `base` checked out. Git refuses
 /// to check the same branch out in the primary checkout, so stacked local
-/// pipelines must merge directly in the owning worktree (the epic worktree in
-/// particular).
-pub(super) fn checkout_holding_branch(
+/// pipelines must merge directly in the owning worktree.
+pub(in crate::executor::automation::vcs) fn checkout_holding_branch(
     repo_root: &Path,
     base: &str,
 ) -> Result<Option<PathBuf>, OrbitError> {
@@ -261,8 +264,14 @@ fn parse_divergence_count(
     })
 }
 
-pub(super) fn ensure_clean_checkout(path: &Path, label: &str) -> Result<(), OrbitError> {
-    let status = git_output(path, &["status", "--porcelain"])?;
+/// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the
+/// whole output, which would misalign the index/worktree columns of a
+/// single-line result by one byte (see `git_output`'s doc comment).
+pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
+    path: &Path,
+    label: &str,
+) -> Result<(), OrbitError> {
+    let status = git_output_raw(path, &["status", "--porcelain", "--untracked-files=all"])?;
     if status.trim().is_empty() {
         return Ok(());
     }
@@ -278,13 +287,13 @@ pub(super) fn ensure_clean_checkout(path: &Path, label: &str) -> Result<(), Orbi
     });
     if has_unmerged {
         return Err(OrbitError::Execution(format!(
-            "{label} '{}' has unresolved merge conflicts",
-            path.display()
+            "{label} '{}' has unresolved merge conflicts:\n{status}\nResolve and commit the conflicts before shipping.",
+            path.display(),
         )));
     }
 
     Err(OrbitError::Execution(format!(
-        "{label} '{}' must be clean before merge_batch_worktree_into_base",
-        path.display()
+        "{label} '{}' must be clean before merge_batch_worktree_into_base. Dirty paths (git status --short):\n{status}\nCommit or stash these changes, and remove unwanted untracked files, then retry shipping.",
+        path.display(),
     )))
 }

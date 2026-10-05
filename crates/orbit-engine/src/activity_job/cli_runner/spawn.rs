@@ -1,40 +1,23 @@
-use std::collections::HashSet;
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 
-use orbit_common::OrbitError;
 use orbit_exec::{
-    BwrapProbeOutcome, LinuxBwrapSpawnRequest, MacosLoginKeychainAccess, MacosSandboxSpawnRequest,
-    UnsatisfiedWriteGrant, compile_linux_bwrap_argv, compile_macos_sandbox_profile,
-    linux_bwrap_write_grant_diagnostic, macos_login_keychain_access,
-    prepare_linux_bwrap_write_grants, probe_bwrap, sandbox_exec_available,
-    sandbox_exec_unavailable_message, spawn_under_linux_bwrap, spawn_under_macos_sandbox,
+    BwrapProbeOutcome, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
+    LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, MacosSandboxSpawnRequest,
+    UnsatisfiedWriteGrant, append_macos_subpath_mask, compile_linux_bwrap_argv_with_authority,
+    compile_macos_sandbox_profile, prepare_linux_bwrap_write_grants, probe_bwrap,
+    sandbox_exec_available, sandbox_exec_unavailable_message, spawn_under_linux_bwrap,
+    spawn_under_macos_sandbox,
 };
-use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::ExecutorSandboxKind;
 use tempfile::NamedTempFile;
 
 use super::super::dispatcher::ResolvedSandbox;
 
-const ORBIT_BIN_ENV: &str = "ORBIT_BIN";
 pub(super) const CODEX_CA_CERTIFICATE_ENV: &str = "CODEX_CA_CERTIFICATE";
 pub(super) const SSL_CERT_FILE_ENV: &str = "SSL_CERT_FILE";
 const DEFAULT_MACOS_CA_CERTIFICATE: &str = "/etc/ssl/cert.pem";
-
-/// Conventional `$HOME` bin directories searched when a provider launcher
-/// is not on the inherited `PATH`, and backfilled into a spawned agent's
-/// `PATH` when those entries are absent. Keep this list shared so lookup
-/// and child-env construction cannot drift. [ORB-10909]
-const CONVENTIONAL_HOME_BIN_DIRS: &[&str] = &[".local/bin", ".orbit/bin", ".cargo/bin", "bin"];
-
-/// Portable supported-launcher prefixes searched after `PATH` and `$HOME`
-/// bins, and backfilled into the spawned agent `PATH`. These are OS package
-/// prefixes, not user directories: Apple Silicon Homebrew, then the Intel
-/// Homebrew / `/usr/local` prefix. launchd's default `PATH` omits both, which
-/// is why a scheduled Mac drain cannot find `/opt/homebrew/bin/codex` while
-/// an interactive shell can. [ORB-11808]
-pub(crate) const SUPPORTED_SYSTEM_BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 
 /// Typed spawn failure with a retryability classification (ORB-10006).
 ///
@@ -131,7 +114,7 @@ pub(crate) fn prepare_sandbox_for_dispatch(
     }
 }
 
-pub(crate) fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
+fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
     sandbox: &'a ResolvedSandbox,
     probe: BwrapProbeOutcome,
 ) -> Result<PreparedSandbox<'a>, SpawnError> {
@@ -201,251 +184,32 @@ impl SpawnError {
     }
 }
 
-/// Resolve a provider launcher without relying solely on the parent process's
-/// ambient `PATH`.
-///
-/// Every CLI-backed provider enters through this resolver so service, routine,
-/// dashboard, and interactive dispatches use the same lookup policy.
-pub(crate) fn resolve_provider_launcher(
-    provider: &str,
-    program: &str,
-    cwd: Option<&Path>,
-) -> Result<String, SpawnError> {
-    let path = std::env::var_os("PATH");
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    resolve_provider_launcher_with(provider, program, path.as_deref(), home.as_deref(), cwd)
-}
-
-/// Pin tools invoked by an agent to the Orbit build that dispatched it.
-///
-/// Long-lived services may retain a `PATH` whose first `orbit` is an older
-/// Cargo install even after the operator deploys `~/.orbit/bin/orbit`. Export
-/// the selected binary for hook scripts and put its directory first for bare
-/// `orbit tool ...` invocations inside the provider (including Bubblewrap).
-pub(crate) fn orbit_tool_env() -> Result<Vec<(String, String)>, SpawnError> {
-    let current_exe = std::env::current_exe().map_err(|error| {
-        SpawnError::permanent(format!(
-            "resolve dispatching Orbit executable for agent tool environment: {error}"
-        ))
-    })?;
-    let configured = std::env::var_os(ORBIT_BIN_ENV);
-    let inherited_path = std::env::var_os("PATH");
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    orbit_tool_env_with(
-        configured.as_deref(),
-        &current_exe,
-        inherited_path.as_deref(),
-        home.as_deref(),
-    )
-}
-
-// pub(crate) widened for sibling tests under the repository's enforced test layout.
-pub(crate) fn orbit_tool_env_with(
-    configured: Option<&OsStr>,
-    current_exe: &Path,
-    inherited_path: Option<&OsStr>,
-    home: Option<&Path>,
-) -> Result<Vec<(String, String)>, SpawnError> {
-    let selected = configured
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| current_exe.to_path_buf());
-    let selected_text = selected.to_string_lossy().into_owned();
-
-    let Some(bin_dir) = selected
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    else {
-        return Ok(vec![(ORBIT_BIN_ENV.to_string(), selected_text)]);
-    };
-
-    let mut path_entries = vec![bin_dir.to_path_buf()];
-    let mut seen = HashSet::new();
-    seen.insert(bin_dir.to_path_buf());
-    if let Some(inherited_path) = inherited_path {
-        for entry in std::env::split_paths(inherited_path) {
-            if seen.insert(entry.clone()) {
-                path_entries.push(entry);
-            }
-        }
-    }
-    // Service/routine dispatch often inherits a PATH that omits cargo and
-    // other login-shell bins. Backfill the same conventional home dirs and
-    // supported system prefixes `resolve_provider_launcher_with` already
-    // searches so `cargo test` and Homebrew-installed tools inside the
-    // spawned agent are not "command not found". [ORB-10909] [ORB-11808]
-    if let Some(home) = home {
-        for dir in conventional_home_bin_dirs(home) {
-            if seen.insert(dir.clone()) {
-                path_entries.push(dir);
-            }
-        }
-    }
-    for dir in supported_system_bin_dirs() {
-        if seen.insert(dir.clone()) {
-            path_entries.push(dir);
-        }
-    }
-    let pinned_path = std::env::join_paths(path_entries)
-        .map_err(|error| {
-            SpawnError::permanent(format!(
-                "construct agent PATH pinned to `{}`: {error}",
-                selected.display()
-            ))
-        })?
-        .into_string()
-        .map_err(|_| {
-            SpawnError::permanent(format!(
-                "agent PATH pinned to `{}` is not valid Unicode",
-                selected.display()
-            ))
-        })?;
-
-    Ok(vec![
-        (ORBIT_BIN_ENV.to_string(), selected_text),
-        ("PATH".to_string(), pinned_path),
-    ])
-}
-
-fn conventional_home_bin_dirs(home: &Path) -> impl Iterator<Item = PathBuf> + '_ {
-    CONVENTIONAL_HOME_BIN_DIRS
-        .iter()
-        .map(|relative| home.join(relative))
-}
-
-fn supported_system_bin_dirs() -> impl Iterator<Item = PathBuf> {
-    SUPPORTED_SYSTEM_BIN_DIRS.iter().map(PathBuf::from)
-}
-
-fn is_launchable_file(path: &Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-// pub(crate) widened for sibling tests under the repository's enforced test layout.
-pub(crate) fn resolve_provider_launcher_with(
-    provider: &str,
-    program: &str,
-    path: Option<&OsStr>,
-    home: Option<&Path>,
-    cwd: Option<&Path>,
-) -> Result<String, SpawnError> {
-    resolve_provider_launcher_with_extra_dirs(
-        provider,
-        program,
-        path,
-        home,
-        cwd,
-        supported_system_bin_dirs(),
-    )
-}
-
-/// Test-injectable resolver: production calls
-/// [`resolve_provider_launcher_with`], which supplies the supported system
-/// prefixes. Tests pass a temporary Homebrew-style prefix rather than
-/// writing into `/opt/homebrew/bin`.
-pub(crate) fn resolve_provider_launcher_with_extra_dirs(
-    provider: &str,
-    program: &str,
-    path: Option<&OsStr>,
-    home: Option<&Path>,
-    cwd: Option<&Path>,
-    extra_bin_dirs: impl IntoIterator<Item = PathBuf>,
-) -> Result<String, SpawnError> {
-    let configured = Path::new(program);
-    if configured.components().count() > 1 {
-        return Ok(program.to_string());
-    }
-
-    let mut search_dirs = Vec::new();
-    let mut seen = HashSet::new();
-    if let Some(path) = path {
-        for dir in std::env::split_paths(path) {
-            let dir = if dir.is_relative() {
-                cwd.map_or(dir.clone(), |cwd| cwd.join(&dir))
-            } else {
-                dir
-            };
-            if seen.insert(dir.clone()) {
-                search_dirs.push(dir);
-            }
-        }
-    }
-    if let Some(home) = home {
-        for dir in conventional_home_bin_dirs(home) {
-            if seen.insert(dir.clone()) {
-                search_dirs.push(dir);
-            }
-        }
-    }
-    for dir in extra_bin_dirs {
-        if seen.insert(dir.clone()) {
-            search_dirs.push(dir);
-        }
-    }
-
-    let mut searched = Vec::with_capacity(search_dirs.len());
-    for dir in search_dirs {
-        let candidate = dir.join(program);
-        searched.push(candidate.clone());
-        if is_launchable_file(&candidate) {
-            return Ok(candidate.to_string_lossy().into_owned());
-        }
-        #[cfg(windows)]
-        if configured.extension().is_none() {
-            for extension in windows_executable_extensions() {
-                let candidate = dir.join(format!("{program}{extension}"));
-                searched.push(candidate.clone());
-                if is_launchable_file(&candidate) {
-                    return Ok(candidate.to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
-
-    let searched = if searched.is_empty() {
-        "<no PATH or HOME search locations available>".to_string()
-    } else {
-        searched
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    Err(SpawnError::permanent(format!(
-        "provider launcher `{program}` for provider `{provider}` was not found; searched: {searched}"
-    )))
-}
-
-#[cfg(windows)]
-fn windows_executable_extensions() -> Vec<String> {
-    std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
-        .split(';')
-        .filter(|extension| !extension.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect()
-}
-
 #[derive(Debug)]
 pub(crate) struct SpawnedChild {
     pub(crate) child: Child,
     /// Sandbox profile tempfile, if any. Held until the supervisor returns
     /// so the kernel can keep reading the SBPL profile while the child runs.
-    pub(crate) _profile_temp: Option<NamedTempFile>,
+    /// Shared: identical compiled profiles reuse one process-wide tempfile
+    /// (see `orbit_exec::spawn_under_macos_sandbox`), so this may outlive
+    /// this particular spawn.
+    pub(crate) _profile_temp: Option<Arc<NamedTempFile>>,
+    /// Linux mount-source descriptors retained until the provider exits.
+    ///
+    /// Closing a duplicate SQLite database descriptor can release this
+    /// process's POSIX locks even while the host lease connection remains
+    /// open, so the complete plan shares the sandboxed child's lifetime.
+    pub(crate) _linux_mount_plan: Option<LinuxBwrapPlan>,
+}
+
+impl SpawnedChild {
+    /// The post-run write-policy snapshot the Linux plan took while compiling
+    /// its deny mounts — after grant preparation, before the child ran. Only
+    /// a managed Bubblewrap launch carries one.
+    pub(crate) fn take_linux_post_run_guard(&mut self) -> Option<LinuxBwrapPostRunGuard> {
+        self._linux_mount_plan
+            .as_mut()
+            .and_then(LinuxBwrapPlan::take_post_run_guard)
+    }
 }
 
 pub(crate) fn spawn_child_with_optional_sandbox(
@@ -502,12 +266,16 @@ fn spawn_linux_bwrap(
         }
         report_unsatisfied_grants(&prepared.unsatisfied);
     }
-    let plan = compile_linux_bwrap_argv(
+    let authority = linux_bwrap_mount_authority(sandbox);
+    let mask = linux_bwrap_mask(sandbox);
+    let plan = compile_linux_bwrap_argv_with_authority(
         &sandbox.fs_profile,
         program,
         args,
         cwd,
         sandbox.managed_worktree,
+        authority,
+        mask.as_ref(),
     )
     .map_err(|error| SpawnError::permanent(error.to_string()))?;
     reject_unsatisfiable_managed_grants(sandbox.managed_worktree, &plan.dropped_grants)?;
@@ -524,6 +292,29 @@ fn spawn_linux_bwrap(
     Ok(SpawnedChild {
         child,
         _profile_temp: None,
+        _linux_mount_plan: Some(plan),
+    })
+}
+
+/// Borrow the runtime owner's exact descriptors for the mount plan. `File`
+/// duplication is forbidden here because closing any duplicate for a SQLite
+/// database can release unrelated POSIX locks owned by this process.
+fn linux_bwrap_mount_authority(sandbox: &ResolvedSandbox) -> Vec<LinuxBwrapMountAuthority> {
+    sandbox
+        .runtime_write_authority
+        .iter()
+        .map(|grant| LinuxBwrapMountAuthority {
+            destination: grant.path.clone(),
+            source: Arc::clone(&grant.handle),
+        })
+        .collect()
+}
+
+/// The host's mask as Bubblewrap mounts it: its sentinel over each target.
+pub(crate) fn linux_bwrap_mask(sandbox: &ResolvedSandbox) -> Option<LinuxBwrapMask> {
+    sandbox.mask.as_ref().map(|mask| LinuxBwrapMask {
+        sentinel: mask.sentinel.clone(),
+        targets: mask.targets.clone(),
     })
 }
 
@@ -537,7 +328,7 @@ fn spawn_linux_bwrap(
 /// can never reach the provider, and a test that has to spawn a real sandbox to
 /// observe it would silently skip on any host without bwrap.
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn reject_unsatisfiable_managed_grants(
+fn reject_unsatisfiable_managed_grants(
     managed_worktree: bool,
     dropped_grants: &[UnsatisfiedWriteGrant],
 ) -> Result<(), SpawnError> {
@@ -572,149 +363,8 @@ fn describe_grants(grants: &[UnsatisfiedWriteGrant]) -> String {
         .join("; ")
 }
 
-/// Turn a child-reported EROFS into a policy-owned denial when the failing
-/// program included the attempted path in stderr. This runs after the real
-/// Bubblewrap child exits, so it covers the production invocation boundary
-/// rather than merely explaining a path supplied by a unit test.
-pub(super) fn linux_bwrap_failed_write_diagnostic(
-    profile: &ResolvedFsProfile,
-    stderr: &[u8],
-    cwd: Option<&Path>,
-) -> Result<Option<String>, OrbitError> {
-    let stderr = String::from_utf8_lossy(stderr);
-    for line in stderr.lines().rev() {
-        if !line.contains("Read-only file system") && !line.contains("EROFS") {
-            continue;
-        }
-        for candidate in failed_write_path_candidates(line).into_iter().rev() {
-            let path = Path::new(&candidate);
-            let attempted = if path.is_absolute() {
-                path.to_path_buf()
-            } else if let Some(cwd) = cwd {
-                cwd.join(path)
-            } else {
-                continue;
-            };
-            if let Some(diagnostic) = linux_bwrap_write_grant_diagnostic(profile, &attempted)? {
-                return Ok(Some(format!(
-                    "Orbit linux-bwrap policy denied the attempted write: {diagnostic}"
-                )));
-            }
-        }
-    }
-    Ok(None)
-}
-
-fn failed_write_path_candidates(line: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
-    for quote in ['\'', '"', '`'] {
-        let mut remainder = line;
-        while let Some(start) = remainder.find(quote) {
-            let after_start = &remainder[start + quote.len_utf8()..];
-            let Some(end) = after_start.find(quote) else {
-                break;
-            };
-            let candidate = after_start[..end].trim();
-            if !candidate.is_empty() {
-                candidates.push(candidate.to_string());
-            }
-            remainder = &after_start[end + quote.len_utf8()..];
-        }
-    }
-
-    // Coreutils quotes paths, but language runtimes often render
-    // `...: /path: Read-only file system`. Keep a conservative token fallback
-    // so those failures are attributable too.
-    let prefix = line
-        .split_once("Read-only file system")
-        .or_else(|| line.split_once("EROFS"))
-        .map_or(line, |(prefix, _)| prefix);
-    if let Some(token) = prefix.split_whitespace().next_back() {
-        let candidate = token
-            .trim_matches(|character: char| {
-                matches!(character, '\'' | '"' | '`' | ':' | '(' | ')' | '[' | ']')
-            })
-            .trim();
-        if !candidate.is_empty() && !candidates.iter().any(|known| known == candidate) {
-            candidates.push(candidate.to_string());
-        }
-    }
-    candidates
-}
-
-/// Text a provider CLI emits when it cannot read its Keychain-backed OAuth
-/// session. The CLI cannot tell "the item is gone" from "the item is
-/// unreadable", so it reports both as an expiry.
-const KEYCHAIN_AUTH_FAILURE_MARKER: &str = "OAuth session expired";
-
-/// Distinguish a sandbox Keychain denial from a genuinely expired provider
-/// login.
-///
-/// A macOS sandbox that hides `$HOME/Library/Keychains` makes a valid login
-/// look expired, and the CLI's own message sends the operator to re-login —
-/// which cannot help. Orbit compiled the profile, so it is the only layer that
-/// knows whether the credential was actually reachable; say so next to the
-/// provider's message instead of leaving the operator to guess.
-///
-/// The verdict comes from `orbit_exec::macos_login_keychain_access`, which
-/// reads the same profile the kernel enforced. Only the `Allowed` case may
-/// recommend re-authentication: the other cases are Orbit's own denial, which
-/// no amount of re-logging in outside the sandbox will clear. [ORB-10931]
-pub(super) fn macos_keychain_auth_diagnostic(
-    provider: &str,
-    sandbox: Option<&ResolvedSandbox>,
-    output: &str,
-) -> Option<String> {
-    let home = std::env::var_os("HOME");
-    macos_keychain_auth_diagnostic_with(provider, sandbox, output, home.as_deref())
-}
-
-/// Test-friendly variant: callers pass HOME explicitly instead of reading
-/// process-global state, which the compiler's carve-out also depends on.
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn macos_keychain_auth_diagnostic_with(
-    provider: &str,
-    sandbox: Option<&ResolvedSandbox>,
-    output: &str,
-    home: Option<&OsStr>,
-) -> Option<String> {
-    let sandbox = sandbox?;
-    if sandbox.kind != ExecutorSandboxKind::MacosSandboxExec
-        || !output.contains(KEYCHAIN_AUTH_FAILURE_MARKER)
-    {
-        return None;
-    }
-    match macos_login_keychain_access(provider, home, &sandbox.fs_profile) {
-        // The provider does not keep credentials in the keychain, so this
-        // failure has nothing to do with the sandbox's keychain deny.
-        MacosLoginKeychainAccess::DeniedByDefaultPolicy => None,
-        MacosLoginKeychainAccess::Allowed => Some(format!(
-            "Orbit's macOS sandbox profile allows `$HOME/Library/Keychains` reads for provider \
-             `{provider}`, so the stored credential was reachable and this is a real login \
-             failure: re-authenticate the provider CLI outside Orbit, then retry."
-        )),
-        // The compiler emits the re-allow only when it can resolve HOME, so an
-        // Orbit process started without a login environment still produces the
-        // fake-expiry failure. That is a different fix from re-authenticating.
-        MacosLoginKeychainAccess::HomeUnresolved => Some(format!(
-            "HOME is unset for the Orbit process, so its macOS sandbox profile could not allow \
-             `$HOME/Library/Keychains` reads for provider `{provider}`: the sandbox hid the \
-             stored credential and the login is not necessarily expired. Start Orbit with a \
-             login environment and retry before re-authenticating."
-        )),
-        MacosLoginKeychainAccess::DeniedByActivityRule { rule } => Some(format!(
-            "The activity's fsProfile `{}` denies `$HOME/Library/Keychains` reads via rule \
-             `{rule}`, which outranks the `{provider}` credential carve-out, so Orbit's macOS \
-             sandbox hid the stored credential and the login is not necessarily expired. \
-             Re-authenticating will not help: drop or narrow that denyRead rule, or run this \
-             activity without the macOS sandbox.",
-            sandbox.fs_profile.name
-        )),
-    }
-}
-
-// pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn spawn_bare(
+fn spawn_bare(
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -740,12 +390,15 @@ pub(crate) fn spawn_bare(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let child = command
-        .spawn()
-        .map_err(|err| SpawnError::from_spawn_io(program, &err))?;
+    #[cfg(target_os = "linux")]
+    let child_result = orbit_common::test_process::retry_executable_busy(|| command.spawn());
+    #[cfg(not(target_os = "linux"))]
+    let child_result = command.spawn();
+    let child = child_result.map_err(|err| SpawnError::from_spawn_io(program, &err))?;
     Ok(SpawnedChild {
         child,
         _profile_temp: None,
+        _linux_mount_plan: None,
     })
 }
 
@@ -774,7 +427,7 @@ fn spawn_macos_sandboxed(
 /// can assert the fail-closed and fallback branches without mutating
 /// process-global state.
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn spawn_macos_sandboxed_with(
+fn spawn_macos_sandboxed_with(
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -809,11 +462,15 @@ pub(crate) fn spawn_macos_sandboxed_with(
     // The sandboxed spawn itself goes through orbit-exec, which erases the
     // io::ErrorKind; classify it transient so retries are preserved.
     //
-    // `provider` reaches the compiler because the credential denylist has one
-    // provider-scoped exception: the confined CLI's own credential store. See
-    // `orbit_exec::macos_login_keychain_access`. [ORB-10929]
-    let profile_text = compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
+    // `provider` reaches the compiler because the credential denylist has a
+    // provider-scoped exception: the confined CLI's own credential store.
+    // See `orbit_exec::macos_login_keychain_access`. [ORB-10929] [ORB-12261]
+    let mut profile_text = compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
         .map_err(|err| SpawnError::permanent(err.to_string()))?;
+    // Last, so the host's mask outranks every allow compiled above.
+    if let Some(mask) = &sandbox.mask {
+        append_macos_subpath_mask(&mut profile_text, &mask.targets);
+    }
     let child_env = prepare_macos_codex_ca_environment_with(
         provider,
         env,
@@ -829,11 +486,13 @@ pub(crate) fn spawn_macos_sandboxed_with(
         stdin: Stdio::piped(),
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
+        inherited_fds: &[],
     })
     .map_err(|err| SpawnError::transient(err.to_string()))?;
     Ok(SpawnedChild {
         child,
         _profile_temp: Some(profile_temp),
+        _linux_mount_plan: None,
     })
 }
 
@@ -845,7 +504,7 @@ pub(crate) fn spawn_macos_sandboxed_with(
 /// public bundle when the operator has not selected either documented
 /// override. Explicit values keep their normal precedence and are validated,
 /// never replaced with the fallback after a typo or permissions failure.
-pub(crate) fn prepare_macos_codex_ca_environment_with(
+fn prepare_macos_codex_ca_environment_with(
     provider: &str,
     env: &[(String, String)],
     cwd: Option<&Path>,

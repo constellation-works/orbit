@@ -25,7 +25,9 @@ pub struct TaskAddArgs {
     /// Dependency task IDs. Repeat or comma-separate for multiple dependencies.
     #[arg(long, alias = "dependency", action = ArgAction::Append, value_delimiter = ',')]
     pub dependencies: Vec<String>,
-    /// Task tags. Repeat or comma-separate for multiple tags.
+    /// Task tags. Repeat or comma-separate for multiple tags. `os:linux`,
+    /// `os:macos` or `os:windows` limits which host OS may run the task; any
+    /// other `os:` value is rejected.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',')]
     pub tags: Vec<String>,
     /// Exact canonical tool names the task adds to its agent activity baseline.
@@ -44,15 +46,16 @@ pub struct TaskAddArgs {
     pub external_refs: Vec<String>,
     /// Task context selectors. Repeat or comma-separate for multiple selectors.
     /// Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
+    /// Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.
     #[arg(long, action = ArgAction::Append, value_delimiter = ',')]
     pub context: Vec<String>,
-    /// Workspace path for the task, relative to the selected workspace
-    #[arg(long = "workspace-path")]
-    pub workspace_path: Option<String>,
+    /// Accept context selectors whose target does not exist yet (for work that creates the file)
+    #[arg(long)]
+    pub allow_missing_context: bool,
     /// Priority level
     #[arg(long, value_enum, default_value_t = TaskPriority::Medium)]
     pub priority: TaskPriority,
-    /// Task complexity (low, medium, or hard)
+    /// Task complexity (low, medium, hard, or xhard)
     #[arg(long, value_enum)]
     pub complexity: TaskComplexity,
     /// Task type
@@ -64,7 +67,8 @@ pub struct TaskAddArgs {
     /// For bug tasks: the originating task whose implementation introduced the defect
     #[arg(long = "source-task")]
     pub source_task: Option<String>,
-    /// Named crew to use when running this task
+    /// Named crew to use when running this task (default: drawn from the
+    /// complexity pool, else the configured default crew)
     #[arg(long)]
     pub crew: Option<String>,
     /// Named crew responsible for orchestration attribution
@@ -80,12 +84,18 @@ pub struct TaskAddArgs {
 
 impl Execute for TaskAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let required_tool_warnings = runtime.validate_required_tools(&self.required_tools)?;
         let (agent, model) = super::mutation_identity(self.model);
+        if !self.allow_missing_context {
+            runtime.ensure_context_selectors_exist(&self.context)?;
+        }
         if let Some(parent_id) = self.parent_id.as_deref()
             && runtime.get_task(parent_id).is_err()
         {
             eprintln!("warning: parent task '{parent_id}' was not found; creating subtask anyway");
         }
+
+        super::warn_unreadable_dependencies(runtime, &self.dependencies);
 
         let task = runtime.add_task_with_identity(
             TaskAddParams {
@@ -100,7 +110,6 @@ impl Execute for TaskAddArgs {
                 plan: self.plan,
                 comment: None,
                 context_files: self.context,
-                workspace_path: self.workspace_path,
                 priority: self.priority,
                 complexity: self.complexity,
                 task_type: self.task_type,
@@ -119,6 +128,15 @@ impl Execute for TaskAddArgs {
             model,
         )?;
 
-        Ok(Payload::detail(task_to_json_for_runtime(runtime, &task)?, task.id).into())
+        let mut document = task_to_json_for_runtime(runtime, &task)?;
+        if !required_tool_warnings.is_empty()
+            && let Some(object) = document.as_object_mut()
+        {
+            object.insert(
+                "warnings".to_string(),
+                serde_json::json!(required_tool_warnings),
+            );
+        }
+        Ok(Payload::detail(document, task.id).into())
     }
 }

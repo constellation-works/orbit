@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web SSH Local Forward"
-last_validated: 2026-09-09
+last_validated: 2026-09-30
 tags: [remote-access]
 ---
 
@@ -26,7 +26,7 @@ It is not used by MCP. MCP remote mode uses direct ssh -T stdio with no -L forwa
 
        ssh -tt -o ExitOnForwardFailure=yes -L 127.0.0.1:<local>:localhost:<remote> <host> "<remote command>"
 
-6. The remote command is orbit web serve --no-open --port <remote>. It may include a POSIX-quoted --workspace and the compatibility --global flag.
+6. By default, the remote command is `orbit web serve --no-open --operator --port <remote>`. `--no-operator` omits `--operator`. It may include a POSIX-quoted `--workspace` and the compatibility `--global` flag.
 7. Poll /healthz for up to 30 seconds. Once ready, open the local URL unless local --no-open was requested.
 
 A forward can exist while no service listens behind it, so SSH startup alone never proves readiness.
@@ -60,6 +60,7 @@ SshTunnel owns the child through RAII. Drop or explicit shutdown sends SIGTERM, 
 - --workspace affects the remote server's default workspace only, and only when this invocation spawns it. A top-level --root is rejected: connect reads no local Orbit data directory.
 - --global is forwarded in spawn mode for compatibility with older remote binaries; current Web serving is always multi-workspace.
 - --no-open controls only the local browser.
+- --no-operator leaves operation controls read-only when this invocation spawns the remote server; an attached server keeps its existing capability.
 
 Attach mode sends no remote command, so --workspace and --global cannot reconfigure an existing server.
 

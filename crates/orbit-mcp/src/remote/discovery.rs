@@ -2,10 +2,11 @@
 
 use std::collections::BTreeSet;
 
+use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::tool::{
-    McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolParam, ToolSchema,
-    validate_mcp_tool_definitions,
+    McpToolAnnotations, McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolParam,
+    ToolSchema, validate_mcp_tool_definitions,
 };
 use orbit_types::workspace::{Workspace, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::{Value, json};
@@ -19,11 +20,45 @@ use serde_json::{Value, json};
 pub const FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL: &str =
     "orbit_federated_destination_workspace_list";
 
+/// `include` value that attaches each workspace's effective crews to its row.
+pub const WORKSPACE_LIST_INCLUDE_CREWS: &str = "crews";
+
 pub(super) fn discovery_tool_definitions() -> Result<Vec<McpToolDefinition>, McpToolDefinitionError>
 {
-    let definitions = vec![workspace_list_definition(), crew_list_definition()];
+    let definitions = vec![workspace_list_definition()];
     validate_mcp_tool_definitions(&definitions)?;
     Ok(definitions)
+}
+
+/// The `include` parameter shared by the machine-local and federated lists.
+pub fn workspace_list_include_param() -> ToolParam {
+    ToolParam {
+        name: "include".to_string(),
+        description: "Optional extra detail per workspace row. `crews` adds the workspace's \
+                      effective configured crews and default crew as `crews`, read on the \
+                      machine that holds the checkout, or `crews_error` when its \
+                      configuration cannot be read."
+            .to_string(),
+        param_type: "string_list".to_string(),
+        required: false,
+    }
+}
+
+/// Whether a workspace-list call asked for crews. An unknown `include` value
+/// is refused rather than ignored, so a typo does not read as "no crews".
+pub fn workspace_list_includes_crews(input: &Value) -> Result<bool, OrbitError> {
+    let include = optional_csv_or_string_list_alias(input, &["include"])?.unwrap_or_default();
+    let mut crews = false;
+    for value in include {
+        if value == WORKSPACE_LIST_INCLUDE_CREWS {
+            crews = true;
+        } else {
+            return Err(OrbitError::InvalidInput(format!(
+                "unknown `include` value '{value}'; expected `{WORKSPACE_LIST_INCLUDE_CREWS}`"
+            )));
+        }
+    }
+    Ok(crews)
 }
 
 /// Registry-wide discovery accepts no workspace selector.
@@ -31,37 +66,15 @@ fn workspace_list_definition() -> McpToolDefinition {
     McpToolDefinition::new(
         ToolSchema {
             name: "orbit.workspace.list".to_string(),
-            description: "List active workspaces with a checkout registered on this machine."
+            description: "List active workspaces with a checkout registered on this machine, \
+                          optionally with each one's configured crews."
                 .to_string(),
-            parameters: Vec::new(),
+            parameters: vec![workspace_list_include_param()],
             builtin: true,
         },
         McpToolScope::Global,
     )
-}
-
-/// Crew discovery resolves one workspace on the accepting machine.
-fn crew_list_definition() -> McpToolDefinition {
-    McpToolDefinition::new(
-        ToolSchema {
-            name: "orbit.crew.list".to_string(),
-            description: "List the effective configured crews for a selected workspace on this \
-                          machine."
-                .to_string(),
-            parameters: vec![ToolParam {
-                name: "workspace".to_string(),
-                description:
-                    "Registered workspace name, logical workspace ID (`ws_*`), or absolute \
-                              path registered on the accepting server. Defaults to the MCP session \
-                              workspace and is never inferred from process cwd."
-                        .to_string(),
-                param_type: "string".to_string(),
-                required: false,
-            }],
-            builtin: true,
-        },
-        McpToolScope::WorkspaceRequired,
-    )
+    .with_annotations(Some(McpToolAnnotations::READ_ONLY))
 }
 
 pub fn execute_discovery_tool(

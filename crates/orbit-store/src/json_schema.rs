@@ -11,24 +11,6 @@ pub fn validate_schema_document(schema: &Value, context: &str) -> Result<JSONSch
     })
 }
 
-pub fn validate_instance_against_schema(
-    schema: &Value,
-    instance: &Value,
-    context: &str,
-) -> Result<(), OrbitError> {
-    let validator = validate_schema_document(schema, context)?;
-    if let Err(errors) = validator.validate(instance) {
-        let details = errors
-            .map(|err| err.to_string())
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(OrbitError::AgentProtocolViolation(format!(
-            "{context}: {details}"
-        )));
-    }
-    Ok(())
-}
-
 fn enforce_minimum_supported_draft(schema: &Value, context: &str) -> Result<(), OrbitError> {
     let Some(uri) = schema
         .as_object()

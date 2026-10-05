@@ -16,6 +16,8 @@ use crate::loop_engine::transport::{
     TransportError, TurnRequest, TurnResponse, TurnUsage,
 };
 
+use crate::providers::http_body::{read_error_body, read_response_body};
+
 use super::wire::{
     CacheControl, IncomingContent, MessagesRequest, MessagesResponse, OutgoingContent,
     OutgoingMessage, OutgoingTool, SystemBlock,
@@ -99,18 +101,13 @@ impl LoopTransport for AnthropicMessagesTransport {
             .map_err(|e| TransportError::Network(e.to_string()))?;
 
         let http_status = response.status().as_u16();
-        let response_bytes = response
-            .bytes()
-            .map_err(|e| TransportError::Network(format!("read body: {e}")))?
-            .to_vec();
-
         if !(200..300).contains(&http_status) {
-            let body = String::from_utf8_lossy(&response_bytes).to_string();
             return Err(TransportError::BadStatus {
                 status: http_status,
-                body,
+                body: read_error_body(response)?,
             });
         }
+        let response_bytes = read_response_body(response)?;
 
         let parsed: MessagesResponse = serde_json::from_slice(&response_bytes)
             .map_err(|e| TransportError::Decode(format!("parse response: {e}")))?;

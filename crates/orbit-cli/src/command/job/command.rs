@@ -30,8 +30,7 @@ pub enum JobSubcommand {
     Run(JobRunArgs),
     /// Replay a previous job run from step 0 using the current job definition
     Replay(JobReplayArgs),
-    /// Resume an interrupted job run from its persisted step checkpoints,
-    /// skipping steps that already completed
+    /// Submit a detached resume of an interrupted job run from its step checkpoints
     Resume(JobResumeArgs),
     /// Internal worker entrypoint for persisted pipeline runs
     #[command(name = "run-pipeline-worker", hide = true)]

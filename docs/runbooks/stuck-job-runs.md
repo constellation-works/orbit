@@ -2,10 +2,10 @@
 type: runbook
 summary: Diagnose, cancel, resume, or replay pending and running Orbit job runs.
 tags: [operations, jobs, runs, recovery, debugging]
-paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/run_audit.rs"]
+paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Recover Stuck Job Runs
@@ -58,7 +58,8 @@ Agent: provider=codex pid=154953 step=agent_implement liveness=alive started_at=
 - `liveness=unknown` — the host cannot probe liveness. Never read this as dead.
 
 Liveness is probed when you ask, against the local process table, so it is only meaningful on
-the host that ran the child; a historical run inspected elsewhere reports `exited`. Use
+the host that ran the child; a historical run inspected elsewhere may report `exited` or
+`unknown` depending on what that host can observe. Use
 `orbit run show --json` for the full records (`pid`, `pid_start_time`, `step_id`, `finished`),
 or `orbit run events <run_id> --type cli.invocation.process` for the raw audit events.
 
@@ -89,19 +90,34 @@ or reboot without finalizing the run. A job that genuinely failed is `failed`;
 
 ## Understand orphan reconciliation
 
-Every run records its owner `pid` plus a pid-start-time token. Pipeline workers claim their
-queued run at startup, so `pending` runs carry an owner too [ORB-10070]. A reconcile pass
-probes liveness and finalizes conclusively orphaned runs to `interrupted`, releasing their
-task reservations:
+Newly submitted runs record their owner `pid` plus a pid-start-time token. Pipeline workers
+claim their queued run at startup, so `pending` runs may carry an owner too [ORB-10070]. A
+reconcile pass probes the owner and any recorded provider child, then finalizes conclusively
+orphaned runs to `interrupted`, releasing their task reservations:
 
-- `running` runs with a dead owner;
-- `pending` runs whose claimed worker died; and
+- `running` runs with a dead owner and no live or unverifiable provider child;
+- `pending` runs whose claimed worker died and have no live or unverifiable provider child; and
 - `pending` runs never claimed within a 30-minute grace window, such as queued children
   stranded when their parent run was interrupted by a reboot.
 
+The parent-side worker observer applies the same provider guard after an unexpected
+worker exit. While a recorded provider is alive or unverifiable, the run stays
+nonterminal and keeps its reservations. The observer retries once per second and
+retains the original exit status and worker-log diagnostic until it can finalize.
+It does not kill surviving providers. If the observer itself stops, lazy orphan
+reconciliation remains available with its ordinary stale-owner diagnostic.
+
+A process running a different executable than the one recorded for a live Orbit root (for
+example, right after the binary was replaced while workers from the previous build are still
+running) opens the state write-free. It can read every run record but finalizes and repairs
+none of them, so `run history` and `run show` report stored records as they are rather than
+failing; the next process that can write records reconciles them.
+
 Reconciliation runs best-effort at workspace open and lazily on
-`orbit run history` / `orbit run show`. `orbit doctor` reports orphans read-only. A run
-whose PID is alive but unverifiable is deliberately left alone.
+`orbit run history` / `show` / `logs` / `events`. Pass `--no-reconcile` to any of those four
+to read stored run records without finalizing anything; the run-failure and backlog-hygiene
+scans do this because they promise not to mutate run state. `orbit doctor` reports orphans
+read-only. A run whose PID is alive but unverifiable is deliberately left alone.
 
 Nested sandboxed activity commands are not a liveness authority for their host worker. When an
 activity child carries truthy `ORBIT_MANAGED_RUN_CONTEXT` and a non-blank `ORBIT_RUN_ID`, its
@@ -114,22 +130,69 @@ Example after a worker was SIGKILLed mid-step:
 
 ```text
 $ orbit run history --limit 1
-│ RUN_ID                 JOB_ID            ATTEMPT   STATE         ERROR_MESSAGE                              │
-│ jrun-20260704-0927-2   demo_sleep_long   1         interrupted   job run marked interrupted because         │
-│                                                                  recorded worker process is no longer alive │
-│                                                                  (reason=process_not_found, pid=154953, …)  │
+│ RUN_ID                  ROLE        JOB_ID            ATTEMPT   STATE         ERROR_MESSAGE                  │
+│ jrun-20260704-0927-t2   top-level   demo_sleep_long   1         interrupted   job run marked interrupted     │
+│                                                                               because recorded worker        │
+│                                                                               process is no longer alive     │
+│                                                                               (reason=process_not_found, …)  │
 ```
+
+`ROLE` reads the run id itself. A directly submitted run and another run's child land in the
+same minute stem, so the marked sequence — `-t2` for the second top-level submission of that
+minute, `-c2` for a second child — is what keeps sibling runs from reading as one run tree.
+A sequence is never handed out twice: archiving or deleting a run keeps its id reserved, so an
+automation key, audit row, or parent dispatch that still names it never resolves to a later run.
+Ids minted before role markers existed report `unmarked`; use `orbit run show <parent>`, which
+names each child it dispatched, to establish their lineage.
+
+For a failed pipeline, `orbit run show <top-level-run-id>` follows those child dispatches and
+prints a `Root cause:` line with the failed leaf run ID, step, and complete error. If separate
+branches failed, `Additional root cause:` lines list the other failed leaves in child dispatch
+order. The parent and child wrapper errors remain in the usual run header and step records.
+`orbit run show <top-level-run-id> --json` exposes the same details in `root_cause` and
+`additional_root_causes`; `step` or `message` is null when a failed leaf has no corresponding
+step detail. The compact child-dispatch lines can still shorten wrapper errors.
+
+An auto drain dispatches its leaves detached and never observes their outcomes, so the drain's
+own `State: success` only means the coordinator ran. `orbit run show <drain-run-id>` adds a
+`Leaves:` line (admitted, succeeded, failed, running, cancelled), a `WARNING:` with each failed
+leaf, its task, error, and the `orbit job resume <leaf-run-id>` that retries it, and a
+`Still waiting:` block naming the backlog tasks the drain's last pass never started and what
+blocked them. `--json` carries the same in `drain_summary` (null for a run that is not a drain).
+
+A run parked on task locks shows `Waiting on locks: file:src/lib.rs (held by ORB-1)`. The run
+persists only the selectors; `orbit run show` resolves the holder from the live lock projection
+when it renders (`--json`: `waiting_on_lock_holders`), so a holder that has since released drops
+off the line. `orbit run readiness` reports the same holders as `blocked-by=`.
+
+A run that failed, timed out, was cancelled or was interrupted leaves its task `blocked`, which
+automation skips. `orbit task show <task-id>` prints a `Next:` line for such a task: the exact
+`orbit job resume <run-id>` when that run is resumable (`failed`, `timeout`, `interrupted`), and
+the `orbit task update <task-id> --status backlog` that re-queues it for a fresh run (the only
+option for a cancelled run). `--json` carries the same in `next_step`; it is absent for a task
+that is not blocked by a run.
 
 ## Cancel a conclusively stuck run
 
 After verifying that the owner is gone or that the run should no longer continue:
 
 ```sh
-orbit run cancel <run_id>
+orbit run cancel <run_id> --confirm --reason "operator stopped this delivery"
 ```
 
 This terminalizes the run on demand. Do not cancel solely because a legitimate step has
 been `running` longer than expected.
+
+Cancellation signals the run's owner process group, then stops every agent process the
+run's audit trail still shows open (`provider processes stopped: N` counts the requested
+run's own agents; each cascaded child run stops its own). Agents run in their
+own process groups, so the owner signal alone never reaches them. A process is signalled
+only while its recorded start token still matches, so a recycled pid is left alone; one
+whose identity cannot be verified is skipped and logged. If an agent survives SIGKILL the
+cancellation fails and the run stays non-terminal.
+
+`--reason` is optional. The CLI and dashboard record a `run.cancelled` event with the
+actor and any reason; inspect it with `orbit run events <run_id> --type run.cancelled`.
 
 Cancellation is truthful about the race with completion: a run that reached a terminal
 state before the signal landed reports `already_terminal` and keeps its real outcome
@@ -142,7 +205,7 @@ or debugging (`orbit run agent <prompt>`, or the `orbit.agent.invoke` tool). It 
 single-step run with no worktree, no task ownership, and no delivery tail, so most of
 this runbook's task-recovery steps do not apply to one.
 
-Three differences matter when triaging one:
+Four differences matter when triaging one:
 
 - **It is unsandboxed by design.** The provider subprocess runs on the host as the same
   operating-system user as Orbit, admitted per invocation by an operator. A sandbox
@@ -152,17 +215,26 @@ Three differences matter when triaging one:
   destination-resolved caller machine ID, invocation mode, and actual identity proof:
   strict grants are `key-bound`; explicitly cooperative same-OS-account SSH grants are
   `cooperative` and `self-asserted`.
-- **Cancel it the ordinary way.** `orbit run cancel <run_id>` signals the owner process
+- **Cancel it the ordinary way.** `orbit run cancel <run_id> --confirm` signals the owner process
   (TERM then KILL) and terminates the process tree, exactly as for any other run.
 - **It cannot be resumed.** `orbit job resume` and `submit_resume_run` refuse a run that
   carries an admission, because that admission covered one invocation and a resume would
   reuse it without a new authorization. Submit a fresh invocation instead. `orbit job
   replay` is likewise not a workaround: the replayed input carries no admission, so the
   activity fails closed.
+- **A retry key resolves the original run.** Reusing `--idempotency-key` returns that
+  run's persisted admission, timeout, provider sandbox, and sandbox warning, even if
+  the retry names different settings or the workspace default has changed. Use a new
+  key to request a new invocation.
 
 Read the outcome with `orbit run show <run_id>` — its `Invocation:` line distinguishes a
 completed answer from a mid-turn stop, a timeout, and a cancellation — and
 `orbit run logs <run_id>` for the full captured output.
+
+Submission warnings in `orbit run agent` are scrubbed with the shared secret
+redactor before appearing in wait progress, human output, or the JSON `warnings`
+array. Queue and provider sandbox warnings remain visible with sensitive values
+replaced by redaction markers.
 
 ## Resume from checkpoints
 
@@ -175,8 +247,33 @@ with `resume requires an interrupted, failed, or timed-out run`.
 orbit job resume <run_id>
 ```
 
+The command submits a detached worker and returns the new run ID. The worker
+continues after the CLI exits. Use `orbit run show <new_run_id>` to inspect it,
+or add `--wait` to block until it finishes and receive a nonzero exit status
+if the run does not succeed.
+
+Resume the run that did the failed work, not the wrapper around it. A ship or drain
+coordinator fails only because a child run failed; resuming it re-checks that same failed
+child result and fails again. `orbit run show <coordinator>` prints a `Resume:` line naming
+the failed leaf whenever one can be resumed (`orbit job resume <leaf>`); the leaf carries
+the worktree and checkpoints, and on success it hands the task to `review` like the
+original run would have.
+
+A **claimed** leaf (distributed-drain execution bound to an immutable claim/run
+pair) cannot use this path. Resume would mint a different run and cannot inherit
+the binding; the command refuses and names deliberate recovery. Inspect the
+claim on the owner with `ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims`,
+reconcile any uncertain merge, and do not ship the same task again. See
+[distributed-drain setup](./distributed-drain.md).
+
 Resume starts a new linked run with `attempt + 1` and `retry_source_run_id` set.
-Checkpointed steps are skipped and their outputs are replayed into the pipeline:
+Checkpointed steps are skipped and their outputs are replayed into the pipeline.
+
+A run submitted from a direct job YAML file keeps that definition. Resume copies
+the snapshot stored beside the source run onto the new run, and a later resume
+of that new run copies it again. Deleting the original file, or installing a
+catalog job with the same name, does not change which definition the resumed
+run executes. A catalog-backed run still resolves its job name from the catalog.
 
 ```text
 $ orbit job resume jrun-20260704-0927-2
@@ -194,6 +291,35 @@ owner only when the active run's durable `retry_source_run_id` chain reaches
 the checkpoint owner. Direct ownership still authorizes the original run.
 An unrelated run, a broken lineage, or a task re-claimed by a superseding run
 fails before Orbit commits, pushes, or updates the task.
+
+When a completion attempt was blocked after promotion, resume restores `review`
+only when its reused host promotion checkpoint names the task and its latest
+status history proves that this source run or an ancestor blocked it from
+`review`. The checkpoint must precede unfinished PR completion, the submitted
+run must carry `completion: done`, and the task must still belong to that retry
+lineage and the same PR. The restoration records `resume_review_restored`, the
+source and resumed run IDs, and the blocking run in task history. Repeating the
+resume while the task is already in review adds no restoration event.
+
+Early implementation retries still restore `in-progress`. Missing stage evidence,
+an unrelated or superseding attempt, a manual block, and withdrawn or terminal
+states cannot gain review through this repair. A merged PR alone is not review
+authority: normal candidate, merge and task-completion guards still run after
+restoration. Source checkpoints and prior task history remain unchanged.
+
+A lineage has at most one live resume. While any run in the source's retry lineage
+(its `retry_source_run_id` ancestors and everything descended from them) is `pending`,
+`running`, or `retrying`, another resume of any member is refused on every surface — CLI,
+MCP, and dashboard — with `already has a live resume in its retry lineage (<run_id>)`
+(HTTP 409 / code `resume_run_in_flight`, with that `run_id` in the payload). All lineage
+runs share one worktree, so a second one would edit it concurrently. The refusal is
+atomic: concurrent requests, even from different processes, create exactly one run.
+Watch or cancel the named run (`orbit run show <run_id>`, `orbit run cancel <run_id> --confirm`);
+once it is terminal, resuming is allowed again. A later resume chains from the run you
+name, using that run's checkpoints and `attempt + 1`. To continue from further along,
+resume the latest attempt instead of the original source. A lineage run stuck as
+`running` after its worker died (for example after a host reboot) is reconciled to
+`interrupted` before the check, so it does not block recovery.
 
 Resume needs the job present in the catalog (`orbit job list --all`). A run started from
 a raw YAML path can be resumed only after that YAML is registered under `resources/jobs/`.

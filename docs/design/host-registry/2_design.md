@@ -3,13 +3,13 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-09-08
-last_validated: 2026-09-07
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: host-registry
 doc_role: design
 tags: [host-registry, machine-identity, workspace-catalog, runtime-composition]
-paths: ["crates/orbit-types/src/identity/host.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/host/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state.rs", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
+paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-config/src/**", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state/**", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access]
 related_artifacts: []
 ---
@@ -18,48 +18,49 @@ related_artifacts: []
 
 ## 1. Boundary and dependency direction
 
-The live implementation has four layers.
+The live implementation has five layers.
 
 | Layer | Owns | Must not own |
 |---|---|---|
-| orbit-types | Host and workspace identity DTOs, identifier validation, lifecycle enums, schema constants | Files, runtime construction, transport |
-| orbit-registry | Machine identity lifecycle; workspace catalog parsing, mutation, validation, health and file I/O | CLI orchestration, MCP framing, Core execution |
+| orbit-types | Workspace identity DTOs, machine/workspace identifier validation, lifecycle enums and schema constants | Files, runtime construction, transport |
+| orbit-registry | Machine identity lifecycle and legacy host.toml migration; workspace catalog parsing, mutation, validation, health and file I/O | CLI orchestration, MCP framing, Core execution |
+| orbit-config | Global machine settings schema and config.toml I/O | Workspace catalog persistence and runtime composition |
 | orbit-cmd | Registry-aware selection and Core runtime construction | Registry schemas or persistence |
 | CLI, Web and MCP server | User/API inputs, presentation, refresh timing and request dispatch | Alternate catalog semantics |
 
-HostIdentity and host.toml I/O live in orbit-registry. Shared primitives such as validate_machine_id, validate_host_id and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
+MachineIdentity and the one-release host.toml migration live in orbit-registry. The machine settings schema and config.toml I/O live in orbit-config. Shared primitives such as validate_machine_id, validate_machine_name and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
 
 ## 2. Machine identity
 
 The current file is:
 
-    schema_version = 2
-    machine_id = "hm_0123456789abcdef"
-    host_id = "build-host"
+    [machine]
+    id = "hm_0123456789abcdef"
+    name = "build-host"
     task_prefix = "BH"
 
 ### Field rules
 
-- machine_id is generated once, starts with hm_, and accepts only an ASCII alphanumeric, underscore or hyphen suffix. Paths, hostnames, SSH targets and URIs are not valid substitutes.
-- host_id is a human display name. It is renameable and must be non-empty, trimmed, path-free and control-character-free.
-- task_prefix is chosen once for task allocation. Fresh values are two to five uppercase ASCII letters and cannot use reserved artifact namespaces. Existing migrated installations may retain ORB.
-- Schema v2 has no machine mode. Topology is not a persisted identity decision.
+- machine.id is generated once, starts with hm_, and accepts only an ASCII alphanumeric, underscore or hyphen suffix. Paths, hostnames, SSH targets and URIs are not valid substitutes.
+- machine.name is a human display name. It is changeable and must be non-empty, trimmed, path-free and control-character-free.
+- machine.task_prefix is chosen once for task allocation. Fresh values are two to five uppercase ASCII letters and cannot use reserved artifact namespaces. Existing migrated installations may retain ORB.
+- The [machine] table has no machine mode. Topology is not a persisted identity decision.
 
-orbit init is the creation and migration surface. A fresh non-interactive initialization requires both host name and task prefix. Repeated initialization returns the existing identity without rewriting it.
+orbit init is the creation and migration surface. A fresh non-interactive initialization requires both machine name and task prefix. Repeated initialization returns the existing identity without rewriting it.
 
-An unversioned host-id-only file and schema v1 can migrate in place. Migration preserves a schema-v1 machine ID when present, generates one otherwise, retains the host name, seeds task_prefix as ORB, and drops the old mode field. Writes are staged, reparsed, and atomically replaced.
+The legacy ~/.orbit/host.toml file is folded into the [machine] table in ~/.orbit/config.toml, then removed when the write succeeds. Its host_id becomes machine.name; a missing machine_id is generated, and a missing task_prefix becomes the legacy ORB namespace. If host.toml disagrees with an existing [machine] table, loading fails and asks the operator to reconcile the files rather than choosing one.
 
-Strict consumers call load_host_identity. Absent, legacy, malformed, incomplete, blank, invalid-ID and future-schema files are errors and are never silently repaired. inspect_host_identity exposes absent and legacy as explicit states for bootstrap and compatibility callers. MCP identity presentation is intentionally more tolerant: absent or legacy local identity may be represented for audit as host/local, but that fallback is not a persisted machine identity.
+Strict consumers call load_machine_identity. An absent identity, or a malformed or incomplete [machine] table, is an error rather than a hostname fallback. inspect_machine_identity exposes an absent identity for bootstrap callers and attempts the legacy host.toml migration. MCP identity presentation is intentionally more tolerant: an absent local identity may be represented for audit as host/local, but that fallback is not persisted. A valid legacy identity is used from memory if the migration cannot write.
 
-### Rename behavior
+### Display-name changes
 
-orbit host rename is local-only. It verifies the current name, holds the host file lock, changes host.toml while preserving machine_id and task_prefix, and updates owner_host_ids entries for locally owned workspaces.
-
-Each file write is atomic, but the two files are not one transaction: host.toml is written before workspaces.json. A failure on the second write can leave the durable identity renamed while the local display-name projection is stale. A later validated registry load repairs the local owner's display name when that machine is represented in owner_host_ids.
+machine.name is the changeable display name. `orbit config set --global machine.name <value>` changes it while leaving machine.id and machine.task_prefix intact. There is no `orbit host rename` command in the current CLI, and workspaces.json no longer maintains an owner_host_ids display-name projection.
 
 ### Task-prefix composition
 
 RegisteredRuntimeFactory projects task_prefix into the global task allocator before opening a runtime. A pristine legacy allocator may adopt the configured prefix. Once allocation or task bindings have begun, a conflicting prefix fails closed rather than renaming issued IDs.
+
+The prefix is also the unit of task *authority* across hosts: the host whose prefix an id carries is that task's sole writer, and copies on other hosts are read-only mirrors. That model, and the export/import consequences, live in [task-migration](../task-migration/4_decisions.md).
 
 ## 3. Workspace catalog
 
@@ -67,7 +68,7 @@ RegisteredRuntimeFactory projects task_prefix into the global task allocator bef
 
 - workspaces are logical records: stable ID, name, owner_machine_id, Git/ship metadata, lifecycle status and timestamps;
 - checkouts are machine-local bindings: workspace ID, repo_root, orbit_dir, role, optional replica owner and path overrides;
-- owner_host_ids maps owner machine IDs referenced by local workspace records to display names. It is a local presentation projection, not a fleet inventory.
+- publication_bindings are optional owner-local bindings to dedicated task-publication repositories.
 
 A logical workspace may exist without a local checkout. Runtime callers require both. The catalog allows at most one local checkout per logical workspace and rejects duplicate workspace IDs or names. Load and save reject a `repo_root` or `path_override` claimed by more than one checkout. `register_checkout` refuses a reused `repo_root`; `set_path_override` refuses a path already claimed as another checkout's `repo_root` or override. Distinct checkouts may share an `orbit_dir`.
 
@@ -86,9 +87,9 @@ Installations without host identity retain a narrow standalone compatibility pat
 
 - A missing workspaces.json loads as an empty schema-v1 registry.
 - Malformed JSON, unknown fields, invalid role tokens, duplicate identities, broken checkout references, contradictions and unsupported future schemas fail without rewriting the file.
-- An unversioned legacy catalog can be split into logical workspaces and local checkouts and written back atomically when its role is unambiguous. Identity-bearing legacy data with no explicit checkout role is rejected rather than guessed.
+- An unversioned legacy catalog can be split into logical workspaces and local checkouts and written back atomically when its role is unambiguous. Identity-bearing legacy data with no explicit checkout role is rejected rather than guessed. A legacy owner_host_ids key is accepted and dropped during the current compatibility release.
 - Successful saves validate a clone, serialize canonical JSON, and use atomic replacement. Rejected mutations leave the prior file intact.
-- Canonicalization sorts and deduplicates path overrides and may refresh the local machine's owner display name.
+- Canonicalization sorts and deduplicates path overrides.
 
 ## 4. Checkout-path health
 
@@ -126,7 +127,7 @@ RegisteredRuntimeFactory also carries replica ownership into Core's coordination
 
 ### CLI
 
-The main CLI opens ordinary runtimes through RegisteredRuntimeFactory using cwd, --root and optional --workspace. `task show` is the one exception, on both the human subcommand and `orbit tool run orbit.task.show`: without `--workspace` or a tool-input `workspace` it opens the checkout the coordination task registry names as the task ID's owner, so it works from a foreign checkout, a linked worktree, and from a directory that is no workspace at all, and it reports the owning workspace name and logical ID. With an explicit workspace selector it is the ordinary registered bootstrap, and the selector filters. Linked-worktree runtime identities are not selectors. Workspace init, role, list, show, remove and teardown call orbit-registry directly for catalog operations. The only active host command is local rename.
+The main CLI opens ordinary runtimes through RegisteredRuntimeFactory using cwd, --root and optional --workspace. `task show` is the one exception, on both the human subcommand and `orbit tool run orbit.task.show`: without `--workspace` or a tool-input `workspace` it opens the checkout the coordination task registry names as the task ID's owner, so it works from a foreign checkout, a linked worktree, and from a directory that is no workspace at all, and it reports the owning workspace name and logical ID. With an explicit workspace selector it is the ordinary registered bootstrap, and the selector filters. Linked-worktree runtime identities are not selectors. Workspace init, sync, role, list, show, source-remote, publication, remove and teardown are the current workspace CLI surface. There is no top-level host command; change the machine display name with `orbit config set --global machine.name <value>`.
 
 There is no active v1 CLI surface for fleet host registration, enumeration or retirement, and no workspace owner-link command.
 
@@ -150,9 +151,10 @@ Older databases may retain tables and migration records from the removed fleet-r
 
 | Condition | Result |
 |---|---|
-| host.toml absent on strict path | Actionable initialization error |
-| host.toml legacy on strict path | Migration-required error |
-| host.toml malformed or future | Error; original bytes retained |
+| [machine] absent on strict path | Actionable initialization error |
+| legacy host.toml is valid and config has no identity | Fold into [machine] and remove the legacy file when writable |
+| legacy host.toml disagrees with [machine] | Error asking for manual reconciliation |
+| [machine] malformed or incomplete | Error; no hostname fallback |
 | workspaces.json absent | Empty registry |
 | workspaces.json malformed, contradictory or future | Error; original bytes retained |
 | selector unknown, ambiguous, inactive or checkoutless | Runtime construction refused |

@@ -7,17 +7,7 @@ use orbit_common::OrbitError;
 pub(crate) const ORBIT_ROOT_TOKEN: &str = "{{ORBIT_ROOT}}";
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("HOME")
-        && !home.trim().is_empty()
-    {
-        return Some(PathBuf::from(home));
-    }
-    if let Ok(profile) = std::env::var("USERPROFILE")
-        && !profile.trim().is_empty()
-    {
-        return Some(PathBuf::from(profile));
-    }
-    None
+    orbit_common::fs::path::home_dir().ok()
 }
 
 pub(crate) fn cwd_orbit_root(cwd: &Path) -> PathBuf {
@@ -81,9 +71,71 @@ pub(crate) fn find_git_worktree_root(start: &Path) -> Option<PathBuf> {
     })
 }
 
+/// Resolve the linked worktree a call is running in, when that worktree is a
+/// *different* checkout of the repository rooted at `canonical_repo_root`.
+///
+/// Returns `None` when the caller stands in the registered checkout itself,
+/// outside any Git checkout, or in a checkout of another repository. A path
+/// prefix test cannot answer this: managed job-run worktrees live under
+/// `<repo>/.orbit/state/worktrees/**`, so they sit inside the registered
+/// checkout's directory tree while being separate checkouts. Git's shared
+/// directory is the identity that actually distinguishes the two.
+pub(crate) fn find_linked_worktree_root(
+    start: &Path,
+    canonical_repo_root: &Path,
+) -> Option<PathBuf> {
+    let checkout = find_git_worktree_root(start)?.canonicalize().ok()?;
+    if checkout == canonical_repo_root {
+        return None;
+    }
+
+    let caller_git_dir = shared_git_dir(&checkout)?;
+    let registered_git_dir = shared_git_dir(canonical_repo_root)?;
+    (caller_git_dir == registered_git_dir).then_some(checkout)
+}
+
+fn shared_git_dir(checkout: &Path) -> Option<PathBuf> {
+    let common_dir = orbit_common::fs::git::git_common_dir(checkout).ok()?;
+    Some(common_dir.canonicalize().unwrap_or(common_dir))
+}
+
 pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
+    // Every short command resolves its roots here; two `git rev-parse`
+    // processes to learn that an ordinary checkout is not a linked worktree
+    // cost more than the rest of root resolution.
+    if !may_be_linked_worktree(start) {
+        return None;
+    }
     find_git_main_worktree_root_with_git(start)
         .or_else(|| find_git_main_worktree_root_from_gitfile(start))
+}
+
+/// Whether `start` could sit in a linked worktree, judged from the nearest
+/// `.git` entry alone. A linked worktree's `.git` is a file, and only a
+/// directory carrying a `commondir` pointer can name a separate shared
+/// directory, so a plain `.git` directory or no `.git` at all rules it out.
+/// Git's own overrides (`GIT_DIR` and friends) can relocate the answer, so
+/// with one set only git can say.
+fn may_be_linked_worktree(start: &Path) -> bool {
+    const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+    if GIT_LOCATION_OVERRIDES
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+    {
+        return true;
+    }
+    start
+        .ancestors()
+        .map(|ancestor| ancestor.join(".git"))
+        .find_map(|git_path| {
+            git_path
+                .symlink_metadata()
+                .ok()
+                .map(|meta| (git_path, meta))
+        })
+        .is_some_and(|(git_path, meta)| {
+            !meta.is_dir() || git_path.join("commondir").symlink_metadata().is_ok()
+        })
 }
 
 fn find_git_main_worktree_root_with_git(start: &Path) -> Option<PathBuf> {

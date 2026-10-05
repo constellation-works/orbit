@@ -31,16 +31,13 @@ impl TaskRegistryStore {
         self.task_action(workspace, key, digest)?
             .ok_or_else(|| OrbitError::Store("task action reservation disappeared".into()))
     }
-    fn task_action(
+    pub(crate) fn task_action(
         &self,
         workspace: &str,
         key: &str,
         digest: &str,
     ) -> Result<Option<String>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let conn = self.read()?;
         let row:Option<(String,String)>=conn.query_row("SELECT task_id,input_digest FROM task_action_keys WHERE workspace_id=?1 AND action_key=?2",params![workspace,key],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|OrbitError::Store(e.to_string()))?;
         row.map(|(id, stored)| {
             if stored == digest {

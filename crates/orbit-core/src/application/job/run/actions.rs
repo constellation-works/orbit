@@ -7,19 +7,26 @@ use std::collections::HashSet;
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
-#[cfg(unix)]
-use orbit_store::contracts::AuditEventFilter;
 use orbit_store::contracts::TaskReservationReleaseReason;
+use orbit_store::contracts::V2AuditEventInsertParams;
+#[cfg(unix)]
+use orbit_store::contracts::{AuditEventFilter, AuditEventStoreBackend};
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::workflow::activity_job::{
+    AUDIT_ENVELOPE_SCHEMA_VERSION, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
+};
 use orbit_types::workflow::{
     ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState,
 };
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::log_best_effort;
 
 use super::owner::signal_run_owner_process;
+#[cfg(unix)]
+use super::owner::{ProviderStop, stop_provider_process};
 use super::types::JobRunCancelResult;
 
 /// `source` recorded on a cancellation a parent propagated to its child.
@@ -43,29 +50,64 @@ impl OrbitRuntime {
         actor: &str,
         source: &str,
     ) -> Result<JobRunCancelResult, OrbitError> {
-        self.cancel_job_run_with_signaller(run_id, actor, source, signal_run_owner_process)
+        self.cancel_job_run_with_reason(run_id, actor, source, None)
     }
 
-    /// Internal cancellation seam so tests can model a failed post-signal
-    /// liveness check without signalling a process they do not own.
-    pub(super) fn cancel_job_run_with_signaller<F>(
+    /// Cancel a run and preserve the requesting surface and optional reason in
+    /// its v2 audit trail and any coupled task's blocked history note.
+    ///
+    /// This is the immediate cancel; a live pull drain's graceful cancel and
+    /// `force` go through `cancel_job_run_with_options`. [ORB-13663]
+    /// Cancelling a follower pull drain, or a claimed leaf, also runs a
+    /// settle-only pass, so nothing the cancelled run was carrying is left
+    /// holding an owner claim with no process responsible for it. This runs on
+    /// `already_terminal` too: cancelling a drain that already ended delivers
+    /// whatever it left behind.
+    pub fn cancel_job_run_with_reason(
         &self,
         run_id: &str,
         actor: &str,
         source: &str,
-        signal: F,
-    ) -> Result<JobRunCancelResult, OrbitError>
-    where
-        F: FnOnce(&JobRun) -> Result<String, OrbitError>,
-    {
-        self.cancel_job_run_cascading(run_id, actor, source, signal, 0)
+        reason: Option<&str>,
+    ) -> Result<JobRunCancelResult, OrbitError> {
+        let mut result = self.cancel_job_run_cascading(
+            run_id,
+            actor,
+            source,
+            reason,
+            signal_run_owner_process,
+            0,
+        )?;
+        result.pull_settlements = self.pull_settlements_after_cancel(run_id);
+        Ok(result)
     }
 
-    fn cancel_job_run_cascading<F>(
+    /// The settle-only pass a cancellation owes: every pending settlement
+    /// when a pull drain was cancelled, the leaf's own when a claimed leaf
+    /// was. A run that is neither reads nothing from the owner.
+    fn pull_settlements_after_cancel(
+        &self,
+        run_id: &str,
+    ) -> Vec<crate::application::distributed::PullSettlementEntry> {
+        let is_pull_drain = self
+            .get_job_run_backend(run_id)
+            .ok()
+            .flatten()
+            .is_some_and(|run| run.job_id == crate::application::distributed::PULL_DRAIN_JOB);
+        if is_pull_drain {
+            return self.settle_pending_pulls();
+        }
+        self.deliver_claimed_leaf_settlement(run_id)
+            .into_iter()
+            .collect()
+    }
+
+    pub(super) fn cancel_job_run_cascading<F>(
         &self,
         run_id: &str,
         actor: &str,
         source: &str,
+        reason: Option<&str>,
         signal: F,
         depth: usize,
     ) -> Result<JobRunCancelResult, OrbitError>
@@ -101,21 +143,52 @@ impl OrbitRuntime {
             match signal(&run) {
                 Ok(outcome) => {
                     self.record_cancellation_signal_acknowledgement(&run, &request_id, &outcome)?;
+                    // A signalled worker never runs its own teardown, so the
+                    // plugin broker socket of the step it was running would
+                    // outlive it. Only directories whose owner is gone go.
+                    #[cfg(unix)]
+                    crate::runtime::plugin::broker::sweep_orphaned(&self.global_root());
                     Some(outcome)
                 }
                 Err(error) => {
-                    let _ = self.record_cancellation_completion(
-                        &run,
-                        &request_id,
-                        "failed",
-                        None,
-                        Some(&error.to_string()),
+                    log_best_effort(
+                        "record cancellation failure",
+                        &run.run_id,
+                        self.record_cancellation_completion(
+                            &run,
+                            &request_id,
+                            "failed",
+                            None,
+                            Some(&error.to_string()),
+                        ),
                     );
                     return Err(error);
                 }
             }
         } else {
             None
+        };
+
+        // Provider CLIs run in their own process groups, so the owner signal
+        // above never reaches them. Stop the ones this run still has open
+        // before its reservations are released, or the agent keeps editing
+        // the worktree under a run that reports `cancelled`.
+        let providers_stopped = match self.stop_run_provider_processes(&run) {
+            Ok(stopped) => stopped,
+            Err(error) => {
+                log_best_effort(
+                    "record cancellation failure",
+                    &run.run_id,
+                    self.record_cancellation_completion(
+                        &run,
+                        &request_id,
+                        "failed",
+                        None,
+                        Some(&error.to_string()),
+                    ),
+                );
+                return Err(error);
+            }
         };
 
         // The worker can reach a real terminal outcome while its owner is
@@ -141,19 +214,26 @@ impl OrbitRuntime {
                 signal_outcome,
                 actor,
                 source,
-            ));
+            )
+            .with_providers_stopped(providers_stopped));
         }
 
         let now = chrono::Utc::now();
         let duration_ms = run
             .started_at
             .map(|s| now.signed_duration_since(s).num_milliseconds().max(0) as u64);
-        self.finalize_job_run_with_reservation_cleanup(
+        let reason = reason.map(str::trim).filter(|reason| !reason.is_empty());
+        let diagnostic = match reason {
+            Some(reason) => format!("run cancelled by {actor}: {reason}"),
+            None => format!("run cancelled by {actor}"),
+        };
+        self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             run_id,
             JobRunState::Cancelled,
             now,
             duration_ms,
             TaskReservationReleaseReason::RunTerminal,
+            Some(("RUN_CANCELLED", &diagnostic)),
         )?;
         let cancelled_run = self
             .get_job_run_backend(run_id)?
@@ -175,7 +255,8 @@ impl OrbitRuntime {
                     signal_outcome,
                     actor,
                     source,
-                ));
+                )
+                .with_providers_stopped(providers_stopped));
             }
             let detail = cancelled_run
                 .state
@@ -192,6 +273,14 @@ impl OrbitRuntime {
                 run_id, detail
             )));
         }
+        self.record_run_cancelled_audit(
+            &cancelled_run,
+            &request_id,
+            actor,
+            source,
+            reason,
+            run.state,
+        )?;
         self.mark_cancelled_pipeline_state(&cancelled_run)?;
         self.settle_child_dispatches_on_cancel(&cancelled_run, actor, depth)?;
         self.record_event(OrbitEvent::JobRunCancelled {
@@ -219,10 +308,102 @@ impl OrbitRuntime {
             signal_outcome,
             actor,
             source,
-        ))
+        )
+        .with_providers_stopped(providers_stopped))
     }
 
-    fn record_cancellation_request(
+    /// Stop the provider children `run` still has open on its audit trail and
+    /// return how many were running. A survivor fails the cancellation, like a
+    /// surviving owner does, so the run is not reported cancelled while its
+    /// agent keeps working.
+    #[cfg(unix)]
+    fn stop_run_provider_processes(&self, run: &JobRun) -> Result<usize, OrbitError> {
+        let processes = match self.collect_run_provider_processes_with(
+            &run.run_id,
+            orbit_common::process::identity::probe_process_liveness,
+        ) {
+            Ok(processes) => processes,
+            Err(error) => {
+                // Unreadable evidence is not proof of a survivor: keep the
+                // established cancellation semantics rather than blocking it.
+                tracing::warn!(
+                    target: "orbit.core.job_run",
+                    run_id = %run.run_id,
+                    error = %error,
+                    "cancellation could not read provider process evidence",
+                );
+                return Ok(0);
+            }
+        };
+        let mut stopped = 0usize;
+        for process in processes.iter().filter(|process| !process.finished) {
+            match stop_provider_process(process.pid, process.pid_start_time.as_deref())? {
+                ProviderStop::Stopped => stopped += 1,
+                ProviderStop::NotRunning => {}
+                ProviderStop::Unverified => tracing::warn!(
+                    target: "orbit.core.job_run",
+                    run_id = %run.run_id,
+                    pid = process.pid,
+                    "cancellation left a provider process it could not verify",
+                ),
+            }
+        }
+        Ok(stopped)
+    }
+
+    #[cfg(not(unix))]
+    fn stop_run_provider_processes(&self, _run: &JobRun) -> Result<usize, OrbitError> {
+        Ok(0)
+    }
+
+    pub(super) fn record_run_cancelled_audit(
+        &self,
+        run: &JobRun,
+        request_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        previous_state: JobRunState,
+    ) -> Result<(), OrbitError> {
+        let workspace_path = Some(self.paths().repo_root.display().to_string());
+        let kind = V2AuditEventKind::RunCancelled {
+            actor: actor.to_string(),
+            source: source.to_string(),
+            reason: reason.map(str::to_string),
+            previous_state: previous_state.to_string(),
+            final_state: run.state.to_string(),
+        };
+        let event = V2AuditEvent {
+            envelope: V2AuditEnvelope {
+                schema_version: AUDIT_ENVELOPE_SCHEMA_VERSION,
+                event_type: kind.event_type().to_string(),
+                event_id: format!("evt-{request_id}"),
+                ts: Utc::now(),
+                run_id: run.run_id.clone(),
+                agent_identity: actor.to_string(),
+                parent_event_id: None,
+                workspace_path: workspace_path.clone(),
+            },
+            kind,
+        };
+        self.insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: self.workspace_id()?,
+            event_id: event.envelope.event_id.clone(),
+            source: "v2_envelope".to_string(),
+            schema_version: event.envelope.schema_version,
+            event_type: event.envelope.event_type.clone(),
+            ts: event.envelope.ts,
+            run_id: event.envelope.run_id.clone(),
+            agent_identity: event.envelope.agent_identity.clone(),
+            parent_event_id: None,
+            workspace_path,
+            payload_json: serde_json::to_string(&event).map_err(|error| {
+                OrbitError::Store(format!("serialize cancellation audit: {error}"))
+            })?,
+        })
+    }
+
+    pub(super) fn record_cancellation_request(
         &self,
         run: &JobRun,
         request_id: &str,
@@ -269,7 +450,7 @@ impl OrbitRuntime {
         )
     }
 
-    fn record_cancellation_completion(
+    pub(super) fn record_cancellation_completion(
         &self,
         run: &JobRun,
         request_id: &str,
@@ -296,64 +477,6 @@ impl OrbitRuntime {
             }),
             error.map(str::to_string),
         )
-    }
-
-    /// The newest cancellation request that has not conclusively failed or
-    /// observed a pre-existing terminal outcome. Worker observers use this to
-    /// avoid converting an expected TERM/KILL exit into a run failure before
-    /// the signalling caller verifies that every owned target stopped.
-    #[cfg(unix)]
-    pub(crate) fn active_job_run_cancellation_request(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<String>, OrbitError> {
-        let audits = self.list_audit_events_filtered(&AuditEventFilter {
-            job_run_id: Some(run_id.to_string()),
-            limit: 200,
-            ..AuditEventFilter::default()
-        })?;
-        let mut completions = HashMap::<String, String>::new();
-        let mut requests = Vec::new();
-        for audit in audits {
-            let Some(tool) = audit.tool_name.as_deref() else {
-                continue;
-            };
-            if !matches!(
-                tool,
-                CANCELLATION_REQUEST_AUDIT | CANCELLATION_COMPLETION_AUDIT
-            ) {
-                continue;
-            }
-            let Some(arguments) = audit
-                .arguments_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-            else {
-                continue;
-            };
-            let Some(request_id) = arguments.get("request_id").and_then(Value::as_str) else {
-                continue;
-            };
-            if tool == CANCELLATION_COMPLETION_AUDIT {
-                if let Some(outcome) = arguments.get("outcome").and_then(Value::as_str) {
-                    completions
-                        .entry(request_id.to_string())
-                        .or_insert_with(|| outcome.to_string());
-                }
-            } else {
-                requests.push(request_id.to_string());
-            }
-        }
-        let inactive: HashSet<&str> = completions
-            .iter()
-            .filter_map(|(request_id, outcome)| {
-                matches!(outcome.as_str(), "failed" | "already_terminal")
-                    .then_some(request_id.as_str())
-            })
-            .collect();
-        Ok(requests
-            .into_iter()
-            .find(|request_id| !inactive.contains(request_id.as_str())))
     }
 
     pub fn archive_job_run(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -419,7 +542,8 @@ impl OrbitRuntime {
     /// parent's wait was that child's only consumer, so leaving it running
     /// would produce work nobody joins and no operator expects. A child
     /// dispatched *detached* does not: it was submitted precisely to outlive
-    /// the parent's step (`workspace_auto_pipeline` starts an epic that way),
+    /// the parent's step (`workspace_auto_pipeline` starts its leaves that
+    /// way),
     /// and its own drain re-observes it. The dispatch record carries which
     /// shape it was, so the rule is decided by how the child was dispatched
     /// rather than by whoever happens to be cancelling.
@@ -507,6 +631,7 @@ impl OrbitRuntime {
             child_run_id,
             actor,
             CHILD_CASCADE_SOURCE,
+            None,
             signal_run_owner_process,
             depth + 1,
         ) {
@@ -532,7 +657,7 @@ impl OrbitRuntime {
     /// deliberately does not touch `child_dispatches`: dependency and lock
     /// waits are momentary and meaningless once terminal, but the child a
     /// parent dispatched outlives the parent's own record of waiting for it.
-    fn mark_cancelled_pipeline_state(&self, run: &JobRun) -> Result<(), OrbitError> {
+    pub(super) fn mark_cancelled_pipeline_state(&self, run: &JobRun) -> Result<(), OrbitError> {
         if let Some(mut state) = self.read_run_state(&run.run_id)? {
             if let Some(object) = state.pipeline.as_object_mut() {
                 object.insert(
@@ -573,7 +698,7 @@ impl OrbitRuntime {
     }
 }
 
-fn cancellation_result(
+pub(super) fn cancellation_result(
     run: &JobRun,
     outcome: &str,
     final_state: JobRunState,
@@ -591,5 +716,71 @@ fn cancellation_result(
         source: source.to_string(),
         signal_attempted,
         signal_outcome,
+        provider_processes_stopped: 0,
+        pull_settlements: Vec::new(),
+        waiting_leaves: Vec::new(),
+        forced_runs: Vec::new(),
+        unstopped_leaves: Vec::new(),
+        unstopped_children: Vec::new(),
     }
+}
+
+/// The newest cancellation request that has not conclusively failed or
+/// observed a pre-existing terminal outcome. Worker supervision uses this to
+/// avoid converting an expected TERM/KILL exit into a run failure before the
+/// signalling caller verifies that every owned target stopped.
+///
+/// A pure read of the run's own audit trail, so a supervisor can answer it
+/// from the audit store alone.
+#[cfg(unix)]
+pub(crate) fn active_cancellation_request(
+    audit_events: &dyn AuditEventStoreBackend,
+    run_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    let audits = audit_events.list_audit_events(&AuditEventFilter {
+        job_run_id: Some(run_id.to_string()),
+        limit: 200,
+        ..AuditEventFilter::default()
+    })?;
+    let mut completions = HashMap::<String, String>::new();
+    let mut requests = Vec::new();
+    for audit in audits {
+        let Some(tool) = audit.tool_name.as_deref() else {
+            continue;
+        };
+        if !matches!(
+            tool,
+            CANCELLATION_REQUEST_AUDIT | CANCELLATION_COMPLETION_AUDIT
+        ) {
+            continue;
+        }
+        let Some(arguments) = audit
+            .arguments_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        else {
+            continue;
+        };
+        let Some(request_id) = arguments.get("request_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if tool == CANCELLATION_COMPLETION_AUDIT {
+            if let Some(outcome) = arguments.get("outcome").and_then(Value::as_str) {
+                completions
+                    .entry(request_id.to_string())
+                    .or_insert_with(|| outcome.to_string());
+            }
+        } else {
+            requests.push(request_id.to_string());
+        }
+    }
+    let inactive: HashSet<&str> = completions
+        .iter()
+        .filter_map(|(request_id, outcome)| {
+            matches!(outcome.as_str(), "failed" | "already_terminal").then_some(request_id.as_str())
+        })
+        .collect();
+    Ok(requests
+        .into_iter()
+        .find(|request_id| !inactive.contains(request_id.as_str())))
 }

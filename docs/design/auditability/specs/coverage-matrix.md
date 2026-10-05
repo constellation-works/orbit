@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Audit Coverage Matrix
-last_validated: 2026-08-31
+last_validated: 2026-09-23
 ---
 
 # Spec: Audit Coverage Matrix
@@ -50,6 +50,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 - Some deterministic automation actions rely on enclosing job context rather than dedicated targeted audit rows.
 - CLI backend tool allowlists are recorded as harness-delegated advisories, not enforced Orbit denials.
 - Command audit stdout/stderr fields exist but are not broadly populated.
+- Friction report submissions have no active producer for the live `orbit.friction.reported` JSONL event; the CLI and web formatters retain only its renderer.
 
 ## Review Checklist
 

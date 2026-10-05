@@ -13,11 +13,15 @@ workspace = true
 
 [features]
 clap = ["orbit-types/clap"]
+# Test-only hooks for downstream crates' tests (`orbit_core::test_support`).
+# Enable it only from `[dev-dependencies]`, never in a shipped build.
+test-support = []
 
 [dependencies]
 getrandom.workspace = true
 orbit-automation = { path = "../orbit-automation" }
 base64.workspace = true
+blake3.workspace = true
 chrono.workspace = true
 croner.workspace = true
 fs2.workspace = true
@@ -26,6 +30,7 @@ orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
 orbit-search = { path = "../orbit-search" }
 orbit-engine = { path = "../orbit-engine" }
+orbit-exec = { path = "../orbit-exec" }
 orbit-policy = { path = "../orbit-policy" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
@@ -34,7 +39,7 @@ serde_json.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
-tempfile = "3"
+tempfile.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 tracing.workspace = true
@@ -43,6 +48,4 @@ tracing.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
-orbit-common = { path = "../orbit-common", features = ["test-util"] }
-orbit-engine = { path = "../orbit-engine", features = ["test-support"] }
-orbit-exec = { path = "../orbit-exec" }
+tracing-subscriber.workspace = true

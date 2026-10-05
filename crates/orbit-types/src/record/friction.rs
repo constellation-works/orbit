@@ -67,6 +67,11 @@ pub struct FrictionRecord {
     pub during_task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_by_task: Option<String>,
+    /// The workspace that owns this friction when it is not the one holding
+    /// the record: curation's `rehome_required` disposition, or — on a record
+    /// a move resolved — where the moved copy now lives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rehome_to: Option<String>,
     #[serde(default)]
     pub body: String,
 }
@@ -87,6 +92,8 @@ pub struct FrictionFrontmatter {
     pub during_task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_by_task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rehome_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

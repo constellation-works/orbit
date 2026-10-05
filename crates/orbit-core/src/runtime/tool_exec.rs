@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -41,27 +39,81 @@ impl OrbitRuntime {
         populate_filesystem_policy_context(self, &mut tool_context)?;
 
         self.check_tool_enabled(name)?;
+        check_tool_active(self.tool_registry(), name)?;
 
         // ORB-10453: the capability chokepoint. Every tool caller in the
         // workspace reaches the registry through this function, so this is the
         // only place a governed tool operation is authorized — a per-command
         // guard would be reopened by the next entry point that skips it.
         self.authorize_tool_operation(name, &tool_context.session_context, capability_enforcement)?;
-
+        // Domain extensions preserve the authority of the operations they expose.
+        // Discovery and a client-supplied mode never grant operator capabilities.
+        if name == "orbit.pipeline.invoke"
+            && !orbit_tools::has_pipeline_child_admission(&tool_context)
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.ship",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        if (name == "orbit.pipeline.invoke"
+            && input.get("default_input") == Some(&Value::Bool(true)))
+            || (name == "orbit.auto_task.update" && input.get("expected_enabled").is_some())
+            || (name == "orbit.auto_task.mint" && input.get("acknowledge_unconditional").is_some())
+        {
+            self.authorize_tool_operation(
+                "orbit.routine.control",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        if name == "orbit.auto_task.list"
+            && input.get("view").and_then(Value::as_str) == Some("bounded")
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.run.show",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
         if !tool_context.allowed_tools.is_empty()
             && !tool_allowed(name, &tool_context.allowed_tools)
         {
-            self.with_mutation(|| {
-                Ok((
-                    (),
-                    OrbitEvent::PolicyDenied {
-                        tool: name.to_string(),
-                    },
-                ))
-            })?;
-            return Err(OrbitError::PolicyDenied(format!(
-                "tool '{name}' is not in the activity allowlist"
-            )));
+            return Err(self.deny_activity_tool(
+                name,
+                format!("tool '{name}' is not in the activity allowlist"),
+            ));
+        }
+        if let Some(policy) = tool_context
+            .tool_deny_policy
+            .as_ref()
+            .filter(|policy| policy.denies(name))
+        {
+            return Err(self.deny_activity_tool(name, policy.denial_message(name)));
+        }
+
+        if self.worker_invocation().is_some()
+            && super::worker_coordination::is_coordination_tool(name)
+        {
+            let input = if name == "orbit.task.artifact.put" {
+                orbit_tools::prepare_remote_task_artifact_put(
+                    input,
+                    tool_context.cwd.as_deref().map(Path::new),
+                    tool_context.workspace_root.as_deref(),
+                )?
+            } else {
+                input
+            };
+            return self.route_worker_tool(name, input, tool_context.session_context);
+        }
+
+        if ((name == "orbit.task.show" && input.get("_worker_read").is_some())
+            || (name == "orbit.task.update" && input.get("_worker_update").is_some()))
+            && let Some(output) =
+                self.execute_worker_projection(name, &input, &tool_context.session_context)?
+        {
+            return Ok(output);
         }
 
         let output = match self
@@ -95,6 +147,22 @@ impl OrbitRuntime {
         })?;
 
         Ok(output)
+    }
+
+    /// Record an activity tool-policy refusal and build its error. An audit
+    /// write failure surfaces instead, so a refusal is never unrecorded.
+    fn deny_activity_tool(&self, name: &str, reason: String) -> OrbitError {
+        match self.with_mutation(|| {
+            Ok((
+                (),
+                OrbitEvent::PolicyDenied {
+                    tool: name.to_string(),
+                },
+            ))
+        }) {
+            Ok(()) => OrbitError::PolicyDenied(reason),
+            Err(error) => error,
+        }
     }
 
     pub fn run_tool_dry_run(&self, name: &str, input: &Value) -> Result<DryRunResult, OrbitError> {
@@ -137,6 +205,13 @@ impl OrbitRuntime {
         })
     }
 
+    /// A registered-but-inactive entry is refused before it runs.
+    ///
+    /// The plugin host keeps a refused plugin's tool *names* on the registry
+    /// so a caller that names one is told why rather than told the tool does
+    /// not exist (design `docs/design/plugins/1_scope.md` §4.1, §4.8). That
+    /// only holds if inactive also means uncallable, which is here: the
+    /// registry is the one place every workspace caller passes through.
     fn check_tool_enabled(&self, name: &str) -> Result<(), OrbitError> {
         if let Some(stored) = self.stores().tools().get_tool(name)?
             && !stored.enabled
@@ -146,6 +221,32 @@ impl OrbitRuntime {
             )));
         }
         Ok(())
+    }
+}
+
+/// Refuse a *plugin* entry the host registered inactive, reporting the
+/// diagnostic the loader recorded (a missing grant, an unmet `requires`).
+///
+/// Scoped to plugin-backed entries on purpose. `Inactive` means two different
+/// things in this registry: for a built-in it means "not on the agent tool
+/// surface", which an operator may still call and which
+/// `ensure_tool_agent_facing` decides; for a plugin tool it means the plugin
+/// was refused at load, and nothing may call it until the operator fixes what
+/// the diagnostic names (design `docs/design/plugins/1_scope.md` §4.1).
+pub(crate) fn check_tool_active(
+    registry: &orbit_tools::ToolRegistry,
+    name: &str,
+) -> Result<(), OrbitError> {
+    if registry.is_active(name) {
+        return Ok(());
+    }
+    match registry.plugin_binding(name) {
+        Some(binding) => Err(OrbitError::PolicyDenied(
+            binding.diagnostic.clone().unwrap_or_else(|| {
+                format!("plugin tool '{name}' is registered but inactive on this host")
+            }),
+        )),
+        None => Ok(()),
     }
 }
 
@@ -212,23 +313,37 @@ fn active_git_checkout_root(
     let cwd = Path::new(cwd);
     let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
 
-    // Stable checkout fast path: the runtime's own tree does not need git
-    // probes. Linked worktrees and unrelated checkouts fall through.
+    // An ordinary path in the runtime checkout needs no git probes. A nested
+    // checkout has its own .git marker, even when it is inside this path.
     if canonical_cwd.starts_with(canonical_repo_root) {
-        return Some(canonical_repo_root.to_path_buf());
+        let nested_checkout = canonical_cwd
+            .ancestors()
+            .take_while(|ancestor| *ancestor != canonical_repo_root)
+            .any(|ancestor| ancestor.join(".git").exists());
+        if !nested_checkout {
+            return Some(canonical_repo_root.to_path_buf());
+        }
     }
 
     let checkout_root = git_checkout_root(cwd)?;
-    same_git_common_dir(&checkout_root, canonical_repo_root).then_some(checkout_root)
+    let repo_common_dir = git_common_dir(canonical_repo_root)?;
+    // A linked worktree shares the runtime repository's common directory. A
+    // source-inspection slot is a standalone repository the CLI runner
+    // materialized for this repository, so it is recognized by its owned
+    // layout instead; without it, a pilot's subprocesses would run in the
+    // primary rather than at the pinned revision [ORB-13800].
+    let owned_checkout = git_common_dir(&checkout_root)
+        .is_some_and(|checkout_common_dir| checkout_common_dir == repo_common_dir)
+        || orbit_engine::activity_job::cli_runner::is_source_inspection_checkout(
+            &repo_common_dir,
+            &checkout_root,
+        );
+    owned_checkout.then_some(checkout_root)
 }
 
 fn git_checkout_root(path: &Path) -> Option<PathBuf> {
-    #[cfg(test)]
-    GIT_CHECKOUT_PROBES.with(|count| count.set(count.get() + 1));
-
     let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
+        .current_dir(path)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .ok()?;
@@ -244,20 +359,9 @@ fn git_checkout_root(path: &Path) -> Option<PathBuf> {
     Some(path.canonicalize().unwrap_or(path))
 }
 
-fn same_git_common_dir(left: &Path, right: &Path) -> bool {
-    match (git_common_dir(left), git_common_dir(right)) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    }
-}
-
 fn git_common_dir(path: &Path) -> Option<PathBuf> {
-    #[cfg(test)]
-    GIT_COMMON_DIR_PROBES.with(|count| count.set(count.get() + 1));
-
     let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
+        .current_dir(path)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .output()
         .ok()?;
@@ -271,32 +375,6 @@ fn git_common_dir(path: &Path) -> Option<PathBuf> {
     }
     let path = PathBuf::from(raw_path);
     Some(path.canonicalize().unwrap_or(path))
-}
-
-#[cfg(test)]
-thread_local! {
-    static GIT_CHECKOUT_PROBES: Cell<usize> = const { Cell::new(0) };
-    static GIT_COMMON_DIR_PROBES: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) struct ContextResolutionProbes;
-
-#[cfg(test)]
-impl ContextResolutionProbes {
-    pub(crate) fn capture() -> Self {
-        GIT_CHECKOUT_PROBES.with(|count| count.set(0));
-        GIT_COMMON_DIR_PROBES.with(|count| count.set(0));
-        Self
-    }
-
-    pub(crate) fn git_checkout_probes(&self) -> usize {
-        GIT_CHECKOUT_PROBES.with(Cell::get)
-    }
-
-    pub(crate) fn git_common_dir_probes(&self) -> usize {
-        GIT_COMMON_DIR_PROBES.with(Cell::get)
-    }
 }
 
 fn read_activity_fs_profile_from_env() -> Option<String> {

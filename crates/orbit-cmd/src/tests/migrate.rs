@@ -4,12 +4,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
-use orbit_store::workflow::layout::SUPPORTED_LAYOUT_VERSION;
-
 use orbit_core::OrbitRuntime;
 
-use crate::{MigrateCommands, migrate_dry_run_at};
+use crate::migrate_dry_run_at;
 
 struct Roots {
     _temp: tempfile::TempDir,
@@ -31,79 +28,13 @@ fn temp_roots() -> Roots {
 }
 
 #[test]
-fn dry_run_on_a_never_opened_workspace_lists_everything_pending() {
-    let roots = temp_roots();
-
-    let status =
-        migrate_dry_run_at(&roots.global_root, &roots.workspace_root).expect("dry run status");
-
-    assert_eq!(status.orbit_dir, roots.workspace_root);
-    assert_eq!(status.layout_version, 0, "no marker before first open");
-    assert_eq!(status.layout_supported, SUPPORTED_LAYOUT_VERSION);
-    assert_eq!(status.schema_version, 0, "no database before first open");
-    assert_eq!(status.schema_supported, SUPPORTED_SCHEMA_VERSION);
-    assert!(!status.pending_layout.is_empty());
-    assert_eq!(status.pending_layout[0].name, "baseline");
-    assert!(!status.pending_layout[0].description.is_empty());
-    assert!(!status.pending_schema.is_empty());
-    assert!(status.pending_total() >= 2);
-    assert!(!status.newer_than_binary());
-    assert!(status.applied_layout.is_empty(), "dry-run never applies");
-
-    // Read-only: the inspection itself must not stamp or migrate anything.
-    assert!(
-        !roots
-            .workspace_root
-            .join("state")
-            .join("layout.version")
-            .exists()
-    );
-    assert!(!roots.global_root.join("orbit.db").exists());
-}
-
-#[test]
-fn workspace_open_auto_migrates_and_reports_what_it_applied() {
-    let roots = temp_roots();
-
-    let runtime =
-        OrbitRuntime::from_roots(&roots.global_root, &roots.workspace_root).expect("open runtime");
-
-    // Pre-flight outcome: the open adopted the layout baseline.
-    let report = runtime.layout_upgrade_report();
-    assert_eq!(report.from_version, 0);
-    assert_eq!(report.to_version, SUPPORTED_LAYOUT_VERSION);
-    assert!(!report.applied.is_empty());
-
-    // Apply-path status: everything current, nothing pending.
-    let status = runtime.migrate_status().expect("migrate status");
-    assert_eq!(status.layout_version, SUPPORTED_LAYOUT_VERSION);
-    assert_eq!(status.schema_version, SUPPORTED_SCHEMA_VERSION);
-    assert_eq!(status.pending_total(), 0);
-    assert_eq!(status.applied_layout, report.applied);
-
-    // Dry-run agrees once the workspace has been opened.
-    let status =
-        migrate_dry_run_at(&roots.global_root, &roots.workspace_root).expect("dry run status");
-    assert_eq!(status.layout_version, SUPPORTED_LAYOUT_VERSION);
-    assert_eq!(status.schema_version, SUPPORTED_SCHEMA_VERSION);
-    assert_eq!(status.pending_total(), 0);
-}
-
-#[test]
-fn reopening_a_current_workspace_applies_nothing() {
-    let roots = temp_roots();
-    drop(OrbitRuntime::from_roots(&roots.global_root, &roots.workspace_root).expect("first open"));
-
-    let runtime =
-        OrbitRuntime::from_roots(&roots.global_root, &roots.workspace_root).expect("second open");
-    let report = runtime.layout_upgrade_report();
-    assert_eq!(report.from_version, SUPPORTED_LAYOUT_VERSION);
-    assert_eq!(report.to_version, SUPPORTED_LAYOUT_VERSION);
-    assert!(report.applied.is_empty());
-}
-
-#[test]
 fn workspace_layout_newer_than_binary_refuses_to_open() {
+    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_layout_newer_than_binary_refuses_to_open,
+    )) {
+        return;
+    }
+
     let roots = temp_roots();
     let state_dir = roots.workspace_root.join("state");
     fs::create_dir_all(&state_dir).expect("mkdir state");

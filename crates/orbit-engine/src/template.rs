@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use serde_json::Value;
@@ -10,8 +11,9 @@ pub struct TemplateContext {
     pub workspace_path: Option<String>,
     pub item: Option<Value>,
     pub iteration: Option<u32>,
-    /// Accumulated outputs from completed steps, keyed by step id (or target_id).
-    pub steps: HashMap<String, Value>,
+    /// Accumulated outputs from completed steps, keyed by step id (or
+    /// target_id). Shared, so cloning a context never copies step outputs.
+    pub steps: Arc<HashMap<String, Value>>,
 }
 
 pub fn render(template: &str, ctx: &TemplateContext) -> Result<String, OrbitError> {

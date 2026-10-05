@@ -23,18 +23,25 @@
 //! Orbit has two independent axes, and this module owns exactly one of them.
 //!
 //! *Placement* is [`crate::governance::operation::OperationSpec::mcp_scope`] and its
-//! registry counterparts (`register_mcp` versus `register_inactive`): which
-//! surfaces *list* a tool. It is an audience decision — what an agent reading
-//! `tools/list` is pointed at — and it authorizes nothing. `tools/list` does no
-//! capability filtering, and the tool registry's `execute` never consults
-//! availability, so an unadvertised tool is still reachable through
-//! `orbit tool run`.
+//! registry counterparts (`register_mcp`, `register`, `register_inactive`):
+//! which surfaces *list* a tool. It is an audience decision — what an agent
+//! reading `tools/list` is pointed at — and it authorizes nothing.
+//! `tools/list` does no capability filtering, and the tool registry's
+//! `execute` never consults availability, so a tool registered active but
+//! unadvertised is still reachable through `orbit tool run`.
+//!
+//! `register_inactive` is the one placement that also removes reach: CLI
+//! dispatch applies `ensure_tool_agent_facing` too, so an inactive tool needs
+//! a command that reaches the runtime directly — the way
+//! `orbit task locks release` does — and registering one without that command
+//! leaves it callable from nowhere [ORB-12581].
 //!
 //! *Permission* for exceptional operations is [`GOVERNED_OPERATIONS`], resolved
-//! by [`authorize`] at one chokepoint per surface. Remote-originated MCP calls
-//! also have a baseline rule at that chokepoint: a destination-side caller
-//! grant must include [`McpCapability::Agent`] before it can use ordinary,
-//! ungoverned tools. The registry remains the only operation-specific
+//! by [`authorize`] at one chokepoint per surface. A session that arrived over
+//! SSH is decided the same way as a local one: the destination honors the
+//! authority in the argv it was started with, because an SSH login to a machine
+//! is ownership of it [ORB-12564]. The registry remains the only
+//! operation-specific
 //! authorization statement Orbit makes, and its answer is surface-independent:
 //! the same answer for an MCP call, a CLI `tool run`, the dashboard, and the
 //! deterministic dispatcher.
@@ -61,7 +68,7 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 
-use orbit_types::tool::{McpCapability, RemoteCallerGrant, ToolSessionContext};
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
 /// Environment variable that grants [`McpCapability::Operator`] to a caller the
 /// envelope would otherwise leave unprivileged.
@@ -73,8 +80,32 @@ use orbit_types::tool::{McpCapability, RemoteCallerGrant, ToolSessionContext};
 /// trail rather than indistinguishable from an ordinary operator session.
 pub const OPERATOR_OVERRIDE_ENV: &str = "ORBIT_OPERATOR";
 
+/// Whether [`OPERATOR_OVERRIDE_ENV`] is set to a truthy value in this
+/// process's environment.
+///
+/// Exposed so a caller outside this module — actor-identity resolution, in
+/// particular — can tell "an operator deliberately raised this" apart from
+/// "nothing identified the caller" without re-deriving the truthy spellings
+/// this module already owns.
+pub fn operator_override_active() -> bool {
+    env_truthy(OPERATOR_OVERRIDE_ENV)
+}
+
 /// Process-envelope variables that declare the caller to be an agent.
 const AGENT_ENVELOPE_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL"];
+
+/// Whether this process's environment declares it to be an agent or a step of
+/// a managed run.
+///
+/// Exposed so a caller outside this module can refuse to *propagate* operator
+/// authority it may itself hold — the federated MCP client asks this before
+/// composing a destination's argv, so a server an agent launched cannot hand
+/// operator authority onward to another machine [ORB-12564]. It is the same
+/// observation [`CallerEnvelope::from_process_env`] makes, named once so the
+/// two cannot disagree about what an agent looks like.
+pub fn agent_context_declared() -> bool {
+    agent_declared_in_env()
+}
 
 /// Set to `agent` by the activity runner for agent-backed steps.
 const ACTOR_KIND_ENV: &str = "ORBIT_TASK_ACTOR_KIND";
@@ -105,8 +136,7 @@ pub enum OperationSurface {
 /// capability check. Governance is opt-in per operation on purpose: the
 /// registry is meant to name the operations whose accidental invocation
 /// actually destroys something, not to become a second copy of the tool
-/// registry. The runtime separately enforces the `agent` baseline for ordinary
-/// tools when a destination-side grant identifies a remote MCP caller.
+/// registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GovernedOperation {
     /// Canonical tool name, or `"<command> <subcommand>"` for a CLI command.
@@ -145,6 +175,14 @@ pub const DASHBOARD_ROUTINE_TOGGLE: GovernedOperation = GovernedOperation {
     surface: OperationSurface::Dashboard,
     allowed: &[McpCapability::Operator],
     rationale: "changing a versioned routine definition changes unattended execution",
+};
+
+/// Manual catalog job submission from the dashboard.
+pub const DASHBOARD_JOB_RUN: GovernedOperation = GovernedOperation {
+    id: "job.run",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "starting a job manually can execute workspace work outside its schedule",
 };
 
 /// Native sweep-clock start/stop action exposed by the dashboard.
@@ -188,22 +226,131 @@ pub const DASHBOARD_AUTO_DRAIN_COMPLETE: GovernedOperation = GovernedOperation {
     rationale: "opting into automatic completion authorizes review -> done for every task the drain window ships, not only the ones visible at submission",
 };
 
-/// Stop new admissions under an operation-mode grant from the dashboard
-/// [ORB-11332].
-pub const DASHBOARD_OPERATION_STOP: GovernedOperation = GovernedOperation {
-    id: "operation.stop",
+/// Stop new admissions for the workspace's live auto-drain window from the
+/// dashboard (the `--stop` equivalent of `orbit run auto`) [ORB-12728].
+pub const DASHBOARD_AUTO_DRAIN_STOP: GovernedOperation = GovernedOperation {
+    id: "auto_drain.stop",
     surface: OperationSurface::Dashboard,
     allowed: &[McpCapability::Operator],
-    rationale: "stopping a grant ends scoped automation for the workspace; only an operator decides that",
+    rationale: "stopping admissions ends the workspace's unattended delivery window early; only an operator decides that",
 };
 
-/// Hard-revoke an operation-mode grant from the dashboard [ORB-11332].
-pub const DASHBOARD_OPERATION_REVOKE: GovernedOperation = GovernedOperation {
-    id: "operation.revoke",
+/// Record completion authority for a distributed delivery handoff from the
+/// dashboard [ORB-12516].
+pub const DASHBOARD_HANDOFF_APPROVE: GovernedOperation = GovernedOperation {
+    id: "handoff.approve",
     surface: OperationSurface::Dashboard,
     allowed: &[McpCapability::Operator],
-    rationale: "revocation withdraws completion authority from admitted work; only an operator decides that",
+    rationale: "approving a handoff authorizes the owner to merge that exact candidate; a follower's agent access never decides that",
 };
+
+/// Withdraw completion authority for a distributed delivery handoff from the
+/// dashboard [ORB-12516].
+pub const DASHBOARD_HANDOFF_REVOKE: GovernedOperation = GovernedOperation {
+    id: "handoff.revoke",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "revocation cancels a pending landing request for work already handed off; only an operator decides that",
+};
+
+/// Configuration write from the dashboard's Config tab [ORB-12724].
+pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
+    id: "config.set",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "config.toml governs sandboxing, crews, and unattended delivery for every surface on this machine",
+};
+
+/// Enable a plugin from the dashboard without changing recorded consent.
+pub const DASHBOARD_PLUGIN_ENABLE: GovernedOperation = GovernedOperation {
+    id: "plugin.enable",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "enabling a plugin exposes its tools and scheduled contributions",
+};
+
+/// Disable a plugin from the dashboard at host or workspace scope.
+pub const DASHBOARD_PLUGIN_DISABLE: GovernedOperation = GovernedOperation {
+    id: "plugin.disable",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "disabling a plugin removes its tools and scheduled contributions",
+};
+
+/// Deliberate recovery of an execution claim from the dashboard [ORB-12516].
+pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
+    id: "claim.recover",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "recovery fences a live attempt on another host and moves its task; there is no heartbeat, so a human decides the attempt is over",
+};
+
+/// Generic row for a `read_only` plugin tool.
+///
+/// Plugin tools are not enumerable at compile time, so they enter the
+/// registry through one row per execution kind rather than one row per tool
+/// (design `docs/design/plugins/1_scope.md` §4.1). The manifest chooses the
+/// execution kind; it never chooses who may call.
+///
+/// Its `id` is not a tool name and is never matched by [`governed_tool`]: the
+/// tool chokepoint resolves a plugin call to one of these two rows through
+/// [`governed_plugin_tool`].
+pub const PLUGIN_TOOL_READ_ONLY: GovernedOperation = GovernedOperation {
+    id: "plugin.tool.read_only",
+    surface: OperationSurface::Tool,
+    allowed: &[
+        McpCapability::Agent,
+        McpCapability::Operator,
+        McpCapability::Runner,
+    ],
+    rationale: "a read-only plugin tool observes without changing anything, so every caller this process can name may run it",
+};
+
+/// Generic row for a `mutating` plugin tool.
+///
+/// An agent reaches one only through the ordinary activity/`required_tools`
+/// allowlist, which is applied separately at the same chokepoint: this row is
+/// the capability floor, not the allowlist.
+pub const PLUGIN_TOOL_MUTATING: GovernedOperation = GovernedOperation {
+    id: "plugin.tool.mutating",
+    surface: OperationSurface::Tool,
+    allowed: &[McpCapability::Operator, McpCapability::Runner],
+    rationale: "a mutating plugin tool runs an installed backend that changes state, so it is an                 operator or sanctioned-run operation unless the task's `required_tools` or the                 activity allowlist names it",
+};
+
+/// Guarded task edits require an identified caller, as distinct from the
+/// operator-only completion and shipment operations.
+pub const DESKTOP_TASK_EDIT: GovernedOperation = GovernedOperation {
+    id: "orbit.desktop.task.edit",
+    surface: OperationSurface::Tool,
+    allowed: &[
+        McpCapability::Agent,
+        McpCapability::Operator,
+        McpCapability::Runner,
+    ],
+    rationale: "guarded task edits require an identified caller; request fields do not grant authority",
+};
+
+/// Desktop review completion is a governed suboperation of guarded task writes.
+/// A UI action or attributable agent label cannot grant this capability.
+pub const DESKTOP_TASK_COMPLETE: GovernedOperation = GovernedOperation {
+    id: "orbit.desktop.task.complete",
+    surface: OperationSurface::Tool,
+    allowed: &[McpCapability::Operator],
+    rationale: "desktop acceptance may complete reviewed work only through an existing operator-authorized session; opening the UI grants no authority",
+};
+
+/// The generic row a plugin tool of this execution kind is authorized by.
+///
+/// `mutating: true` selects [`PLUGIN_TOOL_MUTATING`]; a read-only tool gets
+/// [`PLUGIN_TOOL_READ_ONLY`].
+pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
+    if mutating {
+        &PLUGIN_TOOL_MUTATING
+    } else {
+        &PLUGIN_TOOL_READ_ONLY
+    }
+}
 
 /// Every governed operation, declared exactly once.
 ///
@@ -211,7 +358,7 @@ pub const DASHBOARD_OPERATION_REVOKE: GovernedOperation = GovernedOperation {
 /// site never names a capability; it names an operation and the chokepoint
 /// resolves the requirement here.
 ///
-/// Two rules govern what belongs on this list:
+/// Three rules govern what belongs on this list:
 ///
 /// 1. **Out-of-scope destruction, not all destruction.** The pipeline's own git
 ///    path — worktree force-removal, `branch -D`, `git clean -fd`, `checkout -B`,
@@ -223,7 +370,42 @@ pub const DASHBOARD_OPERATION_REVOKE: GovernedOperation = GovernedOperation {
 ///    alongside `Operator`; the run stamps that grant onto the tool context it
 ///    builds, so the sanction travels with the run rather than with ambient
 ///    process state.
+/// 3. **An identification floor, where answering an unidentified caller is the
+///    accident.** A row that lists [`McpCapability::Agent`] is not an operator
+///    gate; it says every ordinary caller may perform the operation and a
+///    caller this process cannot identify at all may not. The distributed
+///    drain's read-only surface is the case [ORB-12582]: a follower holds
+///    `agent` and nothing more, so `agent` is exactly who must reach it, while
+///    a session that asserts no capability gets no answer about the owner's
+///    workspace. Writing the floor here rather than as a session read inside
+///    the application function is what makes the CLI and MCP answers identical
+///    — only the chokepoint can see the process envelope a CLI caller's
+///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
+    GovernedOperation {
+        id: "orbit.task.review_reset",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "resetting a review budget overrides a recorded admission refusal",
+    },
+    GovernedOperation {
+        id: "orbit.pipeline.invoke",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator, McpCapability::Runner],
+        rationale: "public pipeline submission requires an operator; sanctioned runners retain only their host-authorized child admission path",
+    },
+    GovernedOperation {
+        id: "orbit.workflow.auto",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "auto-drain observation and controls require an operator session",
+    },
+    GovernedOperation {
+        id: "orbit.routine.control",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "routine observation and controls require an operator session",
+    },
     GovernedOperation {
         id: "orbit.workflow.ship",
         surface: OperationSurface::Tool,
@@ -249,30 +431,6 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "resuming a workflow creates another managed run",
     },
     GovernedOperation {
-        id: "orbit.workflow.run.workers",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "retuning a live drain's worker ceiling changes how much work the workspace starts",
-    },
-    GovernedOperation {
-        id: "orbit.operation.enable",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "enabling a grant authorizes automatic preparation, promotion, and possibly completion for a task set without asking again",
-    },
-    GovernedOperation {
-        id: "orbit.operation.stop",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "stopping a grant ends scoped automation for the workspace",
-    },
-    GovernedOperation {
-        id: "orbit.operation.revoke",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "revocation withdraws completion authority from admitted work",
-    },
-    GovernedOperation {
         id: "orbit.agent.invoke",
         surface: OperationSurface::Tool,
         // Deliberately not `Runner`. Every other run-reachable operation lists
@@ -288,6 +446,59 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "command execution reaches the machine's shell surface through an explicit argv, not a filtered allowlist",
+    },
+    GovernedOperation {
+        id: "orbit.drain.claims",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "execution-claim inspection is the operator's recovery surface: it names every \
+                    in-flight attempt, the machine running it, and its landing state",
+    },
+    // Rule 3 above: an identification floor, not an operator gate. A follower's
+    // session holds `agent` and must reach both tools; a caller the chokepoint
+    // resolves to nothing gets no answer about the owner's workspace
+    // [ORB-12582].
+    GovernedOperation {
+        id: "orbit.drain.probe",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "the owner's admission preflight answers for this workspace — its identity, \
+                    binary, ship contract, and review policy — so the caller has to be someone \
+                    this process can name",
+    },
+    // [ORB-13625] The mutating half follows the same floor: a follower's drain
+    // holds `agent`, and what fences an attempt is the claim journal, which
+    // compares every write against the session's own machine and the claim's
+    // current phase. Approval, revocation and recovery are not tools at all.
+    GovernedOperation {
+        id: "orbit.task.pull",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "pull admission claims a backlog task for the calling machine, so the caller \
+                    has to be someone this process can name; the claim itself grants only that \
+                    one attempt's execution",
+    },
+    GovernedOperation {
+        id: "orbit.drain.claim.bind",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "binding a leaf run starts an admitted attempt; the claim journal refuses any \
+                    machine but the one the claim was admitted to",
+    },
+    GovernedOperation {
+        id: "orbit.drain.claim.settle",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "settlement records an attempt's handoff or failure; the claim journal fences \
+                    it to the admitted machine and bound run, and a handoff still needs owner \
+                    approval before anything lands",
+    },
+    GovernedOperation {
+        id: "orbit.drain.receipt.lookup",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "receipt reconciliation reads a caller's own admission history on the owner, \
+                    so the caller has to be someone this process can name",
     },
     GovernedOperation {
         id: "orbit.task.delete",
@@ -308,16 +519,19 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "releasing another run's reservation can let two runs edit the same files",
     },
     GovernedOperation {
+        id: "orbit.task.locks.reserve",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator, McpCapability::Runner],
+        rationale: "a reservation blocks every other caller from its surface until it expires or \
+                    is released, so creating one requires the same authority as removing one — \
+                    otherwise a caller could gate others out of a surface it is not itself \
+                    trusted to clear",
+    },
+    GovernedOperation {
         id: "orbit.workspace.claim.release",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "force-releasing a workspace claim displaces the operator currently driving dispatch",
-    },
-    GovernedOperation {
-        id: "orbit.semantic.uninstall",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "uninstalling tears down the local semantic index and companion",
     },
     GovernedOperation {
         id: "workspace teardown",
@@ -338,28 +552,34 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "pruning permanently deletes audit history",
     },
     GovernedOperation {
-        id: "semantic uninstall",
-        surface: OperationSurface::CliCommand,
-        allowed: &[McpCapability::Operator],
-        rationale: "uninstalling tears down the local semantic index and companion",
-    },
-    GovernedOperation {
         id: "gc worktrees",
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator, McpCapability::Runner],
         rationale: "collection force-removes worktrees and deletes their branches",
     },
     DASHBOARD_ROUTINE_TOGGLE,
+    DASHBOARD_JOB_RUN,
     DASHBOARD_CLOCK_SERVICE,
     DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_AUTO_TASK_TOGGLE,
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
-    DASHBOARD_OPERATION_STOP,
-    DASHBOARD_OPERATION_REVOKE,
+    DASHBOARD_AUTO_DRAIN_STOP,
+    DASHBOARD_HANDOFF_APPROVE,
+    DASHBOARD_HANDOFF_REVOKE,
+    DASHBOARD_CLAIM_RECOVER,
+    DASHBOARD_CONFIG_SET,
+    DASHBOARD_PLUGIN_ENABLE,
+    DASHBOARD_PLUGIN_DISABLE,
+    PLUGIN_TOOL_READ_ONLY,
+    PLUGIN_TOOL_MUTATING,
 ];
 
 /// Look up the governed tool operation for `tool_name`, if any.
+///
+/// The two generic plugin rows are deliberately unreachable here: they are
+/// keyed on a manifest's execution kind, not on a tool name, and the
+/// chokepoint selects them with [`governed_plugin_tool`].
 pub fn governed_tool(tool_name: &str) -> Option<&'static GovernedOperation> {
     GOVERNED_OPERATIONS
         .iter()
@@ -394,19 +614,15 @@ pub fn governed_dashboard(id: &str) -> Option<&'static GovernedOperation> {
 pub enum CallerProvenance {
     /// A trusted transport or the run's own dispatcher asserted the grants.
     Session,
-    /// The destination's callers file granted a remote-originated session
-    /// these capabilities, capping what its argv requested [ORB-11052].
-    ///
-    /// Distinct from [`Self::Session`] on purpose: a local session's stamp is
-    /// the process's own statement about itself, while this one is the
-    /// executing machine's statement about somebody else.
-    RemoteGrant,
     /// [`OPERATOR_OVERRIDE_ENV`] was set. Always logged, never silent.
     OperatorOverride,
     /// The process environment declares an agent envelope.
     AgentEnvelope,
     /// Standard input and error are both terminals — a person is present.
     InteractiveTerminal,
+    /// An unmanaged local CLI call with no stronger identity. Only plugin tool
+    /// authorization may give this caller agent access.
+    LocalCli,
     /// Nothing identified the caller. Grants nothing.
     Unknown,
 }
@@ -415,10 +631,10 @@ impl Display for CallerProvenance {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Session => "session",
-            Self::RemoteGrant => "remote-grant",
             Self::OperatorOverride => "operator-override",
             Self::AgentEnvelope => "agent-envelope",
             Self::InteractiveTerminal => "interactive-terminal",
+            Self::LocalCli => "local-cli",
             Self::Unknown => "unknown",
         })
     }
@@ -459,14 +675,15 @@ pub struct CallerEnvelope {
     pub agent_declared: bool,
     /// Standard input and error are both terminals.
     pub interactive_terminal: bool,
-    /// The destination's callers-file statement that capped a
-    /// remote-originated MCP session [ORB-11052].
+    /// The trusted local CLI transport, used only for plugin tool authorization.
+    pub local_cli: bool,
+    /// Caller label an SSH-originated MCP session forwarded
+    /// (`--remote-caller-machine-id`) [ORB-12564].
     ///
-    /// Carried alongside [`Self::session_capabilities`] rather than folded
-    /// into it because it is the *ceiling*, not the result: the session's
-    /// capabilities are already the intersection of this grant with what the
-    /// caller's argv asked for, and the denial message needs both halves.
-    pub remote_caller_grant: Option<RemoteCallerGrant>,
+    /// Attribution, never a grant: it rides beside
+    /// [`Self::session_capabilities`] so a denial and its audit row can name
+    /// which machine reached in, and it contributes nothing to the decision.
+    pub remote_caller_machine_id: Option<String>,
 }
 
 impl CallerEnvelope {
@@ -478,7 +695,8 @@ impl CallerEnvelope {
             operator_override: env_truthy(OPERATOR_OVERRIDE_ENV),
             agent_declared: agent_declared_in_env(),
             interactive_terminal: interactive_terminal(),
-            remote_caller_grant: session.remote_caller_grant.clone(),
+            local_cli: session.transport == Some(McpTransport::Local),
+            remote_caller_machine_id: session.remote_caller_machine_id().map(ToOwned::to_owned),
         }
     }
 
@@ -492,7 +710,7 @@ impl CallerEnvelope {
         Self {
             resolution: CapabilityResolution::SessionOnly,
             session_capabilities: session.effective_capabilities.clone(),
-            remote_caller_grant: session.remote_caller_grant.clone(),
+            remote_caller_machine_id: session.remote_caller_machine_id().map(ToOwned::to_owned),
             ..Self::default()
         }
     }
@@ -504,7 +722,7 @@ pub struct CallerCapabilities {
     grants: BTreeSet<McpCapability>,
     provenance: CallerProvenance,
     resolution: CapabilityResolution,
-    remote_caller_grant: Option<RemoteCallerGrant>,
+    remote_caller_machine_id: Option<String>,
 }
 
 impl CallerCapabilities {
@@ -512,11 +730,6 @@ impl CallerCapabilities {
     ///
     /// Precedence, highest first:
     ///
-    /// 0. **A destination-side caller grant.** A remote-originated MCP session
-    ///    already carries the executing machine's own statement about the
-    ///    caller, and it is authoritative even when it grants nothing — a
-    ///    `deny` row must not fall through to the rules below and pick up
-    ///    capabilities from the destination's ambient state [ORB-11052].
     /// 1. **Session grants.** A validated MCP session or a run-stamped tool
     ///    context already carries an authorization decision made by a trusted
     ///    seam; re-deriving it from ambient process state would be strictly
@@ -526,7 +739,10 @@ impl CallerCapabilities {
     ///    nothing more, whether or not it happens to have a terminal.
     /// 4. **Interactive terminal.** A person at a TTY is the one caller Orbit
     ///    can positively identify as an operator without a credential.
-    /// 5. **Nothing.** An unidentified caller gets an empty set, and every
+    /// 5. **Local CLI.** An unmanaged invocation is identified but gets no
+    ///    capability here. [`Self::resolve_for_operation`] grants agent only
+    ///    while authorizing plugin tools.
+    /// 6. **Nothing.** An unidentified caller gets an empty set, and every
     ///    governed operation therefore denies. Ambiguity fails closed.
     pub fn resolve(envelope: &CallerEnvelope) -> Self {
         let (grants, provenance) = Self::resolve_grants(envelope);
@@ -534,17 +750,26 @@ impl CallerCapabilities {
             grants,
             provenance,
             resolution: envelope.resolution,
-            remote_caller_grant: envelope.remote_caller_grant.clone(),
+            remote_caller_machine_id: envelope.remote_caller_machine_id.clone(),
         }
     }
 
-    fn resolve_grants(envelope: &CallerEnvelope) -> (BTreeSet<McpCapability>, CallerProvenance) {
-        if envelope.remote_caller_grant.is_some() {
-            return (
-                envelope.session_capabilities.clone(),
-                CallerProvenance::RemoteGrant,
-            );
+    /// Resolve a caller for one governed operation.
+    ///
+    /// An unmanaged local CLI caller gains agent identity only at the plugin
+    /// tool chokepoint. Both plugin rows use that identity; the mutating row
+    /// still requires operator or runner and therefore denies this caller.
+    pub fn resolve_for_operation(envelope: &CallerEnvelope, operation: &GovernedOperation) -> Self {
+        let mut caller = Self::resolve(envelope);
+        if caller.provenance == CallerProvenance::LocalCli
+            && (operation.id == PLUGIN_TOOL_READ_ONLY.id || operation.id == PLUGIN_TOOL_MUTATING.id)
+        {
+            caller.grants.insert(McpCapability::Agent);
         }
+        caller
+    }
+
+    fn resolve_grants(envelope: &CallerEnvelope) -> (BTreeSet<McpCapability>, CallerProvenance) {
         if !envelope.session_capabilities.is_empty() {
             return (
                 envelope.session_capabilities.clone(),
@@ -569,6 +794,9 @@ impl CallerCapabilities {
                 CallerProvenance::InteractiveTerminal,
             );
         }
+        if envelope.local_cli && envelope.resolution == CapabilityResolution::ProcessEnvelope {
+            return (BTreeSet::new(), CallerProvenance::LocalCli);
+        }
         (BTreeSet::new(), CallerProvenance::Unknown)
     }
 
@@ -587,9 +815,12 @@ impl CallerCapabilities {
         self.provenance == CallerProvenance::OperatorOverride
     }
 
-    /// The destination-side grant that capped this caller, if any.
-    pub fn remote_caller_grant(&self) -> Option<&RemoteCallerGrant> {
-        self.remote_caller_grant.as_ref()
+    /// The caller label an SSH-originated session forwarded, if any.
+    ///
+    /// Attribution for the audit trail; it grants nothing and is only as
+    /// strong as the SSH login behind it.
+    pub fn remote_caller_machine_id(&self) -> Option<&str> {
+        self.remote_caller_machine_id.as_deref()
     }
 
     /// The grants, rendered for a human.
@@ -627,9 +858,9 @@ pub struct AuthorizationDenial {
     /// Which signals the refusing surface honored, and therefore which remedy
     /// the caller actually has.
     pub resolution: CapabilityResolution,
-    /// The destination-side grant that capped the caller, when the refusal came
-    /// from a callers file rather than from the session's own argv.
-    pub remote_caller_grant: Option<RemoteCallerGrant>,
+    /// Caller label an SSH-originated session forwarded, for attribution in
+    /// the denial's log and audit row.
+    pub remote_caller_machine_id: Option<String>,
 }
 
 impl AuthorizationDenial {
@@ -637,23 +868,15 @@ impl AuthorizationDenial {
     ///
     /// The remedy is surface-specific because [`OPERATOR_OVERRIDE_ENV`] is
     /// deliberately ignored under [`CapabilityResolution::SessionOnly`];
-    /// advising it there would send an operator in a circle. A caller capped
-    /// by a destination's callers file gets a third remedy, because neither of
-    /// the other two is reachable from the calling machine: no argv and no
-    /// environment variable on the caller's side raises that ceiling.
+    /// advising it there would send an operator in a circle.
+    ///
+    /// A session that arrived over SSH gets the same session-only remedy as a
+    /// local one, and it is reachable: the destination honors the authority in
+    /// the argv the caller's federated server composed, so serving the
+    /// *calling* side with `--operator` raises it [ORB-12564].
     fn remedy(&self) -> String {
-        if let Some(grant) = &self.remote_caller_grant {
-            return format!(
-                "caller '{caller}' is granted [{granted}] by {source} on the machine that \
-                 executes this call; '{operation}' requires {required}. Raise it by editing \
-                 that file on the destination (`orbit mcp callers check {caller}` shows what \
-                 it resolves to) — no flag or environment variable on the calling side can.",
-                caller = grant.caller_machine_id,
-                granted = capabilities_label(&grant.granted_capabilities),
-                source = grant.source,
-                operation = self.operation.id,
-                required = self.operation.allowed_label(),
-            );
+        if self.operation.id == PLUGIN_TOOL_READ_ONLY.id {
+            return "This read-only tool needs a named caller. Use the local CLI or an MCP session granted the agent capability.".to_string();
         }
         match self.resolution {
             CapabilityResolution::ProcessEnvelope => format!(
@@ -664,7 +887,9 @@ impl AuthorizationDenial {
                 "This MCP session's capabilities come from the server process it was served by, \
                  and {OPERATOR_OVERRIDE_ENV} in that process's environment is deliberately \
                  ignored. To perform this as an operator, serve the session from a server \
-                 started as `orbit mcp serve --operator`, or run the operation from the CLI."
+                 started as `orbit mcp serve --operator` — including a federated or remote-proxy \
+                 server on the calling machine, whose `--operator` propagates into the argv every \
+                 SSH destination is started with — or run the operation from the CLI."
             ),
         }
     }
@@ -703,7 +928,7 @@ pub fn authorize(
         granted: caller.grants_label(),
         provenance: caller.provenance,
         resolution: caller.resolution,
-        remote_caller_grant: caller.remote_caller_grant.clone(),
+        remote_caller_machine_id: caller.remote_caller_machine_id.clone(),
     })
 }
 

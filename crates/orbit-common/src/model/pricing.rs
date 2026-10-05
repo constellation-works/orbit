@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
@@ -15,6 +14,9 @@ struct PriceTableFile {
     prices: Vec<PriceRow>,
 }
 
+// The table is embedded at build time, so a parse failure is a build defect
+// rather than a runtime data condition.
+#[allow(clippy::expect_used)]
 fn price_table() -> &'static [PriceRow] {
     static TABLE: OnceLock<Vec<PriceRow>> = OnceLock::new();
     &TABLE.get_or_init(|| {
@@ -34,9 +36,4 @@ pub fn normalize_token_usage(
     usage: &TokenUsage,
 ) -> Option<TokenUsage> {
     normalize_token_usage_from_rows(price_table(), model, at, usage)
-}
-
-#[cfg(test)]
-pub(crate) fn shipped_price_table() -> &'static [PriceRow] {
-    price_table()
 }

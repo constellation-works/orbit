@@ -1,0 +1,883 @@
+//! Register installed plugins into the runtime tool registry.
+//!
+//! Fail closed per plugin (design `docs/design/plugins/1_scope.md` §4.9): a
+//! plugin whose manifest no longer loads, whose `requires` no longer hold,
+//! whose namespace collides, whose required grants the operator has not
+//! recorded, or whose `plugins` row this host cannot verify is reported as one
+//! diagnostic and registered inactive; every built-in and every other plugin is
+//! untouched.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use serde_json::Value;
+
+use orbit_common::observability::audit_id::audit_execution_id;
+use orbit_store::Store;
+use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use orbit_tools::ToolRegistry;
+use orbit_tools::plugin::{
+    LoadedPlugin, PluginToolBinding, PluginValidationPolicy, refuse_covering_fs_write_roots,
+    validate_loaded_plugin,
+};
+use orbit_types::plugin::{
+    InstalledPlugin, PluginDisabledLayer, PluginMcpScope, PluginProvenance, PluginStatus,
+    parse_stored_grants,
+};
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::tool::McpToolScope;
+
+use super::backend::{plugin_backend, plugin_tool};
+use super::cache::load_installed_plugin;
+use super::grants::{verify_install_path, verify_recorded_grants};
+use super::paths::read_pin_file;
+use super::requirements::unmet_requirement;
+
+/// Why a plugin is not on the active tool surface, and what would fix it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDiagnostic {
+    pub plugin: String,
+    pub status: PluginStatus,
+    pub message: String,
+}
+
+/// The status a loaded plugin will have on the next host load.
+///
+/// Lifecycle commands use this before reporting their result, and the loader
+/// uses it before registering tools, so both surfaces apply one eligibility
+/// decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectedPluginStatus {
+    pub(crate) status: PluginStatus,
+    pub(crate) diagnostic: Option<String>,
+    register_inactive_tools: bool,
+}
+
+impl ProjectedPluginStatus {
+    fn active() -> Self {
+        Self {
+            status: PluginStatus::Active,
+            diagnostic: None,
+            register_inactive_tools: false,
+        }
+    }
+
+    fn inactive(message: String, register_inactive_tools: bool) -> Self {
+        Self {
+            status: PluginStatus::Inactive,
+            diagnostic: Some(message),
+            register_inactive_tools,
+        }
+    }
+}
+
+/// What the runtime registered for one host plugin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegisteredPlugin {
+    pub name: String,
+    pub version: String,
+    pub status: PluginStatus,
+    /// Canonical tool names, active or inactive.
+    pub tools: Vec<String>,
+    pub diagnostic: Option<String>,
+    /// Whether the loader could verify this row's grants against the set
+    /// `orbit plugin enable` authorized [ORB-12778]. `false` means the row
+    /// granted nothing, whatever it claims, so no surface may present its
+    /// grants as effective.
+    pub grants_authorized: bool,
+    /// The manifest this pass loaded, when it loaded at all. Retained so the
+    /// catalog layer, the seeded definitions and the config contract all read
+    /// the same document the tool surface was built from.
+    pub loaded: Option<Arc<LoadedPlugin>>,
+    /// `[plugins.<ns>]` over the manifest's defaults, as the backend and the
+    /// manifest's `{{config.<key>}}` templates see it. Retained so a dashboard
+    /// link tile renders the same value the plugin itself runs with (§4.7).
+    pub config_values: BTreeMap<String, String>,
+    /// For a [`PluginStatus::Disabled`] plugin, the layer that switched it
+    /// off. A workspace-disabled plugin keeps its manifest in `loaded` and
+    /// its canonical names in `tools`, so the surfaces can say what is off
+    /// and why, but none of those tools is registered.
+    pub disabled_by: Option<PluginDisabledLayer>,
+}
+
+/// Outcome of a host plugin load pass.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PluginHostLoad {
+    /// Exact host rows this load pass observed. The long-lived dashboard uses
+    /// this snapshot to notice a later lifecycle write and rebuild the tool
+    /// surface before serving another plugin request.
+    pub(crate) installed: Vec<InstalledPlugin>,
+    /// The workspace `[plugin_enablement]` toggles this pass applied, kept
+    /// beside `installed` so a toggle change also triggers a rebuild.
+    pub(crate) workspace_toggles: BTreeMap<String, bool>,
+    pub registered: Vec<RegisteredPlugin>,
+    pub diagnostics: Vec<PluginDiagnostic>,
+}
+
+impl PluginHostLoad {
+    /// Every plugin whose tools and definitions are on the active surface.
+    pub fn active(&self) -> impl Iterator<Item = &Arc<LoadedPlugin>> {
+        self.registered
+            .iter()
+            .filter(|entry| entry.status == PluginStatus::Active)
+            .filter_map(|entry| entry.loaded.as_ref())
+    }
+
+    /// Whether a plugin of this namespace is active on the host.
+    pub fn is_active(&self, namespace: &str) -> bool {
+        self.active().any(|plugin| plugin.namespace() == namespace)
+    }
+
+    /// Whether this workspace's toggle switched off a plugin the host has
+    /// enabled.
+    pub fn is_disabled_in_workspace(&self, namespace: &str) -> bool {
+        self.workspace_disabled()
+            .any(|entry| entry.name == namespace)
+    }
+
+    /// The workspace-disabled plugin that owns a canonical tool name.
+    pub fn workspace_disabled_owner(&self, tool: &str) -> Option<&RegisteredPlugin> {
+        self.workspace_disabled()
+            .find(|entry| entry.tools.iter().any(|name| name == tool))
+    }
+
+    /// The active plugin whose job definition file is `path`: the
+    /// `plugin:<ns>` catalog layer entry a job name resolved to.
+    pub fn active_job_owner(&self, path: &Path) -> Option<&str> {
+        self.active()
+            .find(|plugin| plugin.definitions.jobs.iter().any(|job| job == path))
+            .map(|plugin| plugin.namespace())
+    }
+
+    /// The installed plugin that ships job `job` but is not serving it: switched
+    /// off on the host or in this workspace, or refused at load. `None` when no
+    /// installed plugin ships that name, or only an active one does.
+    ///
+    /// A row whose grants could not be verified is skipped: nothing is read
+    /// from a tree this host does not trust, not even to name it.
+    pub fn inactive_job_owner(&self, job: &str) -> Option<InactiveJobOwner> {
+        self.registered
+            .iter()
+            .filter(|entry| entry.status != PluginStatus::Active && entry.grants_authorized)
+            .find_map(|entry| {
+                let plugin = entry.loaded.clone().or_else(|| {
+                    // A host-disabled row keeps no manifest; read it here, on
+                    // the refusal path only.
+                    self.installed
+                        .iter()
+                        .find(|row| row.name == entry.name)
+                        .and_then(|row| load_installed_plugin(row).ok())
+                })?;
+                let definitions = super::definitions::load_plugin_definitions(
+                    &plugin,
+                    &super::definitions::shipped_job_names(),
+                )
+                .ok()?;
+                definitions
+                    .jobs
+                    .iter()
+                    .any(|(name, _)| name == job)
+                    .then(|| InactiveJobOwner {
+                        plugin: entry.name.clone(),
+                        state: match (entry.disabled_by, entry.diagnostic.as_deref()) {
+                            (Some(PluginDisabledLayer::Host), _) => {
+                                "is disabled on this host".to_string()
+                            }
+                            (Some(PluginDisabledLayer::Workspace), _) => {
+                                "is disabled in this workspace".to_string()
+                            }
+                            (None, Some(diagnostic)) => format!("is inactive: {diagnostic}"),
+                            (None, None) => "is inactive".to_string(),
+                        },
+                    })
+            })
+    }
+
+    fn workspace_disabled(&self) -> impl Iterator<Item = &RegisteredPlugin> {
+        self.registered
+            .iter()
+            .filter(|entry| entry.disabled_by == Some(PluginDisabledLayer::Workspace))
+    }
+}
+
+/// An installed plugin that ships a job but is not serving it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InactiveJobOwner {
+    /// The plugin's namespace.
+    pub plugin: String,
+    /// Why it is not serving, phrased to follow the plugin's name.
+    pub state: String,
+}
+
+#[derive(Debug, Default)]
+struct ActiveDefinitionOwners {
+    activities: BTreeMap<String, String>,
+    jobs: BTreeMap<String, String>,
+}
+
+impl ActiveDefinitionOwners {
+    fn refuse_collision(
+        &self,
+        namespace: &str,
+        definitions: &super::definitions::PluginDefinitionSet,
+    ) -> Result<(), String> {
+        for (name, _) in &definitions.activities {
+            if let Some(owner) = self.activities.get(name) {
+                return Err(format!(
+                    "plugin '{namespace}' is refused: activity '{name}' collides with active \
+                     plugin '{owner}'; activity names must be unique across active plugins"
+                ));
+            }
+        }
+        for (name, _) in &definitions.jobs {
+            if let Some(owner) = self.jobs.get(name) {
+                return Err(format!(
+                    "plugin '{namespace}' is refused: job '{name}' collides with active plugin \
+                     '{owner}'; job names must be unique across active plugins"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn record(&mut self, namespace: &str, definitions: &super::definitions::PluginDefinitionSet) {
+        for (name, _) in &definitions.activities {
+            self.activities.insert(name.clone(), namespace.to_string());
+        }
+        for (name, _) in &definitions.jobs {
+            self.jobs.insert(name.clone(), namespace.to_string());
+        }
+    }
+}
+
+/// Check everything a plugin contributes beyond its tools: the definition
+/// rules of §4.5 and its own `[plugins.<ns>]` schema.
+///
+/// One message, naming the file or key at fault, because the caller reports it
+/// as this plugin's single diagnostic.
+pub(crate) fn validate_plugin_contributions(
+    plugin: &LoadedPlugin,
+    plugin_config: &BTreeMap<String, Value>,
+) -> Result<(), String> {
+    super::definitions::load_plugin_definitions(plugin, &super::definitions::shipped_job_names())?;
+    super::config::validate_plugin_config(plugin, plugin_config)
+}
+
+/// Register every enabled installed plugin, plus one diagnostic per plugin
+/// the workspace pins that this host cannot serve.
+pub fn load_host_plugins(
+    global_root: &Path,
+    orbit_dir: &Path,
+    store: &Store,
+    registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
+) -> PluginHostLoad {
+    load_workspace_plugins(
+        global_root,
+        orbit_dir,
+        store,
+        registry,
+        plugin_config,
+        &BTreeMap::new(),
+    )
+}
+
+/// [`load_host_plugins`] narrowed by one workspace's `[plugin_enablement]`
+/// toggles: a host-enabled plugin toggled `false` registers no tools and
+/// contributes nothing, and reports [`PluginDisabledLayer::Workspace`]. A
+/// toggle never enables a plugin the host has not.
+pub fn load_workspace_plugins(
+    global_root: &Path,
+    orbit_dir: &Path,
+    store: &Store,
+    registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
+    workspace_toggles: &BTreeMap<String, bool>,
+) -> PluginHostLoad {
+    load_host_plugins_with_audit(
+        global_root,
+        orbit_dir,
+        store,
+        registry,
+        plugin_config,
+        workspace_toggles,
+        true,
+    )
+}
+
+/// Load plugins while deliberately avoiding refusal-audit writes.
+///
+/// Global CLI and MCP discovery open their store read-only before the runtime
+/// has selected its writable handle. They still report refused rows, but the
+/// writable runtime load records the refusal audit event. Attempting that
+/// insert here only produces a misleading error about an audit that is
+/// subsequently recorded by the writable pass.
+pub(super) fn load_host_plugins_without_refusal_audit(
+    global_root: &Path,
+    orbit_dir: &Path,
+    store: &Store,
+    registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
+) -> PluginHostLoad {
+    load_host_plugins_with_audit(
+        global_root,
+        orbit_dir,
+        store,
+        registry,
+        plugin_config,
+        &BTreeMap::new(),
+        false,
+    )
+}
+
+fn load_host_plugins_with_audit(
+    global_root: &Path,
+    orbit_dir: &Path,
+    store: &Store,
+    registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
+    workspace_toggles: &BTreeMap<String, bool>,
+    audit_refusals: bool,
+) -> PluginHostLoad {
+    let installed = match store.list_plugins() {
+        Ok(installed) => installed,
+        Err(error) => {
+            return PluginHostLoad {
+                installed: Vec::new(),
+                workspace_toggles: workspace_toggles.clone(),
+                registered: Vec::new(),
+                diagnostics: vec![PluginDiagnostic {
+                    plugin: String::new(),
+                    status: PluginStatus::Inactive,
+                    message: format!("cannot read the host plugin records: {error}"),
+                }],
+            };
+        }
+    };
+
+    let mut load = PluginHostLoad {
+        installed: installed.clone(),
+        workspace_toggles: workspace_toggles.clone(),
+        ..PluginHostLoad::default()
+    };
+    let mut active_definition_owners = ActiveDefinitionOwners::default();
+    for plugin in &installed {
+        // The grant set a row records is only authority when `orbit plugin
+        // enable` wrote it. A backend that can write `orbit.db` can write its
+        // own row, so an enabled row is checked against the authorization
+        // witness before anything it claims is honoured [ORB-12778]. The
+        // witness does not cover `install_path`, so the path is checked
+        // structurally beside it: a row that keeps its authorized grant names
+        // but points them at a tree outside `plugins/<ns>/` is a tree the
+        // backend could have written itself, and nothing is read from it
+        // [ORB-12785].
+        if plugin.enabled
+            && let Err((check, message)) = verify_enabled_row(global_root, plugin)
+        {
+            if audit_refusals {
+                audit_refused_row(store, plugin, check, &message);
+            }
+            load.diagnostics.push(PluginDiagnostic {
+                plugin: plugin.name.clone(),
+                status: PluginStatus::Inactive,
+                message: message.clone(),
+            });
+            // No tools at all, not even inactive ones: an inactive entry is
+            // how the host explains a plugin it trusts but cannot serve, and
+            // this row is one it does not trust.
+            load.registered.push(RegisteredPlugin {
+                name: plugin.name.clone(),
+                version: plugin.version.clone(),
+                status: PluginStatus::Inactive,
+                tools: Vec::new(),
+                diagnostic: Some(message),
+                grants_authorized: false,
+                loaded: None,
+                config_values: BTreeMap::new(),
+                disabled_by: None,
+            });
+            continue;
+        }
+        // The workspace toggle only narrows: it is consulted after the row is
+        // verified, and only for a row the host has enabled.
+        if plugin.enabled && workspace_toggles.get(&plugin.name) == Some(&false) {
+            load.registered.push(workspace_disabled_plugin(plugin));
+            continue;
+        }
+        let registered = register_installed_plugin(
+            global_root,
+            plugin,
+            registry,
+            plugin_config,
+            &mut active_definition_owners,
+        );
+        if let Some(message) = &registered.diagnostic {
+            load.diagnostics.push(PluginDiagnostic {
+                plugin: plugin.name.clone(),
+                status: registered.status,
+                message: message.clone(),
+            });
+        }
+        load.registered.push(registered);
+    }
+
+    // A pin this host has not installed cannot contribute tools — their names
+    // live in a manifest that is not here. Report it once so `plugin list`,
+    // `show` and `doctor` all name the missing step.
+    match read_pin_file(orbit_dir) {
+        Ok(Some(pins)) => {
+            for pin in pins.plugins.iter().filter(|pin| pin.enabled) {
+                if installed.iter().any(|plugin| plugin.name == pin.name) {
+                    continue;
+                }
+                let source = pin
+                    .source
+                    .clone()
+                    .unwrap_or_else(|| "<no source pinned>".to_string());
+                load.diagnostics.push(PluginDiagnostic {
+                    plugin: pin.name.clone(),
+                    status: PluginStatus::Missing,
+                    message: format!(
+                        "plugin '{}' is pinned by this workspace but is not installed on this \
+                         host; run `orbit plugin sync` or `orbit plugin add {source}`",
+                        pin.name
+                    ),
+                });
+            }
+        }
+        Ok(None) => {}
+        Err(error) => load.diagnostics.push(PluginDiagnostic {
+            plugin: String::new(),
+            status: PluginStatus::Inactive,
+            message: error.to_string(),
+        }),
+    }
+
+    load
+}
+
+/// The row checks that run before anything the row names is read: the grant
+/// witness [ORB-12778], then the install path [ORB-12785]. `Err` carries the
+/// audit subcommand naming the check that refused, and its diagnostic.
+fn verify_enabled_row(
+    global_root: &Path,
+    installed: &InstalledPlugin,
+) -> Result<(), (&'static str, String)> {
+    verify_recorded_grants(global_root, installed).map_err(|message| ("verify_grants", message))?;
+    verify_install_path(global_root, installed)
+        .map_err(|message| ("verify_install_path", message))?;
+    super::build_witness::verify_build_record(global_root, installed)
+        .map_err(|message| ("verify_build_record", message))?;
+    Ok(())
+}
+
+/// Write the refusal of a `plugins` row — an unauthorized grant set
+/// [ORB-12778] or a relocated install [ORB-12785] — to the audit trail.
+///
+/// The load pass is the only place this is visible, and a refusal that left no
+/// durable record would be indistinguishable from a plugin the operator had
+/// disabled. One row per load pass: the trail then says how often the
+/// tampered row was presented, not just that it exists once.
+///
+/// A failed write is logged and swallowed, like every other audit write on a
+/// path that is already refusing (`record_authorization_event`): the plugin is
+/// not registered either way. Read-only host discovery skips this function;
+/// its following writable runtime load records the durable refusal event.
+fn audit_refused_row(store: &Store, installed: &InstalledPlugin, check: &str, message: &str) {
+    let params = AuditEventInsertParams {
+        execution_id: audit_execution_id("plugin-load"),
+        command: "plugin.load".to_string(),
+        subcommand: Some(check.to_string()),
+        tool_name: None,
+        target_type: Some("plugin".to_string()),
+        target_id: Some(installed.name.clone()),
+        role: "admin".to_string(),
+        status: AuditEventStatus::Denied,
+        exit_code: 1,
+        duration_ms: 0,
+        working_directory: std::env::current_dir()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".to_string()),
+        // The claimed set and path, not the authorized ones: what the row
+        // asked this host to honour is the fact an operator investigating needs.
+        arguments_json: Some(
+            serde_json::json!({
+                "plugin": installed.name,
+                "version": installed.version,
+                "claimed_grants": installed.grants,
+                "install_path": installed.install_path,
+            })
+            .to_string(),
+        ),
+        stdout_truncated: None,
+        stderr_truncated: None,
+        error_message: Some(message.to_string()),
+        host: std::env::var("HOSTNAME").ok(),
+        pid: std::process::id(),
+        session_id: None,
+        workspace_id: None,
+        caller_machine_id: None,
+        caller_machine_name: None,
+        process_machine_id: None,
+        process_machine_name: None,
+        transport: None,
+        effective_capabilities: Default::default(),
+        origin_session_id: None,
+        mcp_call_id: None,
+        lease_id: None,
+        task_id: None,
+        job_run_id: None,
+        activity_id: None,
+        step_index: None,
+    };
+    // The dedicated plugin columns carry the identity, so `orbit audit` reads
+    // this row beside the plugin's tool calls. Its grant set is empty on
+    // purpose: those columns record what a plugin *ran under*, and this one
+    // ran nothing — the set it claimed is in `arguments_json` above.
+    let provenance = PluginProvenance {
+        name: installed.name.clone(),
+        version: installed.version.clone(),
+        manifest_digest: installed.manifest_digest.clone(),
+        grants: Vec::new(),
+    };
+    let invocation = AuditInvocationFields {
+        plugin: Some(&provenance),
+        ..Default::default()
+    };
+    if let Err(error) = store.insert_audit_event_record_with_invocation(&params, invocation) {
+        tracing::error!(
+            target: "orbit.core.plugin",
+            plugin = %installed.name,
+            check,
+            "could not audit the refused plugin row: {error}",
+        );
+    }
+}
+
+fn register_installed_plugin(
+    global_root: &Path,
+    installed: &InstalledPlugin,
+    registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
+    active_definition_owners: &mut ActiveDefinitionOwners,
+) -> RegisteredPlugin {
+    let refused = |status: PluginStatus, message: String, loaded: Option<Arc<LoadedPlugin>>| {
+        RegisteredPlugin {
+            name: installed.name.clone(),
+            version: installed.version.clone(),
+            status,
+            tools: Vec::new(),
+            diagnostic: Some(message),
+            grants_authorized: true,
+            loaded,
+            config_values: BTreeMap::new(),
+            disabled_by: None,
+        }
+    };
+
+    if !installed.enabled {
+        return RegisteredPlugin {
+            name: installed.name.clone(),
+            version: installed.version.clone(),
+            status: PluginStatus::Disabled,
+            tools: Vec::new(),
+            diagnostic: None,
+            grants_authorized: true,
+            loaded: None,
+            config_values: BTreeMap::new(),
+            disabled_by: Some(PluginDisabledLayer::Host),
+        };
+    }
+
+    let plugin = match load_installed_plugin(installed) {
+        Ok(plugin) => plugin,
+        Err(error) => {
+            return refused(
+                PluginStatus::Inactive,
+                format!(
+                    "plugin '{}' no longer loads from {}: {error}; reinstall it with `orbit \
+                     plugin add`",
+                    installed.name, installed.install_path
+                ),
+                None,
+            );
+        }
+    };
+    let projection = projected_status(installed, &plugin, global_root, plugin_config);
+    if projection.status == PluginStatus::Inactive {
+        let message = projection
+            .diagnostic
+            .unwrap_or_else(|| format!("plugin '{}' is inactive", installed.name));
+        if projection.register_inactive_tools {
+            let mut registered =
+                register_inactive_tools(global_root, installed, &plugin, registry, message);
+            registered.loaded = Some(plugin);
+            return registered;
+        }
+        return refused(PluginStatus::Inactive, message, Some(plugin));
+    }
+
+    // Per-plugin validation above establishes that every definition parses
+    // and follows §4.5. This host-level pass enforces the part no plugin can
+    // decide alone: two active plugins may not contribute the same catalog
+    // name. The store is ordered by namespace, so the first valid owner keeps
+    // serving and only the later plugin is refused.
+    let definitions = match super::definitions::load_plugin_definitions(
+        &plugin,
+        &super::definitions::shipped_job_names(),
+    ) {
+        Ok(definitions) => definitions,
+        Err(message) => {
+            return refused(
+                PluginStatus::Inactive,
+                format!("plugin '{}' is refused: {message}", installed.name),
+                Some(Arc::clone(&plugin)),
+            );
+        }
+    };
+    if let Err(message) =
+        active_definition_owners.refuse_collision(plugin.namespace(), &definitions)
+    {
+        return refused(PluginStatus::Inactive, message, Some(plugin));
+    }
+
+    let backend = plugin_backend(global_root, installed, &plugin, plugin_config);
+    let provenance = backend.spec().provenance.clone();
+    let mut tools = Vec::with_capacity(plugin.tools.len());
+    for tool in &plugin.tools {
+        let name = registered_plugin_tool_name(&plugin, &tool.verb);
+        let binding = Arc::new(PluginToolBinding {
+            provenance: provenance.clone(),
+            execution_kind: tool.execution_kind,
+            diagnostic: None,
+        });
+        let scope = match tool.mcp_scope {
+            PluginMcpScope::Workspace => Some(McpToolScope::WorkspaceRequired),
+            PluginMcpScope::Global => Some(McpToolScope::Global),
+            PluginMcpScope::None => None,
+        };
+        registry.register_plugin_tool(
+            plugin_tool(&plugin, tool, &name, binding.clone(), backend.clone()),
+            scope,
+            binding,
+        );
+        tools.push(name);
+    }
+    active_definition_owners.record(plugin.namespace(), &definitions);
+    RegisteredPlugin {
+        name: installed.name.clone(),
+        version: installed.version.clone(),
+        status: PluginStatus::Active,
+        tools,
+        diagnostic: None,
+        grants_authorized: true,
+        config_values: backend.spec().config_values(),
+        loaded: Some(plugin),
+        disabled_by: None,
+    }
+}
+
+/// A host-enabled plugin this workspace switched off. Nothing is registered;
+/// the manifest is read only so the surfaces can name the tools that are off.
+/// A manifest that no longer loads is reported by the workspaces that use the
+/// plugin, not here, so it is simply omitted.
+fn workspace_disabled_plugin(installed: &InstalledPlugin) -> RegisteredPlugin {
+    let loaded = load_installed_plugin(installed).ok();
+    let tools = loaded
+        .as_ref()
+        .map(|plugin| {
+            plugin
+                .tools
+                .iter()
+                .map(|tool| registered_plugin_tool_name(plugin, &tool.verb))
+                .collect()
+        })
+        .unwrap_or_default();
+    RegisteredPlugin {
+        name: installed.name.clone(),
+        version: installed.version.clone(),
+        status: PluginStatus::Disabled,
+        tools,
+        diagnostic: None,
+        grants_authorized: true,
+        loaded,
+        config_values: BTreeMap::new(),
+        disabled_by: Some(PluginDisabledLayer::Workspace),
+    }
+}
+
+/// Derive the status the host loader will assign to a loaded plugin without
+/// registering any tools or mutating host state.
+pub(crate) fn projected_status(
+    installed: &InstalledPlugin,
+    plugin: &LoadedPlugin,
+    global_root: &Path,
+    plugin_config: &BTreeMap<String, Value>,
+) -> ProjectedPluginStatus {
+    if let Some(message) = first_party_row_mismatch(installed, plugin) {
+        return ProjectedPluginStatus::inactive(message, false);
+    }
+    // Runs before anything below reads `installed.grants` through
+    // `plugin_backend`'s own parse: a name it does not recognize must refuse
+    // the row here, not fall silently out of a `filter_map` there.
+    if let Some(message) = unknown_grant_diagnostic(installed) {
+        return ProjectedPluginStatus::inactive(message, true);
+    }
+    // Validate the manifest actually on disk before deciding what a digest
+    // mismatch means: an on-disk edit that also breaks the namespace rules
+    // (§4.9) is a plain refusal, not tool names inserted as inactive first.
+    let policy =
+        PluginValidationPolicy::host_default().with_first_party_verified(installed.first_party);
+    if let Err(error) = validate_loaded_plugin(plugin, &policy) {
+        return ProjectedPluginStatus::inactive(
+            format!("plugin '{}' is refused: {error}", installed.name),
+            false,
+        );
+    }
+    if plugin.manifest_digest != installed.manifest_digest {
+        return ProjectedPluginStatus::inactive(
+            digest_mismatch_diagnostic(installed, plugin),
+            true,
+        );
+    }
+    let backend = plugin_backend(global_root, installed, plugin, plugin_config);
+    if let Err(error) = refuse_covering_fs_write_roots(backend.spec(), None) {
+        return ProjectedPluginStatus::inactive(
+            format!("plugin '{}' is refused: {error}", installed.name),
+            true,
+        );
+    }
+    if let Some(message) = unmet_requirement(plugin) {
+        return ProjectedPluginStatus::inactive(message, true);
+    }
+    if let Some(message) = missing_grant_diagnostic(installed, plugin) {
+        return ProjectedPluginStatus::inactive(message, true);
+    }
+    // A plugin whose shipped definitions break the §4.5 rules, or whose
+    // `[plugins.<ns>]` section its own schema rejects, contributes nothing:
+    // registering its tools while its catalog layer is unusable would leave
+    // half a plugin on the surface.
+    if let Err(message) = validate_plugin_contributions(plugin, plugin_config) {
+        return ProjectedPluginStatus::inactive(
+            format!("plugin '{}' is refused: {message}", installed.name),
+            false,
+        );
+    }
+    ProjectedPluginStatus::active()
+}
+
+/// An enabled plugin whose `requires` no longer hold keeps its tool names on
+/// the registry as inactive entries, so a caller that names one is told why
+/// rather than told the tool does not exist (§4.8).
+fn register_inactive_tools(
+    global_root: &Path,
+    installed: &InstalledPlugin,
+    plugin: &LoadedPlugin,
+    registry: &mut ToolRegistry,
+    message: String,
+) -> RegisteredPlugin {
+    let backend = plugin_backend(global_root, installed, plugin, &BTreeMap::new());
+    let provenance = backend.spec().provenance.clone();
+    let mut tools = Vec::with_capacity(plugin.tools.len());
+    for tool in &plugin.tools {
+        let name = registered_plugin_tool_name(plugin, &tool.verb);
+        let binding = Arc::new(PluginToolBinding {
+            provenance: provenance.clone(),
+            execution_kind: tool.execution_kind,
+            diagnostic: Some(message.clone()),
+        });
+        registry.register_inactive_plugin_tool(
+            plugin_tool(plugin, tool, &name, binding.clone(), backend.clone()),
+            binding,
+        );
+        tools.push(name);
+    }
+    RegisteredPlugin {
+        name: installed.name.clone(),
+        version: installed.version.clone(),
+        status: PluginStatus::Inactive,
+        tools,
+        diagnostic: Some(message),
+        grants_authorized: true,
+        loaded: None,
+        config_values: BTreeMap::new(),
+        disabled_by: None,
+    }
+}
+
+/// Canonical name the validator already checked: the manifest claim, never
+/// the store row's `first_party` flag. The row is only the verification
+/// answer passed into `with_first_party_verified`.
+fn registered_plugin_tool_name(plugin: &LoadedPlugin, verb: &str) -> String {
+    plugin.tool_name(verb, plugin.manifest.claims_first_party_namespace())
+}
+
+/// A `plugins` row that claims `first_party` for a manifest that does not
+/// declare `origin: orbit`. Validation named tools from the manifest; a
+/// `true` row would otherwise register `orbit.<ns>.*` over a built-in.
+fn first_party_row_mismatch(installed: &InstalledPlugin, plugin: &LoadedPlugin) -> Option<String> {
+    if installed.first_party && !plugin.manifest.claims_first_party_namespace() {
+        Some(format!(
+            "plugin '{}' is refused: the plugins row claims first_party but the manifest does \
+             not declare `origin: orbit`",
+            installed.name
+        ))
+    } else {
+        None
+    }
+}
+
+/// A row's grants contain a name no current [`PluginGrant`] recognizes:
+/// retired, renamed, or written by a newer Orbit. `plugin_backend` would
+/// otherwise drop it with a silent `filter_map`, running the plugin under
+/// fewer grants than the operator authorized without saying so; refusing the
+/// row instead surfaces it, naming the grant it cannot parse.
+fn unknown_grant_diagnostic(installed: &InstalledPlugin) -> Option<String> {
+    parse_stored_grants(&installed.grants)
+        .err()
+        .map(|error| format!("plugin '{}' is refused: {error}", installed.name))
+}
+
+/// The on-disk manifest is not the one this host recorded at install; the
+/// grants apply only to that stored digest (design §4.1).
+fn digest_mismatch_diagnostic(installed: &InstalledPlugin, plugin: &LoadedPlugin) -> String {
+    format!(
+        "plugin '{}' on-disk manifest digest {} does not match the stored digest {}; grants \
+         apply only to the stored manifest. Re-consent with `orbit plugin add --force` and \
+         `orbit plugin enable {}`",
+        installed.name, plugin.manifest_digest, installed.manifest_digest, installed.name
+    )
+}
+
+/// A required grant the operator has not recorded refuses the whole plugin,
+/// naming the grant, the manifest key that asks for it, and the command that
+/// records it (design §4.1). `backend.sandbox: none` is the `unsandboxed`
+/// grant, so it is refused here too.
+pub fn missing_grant_diagnostic(
+    installed: &InstalledPlugin,
+    plugin: &LoadedPlugin,
+) -> Option<String> {
+    let missing = plugin.manifest.missing_grants(&installed.grants);
+    if missing.is_empty() {
+        return None;
+    }
+    let asks = missing
+        .iter()
+        .map(|grant| format!("`{grant}` ({})", grant.requested_by()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let flags = missing
+        .iter()
+        .map(|grant| grant.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!(
+        "plugin '{}' requests {asks} but this host has not granted {}; run `orbit plugin enable {} \
+         --grant {flags}` to grant {}",
+        installed.name,
+        if missing.len() == 1 { "it" } else { "them" },
+        installed.name,
+        if missing.len() == 1 { "it" } else { "them" },
+    ))
+}

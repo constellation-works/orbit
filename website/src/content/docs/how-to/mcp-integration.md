@@ -1,148 +1,122 @@
 ---
-title: Set Up MCP
-description: "Expose Orbit's safe MCP tool surface to Claude Code, Codex, Gemini, or Grok Build."
+title: Connect Your Agent
+description: "Connect Claude Code, Codex, Cursor, and other agent clients to Orbit over MCP: let the orbit-setup skill do it, or run one command."
 sidebar:
   order: 5
 ---
 
-## Initialize
+Your agent reaches Orbit through an MCP server. Once connected, it can file
+tasks, ship them, and run drains.
 
-Use auto-detection:
+:::tip[Recommended]
+Ask your agent to **set up Orbit for this repo**. The `orbit-setup` skill
+registers Orbit with the clients you use, and it also handles the setups
+further down this page: other machines, remote dashboards, and a second
+repository.
+:::
 
-```bash
-orbit mcp init --auto
-```
-
-This registers the **agent-only** tool surface — the same authority as bare
-`orbit mcp serve`. If you want an agent to be able to dispatch workflows and run
-governed operations, register the operator-authorized integration during
-workspace setup instead:
+## Connect
 
 ```bash
 orbit workspace init --mcp
 ```
 
-Or target a client explicitly:
+This registers Orbit with every agent client it finds, with **operator**
+authority, so your agent can ship tasks and run drains as well as file them.
+Start a fresh agent session afterwards so the tools load.
+
+`orbit mcp init` registers Orbit with the narrower **agent-only** authority:
+the agent can file and update tasks but cannot dispatch runs. Use it to pick
+clients or to limit an agent:
 
 ```bash
-orbit mcp init --claude
-orbit mcp init --codex
-orbit mcp init --gemini
-orbit mcp init --grok
+orbit mcp init --auto                   # every detected client
+orbit mcp init --claude --codex         # specific clients
+orbit mcp init --all --scope home       # user-level config, every client
 ```
 
-**Grok Build** uses the native `.grok/config.toml` format (similar to how Claude Code can use a config file). `orbit mcp init --grok` will create or update `.grok/config.toml` in your workspace root (or `~/.grok/config.toml` for global).
+Supported clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`,
+`cursor`, `vscode`, and `windsurf`. `--scope workspace`, the default, writes
+config into the repository; `--scope home` writes it for your user.
+
+Grok Build reads the shared `.mcp.json` (or `~/.claude.json` with
+`--scope home`); when its shared reader is off, Orbit writes
+`.grok/config.toml` instead.
+
+If the workspace's Orbit data lives outside the repository, pass
+`orbit mcp init` the same `--root <dir>` (or `ORBIT_ROOT`) you used for
+`orbit workspace init`.
 
 ## Register the federated mux
 
-Federated MCP presents one namespace over this machine's workspaces plus any
-SSH remotes in the machine-global `~/.orbit/mcp-destinations.toml`. Local
-workspaces need no destination row; a missing or empty file still serves a
-useful local-only federated session. Additional remotes are declared as SSH
-destinations:
+A federated server puts this machine's workspaces and those on SSH remotes
+under one namespace. List the remotes in `~/.orbit/mcp-destinations.toml`:
 
 ```toml
 [[destinations]]
 ssh = "orbit-owner"
 machine_id = "hm_alpha"
-
-[[destinations]]
-ssh = "operator@orbit-build"
-machine_id = "hm_beta"
 ```
 
-Register it with a client (Codex shown here):
+Then register it with a client:
 
 ```bash
 orbit mcp init --federated --client codex --scope home
 ```
 
-This adds a separate `orbit-federated` entry that launches `orbit mcp serve
---mode federated`; an existing v1 `orbit` entry is left unchanged. Use another
-`--client` value or `--auto` to target a different installed client.
-Remove only that entry later with `orbit mcp remove --federated` and the same
-client/scope selection.
+This adds a separate `orbit-federated` entry beside any existing `orbit` one.
+In that session, `orbit_workspace_list` returns host-qualified selectors such
+as `hm_alpha/ws_orbit`; pass one unchanged as the `workspace` of a call. Task
+reads go to the owner's selector. There is no automatic failover: a call
+reaches only the machine you select.
 
-In that federated MCP session, list destinations, copy an owner row's
-host-qualified `selector`, and pass it unchanged to a workspace-scoped call:
+Operator authority travels over SSH. A client started with `--operator` serves
+operator on every destination it opens, because an SSH login to a machine is
+ownership of it. Without `--operator`, and always for a client running inside
+a managed run, remote sessions get agent-only authority. To shut a caller out,
+remove its key from that machine's `~/.ssh/authorized_keys`.
 
-```text
-orbit_workspace_list({})
-  -> {"workspaces":[{"selector":"hm_alpha/ws_orbit", ...}]}
-
-orbit_task_list({"workspace":"hm_alpha/ws_orbit"})
-```
-
-There is no placement, implicit failover, or competing-Owner detection;
-availability is the availability of the selected destination. Task reads are
-owner-only, so `orbit_task_list` and `orbit_task_show` must use the owner
-selector. A replica selector returns `capability_refused`.
-
-## Serve
-
-Start the MCP surface:
-
-```bash
-orbit mcp serve
-```
-
-Use `orbit tool list` to inspect the current local registry. MCP exposure is a
-capability-filtered subset of that registry. The retired graph tools are not
-exposed.
-
-### Attribute the tasks a session creates
-
-A server can carry the orchestrator crew that its tasks are attributed to, so
-each call does not have to remember it:
+## Attribute tasks to an orchestrator
 
 ```bash
 orbit mcp serve --workspace <selector> --orchestrator <crew>
 ```
 
-The value is attribution only. Unlike `--operator` it grants no authority, and
-it neither selects the crew a task executes under nor the model recorded for
-that execution. A call that passes its own `orchestrator` wins; a call that
-omits it inherits the session's; a server started without the flag attributes
-nothing, exactly as before. The crew is resolved against the workspace the call
-lands in, so an unconfigured name fails that call rather than falling back to
-another crew, and only newly created tasks are affected — existing ones are
-never rewritten.
+Tasks the session creates are recorded as filed by that crew, unless a call
+passes its own `orchestrator`. This is attribution only: it grants no
+authority and does not choose the crew that executes a task. The same flag
+works with `--mode remote <ssh-host>` and `--mode federated`.
 
-Both client modes forward the value to the server that actually creates the
-task:
+## Serve on a socket
 
 ```bash
-orbit mcp serve --mode remote <ssh-host> --orchestrator <crew>
-orbit mcp serve --mode federated --orchestrator <crew>
+orbit mcp listen              # 127.0.0.1:7879
 ```
 
-A destination whose `authorized_keys` pins a forced command composes its own
-argv, so its configuration wins there — the same rule that already applies to
-the authority a remote session asks for.
+The listener serves the same tools over TCP, one session per connection, for
+setups such as a server-side Orbit reached through an SSH tunnel. It does not
+authenticate clients, so it binds loopback unless you pass
+`--allow-non-loopback`.
 
-Treat the flag as configuration, not as evidence of which model is answering a
-given call: an MCP connection commonly outlives a model switch on the client
-side. Pass `orchestrator` on the individual call, or restart the connection
-with a new value, when the orchestrating crew genuinely changes.
+## Response shapes
 
-## Listen on a socket
+`orbit tool list` shows every tool. Each one advertises MCP annotations
+(`readOnlyHint`, `destructiveHint`, and so on) so a client can decide what to
+auto-approve; Orbit still enforces authority on every call.
 
-Deployments that need the server on a port — a server-side Orbit reached through
-an SSH tunnel, for example — use the listener instead:
-
-```bash
-orbit mcp listen              # binds 127.0.0.1:7879
-orbit mcp listen 127.0.0.1:9000
-```
-
-It serves the same tool surface as `orbit mcp serve`, one independent session per
-connection. The socket authenticates no client, so it binds loopback; a wider bind
-requires `--allow-non-loopback` and a network path you have restricted by other
-means.
+- `orbit_task_list` and `orbit_task_eligible` return
+  `{ tasks, total, truncated }`. Task records are full by default; pass
+  `fields` (for example `["id", "title", "status"]`) to keep a listing small.
+- `orbit_task_eligible` lists, in dispatch order, the `backlog` and `proposed`
+  tasks whose files overlap no running or in-review task. With
+  `explain: true`, `conflicting` also lists the held-back tasks, each with the
+  overlapping file and the task holding it.
+- The task-write tools leave out `comments` and `history` unless you name them
+  in `fields`.
 
 ## Remove
 
 ```bash
 orbit mcp remove --all
-orbit mcp remove --federated --all  # remove only the federated entry
+orbit mcp remove --federated --all   # only the federated entry
 ```

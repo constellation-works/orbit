@@ -14,7 +14,7 @@ use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
 
-use super::freshness::{commit_sha, recovered_head_checkpoint};
+use super::freshness::{commit_sha, recovered_head_checkpoint, recovery_pinned_base};
 
 const FAILURE_HANDOFF_LINEAGE_MAX_HOPS: usize = 64;
 const RESUME_PREPARATION_REFRESH_MAX_ATTEMPTS: u64 = 1;
@@ -357,7 +357,7 @@ fn validate_preparation_refresh_identity<H: RuntimeHost + ?Sized>(
     let prepared_origin_matches = prepared_head_sha == evidence_head_sha
         || recovered.as_ref().is_some_and(|checkpoint| {
             checkpoint["head_sha_before"] == prepared_head_sha
-                && checkpoint["base_sha"] == prepared["base_sha"]
+                && recovery_pinned_base(checkpoint, &prepared["base_sha"])
                 && checkpoint["head"] == prepared_head
         });
     if prepared_head != evidence_head || !prepared_origin_matches || evidence_head_sha != head_sha {
@@ -406,7 +406,7 @@ fn ensure_run_is_resumable_owner<H: RuntimeHost + ?Sized>(
 
 /// Re-authenticate the evidence carried into `git_commit` against the source
 /// run's immutable state. This is deliberately separate from the ordinary
-/// moved-HEAD escape hatch used by epic child merges.
+/// moved-HEAD escape hatch used by stacked local merges.
 pub(super) fn commit_head_matches_failure_handoff<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,

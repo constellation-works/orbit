@@ -8,6 +8,8 @@ use orbit_types::tool::{
 };
 use serde_json::Value;
 
+use crate::mcp_annotations::mcp_annotations;
+use crate::plugin::PluginToolBinding;
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,9 @@ struct ToolEntry {
     tool: Arc<dyn Tool>,
     availability: ToolAvailability,
     mcp_scope: Option<McpToolScope>,
+    /// Set for a plugin-backed entry: provenance for the audit row and, on
+    /// an inactive entry, the diagnostic naming the missing step.
+    plugin: Option<Arc<PluginToolBinding>>,
 }
 
 #[derive(Default)]
@@ -55,19 +60,81 @@ impl ToolRegistry {
         self.register_with_availability(tool, ToolAvailability::Inactive, None);
     }
 
+    /// Register one plugin tool. `mcp_scope: None` keeps it off `tools/list`
+    /// (`mcp_scope: none` in the manifest) while `orbit tool run` reaches it.
+    pub fn register_plugin_tool<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        mcp_scope: Option<McpToolScope>,
+        binding: Arc<PluginToolBinding>,
+    ) {
+        self.register_entry(tool, ToolAvailability::Active, mcp_scope, Some(binding));
+    }
+
+    /// Register a plugin tool the host could not activate. The binding's
+    /// diagnostic is what `orbit tool run` and `orbit plugin show` report.
+    pub fn register_inactive_plugin_tool<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        binding: Arc<PluginToolBinding>,
+    ) {
+        self.register_entry(tool, ToolAvailability::Inactive, None, Some(binding));
+    }
+
     fn register_with_availability<T: Tool + 'static>(
         &mut self,
         tool: T,
         availability: ToolAvailability,
         mcp_scope: Option<McpToolScope>,
     ) {
+        self.register_entry(tool, availability, mcp_scope, None);
+    }
+
+    fn register_entry<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        availability: ToolAvailability,
+        mcp_scope: Option<McpToolScope>,
+        plugin: Option<Arc<PluginToolBinding>>,
+    ) {
         let schema = tool.schema();
-        if let Some(existing) = self.tools.get(&schema.name)
-            && (existing.mcp_scope.is_some() || mcp_scope.is_some())
-        {
-            self.record_mcp_error(McpToolDefinitionError::DuplicateCanonicalName(
-                schema.name.clone(),
-            ));
+        let collision = self.tools.get(&schema.name).map(|existing| {
+            (
+                existing.mcp_scope.is_some() || mcp_scope.is_some(),
+                existing.plugin.is_none() && existing.tool.schema().builtin,
+                existing.availability.is_active(),
+                existing
+                    .plugin
+                    .as_ref()
+                    .map(|binding| binding.provenance.name.clone()),
+            )
+        });
+        if let Some((mcp_collision, hold_builtin, existing_active, existing_owner)) = collision {
+            if mcp_collision {
+                self.record_mcp_error(McpToolDefinitionError::DuplicateCanonicalName(
+                    schema.name.clone(),
+                ));
+            }
+            // Built-ins register first, active or held inactive behind a
+            // subcommand gate. A later insert must not replace one: a plugin
+            // that collides would otherwise take the name.
+            if hold_builtin {
+                return;
+            }
+            // An active entry already answers for this name — another
+            // plugin's, or a host-registered external tool's. A later
+            // registration under the same name (e.g. a tampered manifest
+            // re-claiming it) is refused rather than swapped in: §4.9 fails
+            // closed per plugin, so one plugin's collision must not touch
+            // another plugin's or an external tool's active entry.
+            if existing_active {
+                let new_owner = plugin
+                    .as_ref()
+                    .map(|binding| binding.provenance.name.clone());
+                if existing_owner != new_owner {
+                    return;
+                }
+            }
         }
         if mcp_scope.is_some() {
             let advertised_name = mcp_advertised_tool_name(&schema.name);
@@ -87,6 +154,7 @@ impl ToolRegistry {
                 tool: Arc::new(tool),
                 availability,
                 mcp_scope,
+                plugin,
             },
         );
     }
@@ -111,6 +179,12 @@ impl ToolRegistry {
             .tools
             .get(name)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
+        if name.starts_with("orbit.task.")
+            && tool.plugin.is_none()
+            && !is_preloaded_artifact_payload(name, &input)
+        {
+            validate_task_arguments(&input, &tool.tool.schema())?;
+        }
         tool.tool.execute(ctx, input)
     }
 
@@ -144,6 +218,24 @@ impl ToolRegistry {
             .map(|entry| entry.tool.execution_kind())
     }
 
+    /// The plugin behind a registry entry, when it is plugin-backed.
+    pub fn plugin_binding(&self, name: &str) -> Option<Arc<PluginToolBinding>> {
+        self.tools
+            .get(name)
+            .and_then(|entry| entry.plugin.as_ref().map(Arc::clone))
+    }
+
+    /// Why a plugin tool is inactive, when the loader recorded a reason.
+    pub fn inactive_diagnostic(&self, name: &str) -> Option<String> {
+        self.plugin_binding(name)
+            .and_then(|binding| binding.diagnostic.clone())
+    }
+
+    /// Advertised MCP scope of one entry, active or not.
+    pub fn mcp_scope(&self, name: &str) -> Option<McpToolScope> {
+        self.tools.get(name).and_then(|entry| entry.mcp_scope)
+    }
+
     pub fn unregister(&mut self, name: &str) -> bool {
         self.tools.remove(name).is_some()
     }
@@ -173,15 +265,87 @@ impl ToolRegistry {
             .values()
             .filter(|entry| entry.availability.is_active())
             .filter_map(|entry| {
-                entry
-                    .mcp_scope
-                    .map(|scope| McpToolDefinition::new(entry.tool.schema(), scope))
+                entry.mcp_scope.map(|scope| {
+                    let schema = entry.tool.schema();
+                    let annotations = mcp_annotations(&schema, entry.tool.execution_kind());
+                    McpToolDefinition::new(schema, scope)
+                        .with_input_schema(entry.tool.input_schema())
+                        .with_annotations(Some(annotations))
+                })
             })
             .collect::<Vec<_>>();
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
         validate_mcp_tool_definitions(&definitions)?;
         Ok(definitions)
     }
+}
+
+/// A spoke broker sends `orbit.task.artifact.put` a path-free `artifacts`
+/// payload that is deliberately absent from the public schema. The handler
+/// admits that shape only from the authenticated ssh-mcp connector and checks
+/// its fields itself, so the public-schema check must not refuse it first.
+fn is_preloaded_artifact_payload(name: &str, input: &Value) -> bool {
+    name == "orbit.task.artifact.put" && input.get("artifacts").is_some()
+}
+
+/// Task argument shapes are checked before a handler can ignore a mistyped
+/// optional field or reach the application host. Required fields and richer
+/// guarded modes remain the handler's responsibility.
+fn validate_task_arguments(input: &Value, schema: &ToolSchema) -> Result<(), OrbitError> {
+    use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
+    use orbit_common::protocol::tool_schema::tool_parameter_schema;
+
+    let object = input
+        .as_object()
+        .ok_or_else(|| OrbitError::InvalidInput("task tool arguments must be an object".into()))?;
+    let allowed = schema
+        .parameters
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<Vec<_>>();
+    reject_unknown_tool_fields(input, &allowed)?;
+    for parameter in &schema.parameters {
+        let Some(value) = object.get(&parameter.name) else {
+            continue;
+        };
+        // Existing optional parsers treat null as absence, and accept numeric
+        // strings and string booleans. Check their normalized shape without
+        // changing the value passed to the handler.
+        if value.is_null() && !parameter.required {
+            continue;
+        }
+        let mut normalized = value.clone();
+        // The persisted relation parser also accepts one relation object.
+        if parameter.name == "relations" && value.is_object() {
+            normalized = Value::Array(vec![value.clone()]);
+        }
+        if let Some(raw) = value.as_str() {
+            match parameter.param_type.as_str() {
+                "boolean" | "bool" => match raw.trim().to_ascii_lowercase().as_str() {
+                    "true" => normalized = Value::Bool(true),
+                    "false" => normalized = Value::Bool(false),
+                    _ => {}
+                },
+                "integer" | "u64" => {
+                    if let Ok(number) = raw.trim().parse::<u64>() {
+                        normalized = Value::from(number);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let shape = Value::Object(tool_parameter_schema(&parameter.param_type));
+        let validator = jsonschema::JSONSchema::compile(&shape).map_err(|error| {
+            OrbitError::Execution(format!("invalid task parameter schema: {error}"))
+        })?;
+        if !validator.is_valid(&normalized) {
+            return Err(OrbitError::InvalidInput(format!(
+                "`{}` must have type {}",
+                parameter.name, parameter.param_type,
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Workspace-independent source for every canonical registry-backed MCP definition.

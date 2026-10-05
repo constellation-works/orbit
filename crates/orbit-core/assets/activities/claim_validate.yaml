@@ -1,0 +1,74 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: claim_validate
+spec:
+  type: deterministic
+  description: >
+    Independently resolve the candidate and its base from the executor's
+    worktree, refuse a candidate that does not descend from that base, run the
+    commands this owner requires on that exact candidate, and attach one
+    captured log per command to the owner's copy of the task. An empty
+    requirement list runs nothing and records `skipped_no_required_commands`
+    with no validation references. Task, claim,
+    execution machine and bound run come from the trusted worker binding; a
+    step input that disagrees is refused rather than preferred.
+  input_schema_json:
+    type: object
+    required: [workspace_path]
+    properties:
+      workspace_path:
+        type: string
+      # The run's sync mode (`local` or `remote`). Observation resolves the
+      # base through the same mapping as worktree setup / pr_prepare, so a
+      # remote-sync claim reads `origin/<base>` rather than a lagging local
+      # `refs/heads/<base>`.
+      base_sync:
+        type: string
+      # The base SHA `sync_base` published. Observation compares it to the
+      # merge-base of the candidate and the resolved base ref, not the live
+      # tip of `origin/<base>`: a later advance of that tip is not a
+      # disagreement, but a candidate that does not contain this SHA is.
+      base_sha:
+        type: string
+      # Set only on the pull-request route, from the number this run's own
+      # publication step observed. `pr_open` emits `pr_number` as a JSON
+      # string; an exact step-output template forwards that type unchanged,
+      # so the live value is a string. Integers remain accepted.
+      pull_request:
+        type: [string, integer, "null"]
+  output_schema_json:
+    type: object
+    required: [candidate, validation]
+    properties:
+      decision:
+        type: string
+        enum: [passed, skipped_no_required_commands]
+      note:
+        type: string
+        description: Why no command ran, when the requirement list is empty.
+      candidate:
+        type: object
+        description: >
+          Repository, branches, candidate and base revisions, and the delivery
+          variant this claim produced.
+      validation:
+        type: array
+        description: Digest-pinned owner artifact references, one per command.
+        items:
+          type: object
+      validation_env:
+        type: [object, "null"]
+        description: >
+          How PATH was resolved for the commands: source (`login_shell`,
+          `config` or `launcher_fallback`), PATH and the login-shell outcome.
+      commands:
+        type: array
+        items:
+          type: string
+      tested_head:
+        type: string
+      validated_base:
+        type: string
+  action: claim_validate
+  config: {}

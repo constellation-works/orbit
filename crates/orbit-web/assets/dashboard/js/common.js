@@ -1,0 +1,776 @@
+const params = new URLSearchParams(window.location.search);
+
+// ORB-00030: the dashboard can serve multiple workspaces. `currentWorkspace`
+// (a workspace id, or null for the aggregate "all" view) is transparently
+// appended as `?workspace=<id>` to every API request below, so individual view
+// modules stay workspace-agnostic. Initialized from the URL for shareable links.
+//
+// The aggregate choice has no workspace id, so it is written as the reserved
+// `workspace=all` token; without one a reload or shared link would read the
+// missing parameter as "pick the default workspace" and silently change scope.
+export const ALL_WORKSPACES_TOKEN = "all";
+const linkedWorkspace = params.get("workspace") || null;
+let aggregateLinked = linkedWorkspace === ALL_WORKSPACES_TOKEN;
+let currentWorkspace = aggregateLinked ? null : linkedWorkspace;
+
+/// True when the address asked for the aggregate view and no concrete
+/// workspace has been chosen since.
+export function isAggregateLinked() {
+  return aggregateLinked && !currentWorkspace;
+}
+
+export function getWorkspace() {
+  return currentWorkspace;
+}
+
+let workspaceRevision = 0;
+const workspaceListeners = new Set();
+
+export function getWorkspaceRevision() {
+  return workspaceRevision;
+}
+
+// Mutations keep the workspace they started in across asynchronous admission
+// reads, responses and refreshes. Returning to the same workspace is a new
+// visit: an earlier result must not update that visit's UI or start a write.
+export function captureWorkspaceVisit() {
+  const workspace = currentWorkspace;
+  const revision = workspaceRevision;
+  return {
+    workspace,
+    revision,
+    isCurrent: () => revision === workspaceRevision,
+    path: (path) => workspacePath(path, workspace),
+  };
+}
+
+export function onWorkspaceChange(listener) {
+  workspaceListeners.add(listener);
+  return () => workspaceListeners.delete(listener);
+}
+
+export function setWorkspace(id) {
+  const next = id || null;
+  if (next) aggregateLinked = false;
+  if (next === currentWorkspace) return;
+  currentWorkspace = next;
+  workspaceRevision += 1;
+  for (const listener of workspaceListeners) listener();
+}
+
+// ORB-10872: workspace + time window are one dashboard scope. Scoreboard,
+// Audit, Reliability, and Managed Execution either honor this window or show
+// an equally prominent independent-scope label. Seeded from `?window=` or the
+// hash query so reload and shared links restore the same cutoff.
+export const DASHBOARD_WINDOWS = ["1h", "24h", "7d", "30d", "all"];
+export const RELIABILITY_WINDOWS = ["1h", "24h", "7d", "30d"];
+export const DEFAULT_DASHBOARD_WINDOW = "24h";
+export const INDEPENDENT_RELIABILITY_WINDOW = "7d";
+
+export function parseDashboardWindow(raw, allowed = DASHBOARD_WINDOWS) {
+  return allowed.includes(raw) ? raw : null;
+}
+
+function windowFromLocation() {
+  const fromSearch = parseDashboardWindow(params.get("window"));
+  if (fromSearch) return fromSearch;
+  const hash = String(window.location.hash || "");
+  const queryIdx = hash.indexOf("?");
+  if (queryIdx >= 0) {
+    const fromHash = parseDashboardWindow(new URLSearchParams(hash.slice(queryIdx + 1)).get("window"));
+    if (fromHash) return fromHash;
+  }
+  return DEFAULT_DASHBOARD_WINDOW;
+}
+
+let currentWindow = windowFromLocation();
+
+export function getWindow() {
+  return currentWindow;
+}
+
+export function setWindow(raw) {
+  const next = parseDashboardWindow(raw) || DEFAULT_DASHBOARD_WINDOW;
+  const changed = next !== currentWindow;
+  currentWindow = next;
+  return changed;
+}
+
+/// Reliability cannot serve an unbounded `all` window. When the dashboard
+/// selection is `all`, Reliability keeps a labeled independent 7d cutoff.
+export function reliabilityWindowFor(selected = currentWindow) {
+  if (RELIABILITY_WINDOWS.includes(selected)) {
+    return { window: selected, independent: false };
+  }
+  return { window: INDEPENDENT_RELIABILITY_WINDOW, independent: true };
+}
+
+/// True only when the payload's reported window matches the active selection.
+/// A 24h scoreboard/orchestration body must not render under an active 7d.
+export function payloadHonorsWindow(payload, selected) {
+  if (!payload || typeof payload !== "object" || !selected) return false;
+  const reported = payload.window;
+  if (typeof reported === "string") return reported === selected;
+  if (reported && typeof reported.label === "string") return reported.label === selected;
+  return false;
+}
+
+let scopeChangeListener = null;
+
+export function setScopeChangeListener(fn) {
+  scopeChangeListener = typeof fn === "function" ? fn : null;
+}
+
+export function notifyScopeChange() {
+  if (scopeChangeListener) scopeChangeListener();
+}
+
+// Mirror workspace + window into the query string without a navigation.
+// Hash routes still own view/filter history; this keeps reload-safe scope.
+export function persistScopeToUrl() {
+  const url = new URL(window.location.href);
+  if (currentWorkspace) url.searchParams.set("workspace", currentWorkspace);
+  else if (isAggregateView() || isAggregateLinked()) url.searchParams.set("workspace", ALL_WORKSPACES_TOKEN);
+  else url.searchParams.delete("workspace");
+  if (currentWindow) url.searchParams.set("window", currentWindow);
+  else url.searchParams.delete("window");
+  if (url.href !== window.location.href) {
+    history.replaceState(null, "", url);
+  }
+}
+
+function windowTabs(selector) {
+  return Array.from(selector.querySelectorAll(".scoreboard-window-seg"));
+}
+
+function syncWindowTabState(selector, target) {
+  for (const tab of windowTabs(selector)) {
+    const on = tab.dataset.window === target;
+    tab.classList.toggle("on", on);
+    tab.setAttribute("aria-selected", on ? "true" : "false");
+    tab.tabIndex = on ? 0 : -1;
+  }
+}
+
+export function syncWindowSelectors() {
+  const selected = currentWindow;
+  const rel = reliabilityWindowFor(selected);
+  for (const [id, target] of [
+    ["scoreboard-window-selector", selected],
+    ["reliability-window-selector", rel.window],
+  ]) {
+    const selector = document.getElementById(id);
+    if (!selector) continue;
+    syncWindowTabState(selector, target);
+  }
+}
+
+function activateWindowTab(tab, allowed) {
+  const next = tab && tab.dataset.window;
+  if (!next || !allowed.includes(next) || next === currentWindow) return;
+  setWindow(next);
+  persistScopeToUrl();
+  syncWindowSelectors();
+  notifyScopeChange();
+}
+
+export function wireWindowSelector(selectorId, opts = {}) {
+  const selector = document.getElementById(selectorId);
+  if (!selector || selector.dataset.wired === "true") return;
+  selector.dataset.wired = "true";
+  const allowed = opts.allowAll === false ? RELIABILITY_WINDOWS : DASHBOARD_WINDOWS;
+  selector.addEventListener("click", (event) => {
+    const tab = event.target && event.target.closest(".scoreboard-window-seg");
+    if (!tab || !selector.contains(tab)) return;
+    activateWindowTab(tab, allowed);
+  });
+  selector.addEventListener("keydown", (event) => {
+    const tab = event.target && event.target.closest(".scoreboard-window-seg");
+    if (!tab || !selector.contains(tab)) return;
+    const tabs = windowTabs(selector);
+    const index = tabs.indexOf(tab);
+    if (index < 0) return;
+    let nextIndex = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = tabs.length - 1;
+    if (nextIndex == null) return;
+    event.preventDefault();
+    const nextTab = tabs[nextIndex];
+    nextTab.focus();
+    activateWindowTab(nextTab, allowed);
+  });
+}
+
+// ORB-00030/00039/00040: the dashboard can serve multiple workspaces. "Multi-
+// workspace mode" is on when more than one workspace is servable; the aggregate
+// ("All workspaces") view is that mode with no concrete workspace selected. In
+// that view the per-workspace endpoints have no workspace to scope to and the
+// backend `Ws` extractor 400s, so every view module (app.js, audit.js,
+// scoreboard.js) guards its per-workspace fetches on isAggregateView() and
+// renders a placeholder instead. This lives in the shared leaf module so all
+// three modules query the same live predicate without a circular import.
+let multiWorkspace = false;
+
+export function setMultiWorkspace(value) {
+  multiWorkspace = !!value;
+}
+
+export function isAggregateView() {
+  return multiWorkspace && !currentWorkspace;
+}
+
+// Inline text shown in place of a per-workspace panel's body while the aggregate
+// view is active, instead of erroring or holding stale content.
+export const AGGREGATE_PANEL_PLACEHOLDER = "Select a workspace to view this panel";
+
+export function renderPanelPlaceholder(bodyId) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  panelRequests.delete(bodyId);
+  body.setAttribute("aria-busy", "false");
+  const note = el("div", { class: "panel-placeholder", text: AGGREGATE_PANEL_PLACEHOLDER });
+  note.dataset.key = "aggregate-placeholder";
+  note.dataset.hash = "aggregate-placeholder";
+  syncNodes(body, [note]);
+}
+
+// One state per rendered panel. Revision plus request identity rejects A→B→A
+// responses and overlapping refreshes, even when their URLs happen to match.
+const panelRequests = new Map();
+
+function panelMessage(bodyId, state) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  body.setAttribute("aria-busy", state.pending ? "true" : "false");
+  let note = Array.from(body.children).find(node => node.dataset.panelStatus);
+  if (!note) {
+    note = el("div", { class: "panel-placeholder" });
+    note.dataset.panelStatus = "true";
+    note.setAttribute("role", "status");
+    note.setAttribute("aria-live", "polite");
+    body.insertBefore(note, body.children[0] || null);
+  }
+  // Only a cold load and an error need to take up room in the panel. "Updated"
+  // and "Refreshing" stay in the live region for assistive tech but are not
+  // painted, so a 30s poll never shifts the rows under the reader.
+  const quiet = !state.error && (state.loaded || !state.pending);
+  note.className = state.error
+    ? "panel-placeholder action-error"
+    : quiet ? "panel-placeholder quiet" : "panel-placeholder";
+  if (state.error) {
+    const label = state.loaded ? "Refresh failed; showing stale data" : "Unable to load";
+    note.textContent = `${label}: ${state.error.message}. Use Refresh to retry.`;
+  } else if (state.pending) {
+    note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
+  } else {
+    note.textContent = "Updated.";
+  }
+}
+
+export function panelCanRender(bodyId) {
+  const state = panelRequests.get(bodyId);
+  return !state || state.loaded;
+}
+
+export function teardownNode(node) {
+  if (!node) return;
+  if (typeof node.teardown === "function") {
+    node.teardown();
+  }
+  if (typeof node.cleanup === "function") {
+    node.cleanup();
+  }
+  if (typeof node.disconnectOutline === "function") {
+    node.disconnectOutline();
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      teardownNode(child);
+    }
+  }
+}
+
+export function resetPanel(bodyId, countId) {
+  const state = { loaded: false, pending: true, countId };
+  panelRequests.set(bodyId, state);
+  const body = document.getElementById(bodyId);
+  if (body) {
+    teardownNode(body);
+    body.textContent = "";
+  }
+  const count = document.getElementById(countId);
+  if (count) count.textContent = "—";
+  panelMessage(bodyId, state);
+}
+
+onWorkspaceChange(() => {
+  for (const [bodyId, state] of panelRequests) resetPanel(bodyId, state.countId);
+});
+
+export async function requestPanel(bodyId, scope, request, render, countId) {
+  const revision = getWorkspaceRevision();
+  const previous = panelRequests.get(bodyId);
+  if (!previous || previous.scope !== scope) resetPanel(bodyId, countId);
+  const state = { ...panelRequests.get(bodyId), scope, pending: true, error: null };
+  panelRequests.set(bodyId, state);
+  panelMessage(bodyId, state);
+  const current = () => revision === getWorkspaceRevision() && panelRequests.get(bodyId) === state;
+  try {
+    const payload = await request();
+    if (!current()) return;
+    state.loaded = true;
+    state.pending = false;
+    render(payload);
+  } catch (error) {
+    if (!current()) return;
+    state.error = error;
+    throw error;
+  } finally {
+    if (current()) {
+      state.pending = false;
+      panelMessage(bodyId, state);
+    }
+  }
+}
+
+// Append the selected workspace to an API path, unless one is already present
+// (aggregate endpoints like /api/tasks/all are called with no workspace set).
+export function withWorkspace(path) {
+  return workspacePath(path, currentWorkspace);
+}
+
+function workspacePath(path, workspace) {
+  if (!workspace || /[?&]workspace=/.test(path)) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}workspace=${encodeURIComponent(workspace)}`;
+}
+
+export function positiveIntParam(name, fallback) {
+  const parsed = parseInt(params.get(name) || String(fallback), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function el(tag, opts = {}, children = []) {
+  const node = document.createElement(tag);
+  if (opts.class) node.className = opts.class;
+  if (opts.text != null) node.textContent = opts.text;
+  if (opts.title != null) node.title = opts.title;
+  if (opts.style) Object.assign(node.style, opts.style);
+  // `append` inserts a string child as a text node, never as markup.
+  for (const child of children) {
+    if (child != null) node.append(child);
+  }
+  return node;
+}
+
+// ORB-11658: expanding a row is the dashboard's primary interaction, so it has
+// to be operable without a mouse. The row itself carries the button semantics —
+// wrapping the cells in a real <button> would break the CSS grid every row type
+// lays out in — so this is the one place that grants the tab stop, the ARIA
+// role and state, and the Enter/Space binding, and it binds `click` from the
+// same handler so pointer and keyboard can never drift apart.
+//
+// `expanded` is omitted for rows that navigate instead of disclosing; those get
+// button semantics with no expansion state. `controls` names the detail node
+// when the row renders one with a stable id.
+export function makeToggleRow(node, { expanded, onToggle, controls } = {}) {
+  node.tabIndex = 0;
+  node.setAttribute("role", "button");
+  if (expanded != null) node.setAttribute("aria-expanded", String(!!expanded));
+  if (controls) node.setAttribute("aria-controls", controls);
+  node.addEventListener("click", onToggle);
+  node.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    // Key events target whatever holds focus. A nested select or button is its
+    // own tab stop and owns its keys; only the row's own activation belongs to
+    // the row, so a bubbled key press must not toggle it.
+    if (event.target !== node) return;
+    event.preventDefault();
+    onToggle(event);
+  });
+  return node;
+}
+
+// ORB-11655: a panel refresh rebuilds its nodes every 30 s, but disclosure is
+// operator state, not payload state — a <details> the operator opened has to
+// come back open. Keyed in one store so every rebuilt panel restores the same
+// way; `key` must identify the disclosure across renders, not the node.
+const expandedDetails = new Set();
+
+export function detailsPanel(key, opts = {}) {
+  const panel = el("details", opts);
+  panel.open = expandedDetails.has(key);
+  panel.addEventListener("toggle", () => {
+    if (panel.open) expandedDetails.add(key);
+    else expandedDetails.delete(key);
+  });
+  return panel;
+}
+
+export function statusPill(status) {
+  const pill = el("span", { class: "pill", text: status });
+  pill.dataset.status = status;
+  return pill;
+}
+
+export function priorityCell(p) {
+  const node = el("span", { class: "priority mono", text: p });
+  node.style.color = `var(--priority-${p}, var(--fg-dim))`;
+  return node;
+}
+
+export function stateCell(state) {
+  const node = el("span", { class: "state-label", text: state });
+  node.dataset.state = state;
+  return node;
+}
+
+// The async clipboard API exists only in secure contexts (HTTPS or localhost),
+// and rejects when the page is not focused. A dashboard served over plain HTTP
+// on a LAN address has neither, so fall back to the legacy selection copy.
+function legacyCopy(text) {
+  if (typeof document.execCommand !== "function") return false;
+  const scratch = document.createElement("textarea");
+  scratch.value = text;
+  scratch.setAttribute("readonly", "");
+  scratch.style.position = "fixed";
+  scratch.style.opacity = "0";
+  const previous = document.activeElement;
+  document.body.appendChild(scratch);
+  scratch.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch (_) {
+    copied = false;
+  }
+  scratch.remove();
+  if (previous && typeof previous.focus === "function") previous.focus();
+  return copied;
+}
+
+/// Puts `text` on the clipboard. Resolves true only when the browser accepted
+/// it, so a caller never reports a copy that did not happen.
+export async function copyText(text) {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) {
+    // Fall through to the legacy path.
+  }
+  return legacyCopy(text);
+}
+
+const COPY_FEEDBACK_MS = 1000;
+
+/// Copies `text` and shows the outcome on `node` for a moment: "copied!" only
+/// when the clipboard took it, "copy failed" otherwise. The node's own text is
+/// remembered once, so clicking again mid-flash cannot leave the feedback
+/// word behind as the node's permanent label.
+export async function copyWithFeedback(node, text) {
+  if (node.dataset.copyLabel === undefined) node.dataset.copyLabel = node.textContent;
+  const copied = await copyText(text);
+  node.textContent = copied ? "copied!" : "copy failed";
+  node.style.color = copied ? "var(--state-success)" : "var(--state-error)";
+  clearTimeout(node.copyFeedbackTimer);
+  node.copyFeedbackTimer = setTimeout(() => {
+    node.textContent = node.dataset.copyLabel;
+    node.style.color = "";
+    delete node.dataset.copyLabel;
+  }, COPY_FEEDBACK_MS);
+}
+
+/// A "click to copy" identifier as a real <button>: it takes a tab stop, Enter
+/// and Space activate it natively, and the copied!/copy failed text that
+/// `copyWithFeedback` writes into it is announced through its polite live
+/// region. The click is kept from reaching a row that toggles on click, and a
+/// key press already stays with the button (see `makeToggleRow`).
+export function makeCopyButton(value, { class: className = "", text = value, title = "Copy to clipboard" } = {}) {
+  const button = el("button", { class: `copy-id ${className}`.trim(), text, title });
+  button.type = "button";
+  button.setAttribute("aria-live", "polite");
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    copyWithFeedback(button, value);
+  });
+  return button;
+}
+
+export async function fetchJson(path) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await fetch(withWorkspace(path), { headers: { accept: "application/json" }, signal: controller.signal });
+    if (!res.ok) {
+      const text = await res.text();
+      let message = `${path}: HTTP ${res.status}`;
+      try {
+        const body = JSON.parse(text);
+        if (body && body.error) message = body.error;
+      } catch (_) {}
+      const error = new Error(message);
+      error.status = res.status;
+      throw error;
+    }
+    return await res.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");
+    // Fetch and response-body transport failures are TypeErrors; HTTP and JSON
+    // errors describe an available server and must stay local to the panel.
+    error.networkFailure = error instanceof TypeError;
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ORB-10400: task-list endpoints answer a paginated envelope
+// `{ items, total, limit, truncated }` so a client can tell an empty result from
+// a truncated window. Accept either shape for compatibility with non-task list
+// call sites that use this helper.
+export function listItems(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.items)) return payload.items;
+  return [];
+}
+
+export function requestJson(path, method, body) {
+  const headers = { accept: "application/json" };
+  const opts = {
+    method,
+    headers,
+  };
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  return fetch(withWorkspace(path), opts).then(async (res) => {
+    const text = await res.text();
+    let body = {};
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { error: text };
+      }
+    }
+    if (!res.ok) {
+      const error = new Error(body.error || `${path}: HTTP ${res.status}`);
+      // The typed code is the actionable half of a refusal: a stale conflict is
+      // resolved by refreshing, an uncertain one is not. Dropping it left every
+      // caller guessing from prose.
+      error.status = res.status;
+      if (body.code) error.code = body.code;
+      if (body.remedy) error.remedy = body.remedy;
+      // A typed refusal can name the resource it conflicts with (a 409's
+      // `run_id`); callers read those fields instead of parsing the prose.
+      error.body = body;
+      throw error;
+    }
+    return body;
+  });
+}
+
+export function postJson(path, body) {
+  return requestJson(path, "POST", body);
+}
+
+export function patchJson(path, body) {
+  return requestJson(path, "PATCH", body);
+}
+
+// A control keeps its first class through state changes (`config-chip` gains
+// and loses `on`), so that is what identifies it across a rebuild.
+const firstClass = (node) => String(node.className || "").split(/\s+/)[0];
+const isFocusable = (node) => !!node && typeof node.focus === "function" && node.tabIndex >= 0;
+
+function findKeyed(root, key) {
+  for (const child of root.children || []) {
+    if (child.dataset && child.dataset.key === key) return child;
+    const found = findKeyed(child, key);
+    if (found) return found;
+  }
+  return null;
+}
+
+/// A panel refresh or an expand rebuilds nodes rather than mutating them, and a
+/// browser drops focus to <body> when the focused node is removed, so a keyboard
+/// user loses their place on every Enter. Call this before the rebuild and the
+/// function it returns afterwards: it hands focus to the rebuilt counterpart.
+///
+/// The counterpart is found by the nearest ancestor carrying `data-key` (a
+/// stable identity) plus the child-index path below it; a control deeper than
+/// the keyed node must also match in tag and leading class, otherwise focus goes to the
+/// keyed node itself when that is focusable. Nothing happens when focus was
+/// outside `container`, still sits in it, or the user has since moved on.
+export function captureFocus(container) {
+  const active = document.activeElement;
+  if (!container || !active || active === container || !container.contains(active)) return () => {};
+  const chain = [];
+  for (let node = active; node && node !== container; node = node.parentNode) chain.unshift(node);
+  let ownerAt = -1;
+  chain.forEach((node, index) => {
+    if (node.dataset && node.dataset.key) ownerAt = index;
+  });
+  const key = ownerAt >= 0 ? chain[ownerAt].dataset.key : null;
+  const path = [];
+  for (let index = ownerAt + 1; index < chain.length; index++) {
+    path.push(Array.prototype.indexOf.call(chain[index].parentNode.children, chain[index]));
+  }
+  const remembered = {
+    tagName: active.tagName,
+    kind: firstClass(active),
+    selection: typeof active.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null,
+  };
+  return () => {
+    if (container.contains(active)) return;
+    const now = document.activeElement;
+    if (now && now !== active && now !== document.body) return;
+    const owner = key === null ? container : findKeyed(container, key);
+    if (!owner) return;
+    let leaf = owner;
+    for (const index of path) {
+      const next = leaf.children[index];
+      if (!next) break;
+      leaf = next;
+    }
+    const exact = leaf !== owner && leaf.tagName === remembered.tagName && firstClass(leaf) === remembered.kind;
+    const target = exact ? leaf : owner;
+    if (!isFocusable(target)) return;
+    try {
+      target.focus({ preventScroll: true });
+      if (exact && remembered.selection && typeof target.setSelectionRange === "function") {
+        target.setSelectionRange(...remembered.selection);
+      }
+    } catch (_) {
+      // A control that cannot take focus or a selection just keeps the default.
+    }
+  };
+}
+
+export function syncNodes(container, newNodesArr) {
+  const restoreFocus = captureFocus(container);
+  const state = panelRequests.get(container.id);
+  if (state) {
+    panelMessage(container.id, state);
+    const note = Array.from(container.children).find(node => node.dataset.panelStatus);
+    newNodesArr = [note, ...newNodesArr];
+  }
+  const oldNodes = Array.from(container.children);
+  const oldMap = new Map();
+  for (const node of oldNodes) {
+    if (node.dataset.key) oldMap.set(node.dataset.key, node);
+  }
+
+  const tornDown = new Set();
+  const teardownOnce = (node) => {
+    if (!node || tornDown.has(node)) return;
+    tornDown.add(node);
+    teardownNode(node);
+  };
+
+  for (let i = 0; i < newNodesArr.length; i++) {
+    const newNode = newNodesArr[i];
+    const key = newNode.dataset.key;
+    let nodeToPlace = newNode;
+
+    if (key && oldMap.has(key)) {
+      const oldNode = oldMap.get(key);
+      if (oldNode.dataset.hash === newNode.dataset.hash) {
+        nodeToPlace = oldNode;
+      } else {
+        nodeToPlace.classList.add("data-changed");
+      }
+    } else if (key) {
+      nodeToPlace.classList.add("data-new");
+    }
+
+    if (newNode !== nodeToPlace) {
+      teardownOnce(newNode);
+    }
+
+    if (container.children[i] !== nodeToPlace) {
+      if (container.children[i]) {
+        container.insertBefore(nodeToPlace, container.children[i]);
+      } else {
+        container.appendChild(nodeToPlace);
+      }
+    }
+  }
+
+  while (container.children.length > newNodesArr.length) {
+    const removed = container.lastElementChild;
+    container.removeChild(removed);
+    teardownOnce(removed);
+  }
+
+  const currentChildren = new Set(container.children);
+  for (const node of oldNodes) {
+    if (!currentChildren.has(node)) {
+      teardownOnce(node);
+    }
+  }
+
+  if (state) panelMessage(container.id, state);
+  restoreFocus();
+}
+
+// One entry per admission a follower's settle-only pass carried (`orbit run
+// cancel` / `orbit run auto --stop`). Each outcome maps to a plain-language
+// clause; `attention` outcomes are the ones an operator has to act on or wait
+// out, so the summary never reports them as plain success.
+const SETTLEMENT_CLAUSES = [
+  { outcomes: ["settled"], text: (n) => `${n} ${n === 1 ? "settlement" : "settlements"} delivered` },
+  { outcomes: ["closed_obsolete"], text: (n) => `${n} closed locally (the owner had already ended ${n === 1 ? "its claim" : "their claims"} — check the ${n === 1 ? "task's" : "tasks'"} status on the owner)` },
+  { outcomes: ["leaf_running"], text: (n) => `${n} still running (${n === 1 ? "settles" : "settle"} on ${n === 1 ? "its" : "their"} own when finished)` },
+  { outcomes: ["awaiting_drain"], text: (n) => `${n} waiting for a live drain to carry ${n === 1 ? "it" : "them"}` },
+  { outcomes: ["idle", "refused", "unanswered_request"], text: (n) => `${n} with nothing held on the owner` },
+  { outcomes: ["owner_unreachable"], attention: true, text: (n) => `${n} waiting for the owner (unreachable) — run Stop again once it is reachable` },
+  { outcomes: ["pending_delivery", "pending"], attention: true, text: (n) => `${n} recorded but not delivered — run Stop again once the owner is reachable` },
+  { outcomes: ["no_owner_route"], attention: true, text: (n) => `${n} without a route to the owner — check the workspace's owner connection` },
+  { outcomes: ["launch_uncertain"], attention: true, text: (n) => `${n} launch uncertain — needs manual recovery, see the distributed drain runbook` },
+];
+const SETTLEMENT_TASKS_SHOWN = 3;
+
+/// Summarize a `pull_settlements` list as `{ text, attention }`. `text` is ""
+/// when nothing was carried. `attention` is true when any outcome still needs
+/// the operator (or the owner) before the work is delivered.
+export function describePullSettlements(entries) {
+  const list = Array.isArray(entries) ? entries.filter((entry) => entry && typeof entry === "object") : [];
+  if (list.length === 0) return { text: "", attention: false };
+  const known = new Set(SETTLEMENT_CLAUSES.flatMap((clause) => clause.outcomes));
+  const clauses = SETTLEMENT_CLAUSES.map((clause) => ({ clause, entries: list.filter((entry) => clause.outcomes.includes(entry.outcome)) }));
+  const unrecognized = list.filter((entry) => !known.has(entry.outcome));
+  const parts = [];
+  let attention = false;
+  for (const { clause, entries: matched } of clauses) {
+    if (matched.length === 0) continue;
+    let part = clause.text(matched.length);
+    if (clause.attention) {
+      attention = true;
+      const tasks = [...new Set(matched.map((entry) => entry.task_id).filter(Boolean))];
+      if (tasks.length > 0) {
+        const shown = tasks.slice(0, SETTLEMENT_TASKS_SHOWN).join(", ");
+        part += ` [${shown}${tasks.length > SETTLEMENT_TASKS_SHOWN ? `, +${tasks.length - SETTLEMENT_TASKS_SHOWN} more` : ""}]`;
+      }
+    }
+    parts.push(part);
+  }
+  if (unrecognized.length > 0) {
+    attention = true;
+    parts.push(`${unrecognized.length} in an unrecognized state — run "orbit run auto --stop" in the workspace for details`);
+  }
+  return { text: parts.join(" · "), attention };
+}
+
+// A URL from a manifest, task record, or API payload is assigned straight to
+// an anchor, so only the two schemes a hyperlink may carry are drawn; anything
+// else (`javascript:`, `data:`) is rendered as text by the caller.
+export function isHttpUrl(url) {
+  const scheme = String(url || "").trimStart().toLowerCase();
+  return scheme.startsWith("http://") || scheme.startsWith("https://");
+}

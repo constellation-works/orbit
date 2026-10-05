@@ -1,6 +1,6 @@
-//! Ambient-process isolation for tests — environment variables and umask.
+//! Ambient-process isolation and validation of re-executed child tests.
 //!
-//! Both halves of this module exist for the same reason: a test that depends
+//! Environment variables and umask need isolation because a test that depends
 //! on ambient process state passes or fails according to *how the suite was
 //! launched* rather than what the code does. See [`unset`] for inherited env
 //! vars and [`harden_dir`] for umask-derived directory permissions.
@@ -23,14 +23,40 @@
 //! attribution. [`INHERITED_AUTHORITY_ENV`] is the canonical list for that
 //! case and [`clear_inherited_authority`] applies it.
 //!
-//! Exposed behind the `test-util` feature so integration tests and sibling
-//! crates share one implementation rather than re-deriving the guard.
+//! Always available so integration tests and sibling crates share one
+//! implementation without changing `orbit-common`'s feature set. Child-test
+//! guards reject successful libtest exits that never executed the exact filter.
 
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{
+    Mutex, MutexGuard, OnceLock,
+    atomic::{AtomicUsize, Ordering},
+};
+
+static ACTIVE_SCOPED_ENVS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn scoped_env_active() -> bool {
+    ACTIVE_SCOPED_ENVS.load(Ordering::SeqCst) != 0
+}
+
+/// The system temporary directory with every symlink resolved.
+///
+/// macOS points `TMPDIR` under `/var`, a symlink to `/private/var`, so a
+/// `tempfile::tempdir()` root is spelled through a link. Orbit resolves
+/// symlinks in the roots it is given (discovery lists a canonical directory and
+/// reports canonical paths), so a fixture that compares those paths with the
+/// spelled root, or hands a path to code that must see one physical spelling,
+/// passes on Linux and fails on macOS. Create such a fixture's root with
+/// `tempfile::tempdir_in(canonical_temp_dir())` instead of overriding `TMPDIR`
+/// for the whole suite: fixtures that do not care keep the ordinary root, so a
+/// symlinked ancestor keeps being exercised where it should be.
+pub fn canonical_temp_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir();
+    std::fs::canonicalize(&dir).unwrap_or(dir)
+}
 
 /// The identity pair consulted when a command carries no explicit
 /// `--agent`/`--model` and no input attribution.
-pub const AGENT_IDENTITY_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL"];
+pub const AGENT_IDENTITY_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL", "ORBIT_ACTOR"];
 
 /// The variables an `orbit-engine` managed run exports into every spawned
 /// activity (see `orbit-engine/src/context/env.rs`): job/task/session
@@ -64,12 +90,24 @@ pub const MANAGED_RUN_ENV: &[&str] = &[
 /// That is not hypothetical: it created three real task records before it was
 /// caught (ORB-11300).
 ///
-/// Clearing the whole set — routing, managed-run trust, actor identity, and
-/// inherited sandbox grants — makes a fixture's authority a property of the
-/// fixture rather than of how the suite was launched. Apply it with
-/// [`clear_inherited_authority`] *before* any variable a test sets on
-/// purpose, so the deliberate value wins.
+/// Git's repository locators also outrank cwd. Scrub Git setup commands as
+/// well as Orbit children: otherwise `git init` can initialize the parent's
+/// repository, and a workflow worker can acquire the parent's fetch lock even
+/// though its home and Orbit authority were isolated (ORB-13940).
+///
+/// Clearing the whole set — routing, managed-run trust, actor identity,
+/// inherited sandbox grants, and the plugin broker socket — makes a fixture's
+/// authority a property of the fixture rather than of how the suite was
+/// launched. Apply it with [`clear_inherited_authority`] *before* any variable
+/// a test sets on purpose, so the deliberate value wins.
 pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
+    // Git repository and write destinations override a fixture's cwd.
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     // Durable routing: which registry, workspace, and data root the child
     // writes to. `ORBIT_REGISTRY_ROOT` and `ORBIT_WORKSPACE` outrank `HOME`.
     "ORBIT_ROOT",
@@ -83,6 +121,7 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     // would be enough to disarm routing today; clearing the whole envelope
     // keeps the fixture correct if that coupling ever changes.
     "ORBIT_MANAGED_RUN_CONTEXT",
+    "ORBIT_WORKER_CONTEXT_REQUIRED",
     "ORBIT_RUN_ID",
     "ORBIT_TASK_ID",
     "ORBIT_ACTIVE_TASK_ID",
@@ -92,13 +131,22 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     // Actor identity and audit role attributed to the child's writes.
     "ORBIT_AGENT_NAME",
     "ORBIT_AGENT_MODEL",
+    "ORBIT_ACTOR",
     "ORBIT_OPERATOR",
     "ORBIT_TASK_ACTOR_KIND",
     // Sandbox and tool grants leased to the host activity, not to a fixture.
     "ORBIT_ACTIVITY_TOOLS",
+    "ORBIT_ACTIVITY_TOOL_POLICY",
+    "ORBIT_ACTIVITY_TOOLS_DENY",
+    "ORBIT_ACTIVITY_NAME",
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
+    "ORBIT_PROC_PROGRAM_POLICY",
+    "ORBIT_PROC_DISALLOWED_PROGRAMS",
     "ORBIT_BIN",
+    // Routes plugin tool calls to the enclosing run's host broker instead of
+    // the fixture's own install; a fixture that needs a broker sets its own.
+    "ORBIT_PLUGIN_BROKER",
 ];
 
 /// Clear every [`INHERITED_AUTHORITY_ENV`] variable from a child command.
@@ -118,6 +166,64 @@ pub fn clear_inherited_authority(mut clear: impl FnMut(&str)) {
     for name in INHERITED_AUTHORITY_ENV {
         clear(name);
     }
+}
+
+/// Require a successful re-exec to have run exactly one test, not merely exited
+/// successfully with a missing or ignored exact filter (ORB-13911).
+///
+/// Pass captured libtest output, including its final summary. Checking the last
+/// summary prevents a nested child's result from hiding an empty outer run.
+pub fn assert_child_test_passed(
+    test_name: &str,
+    status: std::process::ExitStatus,
+    stdout: impl AsRef<[u8]>,
+    stderr: impl AsRef<[u8]>,
+) {
+    let stdout = String::from_utf8_lossy(stdout.as_ref());
+    let stderr = String::from_utf8_lossy(stderr.as_ref());
+    assert!(
+        status.success(),
+        "child test `{test_name}` failed ({status}):\n{stdout}\n{stderr}"
+    );
+    let summary = stdout
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("test result: "));
+    assert!(
+        summary.is_some_and(|line| {
+            line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")
+        }),
+        "child test `{test_name}` did not run exactly once; missing or ignored entry point:\n{stdout}\n{stderr}"
+    );
+}
+
+/// Verify the exact entry point before starting a child that will be killed or
+/// stays alive until a readiness handshake, so it cannot emit a final summary.
+///
+/// The caller must still verify a sentinel or handshake written by the child.
+/// This probe lists tests without executing fixture code, including ignored
+/// entries; callers must select ignored children with `--ignored` themselves.
+pub fn assert_child_test_exists(test_name: &str) {
+    let exe = std::env::current_exe()
+        .unwrap_or_else(|error| panic!("locate child test `{test_name}` executable: {error}"));
+    let mut command = std::process::Command::new(exe);
+    clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    command.args(["--list", "--exact", test_name, "--include-ignored"]);
+    let output = crate::process::run_bounded_capped(
+        &mut command,
+        std::time::Duration::from_secs(30),
+        64 * 1024,
+    )
+    .unwrap_or_else(|error| panic!("list child test `{test_name}`: {error}"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let entry = format!("{test_name}: test");
+    assert!(
+        output.status.success() && stdout.lines().any(|line| line == entry),
+        "missing child test entry point `{test_name}`:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Restores the variables captured by [`unset`] when dropped.
@@ -169,6 +275,7 @@ pub fn scoped<'a>(vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) ->
             }
         }
     }
+    ACTIVE_SCOPED_ENVS.fetch_add(1, Ordering::SeqCst);
     ScopedEnv { _lock: lock, saved }
 }
 
@@ -183,6 +290,7 @@ impl Drop for ScopedEnv {
                 }
             }
         }
+        ACTIVE_SCOPED_ENVS.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -193,10 +301,8 @@ impl Drop for ScopedEnv {
 /// the conventional `umask 022`, so the root lands `0o755` and every
 /// permission-sensitive check downstream happens to pass. A developer box with
 /// a permissive umask (`002`, common with user-private groups, or `000`) gets
-/// a group- or world-writable root instead — and Orbit's search-companion
-/// override validator legitimately refuses to execute a binary whose parent
-/// directory is group/world writable. The fixture, not the validator, is what
-/// needs to be deterministic (ORB-10350).
+/// a group- or world-writable root instead. Permission-sensitive fixtures
+/// need a deterministic private directory regardless of that ambient setting.
 ///
 /// No-op on non-Unix targets.
 #[cfg(unix)]
@@ -215,6 +321,60 @@ pub fn harden_dir(path: &std::path::Path) {
 #[cfg(not(unix))]
 pub fn harden_dir(_path: &std::path::Path) {}
 
-#[cfg(test)]
-#[path = "tests/test_env.rs"]
-mod tests;
+/// Why this process cannot derive its own process-start identity token, when
+/// it cannot. `None` means the probe works and a test may rely on it.
+///
+/// The token uses the UTC / C-locale `ps -o lstart=` rendering (see
+/// [`crate::process::identity`]). Linux reads `/proc`; macOS tries libproc
+/// before `ps`; other Unix hosts execute `ps`. When kernel data is unreadable
+/// and no fallback is available, probes report
+/// [`crate::process::identity::ProbeOutcome::Unavailable`]
+/// and production takes its documented fail-safe branch — an owner it cannot
+/// verify is neither finalized nor signalled. A test whose subject *is* the
+/// derived token (TZ stability, recycled-PID detection, verified-owner
+/// cancellation) has nothing to observe there. It names the constraint from
+/// this helper and returns early, instead of failing for a reason unrelated to
+/// the code under test. The message carries the probe error so the skip is
+/// attributable from a log line.
+pub fn start_identity_probe_blocker() -> Option<String> {
+    crate::process::identity::self_start_identity_probe_blocker()
+}
+
+/// A live process that is no part of this one: not this process, its parent,
+/// or its process group. Killed and reaped on drop.
+#[cfg(unix)]
+pub struct UnrelatedProcess(std::process::Child);
+
+#[cfg(unix)]
+impl UnrelatedProcess {
+    /// The process id to bind or present as "some other process".
+    pub fn pid(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnrelatedProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Spawn a sleeper in a process group of its own.
+///
+/// Tests that need "another live process" used pid 1, but macOS refuses an
+/// unprivileged read of launchd's start time (and a sandboxed run refuses more
+/// than that), so the binding the test wants to make never happens. A child
+/// this process owns has a readable start time on every platform.
+#[cfg(unix)]
+pub fn spawn_unrelated_process() -> UnrelatedProcess {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = std::process::Command::new("sleep");
+    command.arg("600").process_group(0);
+    let child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn an unrelated process: {error}"));
+    UnrelatedProcess(child)
+}

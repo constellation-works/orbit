@@ -69,14 +69,6 @@ pub enum Selector {
 }
 
 impl Selector {
-    /// Parse a list of selector strings.
-    pub fn parse_many(raw_selectors: &[String]) -> Result<Vec<Self>, SelectorParseError> {
-        raw_selectors
-            .iter()
-            .map(|selector| selector.parse())
-            .collect()
-    }
-
     /// Return the filesystem anchor path for this selector, or an empty string
     /// for selector forms that do not carry filesystem anchors.
     pub fn path(&self) -> &str {
@@ -114,19 +106,6 @@ impl Selector {
             Self::Symbol { .. } => ParsedScopeKind::Symbol,
             Self::Module { .. } => ParsedScopeKind::Module,
             Self::Command { .. } => ParsedScopeKind::Command,
-        }
-    }
-
-    /// Return the lookup key used by graph selector indexes.
-    pub fn lookup_key(&self) -> SelectorLookupKey {
-        match self {
-            Self::Dir { path } => SelectorLookupKey::Dir(path.clone()),
-            Self::File { path } => SelectorLookupKey::File(path.clone()),
-            Self::Symbol { path, symbol, kind } => {
-                SelectorLookupKey::Symbol(format!("{path}#{symbol}"), kind.clone())
-            }
-            Self::Module { qualified } => SelectorLookupKey::Module(qualified.clone()),
-            Self::Command { name } => SelectorLookupKey::Command(name.clone()),
         }
     }
 }
@@ -231,34 +210,6 @@ impl FromStr for Selector {
     }
 }
 
-/// Normalized selector index key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SelectorLookupKey {
-    /// Directory key.
-    Dir(String),
-    /// File key.
-    File(String),
-    /// Symbol(location, kind) where location = "path#symbol".
-    Symbol(String, String),
-    /// Module qualified-name key.
-    Module(String),
-    /// Command name key.
-    Command(String),
-}
-
-impl SelectorLookupKey {
-    /// Render this lookup key as a canonical selector string.
-    pub fn to_selector_string(&self) -> String {
-        match self {
-            Self::Dir(path) => format!("dir:{path}"),
-            Self::File(path) => format!("file:{path}"),
-            Self::Symbol(location, kind) => format!("symbol:{location}:{kind}"),
-            Self::Module(qualified) => format!("module:{qualified}"),
-            Self::Command(name) => format!("command:{name}"),
-        }
-    }
-}
-
 /// Convert a selector or legacy path-like input into canonical selector form.
 ///
 /// Accepted inputs are canonical selectors (`file:`, `dir:`, `symbol:`,
@@ -292,15 +243,18 @@ pub fn canonical_selector_in_workspace(
     match parsed {
         ParsedScope::Selector(selector) => {
             if let Some(anchor) = selector.anchor_path() {
-                let path = normalize_workspace_anchor(anchor, workspace)?;
+                let (path, _) = normalize_workspace_anchor(anchor, workspace)?;
                 Ok(selector.with_path(path).to_string())
             } else {
                 Ok(selector.to_string())
             }
         }
         ParsedScope::LegacyPath { path, is_dir_hint } => {
-            let path = normalize_workspace_anchor(path.as_str(), workspace)?;
-            let resolved = resolve_workspace_path(workspace, Path::new(&path));
+            // Use the already-validated, canonicalized anchor for the
+            // filesystem check instead of re-deriving a path from the
+            // caller-provided string: that avoids a second, unchecked
+            // filesystem access built from tainted input.
+            let (path, resolved) = normalize_workspace_anchor(path.as_str(), workspace)?;
             if is_dir_hint || resolved.is_dir() {
                 Ok(format!("dir:{path}"))
             } else {
@@ -331,7 +285,8 @@ pub fn anchor_path(selector: &str) -> Result<PathBuf, SelectorParseError> {
 ///
 /// Relative anchors are resolved against `workspace`; absolute anchors are
 /// checked as-is. Invalid selector strings and anchor-less selectors return
-/// `false`.
+/// `false`. For `symbol:` this is the backing file only; the `#name:kind`
+/// half is not looked up.
 pub fn exists_in_workspace(selector: &str, workspace: &Path) -> bool {
     let Ok(anchor) = anchor_path(selector) else {
         return false;
@@ -354,22 +309,73 @@ pub fn exists_in_workspace(selector: &str, workspace: &Path) -> bool {
 /// Anchor-less selectors (`module:` / `command:`) overlap only on exact
 /// textual equality.
 pub fn overlaps(a: &str, b: &str) -> bool {
-    let Ok(left) = ParsedScope::parse(a) else {
-        return false;
-    };
-    let Ok(right) = ParsedScope::parse(b) else {
-        return false;
-    };
+    match (OverlapScope::parse(a), OverlapScope::parse(b)) {
+        (Some(left), Some(right)) => left.overlaps(&right),
+        _ => false,
+    }
+}
 
-    let (Some(left_anchor), Some(right_anchor)) = (left.anchor_path(), right.anchor_path()) else {
-        return a.trim() == b.trim();
-    };
-    if left_anchor == right_anchor {
-        return true;
+/// One side of an [`overlaps`] comparison, parsed once.
+///
+/// [`overlaps`] parses both selectors on every call, which is fine for a
+/// single comparison and quadratic for a scheduler comparing every requested
+/// selector against every held one. Parsing each side once — and keying an
+/// index on the anchor ([`super::overlap_index::OverlapIndex`]) — turns that
+/// scan into a prefix lookup with the same answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverlapScope {
+    /// Anchored at a normalized filesystem path. `contains_descendants` is
+    /// true for `dir:` and legacy raw paths, which overlap everything beneath
+    /// their anchor; `file:` and `symbol:` overlap only their own anchor.
+    Anchored {
+        /// Normalized anchor path, as [`anchor_path`] would return it.
+        path: String,
+        /// Whether selectors anchored strictly beneath `path` overlap it.
+        contains_descendants: bool,
+    },
+    /// `module:` / `command:` — overlaps only on exact textual equality.
+    Exact(String),
+}
+
+impl OverlapScope {
+    /// Parse a selector or legacy path-like input. `None` when it does not
+    /// parse, which [`overlaps`] treats as overlapping nothing.
+    pub fn parse(selector: &str) -> Option<Self> {
+        let parsed = ParsedScope::parse(selector).ok()?;
+        Some(match parsed.anchor_path() {
+            Some(path) => Self::Anchored {
+                path: path.to_string(),
+                contains_descendants: parsed.can_contain_descendants(),
+            },
+            None => Self::Exact(selector.trim().to_string()),
+        })
     }
 
-    (is_path_ancestor(left_anchor, right_anchor) && left.can_contain_descendants())
-        || (is_path_ancestor(right_anchor, left_anchor) && right.can_contain_descendants())
+    /// The same answer as [`overlaps`] on the two selectors these were parsed
+    /// from.
+    pub fn overlaps(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Anchored {
+                    path: left,
+                    contains_descendants: left_contains,
+                },
+                Self::Anchored {
+                    path: right,
+                    contains_descendants: right_contains,
+                },
+            ) => {
+                left == right
+                    || (*left_contains && is_path_ancestor(left, right))
+                    || (*right_contains && is_path_ancestor(right, left))
+            }
+            (Self::Exact(left), Self::Exact(right)) => left == right,
+            // An anchored selector never reads as the same text as an
+            // anchor-less one, so the mixed case is the textual-equality
+            // branch with a known-false answer.
+            _ => false,
+        }
+    }
 }
 
 /// Return the number of shared path segments between two selector anchors.
@@ -477,7 +483,18 @@ fn normalize_selector_path(
     })
 }
 
-fn normalize_workspace_anchor(path: &str, workspace: &Path) -> Result<String, SelectorParseError> {
+/// Validate a selector anchor against a workspace root.
+///
+/// Returns both the workspace-relative anchor string and the canonicalized,
+/// containment-checked absolute path it resolved to. Callers that need to
+/// touch the filesystem (e.g. an `is_dir()` probe) must use the returned
+/// [`PathBuf`] rather than re-joining the relative string themselves, so the
+/// only path ever handed to a filesystem call is one that already passed the
+/// workspace-containment check below.
+fn normalize_workspace_anchor(
+    path: &str,
+    workspace: &Path,
+) -> Result<(String, PathBuf), SelectorParseError> {
     let normalized = normalize_path_text(path).map_err(|reason| SelectorParseError {
         input: path.to_string(),
         reason,
@@ -523,9 +540,14 @@ fn normalize_workspace_anchor(path: &str, workspace: &Path) -> Result<String, Se
             ),
         });
     }
-    contained
+    // The workspace itself strips to an empty path, which `dir:` cannot
+    // parse back; spell it `.` like every other relative workspace root.
+    let relative = contained
         .strip_prefix(&workspace)
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .map(|path| match path.to_string_lossy().replace('\\', "/") {
+            relative if relative.is_empty() => ".".to_string(),
+            relative => relative,
+        })
         .map_err(|_| SelectorParseError {
             input: path.to_string(),
             reason: format!(
@@ -533,7 +555,8 @@ fn normalize_workspace_anchor(path: &str, workspace: &Path) -> Result<String, Se
                 resolved.display(),
                 workspace.display()
             ),
-        })
+        })?;
+    Ok((relative, contained))
 }
 
 fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
@@ -637,8 +660,45 @@ fn is_numeric(input: &str) -> bool {
     !input.is_empty() && input.chars().all(|ch| ch.is_ascii_digit())
 }
 
+/// Whether normalized `parent` strictly contains normalized `child`.
+///
+/// The roots are the two anchors a `/`-boundary prefix cannot express: `.`
+/// contains every relative path that stays inside it, and `/` contains every
+/// other absolute path.
 fn is_path_ancestor(parent: &str, child: &str) -> bool {
-    child
-        .strip_prefix(parent)
-        .is_some_and(|suffix| suffix.starts_with('/'))
+    match parent {
+        "." => child != "." && !child.starts_with('/') && !is_parent_relative(child),
+        "/" => child != "/" && child.starts_with('/'),
+        _ => child
+            .strip_prefix(parent)
+            .is_some_and(|suffix| suffix.starts_with('/')),
+    }
+}
+
+fn is_parent_relative(path: &str) -> bool {
+    path == ".." || path.starts_with("../")
+}
+
+/// The root anchor that contains `path` when `path` is not itself that root:
+/// `/` for absolute paths, `.` for relative paths inside the workspace.
+pub(super) fn root_ancestor(path: &str) -> Option<&'static str> {
+    let root = if path.starts_with('/') { "/" } else { "." };
+    is_path_ancestor(root, path).then_some(root)
+}
+
+/// Whether a new path is one an owner can accept from a claimed run: no
+/// traversal, Git or `.orbit` metadata, or environment-secret path. Any other
+/// path widens the claim's footprint at handoff acceptance.
+pub fn claim_new_path_is_safe(path: &str) -> bool {
+    let parts = path.split('/').collect::<Vec<_>>();
+    !parts.iter().any(|part| {
+        part.is_empty()
+            || matches!(*part, "." | ".." | ".git" | ".orbit")
+            || part.contains('\\')
+            || part.contains(':')
+            || *part == ".env"
+            || part.starts_with(".env.")
+            || part.ends_with(".env")
+            || part.contains(".env.")
+    })
 }

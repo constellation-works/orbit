@@ -1,42 +1,47 @@
 ---
 title: Routines — Vision
 owner: claude
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: routines
 doc_role: vision
 type: design
-summary: Open questions and prior art for the routines scheduler — leases, event triggers, ship-sweep convergence.
+summary: Open questions and prior art for possible routines evolution beyond the current contract.
 tags: [routines, scheduler]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
-related_features: [routines, activity-job, host-registry]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-11315]
+paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/**"]
+related_features: [routines, auto-tasks, activity-job, host-registry, task-migration]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-11315, ORB-12236, ORB-12237]
 ---
 
 # Routines — Vision
 
-Forward-looking questions for the routines feature. Everything here is explicitly *not*
-part of the v1 contract in [2_design.md](./2_design.md); items graduate through an explicit
-task, implementation, and validation evidence, not by drifting in.
+Forward-looking questions for the routines feature. The current contract lives in
+[2_design.md](./2_design.md); items graduate through an explicit task, implementation,
+and validation evidence, not by drifting in.
 
 ---
 
 ## 1. Open Questions
 
 0. **First-class `activity:` targets.** v1 rejects `activity:<name>` at parse time because
-   run dispatch is job-shaped ([Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads)); the wrapper-job idiom covers current needs. A
+   run dispatch is job-shaped ([Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads)); the wrapper-job idiom covers current needs. A
    standalone activity run entrypoint (or auto-wrapping) would let routines fire
    activities directly — worth doing only if the wrapper friction proves real.
-1. **Single-fire across hosts.** v1 pins routines to explicit hosts. A "exactly one of N"
-   mode needs a lease: the natural v2 shape is a lease table in one designated host's store,
-   reached over SSH (port 22 is the only always-open channel between the current hosts).
-   Worth doing only when a real routine needs failover, not before.
+1. **Single-fire across hosts.** Under the multi-owner model described in
+   [2_design.md §2](./2_design.md#2-discovery-and-registration), every owner checkout
+   is its own schedule and nothing needs to fire exactly once across hosts — each host's
+   automation acts only on its own store. The residual case is a definition with a
+   repo-global side effect (one PR per owner instead of one). If that ever bites, the
+   additive answer is an `owner:` field on the definition, not a lease protocol; it is
+   deliberately not designed now.
 2. **State-driven triggers.** The [shared trigger proposal](../automation-triggers/2_design.md)
-   from [ORB-11315] defines bounded reconciliation of deliveries, preparation eligibility
-   and settled failures over the existing sweep clock. This does not require a resident
-   process. Immediate file-watch/webhook wakeups remain optional future optimizations;
-   the proposal is unimplemented and does not change the current cron-only contract.
+   from [ORB-11315] has shipped in part: delivery-trigger routines and auto-tasks,
+   plus `preparation_eligible` state routines, evaluate on the existing sweep clock
+   with durable batches and checkpoints. Broader multi-member coordination,
+   policy-driven waiver/migration workflows, and usage accounting remain proposals.
+   Immediate file-watch/webhook wakeups remain optional future optimizations; see
+   [2_design.md](./2_design.md) for the current cron, interval, delivery and state-trigger contract.
 3. **Routine-emitted tasks.** A routine whose job files an Orbit task on findings (nightly
    drift check → task per drift) works today via job semantics; what's open is whether
    routines should get first-class dedup support ("don't file a duplicate of an open task
@@ -46,8 +51,9 @@ task, implementation, and validation evidence, not by drifting in.
    routines for it to be observable.
 5. **Missed-run variants.** `catch_up_once | skip` covers current needs; a count-preserving
    `catch_up_all` (anacron-style) is additive if a routine ever needs per-slot semantics.
-6. **Cross-host visibility.** Each host's state is local, so "did the nightly commit fire
-   on the other box?" requires asking that box. The single-host half of this is now built:
+6. **Cross-host visibility.** Each host's state is local and each host's
+   schedule is independent, so "did the nightly commit fire on the other box?" is a
+   question about that box's own automation and requires asking it. The single-host half of this is now built:
    `GET /api/routines` projects this host's routine health (last fire, outcome, duration,
    next due) over the dashboard HTTP API [ORB-10138], so a stopped sweep is visible remotely
    without box ssh. True cross-host *aggregation* (one surface querying every box's store)
@@ -96,8 +102,10 @@ task, implementation, and validation evidence, not by drifting in.
 - **Agent-invoking targets.** A routine can fire an `agent_loop` activity: scheduled agent
   work (nightly triage, periodic research) with the same policy and audit surface as any
   other run — most schedulers fire commands; this one fires accountable agent runs.
-- **Definitions-shared / state-local as a stance.** Two hosts converge through git alone;
-  there is no scheduler network protocol at all in v1.
+- **Definitions-shared / state-local as a stance.** Hosts converge on *what* to schedule
+  through git alone and never on *whether it fired*; there is no scheduler network protocol.
+  Under the multi-owner model that stance is the whole coordination story: the store an
+  owner's automation writes to is the store that owner's prefix names.
 
 ---
 
@@ -120,6 +128,10 @@ External:
 
 ## Task References
 
+- [ORB-12236] — removed `hosts:` pins and `[routines] role`; the current eligibility
+  contract is in [2_design.md §2](./2_design.md#2-discovery-and-registration).
+- [ORB-12237] — delivered `orbit clock`, the combined tick, scheduler retirement, and
+  folded that graduated contract into [2_design.md](./2_design.md); depends on [ORB-12236].
 - [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 
 - [ORB-10001] — authored this design-doc folder (proposal; no implementation).

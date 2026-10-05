@@ -200,13 +200,20 @@ impl OutputSink {
     /// Whether a column carrying the same value in every row may be dropped
     /// (`specs/table-rendering.md` §5).
     ///
-    /// Suppression is a readability heuristic for the default view. Asking for
-    /// `--format table` explicitly is asking for the table's full shape, so it
-    /// turns the heuristic off; `auto` retains it. A command that renders a
-    /// fixed-shape view rather than a result set opts out separately, via
+    /// Suppression is a readability heuristic for a human reading columns, so
+    /// it applies to the `table` rendering only. The plain form is what a pipe
+    /// receives, and there a dropped column silently shifts every later field
+    /// left with no header to say so — `orbit audit list --status denied` is
+    /// the case that found this, emitting three fields for a result set whose
+    /// timestamps happened to agree while a mixed one emitted six [ORB-12113].
+    ///
+    /// Asking for `--format table` explicitly is asking for the table's full
+    /// shape, so it turns the heuristic off too; `auto` on a terminal retains
+    /// it. A command that renders a fixed-shape view rather than a result set
+    /// opts out separately, via
     /// [`Table::keep_all_columns`](crate::output::table::Table::keep_all_columns).
     pub fn suppress_uniform_columns(&self) -> bool {
-        !self.explicit_table
+        self.mode == OutputMode::Table && !self.explicit_table
     }
 
     /// Point the `colored` crate at this sink's answer instead of its own
@@ -221,6 +228,23 @@ impl OutputSink {
     pub fn apply_color_policy(&self) {
         colored::control::set_override(self.color_allowed);
     }
+}
+
+/// Whether process stdin is a terminal.
+///
+/// Interactive prompts (`orbit init`) wait without a deadline when a human is
+/// at stdin, and apply a hang-breaker on a pipe or socket. This is independent
+/// of [`OutputSink::is_tty`], which describes stdout.
+pub fn stdin_is_terminal() -> bool {
+    std::io::stdin().is_terminal()
+}
+
+/// Whether stderr has a terminal for an explicit administrator authentication
+/// prompt. A shell installer may arrive via a stdin pipe while stderr still
+/// points at the user's terminal.
+#[cfg(target_os = "linux")]
+pub fn stderr_is_terminal() -> bool {
+    std::io::stderr().is_terminal()
 }
 
 /// `COLUMNS` first, then what the terminal reported, then 0.
@@ -249,24 +273,17 @@ fn parse_width(raw: &str) -> Option<u16> {
 
 /// Color precedence, per `specs/color-and-styling.md` §2.
 ///
-/// The non-TTY rung comes first and is absolute: a redirected stream is never
-/// styled, whatever the environment claims. `--no-color` and `--color=always`
-/// are rungs 1 and 3 of that list; they land with the flags themselves, which
-/// this step does not introduce.
+/// Delegates to the process-wide policy shared with the stderr log layer
+/// (`orbit_common::observability::logging::ansi_allowed`): a non-TTY sink,
+/// `TERM=dumb`, or a non-empty `NO_COLOR` disable color; otherwise a TTY gets
+/// color.
 fn resolve_color(is_tty: bool, env: &SinkEnv) -> bool {
-    if !is_tty {
-        return false;
-    }
-    if env.term.as_deref() == Some("dumb") {
-        return false;
-    }
-    if is_set(env.no_color.as_deref()) {
-        return false;
-    }
-    if is_set(env.clicolor_force.as_deref()) {
-        return true;
-    }
-    true
+    orbit_common::observability::logging::ansi_allowed(
+        is_tty,
+        env.term.as_deref(),
+        env.no_color.as_deref(),
+        env.clicolor_force.as_deref(),
+    )
 }
 
 /// Mode precedence, per `specs/output-modes.md` §2. First match wins.
@@ -307,10 +324,6 @@ fn render_as(format: FormatArg, is_tty: bool) -> OutputMode {
         FormatArg::Json => OutputMode::Json,
         FormatArg::Ndjson => OutputMode::Ndjson,
     }
-}
-
-fn is_set(value: Option<&str>) -> bool {
-    value.is_some_and(|value| !value.is_empty())
 }
 
 /// Ask the terminal attached to stdout for its column count.

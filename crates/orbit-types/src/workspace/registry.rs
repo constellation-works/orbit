@@ -43,7 +43,7 @@ impl FromStr for WorkspaceStatus {
 pub struct Workspace {
     pub id: String,
     pub name: String,
-    /// Stable owner identity. Standalone registries created before host
+    /// Stable owner identity. Standalone registries created before machine
     /// identity existed may omit this; hub and spoke registries may not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_machine_id: Option<String>,
@@ -64,8 +64,11 @@ pub struct Workspace {
     pub updated_at: DateTime<Utc>,
 }
 
+/// The base branch a workspace record carries when none was registered.
+pub const DEFAULT_BASE_BRANCH: &str = "main";
+
 fn default_base_branch() -> String {
-    "main".to_string()
+    DEFAULT_BASE_BRANCH.to_string()
 }
 
 fn default_status() -> WorkspaceStatus {
@@ -135,11 +138,14 @@ impl WorkspaceCheckout {
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRegistry {
     pub schema_version: u32,
-    /// Human host names known through this machine's local workspace records,
-    /// keyed by stable owner machine id. This is not a fleet inventory: an
-    /// entry exists only for an owner named by a local workspace record.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub owner_host_ids: BTreeMap<String, String>,
+    /// [ORB-12725] Retired machine-id-to-display-name projection. The catalog
+    /// records the stable owner only; a machine's display name is read from
+    /// its own `machine.name`. Accepted and dropped for one release so a
+    /// `workspaces.json` written by an older build still loads under
+    /// `deny_unknown_fields`; delete this field after that release, when the
+    /// key becomes an ordinary unknown one.
+    #[serde(default, rename = "owner_host_ids", skip_serializing)]
+    pub retired_owner_host_ids: BTreeMap<String, String>,
     #[serde(default)]
     pub workspaces: Vec<Workspace>,
     #[serde(default)]
@@ -154,7 +160,7 @@ impl Default for WorkspaceRegistry {
     fn default() -> Self {
         Self {
             schema_version: WORKSPACE_REGISTRY_SCHEMA_VERSION,
-            owner_host_ids: BTreeMap::new(),
+            retired_owner_host_ids: BTreeMap::new(),
             workspaces: Vec::new(),
             checkouts: Vec::new(),
             publication_bindings: Vec::new(),
@@ -173,8 +179,6 @@ pub struct WorkspacePaths {
     pub global_dir: PathBuf,
     pub resources_dir: PathBuf,
     pub state_dir: PathBuf,
-    pub tasks_dir: PathBuf,
-    pub knowledge_dir: PathBuf,
     pub activities_dir: PathBuf,
     pub jobs_dir: PathBuf,
     pub skills_dir: PathBuf,
@@ -184,7 +188,6 @@ pub struct WorkspacePaths {
     pub job_runs_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub scoreboard_dir: PathBuf,
-    pub diagnostics_dir: PathBuf,
     pub worktrees_dir: PathBuf,
 }
 
@@ -204,8 +207,6 @@ impl WorkspacePaths {
         Self {
             resources_dir: resources_dir.clone(),
             state_dir: state_dir.clone(),
-            tasks_dir: orbit_dir.join("tasks"),
-            knowledge_dir: orbit_dir.join("knowledge"),
             activities_dir: resources_dir.join("activities"),
             jobs_dir: resources_dir.join("jobs"),
             skills_dir: resources_dir.join("skills"),
@@ -215,7 +216,6 @@ impl WorkspacePaths {
             job_runs_dir: state_dir.join("job-runs"),
             logs_dir: state_dir.join("logs"),
             scoreboard_dir: state_dir.join("scoreboard"),
-            diagnostics_dir: state_dir.join("diagnostics"),
             worktrees_dir: state_dir.join("worktrees"),
             repo_root,
             orbit_dir,

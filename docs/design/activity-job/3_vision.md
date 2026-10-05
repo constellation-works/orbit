@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Vision"
 owner: codex
 last_updated: 2026-07-20
-last_validated: 2026-08-23
+last_validated: 2026-09-13
 status: Draft
 feature: activity-job
 doc_role: vision
@@ -109,7 +109,6 @@ None of these are research contributions. Activity / Job earns its keep only if 
 - [4_decisions.md](./4_decisions.md) — ADR log
 - [specs/backend-resolution.md](./specs/backend-resolution.md) — retired agent backend selection and its migration
 - [specs/audit-envelope.md](./specs/audit-envelope.md) — v2 audit event tree and persistence layout
-- [../_archive/knowledge-graph/1_overview.md](../_archive/knowledge-graph/1_overview.md) — graph substrate that sits beside this execution substrate
 
 ### External
 

@@ -2,11 +2,17 @@
 	<button
 		type="button"
 		class="canon-theme-toggle"
-		aria-label="Toggle theme"
+		aria-label="Dark theme"
+		aria-pressed="true"
 	>
 		<svg class="label-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"></svg>
 	</button>
 </starlight-theme-select>
+
+{/* Set the initial icon before the deferred toggle script runs. */}
+<script is:inline>
+	StarlightThemeProvider.updatePickers();
+</script>
 
 <style>
 	.canon-theme-toggle {
@@ -50,9 +56,12 @@
 			if (btn) {
 				btn.addEventListener('click', () => {
 					const theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-					localStorage.setItem('starlight-theme', theme);
 					document.documentElement.dataset.theme = theme;
 					updateThemePickers(theme);
+					// Persisting is best effort: blocked site data must not undo the switch.
+					try {
+						localStorage.setItem('orbit-theme-choice', theme);
+					} catch {}
 				});
 			}
 		}

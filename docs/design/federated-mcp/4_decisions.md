@@ -1,17 +1,17 @@
 ---
 title: Federated MCP — Decisions
 owner: grok
-last_updated: 2026-09-04
-last_validated: 2026-09-04
+last_updated: 2026-09-24
+last_validated: 2026-09-19
 status: Draft
 feature: federated-mcp
 doc_role: decisions
 type: design
-summary: Standing rules for the proposed federated MCP mux: destinations are configured, selectors use machine_id, authority is split, routing fails closed, and a destination declares its callers' authority.
+summary: Standing rules for the federated MCP mux: destinations are configured, selectors use machine_id, routing fails closed, and a client's `--operator` propagates into every destination it opens.
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access]
-related_artifacts: [ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Federated MCP — Decisions
@@ -160,77 +160,55 @@ Admit the mux as an explicit exception to v1 byte-transparent / no-relay rules *
 
 ## An MCP session's authority is declared by the destination, not requested by the caller
 
+**Superseded by:** [An SSH login to a destination is ownership of it](#an-ssh-login-to-a-destination-is-ownership-of-it)
+
 **Recorded:** 2026-08 · [ORB-11052]
 
-**Code anchors:** `crates/orbit-mcp/src/remote/callers.rs` (`SessionCapabilityPolicy`, `CallersFile`), `crates/orbit-mcp/src/remote/identity.rs::mcp_serve_session_policy`, `crates/orbit-common/src/governance/authorization.rs::CallerProvenance::RemoteGrant`
-
-### Context
-
-Two axes decide whether a federated call runs, and only one of them was answered by the machine that executes the work. Capability class (`control_plane` / `execute`) was already destination-derived in `federated/capability.rs`. Session authority (`agent` / `operator`) was not: `orbit mcp serve --operator` resolved it once at startup from argv, and on an SSH destination the *caller* writes the remote argv. Anyone with shell access wrote `ssh <host> "orbit mcp serve --operator"` and stamped their own session `Operator`, satisfying every entry in `GOVERNED_OPERATIONS` — `orbit.command.exec`, `orbit.workflow.ship`, `orbit.task.delete`, `orbit.workspace.claim.release`. `--remote-caller-machine-id` was an audit label nothing read as an authorization input.
-
-### Decision
-
-An MCP session's authority is **declared by the machine that executes the work**. A remote-originated session's argv becomes a *request*; the destination's machine-global `~/.orbit/mcp-callers.toml` is the *ceiling*; the session holds `requested ∩ granted`. Apply this to any future signal that would decide what a session may do: it is admissible only if the executing machine can observe it without trusting the caller to supply it.
-
-Four rules make that operational, and each is the part a future change is most likely to erode:
-
-1. **Origination is the destination's observation.** A session is remote-originated when the *serving process* sees `SSH_CONNECTION` and stdin is not a terminal. Keying on `--remote-caller-machine-id` instead would be bypassable by not passing the flag, which would present a remote session to the destination as a local one.
-2. **Intersection only, never union.** The file can lower a session and can never raise one, so it opens no privilege path and cannot escalate a session that did not ask. A caller granted `[agent, operator]` that omitted `--operator` still resolves to `agent`.
-3. **Ambiguity falls to the file default, never back to argv.** An absent, malformed, or unmatched caller label selects no row and takes `default`. Falling back to the request is the escalation being closed.
-4. **A grant is recorded beside the effective set, not folded into it.** `CallerProvenance::RemoteGrant` separates "this destination granted it" from a local `Session` stamp, and the authorization audit row carries the resolved caller and granted set alongside the effective one.
-
-Local (non-remote-originated) sessions are untouched: argv stays authoritative and today's accident-guard model holds byte for byte.
-
-Rejected alternative: **keep argv authoritative and gate on the forwarded `machine_id` allowlist alone**, treating the label as the identity. That was on the table and is materially different — it needs no new file and no origination check — but it authorizes on a value the caller writes, so it moves the label from "audit" to "credential" while leaving the escalation exactly where it was. Also rejected: a **compatibility window** in which a missing callers file preserves the old behavior. A phased default would leave the escalation open for the length of the phase while implying it was closed; the migration is instead a deliberate downgrade that cuts operator-over-SSH on first upgrade.
-
-Tier 2 — binding the caller identity to the SSH key via an `authorized_keys` forced command — shipped separately [ORB-11053] and is recorded below. On a destination that has not opted into it the identity here is still self-asserted, so *that* configuration remains an accident guard in keeping with the governance kernel's doctrine and must not be described in code or docs as a security boundary.
-
-### Consequences
-
-- The escalation is closed for the case it actually occurred in: a caller can still write any argv it likes, and the destination no longer honors it.
-- The two axes compose without either learning about the other. Capability class stays in `federated/capability.rs` and `capability_refused`; session authority stays in the governance kernel and `capability_denied`. A call must clear both.
-- The resolution stays in `orbit-mcp` rather than moving to `orbit-core`, because it composes the session envelope the way `--operator` always did; the *decision* remains the kernel's `authorize`. The crate keeps its rule that a protocol crate does not decide whether a call is allowed.
-- Cost: **the first upgrade breaks working operator-over-SSH setups.** Every destination that serves remote sessions needs a callers file before an operator can dispatch a workflow over SSH again. That is the intended direction, but it is a real outage for anyone who has one, mitigated only by a startup warning and `orbit mcp callers init`.
-- Cost: **`workspaces` narrowing is re-evaluated per call**, so a session's capabilities are no longer a single fact resolved at establishment. Every future call path that resolves a workspace on the destination has to stamp the narrowed set, and one that forgets silently serves the session's unnarrowed ceiling.
-- Cost: **the caller identity is self-asserted unless the destination opts into Tier 2.** A caller that can reach such a destination can name a different row. The file is then strictly stronger than a caller-authored grant and strictly weaker than an authenticated one, and the gap stays legible in the audit trail rather than assumed away.
+Tier 1 of destination-side caller authorization: a remote-originated session's argv was a *request*, a machine-global `~/.orbit/mcp-callers.toml` on the destination was the *ceiling*, and the session held their intersection. The file lived where the caller's own SSH login could rewrite it, so [ORB-12564] removed it. The full entry is in git history.
 
 ## A caller identity is only as strong as the key sshd checked for it
 
+**Superseded by:** [An SSH login to a destination is ownership of it](#an-ssh-login-to-a-destination-is-ownership-of-it)
+
 **Recorded:** 2026-08 · [ORB-11053], corrected by [ORB-11057], [ORB-11134], and [ORB-11184]
 
-**Code anchors:** `crates/orbit-mcp/src/remote/ssh_auth.rs` (`SshAcceptance`, `issue_ssh_acceptance`, `verify_ssh_acceptance`), `crates/orbit-mcp/src/remote/callers.rs` (`RemoteCallerIdentity`, `enforce_key_binding`), `crates/orbit-cli/src/command/mcp/callers.rs::authorize`, `orbit_types::tool::CallerIdentityProof`
+Tier 2: bind the Tier 1 caller row to the SSH key through a root-managed `authorized_keys` forced command, a setgid login-shell launcher, and a destination-issued bearer. It was the machinery a multi-tenant destination needs; Orbit has no such deployment, and [ORB-12564] removed it with Tier 1. The full entry is in git history.
+
+## An SSH login to a destination is ownership of it
+
+**Recorded:** 2026-09 · [ORB-12564]
+
+**Code anchors:** `crates/orbit-mcp/src/remote/proxy.rs::remote_serve_command`, `crates/orbit-mcp/src/remote/identity.rs::mcp_server_identity`, `crates/orbit-mcp/src/remote/legacy.rs`, `crates/orbit-common/src/governance/authorization.rs::agent_context_declared`
 
 ### Context
 
-Tier 1 moved the authorization *statement* to the destination but still keyed it on `--remote-caller-machine-id`, a label the caller types. A caller that can reach the destination can therefore name a different row, which is why that tier is an accident guard rather than a boundary. ORB-11053 tried to close this by treating public forced-command flags as proof of their origin; ORB-11057 established that caller-controlled argv can reproduce those flags and a copied fingerprint. ORB-11134 moved the corrective bearer from argv to the forced-command environment, but ORB-11184 established that a first-line Rust `PR_SET_DUMPABLE=0` still leaves the interval from `execve` through dynamic loading and runtime startup readable to a same-UID scanner. The corrected boundary must exist before the capability-bearing process begins userspace execution.
+`orbit mcp serve --federated --operator` on the Mac held no operator authority on any destination. The remote argv carried no `--operator`, and the destination computed `requested ∩ granted` against a callers file or a forced command, so operator on a remote needed a per-destination setup: a row keyed on the caller's `hm_*` id, or a dedicated login UID, a setgid launcher, a forced command, and an acceptance digest. In practice it failed silently — the 0.20.0 QA sweep found an unparseable `mcp-callers.toml` on the Mac and every remote session downgraded with nothing to point at.
+
+The ceiling was also stored in a file the caller could edit. Anyone who can run `ssh box "orbit mcp serve --operator"` can equally run `ssh box "ORBIT_OPERATOR=1 orbit tool run …"`, `rm`, `git`, or rewrite `mcp-callers.toml` to grant themselves a row. Tier 2 was the machinery that would make the ceiling real on a *multi-tenant* destination. Orbit has no such deployment: it is a single-user tool, and the accounts on both ends are the same person's.
 
 ### Decision
 
-Delegate the identity to sshd, which already authenticates the key. Let the *destination* compose the argv that names the caller, while sshd supplies the bearer in a per-key environment:
+**An SSH login to a destination is ownership of it.** The destination honors the authority in the argv it was started with, for a remote-originated session exactly as for a local one. A federated or remote-proxy client started with `--operator` composes `orbit mcp serve --operator --remote-caller-machine-id <id>` for every destination it opens; started without it, the remote argv stays `agent`. The removed caller-authorization spec's claim that the accident-guard doctrine "does not carry across a machine boundary" had it backwards: SSH authenticating the caller is exactly why the far side needs no second authorization statement.
 
-```
-environment="ORBIT_MCP_SSH_ACCEPTANCE=<destination-token>",command="/usr/local/libexec/orbit-mcp-ssh mcp serve --accept-ssh --caller hm_alpha",no-pty,… ssh-ed25519 AAAA… caller@box
-```
+Three rules make that operational:
 
-Four rules make that operational:
+1. **Orbit governs agents, not people, and the guard is caller-side.** `remote_serve_command` refuses to propagate operator when the composing process declares itself an agent or a managed run (`agent_context_declared`), so a server an agent launched cannot hand operator authority onward to another machine. `child_env` still strips `ORBIT_OPERATOR` from agent children, and sandbox network policy is the backstop. One chokepoint covers both client paths — the v1 proxy and the federated mux — because two would eventually disagree.
+2. **The label stays a label.** `--remote-caller-machine-id` is attribution: it marks the session's transport as SSH, names the calling machine in the destination's `authorization` audit rows and in a trusted-host admission, and contributes nothing to any decision. It is not renamed, merged with a credential, or promoted.
+3. **The deny case is `authorized_keys`.** Removing a key is the only boundary this machine ever had. If per-workspace narrowing of remote operator is wanted later, it returns as a small opt-in on the *caller* side, not as a destination default.
 
-1. **The destination composes the argv; the caller's command is ignored entirely.** `SSH_ORIGINAL_COMMAND` is never parsed, merged, or used to derive a requested authority. Only its presence is logged, so the trail shows an override happened without the content ever reaching a decision.
-2. **An identity without a protected destination-issued capability is unrepresentable.** `--accept-ssh` is a valueless marker. The dedicated account uses a root-owned Orbit copy with mode 2555 and a private, privilege-free group different from its primary group as its login shell. This is load-bearing: sshd always starts a forced command as `<login-shell> -c <command>`, so making only the eventual command setgid would still expose the bearer in an ordinary shell. The login-shell credential transition makes Linux apply its secure-exec dumpability policy inside `execve`, before the first bearer-bearing dynamic loader or Rust startup. Orbit verifies the inherited state, permanently drops the launch group, recognizes the exact generated `-c` shape without a second exec, then sets `PR_SET_DUMPABLE=0` as defense in depth. A normal executable, `NoNewPrivs`, `fs.suid_dumpable=1`, missing bearer, wrong digest, or caller mismatch refuses before selecting a row. `--caller-key-fingerprint` remains refused.
-3. **The capability is bound to the emitted key.** Its destination record stores the public-key fingerprint. A callers-file pin mismatch refuses at session establishment; copied fingerprint argv is not an observation. `SSH_USER_AUTH` remains optional Tier 1 evidence and does not turn caller-selected argv into Tier 2.
-4. **Which tier answered is recorded, not assumed.** `CallerIdentityProof` (`key-bound` / `self-asserted`) rides in `RemoteCallerGrant` into the authorization audit row's `arguments_json`. Both tiers produce identical-looking grants once resolved, so a trail without this field would leave a reader guessing whether the caller had to hold a key.
+What is kept is what actually describes something the destination can observe: capability class (`control_plane` / `execute`) and workspace scope describe the checkout, not the caller; the `authorization` audit rows; and `orbit mcp listen` staying agent-only, because a socket authenticates no client and that reasoning is untouched by any of this.
 
-Orbit renders the authorized-keys line and never installs it. The bearer-bearing entry must live in a root-owned `AuthorizedKeysFile` the login account cannot read, and its `environment=` option requires `PermitUserEnvironment yes` scoped to the account. `authorize` also requires an absolute `--launcher` path; verifies mode 2555, a group different from the account's real group, byte equality with the running Orbit binary, and that the system account database names it as the login shell; then emits that path. The installed launcher must be root-owned and its group must have no members, file privileges, or service privileges; the credential transition exists only to make the kernel protect process metadata. On every Orbit upgrade, replace the launcher with the new binary and re-run `authorize`. Re-authorizing rotates the capability digest immediately, so replacing the root-managed line is part of the same operation.
+Rejected alternative: **fix the propagation and keep the file as an optional ceiling.** It would have satisfied the immediate bug while leaving every destination a setup step, a doctor row, and a silent-downgrade failure mode for a ceiling nothing can enforce. Also rejected: **a compatibility window** in which a present callers file still caps a session. A file that sometimes decides is worse than one that never does; migration is instead one `warn!` at startup and a `orbit doctor` row telling the operator to delete it.
 
-Rejected alternative: **call `prctl` earlier in `main` or a userspace constructor.** Every such call still runs after `execve` created readable process metadata, so it can reduce but cannot close the race. Also rejected: **require a host-wide Yama policy** such as `ptrace_scope=2`. It would protect this launch, but changes debugging policy for every process on the host rather than placing the rule at the Tier 2 executable boundary. Orbit still does not manage `authorized_keys` directly: a task tool must not own machine login or risk locking an operator out. Tier 2 remains opt-in because it requires sshd and launcher configuration the operator may not control.
+This is the same rationale as [ORB-12563] on the dashboard: an authorization statement that the actor can rewrite is documentation, not a boundary, and pricing it as a boundary distorts everything built on top.
 
 ### Consequences
 
-- [3_vision.md §1](./3_vision.md) closes with evidence rather than by assertion: `crates/orbit-cli/tests/mcp_roundtrip.rs` runs a separate ordinary same-UID scanner continuously across repeated generated protected launches, retains a valid key-bound grant, and proves an invocation copied from observable metadata is refused.
-- The boundary is real for the SSH transport only. `orbit mcp listen` authenticates nobody and keeps its hardcoded `agent`; no registry or session field was promoted into a credential to get here.
-- `orbit doctor` gains two machine-global rows (`mcp-callers`, `mcp-caller-keys`), composed in `orbit-cli` because `orbit-cmd` does not know about MCP and must not learn. Both are warnings: an opt-in tier not taken up is not a broken machine.
-- Cost: **`ssh_key_fingerprint` now enforces where it previously only parsed.** A destination that wrote the field speculatively under Tier 1 and cannot observe its callers' keys is unaffected, but one that *can* observe them will start refusing any caller whose row records a stale or wrong fingerprint. That is the intended direction and it is a behavior change on existing files.
-- Cost: **the strongest guarantee depends on root-managed sshd and a refreshed protected launcher Orbit does not install.** The root-owned key file, `PermitUserEnvironment`, forced-command-only public-key authentication, root-owned launcher, private privilege-free setgid group, and `fs.suid_dumpable` other than 1 are deployment requirements. A stale or unhardened launcher fails closed, but an upgrade is not complete for Tier 2 until the protected copy and rotated root-managed line are replaced.
-- Cost: **two similar-looking flags now exist.** `--remote-caller-machine-id` (Tier 1 audit label, hidden) and `--caller` (Tier 2 identity) both name a machine. They are not interchangeable, and a future change that merges them would silently reopen the escalation.
+- `orbit mcp serve --federated --operator` yields operator-capable sessions on every reachable destination with no per-destination configuration. `orbit_agent_invoke`, `orbit.workflow.ship`, `orbit.task.delete`, `orbit.command.exec`, and `orbit.workspace.claim.release` work remotely.
+- `crates/orbit-mcp/src/remote/callers.rs` and `ssh_auth.rs` are gone, with `orbit mcp callers`, `--accept-ssh`, `--caller`, `ORBIT_MCP_SSH_ACCEPTANCE`, `~/.orbit/mcp-ssh-acceptance/`, the setgid login-shell launcher, `CallerIdentityProof`, `RemoteAgentInvokeMode`, `RemoteCallerGrant`, and `CallerProvenance::RemoteGrant`. Roughly 2,500 lines of authorization machinery leave with them.
+- Trusted-host admission is `operator`, full stop. The durable admission keeps `caller_machine_id` for attribution and no longer records an identity proof or a trust mode, because there is only one.
+- Cost: **a destination is as exposed as its `authorized_keys` and no more.** That was already true — the file was editable by the same login — but it is now stated rather than obscured by a ceiling that implied otherwise.
+- Cost: **an operator who wants a genuinely narrower remote surface has nothing to reach for.** The answer is a second SSH key and account, or not granting the login; Orbit deliberately does not reimplement multi-tenancy.
 
 ## Task References
 
@@ -241,5 +219,7 @@ Rejected alternative: **call `prctl` earlier in `main` or a userspace constructo
 - [ORB-11052] — destination-side caller authorization, Tier 1 (the callers file)
 - [ORB-11053] — key-bound caller identity, Tier 2 (the `authorized_keys` forced command)
 - [ORB-11184] — kernel-protected Tier 2 exec boundary before userspace startup
+- [ORB-12564] — argv-propagated remote operator; destination-side caller authorization removed
+- [ORB-12563] — the same rationale applied to the dashboard
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

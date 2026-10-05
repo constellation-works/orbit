@@ -3,7 +3,6 @@ use std::path::Path;
 use orbit_types::task::{TaskArtifact, media_type_for_artifact_path};
 
 use crate::error::OrbitError;
-use crate::fs::selector::exists_in_workspace;
 
 pub fn task_artifact_from_source_file(
     source_path: &Path,
@@ -60,24 +59,4 @@ fn infer_artifact_path_from_source(source_path: &Path) -> Result<String, OrbitEr
             ))
         })?;
     Ok(file_name.to_string())
-}
-
-pub fn prune_missing_context_files(
-    workspace_root: &Path,
-    candidates: Vec<String>,
-) -> (Vec<String>, Vec<String>) {
-    let mut kept = Vec::with_capacity(candidates.len());
-    let mut dropped = Vec::new();
-    for entry in candidates {
-        let trimmed = entry.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if exists_in_workspace(trimmed, workspace_root) {
-            kept.push(trimmed.to_string());
-        } else {
-            dropped.push(trimmed.to_string());
-        }
-    }
-    (kept, dropped)
 }

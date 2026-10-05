@@ -1,3 +1,3 @@
-ORB-00002	Add pagination to the audit export command	low	feature
-ORB-00001	Document the new sink resolution precedence	medium	chore
-ORB-00000	Fix the flaky retry loop in the sync worker	high	bug
+ORB-00002	Add pagination to the audit export command	proposed	low	feature
+ORB-00001	Document the new sink resolution precedence	proposed	medium	chore
+ORB-00000	Fix the flaky retry loop in the sync worker	proposed	high	bug

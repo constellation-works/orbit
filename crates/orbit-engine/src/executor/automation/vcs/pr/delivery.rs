@@ -1,0 +1,422 @@
+//! Fresh delivery evidence for completion-authorized PR runs [ORB-11982].
+//!
+//! F2026-09-102 records a bundle reaching `done` while its pull request was
+//! still open after a base-modification race. The recorded task history shows
+//! that `review -> done` transition carried no actor and no authorization note,
+//! so the completion activity — which always stamps one — did not write it. The
+//! surface that did is not recoverable from the retained evidence. This module
+//! therefore hardens what *is* in scope: the automatic path must never be the
+//! way an open or foreign pull request becomes `done`.
+//!
+//! The rule is that completion is permitted by evidence read at completion
+//! time, about the exact candidate this run published. A run carries the same
+//! `head`, `base`, and `published_head_sha` checkpoints [ORB-11488] already
+//! pins for conflict repair; [`DeliveryPin`] turns them into an identity the
+//! provider's answer has to match, both before a merge is requested and again
+//! before the guarded transition runs. A run without those checkpoints — a
+//! resumed or hand-built completion input — enforces only what it carries, so
+//! the pins narrow the authorized set and never widen it.
+
+use std::path::Path;
+
+use orbit_common::OrbitError;
+use serde_json::{Value, json};
+
+use super::super::super::input::input_string_field;
+use super::super::freshness::{branch_freshness_against_ref, commit_sha};
+use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point};
+
+/// The candidate identity a completion-authorized run is allowed to deliver.
+///
+/// Every field is optional because it mirrors an upstream pipeline checkpoint
+/// that a given invocation may not carry. An absent pin is not permission: it
+/// only means this run has nothing to compare against for that dimension.
+pub(in crate::executor::automation::vcs) struct DeliveryPin {
+    head: Option<String>,
+    base: Option<String>,
+    candidate_sha: Option<String>,
+}
+
+/// What a merged pull request proved, recorded on the activity output and in
+/// the durable authorization note.
+pub(in crate::executor::automation::vcs) struct DeliveryEvidence {
+    pr_number: String,
+    merged_at: String,
+    head_ref: Option<String>,
+    base_ref: Option<String>,
+    head_sha: Option<String>,
+    merge_commit: String,
+}
+
+impl DeliveryPin {
+    /// Pin an identity the caller already holds exactly, rather than one read
+    /// out of pipeline run input. The owner landing consumer has no run
+    /// checkpoints: its pins come from the accepted handoff candidate
+    /// [ORB-12499], so every dimension is always pinned.
+    pub(in crate::executor::automation::vcs) fn pinned(
+        head: &str,
+        base: &str,
+        candidate_sha: &str,
+    ) -> Self {
+        Self {
+            head: Some(head.to_string()),
+            base: Some(base.strip_prefix("origin/").unwrap_or(base).to_string()),
+            candidate_sha: Some(candidate_sha.to_string()),
+        }
+    }
+
+    pub(in crate::executor::automation::vcs) fn from_input(input: &Value) -> Self {
+        Self {
+            head: input_string_field(input, "head"),
+            base: input_string_field(input, "base").map(|base| {
+                base.strip_prefix("origin/")
+                    .unwrap_or(base.as_str())
+                    .to_string()
+            }),
+            candidate_sha: input_string_field(input, "published_head_sha"),
+        }
+    }
+
+    /// The head commit this run is authorized to deliver, after any in-run repair.
+    pub(in crate::executor::automation::vcs) fn candidate_sha(&self) -> Option<&str> {
+        self.candidate_sha.as_deref()
+    }
+
+    /// Adopt the rewritten candidate an authorized in-run repair produced.
+    ///
+    /// The bounded conflict recovery rebases and lease-pushes the *same*
+    /// branch, so the published SHA legitimately moves once. Without this the
+    /// repaired candidate would look like somebody else's head at merge time.
+    pub(in crate::executor::automation::vcs) fn adopt_refreshed_candidate(
+        &mut self,
+        candidate_sha: Option<&str>,
+    ) {
+        if let Some(candidate_sha) = candidate_sha.map(str::trim).filter(|sha| !sha.is_empty()) {
+            self.candidate_sha = Some(candidate_sha.to_string());
+        }
+    }
+
+    /// Refuse a pull request that is no longer the one this run published.
+    ///
+    /// Applied on every poll, so a branch or base that was repointed while the
+    /// run waited never receives a merge request in the first place.
+    pub(in crate::executor::automation::vcs) fn ensure_candidate_identity(
+        &self,
+        status: &Value,
+        pr_number: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_matches(status, pr_number, "headRefName", self.head.as_deref())?;
+        self.ensure_matches(status, pr_number, "baseRefName", self.base.as_deref())
+    }
+
+    /// The full pinned identity, including the head commit.
+    ///
+    /// Checked before a merge or auto-merge is requested, so a head this run
+    /// did not publish never reaches the provider. Completion also sends this
+    /// SHA to the synchronous provider mutation, which refuses a head that
+    /// moves after the read. The owner landing consumer checks the same
+    /// identity on every poll [ORB-12499].
+    pub(in crate::executor::automation::vcs) fn ensure_pinned_candidate(
+        &self,
+        status: &Value,
+        pr_number: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_candidate_identity(status, pr_number)?;
+        self.ensure_matches(
+            status,
+            pr_number,
+            "headRefOid",
+            self.candidate_sha.as_deref(),
+        )
+    }
+
+    /// The gate the guarded `review -> done` transition runs behind.
+    ///
+    /// A merged state is only delivery when the provider also names the merge
+    /// commit and the head it merged is the candidate this run authorized.
+    pub(in crate::executor::automation::vcs) fn ensure_delivered(
+        &self,
+        status: &Value,
+        pr_number: &str,
+    ) -> Result<DeliveryEvidence, OrbitError> {
+        self.ensure_candidate_identity(status, pr_number)?;
+        self.ensure_matches(
+            status,
+            pr_number,
+            "headRefOid",
+            self.candidate_sha.as_deref(),
+        )?;
+
+        let merge_commit = reported(status.pointer("/mergeCommit/oid")).ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "pr_complete: pull request #{pr_number} reports a merged state without a merge \
+                 commit, so this run has no evidence of what landed; the task stays in review"
+            ))
+        })?;
+
+        Ok(DeliveryEvidence {
+            pr_number: pr_number.to_string(),
+            merged_at: reported(status.get("mergedAt")).unwrap_or_default(),
+            head_ref: reported(status.get("headRefName")),
+            base_ref: reported(status.get("baseRefName")),
+            head_sha: reported(status.get("headRefOid")),
+            merge_commit,
+        })
+    }
+
+    /// Compare one reported identity field against its pin.
+    ///
+    /// An unpinned field is not checked. A pinned field the provider does not
+    /// report is a refusal rather than a pass, because completion cannot claim
+    /// an identity it was unable to read.
+    fn ensure_matches(
+        &self,
+        status: &Value,
+        pr_number: &str,
+        field: &str,
+        pinned: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        let Some(pinned) = pinned else {
+            return Ok(());
+        };
+        let Some(reported) = reported(status.get(field)) else {
+            return Err(OrbitError::Execution(format!(
+                "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
+                 the authorized candidate '{pinned}' cannot be confirmed; the task stays in review"
+            )));
+        };
+        if reported != pinned {
+            return Err(OrbitError::Execution(format!(
+                "delivery_evidence_stale: pull request #{pr_number} reports {field} '{reported}' \
+                 but this run published '{pinned}'; completion delivers only the candidate it \
+                 published, so the task stays in review"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Explain whether red required checks describe the current candidate/base.
+    ///
+    /// GitHub runs required checks on a merge of the head into the base as it
+    /// stood when the check started. Once the base advances past that point the
+    /// red result describes a merge ref nobody is proposing any more — the
+    /// exact confusion F2026-09-102 recorded, where rebasing onto the current
+    /// base turned the same suite green. The answer is best effort: it needs a
+    /// readable local checkout, and a refusal is never withheld because the
+    /// diagnosis was unavailable.
+    pub(in crate::executor::automation::vcs) fn base_advance_note(
+        &self,
+        input: &Value,
+        workspace_path: &str,
+    ) -> Option<String> {
+        let (candidate_sha, base) = (self.candidate_sha.as_deref()?, self.base.as_deref()?);
+        let workspace = Path::new(workspace_path);
+        let base_ref =
+            resolve_worktree_start_point(workspace, base, base_sync_mode_from_input(input).ok()?)
+                .ok()?;
+        let base_sha = commit_sha(workspace, &base_ref).ok()?;
+        let freshness =
+            branch_freshness_against_ref(workspace, candidate_sha, &base_ref, &base_sha).ok()?;
+
+        Some(if freshness.commits_behind == 0 {
+            format!(
+                " The published candidate {candidate_sha} is current with base '{base}' \
+                 ({base_sha}), so this is a failure at the current candidate and base."
+            )
+        } else {
+            format!(
+                " The published candidate {candidate_sha} is {} commits behind base '{base}' \
+                 ({base_sha}), so any red required check ran against a stale merge ref; refresh \
+                 the candidate before judging it.",
+                freshness.commits_behind
+            )
+        })
+    }
+}
+
+impl DeliveryEvidence {
+    pub(in crate::executor::automation::vcs) fn as_json(&self) -> Value {
+        json!({
+            "pr_number": self.pr_number,
+            "merged_at": self.merged_at,
+            "head_ref": self.head_ref,
+            "base_ref": self.base_ref,
+            "head_sha": self.head_sha,
+            "merge_commit": self.merge_commit,
+        })
+    }
+
+    /// The provenance appended to the durable completion note, so a later
+    /// reader of task history can tell an evidence-backed automatic completion
+    /// apart from any other writer of the same transition.
+    pub(in crate::executor::automation::vcs) fn authorization_fragment(&self) -> String {
+        format!(
+            "delivered by pull request #{} merged as {}",
+            self.pr_number, self.merge_commit
+        )
+    }
+}
+
+fn reported(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// What GitHub's reported PR state means for a completion or landing attempt.
+pub(in crate::executor::automation::vcs) enum PrMergeState {
+    Merged,
+    Closed,
+    /// The provider's answer disagrees with itself about whether this PR
+    /// merged. Completion refuses rather than picking the convenient half.
+    Contradictory(String),
+    /// Merging is refused by a gate this run must not bypass.
+    Blocked(String),
+    /// GitHub reports a content conflict. The local rebase boundary must prove
+    /// actual unmerged entries before an agent may be launched.
+    Conflict,
+    /// Ready to merge now.
+    Mergeable,
+    /// Required checks are still in flight.
+    Pending,
+}
+
+pub(in crate::executor::automation::vcs) fn classify_pr_state(
+    pull_request: &Value,
+) -> PrMergeState {
+    let state = pull_request
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if state == "MERGED" {
+        return PrMergeState::Merged;
+    }
+    // [ORB-11982] A merge timestamp on a pull request the provider does not
+    // report as merged is the shape F2026-09-102 recorded: an open PR that
+    // nonetheless looks delivered. Only the authoritative `state` may close a
+    // run, so the disagreement itself becomes the refusal.
+    let merged_at = pull_request
+        .get("mergedAt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(merged_at) = merged_at {
+        return PrMergeState::Contradictory(format!(
+            "state '{state}' alongside merge timestamp {merged_at}"
+        ));
+    }
+    if state == "CLOSED" {
+        return PrMergeState::Closed;
+    }
+
+    let merge_state = pull_request
+        .get("mergeStateStatus")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    match merge_state.as_str() {
+        // Mergeable now: no gate outstanding, or only non-required signals.
+        "CLEAN" | "HAS_HOOKS" | "UNSTABLE" => PrMergeState::Mergeable,
+        // Required checks still running.
+        "PENDING" => PrMergeState::Pending,
+        "BLOCKED" => classify_blocked_pr(pull_request),
+        "DIRTY" => PrMergeState::Conflict,
+        "BEHIND" => {
+            PrMergeState::Blocked("the branch is behind its base and must be updated".into())
+        }
+        "DRAFT" => PrMergeState::Blocked("the pull request is still a draft".into()),
+        // An empty or unrecognized merge state is treated as still settling:
+        // GitHub reports UNKNOWN while it computes mergeability.
+        _ => PrMergeState::Pending,
+    }
+}
+
+/// GitHub also reports BLOCKED while required checks are still running. Wait
+/// only when the rollup proves that a check is in flight and no review gate or
+/// failed check is visible. An absent or unfamiliar provider shape refuses.
+fn classify_blocked_pr(pull_request: &Value) -> PrMergeState {
+    match pull_request.get("reviewDecision") {
+        Some(Value::String(decision))
+            if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
+        {
+            return PrMergeState::Blocked(format!("review is required ({decision})"));
+        }
+        // No review decision applies: the GraphQL API reports null, and
+        // `gh pr view --json` serializes that same null as an empty string
+        // [ORB-13759]. Either only permits waiting on in-flight checks below;
+        // a field that is absent altogether stays unavailable.
+        Some(Value::Null) => {}
+        Some(Value::String(decision)) if decision.is_empty() => {}
+        Some(Value::String(decision)) if decision == "APPROVED" => {}
+        _ => return PrMergeState::Blocked("review decision is unavailable".into()),
+    }
+
+    let Some(checks) = pull_request
+        .get("statusCheckRollup")
+        .and_then(Value::as_array)
+    else {
+        return PrMergeState::Blocked("status check rollup is unreadable".into());
+    };
+    let mut pending = false;
+    for check in checks {
+        let name = check
+            .get("name")
+            .or_else(|| check.get("context"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let Some(name) = name else {
+            return PrMergeState::Blocked("status check rollup is unreadable".into());
+        };
+        match classify_check(check) {
+            Some(CheckState::Failed) => {
+                return PrMergeState::Blocked(format!("status check '{name}' failed"));
+            }
+            Some(CheckState::Pending) => pending = true,
+            Some(CheckState::Passed) => {}
+            None => {
+                return PrMergeState::Blocked(format!(
+                    "status check rollup is unreadable for '{name}'"
+                ));
+            }
+        }
+    }
+
+    if pending {
+        PrMergeState::Pending
+    } else {
+        PrMergeState::Blocked("required reviews or checks are not satisfied".into())
+    }
+}
+
+enum CheckState {
+    Pending,
+    Passed,
+    Failed,
+}
+
+/// `statusCheckRollup` contains both CheckRun (`status`/`conclusion`) and
+/// StatusContext (`state`) entries. Unknown values cannot authorize waiting.
+fn classify_check(check: &Value) -> Option<CheckState> {
+    if let Some(state) = check.get("state").and_then(Value::as_str) {
+        return match state {
+            "PENDING" | "EXPECTED" => Some(CheckState::Pending),
+            "SUCCESS" => Some(CheckState::Passed),
+            "FAILURE" | "ERROR" => Some(CheckState::Failed),
+            _ => None,
+        };
+    }
+    match check.get("status").and_then(Value::as_str)? {
+        "QUEUED" | "IN_PROGRESS" | "PENDING" | "REQUESTED" | "WAITING" => Some(CheckState::Pending),
+        "COMPLETED" => match check.get("conclusion").and_then(Value::as_str)? {
+            "SUCCESS" | "NEUTRAL" | "SKIPPED" => Some(CheckState::Passed),
+            "FAILURE" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE"
+            | "STALE" => Some(CheckState::Failed),
+            _ => None,
+        },
+        _ => None,
+    }
+}

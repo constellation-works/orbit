@@ -32,6 +32,12 @@ pub fn error_payload(error: &OrbitError) -> Value {
     {
         object.insert("artifact_origin".to_string(), json!(artifact_origin));
     }
+    if let Some((source_run_id, run_id)) = error.resume_run_in_flight()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("source_run_id".to_string(), json!(source_run_id));
+        object.insert("run_id".to_string(), json!(run_id));
+    }
     if let Some((task_id, path, reason)) = error.task_bundle_corruption()
         && let Some(object) = payload.as_object_mut()
     {
@@ -50,12 +56,23 @@ pub fn error_payload(error: &OrbitError) -> Value {
     payload
 }
 
+/// The error object for an argv clap rejected, in the same shape as
+/// [`error_payload`]. There is no `OrbitError` behind it: parsing failed
+/// before any command existed to return one.
+pub fn usage_error_payload(message: &str) -> Value {
+    json!({
+        "error": message,
+        "code": "usage_error",
+    })
+}
+
 fn error_code(error: &OrbitError) -> &str {
     match error {
         OrbitError::PolicyDenied(_) => "policy_denied",
         OrbitError::NotFound { kind, .. } => match kind {
             NotFoundKind::Tool => "tool_not_found",
             NotFoundKind::Task => "task_not_found",
+            NotFoundKind::Friction => "friction_not_found",
             NotFoundKind::Artifact => "task_artifact_not_found",
             NotFoundKind::Skill => "skill_not_found",
             NotFoundKind::Job => "job_not_found",
@@ -73,8 +90,13 @@ fn error_code(error: &OrbitError) -> &str {
         // Catalog-role refusal, not an operator capability grant: the CLI
         // surfaces the same stable code MCP does [ORB-11012].
         OrbitError::CapabilityRefused(_) => "capability_refused",
-        OrbitError::CompanionNotInstalled(_) => "companion_not_installed",
+        OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
+        OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
+        OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
+        OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
+        OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
         OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) => "skill_validation_failed",
         OrbitError::JobValidation(_) => "job_validation_failed",
@@ -85,11 +107,14 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
         OrbitError::Execution(_) => "execution_failed",
+        OrbitError::ProcessTimeout { .. } => "process_timeout",
+        OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
         OrbitError::Store(_) => "store_error",
         OrbitError::TaskStatusTransition(_) => "task_status_transition",
         OrbitError::JobRunStateTransition(_) => "job_run_state_transition",
         OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
+        OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
         OrbitError::AdrInvalidTransition(_) => "adr_invalid_transition",
@@ -97,6 +122,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
         OrbitError::FrictionNotLocal(_) => "friction_not_local",
         OrbitError::Migration(_) => "migration_failed",
+        OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         // New OrbitError variants must remain JSON-serializable before this
         // boundary assigns them a dedicated stable code.
         _ => "internal_error",

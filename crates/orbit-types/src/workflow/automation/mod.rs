@@ -5,12 +5,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub mod members;
+pub mod recovery;
 
-/// Supported examination contracts; QA and review never share acceptance.
+/// Examination contract stored on a delivery trigger, frozen batch, and
+/// coverage evidence.
+///
+/// [`CoverageClass::LandedCodeReviewV1`] is the coverage a new definition may
+/// select. [`CoverageClass::IntegratedQaV1`] is retired: serde still decodes
+/// it so historical batches, evidence, automation state, and a not-yet-refreshed
+/// workspace copy of the old delivery definition keep loading, and the
+/// evaluator still applies that contract (exclusions are ignored). Auto-task
+/// add, and an update that sets a schedule, refuse to select it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageClass {
+    /// Retired QA coverage. Decode-only for persisted records.
     IntegratedQaV1,
+    /// Review of landed deliveries. A passed before-PR certificate excludes
+    /// a landing from the obligations.
     LandedCodeReviewV1,
 }
 
@@ -86,11 +98,24 @@ pub struct Delivery {
     pub before: SourceRevision,
     pub after: SourceRevision,
     pub commits: Vec<String>,
+    /// The tasks whose delivery this is, from the landing record.
     pub task_ids: Vec<String>,
+    /// Why `task_ids` is empty, when the landing record names no task. A fact
+    /// recorded before attribution carries neither, so its empty `task_ids`
+    /// means unknown rather than none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattributed: Option<String>,
     pub evidence_reference: String,
     pub evidence_digest: String,
     pub landed_at: DateTime<Utc>,
 }
+
+/// No task in this workspace records the landing: a PR merged outside Orbit,
+/// or a direct landing whose run named no task.
+pub const UNATTRIBUTED_NO_LANDING_TASK: &str = "no_landing_task";
+
+/// This checkout cannot read the task records that would attribute the landing.
+pub const UNATTRIBUTED_TASKS_UNREADABLE: &str = "task_records_unreadable";
 
 /// Bounded, pinned source observation. Unresolved commits remain obligations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,7 +129,8 @@ pub struct SourcePage {
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
     /// Accepted before-PR review coverage keyed by delivery key, supplied by
     /// Core from verified certificates [ORB-11333]. Only a
-    /// `landed_code_review_v1` consumer excludes on it; QA never does.
+    /// `landed_code_review_v1` consumer excludes on it. A decoded
+    /// `integrated_qa_v1` record ignores it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub exclusions: BTreeMap<String, DeliveryExclusion>,
     pub complete: bool,
@@ -182,6 +208,36 @@ pub struct BatchAttempt {
     pub state: BatchState,
     pub reason: Option<String>,
     pub retry_after: Option<DateTime<Utc>>,
+    /// Operator authorization for the current attempt, present only when a
+    /// recovery reissued a settled action over this same frozen batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reissue: Option<ActionReissue>,
+}
+
+impl BatchAttempt {
+    /// Latest moment this attempt may still reach admission. The frozen batch
+    /// budget governs, unless an operator explicitly authorized a reissue.
+    pub fn deadline(&self) -> DateTime<Utc> {
+        self.reissue
+            .as_ref()
+            .map_or(self.batch.retry_until, |reissue| reissue.retry_until)
+    }
+}
+
+/// Recorded authorization for one additional attempt over an already frozen
+/// batch, after the previous action settled without accepted evidence. It
+/// grants exactly one attempt and never touches the batch or its obligations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionReissue {
+    /// The settled action this attempt replaces, when one was admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_action_id: Option<String>,
+    pub reason: String,
+    pub by: String,
+    pub at: DateTime<Utc>,
+    /// Authorized admission deadline for this attempt alone.
+    pub retry_until: DateTime<Utc>,
 }
 
 /// Small current scheduler state; completed batches/receipts are separate rows.
@@ -191,6 +247,12 @@ pub struct AutomationState {
     pub members: Option<members::MemberState>,
     pub consumer: String,
     pub epoch: String,
+    /// The resolved trigger this consumer's epoch was derived from. Baselining
+    /// records it and only an audited recovery replaces it, so the settings the
+    /// retained debt was accumulated under stay provable. Absent on consumers
+    /// baselined before it was recorded, and on state-member consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<DeliveryTrigger>,
     pub repository: String,
     pub branch: String,
     pub generation: u64,
@@ -211,6 +273,11 @@ pub struct AutomationState {
     #[serde(default)]
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
     pub active: Option<BatchAttempt>,
+    /// Why this consumer stopped making progress. A recorded stall suspends
+    /// evaluation until an audited recovery or reset clears it, so the reason
+    /// is reported once as a durable fact instead of every tick as an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall: Option<recovery::AutomationStall>,
 }
 
 /// Worker-submitted structured evidence, attached through orbit.task.artifact.put.
@@ -313,6 +380,11 @@ pub struct AutomationDiagnostic {
     /// routines, whose trigger always names its owner outright.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ownership: Option<DeliveryOwnership>,
+    /// Members in the batch a state consumer would admit, is admitting, or
+    /// has in flight, each with why it is there [ORB-12746]. Empty for
+    /// delivery consumers and when nothing is due.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub batch: Vec<members::BatchMember>,
 }
 
 /// Core-verified writer authority for exact artifact bytes; this is not coverage.
@@ -351,6 +423,11 @@ pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
         findings: vec![],
     }
 }
+
+/// Task artifact carrying an action's [`CoverageEvidence`]. The artifact Store
+/// refuses bytes that do not parse as that schema, so the submitter sees the
+/// parse error while it can still fix and re-put the file.
+pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
 
 /// Reserved Store-authored artifact; callers cannot supply its contents.
 pub const EVIDENCE_AUTHORITY_ARTIFACT: &str = "automation-evidence-authority.json";

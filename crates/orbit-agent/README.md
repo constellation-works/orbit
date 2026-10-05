@@ -2,7 +2,8 @@
 
 Agent provider abstraction for Orbit. Two transport families coexist:
 
-- **CLI transports** drive `claude`, `codex`, `gemini`, `grok`, `ollama`, and `mock`
+- **CLI transports** drive `claude`, `codex`, `copilot`, `cursor-agent`, `gemini`,
+  `agy`, `grok`, `ollama`, `opencode`, `pi`, and `mock-agent`
   as subprocesses via the existing `AgentRuntime` trait. An invocation
   builds an `AgentInvocationSpec` (program, args, stdin envelope) that the
   engine runs through `orbit-exec`. **This is the path Orbit executes
@@ -21,6 +22,25 @@ Agent provider abstraction for Orbit. Two transport families coexist:
 
 The two trait shapes diverge enough — one-shot command descriptor vs.
 iterative conversation driver — that they are kept as siblings.
+
+## Provider boundary tests
+
+`./scripts/build-budget.py -- cargo test -p orbit-agent --test provider_invocation`
+runs one integration binary on Unix. Recording shell executables exercise every
+CLI adapter's public `Agent` invocation, including the internal mock provider;
+`Provider::ALL` requires a fixture for each shipped provider. Local HTTP servers
+exercise all three HTTP transports, including Gemini cache creation, and the
+real `AgentLoop` deadline and tool-result pairing behavior.
+
+The CLI fixture launches descriptors with the shared
+`orbit_common::security::child_env` allowlist, checking prompt delivery, model
+and effort flags, admitted context, and exclusion of ambient credentials and
+privilege variables. This covers the adapter and shared environment contract;
+engine-specific sandbox selection and environment overrides remain engine
+responsibilities. Each case runs in an isolated child with a disposable home
+under `.orbit/tmp`, synthetic secrets, bounded process waits and socket I/O.
+The fixtures use `/bin/sh`, `/bin/cat` and `/usr/bin/env`; they call no installed
+provider and need no external network or provider credentials.
 
 ## HTTP loop primitives
 
@@ -69,6 +89,16 @@ crates/orbit-agent/src/loop_engine/
   tooling. Includes native `cachedContents` support: when history length exceeds
   `cache_content_threshold_turns`, automatically issues a `POST .../cachedContents`
   before generation to cache the multi-turn session.
+
+All three transports read response bodies through a shared byte ceiling
+that applies while reading, so chunked bodies without `Content-Length` are
+bounded as well. A success body above 16 MiB (including a Gemini
+`cachedContents` response) fails with a `TransportError::Decode` naming the
+limit, and a declared `Content-Length` above it is refused before reading.
+For a non-2xx status only the first 64 KiB of the body are read into the
+`BadStatus` / `Auth` diagnostic, with a truncation marker when more
+followed. `max_response_tokens` is only a request hint and does not bound
+the bytes a server returns.
 
 ### OpenAI-compatible config surface
 
@@ -121,6 +151,15 @@ Three distinct structured errors, each configurable on
 
 Each check runs at iteration start and after every HTTP response. The
 first to trip wins.
+
+The wall-clock deadline is also checked before each tool dispatch and
+once more after a response's tools finish, before the loop returns
+success or starts the next turn. A tool already running is not
+interrupted, but once the budget expires no further tool in that
+response executes and the loop returns `Timeout`. The session keeps a
+consistent history: completed calls keep their real `tool_result`, and
+every call skipped after expiry gets an `is_error` `tool_result` with
+code `wall_clock_timeout`, so each `tool_use` stays paired on replay.
 
 ## Audit model
 

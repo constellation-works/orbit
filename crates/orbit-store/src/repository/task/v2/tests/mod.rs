@@ -1,13 +1,9 @@
 use chrono::{TimeZone, Utc};
-use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
-};
+use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, TaskType};
 use tempfile::TempDir;
 
 use super::*;
-use crate::contracts::{
-    TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams, TaskHistoryUpdateParams,
-};
+use crate::contracts::{TaskCreateParams, TaskHistoryUpdateParams};
 use crate::driver::sqlite::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
 };
@@ -15,26 +11,43 @@ use crate::driver::sqlite::task_registry::{
 pub(super) fn store(temp: &TempDir) -> TaskV2Store {
     let registry =
         TaskRegistryStore::open(&task_registry_path(temp.path())).expect("open registry");
-    let repo_dir = temp.path().join("repo");
+    bound_store(&registry, temp, "orbit-test-123456", "repo")
+}
+
+/// A second (third, ...) workspace bound into the same coordination registry,
+/// as two checkouts on one machine are. Only the partition and its checkout
+/// directory differ; task ids stay globally allocated across both.
+pub(super) fn bound_store(
+    registry: &TaskRegistryStore,
+    temp: &TempDir,
+    partition_id: &str,
+    checkout: &str,
+) -> TaskV2Store {
+    bound_store_at(registry, temp.path(), partition_id, checkout)
+}
+
+/// [`bound_store`] with the checkout under an explicit `root`, for fixtures
+/// that need a root other than a temp directory's own path.
+pub(super) fn bound_store_at(
+    registry: &TaskRegistryStore,
+    root: &std::path::Path,
+    partition_id: &str,
+    checkout: &str,
+) -> TaskV2Store {
+    let repo_dir = root.join(checkout);
     let orbit_dir = repo_dir.join(".orbit");
     std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     let binding = registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("orbit-test-123456".to_string()),
-            slug: "Orbit Test".to_string(),
+            partition_id: Some(partition_id.to_string()),
+            slug: format!("Orbit Test {checkout}"),
             repo_root: repo_dir.clone(),
             workspace_path: repo_dir.clone(),
             orbit_dir: orbit_dir.clone(),
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    TaskV2Store::new(
-        registry,
-        binding.workspace_id,
-        orbit_dir,
-        Some(repo_dir.to_string_lossy().into_owned()),
-        Some(repo_dir.to_string_lossy().into_owned()),
-    )
+    TaskV2Store::new(registry.clone(), binding.partition_id)
 }
 
 pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
@@ -55,7 +68,6 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         plan: "1. Do the work".to_string(),
         execution_summary: String::new(),
         context_files: vec!["docs/design/task-artifacts/1_overview.md".to_string()],
-        workspace_path: None,
         repo_root: None,
         created_by: Some("codex:gpt-5.5".to_string()),
         planned_by: None,
@@ -78,58 +90,4 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
     }
 }
 
-#[cfg(unix)]
-pub(super) struct RestoreWritePerms<'a> {
-    path: &'a std::path::Path,
-}
-
-#[cfg(unix)]
-impl Drop for RestoreWritePerms<'_> {
-    fn drop(&mut self) {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(self.path, std::fs::Permissions::from_mode(0o755));
-    }
-}
-
-#[cfg(unix)]
-pub(super) fn make_readonly(path: &std::path::Path) -> RestoreWritePerms<'_> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut perms = std::fs::metadata(path).expect("meta").permissions();
-    perms.set_mode(0o555);
-    std::fs::set_permissions(path, perms).expect("chmod -w");
-    RestoreWritePerms { path }
-}
-
-pub(super) fn assert_sandbox_write_io(err: &OrbitError, path_substr: &str) {
-    match err {
-        OrbitError::Io(message) => {
-            assert!(
-                message.contains(path_substr),
-                "expected path `{path_substr}` in `{message}`"
-            );
-            assert!(
-                message.contains("is not writable"),
-                "expected writable attribution in `{message}`"
-            );
-            assert!(
-                message.contains("sandbox or environment"),
-                "expected sandbox/environment hint in `{message}`"
-            );
-            assert!(
-                message.contains("not an Orbit store defect"),
-                "expected store-defect negation in `{message}`"
-            );
-        }
-        other => panic!("expected Io, got {other}"),
-    }
-}
-
 mod concurrency;
-mod crud;
-mod envelope_cache;
-mod update;
-
-mod listing;
-
-mod listing_bench;

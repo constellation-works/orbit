@@ -1,26 +1,12 @@
 use orbit_types::resource::{
     POLICY_RESOURCE_SCHEMA_VERSION, PolicyResource, ResourceHeader, ResourceKind,
 };
-use orbit_types::task::TaskPlan;
 use orbit_types::workflow::{
     AUTO_TASK_SCHEMA_VERSION, AutoTaskDefinition, ROUTINE_SCHEMA_VERSION, RoutineDefinition,
     SchemaHeader,
 };
 
 use crate::error::OrbitError;
-
-pub fn parse_task_plan(raw: &str, label: &str) -> Result<TaskPlan, OrbitError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || !looks_like_structured_task_plan(trimmed) {
-        return Ok(TaskPlan::default());
-    }
-    serde_yaml::from_str::<TaskPlan>(trimmed)
-        .map_err(|error| OrbitError::InvalidInput(format!("failed to parse {label}: {error}")))
-}
-
-fn looks_like_structured_task_plan(raw: &str) -> bool {
-    raw.contains("checkpoints:") || raw.contains("success_criteria:")
-}
 
 pub fn parse_auto_task_yaml(yaml: &str) -> Result<AutoTaskDefinition, OrbitError> {
     let header: SchemaHeader = serde_yaml::from_str(yaml)
@@ -38,24 +24,6 @@ pub fn parse_auto_task_yaml(yaml: &str) -> Result<AutoTaskDefinition, OrbitError
 }
 
 pub fn parse_routine_yaml(yaml: &str) -> Result<RoutineDefinition, OrbitError> {
-    let definition = parse_routine_document(yaml)?;
-    definition.validate_committed()?;
-    Ok(definition)
-}
-
-pub fn parse_local_routine_yaml(
-    yaml: &str,
-    local_host_id: &str,
-) -> Result<RoutineDefinition, OrbitError> {
-    let mut definition = parse_routine_document(yaml)?;
-    definition.validate_local(local_host_id)?;
-    if definition.hosts.is_empty() {
-        definition.hosts = vec![local_host_id.to_string()];
-    }
-    Ok(definition)
-}
-
-fn parse_routine_document(yaml: &str) -> Result<RoutineDefinition, OrbitError> {
     let header: SchemaHeader = serde_yaml::from_str(yaml)
         .map_err(|error| OrbitError::InvalidInput(format!("routine header: {error}")))?;
     if header.schema_version != ROUTINE_SCHEMA_VERSION {
@@ -66,7 +34,7 @@ fn parse_routine_document(yaml: &str) -> Result<RoutineDefinition, OrbitError> {
     }
     let definition: RoutineDefinition = serde_yaml::from_str(yaml)
         .map_err(|error| OrbitError::InvalidInput(format!("routine: {error}")))?;
-    definition.validate_common()?;
+    definition.validate()?;
     Ok(definition)
 }
 

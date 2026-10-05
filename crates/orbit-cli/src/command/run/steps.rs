@@ -1,5 +1,5 @@
 use orbit_core::application::job::JobRunListParams;
-use orbit_core::runtime::run_audit::RunAuditStep;
+use orbit_core::runtime::audit::run::RunAuditStep;
 use orbit_core::{JobRun, JobRunStep, JobTargetType, NotFoundKind, OrbitError, OrbitRuntime};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
@@ -8,28 +8,70 @@ use crate::command::{CommandOut, Payload};
 use crate::output::color::Domain;
 
 use super::format::{
-    format_admissions_stop_line, format_child_dispatch_lines, format_duration, format_timestamp,
-    format_waiting_line, format_worker_limit_line, summarize_error_message,
+    LockHolders, format_admissions_stop_line, format_child_dispatch_lines,
+    format_crew_selection_line, format_duration, format_run_role, format_timestamp,
+    format_waiting_line_with_holders, format_worker_limit_line, summarize_error_message,
 };
+
+/// Whether a run read may reconcile stale runs before reporting them.
+///
+/// `Reconcile` is the operator default: an orphaned `pending`/`running` run
+/// is finalized as `interrupted`, releasing its task reservations, so the
+/// view shows what actually happened. `Observe` reports stored records
+/// untouched, for readers that promise not to mutate run state [ORB-12941].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunRead {
+    Reconcile,
+    Observe,
+}
+
+impl RunRead {
+    pub(crate) fn from_no_reconcile(no_reconcile: bool) -> Self {
+        if no_reconcile {
+            Self::Observe
+        } else {
+            Self::Reconcile
+        }
+    }
+
+    pub(crate) fn show(self, runtime: &OrbitRuntime, run_id: &str) -> Result<JobRun, OrbitError> {
+        match self {
+            Self::Reconcile => runtime.show_job_run(run_id),
+            Self::Observe => runtime.show_job_run_observed(run_id),
+        }
+    }
+
+    pub(crate) fn list(
+        self,
+        runtime: &OrbitRuntime,
+        params: JobRunListParams,
+    ) -> Result<Vec<JobRun>, OrbitError> {
+        match self {
+            Self::Reconcile => runtime.list_job_runs(params),
+            Self::Observe => runtime.list_job_runs_observed(params),
+        }
+    }
+}
 
 pub(crate) fn resolve_run(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
+    read: RunRead,
 ) -> Result<JobRun, OrbitError> {
     if let Some(run_id) = run_id {
-        return runtime
-            .show_job_run(run_id)
-            .map_err(|_| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()));
+        return read.show(runtime, run_id);
     }
 
-    runtime
-        .list_job_runs(JobRunListParams {
+    read.list(
+        runtime,
+        JobRunListParams {
             limit: Some(1),
             ..Default::default()
-        })?
-        .into_iter()
-        .next()
-        .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, "latest".to_string()))
+        },
+    )?
+    .into_iter()
+    .next()
+    .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, "latest".to_string()))
 }
 
 pub(crate) fn resolve_run_step(
@@ -115,7 +157,7 @@ pub(crate) struct RunStepRecord {
 }
 
 impl RunStepRecord {
-    fn from_job_step(step: &JobRunStep) -> Self {
+    pub(crate) fn from_job_step(step: &JobRunStep) -> Self {
         Self {
             step_index: step.step_index,
             target_type: step.target_type.to_string(),
@@ -162,9 +204,22 @@ pub(crate) fn run_header_text(run: &JobRun) -> String {
 }
 
 pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineState>) -> String {
+    run_header_text_with_lock_holders(run, state, &LockHolders::new())
+}
+
+pub(crate) fn run_header_text_with_lock_holders(
+    run: &JobRun,
+    state: Option<&PipelineState>,
+    holders: &LockHolders,
+) -> String {
     use crate::output::color::{Domain, bold, dimmed, text};
     let mut lines = vec![
-        format!("{} {}", bold("Run ID:"), run.run_id),
+        format!(
+            "{} {} ({})",
+            bold("Run ID:"),
+            run.run_id,
+            format_run_role(&run.run_id)
+        ),
         format!("{} {}", bold("Job ID:"), run.job_id),
         format!(
             "{} {}",
@@ -191,6 +246,9 @@ pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineSt
     {
         lines.push(format!("{} {}", bold("Requested Crew:"), requested_crew));
     }
+    if let Some(line) = format_crew_selection_line(run.input.as_ref()) {
+        lines.push(line);
+    }
     if run.resolved_crew.is_some() || run.crew_model.is_some() {
         lines.push(format!(
             "{} {} ({})",
@@ -199,7 +257,7 @@ pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineSt
             run.crew_model.as_deref().unwrap_or("model unavailable"),
         ));
     }
-    if let Some(line) = format_waiting_line(run.state, state) {
+    if let Some(line) = format_waiting_line_with_holders(run.state, state, holders) {
         lines.push(line);
     }
     if let Some(line) = format_worker_limit_line(state) {
@@ -261,7 +319,59 @@ pub(crate) fn activity_provenance_lines(value: &Value) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn step_summary_table(steps: &[&JobRunStep]) -> crate::output::table::Table {
+/// Where the steps a run view renders came from.
+///
+/// A v2 pipeline run keeps its step history in the audit trail rather than in
+/// the job-run record, so `JobRun::steps` is empty for exactly the runs whose
+/// header reports `step_outputs=N` and whose `orbit run events` lists every
+/// step. `orbit run show` used to answer "no steps recorded" for those; it now
+/// reconstructs them from the same trail and names the source [ORB-12113].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StepSource {
+    /// The job-run record carried its own steps.
+    Record,
+    /// Reconstructed from the run's v2 audit trail.
+    Audit,
+}
+
+impl StepSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Record => "record",
+            Self::Audit => "audit",
+        }
+    }
+}
+
+/// The steps a run view should render, and where they came from.
+pub(crate) struct RunDisplaySteps {
+    pub(crate) records: Vec<RunStepRecord>,
+    pub(crate) source: StepSource,
+}
+
+/// Choose the steps a run view renders: the record's own when it has them,
+/// and the ones reconstructed from its audit trail otherwise.
+///
+/// `audit_steps` come from the caller's existing audit scan, so recovering
+/// them costs no extra read.
+pub(crate) fn run_display_steps(run: &JobRun, audit_steps: Vec<RunAuditStep>) -> RunDisplaySteps {
+    if !run.steps.is_empty() {
+        return RunDisplaySteps {
+            records: run.steps.iter().map(RunStepRecord::from_job_step).collect(),
+            source: StepSource::Record,
+        };
+    }
+
+    RunDisplaySteps {
+        records: audit_steps
+            .into_iter()
+            .map(RunStepRecord::from_audit_step)
+            .collect(),
+        source: StepSource::Audit,
+    }
+}
+
+pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::table::Table {
     use crate::output::table::{Column, Table};
     // `orbit run show <run_id> -s <step>` prints one step's untruncated record.
     let mut table = Table::new(vec![
@@ -272,13 +382,13 @@ pub(crate) fn step_summary_table(steps: &[&JobRunStep]) -> crate::output::table:
         Column::new("ERROR CODE").fixed(),
         Column::new("ERROR MESSAGE"),
     ])
-    .empty_message("no steps recorded");
+    .empty_message("no steps recorded in the run record or its audit trail");
     for step in steps {
         use comfy_table::Cell;
         table.add_row(vec![
             Cell::new(step.step_index),
             Cell::new(&step.target_id),
-            crate::output::color::cell(&step.state.to_string(), Domain::JobState),
+            crate::output::color::cell(&step.state, Domain::JobState),
             Cell::new(
                 step.duration_ms
                     .map(|ms| ms.to_string())
@@ -305,7 +415,12 @@ pub(crate) fn step_record_payload(
 
     use crate::output::color::{Domain, bold, dimmed, text};
     let mut lines = vec![
-        format!("{} {}", bold("Run ID:"), run.run_id),
+        format!(
+            "{} {} ({})",
+            bold("Run ID:"),
+            run.run_id,
+            format_run_role(&run.run_id)
+        ),
         format!("{} {}", bold("Job ID:"), run.job_id),
         format!("{} {}", bold("Target ID:"), step.target_id),
         format!("{} {}", bold("Target Type:"), step.target_type),
@@ -353,7 +468,7 @@ pub(crate) fn step_record_payload(
     Ok(Payload::detail(doc.clone(), lines.join("\n")).into())
 }
 
-fn run_step_record_to_json(step: &RunStepRecord) -> Value {
+pub(crate) fn run_step_record_to_json(step: &RunStepRecord) -> Value {
     json!({
         "step_index": step.step_index,
         "target_id": step.target_id,

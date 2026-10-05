@@ -2,15 +2,24 @@
 #
 # Admission control for "these must ship" bundles: wait until the bundle's
 # context_files are not held by any in-flight task lock or active
-# reservation, atomically reserve them, then dispatch to either
-# `task_pr_pipeline` or `task_local_pipeline` via `invoke_and_wait`.
+# reservation, atomically reserve them, then dispatch the bundle's delivery
+# job via `invoke_and_wait`: `task_pr_pipeline` or `task_local_pipeline`, or
+# the job the bundle's tasks select with a `delivery:<job>` tag.
 #
 # Behavioral contract
+# - `delivery` resolves the delivery job first, before any reservation: the
+#   default `task_<mode>_pipeline` when no bundled task carries a
+#   `delivery:<job>` tag, otherwise the selected job, which must be active and
+#   declare `task_delivery.modes` containing this mode. A selection naming a
+#   job whose plugin is disabled or uninstalled, or bundled tasks that select
+#   different jobs, fail the gate here, naming the plugin when one is
+#   installed. It never falls back to the default pipeline.
 # - `reserve_locks` refuses admission outright — before the first poll —
-#   when a bundled task's `blocked_by` target is archived, rejected, or
-#   dangling. Those edges can never reach `done`, so polling them to the
-#   iteration ceiling only delays a failure by the full wait budget. The
-#   loop is for edges that can still close.
+#   when a bundled task's `blocked_by` target is rejected, dangling, or
+#   archived without having reached `done` first (a target archived after
+#   `done` is satisfied). Those edges can never reach `done`, so polling
+#   them to the iteration ceiling only delays a failure by the full wait
+#   budget. The loop is for edges that can still close.
 # - `wait_for_window` polls by calling `reserve_locks` each iteration. The
 #   reserve step is always executed (never skipped) so its output can be
 #   referenced from `break_when` and from the post-loop starvation guard
@@ -23,8 +32,10 @@
 #   budget is enforced by `input.max_wait_seconds`, which the
 #   `starvation_check` step surfaces via the `gate.starvation` audit
 #   event when the loop exits without a reservation.
-# - The default reservation TTL intentionally covers the child dispatch wait
-#   budget. Keep `ttl_seconds >= dispatch_timeout_seconds` when overriding
+# - The child wait covers the longest supported implementation activity (3h)
+#   plus a bounded delivery/review tail (1h). The default reservation TTL
+#   intentionally covers that full child dispatch wait budget. Keep
+#   `ttl_seconds >= dispatch_timeout_seconds` when overriding
 #   these inputs; otherwise a second gate can reserve the same context before
 #   the first child pipeline finishes.
 # - The dispatched child pipeline runs while the reservation is still valid;
@@ -37,7 +48,10 @@
 #   can be released without launching a child run; a task a human withdrew
 #   during the wait (`proposed`, `someday`, `archived`, `rejected`, `blocked`)
 #   returns a non-succeeded output instead, so the reservation is still
-#   released and the gate then fails naming the task and its status. After
+#   released and the gate then fails naming the task and its status. A task a
+#   live distributed execution claim holds (pulled by a follower while this
+#   gate waited) returns a succeeded no-op as well: the claim is its one
+#   execution (ORB-13918). After
 #   `invoke_and_wait` returns a terminal child-run status,
 #   `release_reservation` frees the reservation immediately before
 #   `require_child_success` fails the gate on a non-succeeded child. TTL
@@ -56,8 +70,13 @@ metadata:
   name: task_gate_pipeline
 spec:
   state: enabled
+  # Holds each carried task's delivery slot while live. No mode: it only
+  # dispatches the delivery job, so no task selects it.
+  task_delivery: {}
   kind: workflow
-  max_active_runs: 10
+  # No job-level ceiling: the drain's own worker limit (`--concurrency`, retuned
+  # live by `orbit run concurrency`) bounds how many of these run at once.
+  max_active_runs: 0
   default_input:
     task_ids: []
     mode: pr
@@ -68,16 +87,28 @@ spec:
     landing_branch: ""
     # ORB-11187: forwarded to the leaf pipeline unchanged.
     completion: review
+    # ORB-12102: forwarded to the child pipeline, never pinned here. A gated
+    # local run publishes nothing by default — `task_local_pipeline` gates its
+    # `push` step on this value and defaults it to false — so a checkout with
+    # no usable `origin` no longer fails a push it never asked for. A caller
+    # that does want the child to publish passes `auto_push: true` to this job.
+    auto_push: false
     # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
     # which is the behavior of every caller that does not pass it. Forwarded
-    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    # unchanged so the leaf jobs this run admits inherit the same window.
     allowed_crews: []
     max_wait_seconds: 3600
     poll_interval_seconds: 30
-    ttl_seconds: 7200
-    dispatch_timeout_seconds: 7200
+    ttl_seconds: 14400
+    dispatch_timeout_seconds: 14400
 
   steps:
+    - id: delivery
+      target: activity:resolve_delivery_job
+      default_input:
+        task_ids: "{{ input.task_ids }}"
+        mode: "{{ input.mode }}"
+
     - id: wait_for_window
       loop:
         max_iterations: 120
@@ -106,7 +137,7 @@ spec:
     - id: dispatch_child
       target: activity:invoke_and_wait
       default_input:
-        job_name: "task_{{ input.mode }}_pipeline"
+        job_name: "{{ steps.delivery.output.job_name }}"
         run_input:
           task_ids: "{{ input.task_ids }}"
           base_branch: "{{ input.base_branch }}"
@@ -114,7 +145,7 @@ spec:
           landing_branch: "{{ input.landing_branch }}"
           completion: "{{ input.completion }}"
           allowed_crews: "{{ input.allowed_crews }}"
-          auto_push: true
+          auto_push: "{{ input.auto_push }}"
         admission_task_ids: "{{ input.task_ids }}"
         admission_workflow: worktree_setup
         timeout_seconds: "{{ input.dispatch_timeout_seconds }}"

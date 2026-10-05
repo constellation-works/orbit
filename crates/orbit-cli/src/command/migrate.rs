@@ -1,5 +1,7 @@
 use clap::Args;
-use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_cmd::registry_runtime::{
+    RegisteredRuntimeFactory, global_root_for, workspace_runtime_binding,
+};
 use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
@@ -32,26 +34,51 @@ pub struct MigrateCommand {
 impl MigrateCommand {
     /// `--dry-run` dispatches before the runtime bootstrap in `main.rs`:
     /// opening a runtime would auto-apply the very migrations being listed.
-    pub fn execute_without_runtime(self, root_override: Option<&std::path::Path>) -> CommandOut {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let Some(resolved) =
-            RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?
-        else {
-            return Err(OrbitError::WorkspaceError(
-                "no initialized orbit workspace found from the current directory; run `orbit init` first"
-                    .to_string(),
-            ));
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&std::path::Path>,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
+        let (global_root, orbit_dir) = match workspace_selector
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty())
+        {
+            Some(selector) => {
+                let global_root = global_root_for(root_override)?;
+                let selected =
+                    RegisteredRuntimeFactory::resolve_workspace_selector(&global_root, selector)?;
+                // Validate the checkout-local identity without opening a
+                // runtime: missing or malformed identity is a re-homing
+                // boundary, not permission to inspect a different root.
+                workspace_runtime_binding(&selected.workspace, &selected.checkout)?;
+                (global_root, selected.checkout.orbit_dir)
+            }
+            None => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let Some(resolved) =
+                    RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?
+                else {
+                    return Err(OrbitError::WorkspaceError(
+                        "no initialized orbit workspace found from the current directory; run `orbit init` first"
+                            .to_string(),
+                    ));
+                };
+                let global_root =
+                    RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&cwd, root_override)?
+                        .global_root;
+                (global_root, resolved.shared_root)
+            }
         };
-        let global_root =
-            RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&cwd, root_override)?
-                .global_root;
-        let status = migrate_dry_run_at(&global_root, &resolved.shared_root)?;
+        let status = migrate_dry_run_at(&global_root, &orbit_dir)?;
 
         // `--dry-run` exits nonzero when there is anything pending, and a
         // failing command has no payload — stdout carries records only
         // (spec §5). The readout is the diagnostic that explains the exit
         // code, so on the failing paths it goes to stderr alongside it.
-        if status.newer_than_binary() {
+        // A workspace newer than this binary is not necessarily unusable:
+        // when every extra migration is additive it opens read-only
+        // (ORB-12434), and reporting that is a successful inspection.
+        if status.newer_than_binary() && !status.forward_compatible_only() {
             eprintln!("{}", status_trailer(&status));
             return Err(OrbitError::Migration(format!(
                 "workspace '{}' was written by a newer orbit than this binary supports; \
@@ -106,6 +133,22 @@ fn status_payload(status: &MigrateStatus, dry_run: bool) -> CommandOut {
             "name": m.name,
         })).collect::<Vec<_>>(),
         "up_to_date": status.pending_total() == 0 && !status.newer_than_binary(),
+        "forward_compatible": {
+            "read_only": status.forward_compatible_only() && !status.forward_compatible_writable(),
+            "writable": status.forward_compatible_writable(),
+            "layout": status.layout_forward_compatible.as_ref().map(|open| json!({
+                "state_version": open.state_version,
+                "supported_version": open.supported_version,
+                "min_reader_version": open.min_reader_version,
+                "writable": open.writable,
+            })),
+            "schema": status.schema_forward_compatible.as_ref().map(|open| json!({
+                "state_version": open.state_version,
+                "supported_version": open.supported_version,
+                "min_reader_version": open.min_reader_version,
+                "writable": open.writable,
+            })),
+        },
     });
 
     // A fixed-shape status readout, not a result set: every component is named
@@ -143,6 +186,27 @@ fn status_trailer(status: &MigrateStatus) -> String {
             "\napplied on open: layout v{} ({})",
             applied.version, applied.name
         ));
+    }
+
+    for forward in [
+        status.layout_forward_compatible.as_ref(),
+        status.schema_forward_compatible.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        trailer.push_str(&format!("\nforward-compatible: {forward}"));
+    }
+    if status.forward_compatible_writable() {
+        trailer.push_str(
+            "\n\nThis workspace is newer than this binary, by migrations older binaries keep \
+             writing through: commands read and write it as usual.",
+        );
+    } else if status.forward_compatible_only() {
+        trailer.push_str(
+            "\n\nThis workspace is newer than this binary, by read-compatible migrations: \
+             read-only commands work and writes are refused. Upgrade orbit to write to it.",
+        );
     }
 
     // The caller emits the refusal error for a workspace newer than the binary,

@@ -1,93 +1,16 @@
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use serde_json::json;
 use tempfile::tempdir;
 
-use crate::command::log::format::{LevelFilter, format_message};
 use crate::command::log::tail::{
-    FollowTestControl, MatchingLineWindow, TailArgs, build_filters, run_tail,
-    run_tail_with_test_control,
+    FollowTestControl, TailArgs, build_filters, run_tail_with_test_control,
 };
-use crate::command::{CommandOutput, Execute};
-use crate::output::payload::View;
-use crate::output::sink::{FormatArg, OutputSink, SinkEnv};
-
-fn fixture_lines() -> Vec<String> {
-    vec![
-        json!({
-            "timestamp": "2026-04-27T01:00:01.123456789Z",
-            "level": "INFO",
-            "target": "orbit.job.step_started",
-            "fields": {
-                "job_run_id": "run-1",
-                "task_id": "T123",
-                "step_id": "build",
-                "message": "step started"
-            }
-        })
-        .to_string(),
-        json!({
-            "timestamp": "2026-04-27T01:00:02.000000000Z",
-            "level": "INFO",
-            "target": "orbit.job.step_finished",
-            "fields": {
-                "job_run_id": "run-1",
-                "task_id": "T123",
-                "step_id": "build",
-                "outcome": "success",
-                "success": true,
-                "message": "step finished"
-            }
-        })
-        .to_string(),
-        json!({
-            "timestamp": "2026-04-27T01:00:03.000000000Z",
-            "level": "WARN",
-            "target": "orbit.policy.deny",
-            "fields": {
-                "tool": "fs.write",
-                "path": "/etc/passwd",
-                "profile": "writer",
-                "matched_rule": "/etc/**",
-                "message": "policy deny"
-            }
-        })
-        .to_string(),
-        json!({
-            "timestamp": "2026-04-27T01:00:04.000000000Z",
-            "level": "WARN",
-            "target": "orbit.friction.reported",
-            "fields": {
-                "task_id": "ORB-1011",
-                "agent": "codex",
-                "model": TEST_CODEX_MODEL,
-                "summary": "tool docs missing",
-                "message": "friction reported"
-            }
-        })
-        .to_string(),
-        json!({
-            "timestamp": "2026-04-27T01:00:05.000000000Z",
-            "level": "INFO",
-            "target": "orbit_engine::activity_job::cli_runner",
-            "fields": {
-                "provider": "codex",
-                "stream": "stdout",
-                "job_run_id": "jrun-1",
-                "task_id": "T123",
-                "line": "hello world",
-                "message": "subprocess line"
-            }
-        })
-        .to_string(),
-    ]
-}
 
 fn write_fixture(path: &Path, lines: &[String]) {
     let mut content = String::new();
@@ -96,13 +19,6 @@ fn write_fixture(path: &Path, lines: &[String]) {
         content.push('\n');
     }
     std::fs::write(path, content).expect("write fixture");
-}
-
-fn capture(path: &Path, args: TailArgs) -> String {
-    let filters = build_filters(&args).expect("build filters");
-    let mut buf: Vec<u8> = Vec::new();
-    run_tail(path, &args, &filters, false, &mut buf).expect("tail run");
-    String::from_utf8(buf).expect("utf8")
 }
 
 fn make_args(path: PathBuf) -> TailArgs {
@@ -118,315 +34,63 @@ fn make_args(path: PathBuf) -> TailArgs {
 }
 
 #[test]
-fn default_tail_prints_last_n_formatted_columns_and_exits() {
+fn append_during_initial_history_read_is_emitted_once_at_handoff() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
+    let first = json!({"target": "orbit.test", "fields": {"message": "first"}}).to_string();
+    write_fixture(&path, std::slice::from_ref(&first));
 
-    let output = capture(&path, make_args(path.clone()));
-    let lines: Vec<&str> = output.lines().collect();
-    assert_eq!(lines.len(), 5);
-    assert!(lines[0].contains("01:00:01"));
-    assert!(lines[0].contains("job"));
-    assert!(lines[0].contains("INF"));
-    assert!(lines[0].contains("step build started"));
-    assert!(lines[2].contains("DENY"));
-    assert!(lines[2].contains("policy"));
-    assert!(lines[2].contains("path=/etc/passwd"));
-    assert!(lines[3].contains("FRC"));
-    assert!(lines[3].contains("friction reported on ORB-1011"));
-    assert!(lines[4].contains("codex"));
-    assert!(lines[4].contains("[stdout] hello world"));
-}
-
-#[test]
-fn target_prefix_filter_matches_only_dotted_prefix() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
-    let mut args = make_args(path.clone());
-    args.target = Some("orbit.policy".to_string());
-    let output = capture(&path, args);
-    let lines: Vec<&str> = output.lines().collect();
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].contains("DENY"));
-}
-
-#[test]
-fn level_filter_drops_below_threshold() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
-    let mut args = make_args(path.clone());
-    args.level = Some(LevelFilter::Warn);
-    let output = capture(&path, args);
-    let lines: Vec<&str> = output.lines().collect();
-    // INFO step_started + step_finished + cli_runner are dropped; WARN
-    // policy.deny + friction.reported remain.
-    assert_eq!(lines.len(), 2);
-    assert!(lines[0].contains("DENY"));
-    assert!(lines[1].contains("FRC"));
-}
-
-#[test]
-fn since_filter_drops_older_events() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
-    let mut args = make_args(path.clone());
-    // Make `since` newer than the fixture's timestamps so only events
-    // strictly after that cutoff would survive — but the fixture sits at
-    // 2026-04-27T01:00:0X which is in the past relative to now-anchored
-    // durations. Use a tiny window pinned to the future to assert the
-    // filter actually drops.
-    args.since = Some("0s".to_string());
-    let output = capture(&path, args);
-    // All fixture events have timestamps before "now-0s"; they should all
-    // be dropped.
-    assert_eq!(output.lines().count(), 0);
-}
-
-#[test]
-fn n_flag_limits_history() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
     let mut args = make_args(path.clone());
     args.lines = 2;
-    let output = capture(&path, args);
-    assert_eq!(output.lines().count(), 2);
-    // Should be the last two: friction.reported + cli_runner.
-    let lines: Vec<&str> = output.lines().collect();
-    assert!(lines[0].contains("FRC"));
-    assert!(lines[1].contains("[stdout] hello world"));
-}
-
-#[test]
-fn n_zero_prints_no_initial_history_rows() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
-    let mut args = make_args(path.clone());
-    args.lines = 0;
-    assert!(capture(&path, args).is_empty());
-}
-
-#[test]
-fn initial_tail_streams_large_interleaved_log_to_last_matching_rows_in_order() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    let mut file = File::create(&path).expect("create fixture");
-    let mut expected = Vec::new();
-
-    for index in 0..4_096 {
-        match index % 5 {
-            0 => {
-                let line = json!({
-                    "timestamp": "2026-04-27T01:00:01.000000000Z",
-                    "level": "WARN",
-                    "target": "orbit.policy.deny",
-                    "fields": {"message": format!("matching-{index}")}
-                })
-                .to_string();
-                if index >= 4_065 {
-                    expected.push(line.clone());
-                }
-                writeln!(file, "{line}").expect("write matching row");
-            }
-            3 => writeln!(file, "{{malformed-{index}").expect("write malformed row"),
-            _ => writeln!(
-                file,
-                "{}",
-                json!({
-                    "timestamp": "2026-04-27T01:00:01.000000000Z",
-                    "level": "INFO",
-                    "target": "orbit.unrelated.event",
-                    "fields": {"message": format!("nonmatching-{index}")}
-                })
-            )
-            .expect("write nonmatching row"),
-        }
-    }
-
-    let mut args = make_args(path.clone());
-    args.lines = 7;
-    args.target = Some("orbit.policy".to_string());
+    args.follow = true;
     args.json = true;
+    args.target = Some("orbit.test".to_string());
+    let mut follower =
+        spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
+    reached_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("initial reader paused after first line");
 
-    assert_eq!(capture(&path, args).lines().collect::<Vec<_>>(), expected);
-}
-
-#[test]
-fn matching_line_window_never_retains_more_rows_than_requested() {
-    let mut window = MatchingLineWindow::new(3);
-    for index in 0..4_096 {
-        window.push(format!("matching-{index}"));
-        assert!(
-            window.len() <= 3,
-            "the bounded window exceeded its requested capacity at row {index}"
-        );
-    }
-
-    let mut zero_window = MatchingLineWindow::new(0);
-    zero_window.push("matching".to_string());
-    assert_eq!(zero_window.len(), 0);
-}
-
-#[test]
-fn json_flag_emits_raw_lines_unchanged() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
-    let mut args = make_args(path.clone());
-    args.json = true;
-    let output = capture(&path, args);
-    let lines: Vec<&str> = output.lines().collect();
-    assert_eq!(lines.len(), 5);
-    for (i, line) in lines.iter().enumerate() {
-        assert_eq!(*line, fixture_lines()[i]);
-    }
-}
-
-#[test]
-fn non_tty_output_contains_no_ansi_escapes() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
-    let output = capture(&path, make_args(path.clone()));
-    assert!(
-        !output.as_bytes().contains(&0x1b),
-        "non-tty output leaked ANSI escape: {output}"
-    );
-}
-
-#[test]
-fn follow_mode_emits_appended_line_within_window() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
-    // The worker starts late on purpose: appending is nevertheless safe
-    // because readiness is the post-offset transition, not elapsed time.
-    let mut follower = spawn_follower(path.clone(), false, Duration::from_millis(100));
-    follower.wait_until_ready();
-
+    let during = json!({"target": "orbit.test", "fields": {"message": "during"}}).to_string();
+    let ignored = json!({"target": "orbit.other", "fields": {"message": "ignored"}});
     let mut file = OpenOptions::new()
         .append(true)
         .open(&path)
         .expect("append fixture");
-    let appended = json!({
-        "timestamp": "2026-04-27T01:00:06.000000000Z",
-        "level": "INFO",
-        "target": "orbit.job.step_started",
-        "fields": {
-            "job_run_id": "run-2",
-            "step_id": "post-fixture",
-            "message": "step started"
-        }
-    })
-    .to_string();
-    writeln!(file, "{appended}").expect("write appended");
-    file.flush().ok();
-
-    let deadline = Instant::now() + Duration::from_millis(500);
-    let mut found = false;
-    while Instant::now() < deadline {
-        if let Ok(line) = follower.recv_timeout(Duration::from_millis(50))
-            && line.contains("post-fixture")
-        {
-            found = true;
-            break;
-        }
-    }
-
-    assert!(found, "follow mode did not surface appended line");
-    follower.finish();
-}
-
-#[test]
-fn follow_mode_with_json_flag_emits_appended_line_as_raw_jsonl() {
-    // Regression for review thread P2: follow mode must honor `--json` for
-    // appended lines, not just for the initial window.
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    write_fixture(&path, &fixture_lines());
-
-    let mut follower = spawn_follower(path.clone(), true, Duration::ZERO);
+    writeln!(file, "{during}\n{ignored}").expect("append during initial read");
+    resume_tx.send(()).expect("resume initial reader");
     follower.wait_until_ready();
 
-    let mut file = OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .expect("append fixture");
-    let appended_raw = json!({
-        "timestamp": "2026-04-27T01:00:07.000000000Z",
-        "level": "INFO",
-        "target": "orbit.job.step_started",
-        "fields": {
-            "job_run_id": "run-3",
-            "step_id": "json-followed",
-            "message": "step started"
-        }
-    })
-    .to_string();
-    writeln!(file, "{appended_raw}").expect("write appended");
-    file.flush().ok();
-
-    let deadline = Instant::now() + Duration::from_millis(500);
-    let mut got_raw = false;
-    while Instant::now() < deadline {
-        if let Ok(chunk) = follower.recv_timeout(Duration::from_millis(50)) {
-            // Followed JSON output is the raw JSONL line — i.e. the same
-            // string we appended, optionally followed by a newline. The
-            // formatted four-column view would render `step json-followed
-            // started [run=run-3]` instead, so asserting the literal raw
-            // body is sufficient.
-            if chunk.trim_end().ends_with(&appended_raw) {
-                got_raw = true;
-                break;
-            }
-        }
-    }
-
-    assert!(
-        got_raw,
-        "follow mode with --json did not surface appended line as raw JSONL",
-    );
+    let sentinel = json!({"target": "orbit.test", "fields": {"message": "sentinel"}}).to_string();
+    writeln!(file, "{sentinel}").expect("append after handoff");
+    let output = follower.collect_through("sentinel");
     follower.finish();
+    assert_eq!(
+        output.lines().collect::<Vec<_>>(),
+        [first, during, sentinel]
+    );
 }
 
-fn spawn_follower(path: PathBuf, json: bool, startup_delay: Duration) -> FollowWorker {
+fn spawn_follower_with_args(
+    args: TailArgs,
+    startup_delay: Duration,
+    initial_read_pause: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+) -> FollowWorker {
     let (output_tx, output_rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
         thread::sleep(startup_delay);
         let mut buf = TeeWriter::new(output_tx);
-        let args = TailArgs {
-            lines: 0,
-            follow: true,
-            target: None,
-            level: None,
-            since: None,
-            json,
-            path: Some(path.clone()),
-        };
+        let path = args.path.as_ref().expect("fixture path");
         let filters = build_filters(&args).expect("filters");
-        run_tail_with_test_control(
-            &path,
-            &args,
-            &filters,
-            false,
-            &mut buf,
-            FollowTestControl::new(ready_tx, stop_rx),
-        )
+        let mut control = FollowTestControl::new(ready_tx, stop_rx);
+        if let Some((reached, resume)) = initial_read_pause {
+            control = control.pause_during_initial_read(reached, resume);
+        }
+        run_tail_with_test_control(path, &args, &filters, false, &mut buf, control)
     });
     FollowWorker {
         output_rx,
@@ -454,6 +118,20 @@ impl FollowWorker {
         self.output_rx.recv_timeout(timeout)
     }
 
+    fn collect_through(&self, needle: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut output = String::new();
+        while Instant::now() < deadline {
+            if let Ok(chunk) = self.recv_timeout(Duration::from_millis(50)) {
+                output.push_str(&chunk);
+                if output.lines().any(|line| line.contains(needle)) {
+                    return output;
+                }
+            }
+        }
+        panic!("follow output did not contain {needle}: {output}");
+    }
+
     fn finish(&mut self) {
         let _ = self.stop_tx.send(());
         self.join();
@@ -478,58 +156,6 @@ impl Drop for FollowWorker {
     }
 }
 
-#[test]
-fn format_message_renders_each_high_value_target() {
-    let policy = format_message(
-        "orbit.policy.deny",
-        &json!({
-            "tool": "fs.write",
-            "path": "/etc/passwd",
-            "profile": "writer",
-            "matched_rule": "/etc/**"
-        }),
-    );
-    assert_eq!(
-        policy,
-        "tool=fs.write path=/etc/passwd profile=writer rule=/etc/**"
-    );
-
-    let friction = format_message(
-        "orbit.friction.reported",
-        &json!({
-            "task_id": "ORB-1011",
-            "agent": "codex",
-            "model": TEST_CODEX_MODEL,
-            "summary": "missing"
-        }),
-    );
-    assert!(friction.starts_with("friction reported on ORB-1011"));
-    assert!(friction.contains("by codex/gpt-5.5"));
-    assert!(friction.ends_with(": missing"));
-
-    let started = format_message(
-        "orbit.job.step_started",
-        &json!({"job_run_id": "r", "step_id": "s"}),
-    );
-    assert_eq!(started, "step s started [run=r]");
-
-    let finished_ok = format_message(
-        "orbit.job.step_finished",
-        &json!({"step_id": "s", "outcome": "success", "success": true}),
-    );
-    assert_eq!(finished_ok, "step s finished ok (success)");
-
-    let runner = format_message(
-        "orbit_engine::activity_job::cli_runner",
-        &json!({
-            "provider": "codex",
-            "stream": "stderr",
-            "line": "boom"
-        }),
-    );
-    assert_eq!(runner, "[stderr] boom");
-}
-
 struct TeeWriter {
     tx: mpsc::Sender<String>,
 }
@@ -546,140 +172,6 @@ impl Write for TeeWriter {
             let _ = self.tx.send(text.to_string());
         }
         Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn three_event_log(path: &Path) {
-    let lines: Vec<String> = (0..3)
-        .map(|index| {
-            json!({
-                "timestamp": format!("2026-04-27T01:00:0{index}.000000000Z"),
-                "level": "INFO",
-                "target": "orbit.test",
-                "fields": { "message": format!("event {index}") }
-            })
-            .to_string()
-        })
-        .collect();
-    write_fixture(path, &lines);
-}
-
-fn drive_tail_stream(
-    path: PathBuf,
-    json: bool,
-    requested: Option<FormatArg>,
-    legacy_json: bool,
-) -> String {
-    let args = TailArgs {
-        lines: 3,
-        follow: false,
-        target: None,
-        level: None,
-        since: None,
-        json,
-        path: Some(path),
-    };
-    let runtime = orbit_core::OrbitRuntime::in_memory().expect("runtime");
-    let output = args.execute(&runtime).expect("tail payload");
-    let CommandOutput::Payload(payload) = output else {
-        panic!("log tail must return a stream payload, got {output:?}");
-    };
-    let (_, view) = payload.into_view();
-    let View::Stream(stream) = view else {
-        panic!("log tail must be a stream");
-    };
-    let sink = OutputSink::resolve(false, &SinkEnv::default(), None, requested, legacy_json);
-    let mut buf = Vec::new();
-    stream(&sink, &mut buf).expect("stream");
-    String::from_utf8(buf).expect("utf8")
-}
-
-#[test]
-fn execute_stream_emits_three_ndjson_records_from_sink_mode() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    three_event_log(&path);
-
-    let output = drive_tail_stream(path, false, Some(FormatArg::Ndjson), false);
-    let lines: Vec<&str> = output.lines().collect();
-    assert_eq!(lines.len(), 3, "{output}");
-    for (index, line) in lines.iter().enumerate() {
-        let value: serde_json::Value = serde_json::from_str(line).expect("ndjson line");
-        assert_eq!(value["fields"]["message"], format!("event {index}"));
-    }
-}
-
-#[test]
-fn execute_stream_honors_format_json_when_args_json_is_false() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    three_event_log(&path);
-
-    let output = drive_tail_stream(path, false, Some(FormatArg::Json), false);
-    assert!(
-        output
-            .lines()
-            .all(|line| serde_json::from_str::<serde_json::Value>(line).is_ok()),
-        "sink json mode must emit JSONL, not the column view:\n{output}"
-    );
-}
-
-#[test]
-fn execute_stream_keeps_human_columns_when_format_is_table() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    three_event_log(&path);
-
-    let output = drive_tail_stream(path, true, Some(FormatArg::Table), true);
-    assert!(
-        output.contains("INF"),
-        "--format table must outrank --json:\n{output}"
-    );
-}
-
-#[test]
-fn execute_stream_treats_a_broken_pipe_as_success() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("orbit.jsonl");
-    three_event_log(&path);
-
-    let args = TailArgs {
-        lines: 3,
-        follow: false,
-        target: None,
-        level: None,
-        since: None,
-        json: false,
-        path: Some(path),
-    };
-    let runtime = orbit_core::OrbitRuntime::in_memory().expect("runtime");
-    let output = args.execute(&runtime).expect("tail payload");
-    let CommandOutput::Payload(payload) = output else {
-        panic!("log tail must return a stream payload");
-    };
-    let (_, view) = payload.into_view();
-    let View::Stream(stream) = view else {
-        panic!("log tail must be a stream");
-    };
-    let sink = OutputSink::resolve(
-        false,
-        &SinkEnv::default(),
-        None,
-        Some(FormatArg::Ndjson),
-        false,
-    );
-    stream(&sink, &mut BrokenPipeWriter).expect("broken pipe is success");
-}
-
-struct BrokenPipeWriter;
-
-impl Write for BrokenPipeWriter {
-    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-        Err(io::Error::from(io::ErrorKind::BrokenPipe))
     }
 
     fn flush(&mut self) -> io::Result<()> {

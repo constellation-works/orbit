@@ -1,0 +1,18 @@
+# Superseded `ci_failure_sweep` default (shipped 2026-08-30 to 2026-09-04):
+# the description changed on 2026-09-04. Kept as a provenance shape only —
+# see `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routine.rs`.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Hourly sweep of this repository's current GitHub Actions failures: collect
+  bounded, redacted evidence on the host, then file each current, non-stale
+  failure cluster as an ordinary backlog bug task carrying that evidence
+  inline. Deduped against still-open tasks by failure key.
+enabled: false
+trigger:
+  cron: "5 * * * *"
+  missed_run: skip
+target: job:ci_failure_sweep_pipeline
+policy:
+  timeout_minutes: 30
+  overlap: forbid

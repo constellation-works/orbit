@@ -11,6 +11,7 @@
 //! `orbit_tools::github_cli`, so the shape of a `gh` call has exactly one
 //! owner in the workspace.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -81,6 +82,73 @@ pub(super) struct RunLog {
     pub(super) checkout_evidence_display_truncated: bool,
 }
 
+/// The heads visible on `origin` for one CI sweep.
+///
+/// Production callers populate `heads` with one repository-wide
+/// `ls-remote --heads` result. The per-branch and whole-query error fields let
+/// scripted tests retain the old distinction between an absent ref and a
+/// transient probe failure while all production lookups remain local.
+#[derive(Debug, Default)]
+pub(super) struct RemoteBranchHeads {
+    heads: BTreeMap<String, String>,
+    branch_errors: BTreeMap<String, String>,
+    query_error: Option<String>,
+}
+
+impl RemoteBranchHeads {
+    fn from_heads(heads: BTreeMap<String, String>) -> Self {
+        Self {
+            heads,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn from_query_error(message: String) -> Self {
+        Self {
+            query_error: Some(message),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_scripted(
+        heads: BTreeMap<String, String>,
+        branch_errors: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            heads,
+            branch_errors,
+            query_error: None,
+        }
+    }
+
+    pub(super) fn head(&self, branch: &str) -> Result<Option<String>, OrbitError> {
+        if let Some(message) = self.branch_errors.get(branch) {
+            return Err(OrbitError::Execution(message.clone()));
+        }
+        if let Some(message) = &self.query_error {
+            return Err(OrbitError::Execution(message.clone()));
+        }
+        Ok(self.heads.get(branch).cloned())
+    }
+}
+
+// pub(super) widened for sibling-layout tests in ci/tests/query.rs
+fn parse_remote_branch_heads(output: &str) -> BTreeMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (sha, reference) = line.split_once('\t')?;
+            let branch = reference.strip_prefix("refs/heads/")?;
+            let sha = sha.trim();
+            if sha.is_empty() || branch.is_empty() {
+                return None;
+            }
+            Some((branch.to_string(), sha.to_string()))
+        })
+        .collect()
+}
+
 /// The reads the CI stages are allowed to make.
 ///
 /// A trait rather than free functions so the stages can be exercised against
@@ -95,16 +163,20 @@ pub(super) trait CiQueries {
     /// Recent runs across the whole repository, without a branch filter.
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError>;
+    /// `cached_view` is the already-verified, projected payload a caller
+    /// obtained from [`Self::run_view`] for this exact run, if any. Passing
+    /// it lets the per-job log fallback skip re-querying `gh run view` for
+    /// metadata the caller already has.
     fn run_logs(
         &self,
         run_id: &str,
         job_id: u64,
         scope: LogScope,
         max_bytes: usize,
+        cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError>;
-    /// Current remote head of `branch`, or `None` when the remote has no such
-    /// branch. Reads `origin` without mutating anything locally.
-    fn remote_branch_head(&self, branch: &str) -> Result<Option<String>, OrbitError>;
+    /// Read all current heads from `origin` once for this sweep.
+    fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError>;
 }
 
 /// The production implementation: `gh` and `git`, run on the host.
@@ -128,6 +200,34 @@ impl HostCiQueries {
         let result = run_process(&request, &NoSandbox)?;
         check_exec_result(&result, label)?;
         Ok(result.stdout)
+    }
+}
+
+impl HostCiQueries {
+    /// Attach each failed job's runner labels from the jobs API, the evidence
+    /// a filed repair's `os:` tag comes from. Best effort: the labels only
+    /// route the repair, so a failed read is recorded on the view and the
+    /// failure is still filed, untagged.
+    fn with_runner_labels(&self, mut view: Value, run_id: &str) -> Value {
+        let labels = github_cli::run_jobs_request(&json!({"run": run_id}))
+            .and_then(|request| self.run_gh(request, "gh api run jobs"))
+            .and_then(|stdout| github_cli::parse_gh_json(&stdout, "gh api run jobs"))
+            .map(|listing| github_cli::project_job_labels(&listing));
+        let labels = match labels {
+            Ok(labels) => labels,
+            Err(error) => {
+                view["runner_labels_error"] = json!(redact_all(&error.to_string()));
+                return view;
+            }
+        };
+        for jobs in ["jobs", "failed_jobs"] {
+            for job in view[jobs].as_array_mut().into_iter().flatten() {
+                if let Some(job_labels) = job["job_id"].as_u64().and_then(|id| labels.get(&id)) {
+                    job["runner_labels"] = json!(job_labels);
+                }
+            }
+        }
+        view
     }
 }
 
@@ -217,7 +317,7 @@ impl CiQueries for HostCiQueries {
                 "gh run view returned a different or missing run identity".to_string(),
             ));
         }
-        Ok(view)
+        Ok(self.with_runner_labels(view, run_id))
     }
 
     fn run_logs(
@@ -226,12 +326,17 @@ impl CiQueries for HostCiQueries {
         job_id: u64,
         scope: LogScope,
         max_bytes: usize,
+        cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError> {
         let requests = github_cli::RunLogRequests::from_input(
             &json!({"run": run_id, "job": job_id, "scope": scope.as_str()}),
         )?
         .in_directory(&self.repo_root.to_string_lossy());
-        let read = github_cli::read_run_log(&requests, github_cli::LogReadBounds::new(max_bytes))?;
+        let read = github_cli::read_run_log(
+            &requests,
+            github_cli::LogReadBounds::new(max_bytes),
+            cached_view,
+        )?;
 
         Ok(RunLog {
             source: read.source.to_string(),
@@ -253,17 +358,14 @@ impl CiQueries for HostCiQueries {
         })
     }
 
-    fn remote_branch_head(&self, branch: &str) -> Result<Option<String>, OrbitError> {
+    fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {
         let output = super::super::vcs::git::git_output(
             &self.repo_root,
-            &["ls-remote", "--heads", "origin", "--", branch],
+            &["ls-remote", "--heads", "origin"],
         )?;
-        Ok(output
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().next())
-            .filter(|sha| !sha.is_empty())
-            .map(ToOwned::to_owned))
+        Ok(RemoteBranchHeads::from_heads(parse_remote_branch_heads(
+            &output,
+        )))
     }
 }
 

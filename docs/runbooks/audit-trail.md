@@ -2,10 +2,10 @@
 type: runbook
 summary: Query and interpret Orbit invocation, run, step, and activity audit history.
 tags: [operations, audit, observability, debugging]
-paths: ["crates/orbit-core/src/runtime/run_audit.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
+paths: ["crates/orbit-core/src/runtime/audit/run.rs", "crates/orbit-core/src/runtime/audit/run_projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
 related_artifacts: [ORB-10014, ORB-10227, ORB-10228]
-last_validated: 2026-08-22
+last_validated: 2026-09-16
 ---
 
 # Inspect the Audit Trail
@@ -33,7 +33,7 @@ result ([ORB-10227]). A tool that already failed keeps its implementation error 
 orbit audit list --since 1h --status failure     # recent failures
 orbit audit list --transport local --capability agent
 orbit audit list --origin-session <id> --mcp-call <id>
-orbit audit list --workspace <id> --caller-machine <id> --process-machine <id>
+orbit audit list --workspace-id <ws_*> --caller-machine <id> --process-machine <id>
 orbit audit list --run <jrun-id> --lease <lease-id>
 orbit audit list --json --limit 100              # full event objects
 orbit audit show <id>
@@ -42,12 +42,21 @@ orbit audit export --output audit.json           # JSON or --format csv
 orbit audit prune --older-than 90d --confirm
 ```
 
+The store is host-global and listing is unscoped by default: the global seam records
+unknown or unadvertised MCP tool names and workspace setup failures before a workspace
+resolves, so those rows carry a NULL `workspace_id`. `--workspace-id` is an equality
+filter on the stored workspace ID (`ws_*`) and excludes those NULL rows. It is a
+subcommand filter, distinct from the global `--workspace <selector>`, which takes a
+registered name, logical ID (`ws_*`), or checkout path and only routes runtime bootstrap.
+A registered name is not a stored ID: `orbit audit list --workspace-id <name>` is not
+equivalent to `orbit --workspace <name> audit list` and matches no rows.
+
 Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `subcommand`,
 `tool_name`, `target_type`, `target_id`, `role`, `status` (`success|failure|denied`),
 `exit_code`, `duration_ms`, `working_directory`, `arguments_json`, `stdout_truncated`,
 `stderr_truncated`, `error_message`, `host`, `pid`, `session_id`, `task_id`, `job_run_id`,
 `activity_id`, and `step_index`. MCP rows add optional `workspace_id`, caller/process
-`machine_id` and display `host_id`, `transport`, the complete `effective_capabilities` set,
+`machine_id` and display `machine_name`, `transport`, the complete `effective_capabilities` set,
 `origin_session_id`, `mcp_call_id`, and `lease_id`.
 
 Compatibility matters when interpreting those fields: legacy `host` is always the hostname of
@@ -57,6 +66,26 @@ one call. Standalone MCP rows have role `unverified`, local transport, and exact
 capability. Trusted managed-envelope identity may replace `unverified`; client JSON may not.
 
 ## Find recent failures and causes
+
+The dashboard's **Tool call failures by tool** table retains the raw failed,
+total and rate columns. Failed means `status=failure`, including documented
+negative paths such as invalid input and missing records. Total counts only
+successful and failed invocations (`command=tool`, `run` or `run-mcp`); denied
+rows appear in their own column and are excluded from the rate. Unexpected
+counts use the incident classifier, so schema rejections do not look like
+unexpected execution errors. Tools with only denials still appear, with zero
+comparable calls and a zero rate. Inactive agent-surface calls are policy
+denials, including attempts to enable or disable an already-set inactive tool.
+
+To reconcile with **Audit Events**, use the same workspace routing and cutoff
+(`since` in the summary response), select the tool, and count only its `tool`
+`run`/`run-mcp` rows. Count successes plus failures for total, failures for
+failed, denied rows separately, and classify failed rows for unexpected. Fetch
+all pages; the visible Events page may be smaller than the window. Both views
+read host-global audit history: workspace routing selects the runtime, while
+the Events API's explicit `workspace_id` equality filter further narrows rows
+and is not a filter supported by the summary. Diagnostic lifecycle surfaces
+and unnamed tools are excluded from callable-tool rates.
 
 ```sh
 orbit audit export --output /tmp/audit.json

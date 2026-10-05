@@ -141,6 +141,8 @@ pub enum ResolveError {
     RecoveryActivityNotInCatalog { name: String },
     #[error("job failure_activity `{name}` not found in catalog")]
     FailureActivityNotInCatalog { name: String },
+    #[error("job final_recovery_activity `{name}` not found in catalog")]
+    FinalRecoveryActivityNotInCatalog { name: String },
     #[error("step `{step_id}`: recovery_activity `{name}` not found in catalog")]
     StepRecoveryActivityNotInCatalog { step_id: String, name: String },
 }
@@ -212,6 +214,29 @@ impl V2ActivityCatalog {
         )
     }
 
+    /// Load an explicit list of activity files as one lower-precedence layer.
+    ///
+    /// A plugin ships files rather than a directory it owns outright, so this
+    /// is the file-shaped counterpart of
+    /// [`Self::load_dir_skipping_retired_prefer_existing`]: names already in
+    /// the catalog stay, and the returned paths are the retired assets that
+    /// were skipped.
+    pub fn load_files_prefer_existing(
+        &mut self,
+        files: &[PathBuf],
+    ) -> Result<Vec<PathBuf>, CatalogError> {
+        self.inner.load_files(
+            files,
+            &ActivityCatalogAdapter { skip_retired: true },
+            ExistingNamePolicy::PreferExisting,
+        )
+    }
+
+    /// The file one catalog name resolved from, for layer attribution.
+    pub fn source(&self, name: &str) -> Option<&Path> {
+        self.inner.sources.get(name).map(PathBuf::as_path)
+    }
+
     /// Insert an explicit `(name, spec)` pair — used by smokes and in-memory
     /// composition. Returns the displaced entry if the name was already set.
     pub fn insert(&mut self, name: impl Into<String>, spec: ActivityV2) -> Option<ActivityV2> {
@@ -279,11 +304,51 @@ impl V2JobCatalog {
             .map(|_| ())
     }
 
+    /// Load one job directory while retaining valid siblings when a file has
+    /// an invalid schema or document. Non-parse failures and duplicate names
+    /// remain hard errors. The returned diagnostics are the parse failures
+    /// encountered in this directory.
+    pub fn load_dir_prefer_existing_best_effort(
+        &mut self,
+        dir: &Path,
+    ) -> Result<Vec<CatalogError>, CatalogError> {
+        let mut errors = Vec::new();
+        self.inner
+            .load_dir_best_effort(
+                dir,
+                &JobCatalogAdapter,
+                ExistingNamePolicy::PreferExisting,
+                |_| true,
+                &mut errors,
+            )
+            .map(|_| errors)
+    }
+
+    /// Load an explicit list of job files as one lower-precedence layer, for
+    /// the same reason [`V2ActivityCatalog::load_files_prefer_existing`]
+    /// exists: a plugin contributes files, not a directory.
+    pub fn load_files_prefer_existing(&mut self, files: &[PathBuf]) -> Result<(), CatalogError> {
+        self.inner
+            .load_files(
+                files,
+                &JobCatalogAdapter,
+                ExistingNamePolicy::PreferExisting,
+            )
+            .map(|_| ())
+    }
+
     pub fn get(&self, name: &str) -> Option<(&Path, &JobV2)> {
         Some((
             self.inner.sources.get(name)?.as_path(),
             self.inner.entries.get(name)?,
         ))
+    }
+
+    /// Consume one entry, returning its source path and spec without cloning.
+    pub fn take(&mut self, name: &str) -> Option<(PathBuf, JobV2)> {
+        let spec = self.inner.entries.remove(name)?;
+        let path = self.inner.sources.remove(name)?;
+        Some((path, spec))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Path, &JobV2)> {
@@ -317,7 +382,85 @@ impl<T> LayeredCatalog<T> {
         dir: &Path,
         adapter: &A,
         existing_name_policy: ExistingNamePolicy,
+        include_name: F,
+    ) -> Result<Vec<PathBuf>, CatalogError>
+    where
+        A: CatalogAdapter<Asset = T>,
+        F: FnMut(&str) -> bool,
+    {
+        self.load_dir_inner(dir, adapter, existing_name_policy, include_name, None)
+    }
+
+    fn load_dir_best_effort<A, F>(
+        &mut self,
+        dir: &Path,
+        adapter: &A,
+        existing_name_policy: ExistingNamePolicy,
+        include_name: F,
+        errors: &mut Vec<CatalogError>,
+    ) -> Result<Vec<PathBuf>, CatalogError>
+    where
+        A: CatalogAdapter<Asset = T>,
+        F: FnMut(&str) -> bool,
+    {
+        self.load_dir_inner(
+            dir,
+            adapter,
+            existing_name_policy,
+            include_name,
+            Some(errors),
+        )
+    }
+
+    /// Load an explicit file list as one layer. Duplicate names inside the
+    /// list are rejected; names already in the catalog keep their entry when
+    /// the policy prefers existing.
+    fn load_files<A>(
+        &mut self,
+        files: &[PathBuf],
+        adapter: &A,
+        existing_name_policy: ExistingNamePolicy,
+    ) -> Result<Vec<PathBuf>, CatalogError>
+    where
+        A: CatalogAdapter<Asset = T>,
+    {
+        let mut local_entries: BTreeMap<String, (T, PathBuf)> = BTreeMap::new();
+        let mut skipped = Vec::new();
+        for path in files {
+            let yaml = std::fs::read_to_string(path).map_err(|source| CatalogError::ReadFile {
+                path: path.clone(),
+                source,
+            })?;
+            let Some(asset) = adapter.load(path, &yaml, &mut skipped)? else {
+                continue;
+            };
+            if let Some((_, prev)) = local_entries.get(&asset.name) {
+                return Err(adapter.duplicate_name(asset.name, prev.clone(), path.clone()));
+            }
+            local_entries.insert(asset.name, (asset.spec, path.clone()));
+        }
+        for (name, (spec, path)) in local_entries {
+            if let Some(prev) = self.sources.get(&name) {
+                match existing_name_policy {
+                    ExistingNamePolicy::Reject => {
+                        return Err(adapter.duplicate_name(name, prev.clone(), path));
+                    }
+                    ExistingNamePolicy::PreferExisting => continue,
+                }
+            }
+            self.sources.insert(name.clone(), path);
+            self.entries.insert(name, spec);
+        }
+        Ok(skipped)
+    }
+
+    fn load_dir_inner<A, F>(
+        &mut self,
+        dir: &Path,
+        adapter: &A,
+        existing_name_policy: ExistingNamePolicy,
         mut include_name: F,
+        mut parse_errors: Option<&mut Vec<CatalogError>>,
     ) -> Result<Vec<PathBuf>, CatalogError>
     where
         A: CatalogAdapter<Asset = T>,
@@ -330,7 +473,18 @@ impl<T> LayeredCatalog<T> {
                 path: path.to_path_buf(),
                 source,
             })?;
-            let Some(asset) = adapter.load(path, &yaml, &mut skipped)? else {
+            let asset = match adapter.load(path, &yaml, &mut skipped) {
+                Ok(asset) => asset,
+                Err(error @ CatalogError::Parse { .. }) => {
+                    if let Some(errors) = parse_errors.as_deref_mut() {
+                        errors.push(error);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            };
+            let Some(asset) = asset else {
                 return Ok(());
             };
             if let Some((_, prev)) = local_entries.get(&asset.name) {
@@ -537,6 +691,14 @@ pub fn resolve_job_target_refs(
     job.resolved_failure_activity = match job.failure_activity.as_deref() {
         Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
             ResolveError::FailureActivityNotInCatalog {
+                name: name.to_string(),
+            }
+        })?),
+        None => None,
+    };
+    job.resolved_final_recovery_activity = match job.final_recovery_activity.as_deref() {
+        Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
+            ResolveError::FinalRecoveryActivityNotInCatalog {
                 name: name.to_string(),
             }
         })?),

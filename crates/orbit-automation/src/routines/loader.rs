@@ -1,13 +1,14 @@
-//! Routine discovery [ORB-10021]: enumerate the global workspace registry,
-//! visit every registered, active workspace whose versioned config declares
-//! `[routines] role = "source"` (ADR-0205), and load `.orbit/routines/*.yaml`
-//! from each — fail-closed per file. An invalid definition becomes a load
-//! error and that routine is treated as absent; it never fires with defaults.
+//! Routine discovery [ORB-10021]: visit every registered, active owner
+//! checkout on this host and load `.orbit/routines/*.yaml` from each —
+//! fail-closed per file. An invalid definition becomes a load error and that
+//! routine is treated as absent; it never fires with defaults. A definition
+//! targeting a job in [`RETIRED_ROUTINE_JOBS`] is skipped as retired instead.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::{fmt, fs};
 
-use orbit_common::protocol::yaml::{parse_local_routine_yaml, parse_routine_yaml};
+use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_types::workflow::RoutineDefinition;
 
 use super::due::parse_cron;
@@ -15,29 +16,84 @@ use super::due::parse_cron;
 /// Directory under a source workspace's `.orbit/` holding routine YAML files.
 pub const ROUTINES_DIR: &str = "routines";
 
-/// Subdirectory of [`ROUTINES_DIR`] holding machine-local routine definitions
-/// (gitignored by convention). The directory is the origin contract — the
-/// sweep never shells out to `git check-ignore` (host-registry design §6).
+/// Subdirectory of [`ROUTINES_DIR`] that older checkouts used for definitions
+/// that were not git-committed. `.orbit/` is now ignored in full, so this is
+/// an ordinary subdirectory: files here still load for one release, then the
+/// special-case scan will be dropped.
 pub const LOCAL_ROUTINES_SUBDIR: &str = "local";
 
-/// Where a routine definition came from — the directory decides, not git
-/// status (host-registry design §6). Committed definitions must pin a host;
-/// local definitions are implicitly pinned to the loading host.
+/// Job names a prior release shipped as routine targets that this release no
+/// longer provides, each with why the work needs no routine any more.
+///
+/// A definition targeting one of these is loaded as *retired* rather than
+/// failing to load: the file is dead weight until `orbit workspace sync`
+/// retires it, not a broken definition worth an error on every clock tick.
+/// A job of the same name that the source workspace still defines itself
+/// resolves through the catalog first and is never treated as retired.
+pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[
+    (
+        "auto_task_scheduler_pipeline",
+        "auto-task definitions are evaluated directly by every clock tick",
+    ),
+    (
+        "task_triage_pipeline",
+        "a failed run leaves its task blocked with the failure attached; re-backlogging is a \
+         deliberate human transition",
+    ),
+];
+
+/// Why a routine targeting `job` is retired, when that job is one a prior
+/// release shipped and this one dropped.
+pub fn retired_routine_job_reason(job: &str) -> Option<&'static str> {
+    RETIRED_ROUTINE_JOBS
+        .iter()
+        .find(|(name, _)| *name == job)
+        .map(|(_, reason)| *reason)
+}
+
+/// Compose a retired definition's reason: why the target is gone, then the
+/// single step that clears the file. The advice is a parameter because only
+/// the layer that owns the managed-routine templates can tell which step
+/// applies — see [`sync_retirement_advice`] and [`manual_retirement_advice`].
+pub fn retired_routine_reason(job: &str, retirement: &str, advice: &str) -> String {
+    format!("target 'job:{job}' is retired in this Orbit ({retirement}); {advice}")
+}
+
+/// The step that clears a definition Orbit seeded: synchronization retires a
+/// managed routine by content provenance.
+pub fn sync_retirement_advice(workspace: &str) -> String {
+    format!("run `orbit workspace sync` in workspace '{workspace}' to retire the definition")
+}
+
+/// The step that clears a definition Orbit did not write. Synchronization
+/// never deletes an operator's own routine, so advertising it would leave the
+/// operator running a command that reports `unchanged` forever [DANI-10502].
+pub fn manual_retirement_advice(path: &Path) -> String {
+    format!(
+        "delete '{}' or retarget it at a job this Orbit ships",
+        path.display()
+    )
+}
+
+/// Where a routine definition was found on disk. The directory decides; git
+/// status is not consulted. Both locations are evaluated identically.
+///
+/// `Local` remains only so existing `.orbit/routines/local/` files keep
+/// loading for one release. It is not a git-uncommitted origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutineOrigin {
-    /// A git-committed definition under `.orbit/routines/` (excluding
-    /// `local/`). Requires a non-empty explicit `hosts:` pin.
-    Committed,
-    /// A machine-local definition under `.orbit/routines/local/`. Implicitly
-    /// pinned to the loading host; may not name another host.
+    /// A definition under `.orbit/routines/` (excluding `local/`).
+    Workspace,
+    /// A definition under `.orbit/routines/local/`. Accepted as a plain
+    /// subdirectory for one release; not a distinct git origin.
     Local,
 }
 
 impl RoutineOrigin {
-    /// Stable lowercase label for reporting (`committed` / `local`).
+    /// Stable lowercase label for reporting (`workspace` / `local`).
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Committed => "committed",
+            Self::Workspace => "workspace",
             Self::Local => "local",
         }
     }
@@ -48,7 +104,7 @@ impl RoutineOrigin {
 pub struct LoadedRoutine {
     /// The parsed definition.
     pub definition: RoutineDefinition,
-    /// Whether the definition is committed or machine-local.
+    /// Directory the definition was loaded from (`workspace` or `local/`).
     pub origin: RoutineOrigin,
     /// Registry name of the source workspace.
     pub source_workspace: String,
@@ -56,6 +112,34 @@ pub struct LoadedRoutine {
     pub source_orbit_dir: PathBuf,
     /// Path of the YAML file the definition came from.
     pub path: PathBuf,
+}
+
+/// A definition that parsed but targets a job in [`RETIRED_ROUTINE_JOBS`]:
+/// skipped this pass, reported so `routine list` and the dashboard can show
+/// it as retired rather than as a load error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetiredRoutine {
+    /// The routine name the definition declares.
+    pub name: String,
+    /// Directory the definition was loaded from (`workspace` or `local/`).
+    pub origin: RoutineOrigin,
+    /// Registry name of the source workspace.
+    pub source_workspace: String,
+    /// Path of the YAML file the definition came from.
+    pub path: PathBuf,
+    /// The retired job the definition targets.
+    pub job: String,
+    /// Human-readable explanation, including the one step that clears the
+    /// file. Discovery cannot tell a definition Orbit seeded from one the
+    /// operator wrote, so it states the synchronization step and the layer
+    /// owning managed-routine provenance narrows it — see
+    /// [`retired_routine_reason`].
+    pub reason: String,
+    /// Set when the caller's [`RoutineSkipRule`] parked the definition rather
+    /// than its target job being retired. Core's only rule is a plugin that
+    /// is not active where the file lives, which list surfaces hide unless
+    /// asked.
+    pub skipped: bool,
 }
 
 /// One fail-closed load failure, kept for reporting: the routine (or source)
@@ -70,12 +154,27 @@ pub struct RoutineLoadError {
     pub message: String,
 }
 
+/// Result of resolving a routine target against the source workspace's job
+/// catalog. A target can resolve from a healthy layer even when another layer
+/// produced a load diagnostic that must still be reported.
+#[derive(Debug, Clone, Default)]
+pub struct RoutineCatalogLookup {
+    /// Whether the requested job name resolves for execution.
+    pub resolves: bool,
+    /// A catalog diagnostic to report alongside a successfully resolved target.
+    pub error: Option<String>,
+}
+
 /// Result of one discovery pass across all routine sources.
 #[derive(Debug, Default)]
 pub struct RoutineCollection {
     /// Valid routines, in stable (workspace, filename) order.
     pub routines: Vec<LoadedRoutine>,
-    /// Everything that failed fail-closed.
+    /// Definitions targeting a retired job, or parked by the caller's skip
+    /// rule ([`RetiredRoutine::skipped`]), skipped without an error.
+    pub retired: Vec<RetiredRoutine>,
+    /// Routine/source load failures and catalog diagnostics reported during
+    /// discovery.
     pub errors: Vec<RoutineLoadError>,
 }
 
@@ -84,27 +183,38 @@ pub struct RoutineCollection {
 pub struct RoutineSource {
     pub workspace: String,
     pub orbit_dir: PathBuf,
-    pub enabled: bool,
 }
 
+/// Why a definition is skipped this pass without being an error.
+///
+/// The one caller is a definition a plugin seeded whose plugin is no longer
+/// active: its target job left the catalog with the plugin, so evaluating it
+/// would log the same load error on every clock tick. Reported as a skip so
+/// `routine list` shows it, names the plugin, and stays quiet otherwise.
+pub type RoutineSkipRule<'a> = dyn Fn(&Path, &RoutineDefinition) -> Option<String> + 'a;
+
 /// Load routines from every source workspace among `workspaces` (the same
-/// runtimes are later used for dispatch), origin-aware: committed definitions
-/// under `.orbit/routines/` require a host pin, local definitions under
-/// `.orbit/routines/local/` are implicit to `host_id`. Cross-origin name
-/// collisions are load-time errors: every colliding definition is dropped and
-/// each conflicting source is named.
+/// runtimes are later used for dispatch), from both origins. Cross-origin
+/// name collisions are load-time errors: every colliding definition is
+/// dropped and each conflicting source is named.
 pub fn collect_routines(
     workspaces: &[RoutineSource],
-    catalog: &dyn Fn(&Path, &str) -> bool,
-    host_id: &str,
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+) -> RoutineCollection {
+    collect_routines_with_skips(workspaces, catalog, &|_, _| None)
+}
+
+/// [`collect_routines`] with a caller-supplied skip rule, checked before the
+/// target is resolved so a skipped definition never produces a load error.
+pub fn collect_routines_with_skips(
+    workspaces: &[RoutineSource],
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    skip: &RoutineSkipRule<'_>,
 ) -> RoutineCollection {
     let mut collection = RoutineCollection::default();
 
     for source in workspaces {
-        if !source.enabled {
-            continue;
-        }
-        load_source_workspace(source, catalog, host_id, &mut collection);
+        load_source_workspace(source, catalog, skip, &mut collection);
     }
 
     drop_name_collisions(&mut collection);
@@ -113,67 +223,110 @@ pub fn collect_routines(
 
 fn load_source_workspace(
     source: &RoutineSource,
-    catalog: &dyn Fn(&Path, &str) -> bool,
-    host_id: &str,
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    skip: &RoutineSkipRule<'_>,
     collection: &mut RoutineCollection,
 ) {
-    let routines_dir = source.orbit_dir.join(ROUTINES_DIR);
-    if !routines_dir.is_dir() {
-        // A source with no routines directory is simply an empty source.
-        return;
-    }
+    let mut catalog_errors = std::collections::BTreeSet::new();
 
-    // Committed definitions: top-level YAML files. The `local/` subdirectory is
-    // a directory (never a file) so it is skipped here and scanned separately.
-    load_origin_dir(
-        &routines_dir,
-        RoutineOrigin::Committed,
-        source,
-        catalog,
-        host_id,
-        collection,
-    );
-
-    // Local definitions: `.orbit/routines/local/`, implicit to this host.
-    let local_dir = routines_dir.join(LOCAL_ROUTINES_SUBDIR);
-    if local_dir.is_dir() {
-        load_origin_dir(
-            &local_dir,
-            RoutineOrigin::Local,
+    // Top-level YAML files. The `local/` subdirectory is a directory (never a
+    // file) so it is skipped here and scanned separately for one release.
+    match yaml_files_in(&source.orbit_dir, RoutineOrigin::Workspace) {
+        Ok(paths) => load_origin_files(
+            paths,
+            RoutineOrigin::Workspace,
             source,
             catalog,
-            host_id,
+            skip,
+            &mut catalog_errors,
             collection,
-        );
-    }
-}
-
-/// Load every top-level YAML file in `dir` under `origin`. Only regular files
-/// are considered, so a committed scan of `.orbit/routines/` never treats the
-/// `local/` subdirectory as a definition.
-fn load_origin_dir(
-    dir: &Path,
-    origin: RoutineOrigin,
-    source: &RoutineSource,
-    catalog: &dyn Fn(&Path, &str) -> bool,
-    host_id: &str,
-    collection: &mut RoutineCollection,
-) {
-    let paths = match yaml_files_in(dir) {
-        Ok(paths) => paths,
+        ),
+        // A source with no routines directory is simply an empty source.
+        Err(RoutinesDirectoryError::Missing) => return,
         Err(error) => {
             collection.errors.push(RoutineLoadError {
                 source_workspace: source.workspace.clone(),
-                path: Some(dir.to_path_buf()),
+                path: Some(source.orbit_dir.join(ROUTINES_DIR)),
                 message: format!("failed to list routines directory: {error}"),
             });
             return;
         }
-    };
+    }
 
+    // `.orbit/routines/local/` remains loadable as a plain subdirectory.
+    match yaml_files_in(&source.orbit_dir, RoutineOrigin::Local) {
+        Ok(paths) => {
+            let local_dir = source
+                .orbit_dir
+                .join(ROUTINES_DIR)
+                .join(LOCAL_ROUTINES_SUBDIR);
+            tracing::info!(
+                workspace = %source.workspace,
+                path = %local_dir.display(),
+                ".orbit/routines/local/ is no longer a distinct origin; definitions there load as ordinary workspace routines and the subdirectory will be dropped as a special case in a later release"
+            );
+            load_origin_files(
+                paths,
+                RoutineOrigin::Local,
+                source,
+                catalog,
+                skip,
+                &mut catalog_errors,
+                collection,
+            );
+        }
+        Err(RoutinesDirectoryError::Missing) => {}
+        Err(error) => {
+            collection.errors.push(RoutineLoadError {
+                source_workspace: source.workspace.clone(),
+                path: Some(
+                    source
+                        .orbit_dir
+                        .join(ROUTINES_DIR)
+                        .join(LOCAL_ROUTINES_SUBDIR),
+                ),
+                message: format!("failed to list routines directory: {error}"),
+            });
+        }
+    }
+}
+
+/// Load every listed YAML file under `origin`. Only regular files are
+/// considered, so a scan of `.orbit/routines/` never treats the `local/`
+/// subdirectory as a definition.
+fn load_origin_files(
+    paths: Vec<PathBuf>,
+    origin: RoutineOrigin,
+    source: &RoutineSource,
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    skip: &RoutineSkipRule<'_>,
+    catalog_errors: &mut std::collections::BTreeSet<String>,
+    collection: &mut RoutineCollection,
+) {
     for path in paths {
-        match load_routine_file(&path, origin, source, catalog, host_id) {
-            Ok(routine) => collection.routines.push(routine),
+        match load_routine_file(&path, origin, source, catalog, skip) {
+            Ok(RoutineLoadOutcome {
+                routine,
+                catalog_error,
+            }) => {
+                if let Some(error) = catalog_error {
+                    let message = format!(
+                        "failed to load job catalog for workspace '{}': {error}",
+                        source.workspace
+                    );
+                    if catalog_errors.insert(message.clone()) {
+                        collection.errors.push(RoutineLoadError {
+                            source_workspace: source.workspace.clone(),
+                            path: None,
+                            message,
+                        });
+                    }
+                }
+                match routine {
+                    RoutineLoad::Active(routine) => collection.routines.push(*routine),
+                    RoutineLoad::Retired(routine) => collection.retired.push(routine),
+                }
+            }
             Err(message) => collection.errors.push(RoutineLoadError {
                 source_workspace: source.workspace.clone(),
                 path: Some(path),
@@ -183,40 +336,255 @@ fn load_origin_dir(
     }
 }
 
-/// Regular `*.yaml` / `*.yml` files directly in `dir`, in stable filename
-/// order. Subdirectories (e.g. `local/` under the committed scan) are skipped.
-fn yaml_files_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| {
-                    ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
-                })
-        })
-        .collect();
+#[derive(Debug)]
+enum RoutinesDirectoryError {
+    Missing,
+    Invalid(String),
+    List(std::io::Error),
+}
+
+impl fmt::Display for RoutinesDirectoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => formatter.write_str("routines directory is missing"),
+            Self::Invalid(message) => formatter.write_str(message),
+            Self::List(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+/// CodeQL `rust/path-injection` treats `Path::starts_with` as a SafeAccessCheck
+/// on the receiver. Call this after reconstructing a routines origin so later
+/// `read_dir` sinks only see a prefix-checked value.
+fn routines_origin_dir_is_contained(path: &Path, parent: &Path) -> bool {
+    path.starts_with(parent)
+}
+
+fn resolve_exact_child_dir(
+    parent: &Path,
+    name: &str,
+    child_label: &str,
+) -> Result<PathBuf, RoutinesDirectoryError> {
+    let expected_dir = parent.join(name);
+    if !routines_origin_dir_is_contained(&expected_dir, parent) {
+        return Err(RoutinesDirectoryError::Invalid(format!(
+            "{child_label} directory escapes {}",
+            parent.display()
+        )));
+    }
+    let canonical_dir = match fs::canonicalize(&expected_dir) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(RoutinesDirectoryError::Missing);
+        }
+        Err(error) => {
+            return Err(RoutinesDirectoryError::Invalid(format!(
+                "failed to resolve {child_label} directory {}: {error}",
+                expected_dir.display()
+            )));
+        }
+    };
+    if canonical_dir != expected_dir || !canonical_dir.is_dir() {
+        return Err(RoutinesDirectoryError::Invalid(format!(
+            "{child_label} directory must be a regular directory directly under {}",
+            parent.display()
+        )));
+    }
+    Ok(canonical_dir)
+}
+
+/// Resolve a routines origin directory before it reaches `read_dir`.
+///
+/// The runtime supplies the Orbit root, while the directory names are fixed by
+/// this module. Canonicalizing both components and requiring the exact direct
+/// child prevents a symlinked `routines/` or `routines/local/` directory from
+/// redirecting a scan.
+fn validated_routines_origin_dir(
+    orbit_dir: &Path,
+    origin: RoutineOrigin,
+) -> Result<PathBuf, RoutinesDirectoryError> {
+    let canonical_orbit_dir = match fs::canonicalize(orbit_dir) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(RoutinesDirectoryError::Missing);
+        }
+        Err(error) => {
+            return Err(RoutinesDirectoryError::Invalid(format!(
+                "failed to resolve Orbit directory {}: {error}",
+                orbit_dir.display()
+            )));
+        }
+    };
+    let canonical_routines_dir =
+        resolve_exact_child_dir(&canonical_orbit_dir, ROUTINES_DIR, "routines")?;
+    match origin {
+        RoutineOrigin::Workspace => Ok(canonical_routines_dir),
+        RoutineOrigin::Local => resolve_exact_child_dir(
+            &canonical_routines_dir,
+            LOCAL_ROUTINES_SUBDIR,
+            "local routines",
+        ),
+    }
+}
+
+/// Regular `*.yaml` / `*.yml` files directly in a validated origin directory,
+/// in stable filename order. Subdirectories (e.g. `local/` under the committed
+/// scan) are skipped. Directory listing never consumes the caller `orbit_dir`.
+fn yaml_files_in(
+    orbit_dir: &Path,
+    origin: RoutineOrigin,
+) -> Result<Vec<PathBuf>, RoutinesDirectoryError> {
+    let dir = validated_routines_origin_dir(orbit_dir, origin)?;
+    let mut paths = Vec::new();
+    let entries = fs::read_dir(&dir).map_err(RoutinesDirectoryError::List)?;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = dir.join(entry.file_name());
+        if !routines_origin_dir_is_contained(&path, &dir) {
+            continue;
+        }
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.file_type().is_file() {
+            continue;
+        }
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml"))
+        {
+            paths.push(path);
+        }
+    }
     paths.sort();
     Ok(paths)
+}
+
+/// Every routine name the workspace rooted at `orbit_dir` already claims,
+/// across both origins, mapped to the file that declares it.
+///
+/// Names must be unique across every routine source on a host, so a caller
+/// that is about to write new definitions uses this to detect a collision
+/// before it becomes a load-time error that drops *both* definitions. Files
+/// that fail to parse are skipped: [`collect_routines`] treats them as absent,
+/// so they claim no name.
+pub fn declared_routine_names(orbit_dir: &Path) -> BTreeMap<String, PathBuf> {
+    let mut declared = BTreeMap::new();
+
+    collect_declared_names(orbit_dir, RoutineOrigin::Workspace, &mut declared);
+    collect_declared_names(orbit_dir, RoutineOrigin::Local, &mut declared);
+
+    declared
+}
+
+fn collect_declared_names(
+    orbit_dir: &Path,
+    origin: RoutineOrigin,
+    declared: &mut BTreeMap<String, PathBuf>,
+) {
+    let Ok(paths) = yaml_files_in(orbit_dir, origin) else {
+        return;
+    };
+    for path in paths {
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Ok(definition) = parse_routine_yaml(&raw) {
+            declared.entry(definition.name).or_insert(path);
+        }
+    }
+}
+
+/// A definition that parsed: either evaluable this pass, or retired.
+enum RoutineLoad {
+    Active(Box<LoadedRoutine>),
+    Retired(RetiredRoutine),
 }
 
 fn load_routine_file(
     path: &Path,
     origin: RoutineOrigin,
     source: &RoutineSource,
-    catalog: &dyn Fn(&Path, &str) -> bool,
-    host_id: &str,
-) -> Result<LoadedRoutine, String> {
-    let raw = std::fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
-    // Origin decides the host contract: committed definitions must pin a host,
-    // local definitions are implicit to (and may name only) this host.
-    let definition = match origin {
-        RoutineOrigin::Committed => parse_routine_yaml(&raw).map_err(|error| error.to_string())?,
-        RoutineOrigin::Local => {
-            parse_local_routine_yaml(&raw, host_id).map_err(|error| error.to_string())?
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    skip: &RoutineSkipRule<'_>,
+) -> Result<RoutineLoadOutcome, String> {
+    let raw = fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
+    let definition = parse_routine_yaml(&raw).map_err(|error| error.to_string())?;
+
+    // A caller-supplied skip wins over target resolution: the definition of a
+    // plugin that is no longer active names a job that left with it, and the
+    // honest report is "skipped because the plugin is gone", not "no such job".
+    if let Some(reason) = skip(path, &definition) {
+        return Ok(RoutineLoadOutcome {
+            routine: RoutineLoad::Retired(RetiredRoutine {
+                name: definition.name,
+                origin,
+                source_workspace: source.workspace.clone(),
+                path: path.to_path_buf(),
+                job: definition.target.job_name().to_string(),
+                reason,
+                skipped: true,
+            }),
+            catalog_error: None,
+        });
+    }
+
+    let job_name = definition.target.job_name();
+    let catalog_lookup = catalog(&source.orbit_dir, job_name);
+    // A routine whose target is a job a prior release shipped and this one
+    // dropped is retired, not broken: it is skipped and reported as such so
+    // the clock tick does not log the same load error forever. The catalog
+    // wins when the workspace defines a job of that name itself.
+    if !catalog_lookup.resolves
+        && catalog_lookup.error.is_none()
+        && let Some(reason) = retired_routine_job_reason(job_name)
+    {
+        return Ok(RoutineLoadOutcome {
+            routine: RoutineLoad::Retired(RetiredRoutine {
+                name: definition.name,
+                origin,
+                source_workspace: source.workspace.clone(),
+                path: path.to_path_buf(),
+                job: job_name.to_string(),
+                reason: retired_routine_reason(
+                    job_name,
+                    reason,
+                    &sync_retirement_advice(&source.workspace),
+                ),
+                skipped: false,
+            }),
+            catalog_error: None,
+        });
+    }
+
+    if !catalog_lookup.resolves {
+        if let Some(error) = catalog_lookup.error {
+            return Err(format!(
+                "failed to load job catalog for workspace '{}': {error}",
+                source.workspace
+            ));
         }
-    };
+        return Err(format!(
+            "target 'job:{job_name}' does not resolve in workspace '{}': no such job in its catalog",
+            source.workspace
+        ));
+    }
+
+    // [ORB-12236] Definitions carry no host pin. A file that still has one
+    // loads and is evaluated here; the warning names it so the key can be
+    // dropped before the next release rejects it.
+    if definition.has_legacy_host_pin() {
+        tracing::warn!(
+            target: "orbit.routines",
+            path = %path.display(),
+            routine = %definition.name,
+            "routine still declares the retired `hosts:` key; it is ignored and the routine \
+             is evaluated on this host — remove the key from the definition",
+        );
+    }
 
     // Load-time cron validation: a routine with an unparsable trigger never
     // reaches the due computation.
@@ -224,32 +592,28 @@ fn load_routine_file(
         parse_cron(&definition.trigger.cron).map_err(|error| error.to_string())?;
     }
 
-    // Load-time target resolution through the source workspace's catalog,
-    // like `target:` steps in JobV2: an unresolvable target is a load error,
-    // not a fire-time surprise (ADR-0206).
-    let job_name = definition.target.job_name();
-    if !catalog(&source.orbit_dir, job_name) {
-        return Err(format!(
-            "target 'job:{job_name}' does not resolve in workspace '{}': no such job in its catalog",
-            source.workspace
-        ));
-    }
-
-    Ok(LoadedRoutine {
-        definition,
-        origin,
-        source_workspace: source.workspace.clone(),
-        source_orbit_dir: source.orbit_dir.clone(),
-        path: path.to_path_buf(),
+    Ok(RoutineLoadOutcome {
+        routine: RoutineLoad::Active(Box::new(LoadedRoutine {
+            definition,
+            origin,
+            source_workspace: source.workspace.clone(),
+            source_orbit_dir: source.orbit_dir.clone(),
+            path: path.to_path_buf(),
+        })),
+        catalog_error: catalog_lookup.error,
     })
 }
 
-/// Names must be unique across every routine source *and origin* on a host; a
-/// collision is a load-time error and every colliding definition is treated as
-/// absent (fail-closed — firing an arbitrary winner would make behavior depend
-/// on iteration order, and a committed and a local definition must never
-/// silently shadow one another). Each colliding definition's error names all
-/// conflicting sources so both origins are visible.
+struct RoutineLoadOutcome {
+    routine: RoutineLoad,
+    catalog_error: Option<String>,
+}
+
+/// Names must be unique across every routine source on a host; a collision is
+/// a load-time error and every colliding definition is treated as absent
+/// (fail-closed — firing an arbitrary winner would make behavior depend on
+/// iteration order). Each colliding definition's error names all conflicting
+/// sources.
 fn drop_name_collisions(collection: &mut RoutineCollection) {
     // Collect a stable, sorted descriptor of every source per name.
     let mut sources_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();

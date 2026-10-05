@@ -2,7 +2,8 @@ use std::path::Path;
 
 use clap::Args;
 use comfy_table::Cell;
-use orbit_cmd::registry_routines::routine_statuses;
+use orbit_cmd::registry_routines::{routine_statuses, routine_statuses_for_workspace};
+use orbit_core::application::routines::RetiredRoutine;
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
@@ -13,11 +14,27 @@ pub struct RoutineListArgs {
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
+    /// Also list routines seeded by a plugin that is switched off in their
+    /// workspace or on the host, marked inactive with the reason
+    #[arg(long, visible_alias = "all")]
+    pub include_inactive_plugins: bool,
 }
 
 impl RoutineListArgs {
-    pub fn execute_without_runtime(self, global_root: &Path) -> CommandOut {
-        let report = routine_statuses(global_root)?;
+    pub fn execute_without_runtime(
+        self,
+        global_root: &Path,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
+        let report = match workspace_selector {
+            Some(selector) => routine_statuses_for_workspace(global_root, selector)?,
+            None => routine_statuses(global_root)?,
+        };
+        // A routine a plugin seeded never fires while that plugin is off where
+        // it lives, so it is hidden unless asked for.
+        let retired: Vec<_> = report
+            .listed_retired(self.include_inactive_plugins)
+            .collect();
 
         let statuses: Vec<_> = report
             .statuses
@@ -29,9 +46,6 @@ impl RoutineListArgs {
                     "origin": status.routine.origin.as_str(),
                     "target": status.routine.definition.target.as_ref_string(),
                     "enabled": status.routine.definition.enabled,
-                    "hosts": status.routine.definition.hosts,
-                    "pinned_to_host": status.pinned_to_host,
-                    "validation": &status.validation,
                     "paused_at": status.paused_at,
                     "effective": status.effective(),
                     "cron": status.routine.definition.trigger.cron,
@@ -46,10 +60,18 @@ impl RoutineListArgs {
             })
             .collect();
         let doc = json!({
-            "host_id": report.host_id,
+            "machine_name": report.machine_name,
             "machine_id": report.machine_id,
-            "registry": &report.registry,
             "routines": statuses,
+            "retired": retired.iter().map(|routine| json!({
+                "name": routine.name,
+                "source": routine.source_workspace,
+                "origin": routine.origin.as_str(),
+                "path": routine.path.display().to_string(),
+                "target": format!("job:{}", routine.job),
+                "reason": routine.reason,
+                "plugin_inactive": routine.skipped,
+            })).collect::<Vec<_>>(),
             "load_errors": report.load_errors.iter().map(|e| json!({
                 "source_workspace": e.source_workspace,
                 "path": e.path.as_ref().map(|p| p.display().to_string()),
@@ -63,15 +85,18 @@ impl RoutineListArgs {
             Column::new("SOURCE"),
             Column::new("ORIGIN").fixed(),
             Column::new("ENABLED").fixed(),
-            Column::new("PINNED").fixed(),
             Column::new("PAUSED").fixed(),
             Column::new("NEXT DUE").fixed(),
             Column::new("LAST FIRE").fixed(),
         ])
-        .empty_message(format!(
-            "no routines found (host {}); mark a workspace with [routines] role = \"source\"",
-            report.host_id
-        ));
+        .empty_message(match workspace_selector {
+            Some(selector) => format!("no routines found in workspace '{selector}'"),
+            None => format!(
+                "no routines found (host {}); register an owner checkout that defines \
+                 .orbit/routines/*.yaml",
+                report.machine_name
+            ),
+        });
         for status in &report.statuses {
             let last_fire = status
                 .last_fire
@@ -87,7 +112,6 @@ impl RoutineListArgs {
                 } else {
                     "no"
                 }),
-                Cell::new(if status.pinned_to_host { "yes" } else { "no" }),
                 Cell::new(if status.paused_at.is_some() {
                     "yes"
                 } else {
@@ -97,28 +121,37 @@ impl RoutineListArgs {
                 Cell::new(last_fire),
             ]);
         }
-        // Context about where the list came from, not a record in it (spec §5).
-        eprintln!("host: {}", report.host_id);
-        eprintln!(
-            "registry: {}/{}{}",
-            report.registry.source,
-            report.registry.state,
-            report
-                .registry
-                .age_seconds
-                .map(|age| format!(" ({age}s old)"))
-                .unwrap_or_default()
-        );
-        for status in &report.statuses {
-            for diagnostic in &status.validation.diagnostics {
-                eprintln!(
-                    "{} [{}:{}]: {}",
-                    status.routine.definition.name,
-                    diagnostic.severity.as_str(),
-                    diagnostic.code,
-                    diagnostic.message
-                );
+        // A definition targeting a retired job, or one whose plugin is off
+        // (on request), is listed so the operator can see it exists, but it
+        // has no schedule state of its own.
+        let label = |routine: &RetiredRoutine| {
+            if routine.skipped {
+                "inactive"
+            } else {
+                "retired"
             }
+        };
+        for routine in &retired {
+            table.add_row(vec![
+                Cell::new(&routine.name),
+                Cell::new(&routine.source_workspace),
+                Cell::new(routine.origin.as_str()),
+                Cell::new("—"),
+                Cell::new("—"),
+                Cell::new(label(routine)),
+                Cell::new("—"),
+            ]);
+        }
+        // Context about where the list came from, not a record in it (spec §5).
+        eprintln!("host: {}", report.machine_name);
+        for routine in &retired {
+            eprintln!(
+                "{} [{}] ({}): {}",
+                label(routine),
+                routine.source_workspace,
+                routine.path.display(),
+                routine.reason
+            );
         }
         for error in &report.load_errors {
             let path = error

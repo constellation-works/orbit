@@ -2,7 +2,7 @@
 title: Terminal Interface — Vision
 owner: claude
 last_updated: 2026-08-01
-last_validated: 2026-08-30
+last_validated: 2026-09-20
 status: Accepted
 feature: terminal-interface
 doc_role: vision
@@ -10,7 +10,7 @@ type: design
 summary: "Open questions for orbit's terminal surface — TUI vs. composable CLI, agent-readable output, progress under concurrency — and the prior art the house style borrows from."
 tags: [terminal-interface]
 paths: ["crates/orbit-cli/src/output/**"]
-related_features: [terminal-interface, user-interface, resident-orchestrator]
+related_features: [terminal-interface, user-interface]
 related_artifacts: []
 ---
 

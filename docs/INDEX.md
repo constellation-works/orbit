@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Entry point for Orbit feature designs, operational runbooks, and incident root cause analyses.
-last_validated: 2026-09-06
+last_validated: 2026-09-22
 tags: [docs, index, design, operations, runbooks, incidents]
 related_features: [orbit-docs, activity-job, auditability, routines]
 related_artifacts: [ORB-10014, ORB-11416]
@@ -25,18 +25,22 @@ CLI behavior, state layout, or recovery semantics change.
 | --- | --- |
 | [Inspect the Audit Trail](./runbooks/audit-trail.md) | Query and interpret Orbit invocation, run, step, and activity audit history. |
 | [Bound Concurrent Orbit Repository Builds](./runbooks/build-budget.md) | Run Cargo builds within Orbit's host-wide cross-worktree admission and compiler-job budget. |
-| [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees. |
+| [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, and validate before/after builds with it off. |
 | [Recover a Corrupted Database](./runbooks/database-recovery.md) | Recover a corrupted Orbit SQLite database from backup, salvage, or regeneration. |
+| [Set Up and Recover a Single-Owner Distributed Drain](./runbooks/distributed-drain.md) | Set up, migrate, run, and recover a single-owner distributed drain — follower pull with owner-only landing, no follower merges. |
 | [Onboard an Executor](./runbooks/executor-onboarding.md) | Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state. |
 | [Check Orbit Health](./runbooks/health-checks.md) | Check Orbit workspace, database, dashboard, log-sink, job-run, and routine-clock health. |
-| [Prepare a Linux Host for Sandboxed Dispatch](./runbooks/linux-sandbox.md) | Install and verify the Bubblewrap host prerequisite that Orbit's Linux sandbox fails closed without. |
+| [Linux sandbox onboarding and diagnostics](./runbooks/linux-sandbox.md) | Explain automatic Linux Bubblewrap onboarding, distro eligibility, readiness, and native validation status. |
 | [Inspect and Retain Logs](./runbooks/logging.md) | Locate, filter, rotate, and retain Orbit process and routine-sweep logs. |
+| [Full pre-release QA sweep](./runbooks/qa-full-sweep.md) | Mint, execute, and judge the workspace-local complete pre-release Orbit QA sign-off. |
+| [Post-v0.24.0 release survey](./runbooks/release-survey-v0.24.0.md) | Post-v0.24.0 release survey and breaking-change handoff. |
 | [Post-v0.18.0 release survey](./runbooks/release-survey.md) | Post-v0.18.0 release survey and breaking-change handoff. |
 | [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up. |
+| [Operate the Before-PR Review Gate](./runbooks/review-gate.md) | Read a before-PR review's verdict, reviewer commit and findings comment, and decide what to do with a task the gate blocked. |
 | [Inventory and Protect Orbit State](./runbooks/state-and-backup.md) | Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations. |
 | [Recover Stuck Job Runs](./runbooks/stuck-job-runs.md) | Diagnose, cancel, resume, or replay pending and running Orbit job runs. |
 | [Publish Orbit Tasks to a Dedicated Repository](./runbooks/task-publication.md) | Bind, authenticate, publish, verify, inspect, and recover an Orbit task-publication repository. |
-| [Upgrade Orbit Safely](./runbooks/upgrades.md) | Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely. |
+| [Upgrade Orbit Safely](./runbooks/upgrades.md) | Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely, including what an older binary may still do with a newer workspace. |
 | [Validate Website Changes in a Job-Run Sandbox](./runbooks/website-validation.md) | Build, preview, and validate Orbit website changes with Playwright inside a job-run sandbox. |
 
 Authoring rules live in [runbook conventions](./runbooks/CONVENTIONS.md).
@@ -52,6 +56,8 @@ Incident reviews preserve impact, timelines, causal evidence, uncertainty, and f
 
 | Incident | Date | Summary |
 | --- | --- | --- |
+| [Run failure log](./rca/failure-log.md) | 2026-09-27 | Running log of why Orbit task runs failed or got blocked, one entry per distinct cause, with the fix that closed it. |
+| [Cross-crate recursive test-worker OOM](./rca/2026-09-23-cross-crate-test-worker-oom.md) | 2026-09-23 | Root cause analysis of the cross-crate recursive test-worker fork bomb that exhausted memory and forced a hard reset of the Linux execution host. |
 | [Recursive test-worker fork storm](./rca/2026-09-06-recursive-test-worker-fork-storm.md) | 2026-09-06 | Root cause analysis of the recursive Orbit test-worker fork storm that saturated a 14-CPU Linux host. |
 
 ## Designs
@@ -66,30 +72,30 @@ a conservative title/status fallback.
 | [Activity / Job](./design/activity-job/1_overview.md) | Activity / Job is Orbit's execution substrate. | Draft | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | Orbit models AI coding systems as first-class agent families and groups concrete provider-model assignments into named crews. | Draft | grok |
 | [Auditability](./design/auditability/1_overview.md) | Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? | Draft | codex |
-| [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by one generic scheduler routine — periodic work as data, not code. | Accepted | claude |
+| [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Accepted | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage. | Draft | codex |
+| [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task | Draft | — |
+| [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Accepted | codex |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Accepted | codex |
-| [Operation Mode](./design/operation-mode/1_overview.md) | Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the before-PR review gate, reviewer repairs, lineage budgets and exact-tree delivery coverage (shipped in ORB-11333). | Accepted | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of four hand-copied layers. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional application, runtime, adapter, bootstrap, and composition boundaries inside orbit-core. | Accepted | codex |
-| [Orbit Docs](./design/orbit-docs/1_overview.md) | Orbit Docs — the human-authored workspace corpus and how operators and agents retrieve from it. | Draft | claude |
-| [Orbit Docs Plugin](./design/orbit-docs-plugin/1_scope.md) | Scope: extract docs + search into a plugin-style feature crate | Draft | — |
-| [Semantic Search](./design/orbit-search/1_overview.md) | Semantic search is a local, offline-first retrieval layer over Orbit's task artifacts and explicitly indexed docs. | Draft | claude |
+| [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
+| [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Draft | — |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
-| [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions | Superseded | claude |
+| [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions: why the native learning subsystem was removed and why leftover .orbit/learnings/ files stay ignored. | Accepted | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
-| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | An epic owns one worktree and one branch; its children land into that branch sequentially and the epic agent finishes the work inside it. workspace_auto_pipeline drains the workspace for a caller-supplied window instead of taking one action per tick. The fire clock lives outside Orbit. | Draft | codex, grok, claude |
-| [Routines](./design/routines/1_overview.md) | Durable, git-versioned scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state. | Accepted | claude |
+| [Review Gate](./design/review-gate/1_overview.md) | Independent automatic code review — before-PR gating with a fresh reviewer that fixes its findings as a second commit, after-landing scheduling, lineage budgets, and exact-tree delivery coverage. | Accepted | codex |
+| [Routines](./design/routines/1_overview.md) | Durable per-user scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state. | Accepted | claude |
+| [State Compatibility](./design/state-compatibility/1_overview.md) | How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number. | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
-| [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between machines with export/import (tar.zst) and disjoint id ranges, without hand-written SQL. | Draft | claude |
+| [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); hosts stay disjoint by task_prefix, and the minting host owns each task. | Draft | claude |
 | [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Accepted | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
-| [Worktree Artifacts](./design/worktree-artifacts/1_overview.md) | Historically, worktree artifacts let decision and learning body files travel with the branch that created them while preserving one shared ID authority for the repository. | Accepted | codex |
 
 Folder layout, frontmatter, ADR, and ownership rules live in
 [design conventions](./design/CONVENTIONS.md).

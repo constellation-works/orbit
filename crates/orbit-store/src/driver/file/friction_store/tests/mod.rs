@@ -1,1 +1,0 @@
-mod friction_store;

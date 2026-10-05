@@ -16,21 +16,11 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, Row};
 
 use crate::contracts::{FrictionListFilter, StoredFrictionRecord};
+use crate::driver::sqlite::connection::{UNICODE_LOWER_SQL, unicode_lower};
 
 /// Columns every record read selects, in decode order.
 const RECORD_COLUMNS: &str = "friction_id, title, model, status, created_at, resolved_at, \
-     during_task, resolved_by_task, tags_json, body, legacy_path";
-
-// Counts rows this process decoded into a `StoredFrictionRecord`.
-//
-// Thread-local so each `#[test]` observes only its own decodes; the counter is
-// how the bounded-page tests prove SQLite — not Rust — dropped the rows outside
-// the requested window.
-#[cfg(test)]
-thread_local! {
-    pub(crate) static DECODED_RECORDS: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
+     during_task, resolved_by_task, tags_json, body, legacy_path, rehome_to";
 
 /// Canonical, fixed-width, lexicographically ordered timestamp encoding.
 ///
@@ -92,22 +82,25 @@ pub(super) fn build_predicate(workspace_id: &str, filter: &FrictionListFilter) -
         clauses.push(format!("r.created_at <= ?{index}"));
     }
     if let Some(query) = &filter.q {
-        let needle = query.trim().to_lowercase();
+        let needle = unicode_lower(query.trim());
         if !needle.is_empty() {
             let index = bind(&mut params, SqlValue::Text(needle));
             // Mirrors the scan predicate field for field so a saved query keeps
-            // matching the same records after the cutover.
+            // matching the same records after the cutover. Stored text is
+            // lowered by the same Unicode function as the needle; SQLite's own
+            // `lower()` folds ASCII only.
+            let lower = UNICODE_LOWER_SQL;
             clauses.push(format!(
-                "(instr(lower(r.friction_id), ?{index}) > 0 \
-                 OR instr(lower(COALESCE(r.title, '')), ?{index}) > 0 \
-                 OR instr(lower(r.model), ?{index}) > 0 \
+                "(instr({lower}(r.friction_id), ?{index}) > 0 \
+                 OR instr({lower}(COALESCE(r.title, '')), ?{index}) > 0 \
+                 OR instr({lower}(r.model), ?{index}) > 0 \
                  OR instr(r.status, ?{index}) > 0 \
-                 OR instr(lower(COALESCE(r.during_task, '')), ?{index}) > 0 \
-                 OR instr(lower(r.body), ?{index}) > 0 \
+                 OR instr({lower}(COALESCE(r.during_task, '')), ?{index}) > 0 \
+                 OR instr({lower}(r.body), ?{index}) > 0 \
                  OR EXISTS (SELECT 1 FROM friction_record_tags t \
                     WHERE t.workspace_id = r.workspace_id \
                     AND t.friction_id = r.friction_id \
-                    AND instr(lower(t.tag), ?{index}) > 0))"
+                    AND instr({lower}(t.tag), ?{index}) > 0))"
             ));
         }
     }
@@ -158,6 +151,37 @@ pub(super) fn list_records(
         records.push(row.map_err(|error| OrbitError::Store(error.to_string()))??);
     }
     Ok(records)
+}
+
+/// Oldest record in `workspace_id` whose body contains `marker_line`.
+///
+/// `marker_line` is the full `dedupe-key:` line including its trailing
+/// newline, so a longer key that merely shares this key as a prefix does
+/// not match. Callers hold the write transaction when this result decides
+/// whether to insert.
+pub(super) fn find_by_dedupe_marker(
+    conn: &Connection,
+    workspace_id: &str,
+    marker_line: &str,
+) -> Result<Option<StoredFrictionRecord>, OrbitError> {
+    let mut statement = conn
+        .prepare(&format!(
+            "SELECT {RECORD_COLUMNS} FROM friction_records r \
+             WHERE r.workspace_id = ?1 AND instr(r.body, ?2) > 0 \
+             ORDER BY r.created_at ASC, r.friction_id ASC \
+             LIMIT 1"
+        ))
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let mut rows = statement
+        .query(rusqlite::params![workspace_id, marker_line])
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    match rows
+        .next()
+        .map_err(|error| OrbitError::Store(error.to_string()))?
+    {
+        Some(row) => Ok(Some(decode_record(row)?)),
+        None => Ok(None),
+    }
 }
 
 pub(super) fn show_record(
@@ -212,97 +236,9 @@ pub(super) fn foreign_owners_of(
     Ok(owners)
 }
 
-/// Writes the record row and replaces its denormalized tag rows.
-///
-/// `friction_record_tags` exists so a tag filter is an index probe instead of
-/// a JSON scan; `tags_json` stays the ordered source of truth for the record's
-/// own projection.
-pub(crate) fn upsert_record(
-    conn: &Connection,
-    workspace_id: &str,
-    record: &FrictionRecord,
-    month: &str,
-    seq: u32,
-    legacy_path: Option<&str>,
-) -> Result<(), OrbitError> {
-    let tags_json = serde_json::to_string(&record.tags)
-        .map_err(|error| OrbitError::Store(format!("serialize friction tags: {error}")))?;
-    conn.execute(
-        "INSERT INTO friction_records (
-             workspace_id, friction_id, month, seq, title, model, status, created_at,
-             resolved_at, during_task, resolved_by_task, tags_json, body, legacy_path
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-         ON CONFLICT(workspace_id, friction_id) DO UPDATE SET
-             title = excluded.title,
-             model = excluded.model,
-             status = excluded.status,
-             created_at = excluded.created_at,
-             resolved_at = excluded.resolved_at,
-             during_task = excluded.during_task,
-             resolved_by_task = excluded.resolved_by_task,
-             tags_json = excluded.tags_json,
-             body = excluded.body",
-        rusqlite::params![
-            workspace_id,
-            record.id,
-            month,
-            seq,
-            record.title,
-            record.model,
-            record.status.as_str(),
-            encode_timestamp(record.created_at),
-            record.resolved_at.map(encode_timestamp),
-            record.during_task,
-            record.resolved_by_task,
-            tags_json,
-            record.body,
-            legacy_path,
-        ],
-    )
-    .map_err(|error| OrbitError::Store(format!("write friction record {}: {error}", record.id)))?;
-
-    conn.execute(
-        "DELETE FROM friction_record_tags WHERE workspace_id = ?1 AND friction_id = ?2",
-        rusqlite::params![workspace_id, record.id],
-    )
-    .map_err(|error| OrbitError::Store(error.to_string()))?;
-    for tag in &record.tags {
-        conn.execute(
-            "INSERT OR IGNORE INTO friction_record_tags (workspace_id, friction_id, tag)
-             VALUES (?1, ?2, ?3)",
-            rusqlite::params![workspace_id, record.id, tag],
-        )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
-    }
-    Ok(())
-}
-
-/// Next per-month counter for a workspace. Callers must hold the write
-/// transaction so the read and the matching insert cannot interleave.
-pub(super) fn next_month_seq(
-    conn: &Connection,
-    workspace_id: &str,
-    month: &str,
-) -> Result<u32, OrbitError> {
-    let next: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM friction_records
-             WHERE workspace_id = ?1 AND month = ?2",
-            rusqlite::params![workspace_id, month],
-            |row| row.get(0),
-        )
-        .map_err(|error| OrbitError::Store(error.to_string()))?;
-    u32::try_from(next).map_err(|_| {
-        OrbitError::Store(format!(
-            "friction counter for workspace '{workspace_id}' month '{month}' overflowed"
-        ))
-    })
-}
+pub(crate) use crate::driver::sqlite::friction_write::{next_month_seq, upsert_record};
 
 fn decode_record(row: &Row<'_>) -> Result<StoredFrictionRecord, OrbitError> {
-    #[cfg(test)]
-    DECODED_RECORDS.with(|count| count.set(count.get() + 1));
-
     let get_text = |index: usize| -> Result<String, OrbitError> {
         row.get::<_, String>(index)
             .map_err(|error| OrbitError::Store(error.to_string()))
@@ -336,6 +272,7 @@ fn decode_record(row: &Row<'_>) -> Result<StoredFrictionRecord, OrbitError> {
             resolved_at,
             during_task: get_optional(6)?,
             resolved_by_task: get_optional(7)?,
+            rehome_to: get_optional(11)?,
             body: get_text(9)?,
         },
         path: get_optional(10)?.map(PathBuf::from),

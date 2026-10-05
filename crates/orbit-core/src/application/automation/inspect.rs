@@ -2,16 +2,238 @@
 
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
-use orbit_automation::delivery;
+use orbit_automation::{AutomationError, delivery};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, DedupePolicy, RoutineDefinition,
     automation::{
         AutomationDiagnostic, AutomationState, BatchState, DeliveryOwnership, DeliveryTrigger,
+        OwnerAuthority,
     },
 };
 
-use super::ownership;
+use super::{ownership, source::Source};
+
+/// An enabled delivery definition this host owns whose configured branch does
+/// not resolve in the repository. No tick can baseline it, so `orbit doctor`
+/// reports it as a definition error rather than letting every sweep defer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvableBranch {
+    pub definition: String,
+    pub branch: String,
+    /// The deferral reason evaluation surfaces: the git command and its
+    /// failure text.
+    pub error: String,
+}
+
+/// Every enabled delivery auto-task owned here whose branch git cannot
+/// resolve, in definition order. A definition with persisted state is checked
+/// too: a branch deleted after baseline stops it just as surely. One whose
+/// seeding plugin is off here never ticks, so it is not reported.
+pub fn unresolvable_delivery_branches(
+    runtime: &OrbitRuntime,
+) -> Result<Vec<UnresolvableBranch>, OrbitError> {
+    let source = Source::new(&runtime.paths().repo_root);
+    let mut unresolvable = Vec::new();
+    for listed in runtime.auto_task_listing(false)? {
+        let definition = listed.definition;
+        let AutoTaskSchedule::Deliveries {
+            deliveries_landed: declared,
+        } = &definition.schedule
+        else {
+            continue;
+        };
+        if !runtime.auto_task_enabled(&definition)
+            || !ownership::resolve(runtime, declared.owner_machine.as_deref()).owned_here
+        {
+            continue;
+        }
+        if let Some(error) = branch_unavailable(&source, &declared.branch) {
+            unresolvable.push(UnresolvableBranch {
+                definition: definition.name.clone(),
+                branch: declared.branch.clone(),
+                error,
+            });
+        }
+    }
+
+    Ok(unresolvable)
+}
+
+/// An enabled delivery definition whose resolved owner is not this host.
+///
+/// Admission is impossible here whatever `enabled` says, so a surface that
+/// renders it as scheduled is lying about work that will never happen
+/// [ORB-12867]. The classification is [`DeliveryOwnership::refusal`] verbatim,
+/// the same rule the evaluator fails closed on, so reporting cannot drift from
+/// admission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnadmittableDefinition {
+    pub definition: String,
+    /// `owned_elsewhere` or `ownership_unresolved`, straight from
+    /// [`DeliveryOwnership::refusal`].
+    pub refusal: &'static str,
+    pub ownership: DeliveryOwnership,
+    /// This host's registered machine identity, when it has one.
+    pub this_host: Option<String>,
+}
+
+impl UnadmittableDefinition {
+    /// The mismatch in one clause: the refusal classification, the machine
+    /// that owns the definition and the machine this is.
+    ///
+    /// Only the wording branches on `authority`; the classification token
+    /// itself is still [`DeliveryOwnership::refusal`], so this cannot disagree
+    /// with what the evaluator refuses.
+    pub fn mismatch(&self) -> String {
+        let owner = self.ownership.owner_machine.as_deref();
+        let source = match (self.ownership.authority, owner) {
+            (OwnerAuthority::Definition, Some(owner)) => {
+                format!("the definition's `owner_machine` names machine `{owner}`")
+            }
+            (OwnerAuthority::Workspace, Some(owner)) => {
+                format!("this workspace's registered owner is machine `{owner}`")
+            }
+            (OwnerAuthority::Conflicting, _) => "no owner machine resolves: this workspace's \
+                 registered owner and this replica checkout's declared owner name different \
+                 machines"
+                .to_string(),
+            // `Missing`, and the unreachable case of a resolved authority that
+            // named no machine: either way nothing owns it.
+            _ => "no owner machine resolves: the definition sets no `owner_machine` and this \
+                 workspace has no registered owner machine"
+                .to_string(),
+        };
+        let here = match self.this_host.as_deref() {
+            Some(machine) => format!("this host is `{machine}`"),
+            None => "this host has no registered machine identity".to_string(),
+        };
+
+        format!("{}: {source}, and {here}", self.refusal)
+    }
+
+    /// The whole operator-facing sentence: the mismatch, what it costs, and
+    /// the way out. This is what `orbit auto-task list` prints as the skip
+    /// reason for the row.
+    pub fn reason(&self) -> String {
+        let fix = if self.ownership.owner_machine.is_some() {
+            "set `schedule.deliveries_landed.owner_machine` to this host, or disable it here \
+             with `orbit auto-task toggle <name> off`"
+        } else {
+            "register this workspace's owner machine, or set \
+             `schedule.deliveries_landed.owner_machine` explicitly"
+        };
+
+        format!(
+            "{}, so no tick here can admit work for it while its coverage debt grows; inspect \
+             the debt with `orbit auto-task show {} --preview`, then {fix}",
+            self.mismatch(),
+            self.definition
+        )
+    }
+}
+
+/// Ownership refusal for one delivery auto-task, or `None` when this host owns
+/// it, it is disabled, or it is not a delivery definition at all.
+///
+/// A disabled definition is deliberately quiet: `disabled` already means the
+/// operator turned it off, and saying it is also unadmittable adds nothing.
+pub fn delivery_ownership_refusal(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Option<UnadmittableDefinition> {
+    let AutoTaskSchedule::Deliveries {
+        deliveries_landed: declared,
+    } = &definition.schedule
+    else {
+        return None;
+    };
+    if !runtime.auto_task_enabled(definition) {
+        return None;
+    }
+
+    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
+    let refusal = ownership.refusal()?;
+
+    Some(UnadmittableDefinition {
+        definition: definition.name.clone(),
+        refusal,
+        ownership,
+        this_host: runtime.automation_machine_identity().map(ToOwned::to_owned),
+    })
+}
+
+/// Every enabled delivery auto-task this host can never admit work for, in
+/// definition order. `orbit doctor` reports them; `orbit auto-task list`
+/// reports each one on its own row. One whose seeding plugin is off here is
+/// already parked for that reason and is not reported twice.
+pub fn unadmittable_delivery_definitions(
+    runtime: &OrbitRuntime,
+) -> Result<Vec<UnadmittableDefinition>, OrbitError> {
+    Ok(runtime
+        .auto_task_listing(false)?
+        .iter()
+        .filter_map(|listed| delivery_ownership_refusal(runtime, &listed.definition))
+        .collect())
+}
+
+/// A delivery auto-task whose admitted action stopped without evidence its
+/// settlement would accept — usually a task closed with missing or malformed
+/// coverage. The next evaluation settles it; one still reported means none is
+/// running here, and the consumer admits nothing until it does or an operator
+/// recovers or resets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WedgedConsumer {
+    pub definition: String,
+    /// The stopped action: the task the consumer is still waiting on.
+    pub action_id: String,
+    /// The last validation reason recorded against its evidence, if any.
+    pub reason: Option<String>,
+}
+
+/// Every delivery auto-task here holding a stopped admitted action, in
+/// definition order, by the same rule reset and recovery accept.
+pub fn wedged_delivery_consumers(
+    runtime: &OrbitRuntime,
+    now: DateTime<Utc>,
+) -> Result<Vec<WedgedConsumer>, OrbitError> {
+    if runtime.automation_machine_identity().is_none() {
+        return Ok(vec![]);
+    }
+    let store = runtime.automation_store()?;
+    let mut wedged = Vec::new();
+    for listed in runtime.auto_task_listing(false)? {
+        let definition = listed.definition;
+        if !matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
+            continue;
+        }
+        let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
+        let state = store.automation_state(&consumer)?;
+        if !super::auto_task_action_liveness(runtime, &definition, state.as_ref(), now)
+            .failed_without_evidence
+        {
+            continue;
+        }
+        if let Some(active) = state.and_then(|state| state.active) {
+            wedged.push(WedgedConsumer {
+                definition: definition.name.clone(),
+                action_id: active.action_id.unwrap_or_default(),
+                reason: active.reason,
+            });
+        }
+    }
+
+    Ok(wedged)
+}
+
+/// The reason evaluation would defer with when `branch` does not resolve,
+/// or `None` when it does. Only a local ref lookup: no history, no provider.
+pub(super) fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<String> {
+    source.verify_branch(branch).err().map(|error| match error {
+        AutomationError::Deferred(reason) => reason,
+        other => other.to_string(),
+    })
+}
 
 pub fn inspect_auto_task(
     runtime: &OrbitRuntime,
@@ -40,7 +262,7 @@ pub fn inspect_auto_task(
             epoch: &epoch,
             trigger: &trigger,
             ownership,
-            enabled: definition.enabled,
+            enabled: runtime.auto_task_enabled(definition),
             admission_deferred,
         },
         now,
@@ -122,22 +344,28 @@ fn inspect(
     // edited definition comes first: it has to be restored before any owner
     // question matters.
     let reason = if definition_changed {
-        delivery::DEFINITION_CHANGED
+        delivery::DEFINITION_CHANGED.into()
     } else if !enabled {
-        "disabled"
+        "disabled".into()
     } else if let Some(refusal) = ownership.refusal() {
-        refusal
+        refusal.into()
     } else {
         match &state {
-            None => "awaiting_baseline",
-            Some(state) => scheduling_reason(state, trigger, admission_deferred, now),
+            // A baseline needs the configured branch to resolve. Reporting the
+            // same failure the tick defers with here is what tells an operator
+            // why `awaiting_baseline` never ends; it reads one local ref and
+            // still fetches no history or provider evidence.
+            None => branch_unavailable(&Source::new(&runtime.paths().repo_root), &trigger.branch)
+                .unwrap_or_else(|| "awaiting_baseline".into()),
+            Some(state) => scheduling_reason(state, trigger, admission_deferred, now).into(),
         }
     };
 
     Ok(AutomationDiagnostic {
-        reason: reason.into(),
+        reason,
         state,
         ownership: Some(ownership),
+        batch: Vec::new(),
         waivers: store.automation_waivers(&consumer, 20)?,
         receipts: store
             .automation_receipts(&consumer, 20)?
@@ -172,7 +400,7 @@ fn scheduling_reason(
     if active_is_settled {
         "needs_attention"
     } else if claim_awaiting_admission
-        .is_some_and(|active| active.attempt > 1 && now > active.batch.retry_until)
+        .is_some_and(|active| active.attempt > 1 && now > active.deadline())
     {
         "retry_deadline_expired"
     } else if claim_awaiting_admission

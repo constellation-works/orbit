@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Table Rendering"
-last_validated: 2026-08-31
+last_validated: 2026-09-27
 ---
 
 # Spec: Table Rendering
@@ -17,6 +17,7 @@ Before [ORB-10567], `build_table` paired `UTF8_BORDERS_ONLY` with `ContentArrang
 - **Header.** One row, uppercase, dim, no rule beneath it. Present in `table` mode; absent in the plain (piped) form so consumers need not skip a line. Suppress the header when the result set is empty — print the empty-state line from §6 instead.
 - **Body.** One line per record. No leading indent, no outer border, no column separators.
 - **Gutter.** Exactly two spaces between columns. Padding is spaces only; never tabs in `table` mode.
+- **Plain field encoding.** The plain form separates fields with a tab and records with a line feed, so a value may contain neither. Each plain field is escaped: a backslash becomes `\\`, a tab `\t`, a line feed `\n`, and a carriage return `\r`. A title stored as `first line`⏎`second`⇥`field` is piped as the single field `first line\nsecond\tfield`. A value without those four characters renders unchanged, and the escape is reversible. Only the plain form is encoded: `json` and `ndjson` carry the stored value, and the `table` rendering keeps its one-line truncation (§4).
 - **No footer.** Counts, totals, and pagination hints go to stderr or a `--stats` flag, never into the table body where a consumer would parse them as a record.
 
 ## 2. Column Widths
@@ -48,8 +49,9 @@ Widths are computed from the result set, never declared as literals.
 
 ## 5. Column Selection
 
-- **Uniform-value suppression.** In `auto`/`table` mode, a column whose value is identical across every row of the result set is not rendered. It stays present in `json`. This is what removes `BUILTIN` from an all-builtin `orbit tool list` without a per-command decision.
+- **Uniform-value suppression.** In the `table` rendering `auto` chooses for a terminal, a column whose value is identical across every row of the result set is not rendered. It stays present in `json`. This is what removes `BUILTIN` from an all-builtin `orbit tool list` without a per-command decision.
 - Suppression is computed per invocation, so a filtered result set may show fewer columns than an unfiltered one. That is intended: the column carried no information *for this result set*.
+- **The plain form is never suppressed.** It has no header, so a dropped column is invisible: every later field simply shifts one position left, and `cut -f4` silently reads a different field than it did for the previous result set. `orbit audit list --status denied` emitted three fields where a mixed-status listing emitted six, because the denied rows' timestamps agreed to the second [ORB-12113]. Suppression is a readability heuristic for a human reading columns; a pipe gets the table's full shape.
 - `--format table` (explicit) disables suppression, so a caller who wants stable columns can ask for them.
 - Never suppress a column the user filtered on — if `--status done` was passed, `STATUS` renders even though it is uniform.
 
@@ -65,14 +67,14 @@ The path from current behavior:
 
 1. ~~Change the preset in `crates/orbit-cli/src/output/table.rs` to a borderless one and switch `ContentArrangement` off full-width wrapping.~~ Done [ORB-10567].
 2. ~~Make `add_single_line_row` the only exported row constructor; convert the 19 call sites that use `Table::add_row` directly.~~ Done [ORB-10567] — `output::table::Table` wraps `comfy_table`, and its `add_row` is the only constructor reachable from a command module.
-3. Move width computation behind the sink (see [./output-modes.md](./output-modes.md) §1) so it is not resolved from a terminal that may not exist. **Open**, depends on [Terminal Output Is a Rendering of a Structured Payload](../4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload). `sink_width` currently reads `COLUMNS`, falls back to the terminal query, and returns no width for a non-terminal sink — the policy of §2 consumes whatever it returns, so only the source moves.
-4. Convert `print_audit_event_line` and the other hand-padded `println!` sites to the table path. **Open** — `orbit audit list` still pads with format-string literals, and some count/summary lines that neighbor a table still print to stdout rather than stderr (`orbit semantic stats` and `orbit migrate status`; `orbit doctor` prints its healthy summary to stdout, while failures and warnings go to stderr).
+3. ~~Move width computation behind the sink (see [./output-modes.md](./output-modes.md) §1) so it is not resolved from a terminal that may not exist.~~ Done — `OutputSink` prefers `COLUMNS`, falls back to a terminal query, and resolves a zero width for non-terminal sinks; `Table::emit` consumes that resolved width when sizing columns.
+4. ~~Convert `print_audit_event_line` and the `orbit audit list` view from hand-padded format strings to the table path.~~ Done — `audit_event_table` uses per-column sizing. **Remaining:** some count/summary lines that neighbor a table still print to stdout rather than stderr (`orbit migrate status`; `orbit doctor` prints its healthy summary to stdout, while failures and warnings go to stderr).
 5. ~~Add per-column *fixed*/*flexible* and alignment metadata at each call site.~~ Done [ORB-10567] for the 21 table call sites, via `Column::fixed` / `Column::number` / `Column::path` / `Column::filtered`.
 
-Step 3 depends on [Terminal Output Is a Rendering of a Structured Payload](../4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload). Step 4 is per-command and may proceed incrementally.
+Step 3 uses the sink contract in [./output-modes.md](./output-modes.md) §1. Step 4 remains per-command and may proceed incrementally.
 
-The header is still rendered in the piped form, contrary to §1: suppressing it requires the mode resolution of [./output-modes.md](./output-modes.md) §2, which has not landed. Truncation is already disabled for a non-terminal sink, so the piped form carries whole values today.
+The piped form now follows §1: `auto` on a non-terminal sink selects plain output, which suppresses the header and carries full values separated by tabs without ANSI or truncation. `--format table` explicitly requests the header-bearing table; a non-terminal sink still has no width, so it does not truncate values.
 
-There was no output snapshot suite to update — see [../2_design.md §8](../2_design.md#8-test-coverage-of-output) — so the migration added fixtures rather than adjusting them: unit rendering assertions at pinned widths in `crates/orbit-cli/src/output/tests/table.rs`, and an end-to-end *N*-records-is-*N*-lines assertion for `orbit tool list` and `orbit task list` in `crates/orbit-cli/tests/table_rendering.rs`.
+There was no output snapshot suite to update — see [../2_design.md §8](../2_design.md#8-test-coverage-of-output) — so the migration added fixtures rather than adjusting them: unit rendering assertions at pinned widths (since retired for boundary tests), and an end-to-end *N*-records-is-*N*-lines assertion for `orbit tool list` and `orbit task list` in `crates/orbit-cli/tests/output/table_rendering.rs`.
 
 Which truncatable column has a detail command, and which four views still lack one, is recorded in [../references/detail-commands.md](../references/detail-commands.md).

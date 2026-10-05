@@ -1,318 +1,449 @@
 ---
 title: Use the Dashboard
-description: "Connect to the Orbit operator dashboard locally or over SSH, select a workspace, inspect tasks and runs, and use Operations controls with current authorization rules."
+description: "Open the Orbit dashboard locally or over SSH, pick a workspace, act on tasks and runs, run a delivery window, and edit settings."
 sidebar:
   order: 6
 ---
 
-The **Orbit dashboard** is the operator UI for a live host: tasks, runs,
-errors, and Operations. It is not a login portal and it is not a replica of
-another machine's store. Open it on loopback, or reach a remote host over an
-authenticated SSH tunnel.
+The Orbit dashboard is the browser UI for the host it runs on: tasks, runs,
+errors, automation, and settings. It has no login and binds to loopback only.
+To use another machine's dashboard, tunnel to it over SSH.
 
-Commands and UI labels below were verified against current `orbit web`
-help and the dashboard sources in this repository. Examples use sanitized
-identifiers and are **illustrative**, not captured from a live host, unless a
-caption says otherwise.
+![The dashboard's Tasks view: tasks grouped by status, with Approve and Ship buttons, and the Drain card on the right.](../../../assets/dashboard/dashboard-tasks.png)
 
 ## Open it locally
 
-From any directory, serve every workspace registered in the current Orbit
-root:
-
 ```bash
-orbit web serve --no-open
+orbit web serve
 ```
 
-The default URL is `http://127.0.0.1:7878`. Omit `--no-open` to let the
-process try to open a browser. Useful flags:
+This serves every workspace in the current Orbit registry at
+`http://127.0.0.1:7878` and tries to open a browser.
 
-```bash
-orbit web serve --port 8080 --no-open
-orbit web serve --workspace orbit --no-open
-orbit --root /path/to/orbit-root web serve --no-open
-```
+| Option | Effect |
+|---|---|
+| `--no-open` | Do not open a browser. |
+| `--port <N>` | Serve on another port. |
+| `--workspace <SELECTOR>` | Open on this workspace: a registered name, `ws_*` ID, or checkout path. If nothing matches, the dashboard opens on **All workspaces**. |
+| `--operator` | Enable operator controls without an interactive terminal. See [Authorization](#authorization). |
+| `orbit --root <DIR> web serve` | Serve only the workspaces in `<DIR>/workspaces.json`, not `~/.orbit/workspaces.json`. |
 
-`--workspace` preselects a registered name, logical `ws_*` ID, or local
-checkout path. If the selector does not match an active workspace, the UI
-opens on **All workspaces** instead of erroring.
-
-`--root` chooses which registry is served — `<root>/workspaces.json` and
-nothing from the machine-global `~/.orbit/workspaces.json`. That is the same
-root isolation every other command uses. `--global` still parses but is a
-no-op: `orbit web serve` always serves every workspace in that registry.
-
-The dashboard refuses non-loopback binds. `--host 0.0.0.0` is not a remote
-access path; use [`orbit web connect`](#open-it-over-ssh) instead.
+`--global` is still accepted but does nothing. The server refuses
+non-loopback addresses such as `--host 0.0.0.0`; use
+[`orbit web connect`](#open-it-over-ssh) to reach another machine.
 
 ## Open it over SSH
 
 ```bash
 orbit web connect my-server
-orbit web connect my-server --remote-port 7878 --port 9000
-orbit web connect my-server --workspace orbit
 ```
 
-`ssh-host` is anything `ssh` accepts: a hostname, `user@host`, or a
+`my-server` is anything `ssh` accepts: a hostname, `user@host`, or a
 `~/.ssh/config` alias. The command:
 
-1. Forwards a local loopback port to the remote dashboard port (default
-   `7878`).
-2. Reuses a remote `orbit web serve` that already answers `/healthz`, or
-   starts `orbit web serve --no-open --port <remote-port>` and owns that
-   process.
-3. Prints `http://localhost:<local-port>` and, unless `--no-open` is set,
-   opens a browser.
-4. On Ctrl-C, tears down only the SSH process this invocation started. A
-   server it spawned is not left behind; a server it attached to is left
-   running.
+1. Forwards a local loopback port to the remote dashboard port.
+2. Attaches to a remote `orbit web serve` that is already running, or starts
+   one with `--operator`.
+3. Prints `http://localhost:<port>` and opens it in a browser.
+4. On Ctrl-C, closes the tunnel. It stops the remote server only if it
+   started it.
 
-If local `7878` is busy and you did not pass `--port`, connect picks a free
-ephemeral port. An explicit `--port` that is already bound fails instead.
+| Option | Effect |
+|---|---|
+| `--port <N>` | Local port. Default `7878`, or a free port if `7878` is busy. An explicit port that is busy fails. |
+| `--remote-port <N>` | Remote dashboard port. Default `7878`. |
+| `--workspace <SELECTOR>` | Open on this remote workspace. `connect` refuses `--root`. |
+| `--no-operator` | Start the remote server without operator capability, so automation controls and settings writes stay read-only. |
+| `--no-open` | Do not open a browser. |
 
-`orbit web connect` does not accept `--root`. That flag used to name a remote
-workspace; it now means a local data directory, which this command does not
-read. Pass `--workspace <SELECTOR>` to preselect the remote workspace.
+`connect` cannot add operator capability to a server it did not start. If it
+attaches to one running without it, it prints a notice. Restart that server
+with `orbit web serve --operator`, or stop it and reconnect.
 
 ## Workspace scope
 
-When more than one workspace is registered, the left rail shows a workspace
-selector. One active workspace is the default: the `--workspace` value if it
-resolved, otherwise the registered workspace containing the current
-directory, otherwise the first active entry.
+With more than one workspace registered, the left rail has a workspace picker.
+The dashboard opens on the `--workspace` match, else the workspace containing
+the current directory, else the first active workspace.
 
-**All workspaces** is an explicit aggregate view. It lists tasks across the
-served registry, but mutations are disabled there — including Operations
-Enable/Disable, Mint now, clock changes, and auto-drain. Select one active
-workspace before changing anything. Inactive registry entries appear as
-`<name> (unavailable)` and cannot be selected.
+- **All workspaces** lists tasks from every served workspace. Automation, the
+  auto-drain, settings, and other per-workspace panels are read-only there.
+  Task actions still work on a row that names its owning workspace and are
+  sent to that owner. A row without an owner stays read-only.
+- Inactive workspaces show as `<name> (unavailable)` and cannot be selected.
+- The URL holds the workspace and time window, so a reload or copied link
+  opens the same view.
+- **Health → Reliability** covers every workspace, whatever is selected.
 
-The selected workspace and time window live in the page URL, so a reload or
-copied link restores the same scope. **Diagnostics → Reliability** is
-fleet-wide: it ignores the selected workspace and says so in the rail.
+Confirm the selected workspace before you act. A count or metric does not
+prove that a particular task or run succeeded.
 
-A dashboard aggregate or metric is not proof that a particular task or run
-succeeded. Confirm the selected workspace before acting.
+## Find your way around
 
-## Inspect tasks, runs, and errors
-
-The left rail is the section map:
-
-| Rail | What it shows |
+| Rail | Shows |
 |---|---|
-| **Tasks** | Backlog and other statuses for the selected workspace (or the aggregate list). |
+| **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the [auto-drain](#auto-drain) card and a live log. |
+| **Runs** | Job runs, newest first, and run detail. |
 | **Audit** | Recent events and a 24-hour summary. |
-| **Diagnostics** | Recent runs, metrics, errors, incidents, reliability, and the scoreboard. |
-| **Operations** | Routines, auto-tasks, auto-drain, and operation-mode grants. |
+| **Health** | Incidents, errors, reliability, step metrics, and the scoreboard. |
+| **Automation** | **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
+| **Plugins** | Installed plugins and the panels they add. |
+| **Settings** | The workspace's `config.toml`. |
 
-### Tasks
+The top bar counts failed runs, policy denials, long-running runs, and audited
+events in the selected window. Click a count to open the view behind it.
 
-Search by ID or title, filter by status, or type an ID into **Jump to
-ORB-NNNNN** in the top bar. Opening a task shows detail plus the actions
-that apply to its current status:
+View URLs keep older section names: `#diagnostics/…` is Health,
+`#operations/…` is Automation, and `#config/…` is Settings.
 
-| Control | When it is present |
+## Tasks
+
+Search by ID or title, or filter by status. Press Enter on a full task ID to
+open it even when the filter, page, or selected workspace hides it.
+
+Tasks are grouped in the order you act on them: **Awaiting approval**
+(`proposed`), review, blocked, in progress, then backlog. Each row carries the
+action its group waits on: **Approve** on a proposed task, **Ship** on a
+backlog task, and **View run** on a task in progress.
+
+Open a task to see its detail and every action its status allows:
+
+| Action | Shown for |
 |---|---|
-| **ship** | `backlog` only. Dispatches the workspace's configured ship mode (`pr` or `local`); there is no extra PR/local toggle on the button. Disabled while a ship run is already in flight for that task. |
+| **ship** | `backlog`. Runs the workspace's ship mode (`pr` or `local`). Disabled while a ship run for the task is in flight. |
 | **approve** | `proposed` or `review`. |
 | **reject** | `proposed`, `review`, or `backlog`. |
 | **archive** | Any status except `archived`. |
-| **comment** | Always. |
+| **comment** | Any status. |
 
-Status and crew dropdowns on the row are editable only with a concrete
-workspace selected. In **All workspaces** they stay visible but are
-read-only.
+The row's status and crew dropdowns are editable when a workspace is
+selected, or in **All workspaces** for a row that names its owner. The status
+list shows every status:
 
-The right dock has two modes that share the same column width: **Status**
-(files currently locked by tasks) and **Log** (a live `orbit.log` tail with
-all / err / deny / warn filters).
+- Moves the [lifecycle table](../../concepts/tasks/#transition-rules) allows
+  still ask for the evidence they need, such as a plan or completion summary.
+- Every other status sits under **force (off-table)**, marked ⚠. Picking one
+  asks for confirmation, then applies it as an operator override. This is the
+  same as `orbit task update <id> --status <status> --force` and is recorded
+  in task history as a `forced` event. Agents cannot force a status.
 
-### Runs and errors
+The right dock has two modes. **Drain** shows the [auto-drain](#auto-drain)
+card and the files tasks currently lock. **Log** is a live `orbit.log` tail
+you can filter to **all**, **err**, **deny**, or **warn**.
 
-**Diagnostics → Recent runs** lists job runs for the selected workspace.
-Click a row for run detail: metadata, steps, events, and a timing chart when
-the run has that data.
+### Edit task metadata
 
-Supported run actions, when the run's state allows them:
+Expand a row to edit these fields in place. Edits change the task record; they
+do not dispatch work.
 
-- **cancel** — `pending` or `running`.
-- **Resume** — `failed`, `interrupted`, or `timeout`; starts from the first
-  non-successful step.
-- **Replay run** — submits a new run of the same job.
+| Field | Where and how |
+|---|---|
+| **description** | Left column. **edit** opens a Markdown editor. |
+| **acceptance criteria** | Left column, collapsed section. **edit**, then one criterion per line. |
+| **complexity** | **properties** card. Pick **low**, **medium**, **hard**, or **xhard**; it saves on change. A stored **unassessed** is shown but cannot be picked. |
+| **tags** | **edit** in the **properties** card header. Separate tags with commas or newlines. |
+| **context files** | **context files** section. **edit**, then one selector per line: `file:…`, `dir:…`, or `symbol:…`. |
 
-Those buttons are absent or disabled when the state does not allow the
-action. A 409 from ship or another governed start means a conflicting run
-or workspace claim is already held; refresh and inspect the named run
-instead of retrying blindly.
+Text fields save with **save** and discard with **cancel**. A failed save
+keeps your draft open with the error.
 
-**Diagnostics → Errors** is the step/event failure list for the current
-month. It is not the same counter as the top-bar **Failed runs** tile
-(failed, timeout, and interrupted job runs in the selected health window)
-or Recent runs' **failed** filter (durable `Failed` state, no window). Use
-the view that matches the question you are asking.
+For context files, the server checks that the file or directory exists and is
+the kind the selector names. It does not look up `symbol:` names. If the task
+will create the target, check **allow missing context** before you save.
 
-```bash
-# CLI equivalents for the same facts. Identifiers are placeholders.
-orbit task show ORB-NNNNN
-orbit run show jrun-YYYYMMDD-HHMM-NN
-orbit audit list
-```
+### Distributed tasks
 
-## Operations: mint, toggle, clock, drain
+On the owner of a [distributed drain](../distributed-drain/), a task with an
+execution claim shows a **distributed execution** panel with the claim's
+state and the accepted handoff.
 
-Operations has three subtabs. All of them require a **single active
-workspace**. In **All workspaces** the panels stay read-only and explain
-why.
+- **approve** on a `review` task with a handed-off claim sends **Approve
+  handoff** for the exact candidate shown.
+- **Revoke authority** and **Recover claim → blocked** / **Recover claim →
+  backlog** require a reason. With the field empty, they send nothing.
+- A replica shows the claim as held by its owner and refuses all three
+  actions.
+
+## Auto-drain
+
+The auto-drain card starts and stops a
+[delivery window](../continuous-delivery/): a time-bounded run that ships
+approved backlog tasks in parallel. It sits at the top of the Tasks dock's
+**Drain** mode; `#auto-drain` and `#operations/auto-drain` open it. It needs a
+single active workspace.
+
+![The Drain card: running and free slots, eligible and blocked tasks, window length, parallel tasks, Stop at review or Mark done, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
+
+The card shows:
+
+- **State.** **Draining**, with time left and `N running / M admitted`;
+  **Winding down · N workers still running** once admissions stop; or `idle`.
+  The header links the live window's run. Windows started from the CLI show
+  here too.
+- **Capacity.** Running tasks against the limit, free slots, and what a window
+  started now would admit.
+- **Eligible now** and **Blocked by running.** Counts from a read-only
+  readiness snapshot. Up to three blocked tasks are listed as
+  `ABC-1 waits on ABC-2`, with the lock they contend for.
+
+| Control | Effect |
+|---|---|
+| **Window length** | `15m` to `8h`. |
+| **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
+| **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those eligible now. **Mark done** needs an operator session. |
+| **Start … window** | After a confirmation, runs `orbit run auto` with these settings. Reads **Start another … window** while one is draining. |
+| **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
+| **Settle pending** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
+
+Without operator capability you can still start a window that stops at
+review; **Mark done** stays disabled and says why. Nothing is reserved or
+started until you click **Start**. Results appear in the card's status line.
+
+On a replica, a live pull drain counts as a window. The header reads **Pull
+drain**, and the **Stop** confirmation says admitted leaves stay claimed by
+their owner and that cancelling one fails its claim. See
+[Set Up a Distributed Drain](../distributed-drain/#stop-cancel-and-settle).
+
+## Runs and errors
+
+**Runs** lists job runs for the selected workspace. Filter by **All**,
+**Live**, or **Failed**. Click a run for its metadata, steps, events, child
+runs, and a timing chart when one is recorded. A failed, timed-out, or
+interrupted run opens on the step it stopped at and the error it recorded.
+
+| Action | Available for | Effect |
+|---|---|---|
+| **cancel** | `pending` or `running` | Cancels the run. |
+| **Resume** | `failed`, `interrupted`, or `timeout` | Restarts from the first step that did not succeed. |
+| **Replay run** | Any run (asks first if it is still running) | Submits a new run of the same job. |
+
+A refused action shows its error above the list until you dismiss it or start
+another action. If the action succeeded but the view could not refresh, the
+message says the view is stale. A `409` from ship or another start means a
+conflicting run or workspace claim is held: refresh and open the named run
+instead of retrying.
+
+On a distributed-drain follower, cancelling a run that works a claimed task
+asks first: it fails the claim on the owner and blocks the owner's task, which
+the confirmation names. The run detail shows the claim (`pull_claim`), and a
+pull drain's detail lists the crews its window can run and those it excluded,
+with the reason.
+
+Three failure counts answer different questions:
+
+| Where | Counts |
+|---|---|
+| Top-bar **failed runs** | Job runs that failed, timed out, or were interrupted in the selected window. |
+| Runs **Failed** filter | Runs in the `Failed` state, with no time window. |
+| **Health → Errors** | Step and event failures this month. |
+
+From a terminal, the same facts come from `orbit task show <task-id>`,
+`orbit run show <run-id>`, and `orbit audit list`.
+
+## Automation
+
+**Automation** has three views: **Routines** (with the sweep clock),
+**Auto-tasks**, and **Jobs**. Its controls need a single active workspace and
+an [operator session](#authorization). In **All workspaces** they are
+read-only and say why. For what routines and auto-tasks are, see
+[Schedule Recurring Work](../recurring-work/).
+
+Each row shows the item, its trigger, when it fires next, its last result, and
+one control. Rows are grouped by whether they will fire. **Details** expands
+the longer fields.
 
 ### Routines
 
-Each card is one versioned routine from the selected workspace: name, enabled
-/ blocked / disabled, target job, schedule, host pin, last and next
-evaluation, and last fire.
 
-**Enable** / **Disable** writes that routine's enabled field. The control is
-disabled when:
+![Automation → Routines: the next hour's fires on a timeline, then each routine with its switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
+A **Next hour** strip shows each routine due in the next hour: solid if it
+will fire, hollow if it is paused. A paused routine's slot is skipped, not
+queued. An enabled routine that cannot take effect shows a **blocked** pill.
 
-- no single workspace is selected,
-- the session is not an authorized operator (see
-  [Authorization](#authorization)),
-- or the routine is pinned to another host — the note names the pinned host.
+Each row's switch writes the routine's `enabled` field. It does not start or
+stop the sweep clock.
 
-Toggling a routine does not start or stop the host sweep clock.
+### Sweep clock
 
-### Host sweep clock
+The bar above the routines shows this host's sweep clock (`orbit clock tick`):
+health, provider, whether the service is enabled, cadence, and the last and
+next tick.
 
-The clock panel is host-scoped (`orbit sweep` on this machine). **Start** /
-**Stop** asks for confirmation and does not change any routine definition.
-**Apply cadence** reloads the native clock interval without changing whether
-the service is enabled. Both need the same operator authorization as routine
-toggles.
+- **Pause clock** / **Enable clock** asks for confirmation. It does not change
+  any routine definition.
+- The cadence picker and **Apply cadence** change the interval without pausing
+  or enabling the clock.
 
-CLI equivalents:
-
-```bash
-orbit routine list
-orbit routine clock status
-orbit routine clock pause
-orbit routine clock enable
-orbit routine clock set --cadence-seconds 300
-```
+The CLI equivalents are `orbit clock status`, `orbit clock pause`,
+`orbit clock enable`, and `orbit clock set --cadence-seconds <N>`.
 
 ### Auto-tasks
 
-Each definition shows its schedule, dedupe policy, last evaluation or mint,
-last minted task, and whether an open duplicate already exists.
+Definitions live in `.orbit/auto_tasks/` and are checked on every sweep clock
+tick, so pausing the clock pauses scheduled mints. Rows are grouped **On a
+schedule**, **On delivery** (minted after landed deliveries), and
+**Disabled**. The stats strip counts definitions with an open duplicate, and
+the scheduler skips those slots; the row calls out the duplicate too.
 
-- **Enable** / **Disable** writes the definition's `enabled` field after a
-  confirm dialog. A disabled definition is skipped by the scheduler; it is
-  not deleted.
-- **Mint now** creates one task immediately. It **ignores** the definition's
-  schedule, enabled flag, and scheduler dedupe policy. The UI warns before
-  the request: `Manual mint ignores this definition's schedule, enabled flag,
-  and scheduler dedupe policy.` If an open instance already exists, mint
-  still creates another.
+- The switch writes the definition's `enabled` field after a confirmation. A
+  disabled definition is skipped, not deleted.
+- **Mint now** creates one task immediately. It ignores the schedule, the
+  enabled flag, and dedupe, so it works on a disabled definition and creates
+  another task even when one is open. The confirmation warns about this.
+  `orbit auto-task mint <name>` does the same.
 
-Mint and toggle are separate operations. Minting a disabled definition is
-supported and intentional; it is the on-demand escape hatch, not a
-scheduler fire.
+### Jobs
 
-```bash
-orbit auto-task list
-orbit auto-task toggle "$NAME"
-orbit auto-task mint "$NAME"
-```
+**Jobs** lists the jobs this workspace's routines target or recently ran,
+with **Running now** above them. They are grouped **Sweeps** (housekeeping and
+intake, safe to run by hand), **Delivery** (task and workspace pipelines), and
+**Other**.
 
-The CLI mint path is the same unconditional operation the dashboard button
-calls.
+**Run ▸** starts the job in this workspace with no input and reports the new
+run ID. It is disabled on **Delivery** rows, which need a task or a window:
+use **ship** or the [auto-drain](#auto-drain). **Details** shows the
+equivalent command, such as
+`orbit run job worktree_gc_pipeline --workspace orbit`.
 
-### Auto-drain and operation mode
+## Settings
 
-**Start bounded window** submits `orbit run auto` for the selected duration
-and concurrency. Shipped tasks stay in `review` unless you opt into
-automatic completion.
+**Settings** shows the configuration this workspace runs on, with the same
+layering and descriptions as `orbit config show`.
 
-The completion checkbox is a governed operator action: it marks every task
-the window ships as `done` (`review` → `done`), not only the ones visible at
-submit time. If the session is not authorized for that option, the window
-can still start with default review completion; the completion control stays
-disabled and says why.
+| View | Shows |
+|---|---|
+| **Effective** | The merged result: workspace values over global values over built-in defaults. |
+| **Workspace file** | `.orbit/config.toml` alone (`orbit config show --scope workspace`). |
+| **Global file** | `~/.orbit/config.toml` alone. Edits here write the global file. |
+| **Crews** | The crew table. |
+| **Keys** | Every settable key with its type, section, description, and accepted values. |
 
-**Operation Mode** projects `orbit operation explain` for the workspace:
-preset, caps, and the active grant. **Stop grant** and **Revoke grant** are
-supported when a grant is active and the session is authorized.
+**Effective** opens with a strip naming both files, then one panel per section
+(Delivery, Crews, Execution, Review, Housekeeping) and a read-only **Paths**
+grid. Each row shows the value, where it came from, and the key's description.
+The source is `workspace`, `global`, `default` (no file sets it), `unset` (no
+value at all), or `registry` (from the workspace registry, not
+`config.toml`).
 
-**Enablement is not a dashboard action.** Creating a grant names a finite
-task set and explicit rights; that decision stays on the CLI or operator MCP
-surface. Do not treat a missing Enable control as a broken button.
+Rows also flag two things the value alone hides:
+
+- `overrides global: trunk`: the workspace file replaced a global value.
+- `global sets … — not inherited while a workspace file exists`: a workspace
+  `config.toml` must restate the security keys `execution.codex.sandbox`,
+  `execution.codex.approval_policy`, and `execution.env.pass` to keep them.
+  The Execution panel shows a badge, and the strip warns whenever a workspace
+  file exists.
+
+**Set only** hides keys nothing sets, except rows that override or drop a
+lower layer. **All keys** shows the rest.
+
+A **registry strip** shows the registered `base_branch` and `ship_mode`.
+Delivery uses these, not `workflow.base_branch`, and the strip flags a
+disagreement. Change them with `orbit workspace`; the strip is read-only.
+
+### Edit a value
+
+Click a row, or its pencil, to edit it. The editor matches the key's type: a
+choice list, toggle, number field, or chip list. Each row saves on its own.
+
+- In **Effective**, saves go to the workspace file (`.orbit/config.toml`,
+  per-user and git-ignored). Only **Global file** writes `~/.orbit/config.toml`.
+- A save passes the same checks as `orbit config set`. A refused value shows
+  that command's message on the row.
+- If the workspace has no `config.toml` yet, the first save is refused,
+  because creating the file moves the security keys off global policy. The row
+  offers **Copy global policy** (`--seed-from-global`) or **Start empty**
+  (`--fresh`).
+- Writes need an operator session. Each records a `config.set` audit event
+  with the key, the old and new values, and the file. Without the capability,
+  rows are read-only.
+
+**Crews** shows one row per crew with its provider, model, effort, tags, and
+source layer. The crews named by `workflow.default_crew` and
+`workflow.system_crew` are marked. You can add, edit, and delete crews inline,
+with two refusals:
+
+- You cannot delete a crew that either key still names.
+- A file that defines any `[crews.*]` table must resolve
+  `workflow.default_crew` within itself, so adding the first crew to a file
+  with no default crew is refused.
+
+Routines, auto-task definitions, and the workspace registry are not editable
+here. Settings shows one workspace at a time.
 
 ## Authorization
 
-The dashboard has **no application login**. It binds loopback only. Origin
-checks mitigate browser CSRF; they are not an access-control boundary.
-Anyone who can reach the forwarded port can call the same mutation endpoints
-the browser uses, with the server process's authority. Keep that port inside
-the intended operator boundary.
+The dashboard has **no login** and binds loopback only. Origin checks reduce
+browser CSRF but do not control access. Anyone who can reach the port,
+including a forwarded port, can call the same write endpoints the browser uses,
+with the server process's authority. Keep that port inside your operator
+boundary.
 
-Two independent gates still apply:
+Two gates apply:
 
-1. **Workspace scope.** Aggregate view and inactive workspaces are
-   read-only, even for an operator.
-2. **Operator capability** for Operations controls (routine/auto-task
-   toggle, mint, clock, auto-drain completion, grant stop/revoke). The
-   server resolves the same capability vocabulary as the CLI. A local
-   interactive terminal counts as an operator session. A non-interactive
-   process (a service unit, a script) does not, unless it is started with
-   `ORBIT_OPERATOR=1`. That override is recorded in the audit trail.
+1. **Workspace scope.** **All workspaces** and inactive workspaces are
+   read-only, even for an operator. The exception is task actions on rows that
+   name their owner.
+2. **Operator capability.** Needed for routine and auto-task switches,
+   **Mint now**, **Run ▸**, clock controls, **Mark done**, **Stop** and
+   **Settle pending**, settings writes, plugin enable and disable, and the
+   owner's handoff approve, revoke, and claim-recovery actions.
 
-When a control is unauthorized, it is **disabled** and the card states
-`Controls require an authorized operator session.` A click that still
-reaches the API returns `403` with `code: authorization_denied`. That is
-supported refusal, not a missing feature.
+The dashboard server has operator capability when:
 
-Task **ship** / **approve** / **reject** / **archive** and run cancel /
-resume / replay are not the Operations operator gate. They still require a
-concrete active workspace, and they still fail closed on conflicts (in-flight
-ship, workspace claim held).
+- it was started from a local interactive terminal;
+- it was started with `orbit web serve --operator`;
+- it was started by `orbit web connect`, which passes `--operator` by default
+  because the SSH login is the operator act (pass `--no-operator` for a
+  read-only remote); or
+- its process has `ORBIT_OPERATOR=1`, which the audit trail records.
+
+MCP is separate: `orbit mcp serve --operator` is its only operator path.
+
+An unauthorized control is disabled and shows the reason, and the panel says
+how to get operator access. A request that reaches the API anyway gets `403`
+with `code: authorization_denied`.
+
+Task **ship**, **approve**, **reject**, and **archive**, and run **cancel**,
+**Resume**, and **Replay run**, do not need operator capability. They need a
+concrete active workspace, and they fail closed on conflicts such as an
+in-flight ship or a held workspace claim.
 
 ## Troubleshooting
 
 | Symptom | What to check |
 |---|---|
-| Browser never opens, or `connection refused` | Is `orbit web serve` still running? Probe `curl -s http://127.0.0.1:7878/healthz` — a live server returns `ok`. |
-| `refusing to bind dashboard to non-loopback address` | Bind `127.0.0.1` or `::1`. For another machine, use `orbit web connect`, not `--host 0.0.0.0`. |
+| No browser, or `connection refused` | Is `orbit web serve` still running? `curl -s http://127.0.0.1:7878/healthz` returns `ok` from a live server. |
+| `refusing to bind dashboard to non-loopback address` | Bind `127.0.0.1` or `::1`. Reach another machine with `orbit web connect`. |
 | `orbit web connect does not accept --root` | Pass `--workspace <SELECTOR>`. |
-| Connect waits then fails readiness | SSH must work non-interactively to that host, and `orbit` must be on the remote `PATH`. The remote process has about 30 seconds to answer `/healthz`. |
-| Workspace selector missing | Only one servable workspace is registered; the UI has nothing to switch. |
-| Enable / Mint now / clock buttons disabled | Select one active workspace. If the note mentions an authorized operator session, start `orbit web serve` from an interactive terminal or with `ORBIT_OPERATOR=1`. |
-| Routine toggle names another host | The routine is pinned; change it on that host, or use `orbit routine` there. |
-| Mint created a second open task | Expected: manual mint ignores dedupe. The card's **Open duplicate** field says so before you confirm. |
-| Ship returns 409 `ship_run_in_flight` | That task already has a non-terminal ship run. Open the named `run_id`. |
-| 409 `workspace_claim_held` | Another operator holds the workspace claim. Wait for expiry or inspect the holder; do not retry in a loop. |
-| Top-bar **Failed runs** disagrees with Diagnostics → Errors | Different denominators. See [Runs and errors](#runs-and-errors). |
-| Stale workspace list after `orbit workspace init` | A running server reloads the registry on request boundaries; click **Refresh**. A malformed refresh keeps the last good snapshot. |
+| Connect waits, then fails readiness | SSH must work without prompts, and `orbit` must be on the remote `PATH`. The remote server has about 30 seconds to answer `/healthz`. |
+| Automation buttons disabled | Select one active workspace. If the reason mentions operator authority, see [Authorization](#authorization). `connect` cannot upgrade a remote server it did not start. |
+| Ship returns `409` `ship_run_in_flight` | The task already has an unfinished ship run. Open the named `run_id`. |
+| `409` `workspace_claim_held` | Another operator holds the workspace claim. Wait for it to expire or inspect the holder; do not retry in a loop. |
+| Top-bar **failed runs** disagrees with **Health → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
+| Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
+| Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
+| New workspace missing after `orbit workspace init` | Click **Refresh**. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |
+| **connecting…** stays orange after startup | The first API request probably failed. **Refresh** or the `/healthz` probe tells a dead process from a slow workspace. |
 
-Readiness with per-workspace store and log-sink checks:
+For uptime monitoring, use the detailed probe. It also checks each workspace's
+store and log sink:
 
 ```bash
 curl -s 'http://127.0.0.1:7878/healthz?detailed=true'
 ```
 
-HTTP 200 means every check passed; 503 means at least one failed. Point
-uptime monitoring at the detailed form. Plain `/healthz` is liveness only.
-
-The rail foot shows connection state next to the workspace selector. Orange
-**connecting…** at idle after startup usually means the first API request
-failed; **Refresh** or the `/healthz` probe distinguishes a dead process
-from a slow workspace.
+It returns `200` when every check passes and `503` when any fails. Plain
+`/healthz` checks liveness only.
 
 ## Next
 
-- [Run a Task Lifecycle](../task-lifecycle/) — create, ship, and review from
-  the CLI.
-- [Schedule Recurring Work](../recurring-work/) — routines, the sweep clock,
+- [First Task](../../getting-started/first-task/): take one task from your
+  agent's request to a reviewed pull request.
+- [Schedule Recurring Work](../recurring-work/): routines, the sweep clock,
   and auto-task definitions.
-- [Run a Continuous Delivery Window](../continuous-delivery/) — bounded
-  `orbit run auto`, including `--complete`.
-- [Set Up MCP](../mcp-integration/) — the tool surface agents use; distinct
-  from this operator UI.
+- [Run a Delivery Window](../continuous-delivery/): prepare, start, stop, and
+  recover a bounded drain.
+- [Connect Your Agent](../mcp-integration/): the tool surface agents use,
+  separate from this operator UI.

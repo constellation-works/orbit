@@ -234,14 +234,14 @@ pub(super) fn resolve_source_snapshot(
     }))
 }
 
-pub(super) fn requested_base_branch(runtime: &OrbitRuntime, input: &Value) -> String {
+pub(crate) fn requested_base_branch(runtime: &OrbitRuntime, input: &Value) -> String {
     input
         .get("base_branch")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| runtime.workflow_base_branch().to_string())
+        .unwrap_or_else(|| runtime.workspace_base_branch().to_string())
 }
 
 fn normalize_base_branch(action: &str, base: &str) -> Result<String, DispatchError> {

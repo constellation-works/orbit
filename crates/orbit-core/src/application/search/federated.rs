@@ -11,19 +11,19 @@
 //! * **Rank, never raw score.** Per-workspace hits are interleaved by their
 //!   position in their own workspace's ranked list, reusing the same
 //!   round-robin merge that already balances kinds. Lexical BM25 scores,
-//!   blended hybrid scores, and `None` (frictions) are not commensurable
+//!   and `None` (frictions) are not commensurable
 //!   across workspaces, so nothing compares them, and no single large
 //!   workspace can crowd out the rest.
 //! * **Every hit is attributed.** Friction and job-run IDs are allocated per
 //!   workspace, so a merged list without a workspace field lets a caller route
 //!   a follow-up write to the wrong record (F2026-08-046).
 
-use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orbit_common::OrbitError;
 
 use crate::OrbitRuntime;
-use crate::runtime::workspace_catalog::{
+use crate::runtime::workspace::catalog::{
     FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
 };
 
@@ -40,31 +40,20 @@ use super::types::{
 /// the cap and how many workspaces were dropped.
 pub(super) const MAX_FEDERATED_WORKSPACES: usize = 16;
 
+/// How many of those checkouts are queried at once.
+///
+/// Serially, a fan-out costs the sum of every workspace's runtime open, index
+/// read, and query; the per-workspace work is independent and merged by rank
+/// afterwards, so it runs on a pool instead. The pool is bounded rather than
+/// one thread per target because each in-flight query holds a full runtime —
+/// every SQLite store plus a lexical index — and that footprint, not CPU, is
+/// what the bound protects [DANI-10365].
+pub(super) const MAX_FEDERATED_CONCURRENCY: usize = 8;
+
 const NO_MATCHING_WORKSPACE_NOTE: &str = "no registered workspace matched the requested scope";
 
-#[cfg(test)]
-thread_local! {
-    /// Test seam for the managed-run guard. The suite itself may run inside an
-    /// Orbit-managed job, whose environment would otherwise make every
-    /// fan-out test observe the refusal.
-    static MANAGED_RUN_OVERRIDE: std::cell::Cell<Option<bool>> =
-        const { std::cell::Cell::new(None) };
-}
-
 fn in_managed_run() -> bool {
-    #[cfg(test)]
-    if let Some(value) = MANAGED_RUN_OVERRIDE.with(std::cell::Cell::get) {
-        return value;
-    }
     crate::runtime::run_input::managed_run_context_from_env()
-}
-
-#[cfg(test)]
-pub(super) fn with_managed_run_override<T>(value: bool, f: impl FnOnce() -> T) -> T {
-    MANAGED_RUN_OVERRIDE.with(|cell| cell.set(Some(value)));
-    let out = f();
-    MANAGED_RUN_OVERRIDE.with(|cell| cell.set(None));
-    out
 }
 
 impl OrbitRuntime {
@@ -91,62 +80,113 @@ impl OrbitRuntime {
                 kind: params.kind,
                 results: Vec::new(),
                 notes,
+                skipped_kinds: Vec::new(),
                 workspaces: Vec::new(),
             });
         }
 
-        // Resolved once: the query-side model is a host fact, not a
-        // per-workspace one. Only hybrid ranking compares vectors, so a lexical
-        // query never pays for it.
-        let query_model = params
-            .hybrid
-            .then(|| orbit_search::query_model_id(None).ok())
-            .flatten();
+        let outcomes = fan_out(catalog.as_ref(), &targets, &params);
 
-        let mut branches = Vec::with_capacity(targets.len());
-        let mut reports = Vec::with_capacity(targets.len());
-        for target in &targets {
-            let (hits, report) = self.query_one_workspace(
-                catalog.as_ref(),
-                target,
-                &params,
-                query_model.as_deref(),
-                &mut notes,
-            );
-            branches.push(hits);
-            reports.push(report);
+        let mut branches = Vec::with_capacity(outcomes.len());
+        let mut reports = Vec::with_capacity(outcomes.len());
+        for outcome in outcomes {
+            notes.extend(outcome.notes);
+            branches.push(outcome.hits);
+            reports.push(outcome.report);
         }
 
         let results = merge_round_robin(branches, params.normalized_limit());
         Ok(GlobalSearchResponse {
-            mode: response_mode(params.hybrid, &results),
+            mode: GlobalSearchMode::Lexical,
             kind: params.kind,
             results,
             notes,
+            skipped_kinds: Vec::new(),
             workspaces: reports,
         })
     }
+}
 
-    /// One workspace's contribution, with every failure mode folded into a note.
-    ///
-    /// Returns no `Result`: a registered checkout can be stale, moved, or owned
-    /// by another machine, and that must degrade exactly one workspace rather
-    /// than the query.
-    fn query_one_workspace(
-        &self,
-        catalog: &dyn WorkspaceCatalog,
-        target: &FederatedWorkspaceTarget,
-        params: &GlobalSearchParams,
-        query_model: Option<&str>,
-        notes: &mut Vec<String>,
-    ) -> (Vec<GlobalSearchHit>, WorkspaceSearchReport) {
-        let mut report = WorkspaceSearchReport {
-            workspace_id: target.workspace_id.clone(),
-            name: target.name.clone(),
-            hits: 0,
-            note: None,
-        };
-        let mut record_note = |report: &mut WorkspaceSearchReport, note: String| {
+/// What one workspace contributed to the fused answer.
+///
+/// `notes` is carried per workspace rather than appended to one shared buffer
+/// so the concurrent fan-out still emits notes in target order — identical to
+/// the serial order a reader and the existing tests expect.
+struct WorkspaceOutcome {
+    hits: Vec<GlobalSearchHit>,
+    report: WorkspaceSearchReport,
+    notes: Vec<String>,
+}
+
+/// Query every target over a bounded pool, in target order.
+///
+/// Workers pull the next unclaimed target rather than taking a fixed slice, so
+/// one slow checkout — a cold SQLite page cache, a network mount — does not
+/// idle the pool behind it. Results are re-sorted by target index, so ordering
+/// and attribution do not depend on completion order.
+fn fan_out(
+    catalog: &dyn WorkspaceCatalog,
+    targets: &[FederatedWorkspaceTarget],
+    params: &GlobalSearchParams,
+) -> Vec<WorkspaceOutcome> {
+    let workers = federated_worker_count(targets.len());
+    if workers <= 1 {
+        return targets
+            .iter()
+            .map(|target| query_one_workspace(catalog, target, params))
+            .collect();
+    }
+
+    let next = AtomicUsize::new(0);
+    let claim_and_query = || {
+        let mut claimed = Vec::new();
+        loop {
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            let Some(target) = targets.get(index) else {
+                return claimed;
+            };
+            claimed.push((index, query_one_workspace(catalog, target, params)));
+        }
+    };
+
+    let mut collected = std::thread::scope(|scope| {
+        let handles = (0..workers)
+            .map(|_| scope.spawn(claim_and_query))
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+            })
+            .collect::<Vec<_>>()
+    });
+    collected.sort_by_key(|(index, _)| *index);
+    collected.into_iter().map(|(_, outcome)| outcome).collect()
+}
+
+/// The pool width for a scope of `targets` workspaces: never wider than the
+/// scope, never wider than [`MAX_FEDERATED_CONCURRENCY`].
+pub(super) fn federated_worker_count(targets: usize) -> usize {
+    targets.min(MAX_FEDERATED_CONCURRENCY)
+}
+
+/// One workspace's contribution, with failures folded into a note.
+fn query_one_workspace(
+    catalog: &dyn WorkspaceCatalog,
+    target: &FederatedWorkspaceTarget,
+    params: &GlobalSearchParams,
+) -> WorkspaceOutcome {
+    let mut report = WorkspaceSearchReport {
+        workspace_id: target.workspace_id.clone(),
+        name: target.name.clone(),
+        hits: 0,
+        note: None,
+    };
+    let mut notes = Vec::new();
+    let record_note =
+        |report: &mut WorkspaceSearchReport, notes: &mut Vec<String>, note: String| {
             notes.push(workspace_note(&target.name, &note));
             report.note = Some(match report.note.take() {
                 Some(existing) => format!("{existing}; {note}"),
@@ -154,37 +194,44 @@ impl OrbitRuntime {
             });
         };
 
-        let runtime = match catalog.open(target) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                record_note(&mut report, format!("skipped: {error}"));
-                return (Vec::new(), report);
-            }
-        };
-        if let Some(note) = query_model.and_then(|model| model_mismatch_note(&runtime, model)) {
-            record_note(&mut report, note);
+    let runtime = match catalog.open(target) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            record_note(&mut report, &mut notes, format!("skipped: {error}"));
+            return WorkspaceOutcome {
+                hits: Vec::new(),
+                report,
+                notes,
+            };
         }
-
-        // Scope is reset so the sub-runtime — which carries a catalog of its
-        // own — takes the plain single-workspace path and cannot recurse.
-        let mut scoped = params.clone();
-        scoped.workspaces = WorkspaceScope::Current;
-        match runtime.workspace_search(scoped) {
-            Ok(response) => {
-                for note in response.notes {
-                    notes.push(workspace_note(&target.name, &note));
-                }
-                let hits = response
-                    .results
-                    .into_iter()
-                    .map(|hit| attribute(hit, target))
-                    .collect::<Vec<_>>();
-                report.hits = hits.len();
-                (hits, report)
+    };
+    // Scope is reset so the sub-runtime — which carries a catalog of its
+    // own — takes the plain single-workspace path and cannot recurse.
+    let mut scoped = params.clone();
+    scoped.workspaces = WorkspaceScope::Current;
+    match runtime.workspace_search(scoped) {
+        Ok(response) => {
+            for note in response.notes {
+                notes.push(workspace_note(&target.name, &note));
             }
-            Err(error) => {
-                record_note(&mut report, format!("skipped: {error}"));
-                (Vec::new(), report)
+            let hits = response
+                .results
+                .into_iter()
+                .map(|hit| attribute(hit, target))
+                .collect::<Vec<_>>();
+            report.hits = hits.len();
+            WorkspaceOutcome {
+                hits,
+                report,
+                notes,
+            }
+        }
+        Err(error) => {
+            record_note(&mut report, &mut notes, format!("skipped: {error}"));
+            WorkspaceOutcome {
+                hits: Vec::new(),
+                report,
+                notes,
             }
         }
     }
@@ -204,12 +251,6 @@ fn federation_unavailable() -> OrbitError {
 pub(super) fn ensure_federated_scope_supported(
     params: &GlobalSearchParams,
 ) -> Result<(), OrbitError> {
-    if params.semantic.is_some() {
-        return Err(OrbitError::InvalidInput(
-            "`semantic` neighbor lookup is single-workspace; it ranks against one workspace's task vectors"
-                .to_string(),
-        ));
-    }
     if params.path.is_some() {
         return Err(OrbitError::InvalidInput(
             "`path` applicability lookup is single-workspace; a checkout path belongs to one workspace"
@@ -248,30 +289,6 @@ pub(super) fn apply_workspace_cap(targets: &mut Vec<FederatedWorkspaceTarget>) -
     ))
 }
 
-/// Whether this workspace's vectors can contribute cosine rank at all.
-///
-/// A workspace indexed under a different `model_id` has no rows the query
-/// embedder can score, so its hybrid branch degrades to lexical. Say so by
-/// name instead of emitting a plausible-looking ranking the caller cannot
-/// tell apart from a fused one.
-fn model_mismatch_note(runtime: &OrbitRuntime, query_model: &str) -> Option<String> {
-    let indexed = runtime.stores().semantic_vector.model_ids().ok()?;
-    describe_model_mismatch(&indexed, query_model)
-}
-
-pub(super) fn describe_model_mismatch(
-    indexed: &BTreeSet<String>,
-    query_model: &str,
-) -> Option<String> {
-    if indexed.is_empty() || indexed.contains(query_model) {
-        return None;
-    }
-    let models = indexed.iter().cloned().collect::<Vec<_>>().join(", ");
-    Some(format!(
-        "semantic index uses model(s) {models}, not the query model {query_model}; cosine scores are not fused for this workspace and it contributes lexical hits only"
-    ))
-}
-
 pub(super) fn workspace_note(name: &str, note: &str) -> String {
     format!("[{name}] {note}")
 }
@@ -286,16 +303,4 @@ pub(super) fn attribute(
         repo_root: target.repo_root.to_string_lossy().into_owned(),
     });
     hit
-}
-
-fn response_mode(hybrid: bool, results: &[GlobalSearchHit]) -> GlobalSearchMode {
-    if hybrid
-        && results
-            .iter()
-            .any(|hit| matches!(hit.source.as_str(), "hybrid" | "semantic"))
-    {
-        GlobalSearchMode::Hybrid
-    } else {
-        GlobalSearchMode::Lexical
-    }
 }

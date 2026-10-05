@@ -1,6 +1,4 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
+use super::reviewer::ReviewerInvocation;
 use super::*;
 
 pub(super) fn run_target(
@@ -8,20 +6,24 @@ pub(super) fn run_target(
     t: &TargetStep,
     ctx: &ExecCtx<'_>,
 ) -> Result<StepOutcome, DispatchError> {
-    let tctx = ctx.template_ctx();
-    let rendered_input = render_input(
-        t.default_input.as_ref(),
-        &ctx.input,
-        &tctx,
-        t.input_schema_json.as_ref(),
-    )?;
+    // Scoped so the shared step snapshot is released before this step's own
+    // output is recorded, letting `record_pipeline` write in place.
+    let rendered_input = {
+        let tctx = ctx.template_ctx();
+        render_input(
+            t.default_input.as_ref(),
+            &ctx.input,
+            &tctx,
+            t.input_schema_json.as_ref(),
+        )?
+    };
     // [ORB-10902] Rebind before dispatch so `system_crew: true` reaches the
     // activity input, not only the local copy used to resolve crew settings.
     // Recovery does the same; injection is independent of target spec type.
     let rendered_input = inject_system_crew_input(ctx.host, &rendered_input)?;
 
-    // A rendered activity `crew` selects a non-default assignment; otherwise
-    // dispatch inherits the run's resolved crew.
+    // A rendered activity `crew` or `crew_config_key` selects an assignment;
+    // otherwise dispatch inherits the run's resolved crew.
     let crew_override = crew_overridden_spec(t, ctx, &rendered_input)?;
     if t.session.is_some() {
         // [ORB-10801] Cross-iteration sessions were provided only by the
@@ -41,6 +43,7 @@ pub(super) fn run_target(
         .as_ref()
         .map(|spec| ActivityV2Spec::AgentLoop(spec.clone()));
     let dispatched_spec = dispatched_spec_storage.as_ref().unwrap_or(&t.spec);
+    let reviewer = ReviewerInvocation::start(ctx, t, dispatched_spec, &rendered_input);
     let dispatch = dispatch_v2_activity(V2DispatchInput {
         activity_name: &step.id,
         spec: dispatched_spec,
@@ -49,13 +52,16 @@ pub(super) fn run_target(
         audit: ctx.audit.clone(),
         run_id: &ctx.run_id,
         host: Some(ctx.host),
-    })?;
+    });
+    if let Some(reviewer) = reviewer {
+        reviewer.finish(ctx);
+    }
+    let dispatch = dispatch?;
     persist_dispatch_invocation(ctx, &step.id, &rendered_input, &dispatch);
-    let out = dispatch.output.clone();
-    record_pipeline(ctx, &step.id, out.clone());
+    record_pipeline(ctx, &step.id, dispatch.output.clone());
     Ok(StepOutcome {
         success: dispatch.success,
-        output: out,
+        output: dispatch.output,
         message: dispatch.message,
     })
 }
@@ -91,7 +97,8 @@ pub(super) fn persist_dispatch_invocation(
 }
 
 /// Build a crew-overridden clone of an [`AgentLoopSpec`]. An explicit rendered
-/// `crew` wins; otherwise the run input supplies the resolved fallback crew.
+/// `crew` or `crew_config_key` selects the activity crew; otherwise the run
+/// input supplies the resolved fallback crew.
 pub(super) fn crew_overridden_spec(
     t: &TargetStep,
     ctx: &ExecCtx<'_>,
@@ -101,6 +108,10 @@ pub(super) fn crew_overridden_spec(
         return Ok(None);
     };
     let rendered_input = inject_system_crew_input(ctx.host, rendered_input)?;
+    // Crew selection precedes dispatch. A stateful pool draw needs the same
+    // executing identity here that dispatch supplies when `run_id` names a
+    // different, originating run (such as a failed follower claim).
+    let rendered_input = super::super::dispatcher::inject_run_id(&rendered_input, &ctx.run_id);
     let Some(resolved) = resolve_crew_settings(ctx.host, inline_spec, &rendered_input, &ctx.input)?
     else {
         return Ok(None);

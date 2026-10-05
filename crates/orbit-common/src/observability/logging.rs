@@ -10,12 +10,16 @@
 //! workspace-local because logging starts before CLI argument parsing and
 //! runtime root resolution.
 //!
-//! The JSONL file is size-rotated and pruned on startup (see `log_rotation`;
-//! ORB-00415). Multiple Orbit processes may append to the same file at
-//! the same time; readers should tolerate malformed lines because writes
-//! larger than `PIPE_BUF` can interleave across processes. JSONL timestamps are
-//! assigned when the formatter writes the event, which may lag event emission
-//! slightly when the non-blocking writer is under load.
+//! The JSONL file is opened on the first tracing event, not at subscriber
+//! init, so commands that never log (`orbit --help`) do not create the log
+//! directory or open the file. Size rotation and archive pruning (see
+//! `log_rotation`; ORB-00415) run from long-lived entry points and, on first
+//! write, when a single `metadata()` check shows the active file exceeds its
+//! budget. Multiple Orbit processes may append to the same file at the same
+//! time; readers should tolerate malformed lines because writes larger than
+//! `PIPE_BUF` can interleave across processes. JSONL timestamps are assigned
+//! when the formatter writes the event, which may lag event emission slightly
+//! when the non-blocking writer is under load.
 //!
 //! Library crates enforce a `#![deny(clippy::print_stderr,
 //! clippy::print_stdout)]` guard at their crate roots so new diagnostic output
@@ -32,7 +36,9 @@
 
 use std::{
     collections::BTreeMap,
-    fmt as std_fmt, io,
+    fmt as std_fmt,
+    fs::File,
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -44,7 +50,7 @@ use tracing::{
     field::{Field, Visit},
     span,
 };
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::non_blocking::{NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::{
     EnvFilter, Layer, Registry,
     field::{RecordFields, VisitOutput},
@@ -354,50 +360,96 @@ fn json_field_name(field: &Field) -> &str {
 ///
 /// `default_filter` is applied when `RUST_LOG` is unset (e.g. `"warn"`,
 /// `"orbit=debug"`).
+///
+/// The JSONL layer is installed immediately but opens the file only on the
+/// first event. Path resolution reads environment variables only; it does
+/// not walk the log directory or parse `config.toml`.
 pub fn init_default_subscriber(default_filter: &str) {
-    let filter = env_filter(default_filter);
+    init_subscriber_with_file_filter(default_filter, default_filter);
+}
+
+/// Install stderr and JSONL layers with independent defaults. `RUST_LOG`, when
+/// set and valid, overrides both; otherwise callers can retain additional file
+/// evidence without also printing it as a terminal diagnostic.
+pub fn init_subscriber_with_file_filter(stderr_default: &str, file_default: &str) {
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
-        .fmt_fields(RedactingFields::default());
-    let log_layer = global_jsonl_log_path()
-        .map_err(|err| err.to_string())
-        .and_then(|path| {
-            // [ORB-00415] Opportunistically roll the active feed if it has grown
-            // past the per-file budget and prune old archives, before reopening
-            // the (fixed-path) active file for appending. Config is read
-            // leniently from the global config here; orbit-core validates the
-            // same keys strictly at config load.
-            super::log_rotation::rotate_and_prune(
-                &path,
-                &super::log_rotation::LogRotationConfig::load_global_best_effort(),
-            );
-            jsonl_layer_at_path(&path).map_err(|err| err.to_string())
-        });
+        .with_ansi(stderr_ansi_enabled())
+        .fmt_fields(RedactingFields::default())
+        .with_filter(env_filter(stderr_default));
 
-    match log_layer {
-        Ok((file_layer, guard)) => {
+    match global_jsonl_log_path() {
+        Ok(path) => {
+            let (file_layer, guard) = jsonl_layer_at_path(&path);
             if FILE_GUARD.set(guard).is_ok() {
                 let _ = Registry::default()
-                    .with(filter)
                     .with(stderr_layer)
-                    .with(file_layer)
+                    .with(file_layer.with_filter(env_filter(file_default)))
                     .try_init();
             } else {
-                let _ = Registry::default()
-                    .with(filter)
-                    .with(stderr_layer)
-                    .try_init();
+                let _ = Registry::default().with(stderr_layer).try_init();
                 emit_log_init_warning("JSONL tracing worker guard was already initialized");
             }
         }
-        Err(warning) => {
-            let _ = Registry::default()
-                .with(filter)
-                .with(stderr_layer)
-                .try_init();
-            emit_log_init_warning(&warning);
+        Err(err) => {
+            let _ = Registry::default().with(stderr_layer).try_init();
+            emit_log_init_warning(&err.to_string());
         }
     }
+}
+
+/// Whether a stream may carry ANSI styling, given its terminal-ness and the
+/// color environment (`TERM`, `NO_COLOR`, `CLICOLOR_FORCE`).
+///
+/// This is the one color policy for the process: the CLI output sink decides
+/// stdout with it and the stderr log layer decides stderr with it, so the two
+/// cannot disagree. Only a terminal renders escapes. Everywhere else the
+/// stream is captured as text — an MCP client keeps a stdio server's stderr as
+/// its log, a supervisor writes it to a file — and the escapes would arrive as
+/// literal `\x1b[2m` noise. On a terminal, `TERM=dumb` and a non-empty
+/// `NO_COLOR` disable styling; a non-empty `CLICOLOR_FORCE` only restates the
+/// terminal default, since forcing color into a non-terminal is not offered.
+pub fn ansi_allowed(
+    is_terminal: bool,
+    term: Option<&str>,
+    no_color: Option<&str>,
+    clicolor_force: Option<&str>,
+) -> bool {
+    let is_set = |value: Option<&str>| value.is_some_and(|value| !value.is_empty());
+    if !is_terminal || term == Some("dumb") || is_set(no_color) {
+        return false;
+    }
+    // `CLICOLOR_FORCE` cannot turn on what the terminal check refused above.
+    let _ = clicolor_force;
+    true
+}
+
+/// [`ansi_allowed`] for stderr, reading the color environment from the process.
+fn stderr_ansi_enabled() -> bool {
+    let var = |key: &str| std::env::var_os(key).map(|value| value.to_string_lossy().into_owned());
+    ansi_allowed(
+        io::stderr().is_terminal(),
+        var("TERM").as_deref(),
+        var("NO_COLOR").as_deref(),
+        var("CLICOLOR_FORCE").as_deref(),
+    )
+}
+
+/// Roll and prune the global JSONL feed.
+///
+/// Call from long-lived processes (`orbit mcp serve`, `orbit sweep` /
+/// `orbit clock tick`, `orbit web serve`) so archives are reaped even when
+/// the active file is within budget. Short-lived commands skip this and
+/// only rotate on first JSONL write when a single `metadata()` check shows
+/// the active file is oversized.
+pub fn rotate_global_jsonl_best_effort() {
+    let Ok(path) = global_jsonl_log_path() else {
+        return;
+    };
+    super::log_rotation::rotate_and_prune(
+        &path,
+        &super::log_rotation::LogRotationConfig::load_global_best_effort(),
+    );
 }
 
 /// Pre-emission scrubber for callers that need to sanitize text before writing
@@ -477,14 +529,98 @@ fn managed_registry_root() -> io::Result<Option<PathBuf>> {
     Ok(Some(root))
 }
 
+/// Lines the background writer may lag behind before new ones are dropped.
+///
+/// The queue is preallocated slot by slot when the layer is built, so the
+/// `tracing_appender` default of 128 000 lines costs milliseconds of
+/// initialization in every process, including one-shot commands that log
+/// nothing. Orbit emits lines at human scale and the writer drains them as they
+/// arrive, so a few thousand absorb any realistic burst.
+pub(super) const JSONL_QUEUE_LINES: usize = 4_096;
+
 // Visible to sibling-layout logging tests so file-layer behavior can be
 // exercised without nesting tests under this source file.
 pub(super) fn jsonl_layer_at_path<S>(
     path: &Path,
-) -> io::Result<(impl Layer<S> + Send + Sync + 'static + use<S>, WorkerGuard)>
+) -> (impl Layer<S> + Send + Sync + 'static + use<S>, WorkerGuard)
 where
     S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
+    let (writer, guard) = NonBlockingBuilder::default()
+        .buffered_lines_limit(JSONL_QUEUE_LINES)
+        .finish(LazyJsonlWriter::new(path.to_path_buf()));
+    let layer = fmt::layer()
+        .event_format(RedactingJsonEventFormat)
+        .fmt_fields(RedactingFields::json())
+        .with_ansi(false)
+        .with_writer(writer);
+    (layer, guard)
+}
+
+/// Opens the JSONL file on first write. Construction is disk-free so
+/// subscriber init does not create the log directory or open the active file.
+enum JsonlFile {
+    Closed,
+    Open(File),
+    Failed,
+}
+
+struct LazyJsonlWriter {
+    path: PathBuf,
+    file: JsonlFile,
+}
+
+impl LazyJsonlWriter {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            file: JsonlFile::Closed,
+        }
+    }
+
+    fn file(&mut self) -> io::Result<&mut File> {
+        match self.file {
+            JsonlFile::Open(_) => {}
+            JsonlFile::Failed => {
+                return Err(io::Error::other("JSONL tracing log unavailable"));
+            }
+            JsonlFile::Closed => match open_jsonl_file(&self.path) {
+                Ok(file) => self.file = JsonlFile::Open(file),
+                Err(err) => {
+                    let warning = err.to_string();
+                    self.file = JsonlFile::Failed;
+                    emit_log_init_warning(&warning);
+                    return Err(err);
+                }
+            },
+        }
+        match &mut self.file {
+            JsonlFile::Open(file) => Ok(file),
+            JsonlFile::Failed | JsonlFile::Closed => {
+                Err(io::Error::other("JSONL tracing log unavailable"))
+            }
+        }
+    }
+}
+
+impl Write for LazyJsonlWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.file()?.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match &mut self.file {
+            JsonlFile::Open(file) => file.flush(),
+            JsonlFile::Closed | JsonlFile::Failed => Ok(()),
+        }
+    }
+}
+
+fn open_jsonl_file(path: &Path) -> io::Result<File> {
+    super::log_rotation::rotate_if_active_exceeds_budget(
+        path,
+        &super::log_rotation::LogRotationConfig::load_global_best_effort(),
+    );
     if let Some(parent) = path.parent() {
         create_private_dir_all(parent).map_err(|err| {
             io::Error::new(
@@ -496,21 +632,12 @@ where
             )
         })?;
     }
-
-    let file = append_private_file(path).map_err(|err| {
+    append_private_file(path).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!("cannot open JSONL tracing log {}: {err}", path.display()),
         )
-    })?;
-    let (writer, guard) = tracing_appender::non_blocking(file);
-    let layer = fmt::layer()
-        .event_format(RedactingJsonEventFormat)
-        .fmt_fields(RedactingFields::json())
-        .with_ansi(false)
-        .with_writer(writer);
-
-    Ok((layer, guard))
+    })
 }
 
 // Visible to sibling-layout logging tests that verify stderr fallback behavior.

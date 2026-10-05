@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-25
+last_validated: 2026-10-04
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -10,7 +10,7 @@ type: design
 summary: Proposed trigger contract for immutable delivery batches, separate coverage checkpoints, preparation freshness, and correlated failure triage.
 tags: [automation-triggers, scheduling, coverage, pilot, triage]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-store/src/contracts/**", "crates/orbit-types/src/workflow/**", "crates/orbit-core/src/adapter/engine_host/v2_host/**"]
-related_features: [routines, auto-tasks, operation-mode, activity-job]
+related_features: [routines, auto-tasks, review-gate, activity-job]
 related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 ---
 
@@ -43,9 +43,11 @@ Historical ADRs are not inputs to this design.
   and provenance before accepting an immutable receipt. Job-only consumers use
   persisted step results. QA and review remain independent.
 - State-member pilot freshness and bounded causal triage use the same Store
-  checkpoint path [ORB-11331]. Broader multi-member coordination, review exclusion certificates,
+  checkpoint path [ORB-11331]. Broader multi-member coordination,
   policy-driven waiver/migration workflows and usage accounting below remain
-  separately owned proposals. No such certificate currently excludes a delivery;
+  separately owned proposals. The implemented before-PR review gate excludes
+  only deliveries whose certificate, task meaning, repository, reviewed trees,
+  and landing evidence pass validation [ORB-11333];
   missing usage is unknown.
 
 ## 2. Shared contract and ownership
@@ -143,8 +145,20 @@ as obligations, including unattributed commits. Late evidence for content at or
 before the explicit baseline retains its baseline exclusion. Later content already
 validly examined attaches to that coverage and does not trigger a redundant
 batch; otherwise it enters pending work. Force-push/non-ancestral history pauses
-range advancement with `history_diverged`; an operator chooses a documented
-reset/replay. Never silently replace the baseline with current HEAD.
+range advancement with `history_diverged`. The supported replay is an explicit,
+audited recovery: it captures the configured head and consumer generation,
+walks at most 1,000 first-parent commits, and maps each orphan uniquely by its
+exact parent-relative binary patch plus `.orbit` tree. It then obtains ordinary
+provider associations for inserted commits and reconciles debt by delivery key.
+Missing objects, ambiguous content, unreachable covered/frozen boundaries,
+provider gaps, contract drift, or a changed head/generation fail closed. Never
+silently replace the baseline with current HEAD.
+
+An unresolved orphan with no delivery or provider association is itself unpaid
+debt. When the exact mapping proof uniquely identifies its canonical replacement,
+replay moves the same unresolved reason to that replacement without inventing a
+provider identity. This exception applies only to the mapped pre-existing debt;
+every inserted canonical commit still requires ordinary provider proof.
 
 Batch input contains batch/consumer/epoch IDs, ordered delivery IDs and evidence
 digests, exact `from_exclusive`/`through_inclusive` revisions and trees, full
@@ -154,8 +168,8 @@ mint/submission. Workers inspect that pinned revision, not whatever HEAD is when
 they start. Retain source objects and manifests until obligations settle and the
 audit retention window ends; missing objects make coverage unverifiable.
 
-Operation-mode's [review contract](../operation-mode/3_vision.md#313-content-specific-coverage-through-delivery)
-from [ORB-11316] determines whether before-PR coverage maps to actual landing
+The [review gate's coverage contract](../review-gate/2_design.md#7-delivery-coverage)
+from [ORB-11333] determines whether before-PR coverage maps to actual landing
 content. Trigger code consumes that validated result; it does not infer review
 from a tag, patch ID, timestamp, or task status. Exclude proven patch coverage
 from redundant review counts, retain neighboring context, and keep QA independent.
@@ -281,21 +295,41 @@ them. Missing selectors are one reason to prepare, not the general definition of
 staleness. Tasks in progress, review, terminal, withdrawn, or human-blocked are
 not automatic pilot candidates. Preparing proposed work does not approve it.
 
-A material fingerprint covers normalized title, description, acceptance criteria,
-plan, selectors, type, complexity/crew and required tools, behavior-relevant tags,
-dependency identities and delivery state, applicable repository instructions,
-pilot contract version, and pinned integration revision. V1 conservatively treats
-any source revision change as stale; selective path invalidation needs separate
-evidence and is deferred. Resolve dependency evidence, not raw done statuses.
-Priority-only edits reorder candidates; comments, summaries, timestamps, run
-linkage and instrumentation do not invalidate. Proposed/backlog share an
-eligibility class so authorized promotion alone does not cause a pilot loop.
+A material fingerprint (`material_v2`) covers the pilot contract version, the
+eligibility verdict, and the task inputs the consumer's resolved freshness names
+[ORB-13638]. By default those are normalized title, description, acceptance
+criteria, plan and selectors: what an assessment is about. Tags, crew and its
+resolved model/provider, required tools, type, complexity, relations, dependency
+evidence and repository instructions are opt-in fields, and the pinned
+integration revision is recorded as evidence but is material only under
+`source_sensitivity: context_files` (a commit touched a selector path) or `any`
+(every head move). `material_v1` hashed all of them and treated any head move
+as stale, so every merge re-piloted every assessed task. Resolve dependency
+evidence, not raw done statuses, when it is opted in. Priority-only edits
+reorder candidates; comments, summaries, timestamps, run linkage and
+instrumentation never invalidate. Proposed/backlog share an eligibility class
+so authorized promotion alone does not cause a pilot loop.
 
 Use proposed defaults of a two-minute quiet period, ten-minute maximum wait and
 50 tasks per batch, preserving partitions of at most five. Coalesce repeated
 changes to a pending task into its newest fingerprint. One in-flight assessment
 per task/fingerprint; changes during execution remain pending and do not mutate
-the captured snapshot. Stable ordering by oldest pending time then task ID
+the captured snapshot. Successful preparation checkpoints in any active pilot
+run also hold their tasks across consumers: observation and admission withhold
+them as `already_preparing: <run id>` until that run becomes terminal. This
+prevents a routine from duplicating a targeted CI-sweep or manual pilot, even
+when the task's material changes while held. Explicit pilot selections report
+held tasks as `already_preparing` exclusions with `prepared_by_run_ids` and
+prepare the free tasks; an all-held selection succeeds without agent work.
+At pilot apply, a companion status-neutral fingerprint
+allows one fresh read and retry when only the task's status or a dependency's
+status changed. A dependency-only status change may then apply; a task that
+entered in-progress remains unwritable and is reported as `status_changed`.
+Any other material change, or a second mismatch on that retry, still refuses
+the assessment. That `material_changed` refusal names the freshness component
+that drifted — title, description, criteria, plan, selectors, or an opted-in
+field such as dependencies, crew, instructions or source — when preparation
+recorded the component. Stable ordering by oldest pending time then task ID
 prevents repeatedly edited work from starving other tasks.
 
 The prepare/apply domain boundary recomputes fingerprints and eligibility under
@@ -315,6 +349,17 @@ Mode-driven promotion must consume a fresh accepted readiness record and its
 separate grant; populated selectors or a successful wrapper are insufficient.
 
 ## 7. Triage incidents, cancellation, and recursion
+
+> **Retired.** Terminal failed-run triage — the `task_triage_pipeline` this
+> section's `execution_failed` trigger fires — is gone
+> ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
+> A failed run parks its task in `blocked` with the failure attached and waits
+> for a reader; re-backlogging is a deliberate human transition. The
+> `execution_failed` trigger kind and its incident semantics remain in the code
+> for persisted state, but they have no shipped target job, so an existing
+> definition loads as retired and fires nothing. The recursion guard described
+> below is removed with the pipeline that made it necessary. The rest of this
+> section records the contract as authored.
 
 Observe the transition into **settled execution failure after applicable retry
 exhaustion**, not every failed step. Engine retry/recovery and authorized resumes
@@ -374,6 +419,10 @@ both `schedule` and `trigger` are rejected. Provenance fields are omitted here.
 
 ```yaml
 # Proposed auto-task: QA after five actual deliveries, or one-hour pending age.
+# This candidate named coverage integrated_qa_v1. That contract is retired:
+# persisted batches, evidence and automation state still decode it, and new
+# definitions cannot select it. Hands-on QA is qa-sweep and qa-full-sweep.
+# The delivery coverage new definitions select is landed_code_review_v1.
 schemaVersion: 2
 name: qa-sweep
 description: Validate a captured integration range hands-on
@@ -383,7 +432,6 @@ trigger:
   branch: agent-main
   threshold: 5
   max_wait_minutes: 60
-  coverage: integrated_qa_v1
 batch:
   max_items: 25
   max_active: 1
@@ -430,12 +478,11 @@ template:
 schemaVersion: 2
 name: task_pilot
 enabled: false
-hosts: [designated-owner]
 target: job:task_pilot_pipeline
 trigger:
   kind: preparation_eligible
   statuses: [proposed, backlog]
-  freshness: material_v1
+  freshness: {source_sensitivity: ignore}   # material_v2 defaults
   debounce_minutes: 2
   max_wait_minutes: 10
 batch:
@@ -447,12 +494,27 @@ policy:
   retries: {max: 1, backoff_minutes: 5}
 ```
 
+Preparation eligibility includes both selector-free tasks and tasks whose
+persisted complexity remains `unassessed`. Task-pilot records the bounded
+repair's certainty, behavioral change, coupling, validation difficulty,
+rationale, confidence, evidence gaps, validation approach, and reassessment
+triggers. Its apply step commits concrete selectors, complexity, audit evidence,
+and the idempotency receipt at one task-bundle boundary. Automatic admission
+then rejects any still-unassessed task, including urgent security work, except
+one tagged exactly `no-diff-expected`, which is admitted without an assessment
+because an implementation lane sizes no diff for it [ORB-12118]; missing
+validation permission is a readiness blocker rather than a complexity or
+priority inference. The low/medium/hard examples in the activity contract are
+deterministic policy fixtures, not a claim about live-model accuracy.
+
+The triage routine below is retired (see the note in §7); it is kept as the
+authored example of a state trigger's shape, not as a definition to write.
+
 ```yaml
-# Proposed routine: one diagnosis per settled causal incident.
+# Retired routine: one diagnosis per settled causal incident.
 schemaVersion: 2
 name: task_triage
 enabled: false
-hosts: [designated-owner]
 target: job:task_triage_pipeline
 trigger:
   kind: execution_failed
@@ -491,20 +553,21 @@ drift from task completion time. No OR/AND trigger language is proposed.
 | Child fails, wrapper propagates failure, retry remains | One unsettled incident, no diagnosis. Final retry exhaustion settles it; one triage batch includes affected tasks. |
 | Operator intentionally cancels instead / triage itself fails | Intentional cancellation is filtered; triage failure retries or escalates the original incident without recursive diagnosis. |
 
-## 10. Mode, compatibility, and migration
+## 10. Compatibility and migration
 
-[Operation mode](../operation-mode/3_vision.md), proposed in [ORB-11314], supplies
-cadence, thresholds, batch/resource defaults and scoped grants. Resolve mode
-defaults through its global → workspace → run rules, then explicit definition
-values override operational defaults. An explicit operator invocation may provide
-an audited override for that invocation, subject to the same hard ceilings. Never
-let an unrelated run's override retune global scheduled consumers. Record each
-effective value's source, definition hash and policy revision at batch admission.
+Cadence, thresholds and batch/resource defaults come from the definition
+itself. Operation mode, which once proposed supplying them as global →
+workspace → run defaults plus scoped grants, was removed on 2026-09-21
+([orbit-core decisions](../orbit-core/4_decisions.md)). An explicit operator
+invocation may provide an audited override for that invocation, subject to the
+same hard ceilings. Never let an unrelated run's override retune global
+scheduled consumers. Record each effective value's source, definition hash and
+policy revision at batch admission.
 
 Authority is an intersection, not a numeric precedence ladder: definition enabled,
-host ownership, local pause, applicable grant/window, job availability, capacity,
-task approval and repository rules all constrain action. Neither a lower threshold
-nor an autonomous preset creates permission to promote/commit/merge. Current
+host ownership, local pause, job availability, capacity,
+task approval and repository rules all constrain action. A lower threshold
+creates no permission to promote/commit/merge. Current
 `--complete` is default-off; triggers do not alter it. Orbit task PRs target
 `agent-main`; this task's PR is left unmerged, with no auto-merge or scheduled
 agent review. A finding task is not authorization to implement it. Routine
@@ -602,7 +665,6 @@ to change; implementation scope and defaults still require approval.
 ## Task References
 
 - [ORB-11315] — specifies shared triggers, batch/coverage and pilot/triage semantics.
-- [ORB-11314] — proposes operation-mode defaults and authorization snapshots.
-- [ORB-11316] — proposes review timing and content-specific coverage exclusions.
+- [ORB-11333] — implements review timing and content-specific coverage exclusions.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

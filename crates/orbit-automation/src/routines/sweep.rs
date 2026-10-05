@@ -4,12 +4,6 @@ use super::due::{
     DueDecision, due_decision_with_grace, natural_slot_grace_for_cadence, parse_cron,
 };
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
-#[cfg(test)]
-use super::validation::RoutineHostIdentity;
-use super::validation::{
-    RoutineHostIdentityView, RoutinePinValidation, RoutineRegistryStatus, RoutineRegistryView,
-    validate_routine_pins,
-};
 use chrono::{DateTime, Duration, Local, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
@@ -33,6 +27,9 @@ pub enum RunOwnerLiveness {
 /// fake so the sweep's fire / retry / overlap / outcome-sync orchestration is
 /// exercised deterministically without spawning pipeline workers.
 pub trait RoutineDispatch {
+    /// Running workspace auto coordinator, if one owns this source workspace.
+    fn live_workspace_drain(&self, source_orbit_dir: &Path) -> Result<Option<String>, OrbitError>;
+
     fn evaluate_delivery(
         &self,
         _routine: &LoadedRoutine,
@@ -45,12 +42,14 @@ pub trait RoutineDispatch {
     }
 
     /// Submit `job_name` in the source workspace rooted at `source_orbit_dir`
-    /// under `actor`, returning the dispatched run id.
+    /// under `actor`, returning the dispatched run id. `slot` is the RFC 3339
+    /// scheduled slot consumed by this fire [ORB-12255].
     fn submit(
         &self,
         source_orbit_dir: &Path,
         job_name: &str,
         actor: &str,
+        slot: &str,
     ) -> Result<String, OrbitError>;
 
     /// Current run state for a dispatched fire, when the run is queryable.
@@ -101,25 +100,48 @@ pub struct RoutineSweepReport {
     pub slot: Option<String>,
     /// Run id returned by dispatch, when one was submitted.
     pub run_id: Option<String>,
-    /// Registry-aware eligibility and diagnostics evaluated before mutation.
-    pub validation: RoutinePinValidation,
+    /// Members of the batch a state routine would admit, is admitting, or has
+    /// in flight, each with why it is there [ORB-12746]. Empty otherwise.
+    pub batch: Vec<orbit_types::workflow::automation::members::BatchMember>,
+}
+
+/// Per-auto-task outcome included in the host tick report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoTaskSweepReport {
+    /// Auto-task definition name, or the failing file name for a load error.
+    pub name: String,
+    /// Source workspace name.
+    pub source: String,
+    /// One of: `minted`, `would_fire`, `baselined`, `would_baseline`,
+    /// `skipped`, `error`.
+    pub action: &'static str,
+    /// Why, for `skipped` and `error` rows.
+    pub reason: Option<String>,
+    /// Scheduled slot consumed (RFC 3339, UTC), when a fire was involved.
+    pub slot: Option<String>,
+    /// Task minted by this tick.
+    pub task_id: Option<String>,
 }
 
 /// Result of one sweep pass.
 #[derive(Debug, Default)]
 pub struct SweepOutcome {
-    /// Host identity the pass filtered against.
-    pub host_id: String,
-    /// Stable machine identity used by registry-resolved pins.
+    /// Display name of the machine this pass ran on.
+    pub machine_name: String,
+    /// Stable identity of the machine this pass ran on.
     pub machine_id: String,
-    /// Registry source/state used for this pass.
-    pub registry: RoutineRegistryStatus,
     /// True when another sweep held the lock and this pass exited early.
     pub lock_busy: bool,
     /// Per-routine outcomes.
     pub reports: Vec<RoutineSweepReport>,
+    /// Per-auto-task outcomes, evaluated after all routine rows.
+    pub auto_task_reports: Vec<AutoTaskSweepReport>,
     /// Fail-closed definition/load failures (those routines were absent).
     pub load_errors: Vec<RoutineLoadError>,
+    /// Set when every discovered workspace failed to open, so this pass
+    /// loaded nothing. The CLI prints this one row and exits non-zero.
+    /// Partial load errors leave this `None`.
+    pub no_workspace_loaded: Option<String>,
 }
 
 /// The dispatch-agnostic core of one sweep pass: outcome-sync
@@ -127,65 +149,16 @@ pub struct SweepOutcome {
 /// from Core assembly — which owns the lock, store, and workspace discovery
 /// — so the orchestration can be driven against a temp store, a hand-built
 /// [`RoutineCollection`], a fake [`RoutineDispatch`], and an explicit `now`.
-#[cfg(test)]
-pub(crate) fn run_sweep_core(
+pub fn run_sweep_core(
     store: &dyn RoutineStoreBackend,
-    host_id: &str,
     collection: &RoutineCollection,
     dispatch: &dyn RoutineDispatch,
     options: SweepOptions,
     now_utc: DateTime<Utc>,
 ) -> Result<Vec<RoutineSweepReport>, OrbitError> {
-    let identity = RoutineHostIdentity {
-        machine_id: format!("hm_standalone_{}", sanitize_test_machine_suffix(host_id)),
-        host_id: host_id.to_string(),
-    };
-    run_sweep_core_with_registry(
-        store,
-        &identity,
-        &RoutineRegistryView {
-            owner_host_ids: Default::default(),
-        },
-        collection,
-        dispatch,
-        options,
-        now_utc,
-    )
-}
-
-/// Registry-aware core used by production and deterministic R2 fixtures.
-pub fn run_sweep_core_with_registry(
-    store: &dyn RoutineStoreBackend,
-    identity: &dyn RoutineHostIdentityView,
-    registry_view: &RoutineRegistryView,
-    collection: &RoutineCollection,
-    dispatch: &dyn RoutineDispatch,
-    options: SweepOptions,
-    now_utc: DateTime<Utc>,
-) -> Result<Vec<RoutineSweepReport>, OrbitError> {
-    let validations: BTreeMap<String, RoutinePinValidation> = collection
-        .routines
-        .iter()
-        .map(|routine| {
-            (
-                routine.definition.name.clone(),
-                validate_routine_pins(
-                    identity,
-                    routine.origin,
-                    &routine.definition.hosts,
-                    registry_view,
-                ),
-            )
-        })
-        .collect();
     let routines_by_name: BTreeMap<String, &LoadedRoutine> = collection
         .routines
         .iter()
-        .filter(|routine| {
-            validations
-                .get(&routine.definition.name)
-                .is_some_and(|validation| validation.eligible)
-        })
         .map(|routine| (routine.definition.name.clone(), routine))
         .collect();
 
@@ -199,13 +172,6 @@ pub fn run_sweep_core_with_registry(
 
     let mut reports = Vec::new();
     for routine in &collection.routines {
-        let validation = validations
-            .get(&routine.definition.name)
-            .cloned()
-            .unwrap_or(RoutinePinValidation {
-                eligible: false,
-                diagnostics: Vec::new(),
-            });
         let same_target = collection
             .routines
             .iter()
@@ -220,23 +186,15 @@ pub fn run_sweep_core_with_registry(
                 .iter()
                 .any(|other| other.definition.trigger.state.is_some())
         {
-            reports.push(skipped(routine, &validation, "duplicate_routine_ownership"));
+            reports.push(skipped(routine, "duplicate_routine_ownership"));
             continue;
         }
         if let Some(reason) = sync_errors.get(&routine.definition.name) {
-            reports.push(failure_report(routine, &validation, reason.clone()));
+            reports.push(failure_report(routine, reason.clone()));
             continue;
         }
-        let report = sweep_routine(
-            store,
-            routine,
-            dispatch,
-            &validation,
-            &pauses,
-            options,
-            now_utc,
-        )
-        .unwrap_or_else(|error| failure_report(routine, &validation, error.to_string()));
+        let report = sweep_routine(store, routine, dispatch, &pauses, options, now_utc)
+            .unwrap_or_else(|error| failure_report(routine, error.to_string()));
         reports.push(report);
     }
 
@@ -247,7 +205,6 @@ fn sweep_routine(
     store: &dyn RoutineStoreBackend,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
-    validation: &RoutinePinValidation,
     pauses: &BTreeMap<String, orbit_store::contracts::RoutinePauseRecord>,
     options: SweepOptions,
     now_utc: DateTime<Utc>,
@@ -255,7 +212,6 @@ fn sweep_routine(
     let definition = &routine.definition;
     let name = &definition.name;
     if (definition.trigger.deliveries_landed.is_some() || definition.trigger.state.is_some())
-        && validation.eligible
         && !pauses.contains_key(name)
     {
         let diagnostic = dispatch.evaluate_delivery(routine, options.dry_run, now_utc)?;
@@ -282,20 +238,17 @@ fn sweep_routine(
             reason: Some(diagnostic.reason),
             slot: None,
             run_id,
-            validation: validation.clone(),
+            batch: diagnostic.batch,
         });
     }
 
     // Toggle resolution order (2_design.md §4): versioned kill-switch →
-    // versioned host pinning → host-local pause.
+    // host-local pause.
     if !definition.enabled {
-        return Ok(skipped(routine, validation, "disabled_in_definition"));
-    }
-    if !validation.eligible {
-        return Ok(skipped(routine, validation, "host_not_pinned"));
+        return Ok(skipped(routine, "disabled_in_definition"));
     }
     if pauses.contains_key(name) {
-        return Ok(skipped(routine, validation, "paused_locally"));
+        return Ok(skipped(routine, "paused_locally"));
     }
 
     let cron = parse_cron(&definition.trigger.cron)?;
@@ -306,10 +259,10 @@ fn sweep_routine(
         // nothing — a routine never fires for slots that predate its
         // registration here.
         if options.dry_run {
-            return Ok(action(routine, validation, "would_baseline"));
+            return Ok(action(routine, "would_baseline"));
         }
         store.routine_record_baseline(name, &now_utc.to_rfc3339())?;
-        return Ok(action(routine, validation, "baselined"));
+        return Ok(action(routine, "baselined"));
     };
 
     let lower_bound_raw = cursor.last_slot.as_deref().unwrap_or(&cursor.baseline_at);
@@ -329,7 +282,6 @@ fn sweep_routine(
                 store,
                 routine,
                 dispatch,
-                validation,
                 FireRequest {
                     slot: &slot_utc,
                     attempt: 1,
@@ -347,7 +299,6 @@ fn sweep_routine(
                     store,
                     routine,
                     dispatch,
-                    validation,
                     FireRequest {
                         slot: &retry.slot,
                         attempt: retry.attempt + 1,
@@ -356,7 +307,7 @@ fn sweep_routine(
                     },
                 );
             }
-            Ok(skipped(routine, validation, "not_due"))
+            Ok(skipped(routine, "not_due"))
         }
     }
 }
@@ -410,7 +361,6 @@ fn fire(
     store: &dyn RoutineStoreBackend,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
-    validation: &RoutinePinValidation,
     request: FireRequest<'_>,
 ) -> Result<RoutineSweepReport, OrbitError> {
     let FireRequest {
@@ -431,14 +381,46 @@ fn fire(
         // still non-terminal here is genuinely (believed) in flight.
         return Ok(RoutineSweepReport {
             slot: Some(slot.to_string()),
-            ..skipped(routine, validation, "overlap_in_flight")
+            ..skipped(routine, "overlap_in_flight")
+        });
+    }
+
+    if definition.target.job_name() == "workspace_ship_pipeline"
+        && let Some(drain_run_id) = dispatch.live_workspace_drain(&routine.source_orbit_dir)?
+    {
+        let reason = format!("workspace_drain_live: {drain_run_id}");
+        if !options.dry_run {
+            let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
+                routine_name: name.clone(),
+                slot: slot.to_string(),
+                attempt,
+                source_workspace: routine.source_workspace.clone(),
+            })?;
+            if !claimed {
+                return Ok(RoutineSweepReport {
+                    slot: Some(slot.to_string()),
+                    ..skipped(routine, "slot_already_claimed")
+                });
+            }
+            store.routine_mark_fire_outcome(
+                name,
+                slot,
+                attempt,
+                RoutineFireState::Skipped,
+                Some(&reason),
+            )?;
+        }
+        return Ok(RoutineSweepReport {
+            slot: Some(slot.to_string()),
+            reason: Some(reason),
+            ..skipped(routine, "workspace_drain_live")
         });
     }
 
     if options.dry_run {
         return Ok(RoutineSweepReport {
             slot: Some(slot.to_string()),
-            ..action(routine, validation, "would_fire")
+            ..action(routine, "would_fire")
         });
     }
 
@@ -451,7 +433,7 @@ fn fire(
     if !claimed {
         return Ok(RoutineSweepReport {
             slot: Some(slot.to_string()),
-            ..skipped(routine, validation, "slot_already_claimed")
+            ..skipped(routine, "slot_already_claimed")
         });
     }
 
@@ -460,6 +442,7 @@ fn fire(
         &routine.source_orbit_dir,
         definition.target.job_name(),
         &actor,
+        slot,
     ) {
         Ok(run_id) => {
             store.routine_mark_fire_dispatched(name, slot, attempt, &run_id)?;
@@ -471,7 +454,7 @@ fn fire(
                 reason: None,
                 slot: Some(slot.to_string()),
                 run_id: Some(run_id),
-                validation: validation.clone(),
+                batch: Vec::new(),
             })
         }
         Err(error) => {
@@ -494,7 +477,7 @@ fn fire(
                 reason: Some(format!("dispatch failed: {error}")),
                 slot: Some(slot.to_string()),
                 run_id: None,
-                validation: validation.clone(),
+                batch: Vec::new(),
             })
         }
     }
@@ -512,9 +495,8 @@ fn sync_unresolved_fires(
 ) -> Result<BTreeMap<String, String>, OrbitError> {
     let mut errors = BTreeMap::new();
     for fire in store.routine_unresolved_fires()? {
-        // Eligibility was resolved before this mutation phase. A routine that
-        // is no longer assigned to this machine must leave this machine's
-        // prior fire history byte/logically untouched.
+        // A fire recorded for a routine this host no longer loads must leave
+        // that prior history untouched.
         let Some(routine) = routines_by_name.get(&fire.routine_name) else {
             continue;
         };
@@ -661,11 +643,7 @@ fn duration_from_minutes(minutes: u64, field: &str) -> Result<Duration, OrbitErr
     })
 }
 
-fn skipped(
-    routine: &LoadedRoutine,
-    validation: &RoutinePinValidation,
-    reason: &str,
-) -> RoutineSweepReport {
+fn skipped(routine: &LoadedRoutine, reason: &str) -> RoutineSweepReport {
     RoutineSweepReport {
         routine: routine.definition.name.clone(),
         source: routine.source_workspace.clone(),
@@ -674,15 +652,11 @@ fn skipped(
         reason: Some(reason.to_string()),
         slot: None,
         run_id: None,
-        validation: validation.clone(),
+        batch: Vec::new(),
     }
 }
 
-fn failure_report(
-    routine: &LoadedRoutine,
-    validation: &RoutinePinValidation,
-    reason: String,
-) -> RoutineSweepReport {
+fn failure_report(routine: &LoadedRoutine, reason: String) -> RoutineSweepReport {
     RoutineSweepReport {
         routine: routine.definition.name.clone(),
         source: routine.source_workspace.clone(),
@@ -691,15 +665,11 @@ fn failure_report(
         reason: Some(reason),
         slot: None,
         run_id: None,
-        validation: validation.clone(),
+        batch: Vec::new(),
     }
 }
 
-fn action(
-    routine: &LoadedRoutine,
-    validation: &RoutinePinValidation,
-    action: &'static str,
-) -> RoutineSweepReport {
+fn action(routine: &LoadedRoutine, action: &'static str) -> RoutineSweepReport {
     RoutineSweepReport {
         routine: routine.definition.name.clone(),
         source: routine.source_workspace.clone(),
@@ -708,26 +678,7 @@ fn action(
         reason: None,
         slot: None,
         run_id: None,
-        validation: validation.clone(),
-    }
-}
-
-#[cfg(test)]
-fn sanitize_test_machine_suffix(host_id: &str) -> String {
-    let suffix: String = host_id
-        .bytes()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
-                char::from(byte)
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if suffix.is_empty() {
-        "host".to_string()
-    } else {
-        suffix
+        batch: Vec::new(),
     }
 }
 

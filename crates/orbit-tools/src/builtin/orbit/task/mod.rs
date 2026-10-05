@@ -1,16 +1,15 @@
 pub mod add;
-pub mod approve;
 pub mod artifact_get;
 pub mod artifact_put;
 pub mod delete;
+pub mod eligible;
+pub(super) mod guarded;
 pub mod lint;
 pub mod list;
 pub mod locks;
-pub mod locks_release;
-pub mod locks_reserve;
 pub mod reject;
+pub mod review_reset;
 pub mod show;
-pub mod start;
 pub mod update;
 
 #[cfg(test)]

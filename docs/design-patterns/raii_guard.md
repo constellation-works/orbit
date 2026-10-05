@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "RAII Guard Pattern"
-last_validated: 2026-09-07
+last_validated: 2026-09-27
 ---
 # RAII Guard Pattern
 
@@ -23,11 +23,12 @@ Four shapes in the codebase carry distinct lessons.
 
 ## Reference: `AuditGuard` — record the scope's outcome once
 
-From `crates/orbit-cli/src/audit_middleware.rs:28`:
+From `crates/orbit-cli/src/audit_middleware.rs:29`:
 
 ```rust
 pub struct AuditGuard<'a> {
     runtime: &'a OrbitRuntime,
+    execution_id: String,
     meta: CommandMeta,
     start: Instant,
     status: AuditEventStatus,    // defaults to Failure
@@ -60,12 +61,14 @@ Patterns to copy:
 
 ## Reference: `StagedTextFile` — `Drop` as rollback
 
-From `crates/orbit-common/src/fs/io.rs:112`:
+From `crates/orbit-common/src/fs/io.rs:143`:
 
 ```rust
 pub struct StagedTextFile {
     target_path: PathBuf,
     temp_path: PathBuf,
+    parent_dir: Option<File>,
+    sync_parent: bool,
     committed: bool,
 }
 
@@ -98,21 +101,30 @@ pub(super) struct SignalHandlerGuard {
 }
 
 impl SignalHandlerGuard {
-    pub(super) fn install(pgid: u32) -> Result<Self, OrbitError> {
+    pub(super) fn install(child_pid: u32) -> Result<Self, OrbitError> {
         let start_gen = acquire_handlers()?;   // refcount++; first waiter installs
-        Ok(Self { start_gen, slot: register_pgid(pgid) })
+        let slot = if is_child_process_group_leader(child_pid) {
+            register_pgid(child_pid)           // only a verified live group leader
+        } else {
+            None
+        };
+        Ok(Self { start_gen, slot })
+    }
+
+    pub(super) fn release_process_group(&mut self) {
+        unregister_pgid(self.slot.take());     // called as soon as the child is reaped
     }
 }
 
 impl Drop for SignalHandlerGuard {
     fn drop(&mut self) {
-        unregister_pgid(self.slot);
+        unregister_pgid(self.slot.take());
         release_handlers();                    // last waiter restores prior sigaction
     }
 }
 ```
 
-`acquire_handlers` takes a process-wide `Mutex` only for the refcount/`sigaction` critical section. The first waiter snapshots the previous SIGINT/SIGTERM dispositions and installs a handler that stores a generation counter, records a pending forward, and `killpg`s every registered child; the last drop restores those dispositions and re-raises a captured signal (except `SIG_IGN`) with the mutex released. Concurrent waits overlap.
+`acquire_handlers` takes a process-wide `Mutex` only for the refcount/`sigaction` critical section. The first waiter snapshots the previous SIGINT/SIGTERM dispositions and installs a handler that stores a generation counter, records a pending forward, and `killpg`s every registered child group; the last drop restores those dispositions and re-raises a captured signal (except `SIG_IGN`) with the mutex released. Concurrent waits overlap. A slot only ever holds a pid that leads its own live process group (never our own group), the handler re-checks that before each `killpg`, and the waiter releases the slot the moment the child is reaped — a reaped pid can be reused by an unrelated group leader, and a fan-out to it would signal processes Orbit never spawned.
 
 Patterns to copy:
 

@@ -27,11 +27,13 @@ pub(super) struct EnvOverrides<'a> {
     pub(super) xdg_config_home: Option<&'a str>,
     pub(super) xdg_state_home: Option<&'a str>,
     pub(super) opencode_config_dir: Option<&'a str>,
+    pub(super) cargo_home: Option<&'a str>,
 }
 
 /// Provider used by profile tests that are not about the per-provider
 /// credential carve-out. Codex keeps every default credential deny, so a test
 /// asserting the shared clauses sees them unmodified.
+#[cfg(target_os = "macos")]
 pub(super) const NEUTRAL_PROVIDER: &str = "codex";
 
 pub(super) fn compile_with_env(
@@ -54,6 +56,7 @@ pub(super) fn compile_with_env(
             xdg_config_home: env.xdg_config_home.map(OsStr::new),
             xdg_state_home: env.xdg_state_home.map(OsStr::new),
             opencode_config_dir: env.opencode_config_dir.map(OsStr::new),
+            cargo_home: env.cargo_home.map(OsStr::new),
         },
     )
     .expect("compile")
@@ -102,7 +105,7 @@ pub(super) fn can_read_under_profile(profile_text: &str, path: &Path) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn sandbox_exec_can_apply() -> bool {
+pub(crate) fn sandbox_exec_can_apply() -> bool {
     if !super::spawn::sandbox_exec_available() {
         return false;
     }
@@ -180,7 +183,7 @@ fn is_default_write_allow_root(path: &Path) -> bool {
         let codex_home = std::env::var_os("CODEX_HOME");
         let claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
         let grok_home = std::env::var_os("GROK_HOME");
-        if let Some(home) = super::provider_dirs::non_empty_env_path(home.as_deref()) {
+        if let Some(home) = crate::credential_paths::non_empty_env_path(home.as_deref()) {
             roots.push(home.join("Library/Caches"));
             roots.push(home.join(".orbit/state/logs"));
         }

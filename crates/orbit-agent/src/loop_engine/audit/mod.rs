@@ -9,11 +9,8 @@
 //! Persistent audit storage is owned by the runtime layer. Tests use
 //! [`InMemorySink`], callers with no need for persistence use [`NullSink`].
 
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -138,7 +135,10 @@ impl InMemorySink {
     }
 
     pub fn events(&self) -> Vec<LoopAuditEvent> {
-        self.events.lock().expect("audit mutex").clone()
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn blob_store(&self) -> &BlobStore {
@@ -148,7 +148,10 @@ impl InMemorySink {
 
 impl AuditSink for InMemorySink {
     fn emit(&self, event: &LoopAuditEvent) {
-        self.events.lock().expect("audit mutex").push(event.clone());
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(event.clone());
     }
     fn write_blob(&self, content: &[u8]) -> String {
         let hash = self
@@ -158,11 +161,8 @@ impl AuditSink for InMemorySink {
         let stored = self.blob_store.redact_for_storage(content);
         self.blobs
             .lock()
-            .expect("blob mutex")
+            .unwrap_or_else(PoisonError::into_inner)
             .push((hash.clone(), stored));
         hash
     }
 }
-
-#[cfg(test)]
-mod tests;

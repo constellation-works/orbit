@@ -5,16 +5,20 @@ use orbit_common::OrbitError;
 use orbit_types::task::{ExternalRef, TaskComment, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
 
 use super::commit::commit_failure_candidate;
-use super::freshness::{commit_sha, original_base_sha, remote_branch_sha};
+use super::freshness::{
+    commit_sha, original_base_sha, rebase_belongs_to_attempt, rebase_provenance_summary,
+    remote_branch_sha,
+};
 use super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
+use super::handoff::rebase_in_progress;
 use super::pr::open_or_reuse_unchecked;
 use super::push::push_batch_changes_inner;
 use super::resume::ensure_retry_descends_from;
@@ -23,12 +27,45 @@ pub(super) use super::resume::commit_head_matches_failure_handoff;
 
 const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
 const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
+/// The handoff found a rebase this run did not start and left it intact [ORB-13455].
+const FOREIGN_REBASE_EVENT: &str = "pr_foreign_rebase_refused";
 /// A before-PR review gate stopped delivery [ORB-11333].
 const REVIEW_GATE_EVENT: &str = "review_gate_escalation";
+/// Required validation could not find a tool; the candidate was not judged
+/// [ORB-13987].
+const VALIDATION_ENVIRONMENT_EVENT: &str = "validation_environment_blocked";
+/// Largest validation diagnostic the blocking comment repeats; the full
+/// output is in the attached validation log.
+const MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 
-/// The pipeline steps that belong to the before-PR review gate.
-pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] =
-    &["review_gate_admit", "review", "review_gate_settle"];
+/// The pipeline steps that belong to the before-PR review gate: admission,
+/// the reviewer, settlement, and owner revalidation of the reviewer's fixes
+/// [ORB-13989].
+pub(in crate::executor::automation) const REVIEW_GATE_STEPS: &[&str] = &[
+    "review_gate_admit",
+    "review",
+    "review_gate_settle",
+    REVIEW_VALIDATION_STEP,
+];
+
+/// Owner revalidation of the reviewer commit. Its failure rejects the
+/// candidate: there is no second review round [ORB-13989].
+const REVIEW_VALIDATION_STEP: &str = "review_validate";
+
+/// Completion-stage steps: merging the published PR, and re-reviewing and
+/// republishing it after completion rebased a conflicting reviewed head.
+const COMPLETION_STEPS: &[&str] = &[
+    "complete_pr",
+    "re_review_gate_admit",
+    "re_review",
+    "re_review_gate_settle",
+    "re_review_validate",
+    "re_push",
+    "complete_reviewed_pr",
+];
+
+/// Admission checkpoints whose attempt a failing run must close.
+const REVIEW_ADMISSION_STEPS: &[&str] = &["review_gate_admit", "re_review_gate_admit"];
 
 /// Terminal hook for `task_pr_pipeline`.
 ///
@@ -44,6 +81,9 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     let error_code = required_input_string(input, "error_code")?;
     let error_message = required_input_string(input, "error_message")?;
     let run_id = required_input_string(input, "run_id")?;
+    // Before anything that may refuse the handoff — a bundle, a missing
+    // task — so every attempt this run admitted is closed.
+    release_review_attempts(host, input, run_id);
     let job_input = input
         .get("job_input")
         .ok_or_else(|| OrbitError::InvalidInput("missing required input.job_input".to_string()))?;
@@ -69,7 +109,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     let task = host.get_task(task_id)?;
     ensure_failure_handoff_ownership(host, input, &task, run_id)?;
 
-    if failed_step_id == "complete_pr"
+    if COMPLETION_STEPS.contains(&failed_step_id)
         && let Some(pr_number) = task.github_pr_number().map(ToOwned::to_owned)
     {
         return preserve_completion_failure(
@@ -97,7 +137,25 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     )?;
 
     let mut conflicting_paths = unmerged_paths(&workspace_path)?;
-    let rebase_aborted = git_command_success(&workspace_path, &["rebase", "--abort"])?;
+    // [ORB-13455] Task and run ownership do not prove this run started the
+    // Git rebase. Only the rebase `sync_base` started from the prepared
+    // checkpoint may be aborted; any other rebase is left exactly as found.
+    let rebase_aborted = if rebase_in_progress(&workspace_path)? {
+        if !prepared_attempt_owns_rebase(input, &workspace_path)? {
+            return refuse_foreign_rebase(
+                host,
+                &task,
+                run_id,
+                failed_step_id,
+                error_code,
+                error_message,
+                &workspace_path,
+            );
+        }
+        git_command_success(&workspace_path, &["rebase", "--abort"])?
+    } else {
+        false
+    };
     if !conflicting_paths.is_empty() && !rebase_aborted {
         return Err(OrbitError::Execution(
             "pr_failure_handoff: conflicts exist but the in-progress rebase could not be aborted"
@@ -106,6 +164,25 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     }
     if conflicting_paths.is_empty() && rebase_aborted {
         conflicting_paths = conflicts_from_error(error_message);
+    }
+
+    // [ORB-13987] Required validation lacked a tool. Nothing about the
+    // candidate is known, so it is neither published as a `[BLOCKED]` PR nor
+    // repaired: it stays exactly as validated for `orbit job resume`. Checked
+    // before the review-gate branch because `rework_validate` fails inside
+    // that loop.
+    if orbit_types::workflow::is_validation_environment_failure(
+        Some(error_code),
+        Some(error_message),
+    ) {
+        return preserve_validation_environment_candidate(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_message,
+            &workspace_path,
+        );
     }
 
     // [ORB-11333] A review-gate failure keeps the implementation and any
@@ -232,15 +309,103 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pr_url": pr_url,
         "pr_created": pr_created,
         "task_status": "blocked",
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
+    }))
+}
+
+/// The spec digest a later run compares before resuming this candidate
+/// [ORB-13985], read after this handoff's own selector widening.
+fn recorded_spec_digest<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+) -> Result<String, OrbitError> {
+    Ok(host.get_task(task_id)?.spec_digest())
+}
+
+/// Keep a candidate whose required validation could not run because a tool
+/// was missing [ORB-13987].
+///
+/// The validation step only runs on a clean, committed candidate, so there is
+/// nothing to commit and nothing to push: the branch and the run's worktree
+/// already hold it, and `orbit job resume` reruns validation on that exact
+/// head once the environment is fixed. The task is blocked under its own
+/// event, which the blocked-task recovery backstop does not treat as a code
+/// failure, and no PR is opened.
+fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let diagnostic = error_message.trim();
+    let cut = orbit_common::text::floor_char_boundary(
+        diagnostic,
+        MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES,
+    );
+    let note = format!(
+        "required validation lacked a tool in its environment: run={run_id}, \
+         failed_step={failed_step_id}, candidate={head_sha}, branch={branch}; the candidate was \
+         not judged and no PR was opened"
+    );
+    let body = format!(
+        "## Validation environment\n\nA required validation command could not run because a \
+         tool it calls is missing from the validation environment. This is the host's \
+         environment, not a defect in the candidate, so no repair ran, no review or rework \
+         budget was spent, and no PR was opened.\n\n- Run: `{run_id}`\n- Failed step: \
+         `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n\n\
+         Make the tool available to the owner's login shell (or set \
+         `workflow.validation_env.path`), check with `orbit doctor`, then resume validation on \
+         the same candidate with `orbit job resume {run_id}`.\n\n## Failure\n\n```text\n{}{}\n```",
+        &diagnostic[..cut],
+        if cut < diagnostic.len() {
+            format!("\n[truncated to {cut} of {} bytes]", diagnostic.len())
+        } else {
+            String::new()
+        }
+    );
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Blocked),
+            status_event: Some(VALIDATION_ENVIRONMENT_EVENT.to_string()),
+            status_note: Some(note.clone()),
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!("{note}\n\n{body}"),
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "blocked_validation_environment",
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "candidate_preserved": true,
+        "pr_created": false,
+        "task_status": "blocked",
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
 }
 
 /// Preserve a candidate the before-PR review gate refused to publish.
 ///
 /// Uncommitted reviewer changes are committed under the reviewer identity the
-/// gate admitted, never as implementer work; the branch is pushed so partial
-/// repairs and evidence are recoverable; the task is blocked with the gate's
-/// escalation. No PR is opened.
+/// gate admitted, never as implementer work; the implementation and reviewer
+/// commits stay as they are; the branch is pushed so partial fixes and
+/// evidence are recoverable; the task is blocked with the gate's escalation.
+/// No PR is opened.
 #[allow(clippy::too_many_arguments)]
 fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -293,15 +458,25 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "before-PR review gate stopped delivery: run={run_id}, failed_step={failed_step_id}, \
          candidate={head_sha}, branch={head}; no PR was opened"
     );
+    let verdict = if failed_step_id == REVIEW_VALIDATION_STEP {
+        "Verdict: `reject`. The reviewer's fixes did not pass owner revalidation (required \
+         validation or path ownership) on the reviewed head, and there is no second review \
+         round.\n\n"
+    } else {
+        ""
+    };
     let body = format!(
         "## Review gate escalation\n\nOrbit held PR publication because the before-PR review gate \
-         did not pass. The candidate branch was pushed so the implementation commits, any \
-         reviewer repairs, and the review evidence remain inspectable; nothing was merged or \
+         did not pass. {verdict}The candidate branch was pushed so the implementation commit, \
+         any reviewer commit, and the review evidence remain inspectable; nothing was merged or \
          published as a PR.\n\n- Task: `{}`\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n\
          - Error code: `{error_code}`\n- Candidate branch: `{head}`\n- Candidate head: `{head_sha}`\n\
-         - Partial reviewer repair commit: {}\n- Uncommitted paths left in the worktree: {}\n\n\
-         Resuming delivery needs a recorded decision: repair or re-scope, then run the gate again \
-         within the lineage's remaining review budget.\n\n## Failure\n\n```text\n{error_message}\n```",
+         - Partial reviewer commit: {}\n\
+         - Uncommitted paths left in the worktree: {}\n\n\
+         The review's verdict, findings and what changed for each are recorded in the gate's \
+         settlement comment on the task. Resuming delivery needs a recorded decision: fix or \
+         re-scope, then run the gate again within the lineage's remaining review budget.\n\n\
+         ## Failure\n\n```text\n{error_message}\n```",
         task.id,
         partial_repair
             .as_ref()
@@ -341,6 +516,7 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "push": pushed,
         "pr_created": false,
         "task_status": "blocked",
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
 }
 
@@ -485,6 +661,110 @@ fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
         "candidate_preserved": true,
         "task_status": task.status.to_string(),
     }))
+}
+
+/// Whether the in-progress rebase is the one `sync_base` started from this
+/// run's `prepare_branch` checkpoint: its `orig-head`, `onto`, and
+/// `head-name` must name the prepared head SHA, base SHA, and branch. Without
+/// that checkpoint no Orbit step started a rebase, so none is owned.
+fn prepared_attempt_owns_rebase(input: &Value, workspace_path: &Path) -> Result<bool, OrbitError> {
+    let (Some(head), Some(head_sha), Some(base_sha)) = (
+        pipeline_checkpoint_string(input, "prepare_branch", "head"),
+        pipeline_checkpoint_string(input, "prepare_branch", "head_sha"),
+        pipeline_checkpoint_string(input, "prepare_branch", "base_sha"),
+    ) else {
+        return Ok(false);
+    };
+    rebase_belongs_to_attempt(workspace_path, &head, &head_sha, &base_sha)
+}
+
+/// Leave a rebase this run did not start untouched: no abort, commit, push,
+/// or PR. The task is blocked with the rebase provenance so an operator can
+/// inspect the worktree; the original step error stays authoritative.
+fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_code: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let provenance = rebase_provenance_summary(workspace_path);
+    let note = format!(
+        "failure handoff refused a rebase this run did not start: run={run_id}, \
+         failed_step={failed_step_id}, {provenance}; nothing was aborted, committed, pushed, \
+         or published"
+    );
+    let message = format!(
+        "{note}\n\nThe in-progress rebase does not match this run's prepared branch checkpoint, \
+         so its rebase metadata, index, and worktree edits were left intact. Inspect \
+         `{}` before retrying delivery.\n\n- Error code: `{error_code}`\n\n\
+         Failure:\n```text\n{error_message}\n```",
+        workspace_path.display()
+    );
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Blocked),
+            status_event: Some(FOREIGN_REBASE_EVENT.to_string()),
+            status_note: Some(note),
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message,
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "foreign_rebase_refused",
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "workspace_path": workspace_path,
+        "rebase_provenance": provenance,
+        "pr_created": false,
+        "task_status": "blocked",
+    }))
+}
+
+/// [ORB-13890] Close every review attempt this run admitted that has no
+/// verdict yet, charging the reviewer runtime it spent, so a failed or
+/// timed-out reviewer step never leaves its attempt open for the lineage.
+/// Only the run's own admission checkpoints are read, so this needs no task
+/// ownership proof. The original failure stays authoritative: a release
+/// error is logged, not raised; the run's termination releases it again.
+fn release_review_attempts<H: RuntimeHost + ?Sized>(host: &H, input: &Value, run_id: &str) {
+    for step in REVIEW_ADMISSION_STEPS {
+        let Ok(admission) = pipeline_step(input, step) else {
+            continue;
+        };
+        if admission.get("applies").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let (Some(lineage_key), Some(attempt_id)) = (
+            input_string_field(admission, "lineage_key"),
+            input_string_field(admission, "attempt_id"),
+        ) else {
+            continue;
+        };
+        let request = ReviewReleaseRequest {
+            run_id: run_id.to_string(),
+            lineage_key,
+            attempt_id,
+        };
+        if let Err(error) = host.release_review_attempt(&request) {
+            tracing::warn!(
+                run_id = %run_id,
+                attempt_id = %request.attempt_id,
+                error = %error,
+                "pr_failure_handoff could not release the review attempt; run termination releases it"
+            );
+        }
+    }
 }
 
 fn pipeline_step<'a>(input: &'a Value, step: &str) -> Result<&'a Value, OrbitError> {

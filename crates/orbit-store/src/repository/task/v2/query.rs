@@ -1,110 +1,102 @@
+use orbit_common::text::contains_lowercased;
+use orbit_types::task::ExternalRef;
+
 use super::*;
 
 impl TaskV2Store {
-    /// Search over the bundles the candidate listing already read, so a
-    /// query costs one lightweight bundle read per task. Materialization does
-    /// not hash artifact payloads; a later on-demand read may open a text
-    /// blob only when in-memory fields and comments did not already match.
-    pub(super) fn search_bundles(
+    /// The task `bundle` describes when it matches `lowered`, else `None`.
+    /// Matching is over the lightweight bundle read: it never opens artifact
+    /// payloads, and only the manifest paths participate.
+    pub(super) fn matching_task(
         &self,
-        bundles: Vec<TaskBundleV2>,
+        bundle: TaskBundleV2,
         lowered: &str,
-    ) -> Result<Vec<Task>, OrbitError> {
-        let mut matches = Vec::new();
-        for bundle in bundles {
-            let comments_match = bundle
-                .comments
-                .iter()
-                .any(|comment| comment.body.to_lowercase().contains(lowered));
-            let manifest = bundle.artifact_manifest.clone();
-            let task = self.task_from_bundle(bundle)?;
-            // Cheapest evidence first: the fields already in memory, then the
-            // comments, and only then the artifact blobs on disk.
-            if task_in_memory_fields_match_query(&task, lowered)
-                || comments_match
-                || self.artifact_manifest_matches_query(&task.id, manifest.as_ref(), lowered)?
-            {
-                matches.push(task);
-            }
-        }
-        Ok(matches)
+    ) -> Result<Option<Task>, OrbitError> {
+        let sidecars_match =
+            sidecar_fields_match(&bundle.comments, bundle.artifact_manifest.as_ref(), lowered);
+        let task = self.task_from_bundle(bundle)?;
+        Ok((task_in_memory_fields_match_query(&task, lowered) || sidecars_match).then_some(task))
     }
 
-    /// Phase 5 bridge: artifact search reads text artifact files on demand
-    /// until generated full-text indexes carry artifact paths, content, and
-    /// snippets. A path match needs no read; a text blob is read only when
-    /// its path did not already match.
-    fn artifact_manifest_matches_query(
-        &self,
-        id: &str,
-        manifest: Option<&ArtifactManifestV2>,
-        lowered: &str,
-    ) -> Result<bool, OrbitError> {
-        let Some(manifest) = manifest else {
-            return Ok(false);
-        };
-        let artifact_dir = self
-            .bundle_store
-            .bundle_path(id)?
-            .join(TASK_ARTIFACTS_DIR_NAME);
-        for file in &manifest.files {
-            if file.path.to_lowercase().contains(lowered) {
-                return Ok(true);
-            }
-            if !is_text_artifact_media_type(&file.media_type) {
-                continue;
-            }
-            let content = match fs::read(artifact_dir.join(&file.blob)) {
-                Ok(content) => content,
-                // The bundle can be rewritten between the listing and this
-                // read; a blob that vanished is not a match, not an error.
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(OrbitError::Io(err.to_string())),
-            };
-            if String::from_utf8(content)
-                .ok()
-                .is_some_and(|text| text.to_lowercase().contains(lowered))
-            {
-                return Ok(true);
-            }
+    /// Whether the task `envelope` describes could match `lowered`, decided
+    /// from the envelope and the search documents alone: no event log, no
+    /// consistency checks, no [`Task`] built. Every field is matched by the
+    /// same helpers [`Self::matching_task`] uses.
+    ///
+    /// A pruning check, never a verdict: `true` also covers "cannot tell" (a
+    /// pending write, a bundle in flight, a read failure), so the caller's full
+    /// read decides and reports any failure. `false` is only ever the answer
+    /// for a task whose files were read and hold no match.
+    pub(super) fn may_match(&self, envelope: &TaskEnvelopeV2, lowered: &str) -> bool {
+        if envelope_fields_match(&envelope.title, &envelope.external_refs, lowered) {
+            return true;
         }
-        Ok(false)
+        let Some(docs) = self.bundle_store.read_search_docs(&envelope.id) else {
+            return true;
+        };
+        body_fields_match(
+            &docs.description,
+            &docs.plan,
+            &docs.execution_summary,
+            &parse_acceptance(&docs.acceptance),
+            lowered,
+        ) || sidecar_fields_match(&docs.comments, docs.artifact_manifest.as_ref(), lowered)
     }
+}
+
+fn sidecar_fields_match(
+    comments: &[TaskCommentRowV2],
+    manifest: Option<&ArtifactManifestV2>,
+    lowered: &str,
+) -> bool {
+    comments
+        .iter()
+        .any(|comment| contains_lowercased(&comment.body, lowered))
+        || artifact_manifest_path_matches_query(manifest, lowered)
+}
+
+fn artifact_manifest_path_matches_query(
+    manifest: Option<&ArtifactManifestV2>,
+    lowered: &str,
+) -> bool {
+    manifest.is_some_and(|manifest| {
+        manifest
+            .files
+            .iter()
+            .any(|file| contains_lowercased(&file.path, lowered))
+    })
 }
 
 fn task_in_memory_fields_match_query(task: &Task, lowered: &str) -> bool {
-    task.title.to_lowercase().contains(lowered)
-        || task.description.to_lowercase().contains(lowered)
-        || task.plan.to_lowercase().contains(lowered)
-        || task.execution_summary.to_lowercase().contains(lowered)
-        || task
-            .acceptance_criteria
-            .iter()
-            .any(|criterion| criterion.to_lowercase().contains(lowered))
-        || task.external_refs.iter().any(|external_ref| {
-            external_ref.system.to_lowercase().contains(lowered)
-                || external_ref.id.to_lowercase().contains(lowered)
+    envelope_fields_match(&task.title, &task.external_refs, lowered)
+        || body_fields_match(
+            &task.description,
+            &task.plan,
+            &task.execution_summary,
+            &task.acceptance_criteria,
+            lowered,
+        )
+}
+
+fn envelope_fields_match(title: &str, external_refs: &[ExternalRef], lowered: &str) -> bool {
+    contains_lowercased(title, lowered)
+        || external_refs.iter().any(|external_ref| {
+            contains_lowercased(&external_ref.system, lowered)
+                || contains_lowercased(&external_ref.id, lowered)
         })
 }
 
-fn is_text_artifact_media_type(media_type: &str) -> bool {
-    let base = media_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    base.starts_with("text/")
-        || matches!(
-            base.as_str(),
-            "application/json"
-                | "application/javascript"
-                | "application/toml"
-                | "application/x-toml"
-                | "application/x-yaml"
-                | "application/xml"
-                | "application/yaml"
-        )
-        || base.ends_with("+json")
-        || base.ends_with("+xml")
+fn body_fields_match(
+    description: &str,
+    plan: &str,
+    execution_summary: &str,
+    acceptance_criteria: &[String],
+    lowered: &str,
+) -> bool {
+    contains_lowercased(description, lowered)
+        || contains_lowercased(plan, lowered)
+        || contains_lowercased(execution_summary, lowered)
+        || acceptance_criteria
+            .iter()
+            .any(|criterion| contains_lowercased(criterion, lowered))
 }

@@ -1,22 +1,50 @@
 ---
 title: Routines — Decisions
 owner: claude
-last_updated: 2026-08-29
-last_validated: 2026-08-29
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Accepted
 feature: routines
 doc_role: decisions
 type: design
-summary: Decision log for the routines scheduler, including default seeding and workspace-local shipment.
+summary: Decision log for the routines scheduler — OS clock, one host tick for routines and auto-tasks, no host pins, registration as the automation opt-in, default seeding, workspace-local shipment.
 tags: [routines, scheduler]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
-related_features: [routines, activity-job, host-registry]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-10986, ORB-11082]
+paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/**"]
+related_features: [routines, auto-tasks, activity-job, host-registry, task-migration]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-10986, ORB-11082, ORB-12236, ORB-12237, ORB-12718]
 ---
 
 # Routines — Decisions
 
 [ORB-10001] recorded five candidate scheduler decisions; [ORB-10021] implemented them for v1. Their titles and recorded task provenance below now carry that history directly.
+
+---
+
+## Per-user ownership of `.orbit/` (no git re-includes)
+
+**Recorded:** 2026-09-20 · [ORB-12718]
+**Code anchors:** `crates/orbit-cli/src/command/workspace/support.rs::ORBIT_GITIGNORE_BLOCK`
+**Supersedes:** [Routine definitions are git-shared; scheduler state is host-local and never synced](#routine-definitions-are-git-shared-scheduler-state-is-host-local-and-never-synced), and the git-versioned half of auto-tasks [ORB-10149] ([Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](../auto-tasks/4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates--one-generic-scheduler-routine)).
+
+### Context
+
+Orbit's model is per-user: each person (or each machine of one person) owns their checkout, task prefix, clock, crews, and delivery policy. Every *effect* of a routine or auto-task is already host-local (task store, cursors, fires, pauses, worktrees). Versioning the *definitions* in git was the last inconsistency: one owner's crews, sandbox mode, base branch, and which sweeps fire were landing on every other clone. `orbit workspace init` already seeds those files from the binary; git was carrying a copy of what the binary ships, plus a digest that churned on every release.
+
+`.orbit/learnings/` was the one remaining candidate exception (ADR-003, repo-travelling knowledge). The native learning subsystem is retired; leftover files are inert historical data with no runtime consumer. Shared knowledge already has task publication and the docs corpus.
+
+### Decision
+
+The whole of `.orbit/` is per-user checkout state and is gitignored with no `!` re-includes. The managed block is a comment plus `.orbit/`. `orbit workspace init` and `orbit workspace sync` rewrite older blocks (including `!.orbit/auto_tasks/` and friends) so retired negations do not survive. `orbit doctor` reports leftover tracked files and names `git rm -r --cached .orbit`; sync never runs git.
+
+Seeded defaults still come from the binary via `init`/`sync`. Task publication remains the mechanism for sharing task records. `.orbit/routines/local/` is no longer a git-uncommitted origin; files there still load as a plain subdirectory for one release.
+
+`.orbit/learnings/` is ignored with the rest of `.orbit/`. Archaeology is git history; current shared knowledge is docs and task publication.
+
+### Consequences
+
+- One owner's config and schedules cannot be pushed onto another clone.
+- A fresh clone gets the same shipped defaults from `orbit workspace init`, not from git.
+- Cost: operators who previously reviewed definition edits in PRs now review them only on the checkout that owns them. Sharing a chore across owners is an explicit copy, a docs change, or a published task — not a git pull of `.orbit/`.
 
 ---
 
@@ -43,6 +71,7 @@ launchd (`StartInterval` 60s) and a systemd timer (`OnActiveSec` plus `OnUnitAct
 
 **Recorded:** 2026-07-04 21:14:40.332406Z · [ORB-10021]
 **Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Superseded by:** [Registration is the automation opt-in; there is no routine-source role](#registration-is-the-automation-opt-in-there-is-no-routine-source-role) — discovery through the workspace registry stands; the `[routines] role = "source"` key does not.
 
 ### Context
 
@@ -81,6 +110,7 @@ The original sketch allowed a `run: {type: shell, command: ...}` payload for sma
 
 **Recorded:** 2026-07-04 21:14:40.332307Z · [ORB-10021]
 **Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Superseded by:** [Definitions carry no host pin: every owner checkout is an independent schedule](#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule). The "no cross-host coordination" half survives; the pin does not.
 
 ### Context
 
@@ -100,6 +130,7 @@ Each routine carries a `hosts:` list matched against the host-local `host_id`; t
 
 **Recorded:** 2026-07-04 21:14:40.331256Z · [ORB-10021]
 **Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Superseded by:** [Per-user ownership of `.orbit/` (no git re-includes)](#per-user-ownership-of-orbit-no-git-re-includes). Scheduler state stays host-local; definitions no longer converge via git.
 
 ### Context
 
@@ -119,18 +150,29 @@ Routine YAML definitions live in routine-source workspaces and converge via git 
 
 **Recorded:** 2026-07-11 21:51:20.761360Z · [ORB-10129], [ORB-10207]
 **Paths:** `crates/orbit-core/assets/routines/**`, `crates/orbit-core/src/command/routine.rs`, `crates/orbit-core/src/command/init.rs`
+**Superseded in part by:** [Definitions carry no host pin: every owner checkout is an independent schedule](#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule) (no `__ORBIT_HOST_ID__` resolution; seeded bytes become machine-independent) and [One host tick evaluates routines and auto-task definitions in-process](#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process) (`auto_task_scheduler` leaves the default set). The workspace-name suffix rule below is unchanged.
 
 ### Context
 ORB-10129 ships the triage pipeline as a default, but routines have no global directory: discovery reads `.orbit/routines/*.yaml` from `[routines] role = "source"` workspaces, v1 requires explicit host pinning (no "any host"), and routine names must be unique across all sources on a host — so a static shipped YAML cannot work. The real alternatives were leaving defaults workspace-authored from scratch or adding a global routines directory (a discovery-model change [Routine discovery through workspace registry](#routine-discovery-via-the-workspace-registry-and-a-versioned-routines-rolesource-config-key) deliberately avoided).
 
 ### Decision
-`orbit init` (workspace branch) seeds `DEFAULT_ROUTINE_FILES` templates into `.orbit/routines/`, resolving `__ORBIT_HOST_ID__` via `resolve_host_id` and `__ORBIT_ROUTINE_NAME__` from a workspace-directory slug, validating each rendered document fail-closed before writing. Every default is disabled. The complete set is `auto_task_scheduler`, `task_triage`, `task_pilot`, `ship_sweep`, and `worktree_gc`. Plain re-init creates missing defaults while preserving existing definitions byte-for-byte; destructive `--force` recreates templates. A routine fires only after the workspace is a routine source and its versioned `enabled` field is set true. [ORB-10739]
+`orbit init` (workspace branch) seeds `DEFAULT_ROUTINE_FILES` templates into `.orbit/routines/`, resolving `__ORBIT_HOST_ID__` via `resolve_host_id` and `__ORBIT_ROUTINE_NAME__` from the **registered workspace name**, validating each rendered document fail-closed before writing. Every default is disabled. The complete set is `auto_task_scheduler`, `task_triage`, `task_pilot`, `ship_sweep`, and `worktree_gc`. Plain re-init creates missing defaults while preserving existing definitions byte-for-byte; destructive `--force` recreates templates. A routine fires only after the workspace is a routine source and its versioned `enabled` field is set true. [ORB-10739]
 
 ### Consequences
 - Fresh workspaces get reviewable routine definitions without silently granting scheduled execution.
 - Per-workspace names let multiple seeded source workspaces coexist on one host despite the global name-uniqueness rule.
 - The seeded file pins the initializing host; sharing the repo to another host needs a hand edit of `hosts:` or recreation during destructive initialization.
-- Cost: `orbit init` output depends on the machine it runs on (host id, directory name), and routine template improvements do not overwrite existing workspace-authored files.
+- Cost: `orbit init` output depends on the machine it runs on (host id, workspace name), and routine template improvements do not overwrite existing workspace-authored files.
+
+### Correction: the suffix is the workspace name, not the checkout directory [ORB-12107]
+
+The suffix was originally taken from the directory containing `.orbit/`, so `orbit workspace init --name qa-sweep` inside `.../repo` seeded `task-pilot-repo` while `orbit routine list` reported a `qa-sweep` workspace — `orbit routine show task-pilot-qa-sweep` found nothing. Worse, the directory basename is not unique on a host: any two `repo`/`src`/`app` checkouts seeded identical names, and a name defined twice drops *both* definitions at load time.
+
+`RoutineSeedIdentity` now carries the host id and the registered workspace name together, and is the only way to reach default-routine seeding, so neither `orbit workspace init` nor `orbit workspace sync` can render a name without one. A workspace name with no characters usable in a routine name is rejected rather than silently falling back to an unsuffixed, host-wide name.
+
+`orbit workspace init` also refuses a name whose seeded routines a *different* registered checkout on the host already declares (committed or `local/`), naming each conflicting file, instead of writing a duplicate set that can never fire.
+
+Existing workspaces are **left untouched**: the managed-asset manifest records each routine's materialization binding, and reconciliation keeps the recorded name. A workspace seeded before this change therefore keeps its directory-derived routine names and keeps working; `orbit workspace sync --check` reports the difference as `binding_drift`, naming the workspace-derived name it would render now. Adopting the new name is a deliberate operator action (rename in the definition and its manifest entry, or re-initialize the routines directory) — nothing renames a live routine automatically, because a rename loses the routine's run history and state, which key off the name.
 
 ## Delegate workspace ship routines through a synchronous wrapper job
 
@@ -153,26 +195,97 @@ Seed a workspace-local ship-sweep routine targeting a shipped wrapper job. The w
 
 **Recorded:** 2026-08-11 03:29:01.559340Z · [ORB-10720]
 **Paths:** `crates/orbit-core/src/application/routines/**`, `crates/orbit-cli/src/command/routine/**`, `docs/design/routines/**`
+**Superseded in part by:** [One host tick evaluates routines and auto-task definitions in-process](#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process) — the clock's storage, cadence rules, and native-manager health checks are unchanged; its controls now live at top-level `orbit clock`.
 
 ### Context
 The OS sweep clock is shared host infrastructure but previously had a hard-coded minutely cadence and only native-manager controls. The alternatives were a workspace routine setting, which would make one workspace own host infrastructure, or a host-local configuration plus Orbit CLI controls.
 
 ### Decision
-Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml` and expose it through `orbit routine clock`. Native launchd/systemd user services remain the authority for enabled state; routine pauses and manual `orbit sweep` remain separate.
+Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml`. Native launchd/systemd user services remain the authority for enabled state; routine pauses and manual ticks remain separate. The current control surface is `orbit clock`.
 
 ### Consequences
 - Clock status reports configured and effective cadence, and native-manager failures include recovery commands.
-- On Linux, enabled state and successful manager command exits are insufficient for health: installation and controls report success only when systemd exposes an active timer with a finite next trigger. An elapsed or unscheduled timer reports `orbit routine clock enable`, which rewrites a stale installed unit (for example a pre-fix `OnStartupSec` timer) when it differs from the embedded template, daemon-reloads, restarts the timer even when already enabled, and verifies the repaired state.
+- On Linux, enabled state and successful manager command exits are insufficient for health: installation and controls report success only when systemd exposes an active timer with a finite next trigger. An elapsed or unscheduled timer reports `orbit clock enable`, which rewrites a stale installed unit (for example a pre-fix `OnStartupSec` timer) when it differs from the embedded template, daemon-reloads, restarts the timer even when already enabled, and verifies the repaired state.
 - Linux uses monotonic timer-activation and service-activation triggers. `OnActiveSec` establishes the first deadline after every install, reinstall, cadence change, and re-enable; `OnUnitActiveSec` establishes recurrence after each sweep service activation. `AccuracySec=5s` bounds coalescing after either deadline. Missed timer ticks are not replayed, leaving catch-up versus skip behavior to each routine's persisted cursor and `missed_run` policy.
 - Cost: the host-local setting intentionally does not travel with a workspace, so operators configure each host separately.
 
+
+## One host tick evaluates routines and auto-task definitions in-process
+
+**Recorded:** 2026-09-12 · [ORB-12237]
+**Code anchors:** `crates/orbit-core/src/application/routines/sweep.rs`, `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-cli/src/command/clock/**`
+
+### Context
+
+Auto-tasks shipped as a consumer of routines: the seeded `auto_task_scheduler` routine (cron `* * * * *`, `overlap: forbid`) fired the `auto_task_scheduler_pipeline` job, whose one deterministic step ran `run_auto_task_scheduler`, which loaded `.orbit/auto_tasks/*.yaml`, evaluated each definition's cursor, and minted tasks. That is four hops and a detached worker process per tick, per workspace, to evaluate a cron expression against a host-local cursor — which is exactly what the sweep already does for routines one layer up, with the same due-math (`auto_tasks::schedule` calls `routines::due::due_decision`). The scheduler pass already had its own single-flight lock (`.auto-tasks.json.lock`), so the job's `max_active_runs: 1` and the routine's `overlap: forbid` were guards around a thing that guards itself. An operator had to flip four switches before a definition fired: workspace `role = "source"`, routine `enabled`, routine `hosts`, definition `enabled`. The real alternatives were to keep the routine-as-scheduler shape and accept the overhead, or to make the auto-task evaluator a second consumer of the same clock.
+
+### Decision
+
+The OS clock invokes one host tick. The tick holds the host sweep lock, discovers registered owner checkouts once, and runs two evaluators in-process against each: **routines** (unchanged — due routines dispatch job runs through `submit_pipeline_run`) and **auto-task definitions** (the existing `run_auto_task_scheduler_at` pass, called directly — a due definition mints a task into that checkout's store; no job run is created). Auto-task evaluation runs after routine evaluation, is bounded, and reports per-definition rows (`name`, `action`, `slot`, `task_id`, `reason`) alongside routine rows in the tick report; a definition error is a report row, never an aborted tick. The `auto_task_scheduler` routine, `auto_task_scheduler_pipeline` job, and `run_auto_task_scheduler` activity are retired from the embedded defaults through the managed-asset provenance path; `orbit auto-task mint` remains the manual surface and `orbit clock tick --dry-run` the inspection surface.
+
+The clock is host infrastructure shared by both evaluators, so its CLI moves to the top level: `orbit clock status|pause|enable|set|tick`. `orbit sweep` stays as a compatibility alias for `orbit clock tick` during burn-in; `orbit routine clock` is removed.
+
+### Consequences
+
+- One mental model: the clock ticks; the tick evaluates every schedule the host owns. Routines and auto-tasks are siblings under it, not one built on the other.
+- No `jrun-*` per tick for auto-task evaluation. Evidence of a fire is the minted task (tagged `auto-task:<name>`), the cursor file, and the tick report row — the dashboard Operations surface and `orbit doctor` read those, not run history.
+- The job-level and routine-level overlap knobs disappear for auto-tasks; the sidecar cursor lock and the host sweep lock are the only exclusion, as before.
+- Auto-task fires stop appearing on `GET /api/routines`; the Operations auto-task panel (already cursor-backed) is their surface.
+- Cost: an in-process evaluator holds the sweep lock while it mints, so a hung task-store write stalls routine dispatch for that tick (bounded, and file I/O plus one store write — but a failure mode the job wrapper did not have). Existing workspaces carry a seeded `auto_task_scheduler` routine that must be retired via `orbit workspace sync` or `orbit doctor --fix-stale-artifacts`. That retirement did not converge as written: the byte-exact provenance check counted the documented opt-in (`enabled: true`) and the dropped `hosts:` key as local edits, so sync refused, and the dead definition failed to load on every clock tick. Both are corrected in [2_design.md](2_design.md) — provenance accepts lifecycle-only differences from a shape a prior release shipped, and until the sync runs the definition is skipped as retired rather than reported faulty.
+
+## Definitions carry no host pin: every owner checkout is an independent schedule
+
+**Recorded:** 2026-09-12 · [ORB-12236]
+
+### Context
+
+`hosts:` existed because "an unpinned routine checked out on N source machines is N independent schedules" was treated as a failure mode: the two hosts were imagined as sharing one backlog, so a routine firing on both looked like a duplicate. Everything a routine or auto-task acts on is host-local and gitignored — the task store, cursors, fires, pauses, worktrees — and each owner checkout allocates under its own immutable `task_prefix` (host-registry). Under a multi-owner model, where several people (or one person on several machines) each own a checkout of the same repository with their own prefix, N independent schedules is the intended semantics: each owner's clock triages, pilots, and ships that owner's tasks. The pin was defending against a collision that only existed while two stores were mistaken for one. It also made `orbit init` output machine-dependent (`__ORBIT_HOST_ID__`), required a host-registry projection (`owner_host_ids`, `host_belongs_elsewhere`, `host_unresolvable`) to validate, and made sharing a repo to a second machine a hand edit of every definition. The alternative — keeping the pin and adding "any host" — keeps all of that machinery for a distinction the model no longer needs.
+
+### Decision
+
+Routine and auto-task definitions carry no host field. A definition is evaluated on a host iff (1) the workspace has an **owner** checkout registered on that host, (2) that host's clock is enabled, and (3) the definition's versioned `enabled` is true and no host-local pause suppresses it. Replica checkouts never evaluate schedules (they cannot write the coordination store). N owner checkouts of one repository are N independent schedules by design. There is no cross-host coordination, lease, or "exactly one of N" mode.
+
+The standing rule this settles: **scheduled automation acts only on the host-local store.** A definition whose effect lands on the shared remote rather than the local store (a repo-global chore: "bump dependencies weekly") will run once per owner; such a definition must dedupe against the remote itself or must not ship as an embedded default. An `owner:` field on the definition is the additive answer if that case ever bites; it is deliberately not designed now.
+
+Migration: `hosts:` is accepted and ignored with a load warning for one release, then rejected. `.orbit/routines/local/` is no longer a git-uncommitted origin ([Per-user ownership of `.orbit/` (no git re-includes)](#per-user-ownership-of-orbit-no-git-re-includes)); files there still load as a plain subdirectory for one release. Seeded defaults no longer render a host id, so the managed-asset digest changes once; reconciliation adopts the new bytes on the next `orbit workspace sync`.
+
+### Consequences
+
+- Three switches, each with obvious semantics, replace four. "Why didn't this fire?" is answerable from `orbit clock status`, `orbit workspace list`, and the definition.
+- `orbit init` output is machine-independent; a repository can be registered on a second machine with no definition edits.
+- Host-registry keeps `host_id`/`machine_id` for run ownership, liveness, and display only; routine placement validation and its diagnostics are deleted.
+- Enabling a host's clock immediately activates every enabled definition on that host. That is the contract; the clock is off until `orbit clock enable`.
+- Cost: repo-global chores are no longer prevented from running once per owner by the scheduler; that responsibility moves to the definition author. A routine that genuinely must run on exactly one machine is paused on the others.
+
+## Registration is the automation opt-in; there is no routine-source role
+
+**Recorded:** 2026-09-12 · [ORB-12236]
+**Code anchors:** `crates/orbit-config/src/raw.rs`, `crates/orbit-config/src/resolved/compatibility.rs` (the `[routines] role` key, removed), `crates/orbit-core/src/application/routines/loader.rs`
+
+### Context
+
+`[routines] role = "source"` lives in the git-shared `.orbit/config.toml`, so it is a repository-level "this repo participates in automation" switch, not a host switch — and every workspace that seeds routines and auto-tasks already participates. The key duplicated the opt-in that registering an owner checkout already expresses, added a fail-closed config error for any other value, and was one of the four switches an operator had to find. The alternative was keeping it as a belt-and-braces repository gate.
+
+### Decision
+
+Remove the `[routines]` config section. The tick evaluates definitions from every registered, active **owner** checkout on the host. A host that wants a workspace registered but excluded from automation pauses its routines (`orbit routine pause`) or, if a whole-workspace switch proves necessary, gets a `clock = false` flag on the host-local registration entry — never a versioned config key. The key is accepted and ignored with a warning for one release, then rejected as unknown.
+
+### Consequences
+
+- Registering an owner checkout is the entire setup; enabling the clock is the entire activation.
+- The review boundary for scheduled execution is the definitions on this checkout (`.orbit/routines/` and `.orbit/auto_tasks/`), which no longer travel by git.
+- Cost: a workspace can no longer declare "never schedule me" in versioned config; exclusion is a per-host operator action.
+
 ## Task References
 
+- [ORB-12718] — ignores all of `.orbit/` as per-user state; definitions no longer converge via git ([Per-user ownership of `.orbit/` (no git re-includes)](#per-user-ownership-of-orbit-no-git-re-includes)).
+- [ORB-12236] — removes `hosts:` pins and `[routines] role = "source"` (the second and third 2026-09-12 entries).
+- [ORB-12237] — moves auto-task evaluation into the host tick, adds `orbit clock`, retires the scheduler routine/job/activity (the first 2026-09-12 entry); depends on [ORB-12236].
 - [ORB-10001] — authored this design-doc folder (proposal).
 - [ORB-10021] — implemented routines v1; allocated and accepted [The OS owns the clock: stateless orbit sweep under launchd/systemd, no resident daemon](#the-os-owns-the-clock-stateless-orbit-sweep-under-launchdsystemd-no-resident-daemon)..[Routine definitions are git-shared; scheduler state is host-local and never synced](#routine-definitions-are-git-shared-scheduler-state-is-host-local-and-never-synced).
 - [ORB-10129] — shipped the default triage routine; allocated and accepted [Default routines seed per-workspace at init with host and name resolved at seed time](#default-routines-seed-per-workspace-at-init-with-host-and-name-resolved-at-seed-time).
 - [ORB-10207] — seeded disabled defaults and allocated/accepted [Delegate workspace ship routines through a synchronous wrapper job](#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job) for workspace ship.
-- [ORB-10270] — completed [Committed-routine ownership with host-local cursors](../host-registry/4_decisions.md#committed-routine-ownership-with-host-local-cursors)'s runtime enforcement: committed pins resolve through
+- [ORB-10270] — completed the (since-retired) host-registry "committed-routine ownership with host-local cursors" runtime enforcement: committed pins resolve through
   current registry or classified spoke-cache data before scheduler mutation, diagnostics
   remain explicit under degradation, and reassignment starts with a fresh baseline.
 - [ORB-10319] — moved the registry-specific providers that source identity, workspace
@@ -182,7 +295,7 @@ Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml` and
   (`GET /api/routines`), realizing the single-host half of the §7 cross-host-visibility
   vision. Read-only projection of `routine_statuses`; no new ADR (no new architectural
   constraint — mirrors the existing `orbit routine list --json` surface).
-- [ORB-11082] — Linux `orbit routine clock enable` rewrites a stale installed timer from
+- [ORB-11082] — Linux `orbit clock enable` rewrites a stale installed timer from
   the embedded template and daemon-reloads before restart, so an `OnStartupSec` upgrade
   leftover is recovered by the advertised command instead of looping on enable.
 

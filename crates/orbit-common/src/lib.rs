@@ -10,9 +10,9 @@
 //!
 //! Domain contracts live in `orbit-types`. This crate owns `OrbitError` and
 //! responsibility-based helpers: governance, filesystem, process, storage,
-//! protocol, observability, and security.
+//! protocol, observability, security, and text.
 
-pub mod error;
+mod error;
 pub mod fs;
 pub mod governance;
 pub mod migration;
@@ -23,24 +23,18 @@ pub mod process;
 pub mod protocol;
 pub mod security;
 pub mod storage;
+pub mod text;
 
-#[cfg(any(test, feature = "test-util"))]
 pub mod test_env;
 
-#[cfg(any(test, feature = "test-util"))]
 pub mod test_fixtures;
 
+pub mod test_process;
+
 pub use error::{
-    ArtifactOrigin, ArtifactOriginMode, DependencyNotDelivered, FrictionNotLocal, NotFoundKind,
-    OrbitError, RecoverableVcsConflict, WorkspaceClaimHeld,
+    ArtifactOrigin, ArtifactOriginMode, DependencyNotDelivered, NotFoundKind, OrbitError,
+    RecoverableVcsConflict, SqliteContention, WorkspaceClaimHeld,
 };
-pub use fs::task_io::{prune_missing_context_files, task_artifact_from_source_file};
-pub use model::pricing::{derive_cost_usd, normalize_token_usage};
-pub use observability::audit_id::audit_execution_id;
-pub use protocol::tool_input;
-pub use protocol::tool_schema;
-pub use protocol::yaml::{
-    parse_auto_task_yaml, parse_local_routine_yaml, parse_policy_resource, parse_routine_yaml,
-    parse_task_plan,
-};
+pub use fs::task_io::task_artifact_from_source_file;
+pub use model::pricing::derive_cost_usd;
 pub use tracing;

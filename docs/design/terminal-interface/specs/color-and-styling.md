@@ -1,7 +1,8 @@
 ---
 type: design
 summary: "Spec: Color and Styling"
-last_validated: 2026-08-31
+last_updated: 2026-09-26
+last_validated: 2026-09-26
 ---
 
 # Spec: Color and Styling
@@ -31,14 +32,15 @@ Mapping from domain values to roles is defined once, in one table, covering task
 
 ## 2. When Color Is Emitted
 
-Resolved once, at the sink, in this precedence:
+Resolved once, at the sink:
 
-1. `--no-color` → off.
-2. `NO_COLOR` set to any non-empty value → off.
-3. `CLICOLOR_FORCE` non-empty → on.
-4. Otherwise: on if and only if `is_tty`.
+1. A non-terminal sink → off.
+2. `TERM=dumb` → off.
+3. `NO_COLOR` set to any non-empty value → off.
+4. `CLICOLOR_FORCE` set to any non-empty value → on.
+5. Otherwise: on for a terminal.
 
-`TERM=dumb` forces off regardless of 2 and 3. There are no command-line color override flags; the sink owns this environment-based policy.
+There are no command-line color override flags; the sink owns this environment-based policy.
 
 **Invariant:** exactly one place in the crate reads these — `output/sink.rs`, enforced by `scripts/check-terminal-state-guard.sh`. A call site that consults them itself is a defect. Because the two styling crates each ship their own probe, "one place" also means the sink must *override* them rather than agree with them: `OutputSink::apply_color_policy` sets `colored`'s global override, and `output::table` passes `enforce_styling`/`force_no_tty` per render. Neither backend is left to ask.
 
@@ -69,6 +71,6 @@ Resolved once, at the sink, in this precedence:
 3. ~~Move emission gating into the sink; delete the local `is_terminal` check in `command/log/tail.rs`.~~ Done [ORB-10570].
 4. ~~Replace the wrappers with role-tagged values at each call site and delete the wrappers.~~ Done [ORB-10570]. A call site now passes either a `Role` it names outright or the `Domain` the value came from; `cell(value, tag)` and `text(value, tag)` are the only two renderings.
 
-**Remaining gap:** §3's "16-color ANSI only" is not met on the table path. `comfy_table` renders a role's color through `crossterm` as a 256-color code (`\e[38;5;10m` for green) while `colored` renders the same role as `\e[32m`. Both honor the sink's decision about *whether* to emit; they disagree about the shade. Closing it means either mapping roles to raw SGR codes and bypassing `comfy_table::Color`, or accepting the 256-color spelling and amending §3.
+The table renderer translates the four role foreground colors emitted by `comfy_table` to basic SGR codes after layout. This keeps the §3 palette and column widths the same for colored and uncolored output.
 
 **Remaining gap:** §3's "never restyle a value the user is filtering on" is unimplemented. `Column::filtered` keeps such a column on screen, but the cell is still painted, in every list command.

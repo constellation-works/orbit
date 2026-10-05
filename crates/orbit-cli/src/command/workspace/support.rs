@@ -1,23 +1,97 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_core::OrbitError;
 
-/// Remove all symlinks in a directory (non-recursive).
-pub(super) fn remove_symlinks_in(dir: &Path) -> Result<(), OrbitError> {
-    let entries = std::fs::read_dir(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+/// Repo-local discovery directories a legacy workspace init linked skills into.
+pub(super) const LEGACY_SKILL_DISCOVERY_DIRS: [&str; 2] = [".agents", ".claude"];
+
+/// What legacy skill-link cleanup did in one discovery directory.
+pub(super) struct SkillLinkCleanup {
+    pub(super) removed_links: usize,
+    pub(super) removed_dirs: Vec<PathBuf>,
+}
+
+/// Remove the legacy skill links a workspace init wrote into
+/// `<repo_root>/<dir_name>/skills`.
+///
+/// A link is Orbit-owned only when its name matches the skill it targets and
+/// that target is `<orbit_dir>/skills/<name>` (or the same path through the
+/// canonical `orbit_dir`), the layout workspace init linked. Unrelated,
+/// dangling unrelated and plugin links, regular files, and directories stay.
+///
+/// Neither `<dir_name>` nor its `skills` child is followed when it is a
+/// symlink: that directory belongs to whatever tree it points at, not to the
+/// checkout being torn down. When this removes a link and so empties the real
+/// `skills` directory, that directory and then an emptied real parent go too.
+pub(super) fn remove_owned_skill_links(
+    repo_root: &Path,
+    orbit_dir: &Path,
+    dir_name: &str,
+) -> Result<SkillLinkCleanup, OrbitError> {
+    let mut cleanup = SkillLinkCleanup {
+        removed_links: 0,
+        removed_dirs: Vec::new(),
+    };
+    let parent = repo_root.join(dir_name);
+    let skills_dir = parent.join("skills");
+    if !is_real_dir(&parent)? || !is_real_dir(&skills_dir)? {
+        return Ok(cleanup);
+    }
+
+    let skills_root = orbit_dir.join("skills");
+    let canonical_skills_root = std::fs::canonicalize(orbit_dir)
+        .map(|dir| dir.join("skills"))
+        .unwrap_or_else(|_| skills_root.clone());
+    let entries = std::fs::read_dir(&skills_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
     for entry in entries {
         let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
-        let meta =
-            std::fs::symlink_metadata(entry.path()).map_err(|e| OrbitError::Io(e.to_string()))?;
-        if meta.file_type().is_symlink() {
-            std::fs::remove_file(entry.path()).map_err(|e| OrbitError::Io(e.to_string()))?;
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        if !meta.file_type().is_symlink() {
+            continue;
         }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let target = std::fs::read_link(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        let resolved = if target.is_absolute() {
+            target
+        } else {
+            skills_dir.join(target)
+        };
+        if resolved != skills_root.join(name) && resolved != canonical_skills_root.join(name) {
+            continue;
+        }
+        std::fs::remove_file(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        cleanup.removed_links += 1;
     }
-    Ok(())
+
+    // Only a directory this cleanup emptied is Orbit's to remove.
+    if cleanup.removed_links == 0 {
+        return Ok(cleanup);
+    }
+    for dir in [skills_dir, parent] {
+        if !is_dir_empty(&dir) {
+            break;
+        }
+        std::fs::remove_dir(&dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        cleanup.removed_dirs.push(dir);
+    }
+    Ok(cleanup)
+}
+
+/// Whether `path` is a directory itself rather than a symlink to one.
+fn is_real_dir(path: &Path) -> Result<bool, OrbitError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => Ok(meta.file_type().is_dir()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(OrbitError::Io(error.to_string())),
+    }
 }
 
 /// Check if a directory is empty.
-pub(super) fn is_dir_empty(dir: &Path) -> bool {
+fn is_dir_empty(dir: &Path) -> bool {
     std::fs::read_dir(dir)
         .map(|mut entries| entries.next().is_none())
         .unwrap_or(false)
@@ -47,23 +121,38 @@ pub(super) fn ensure_orbit_gitignore_entry(
     workspace_root: &Path,
     orbit_dir: &Path,
 ) -> Result<(), OrbitError> {
-    let Some(gitignore_root) = orbit_gitignore_root(workspace_root, orbit_dir) else {
+    let Some(gitignore_path) = orbit_gitignore_path(workspace_root, orbit_dir) else {
         return Ok(());
     };
-    let gitignore_path = gitignore_root.join(".gitignore");
     write_orbit_gitignore_entry(&gitignore_path)
 }
 
-/// Whether workspace initialization manages checkout-local Orbit definitions.
+/// The `.gitignore` that carries the managed `.orbit/` block, if any.
 ///
-/// This is the same condition that determines whether initialization writes
-/// the managed `.gitignore` entry, so onboarding guidance can describe only
-/// files that were actually created in the checkout.
-pub(super) fn manages_checkout_local_orbit_files(workspace_root: &Path, orbit_dir: &Path) -> bool {
-    orbit_gitignore_root(workspace_root, orbit_dir).is_some()
+/// A checkout-local Orbit data directory is ignored at its repository root.
+/// A checkout at a Git repository root is ignored even when `--root` keeps
+/// Orbit's data directory elsewhere: delivery worktrees are still created
+/// under `<checkout>/.orbit/state/worktrees/`, and left unignored each one is
+/// an untracked nested checkout that breaks the primary-checkout Git snapshot.
+pub(super) fn orbit_gitignore_path(workspace_root: &Path, orbit_dir: &Path) -> Option<PathBuf> {
+    checkout_local_orbit_root(workspace_root, orbit_dir)
+        .or_else(|| is_git_repo_root(workspace_root).then_some(workspace_root))
+        .map(|root| root.join(".gitignore"))
 }
 
-fn orbit_gitignore_root<'a>(workspace_root: &'a Path, orbit_dir: &'a Path) -> Option<&'a Path> {
+/// Whether workspace initialization writes Orbit definitions into the checkout.
+///
+/// False when `--root` relocates the data directory, so onboarding guidance
+/// can point at the files that were actually created.
+pub(super) fn manages_checkout_local_orbit_files(workspace_root: &Path, orbit_dir: &Path) -> bool {
+    checkout_local_orbit_root(workspace_root, orbit_dir).is_some()
+}
+
+/// The repository root whose `.orbit` is the Orbit data directory itself.
+fn checkout_local_orbit_root<'a>(
+    workspace_root: &'a Path,
+    orbit_dir: &'a Path,
+) -> Option<&'a Path> {
     // Legacy: walking up from a subdir, orbit_dir is `<repo>/.orbit` whose
     // parent is a git repo root.
     if orbit_dir.file_name().and_then(|name| name.to_str()) == Some(".orbit")
@@ -74,9 +163,6 @@ fn orbit_gitignore_root<'a>(workspace_root: &'a Path, orbit_dir: &'a Path) -> Op
     }
 
     // Default: orbit_dir lives directly inside workspace_root as `.orbit`.
-    // If the user passed `--root` to relocate Orbit data outside the workspace
-    // (or to a non-`.orbit` basename), skip the gitignore write — there is no
-    // `<workspace>/.orbit` directory to ignore.
     if is_git_repo_root(workspace_root) && orbit_dir == workspace_root.join(".orbit") {
         return Some(workspace_root);
     }
@@ -90,33 +176,40 @@ fn is_git_repo_root(path: &Path) -> bool {
 
 /// The Orbit-managed `.gitignore` block written by `orbit workspace init`.
 ///
-/// Blanket-ignores `.orbit/*`, then re-includes the artifact partitions that
-/// travel with the repo. Lock files remain excluded.
+/// `.orbit/` is per-user checkout state (config, routines, auto-tasks,
+/// resources). It is not a repository artifact, so the managed block ignores
+/// the whole directory with no `!` re-includes.
 const ORBIT_GITIGNORE_BLOCK: &[&str] = &[
+    "# Orbit per-user state — not a repository artifact.",
+    ".orbit/",
+];
+
+/// Lines earlier managed blocks wrote that the current policy retires.
+///
+/// Includes the previous re-include form (`.orbit/*` plus `!.orbit/...`) so
+/// `init`/`sync` rewrite an existing checkout instead of leaving stale
+/// negations above the new block.
+const RETIRED_ORBIT_BLOCK_LINES: &[&str] = &[
     ".orbit/*",
     "!.orbit/auto_tasks/",
     "!.orbit/resources/",
     "!.orbit/routines/",
     "!.orbit/config.toml",
-    ".orbit/**/*.lock",
-];
-
-/// Lines earlier managed blocks wrote that the current policy retires.
-const RETIRED_ORBIT_BLOCK_LINES: &[&str] = &[
+    "!.orbit/learnings/",
     "!.orbit/adrs/",
     ".orbit/adrs/index.sqlite*",
     ".orbit/adrs/proposed/",
     ".orbit/adrs/superseded/",
+    ".orbit/**/*.lock",
 ];
 
-/// Legacy bare `.orbit` ignore lines written by earlier `orbit workspace init`
-/// versions. A bare `.orbit` ignores the whole directory, so no `!`-negation
-/// inside it can ever re-include a partition — these must be *replaced* by the
-/// managed block, never merely supplemented.
-const LEGACY_ORBIT_LINES: &[&str] = &[".orbit", ".orbit/", "/.orbit", "/.orbit/"];
+/// Legacy ignore lines written by earlier `orbit workspace init` versions that
+/// are *not* the canonical `.orbit/` form. A bare `.orbit/` is the desired
+/// managed line and must not be treated as something to replace.
+const LEGACY_ORBIT_LINES: &[&str] = &[".orbit", "/.orbit", "/.orbit/"];
 
 /// Renders [`ORBIT_GITIGNORE_BLOCK`] as newline-terminated text.
-pub(super) fn orbit_gitignore_block() -> String {
+fn orbit_gitignore_block() -> String {
     let mut block = String::new();
     for line in ORBIT_GITIGNORE_BLOCK {
         block.push_str(line);
@@ -133,8 +226,7 @@ fn write_orbit_gitignore_entry(gitignore_path: &Path) -> Result<(), OrbitError> 
     };
 
     // Idempotent no-op: the full managed block is already present and neither a
-    // legacy bare `.orbit` line (which would defeat the re-includes) nor a
-    // retired line from an older block lingers.
+    // non-canonical legacy line nor a retired line from an older block lingers.
     if gitignore_has_managed_block(&content)
         && !gitignore_has_legacy_orbit_line(&content)
         && !gitignore_has_retired_block_line(&content)

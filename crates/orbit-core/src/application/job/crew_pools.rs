@@ -1,12 +1,20 @@
-//! Capture auto policy on the coordinator and freeze each task's selection in
-//! its admitted run input. Descendant pipelines inherit the same task choice.
+//! Draw a task's crew from the complexity pools when it is created
+//! [ORB-12717], and capture pool policy on the admitting pipeline so each
+//! task's selection is frozen in its run input. Descendant pipelines inherit
+//! the same task choice; a task created without a crew before assignment moved
+//! to creation time is still routed through the pools at admission, which
+//! reads the record and never writes it.
 
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_config::{ComplexityCrewPools, canonical_crew_pool};
+use orbit_config::{
+    ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries,
+};
 use orbit_types::identity::Crew;
 use orbit_types::task::{Task, TaskComplexity};
+use orbit_types::workflow::RunStateUpdate;
+use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember, FINAL_RECOVERY_CREWS_KEY};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -15,17 +23,52 @@ use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 
 const POOLS_KEY: &str = "auto_crew_pools";
+/// The pipelines complexity-pool routing applies to: the two workspace
+/// coordinators and the task-carrying delivery pipelines [ORB-12606].
+///
+/// Policy is captured by whichever of these is admitted without a
+/// policy-bearing parent, so an ordinary `run ship` routes a crew-less task
+/// exactly as a drain does. System, review and preparation jobs are absent
+/// from the list and keep their own crew selection.
+const POLICY_PIPELINES: [&str; 6] = [
+    "workspace_auto_pipeline",
+    "workspace_ship_pipeline",
+    "task_auto_pipeline",
+    "task_gate_pipeline",
+    "task_local_pipeline",
+    "task_pr_pipeline",
+];
 const SELECTION_KEY: &str = "crew_selection";
-const COMPLEXITIES: [TaskComplexity; 3] = [
+const COMPLEXITIES: [TaskComplexity; 4] = [
     TaskComplexity::Low,
     TaskComplexity::Medium,
     TaskComplexity::Hard,
+    TaskComplexity::XHard,
 ];
+
+/// Crew chosen for a task at creation, with the provenance its history entry
+/// records: `explicit`, `pool:<complexity>`, or `default` [ORB-12717].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CreationCrewAssignment {
+    pub(crate) crew: String,
+    pub(crate) source: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CapturedCrewPool {
-    crews: Vec<String>,
+    /// Weighted members. A pool captured before weights existed is a plain
+    /// name list, which [`CrewPoolEntry`] still deserialises at weight 1.
+    crews: Vec<CrewPoolEntry>,
     source: String,
+}
+
+/// One crew a task may be admitted to, with the tickets it holds in the draw.
+/// A crew chosen outside a pool — explicit, `task.crew`, or the default chain —
+/// is the only candidate and holds a single ticket.
+#[derive(Debug, Clone)]
+pub(crate) struct CrewCandidate {
+    pub(crate) crew: Crew,
+    pub(crate) weight: u32,
 }
 
 pub(crate) type CapturedCrewPools = BTreeMap<String, CapturedCrewPool>;
@@ -65,8 +108,14 @@ impl OrbitRuntime {
                         format!("workflow.{key}"),
                     ),
                 };
-                let crews = canonical_crew_pool(&names, self.context.settings().crews(), &source)?;
-                Ok((complexity.to_string(), CapturedCrewPool { crews, source }))
+                let pool = canonical_crew_pool(&names, self.context.settings().crews(), &source)?;
+                Ok((
+                    complexity.to_string(),
+                    CapturedCrewPool {
+                        crews: pool.entries,
+                        source,
+                    },
+                ))
             })
             .collect()
     }
@@ -99,12 +148,14 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CapturedCrewPools,
         explicit: Option<&str>,
-    ) -> Result<(Vec<Crew>, String), OrbitError> {
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
         if explicit.and_then(non_empty).is_some()
             || task.crew.as_deref().and_then(non_empty).is_some()
         {
             return Ok((
-                vec![self.resolve_crew_for_task(explicit, task.crew.as_deref())?],
+                vec![sole_candidate(
+                    self.resolve_crew_for_task(explicit, task.crew.as_deref())?,
+                )],
                 if explicit.and_then(non_empty).is_some() {
                     "explicit"
                 } else {
@@ -113,29 +164,105 @@ impl OrbitRuntime {
                 .to_string(),
             ));
         }
-        if let Some(complexity) = task.complexity
-            && let Some(pool) = pools.get(complexity.as_str())
-            && !pool.crews.is_empty()
-        {
-            let names =
-                canonical_crew_pool(&pool.crews, self.context.settings().crews(), &pool.source)?;
-            let crews = names
-                .iter()
-                .map(|name| self.resolve_crew_for_task(Some(name), None))
-                .collect::<Result<Vec<_>, _>>()?;
-            return Ok((crews, pool.source.clone()));
+        if let Some(drawn) = self.complexity_pool_candidates(task.complexity, pools)? {
+            return Ok(drawn);
         }
-        Ok((vec![self.effective_task_crew(task)?], "default".to_string()))
+        Ok((
+            vec![sole_candidate(self.effective_task_crew(task)?)],
+            "default".to_string(),
+        ))
     }
 
-    pub(crate) fn auto_task_crew_eligibility(
+    /// The enabled pool members configured for `complexity`, with the
+    /// provenance the pool was captured from. `None` when no pool covers the
+    /// complexity, which is what sends both callers to the default chain.
+    ///
+    /// A disabled crew (`[crews.<name>] enabled = false`) is never drawn.
+    /// A pool whose members are all disabled is treated exactly like an empty
+    /// pool and also returns `None`, so the task falls through to
+    /// `workflow.default_crew` — and dispatch refuses that too if it is
+    /// disabled. Enabled state is read from the current configuration, not the
+    /// captured pool, so disabling a crew takes effect for the next draw.
+    fn complexity_pool_candidates(
         &self,
-        task: &Task,
+        complexity: Option<TaskComplexity>,
         pools: &CapturedCrewPools,
-        allowlist: &CrewAllowlist,
-    ) -> Result<(), OrbitError> {
-        let (crews, source) = self.auto_task_crew_candidates(task, pools, None)?;
-        permitted_candidates(crews, &source, Some(allowlist)).map(|_| ())
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        let Some(pool) = complexity
+            .and_then(|complexity| pools.get(complexity.as_str()))
+            .filter(|pool| !pool.crews.is_empty())
+        else {
+            return Ok(None);
+        };
+        let registry = self.context.settings().crews();
+        let entries = canonical_crew_pool_entries(&pool.crews, registry, &pool.source)?;
+        let crews = entries
+            .iter()
+            .filter(|entry| registry.get(&entry.name).is_some_and(|crew| crew.enabled))
+            .map(|entry| {
+                Ok(CrewCandidate {
+                    crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
+                    weight: entry.weight,
+                })
+            })
+            .collect::<Result<Vec<_>, OrbitError>>()?;
+        if crews.is_empty() {
+            tracing::info!(
+                source = %pool.source,
+                "every crew in the pool is disabled; routing to workflow.default_crew",
+            );
+            return Ok(None);
+        }
+        Ok(Some((crews, pool.source.clone())))
+    }
+
+    /// Decide the crew a task is created with [ORB-12717].
+    ///
+    /// Creation is the only place a crew-less task is routed through the
+    /// complexity pools — a status transition never revisits the choice — and
+    /// `task update --crew ""` re-enters here for the task's current
+    /// complexity. An explicit crew is kept exactly as the caller wrote it.
+    /// `None` means this workspace can name no crew at all, so the field stays
+    /// unset and dispatch resolves one from configuration as it always has.
+    pub(crate) fn creation_crew_assignment(
+        &self,
+        complexity: Option<TaskComplexity>,
+        explicit: Option<&str>,
+        random: &mut impl FnMut() -> Result<u64, OrbitError>,
+    ) -> Result<Option<CreationCrewAssignment>, OrbitError> {
+        if let Some(explicit) = explicit.and_then(non_empty) {
+            return Ok(Some(CreationCrewAssignment {
+                crew: explicit.to_string(),
+                source: "explicit".to_string(),
+            }));
+        }
+        let pools = self.capture_auto_crew_pools(&Value::Null)?;
+        if let Some(complexity) = complexity
+            && let Some((candidates, _)) =
+                self.complexity_pool_candidates(Some(complexity), &pools)?
+        {
+            let source = format!("pool:{complexity}");
+            let candidates = permitted_candidates(candidates, &source, None)?;
+            let selected = weighted_draw(&candidates, &source, random)?;
+            return Ok(Some(CreationCrewAssignment {
+                crew: selected.crew.name.clone(),
+                source,
+            }));
+        }
+        if self.context.settings().default_crew().is_none() {
+            return Ok(None);
+        }
+        // A disabled default is not pinned onto the task: creation stays
+        // possible on a host with no enabled crew, and the unset field lets
+        // dispatch refuse against `workflow.default_crew` by name.
+        let default = self.lookup_crew_for_task(None, None)?;
+        if !default.enabled {
+            return Ok(None);
+        }
+        Ok(Some(CreationCrewAssignment {
+            crew: default.name,
+            source: "default".to_string(),
+        }))
     }
 
     /// Called before the existing durable insert. Resume input already contains
@@ -153,17 +280,7 @@ impl OrbitRuntime {
         if resuming {
             return Ok(());
         }
-        // Only auto coordinators and delivery pipelines carry this policy.
-        // System, review and preparation jobs keep their own crew selection.
-        if !matches!(
-            job_name,
-            "workspace_auto_pipeline"
-                | "task_auto_pipeline"
-                | "task_gate_pipeline"
-                | "task_local_pipeline"
-                | "task_pr_pipeline"
-                | "epic_pipeline"
-        ) {
+        if !POLICY_PIPELINES.contains(&job_name) {
             return Ok(());
         }
         if !input.is_object() {
@@ -171,39 +288,71 @@ impl OrbitRuntime {
                 "pipeline run input must be a JSON object".to_string(),
             ));
         }
-        if job_name == "workspace_auto_pipeline" {
-            input[POOLS_KEY] = json!(self.capture_auto_crew_pools(input)?);
-            return Ok(());
+        let parent_input = parent_run_id
+            .map(|run_id| self.get_job_run_backend(run_id))
+            .transpose()?
+            .flatten()
+            .and_then(|run| run.input)
+            .filter(|parent| parent.get(POOLS_KEY).is_some());
+        match parent_input {
+            // A descendant runs under the policy its coordinator froze,
+            // including that run's overrides and crew allowlist.
+            Some(parent) => {
+                input[POOLS_KEY] = parent[POOLS_KEY].clone();
+                // Keep separately explicit constraints authoritative through every child.
+                if let Some(allowed) = parent.get("allowed_crews") {
+                    input["allowed_crews"] = allowed.clone();
+                }
+                let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
+                    return Ok(());
+                };
+                if let Some(selection) = parent.get(SELECTION_KEY)
+                    && selection.get("task_id").and_then(Value::as_str) == Some(&task_id)
+                {
+                    input["crew"] = selection["crew"].clone();
+                    input[SELECTION_KEY] = selection.clone();
+                    return Ok(());
+                }
+                self.capture_auto_task_selection(input, &task_id, random)
+            }
+            // A top-level submission — a drain, a ship wrapper, or an ordinary
+            // `run ship` — captures the effective policy itself. A submission
+            // naming exactly one task then draws that task's crew here; a
+            // multi-task or discovery run leaves each leaf to draw at its own
+            // admission, so siblings stay independent.
+            None => {
+                input[POOLS_KEY] = json!(self.capture_auto_crew_pools(input)?);
+                let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
+                    return Ok(());
+                };
+                self.capture_auto_task_selection(input, &task_id, random)
+            }
         }
-        let Some(parent_id) = parent_run_id else {
-            return Ok(());
-        };
-        let Some(parent) = self.get_job_run_backend(parent_id)? else {
-            return Ok(());
-        };
-        let Some(parent_input) = parent.input.as_ref() else {
-            return Ok(());
-        };
-        let Some(pools_value) = parent_input.get(POOLS_KEY) else {
-            return Ok(());
-        };
-        input[POOLS_KEY] = pools_value.clone();
-        // Keep separately explicit constraints authoritative through every child.
-        if let Some(allowed) = parent_input.get("allowed_crews") {
-            input["allowed_crews"] = allowed.clone();
-        }
-        let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
-            return Ok(());
-        };
-        if let Some(selection) = parent_input.get(SELECTION_KEY)
-            && selection.get("task_id").and_then(Value::as_str) == Some(&task_id)
-        {
-            input["crew"] = selection["crew"].clone();
-            input[SELECTION_KEY] = selection.clone();
-            return Ok(());
-        }
+    }
 
-        self.capture_auto_task_selection(input, &task_id, random)
+    /// Report a submission-time crew exclusion against the crew that will
+    /// actually run [ORB-12606]. A task routed by a pool is excluded only when
+    /// the allowlist permits none of the pool's members, which is exactly what
+    /// admission will decide; a task with one candidate is named directly.
+    pub(crate) fn enforce_admitted_crew_allowlist(
+        &self,
+        task: &Task,
+        input: &Value,
+        allowlist: &CrewAllowlist,
+        origin: &str,
+    ) -> Result<(), OrbitError> {
+        let pools = self.auto_crew_pools_for_input(input)?;
+        let explicit = input
+            .get("crew")
+            .and_then(Value::as_str)
+            .and_then(non_empty);
+        let (candidates, source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
+        if let [only] = candidates.as_slice()
+            && only.weight > 0
+        {
+            return enforce_crew_allowlist(Some(allowlist), &only.crew, origin);
+        }
+        permitted_candidates(candidates, &source, Some(allowlist)).map(|_| ())
     }
 
     fn capture_auto_task_selection(
@@ -221,17 +370,131 @@ impl OrbitRuntime {
         let (crews, source) = self.auto_task_crew_candidates(&task, &pools, explicit)?;
         let allowlist = self.crew_allowlist_from_input(input)?;
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
-        let index = random_index(candidates.len(), random)?;
-        let selected = &candidates[index];
+        let selected = weighted_draw(&candidates, &source, random)?;
         input[SELECTION_KEY] = json!({
             "task_id": task.id,
-            "crew": selected.name,
+            "crew": selected.crew.name,
             "source": source,
             "complexity": task.complexity,
-            "eligible_pool": candidates.iter().map(|crew| &crew.name).collect::<Vec<_>>(),
+            // The odds this draw ran on, renormalised over the permitted
+            // members, so `orbit run show` can explain the choice.
+            "eligible_pool": candidates
+                .iter()
+                .map(|candidate| json!({"name": candidate.crew.name, "weight": candidate.weight}))
+                .collect::<Vec<_>>(),
         });
-        input["crew"] = json!(selected.name);
+        input["crew"] = json!(selected.crew.name);
         Ok(())
+    }
+}
+
+impl OrbitRuntime {
+    /// The crew a `final_recovery` activity runs as: one draw from
+    /// `workflow.final_recovery_crews`, frozen in the executing run's state.
+    /// Dispatch supplies that identity as `job_run_id` when an explicit
+    /// `run_id` names the originating failure; otherwise `run_id` is the
+    /// executing run. A follower's originating state need not exist here.
+    ///
+    /// The first dispatch draws over the enabled members this run's
+    /// `allowed_crews` permits and records the choice in the same run-state
+    /// transaction that reads it, so two racing dispatches cannot record
+    /// different crews. Every later dispatch of the key in this run, and every
+    /// resume seeded from it, reuses the record even if the pool has since
+    /// changed; the caller's allowlist gate still applies to the frozen crew.
+    pub(crate) fn final_recovery_crew(
+        &self,
+        input: &Value,
+        random: &mut impl FnMut() -> Result<u64, OrbitError>,
+    ) -> Result<Crew, OrbitError> {
+        let source = FINAL_RECOVERY_CREWS_KEY;
+        let run_id = input
+            .get("job_run_id")
+            .or_else(|| input.get("run_id"))
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "an activity crew drawn from `{source}` needs the input's executing \
+                     `job_run_id` or `run_id` to freeze the draw"
+                ))
+            })?;
+        let allowlist = self.crew_allowlist_from_input(input)?;
+        let mut drawn: Option<ActivityCrewDraw> = None;
+        let update = self
+            .stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                if let Some(frozen) = state.activity_crew_draws.get(source) {
+                    drawn = Some(frozen.clone());
+                    return Ok(());
+                }
+                let candidates = self.final_recovery_candidates()?;
+                let candidates = permitted_candidates(candidates, source, allowlist.as_ref())?;
+                let selected = weighted_draw(&candidates, source, random)?;
+                let draw = ActivityCrewDraw {
+                    crew: selected.crew.name.clone(),
+                    source: source.to_string(),
+                    eligible_pool: candidates
+                        .iter()
+                        .map(|candidate| ActivityCrewPoolMember {
+                            name: candidate.crew.name.clone(),
+                            weight: candidate.weight,
+                        })
+                        .collect(),
+                };
+                state
+                    .activity_crew_draws
+                    .insert(source.to_string(), draw.clone());
+                drawn = Some(draw);
+                Ok(())
+            })?;
+        if update != RunStateUpdate::Updated {
+            return Err(OrbitError::InvalidInput(format!(
+                "run '{run_id}' has no persisted state to freeze its `{source}` draw in"
+            )));
+        }
+        let draw = drawn.ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "`{source}` draw for run '{run_id}' did not run inside its state update"
+            ))
+        })?;
+        self.resolve_crew_for_task(Some(&draw.crew), None)
+    }
+
+    /// The enabled members of `workflow.final_recovery_crews`, each with its
+    /// tickets. An empty pool disables final recovery, and a pool whose every
+    /// member is disabled is refused the same way rather than falling back to
+    /// another crew.
+    fn final_recovery_candidates(&self) -> Result<Vec<CrewCandidate>, OrbitError> {
+        let source = FINAL_RECOVERY_CREWS_KEY;
+        let registry = self.context.settings().crews();
+        let pool = canonical_crew_pool(
+            self.context.settings().final_recovery_crews(),
+            registry,
+            source,
+        )?;
+        if pool.entries.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "final recovery is disabled: `{source}` is []"
+            )));
+        }
+        let candidates = pool
+            .entries
+            .iter()
+            .filter(|entry| registry.get(&entry.name).is_some_and(|crew| crew.enabled))
+            .map(|entry| {
+                Ok(CrewCandidate {
+                    crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
+                    weight: entry.weight,
+                })
+            })
+            .collect::<Result<Vec<_>, OrbitError>>()?;
+        if candidates.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "every crew in `{source}` is disabled"
+            )));
+        }
+        Ok(candidates)
     }
 }
 
@@ -247,55 +510,107 @@ fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
 }
 
 fn auto_task_id(input: &Value) -> Option<&str> {
-    singular_task_id_from_input(input).or_else(|| {
-        input
-            .get("epic_task_id")
-            .and_then(Value::as_str)
-            .and_then(non_empty)
-    })
+    singular_task_id_from_input(input)
 }
 
+fn sole_candidate(crew: Crew) -> CrewCandidate {
+    CrewCandidate { crew, weight: 1 }
+}
+
+/// The members this run may actually draw, renormalised over the allowlist.
+///
+/// A parked crew (weight `0`) holds no ticket, so it neither wins a draw nor
+/// rescues a pool the allowlist has otherwise emptied.
 fn permitted_candidates(
-    crews: Vec<Crew>,
+    candidates: Vec<CrewCandidate>,
     source: &str,
     allowlist: Option<&CrewAllowlist>,
-) -> Result<Vec<Crew>, OrbitError> {
-    if crews.len() == 1 {
-        enforce_crew_allowlist(allowlist, &crews[0], source)?;
-        return Ok(crews);
+) -> Result<Vec<CrewCandidate>, OrbitError> {
+    if let [only] = candidates.as_slice()
+        && only.weight > 0
+    {
+        enforce_crew_allowlist(allowlist, &only.crew, source)?;
+        return Ok(candidates);
     }
-    let names = crews
+    let has_positive_weight = candidates.iter().any(|candidate| candidate.weight > 0);
+    let names = candidates
         .iter()
-        .map(|crew| crew.name.as_str())
+        .map(|candidate| candidate.crew.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    let permitted = crews
+    let permitted = candidates
         .into_iter()
-        .filter(|crew| allowlist.is_none_or(|list| list.permits(crew)))
+        .filter(|candidate| {
+            candidate.weight > 0 && allowlist.is_none_or(|list| list.permits(&candidate.crew))
+        })
         .collect::<Vec<_>>();
     if permitted.is_empty() {
+        let reason = if has_positive_weight {
+            "has no member permitted by this run's crew allowlist"
+        } else {
+            "has no member with a weight above 0"
+        };
         return Err(OrbitError::InvalidInput(format!(
-            "crew pool from {source} [{names}] has no member permitted by this run's crew allowlist"
+            "crew pool from {source} [{names}] {reason}"
         )));
     }
     Ok(permitted)
 }
 
-fn random_index(
-    len: usize,
+/// Draw one ticket in `[0, total_weight)` and walk the cumulative weights.
+/// An all-bare pool weighs one ticket per member, so it draws exactly as the
+/// uniform selector it replaces did, on the same ticket.
+fn weighted_draw<'a>(
+    candidates: &'a [CrewCandidate],
+    source: &str,
     random: &mut impl FnMut() -> Result<u64, OrbitError>,
-) -> Result<usize, OrbitError> {
-    if len <= 1 {
-        return Ok(0);
+) -> Result<&'a CrewCandidate, OrbitError> {
+    if let [only] = candidates {
+        return if only.weight > 0 {
+            Ok(only)
+        } else {
+            Err(OrbitError::InvalidInput(format!(
+                "crew pool from {source} has no member with a weight above 0"
+            )))
+        };
     }
-    let bound = len as u64;
-    // Rejection sampling avoids modulo bias for pools whose size is not a
-    // power of two. No random draw occurs for explicit or singleton choices.
+    let total = candidates
+        .iter()
+        .map(|candidate| u64::from(candidate.weight))
+        .sum();
+    let ticket = random_ticket(total, source, random)?;
+    let mut cumulative = 0;
+    for candidate in candidates {
+        cumulative += u64::from(candidate.weight);
+        if ticket < cumulative {
+            return Ok(candidate);
+        }
+    }
+    // `permitted_candidates` keeps only positive weights, so the walk always
+    // lands inside the pool; report the impossible rather than fall through to
+    // an arbitrary member.
+    Err(OrbitError::Execution(format!(
+        "crew pool from {source} drew ticket {ticket} outside its {total} weighted tickets"
+    )))
+}
+
+fn random_ticket(
+    bound: u64,
+    source: &str,
+    random: &mut impl FnMut() -> Result<u64, OrbitError>,
+) -> Result<u64, OrbitError> {
+    if bound == 0 {
+        return Err(OrbitError::InvalidInput(format!(
+            "crew pool from {source} has no member with a weight above 0"
+        )));
+    }
+    // Rejection sampling avoids modulo bias for totals that are not a power of
+    // two. No random draw occurs for explicit or singleton choices.
     let threshold = bound.wrapping_neg() % bound;
     loop {
         let ticket = random()?;
         if ticket >= threshold {
-            return Ok((ticket % bound) as usize);
+            return Ok(ticket % bound);
         }
     }
 }

@@ -4,7 +4,11 @@ metadata:
   name: git_commit
 spec:
   type: deterministic
-  description: Commit pending shared worktree changes on the active task branch.
+  description: >
+    Commit the active task candidate: every tracked change plus every new
+    path outside `.orbit/tmp/` and gitignored output. Paths outside the task's
+    selectors widen them with exact file selectors; a claimed leaf refuses
+    only protected new paths before changing the index.
   input_schema_json:
     type: object
     properties:
@@ -28,21 +32,27 @@ spec:
       verify_already_landed:
         type: boolean
         description: >
-          Allow a clean pinned HEAD to return verified_already_landed only
-          after checking the task's structured landing and validation artifacts.
+          Allow a clean pinned HEAD to return verified_no_diff or
+          verified_already_landed only after checking the task's structured
+          no-diff.json or already-landed.json and validation artifacts.
           Callers must recheck that evidence at promotion and completion.
       allow_empty:
         type: boolean
         description: >
           Treat a clean empty stage as `skipped_no_diff_expected` even when
-          the task does not carry the no-diff-expected tag. Used by
-          `epic_pipeline` so a no-op epic does not fail commit.
+          the task does not carry the no-diff-expected tag, so a caller that
+          may legitimately produce no diff does not fail commit.
       allow_moved_head:
         type: boolean
         description: >
-          Allow HEAD to have moved past the pinned `base_sha` (child merges
-          into an epic branch). A clean moved HEAD is `already_committed`
+          Allow HEAD to have moved past the pinned `base_sha`, as a stacked
+          local merge does. A clean moved HEAD is `already_committed`
           rather than `skipped_no_diff_expected`, so delivery still runs.
+      # A claimed leaf's implement-step output. Under the claim's worker
+      # binding the delivery gate judges its summary, not the owner's
+      # stored one; any other run ignores it.
+      implementation:
+        type: [object, "null"]
   output_schema_json:
     type: object
     properties:

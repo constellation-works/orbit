@@ -18,26 +18,35 @@ const DEFAULT_LISTEN_ADDR: SocketAddr =
 #[derive(Args)]
 #[command(about = "Serve the Orbit tool registry over Model Context Protocol on a TCP socket")]
 pub struct ListenArgs {
-    /// Address to bind, written `IP:PORT`. Defaults to loopback, which is
-    /// reachable only from this machine.
+    /// Address to bind, written `IP:PORT`. Defaults to loopback. Local
+    /// processes can connect without authentication; browser HTTP requests
+    /// are rejected before MCP dispatch.
     #[arg(value_name = "ADDR", default_value_t = DEFAULT_LISTEN_ADDR)]
     pub addr: SocketAddr,
     /// Allow a bind address other hosts can reach. Anyone who reaches the
-    /// socket gets this machine's full tool surface, so pass this only where
-    /// the network path is already restricted.
+    /// socket gets this machine's agent-accessible tools, so pass this only
+    /// where the network path is already restricted.
     #[arg(long)]
     pub allow_non_loopback: bool,
 }
 
 impl ListenArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
         if root_override.is_some() {
             return Err(OrbitError::InvalidInput(
                 "orbit mcp listen does not accept a workspace root override; select a workspace per initialize or tool call"
                     .to_string(),
             ));
         }
-        super::server::serve_mcp_listener(self.addr, self.exposure())?;
+        super::server::serve_mcp_listener(
+            self.addr,
+            self.exposure(),
+            workspace_selector.map(ToOwned::to_owned),
+        )?;
         Ok(CommandOutput::Silent)
     }
 
@@ -49,7 +58,3 @@ impl ListenArgs {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/listen.rs"]
-mod tests;

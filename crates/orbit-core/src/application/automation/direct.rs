@@ -40,7 +40,7 @@ pub(crate) fn record_direct_landing_intent(
         .collect::<Vec<_>>();
 
     let run = runtime.show_job_run(&request.run_id)?;
-    let task_ids = run
+    let task_ids: Vec<String> = run
         .input
         .as_ref()
         .and_then(|input| input.get("task_ids"))
@@ -52,6 +52,9 @@ pub(crate) fn record_direct_landing_intent(
                 .collect()
         })
         .unwrap_or_default();
+    let unattributed = task_ids
+        .is_empty()
+        .then(|| UNATTRIBUTED_NO_LANDING_TASK.into());
 
     let evidence_digest =
         digest(&serde_json::to_vec(request).map_err(|e| OrbitError::InvalidInput(e.to_string()))?);
@@ -66,6 +69,7 @@ pub(crate) fn record_direct_landing_intent(
             after,
             commits,
             task_ids,
+            unattributed,
             evidence_reference: format!("run:{}:direct-landing", request.run_id),
             evidence_digest,
             landed_at: chrono::Utc::now(),

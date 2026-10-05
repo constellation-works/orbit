@@ -1,8 +1,11 @@
 //! Stable cross-process identity tokens for job-run owner verification.
 //!
-//! On Unix, the token is derived from `ps -o lstart=` with the child
-//! environment forced to `TZ=UTC` / `LC_ALL=C` / `LANG=C` so the persisted
-//! value does not depend on the caller's locale or timezone. Tokens written
+//! On Unix, the token uses the UTC / C-locale rendering of `ps -o lstart=`
+//! so the persisted value does not depend on the caller's locale or timezone.
+//! Linux reads the start time and boot time from `/proc`, without executing
+//! `ps` or consulting `PATH`. macOS reads the same value from libproc first,
+//! because a sandboxed agent cannot exec the setuid `ps`. Other Unix hosts
+//! execute `ps` with `TZ=UTC` / `LC_ALL=C` / `LANG=C`. Tokens written
 //! by this helper carry a [`STABLE_TOKEN_PREFIX`] so readers can distinguish
 //! them from legacy unversioned values.
 //!
@@ -148,17 +151,18 @@ pub fn pid_namespace_scope(persisted: Option<&str>) -> PidNamespaceScope {
 ///
 /// Readers must distinguish a *probe failure* (`Unavailable`) from a
 /// *process-not-found* result (`NoProcess`): the former indicates we cannot
-/// tell whether the PID is alive (transient `ps` spawn error, etc.) and must
-/// not be enough to terminalize a still-running worker.
+/// tell whether the PID is alive (unreadable kernel data, spawn error, etc.)
+/// and must not be enough to terminalize a still-running worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeOutcome {
-    /// `ps` succeeded and produced a non-empty versioned token.
+    /// The probe succeeded and produced a non-empty versioned token.
     Token(String),
-    /// `ps` exited non-zero or returned an empty token; the kernel has no
-    /// process with this PID.
+    /// The process record was absent (`ps` exited non-zero or returned an
+    /// empty token on hosts using that fallback).
     NoProcess,
-    /// `Command::output()` itself errored (spawn/IO failure). Identity cannot
-    /// be probed; defer to other liveness signals.
+    /// Kernel data could not be read or parsed, or the fallback command
+    /// failed to spawn. Identity cannot be probed; defer to other liveness
+    /// signals.
     Unavailable,
 }
 
@@ -169,6 +173,14 @@ use std::process::Command;
 
 #[cfg(unix)]
 fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
+    #[cfg(target_os = "linux")]
+    if stable_env {
+        return linux_lstart_utc(pid);
+    }
+    #[cfg(target_os = "macos")]
+    if stable_env && let Some(lstart) = darwin_lstart_utc(pid) {
+        return Ok(Some(lstart));
+    }
     let mut cmd = Command::new("ps");
     cmd.args(["-o", "lstart=", "-p", &pid.to_string()]);
     if stable_env {
@@ -180,6 +192,95 @@ fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok((!token.is_empty()).then_some(token))
+}
+
+/// Linux uses the same integer-second calculation as procps `lstart`:
+/// `/proc/stat`'s `btime` + `/proc/<pid>/stat`'s `starttime` / clock ticks.
+/// Only a missing process record means `NoProcess`; unreadable or malformed
+/// kernel data must not turn an unverifiable owner into a verified one.
+#[cfg(target_os = "linux")]
+fn linux_lstart_utc(pid: u32) -> io::Result<Option<String>> {
+    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    // comm (field 2) can contain spaces and ')', so split at its last ')'.
+    // The tail starts at field 3; starttime is field 22 (index 19).
+    let start_ticks = stat
+        .rsplit_once(')')
+        .and_then(|(_, tail)| tail.split_whitespace().nth(19))
+        .and_then(|field| field.parse::<u64>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid process starttime"))?;
+    // Safety: sysconf only queries the host's clock-tick rate.
+    let ticks_per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) })
+        .ok()
+        .filter(|ticks| *ticks > 0)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid clock-tick rate"))?;
+    let boot_time = std::fs::read_to_string("/proc/stat")?
+        .lines()
+        .find_map(|line| line.strip_prefix("btime "))
+        .and_then(|field| field.trim().parse::<u64>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid kernel boot time"))?;
+    let started = boot_time
+        .checked_add(start_ticks / ticks_per_second)
+        .and_then(|seconds| i64::try_from(seconds).ok())
+        .and_then(|seconds| chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid process start time"))?;
+    Ok(Some(started.format("%a %b %e %H:%M:%S %Y").to_string()))
+}
+
+/// The kernel's start time for `pid`, rendered exactly as `ps -o lstart=`
+/// prints it under `TZ=UTC LC_ALL=C` (`%c` in the C locale).
+///
+/// On macOS `ps` is setuid root, and the agent sandbox refuses to exec it,
+/// while `proc_pidinfo` stays allowed. Reading libproc directly lets a
+/// sandboxed worker compute the same token for its ancestors that the host
+/// recorded outside the sandbox. `None` sends the caller to `ps`, which still
+/// tells a missing process from an unreadable one.
+#[cfg(target_os = "macos")]
+pub(crate) fn darwin_lstart_utc(pid: u32) -> Option<String> {
+    let key = crate::process::ancestry::process_start_key(pid)?;
+    let seconds = i64::try_from(key.starttime >> 20).ok()?;
+    Some(format_lstart_utc(seconds))
+}
+
+/// `ps`'s C-locale `%c`: `Sun Sep  7 04:05:06 2026`.
+#[cfg(target_os = "macos")]
+pub(crate) fn format_lstart_utc(seconds: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
+        .unwrap_or_default()
+        .format("%a %b %e %H:%M:%S %Y")
+        .to_string()
+}
+
+/// Backs [`crate::test_env::start_identity_probe_blocker`]: the reason the
+/// stable probe cannot produce a token for the current process, if any.
+#[cfg(unix)]
+pub(crate) fn self_start_identity_probe_blocker() -> Option<String> {
+    match lstart_raw(std::process::id(), true) {
+        Ok(Some(_)) => None,
+        Ok(None) => Some(
+            if cfg!(target_os = "linux") {
+                "Linux /proc reported no process for this process's own pid"
+            } else {
+                "`ps -o lstart=` reported no process for this process's own pid"
+            }
+            .to_string(),
+        ),
+        Err(error) => Some(if cfg!(target_os = "linux") {
+            format!("Linux /proc process-start identity is unreadable or invalid: {error}")
+        } else {
+            format!(
+                "`ps` cannot be executed from this process (an agent sandbox that denies `ps`?): {error}"
+            )
+        }),
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn self_start_identity_probe_blocker() -> Option<String> {
+    Some("process-start identity probes are Unix-only".to_string())
 }
 
 /// Probe a running process and classify the outcome.
@@ -276,9 +377,9 @@ impl ProcessLiveness {
 /// [`process_start_identity_token`]). It guards against PID reuse: a live PID
 /// whose versioned token disagrees with the current process is reported
 /// `Exited`, because the recorded process is gone even though the number was
-/// recycled. A live PID with no token, or one whose probe could not run (`ps`
-/// unavailable in a sandbox), stays `Alive` — a probe that cannot answer must
-/// not be enough to declare a running process dead.
+/// recycled. A live PID with no token, or one whose probe could not run
+/// (kernel data unreadable or `ps` unavailable), stays `Alive` — a probe that
+/// cannot answer must not be enough to declare a running process dead.
 ///
 /// [ORB-10594] A PID recorded in another PID namespace is `Unknown`, not
 /// `Exited`: from here the number names nothing, which is not evidence that
@@ -304,7 +405,7 @@ pub fn probe_process_liveness(pid: u32, pid_start_time: Option<&str>) -> Process
             ProcessLiveness::Alive
         }
         ProbeOutcome::Token(_) => ProcessLiveness::Exited,
-        // `kill(pid, 0)` above already saw the PID; a `ps` that disagrees is a
+        // `kill(pid, 0)` above already saw the PID; a probe that disagrees is a
         // race or a blocked probe, not proof of death.
         ProbeOutcome::NoProcess | ProbeOutcome::Unavailable => ProcessLiveness::Alive,
     }
@@ -445,8 +546,10 @@ pub fn probe_process_group_liveness(pgid: libc::pid_t) -> KernelLiveness {
     }
 }
 
+/// Process groups are a Unix concept; `i32` mirrors `libc::pid_t`, which is
+/// not available off Unix.
 #[cfg(not(unix))]
-pub fn probe_process_group_liveness(_pgid: libc::pid_t) -> KernelLiveness {
+pub fn probe_process_group_liveness(_pgid: i32) -> KernelLiveness {
     KernelLiveness::Unknown
 }
 

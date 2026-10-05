@@ -18,9 +18,10 @@ spec:
   fsProfiles: {}
 ```
 
-## Global Denies
+## Global denies
 
-`denyRead` blocks reads. `denyModify` blocks writes. These rules accumulate globally and apply after the selected filesystem profile is resolved.
+`denyRead` blocks reads and `denyModify` blocks writes. Deny rules accumulate
+globally and apply after the selected filesystem profile is resolved.
 
 ```yaml
 denyRead:
@@ -30,9 +31,9 @@ denyModify:
   - "**/*.env"
 ```
 
-## Filesystem Profiles
+## Filesystem profiles
 
-Profiles describe allowed read and modify globs.
+A profile lists the globs an activity may read and modify.
 
 ```yaml
 fsProfiles:
@@ -46,7 +47,7 @@ fsProfiles:
       - docs/**
 ```
 
-An activity selects a profile with `fsProfile`.
+An activity selects a profile with `fsProfile`:
 
 ```yaml
 spec:
@@ -54,4 +55,6 @@ spec:
   fsProfile: implementer
 ```
 
-> **Platform support.** Spawned agent CLIs use a platform-specific OS boundary where supported: macOS uses `sandbox-exec`, and Linux uses trusted `/usr/bin/bwrap` after a namespace-and-mount capability probe. The Linux boundary enforces writes from the resolved profile while leaving host filesystem reads and host network access available; read rules and network-egress policy remain delegated. Linux dispatch fails closed when `/usr/bin/bwrap` is unavailable or the probe fails, unless the executor explicitly sets `allow_fallback: true`, which runs without Linux write confinement. On Windows and other unsupported platforms, the same policy YAML is applied to in-process FS-tool calls, but no OS-level backend wraps the agent subprocess.
+To test a path against a profile, run `orbit doctor fs-access <profile> <path>`.
+For which OS sandbox enforces a profile on each platform, and what happens
+where none is available, see [Platform Support](../../concepts/agents/#platform-support).

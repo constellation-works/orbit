@@ -5,8 +5,10 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState};
-use rusqlite::OptionalExtension;
+use orbit_types::workflow::{
+    JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState, RunIdRole, run_id_candidate,
+    run_id_minute_stem,
+};
 
 use crate::contracts::{JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
@@ -14,7 +16,50 @@ use crate::{Store, parse_timestamp};
 /// Run ids per `IN (...)` list, under SQLite's bound-parameter cap.
 pub(super) const STEP_RUN_ID_CHUNK: usize = 500;
 
+/// Job ids per latest-run lookup, also below SQLite's bound-parameter cap.
+pub(super) const LATEST_JOB_ID_CHUNK: usize = 500;
+
 impl Store {
+    pub(super) fn latest_job_runs_for_workspace(
+        &self,
+        workspace_id: &str,
+        job_ids: &[String],
+    ) -> Result<Vec<JobRun>, OrbitError> {
+        if job_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut ids = job_ids.iter().collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        let conn = self.read()?;
+        let mut runs = Vec::new();
+        for chunk in ids.chunks(LATEST_JOB_ID_CHUNK) {
+            let sql = latest_job_runs_sql(chunk.len());
+            let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&workspace_id];
+            params.extend(chunk.iter().map(|id| *id as &dyn rusqlite::types::ToSql));
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let rows = stmt
+                .query_map(params.as_slice(), row_to_job_run)
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            runs.extend(
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| OrbitError::Store(e.to_string()))?,
+            );
+        }
+        let run_ids = runs
+            .iter()
+            .map(|run| run.run_id.clone())
+            .collect::<Vec<_>>();
+        let mut steps = read_steps_for_runs(&conn, workspace_id, &run_ids)?;
+        for run in &mut runs {
+            run.steps = steps.remove(&run.run_id).unwrap_or_default();
+        }
+        runs.sort_by(|a, b| a.job_id.cmp(&b.job_id));
+        Ok(runs)
+    }
+
     pub fn upsert_job_run_for_workspace(
         &self,
         workspace_id: &str,
@@ -90,18 +135,7 @@ impl Store {
         workspace_id: &str,
         query: &JobRunQuery,
     ) -> Result<Vec<JobRun>, OrbitError> {
-        let (where_clause, mut params) = job_run_filter_sql(workspace_id, query);
-        let order_clause = job_run_order_sql(query.order_by);
-        let mut sql = format!(
-            "SELECT run_id, job_id, attempt, state, scheduled_at, started_at, finished_at, \
-             duration_ms, created_at, pid, pid_start_time, input_json, retry_source_run_id, \
-             knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model) \
-             FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
-        );
-        if let Some(limit) = query.limit {
-            sql.push_str(&format!(" LIMIT ?{}", params.len() + 1));
-            params.push(Box::new(limit as i64));
-        }
+        let (sql, params) = job_run_list_sql(workspace_id, query);
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|b| b.as_ref()).collect();
         let conn = self.read()?;
@@ -115,13 +149,15 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         drop(stmt);
-        let run_ids = runs
-            .iter()
-            .map(|run| run.run_id.clone())
-            .collect::<Vec<_>>();
-        let mut steps_by_run = read_steps_for_runs(&conn, workspace_id, &run_ids)?;
-        for run in &mut runs {
-            run.steps = steps_by_run.remove(&run.run_id).unwrap_or_default();
+        if query.include_steps {
+            let run_ids = runs
+                .iter()
+                .map(|run| run.run_id.clone())
+                .collect::<Vec<_>>();
+            let mut steps_by_run = read_steps_for_runs(&conn, workspace_id, &run_ids)?;
+            for run in &mut runs {
+                run.steps = steps_by_run.remove(&run.run_id).unwrap_or_default();
+            }
         }
         Ok(runs)
     }
@@ -200,13 +236,14 @@ pub(super) fn upsert_job_run_for_workspace_conn(
     let knowledge_metrics_json =
         optional_json(&run.knowledge_metrics, "job run knowledge metrics")?;
     let pipeline_state_json = optional_json(&pipeline_state, "job run pipeline state")?;
+    let executed_on_json = optional_json(&run.executed_on, "execution location")?;
     conn.execute(
         r#"INSERT INTO job_runs(
             run_id, workspace_id, job_id, attempt, state, scheduled_at,
             started_at, finished_at, duration_ms, created_at, pid, pid_start_time,
             input_json, retry_source_run_id, knowledge_metrics_json, resolved_crew,
-            crew_model, pipeline_state_json
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            crew_model, pipeline_state_json, executed_on_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
         ON CONFLICT(workspace_id, run_id) DO UPDATE SET
             job_id = excluded.job_id,
             attempt = excluded.attempt,
@@ -243,39 +280,66 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             run.resolved_crew,
             run.crew_model,
             pipeline_state_json,
+            executed_on_json,
         ],
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    // Reserve the id for good: deleting the row must not free it for
+    // `next_run_id_conn` while other records still name it.
+    conn.execute(
+        "INSERT OR IGNORE INTO job_run_id_allocations(workspace_id, run_id) VALUES (?1, ?2)",
+        rusqlite::params![workspace_id, run.run_id],
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
     Ok(())
 }
 
+/// Sequence ceiling for one role inside one minute stem.
+const MAX_RUN_ID_SEQUENCE: u32 = 1023;
+
+/// Allocate the next free run id of `role` for the minute `submitted_at` falls
+/// in.
+///
+/// Each role numbers its own sequence, so a run's children never consume the
+/// numbers its top-level siblings would take and neither borrows the other's
+/// shape [ORB-12111]. Call this inside the same transaction that inserts the
+/// run: the probe below is only as good as the write it commits with.
+///
+/// A candidate is free only if no run holds it now and none ever did. Archive
+/// and delete remove the row, but automation keys, audit rows and a parent's
+/// child dispatches keep naming the id, so handing it out again would resolve
+/// those references to unrelated work.
+///
+/// Exhausting the sequence is an error rather than a fallback id. Roughly a
+/// thousand runs of one role in one workspace inside one minute is already
+/// pathological, and any id returned without a free-slot probe behind it would
+/// upsert over the live run already holding it.
 pub(super) fn next_run_id_conn(
     conn: &rusqlite::Connection,
     workspace_id: &str,
-    job_id: &str,
+    role: RunIdRole,
     submitted_at: DateTime<Utc>,
 ) -> Result<String, OrbitError> {
-    let base = format!("jrun-{}", submitted_at.format("%Y%m%d-%H%M"));
-    for suffix in 1..1024_u32 {
-        let candidate = if suffix == 1 {
-            base.clone()
-        } else {
-            format!("{base}-{suffix}")
-        };
-        let exists = conn
+    let stem = run_id_minute_stem(submitted_at);
+    for sequence in 1..=MAX_RUN_ID_SEQUENCE {
+        let candidate = run_id_candidate(&stem, role, sequence);
+        let taken: bool = conn
             .query_row(
-                "SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
+                "SELECT EXISTS(SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2)
+                     OR EXISTS(SELECT 1 FROM job_run_id_allocations
+                               WHERE workspace_id = ?1 AND run_id = ?2)",
                 rusqlite::params![workspace_id, candidate],
-                |_| Ok(()),
+                |row| row.get(0),
             )
-            .optional()
-            .map_err(|error| OrbitError::Store(error.to_string()))?
-            .is_some();
-        if !exists {
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        if !taken {
             return Ok(candidate);
         }
     }
-    Ok(format!("{base}-{job_id}"))
+
+    Err(OrbitError::Store(format!(
+        "run id sequence exhausted: {MAX_RUN_ID_SEQUENCE} {role} runs already recorded for {stem}"
+    )))
 }
 
 pub(super) fn get_job_run_for_workspace_conn(
@@ -284,12 +348,9 @@ pub(super) fn get_job_run_for_workspace_conn(
     run_id: &str,
 ) -> Result<Option<JobRun>, OrbitError> {
     let mut stmt = conn
-        .prepare(
-            "SELECT run_id, job_id, attempt, state, scheduled_at, started_at, finished_at, \
-             duration_ms, created_at, pid, pid_start_time, input_json, retry_source_run_id, \
-             knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model) \
-             FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
-        )
+        .prepare(&format!(
+            "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2"
+        ))
         .map_err(|e| OrbitError::Store(e.to_string()))?;
     let mut run = match stmt.query_row(rusqlite::params![workspace_id, run_id], row_to_job_run) {
         Ok(run) => run,
@@ -300,7 +361,7 @@ pub(super) fn get_job_run_for_workspace_conn(
     Ok(Some(run))
 }
 
-fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
+pub(super) fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
     let attempt: i64 = row.get(2)?;
     let state_raw: String = row.get(3)?;
     let scheduled_raw: String = row.get(4)?;
@@ -312,6 +373,7 @@ fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
     let input_json: Option<String> = row.get(11)?;
     let knowledge_metrics_json: Option<String> = row.get(13)?;
     Ok(JobRun {
+        executed_on: parse_optional_json(row.get(16)?, "executed_on_json")?,
         run_id: row.get(0)?,
         job_id: row.get(1)?,
         attempt: attempt as u32,
@@ -330,6 +392,48 @@ fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
         crew_model: row.get(15)?,
         steps: Vec::new(),
     })
+}
+
+/// The run-row `SELECT` and its bound parameters for a [`JobRunQuery`]:
+/// filter, order, and `LIMIT`. Steps are read separately.
+pub(super) fn job_run_list_sql(
+    workspace_id: &str,
+    query: &JobRunQuery,
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let (where_clause, mut params) = job_run_filter_sql(workspace_id, query);
+    let order_clause = job_run_order_sql(query.order_by);
+    let mut sql = format!(
+        "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
+    );
+    if let Some(limit) = query.limit {
+        sql.push_str(&format!(" LIMIT ?{}", params.len() + 1));
+        params.push(Box::new(limit as i64));
+    }
+    (sql, params)
+}
+
+/// Columns [`row_to_job_run`] reads, in its order.
+pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
+     started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
+     retry_source_run_id, knowledge_metrics_json, resolved_crew, \
+     COALESCE(crew_model, implementer_model), executed_on_json";
+
+/// Probe the existing per-job created index once per requested ID, then
+/// hydrate only that run. A window over all history would scan old runs to
+/// answer a catalog refresh; the correlated LIMIT stops at its first match.
+pub(super) fn latest_job_runs_sql(job_count: usize) -> String {
+    let values = (2..job_count + 2)
+        .map(|index| format!("(?{index})"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "WITH requested(requested_id) AS (VALUES {values}) \
+         SELECT {JOB_RUN_COLUMNS} FROM requested CROSS JOIN job_runs \
+         WHERE workspace_id = ?1 AND run_id = (\
+             SELECT run_id FROM job_runs WHERE workspace_id = ?1 \
+             AND job_id = requested.requested_id \
+             ORDER BY created_at DESC, run_id ASC LIMIT 1)"
+    )
 }
 
 /// `WHERE` clause and bound parameters for a [`JobRunQuery`] on `job_runs`,
@@ -379,7 +483,7 @@ fn job_run_order_sql(order_by: JobRunOrder) -> &'static str {
 }
 
 /// Steps for a page of runs in one query per chunk instead of one per run.
-fn read_steps_for_runs(
+pub(super) fn read_steps_for_runs(
     conn: &rusqlite::Connection,
     workspace_id: &str,
     run_ids: &[String],

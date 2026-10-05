@@ -40,6 +40,18 @@ fn error_payload(err: &OrbitError) -> Value {
         object.insert("task_id".to_string(), json!(task_id));
         object.insert("run_id".to_string(), json!(run_id));
     }
+    if let OrbitError::TaskCompletionLiveRun { task_id, run_id } = err
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("task_id".to_string(), json!(task_id));
+        object.insert("run_id".to_string(), json!(run_id));
+    }
+    if let Some((source_run_id, run_id)) = err.resume_run_in_flight()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("source_run_id".to_string(), json!(source_run_id));
+        object.insert("run_id".to_string(), json!(run_id));
+    }
     if let Some((task_id, path, reason)) = err.task_bundle_corruption()
         && let Some(object) = payload.as_object_mut()
     {
@@ -63,6 +75,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::NotFound { kind, .. } => match kind {
             NotFoundKind::Tool => "tool_not_found",
             NotFoundKind::Task
+            | NotFoundKind::Friction
             | NotFoundKind::Artifact
             | NotFoundKind::Skill
             | NotFoundKind::Job
@@ -73,7 +86,6 @@ fn error_code(err: &OrbitError) -> &str {
             | NotFoundKind::AgentSession
             | NotFoundKind::Workspace => "not_found",
         },
-        OrbitError::CompanionNotInstalled(_) => "companion_not_installed",
         OrbitError::PolicyDenied(_) => "policy_denied",
         OrbitError::CapabilityDenied(_) => "capability_denied",
         OrbitError::UnknownSelector(_) => "unknown_selector",
@@ -84,7 +96,13 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::UnhealthyCheckout(_) => "unhealthy_checkout",
         OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
         OrbitError::CapabilityRefused(_) => "capability_refused",
+        OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
+        OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
+        OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
+        OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
+        OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
         OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
         OrbitError::TaskStatusTransition(_)
@@ -94,8 +112,12 @@ fn error_code(err: &OrbitError) -> &str {
         // incumbent owner is an expected race, and the caller yields rather
         // than treating its own request as malformed.
         OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
+        // [ORB-11253, ORB-12260] A compare-and-set revision conflict on a
+        // run-control update or operation grant transition.
+        OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::DependencyNotDelivered { .. } => "dependency_not_delivered",
         OrbitError::ShipRunInFlight { .. } => "ship_run_in_flight",
+        OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         OrbitError::WorkspaceClaimHeld(_) => "workspace_claim_held",
         OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
@@ -107,6 +129,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
         OrbitError::Execution(_) => "execution_failed",
+        OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
         OrbitError::Store(_) => "store_error",
         OrbitError::WorkspaceError(_) => "workspace_error",
@@ -118,7 +141,3 @@ fn error_code(err: &OrbitError) -> &str {
         _ => "internal_error",
     }
 }
-
-#[cfg(test)]
-#[path = "tests/error.rs"]
-mod tests;

@@ -13,13 +13,11 @@ use orbit_common::governance::authorization::{
 use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::schedule::next_scheduled_slot;
 use orbit_core::application::auto_tasks::{
-    AutoTaskCursor, collect_auto_tasks, cursor_state_path, load_cursor_state,
+    AutoTaskCursor, ListedAutoTask, collect_auto_tasks, cursor_state_path, load_cursor_state,
 };
+use orbit_core::application::plugin::is_listed;
 use orbit_core::application::routines::ScheduleDisplayState;
-use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{
-    AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag,
-};
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -68,17 +66,29 @@ pub(super) async fn list_auto_tasks(
         ))
         .into_response();
     };
-    match resolve_workspace(&state, workspace) {
-        Ok((workspace_name, runtime)) => Json(list_json(
-            &runtime,
-            workspace,
-            &workspace_name,
-            generated_at,
-        ))
-        .into_response(),
-        Err(reason) => {
-            Json(read_only_envelope(generated_at, Some(workspace), &reason)).into_response()
+    let workspace = workspace.to_string();
+    let include_inactive_plugins = query.include_inactive_plugins;
+    match blocking("auto-task list", {
+        let state = state.clone();
+        let workspace = workspace.clone();
+        move || {
+            Ok(match resolve_workspace(&state, &workspace) {
+                Ok((workspace_name, runtime)) => list_json(
+                    &runtime,
+                    &workspace,
+                    &workspace_name,
+                    generated_at,
+                    state.operator_session(),
+                    include_inactive_plugins,
+                ),
+                Err(reason) => read_only_envelope(generated_at, Some(&workspace), &reason),
+            })
         }
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
     }
 }
 
@@ -92,13 +102,11 @@ pub(super) async fn toggle_auto_task(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let runtime = match resolve_workspace(&state, &workspace) {
-        Ok((_, runtime)) => runtime,
-        Err(reason) => {
-            return selection_conflict("workspace_mismatch", reason);
-        }
+    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(runtime) => runtime,
+        Err(response) => return *response,
     };
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE) {
+    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
             record_operation_audit(
@@ -112,7 +120,8 @@ pub(super) async fn toggle_auto_task(
                 Some(&denial),
                 None,
                 Instant::now(),
-            );
+            )
+            .await;
             return authorization_denied(denial);
         }
     };
@@ -157,7 +166,8 @@ pub(super) async fn toggle_auto_task(
         let runtime = runtime.clone();
         let name = body.name.clone();
         let enabled = body.enabled;
-        move || Ok(runtime.auto_task_toggle(&name, enabled))
+        let expected_enabled = body.expected_enabled;
+        move || Ok(runtime.auto_task_toggle_checked(&name, expected_enabled, enabled))
     })
     .await
     {
@@ -175,7 +185,8 @@ pub(super) async fn toggle_auto_task(
                 None,
                 Some(&error_message),
                 started,
-            );
+            )
+            .await;
             return map_runtime_error(error);
         }
         Err(response) => return *response,
@@ -191,7 +202,8 @@ pub(super) async fn toggle_auto_task(
         None,
         None,
         started,
-    );
+    )
+    .await;
     Json(json!({
         "name": updated.name,
         "enabled": updated.enabled,
@@ -211,11 +223,9 @@ pub(super) async fn mint_auto_task(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let runtime = match resolve_workspace(&state, &workspace) {
-        Ok((_, runtime)) => runtime,
-        Err(reason) => {
-            return selection_conflict("workspace_mismatch", reason);
-        }
+    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(runtime) => runtime,
+        Err(response) => return *response,
     };
     if !body.acknowledge_unconditional {
         return (
@@ -227,7 +237,7 @@ pub(super) async fn mint_auto_task(
         )
             .into_response();
     }
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_MINT) {
+    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_MINT, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
             record_operation_audit(
@@ -241,7 +251,8 @@ pub(super) async fn mint_auto_task(
                 Some(&denial),
                 None,
                 Instant::now(),
-            );
+            )
+            .await;
             return authorization_denied(denial);
         }
     };
@@ -267,7 +278,8 @@ pub(super) async fn mint_auto_task(
                 None,
                 Some(&error_message),
                 started,
-            );
+            )
+            .await;
             return map_runtime_error(error);
         }
         Err(response) => return *response,
@@ -286,7 +298,8 @@ pub(super) async fn mint_auto_task(
         None,
         None,
         started,
-    );
+    )
+    .await;
     Json(json!({
         "name": body.name,
         "task_id": minted.id.to_string(),
@@ -294,6 +307,24 @@ pub(super) async fn mint_auto_task(
         "message": format!("Minted {} ({})", minted.id, minted.status),
     }))
     .into_response()
+}
+
+async fn resolve_workspace_blocking(
+    state: &DashboardState,
+    workspace: &str,
+) -> Result<Arc<OrbitRuntime>, Box<Response>> {
+    let state = state.clone();
+    let workspace = workspace.to_string();
+    match blocking("resolve workspace", {
+        let workspace = workspace.clone();
+        move || Ok(resolve_workspace(&state, &workspace))
+    })
+    .await
+    {
+        Ok(Ok((_, runtime))) => Ok(runtime),
+        Ok(Err(reason)) => Err(Box::new(selection_conflict("workspace_mismatch", reason))),
+        Err(response) => Err(response),
+    }
 }
 
 pub(super) fn resolve_workspace(
@@ -330,49 +361,66 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": [],
+        "inactive_plugin_count": 0,
         "cursor_state_error": null,
         "load_errors": [],
     })
 }
 
+/// `inactive_plugin_count` counts the definitions whose seeding plugin is off
+/// in this workspace whether or not they are listed, so the panel can offer
+/// to show them; they never enter the listed counts or next-mint summary.
 fn list_json(
     runtime: &OrbitRuntime,
     workspace: &str,
     workspace_name: &str,
     generated_at: DateTime<Utc>,
+    operator_session: bool,
+    include_inactive_plugins: bool,
 ) -> Value {
     let collection = collect_auto_tasks(&runtime.paths().local_dir);
     let cursor_load = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir));
     let cursor_state_error = cursor_load.as_ref().err().map(ToString::to_string);
     let cursors = cursor_load.as_ref().ok();
     let now = Utc::now();
-    let definitions = collection
+    let listed = collection
         .definitions
         .iter()
-        .map(|loaded| {
+        .map(|loaded| runtime.listed_auto_task(loaded.definition.clone()))
+        .collect::<Vec<_>>();
+    let inactive_plugin_count = listed
+        .iter()
+        .filter(|listed| listed.inactive_plugin.is_some())
+        .count();
+    let definitions = listed
+        .iter()
+        .filter(|listed| is_listed(listed.inactive_plugin.is_some(), include_inactive_plugins))
+        .map(|listed| {
             definition_json(
                 runtime,
-                &loaded.definition,
-                cursors.and_then(|state| state.definitions.get(&loaded.definition.name)),
+                listed,
+                cursors.and_then(|state| state.definitions.get(&listed.definition.name)),
                 cursor_state_error.is_some(),
                 now,
             )
         })
         .collect::<Vec<_>>();
-    let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE).is_ok()
-        && authorized_caller(&DASHBOARD_AUTO_TASK_MINT).is_ok();
+    let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session)
+        .is_ok()
+        && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok();
     json!({
         "generated_at": generated_at.to_rfc3339(),
         "workspace": workspace,
         "workspace_name": workspace_name,
         "controls_authorized": controls_authorized,
         "capabilities": {
-            "auto_task_toggle": action_capability(&DASHBOARD_AUTO_TASK_TOGGLE),
-            "auto_task_mint": action_capability(&DASHBOARD_AUTO_TASK_MINT),
+            "auto_task_toggle": action_capability(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session),
+            "auto_task_mint": action_capability(&DASHBOARD_AUTO_TASK_MINT, operator_session),
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": definitions,
+        "inactive_plugin_count": inactive_plugin_count,
         "cursor_state_error": cursor_state_error,
         "load_errors": collection.errors.iter().map(|error| json!({
             "path": error.path.as_ref().map(|path| path.display().to_string()),
@@ -383,11 +431,12 @@ fn list_json(
 
 fn definition_json(
     runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
+    listed: &ListedAutoTask,
     cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
     cursor_state_unavailable: bool,
     now: DateTime<Utc>,
 ) -> Value {
+    let definition = &listed.definition;
     let automation = match &definition.schedule {
         AutoTaskSchedule::Deliveries { .. } => Some(
             match orbit_core::application::automation::inspect_auto_task(runtime, definition, now) {
@@ -398,9 +447,9 @@ fn definition_json(
         _ => None,
     };
     let minted = tagged_instances(runtime, &definition.name);
-    let open_duplicate = minted
-        .as_ref()
-        .is_ok_and(|tasks| tasks.iter().any(|task| is_open_status(task.status)));
+    let open_duplicate = runtime
+        .open_auto_task_instance(definition)
+        .is_ok_and(|id| id.is_some());
     let last_minted = minted.as_ref().ok().and_then(|tasks| tasks.first());
     let last_minted_task_id = last_minted
         .map(|task| task.id.to_string())
@@ -419,6 +468,7 @@ fn definition_json(
             "crew": definition.template.crew,
             "status": definition.template.status,
             "priority": definition.template.priority,
+            "complexity": definition.template.complexity,
             "required_tools": definition.template.required_tools,
         },
         "dedupe": match definition.dedupe {
@@ -435,6 +485,17 @@ fn definition_json(
                 "slot": pending.slot,
                 "task_id": pending.task_id,
             })),
+            // Why a due definition minted nothing, so a quiet panel is
+            // explained rather than merely empty [ORB-12698].
+            "last_skip": cursor.last_skip.as_ref().map(|skip| json!({
+                "at": skip.at,
+                "slot": skip.slot,
+                "reason": skip.reason,
+                "ref": skip.reference,
+                "cursor_sha": skip.cursor_sha,
+                "tip_sha": skip.tip_sha,
+                "cursor_task_id": skip.cursor_task_id,
+            })),
         })),
         "last_minted_task_id": last_minted_task_id,
         "last_minted_task_status": last_minted_task_status,
@@ -448,6 +509,9 @@ fn definition_json(
         ),
         "open_duplicate": open_duplicate,
         "may_create_open_duplicate": open_duplicate,
+        "plugin_inactive": listed.inactive_plugin.is_some(),
+        "inactive_plugin": listed.inactive_plugin,
+        "skipped_reason": listed.skipped_reason,
     })
 }
 
@@ -457,13 +521,6 @@ fn tagged_instances(
 ) -> Result<Vec<orbit_core::Task>, orbit_core::OrbitError> {
     let tag = auto_task_tag(name);
     runtime.list_tasks_by_tags(std::slice::from_ref(&tag))
-}
-
-fn is_open_status(status: TaskStatus) -> bool {
-    !matches!(
-        status,
-        TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
-    )
 }
 
 fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
@@ -496,6 +553,12 @@ fn template_summary(template: &AutoTaskTemplate) -> String {
     }
     parts.push(format!("status {}", template.status));
     parts.push(format!("priority {}", template.priority));
+    parts.push(format!(
+        "complexity {}",
+        template
+            .complexity
+            .map_or("unassessed", |value| value.as_str())
+    ));
     parts.join(" · ")
 }
 

@@ -1,0 +1,19 @@
+# The backend's Python dependencies. `uv.lock` beside this file pins every one
+# of them; the plugin's `bin/uvdemo` shim runs the backend with
+# `uv run --frozen`, so a call never re-resolves.
+#
+# The fixture takes its one dependency from a wheel inside the plugin tree, so
+# installing and calling it never reaches the network. A real plugin drops
+# `[tool.uv.sources]` and locks against PyPI.
+[project]
+name = "orbit-uvdemo-plugin"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["orbit-uv-fixture-dep"]
+
+[tool.uv]
+# The backend is a script, not an installable package.
+package = false
+
+[tool.uv.sources]
+orbit-uv-fixture-dep = { path = "wheels/orbit_uv_fixture_dep-1.0.0-py3-none-any.whl" }

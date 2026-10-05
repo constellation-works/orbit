@@ -1,28 +1,32 @@
 //! The host trait boundary between the engine and its runtime/store
 //! implementors, plus the task-update param types those traits consume.
 
-use orbit_agent::AgentConfig;
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_store::contracts::JobRunStepParams;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord};
+use orbit_tools::plugin::BrokeredCaller;
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
 use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
+    ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
+    TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::InvocationTrace;
+use orbit_types::workflow::ActivityToolDenyPolicy;
 use orbit_types::workflow::activity_job::Provider;
-use orbit_types::workflow::{ActivityV2, JobRun, JobRunStartOutcome, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    JobRun, JobRunStartOutcome, JobRunState, PipelineState, ReviewerInvocationEvent,
+};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::activity_job::{
-    DispatchError, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, V2AuditWriter,
+    DispatchError, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -56,9 +60,13 @@ pub struct TaskActivityUpdate {
     pub note: Option<String>,
     pub agent: Option<String>,
     pub model: Option<String>,
+    /// Trusted completion activity's owning run, exempted while that run
+    /// performs its own final transition. Its recorded children are not exempt.
+    pub calling_run_id: Option<String>,
 }
 
 /// Task requirements and the resulting activity allowlist fixed at admission.
+/// In deny mode `effective_tools` is the concrete callable set.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolvedActivityTools {
     pub requested_tools: Vec<String>,
@@ -100,6 +108,60 @@ pub enum StepRecoveryAdmission {
     Denied { reason: String },
 }
 
+/// [ORB-13907] What the engine asks a host before dispatching a job's final
+/// recovery for a failed run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalRecoveryAdmissionRequest {
+    pub task_id: String,
+    /// Top-level step whose failure exhausted step recovery.
+    pub failed_step_id: String,
+    /// Base ref a `complete_no_diff` commit must be reachable from, when the
+    /// run's worktree reported one.
+    pub base_ref: Option<String>,
+}
+
+/// [ORB-13907] The host's answer to [`FinalRecoveryAdmissionRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FinalRecoveryAdmission {
+    /// Recorded durably for the run; the hook may run, and never again.
+    Admitted,
+    /// The hook does not run; today's failure path does.
+    Skipped { reason: String },
+}
+
+/// [ORB-13907] A final-recovery decision for the host to act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalRecoveryApplication {
+    pub task_id: String,
+    pub failed_step_id: String,
+    /// The decision as the engine will act on it: a `resume` here already
+    /// names a valid step, and an invalid one arrives as `escalate`.
+    pub decision: orbit_types::workflow::FinalRecoveryDecision,
+    /// Top-level index a `resume` reruns from. Durable step checkpoints at and
+    /// after it are stale once the run goes back there.
+    pub resume_step_index: Option<u32>,
+    /// The run's assigned worktree, where a `complete_no_diff` commit is
+    /// resolved.
+    pub workspace_path: std::path::PathBuf,
+    /// Whether the run held `completion: done` authority.
+    pub completion_done: bool,
+}
+
+/// [ORB-13907] What applying a final-recovery decision did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FinalRecoveryApplied {
+    /// Recorded; the engine reruns from the decision's step.
+    Resume,
+    /// The task was settled (completed, rejected, archived, requeued, or
+    /// handed to the claim settlement); the run ends without its
+    /// `failure_activity`.
+    Settled { outcome: String },
+    /// The task is parked for a human — by the decision, by the applier's
+    /// override, or because the applier refused it; the run's
+    /// `failure_activity` follows.
+    Escalated { outcome: String },
+}
+
 /// What completion observed about a reviewed candidate's managed landing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewLandingRequest {
@@ -115,11 +177,216 @@ pub struct ReviewLandingRequest {
     pub landed_commit: Option<String>,
 }
 
+/// A review attempt whose reviewer step failed or whose run is ending
+/// without a settled verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewReleaseRequest {
+    /// The run closing the attempt; its own reviewer runtime is charged.
+    pub run_id: String,
+    pub lineage_key: String,
+    pub attempt_id: String,
+}
+
+/// A before-PR reviewer invocation starting or ending for its attempt, so
+/// the lineage is charged reviewer process runtime only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerInvocationRequest {
+    /// The run executing the reviewer step.
+    pub run_id: String,
+    pub lineage_key: String,
+    pub attempt_id: String,
+    pub event: ReviewerInvocationEvent,
+}
+
+/// Trusted execution facts for one claimed distributed leaf [ORB-12616].
+///
+/// The runtime resolves every field from its own process worker binding and
+/// the durable pull admission that created this run. Nothing here may come
+/// from job input, activity payload or environment: an activity compares a
+/// payload against this context, it never adopts one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimExecutionContext {
+    /// Original owner-admitted selectors from the local durable receipt.
+    pub footprint: Vec<String>,
+    pub workspace_id: String,
+    pub task_id: String,
+    pub claim_id: String,
+    /// Trusted execution machine, as the owner recorded it on the claim.
+    pub machine_id: String,
+    /// The one leaf run bound to this claim.
+    pub run_id: String,
+    /// Owner-resolved ship mode: `local` or `pr`.
+    pub ship_mode: String,
+    pub base_branch: String,
+    pub landing_branch: String,
+    /// Commands the owner requires this candidate to pass. Empty means no
+    /// required check: the activity runs nothing and records that it did not.
+    pub required_commands: Vec<String>,
+}
+
+/// What the owner store knows about one authorized handoff, handed to the
+/// landing activity so it can observe the real world and decide [ORB-12499].
+///
+/// Everything here is owner-held state. The activity may not treat any of it as
+/// proof that a merge happened; it exists so the activity knows exactly which
+/// candidate to look for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffLandingContext {
+    pub handoff_id: String,
+    pub task_id: String,
+    pub claim_id: String,
+    /// The accepted candidate: repository, branches, candidate/base revisions
+    /// and delivery variant.
+    pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
+    /// An external merge request this owner sent but never confirmed. It must
+    /// be reconciled against real state before anything else happens.
+    pub unresolved_merge_intent: Option<String>,
+    /// The owner checkout the landing runs against. Never a follower path.
+    pub workspace_path: std::path::PathBuf,
+}
+
+/// One durable step of a landing attempt, recorded by the owner store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandoffLandingStep {
+    /// Persisted before the external merge call, so a lost reply is uncertainty
+    /// the next attempt must reconcile rather than silently retry.
+    PublishIntent { intent_id: String },
+    /// The external state was read back: `merged` says what it actually shows.
+    ResolveIntent { intent_id: String, merged: bool },
+    /// Verified merge evidence permits the guarded `review -> done` transition.
+    Complete,
+    /// Durable evidence for a landing that must not proceed.
+    Stop,
+}
+
+/// A landing transition with the owner observation that justifies it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffLandingUpdate {
+    pub handoff_id: String,
+    pub step: HandoffLandingStep,
+    /// Read from the provider and the owner checkout by this activity, never
+    /// copied from the worker's handoff payload. `None` where no candidate
+    /// observation was possible, which the host refuses for any step that
+    /// records a landing authority decision.
+    pub observed: Option<orbit_types::workflow::handoff::HandoffCandidate>,
+    /// What was observed, in the operator's words, recorded durably.
+    pub evidence: String,
+}
+
+/// Environment name that tells a sandboxed agent where its run's plugin broker
+/// listens. The value locates the socket and proves nothing: the broker
+/// authenticates each connection by the kernel's peer identity.
+pub const PLUGIN_BROKER_ENV: &str = "ORBIT_PLUGIN_BROKER";
+
+/// The dispatching run as its plugin broker authorizes and executes brokered
+/// calls (`docs/design/plugins/2_agent_call_broker.md` §4.3). Every field
+/// comes from the run the host dispatched; none is read from a broker request
+/// or from the agent's environment.
+#[derive(Debug, Clone)]
+pub struct PluginBrokerRun {
+    /// The run the broker serves, for its logs.
+    pub run_id: String,
+    /// The job run a backend is told it serves (`context.job_run_id`). `None`
+    /// for an invocation without job-run authority, such as a source
+    /// inspection.
+    pub job_run_id: Option<String>,
+    /// The task a backend is told it serves (`context.task_id`).
+    pub task_id: Option<String>,
+    pub activity_name: String,
+    /// The provider the run dispatched, and its model.
+    pub agent_name: Option<String>,
+    pub model_name: Option<String>,
+    /// The run's logical workspace. A request may name only this one.
+    pub workspace: Option<String>,
+    /// Allowlist mode: the activity's effective tools. The broker treats an
+    /// empty list as "no tool", never as unrestricted.
+    pub allowed_tools: Vec<String>,
+    /// Deny mode: the activity's disallow list, which decides in place of
+    /// `allowed_tools`.
+    pub tool_deny_policy: Option<ActivityToolDenyPolicy>,
+    /// The worktree, sandbox profile and program policy the agent runs
+    /// under; a brokered backend is confined to them as well as to its own
+    /// profile (design §5).
+    pub caller: BrokeredCaller,
+}
+
+/// A per-run plugin broker a host started for one sandboxed provider launch
+/// (`docs/design/plugins/2_agent_call_broker.md`).
+///
+/// The listener runs until the handle is dropped. Dropping it stops the
+/// listener and removes the socket and the directory holding it.
+pub trait PluginBrokerHandle: Send {
+    /// Absolute socket path exported to the agent as [`PLUGIN_BROKER_ENV`].
+    fn socket_path(&self) -> &Path;
+
+    /// Anchor peer authentication to the sandbox process just spawned for
+    /// this run: the `bwrap` child on Linux, the `sandbox-exec` child on
+    /// macOS. Until this succeeds, the broker refuses every connection.
+    fn bind_sandbox(&self, sandbox_pid: u32) -> Result<(), OrbitError>;
+}
+
+/// What worktree GC learned about one task from the store that owns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeGcTaskLookup {
+    /// The owning store answered with the task's current state.
+    Found {
+        status: TaskStatus,
+        pr_status: Option<String>,
+    },
+    /// The owning store answered but did not produce the task.
+    Unresolved,
+    /// This checkout is a replica with no route to ask its owner: it is not
+    /// a registered workspace or has no federated destination for the owner.
+    /// Nothing was attempted over the wire, so this is a configuration gap,
+    /// not an outage. The string names it.
+    NoOwnerRoute(String),
+    /// The owner route was available, but the owner answered with a failure
+    /// while reading the task. The string names the owner's response.
+    OwnerLookupFailed(String),
+    /// This checkout is a replica and the transport to its owner failed. The
+    /// string is the transport's error, reported beside the retained
+    /// worktree.
+    OwnerUnreachable(String),
+}
+
 /// The single capability boundary between the job executor and its runtime.
 ///
 /// Deterministic actions, task/run persistence, environment resolution, agent
 /// dispatch, and audit/checkpoint hooks all cross this boundary exactly once.
 pub trait RuntimeHost: Send + Sync {
+    /// Start this run's plugin broker before a sandboxed provider is spawned.
+    ///
+    /// `Ok(None)` means the host offers no broker. An error names why a
+    /// broker-capable host could not bind one; the step still runs without
+    /// it.
+    fn start_plugin_broker(
+        &self,
+        _run: &PluginBrokerRun,
+    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+        Ok(None)
+    }
+
+    fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Err(OrbitError::Execution(
+                "worker namespace authority unavailable".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Err(OrbitError::Execution(
+                "worker process authority unavailable".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+        None
+    }
     /// Optional observation hook; execution-only test hosts need no scheduler store.
     fn record_direct_landing_intent(
         &self,
@@ -207,6 +474,15 @@ pub trait RuntimeHost: Send + Sync {
         );
         Err(unsupported_runtime_capability("list_tasks_filtered"))
     }
+    /// The tasks run `run_id` bound on the machine that executes it.
+    ///
+    /// A run id is unique only within one machine's store, so two machines'
+    /// runs can share one [ORB-13649]. A runtime that records where each
+    /// binding executed scopes this lookup to the executing machine; the
+    /// default reads by run id alone.
+    fn list_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, OrbitError> {
+        self.list_tasks_filtered(None, None, None, Some(run_id), None, None)
+    }
 
     fn start_task(
         &self,
@@ -237,6 +513,26 @@ pub trait RuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability(
             "apply_task_automation_update",
         ))
+    }
+
+    /// Append an exact `file:` selector to `task_id` for each of `paths` its
+    /// selectors do not cover, recording `step` and `activity` as the
+    /// provenance in task history, and return the selectors appended.
+    ///
+    /// Agents may change any path the work requires; delivery widens the
+    /// task's declaration rather than refusing the change. A claimed leaf
+    /// widens nothing here: the owner widens at handoff acceptance. Hosts
+    /// without task records widen nothing.
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        let _ = (task_id, run_id, step, activity, paths);
+        Ok(Vec::new())
     }
 
     // ── Operation-mode rechecks [ORB-11332] ────────────────────────────
@@ -291,7 +587,94 @@ pub trait RuntimeHost: Send + Sync {
         Ok(())
     }
 
+    /// Close a review attempt that ended without a verdict, charging the
+    /// reviewer runtime spent, so a failed or terminated reviewer step never
+    /// leaves its attempt open. Hosts without review evidence have nothing
+    /// to close.
+    fn release_review_attempt(&self, _request: &ReviewReleaseRequest) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    /// Record a reviewer invocation starting or ending for its attempt.
+    /// Hosts without review evidence have nothing to charge.
+    fn record_reviewer_invocation(
+        &self,
+        _request: &ReviewerInvocationRequest,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    // ── Owner landing consumer [ORB-12499] ─────────────────────────────
+
+    /// Read the owner's authorized handoff for a landing attempt. Hosts without
+    /// an owner coordination store have no landing work.
+    fn handoff_landing_context(
+        &self,
+        _handoff_id: &str,
+    ) -> Result<HandoffLandingContext, OrbitError> {
+        Err(unsupported_runtime_capability("handoff_landing_context"))
+    }
+
+    /// Record a landing step durably. The host rechecks current authority, the
+    /// exact candidate and the pinned validation evidence inside its own
+    /// transaction; an error refuses the step.
+    fn record_handoff_landing(&self, _update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability("record_handoff_landing"))
+    }
+
+    // ── Claimed distributed leaf execution [ORB-12616] ─────────────────
+
+    /// The trusted claim this process is executing under. Hosts with no worker
+    /// binding have no claimed execution and refuse: a claimed leaf activity
+    /// must never fall back to an unauthenticated local identity.
+    fn claim_execution_context(&self) -> Result<ClaimExecutionContext, OrbitError> {
+        Err(unsupported_runtime_capability("claim_execution_context"))
+    }
+
+    /// Attach one captured validation log to the claimed task on the owner, so
+    /// the evidence the owner later re-reads lives in the owner's coordination
+    /// store rather than on the executor's disk.
+    fn attach_claim_validation_log(
+        &self,
+        _path: &str,
+        _content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability(
+            "attach_claim_validation_log",
+        ))
+    }
+
+    /// Record the typed handoff as this claim's durable pending settlement.
+    /// It commits locally before any owner call, so a disconnect leaves
+    /// exactly one immutable settlement for an idempotent retry.
+    fn record_claim_handoff(
+        &self,
+        _handoff: &orbit_types::workflow::handoff::TaskHandoff,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability("record_claim_handoff"))
+    }
+
+    /// Attach one captured required-validation log to a task the calling run
+    /// owns, as owner-side evidence of the candidate it validated
+    /// [ORB-13915]. The host refuses a task this run does not own.
+    fn attach_task_validation_log(
+        &self,
+        _task_id: &str,
+        _run_id: &str,
+        _path: &str,
+        _content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability("attach_task_validation_log"))
+    }
+
     // ── Config accessors (implementors provide these) ──────────────────
+
+    /// Commands every delivered candidate must pass
+    /// (`workflow.required_validation_commands`). Empty means no required
+    /// check: the owner delivery path validates nothing.
+    fn required_validation_commands(&self) -> Vec<String> {
+        Vec::new()
+    }
 
     /// Returns provider-agnostic key-value configuration that is forwarded
     /// to the selected provider factory so it can decode any provider-specific
@@ -310,6 +693,17 @@ pub trait RuntimeHost: Send + Sync {
     /// `[execution.env]` policy. [ORB-10917]
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&[], required_env_vars)
+    }
+    /// The environment owner-side repository tooling runs in: required
+    /// validation and `local_shell` steps [ORB-13987].
+    ///
+    /// It starts from the agent subprocess environment, so the allowlist still
+    /// decides every variable, but PATH and toolchain locators must not depend
+    /// on whatever launched the worker. The default keeps the launcher's PATH
+    /// (`launcher_fallback`); `OrbitRuntime` resolves the owner user's login
+    /// shell under `[workflow.validation_env]`.
+    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+        orbit_exec::ValidationEnvironment::launcher(self.agent_subprocess_environment(&[]))
     }
     /// The authoritative shared Orbit registry root to hand a spawned CLI
     /// agent as `ORBIT_REGISTRY_ROOT`.
@@ -332,27 +726,16 @@ pub trait RuntimeHost: Send + Sync {
     fn orbit_workspace_selector(&self) -> Option<String> {
         None
     }
-    fn missing_required_environment_vars(&self, _required_env_vars: &[&str]) -> Vec<String> {
-        Vec::new()
+    /// Rebind durable runtime handles after an external CLI provider exits.
+    ///
+    /// Provider sandboxes may receive explicit access to a SQLite database and
+    /// its WAL sidecars. A host with cached connections refreshes them here so
+    /// completion audit and checkpoints target the authoritative files.
+    fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
+        Ok(())
     }
 
     // ── Default implementations (use accessors above) ──────────────────
-
-    fn agent_config_for(
-        &self,
-        agent_cli: &str,
-        model: Option<&str>,
-    ) -> Result<AgentConfig, OrbitError> {
-        let config = self.agent_provider_config();
-        AgentConfig::from_cli_config(agent_cli, model, &config)
-    }
-
-    fn validate_agent_cli(&self, cli: &str, model: Option<&str>) -> Result<(), OrbitError> {
-        use orbit_agent::Agent;
-        let cfg = AgentConfig::cli(cli)?.with_model(model);
-        let _ = Agent::new(&cfg)?;
-        Ok(())
-    }
 
     fn record_event(&self, _event: OrbitEvent) -> Result<(), OrbitError> {
         Ok(())
@@ -364,6 +747,34 @@ pub trait RuntimeHost: Send + Sync {
         Err(OrbitError::Execution(
             "worktree GC is not implemented for this runtime host".to_string(),
         ))
+    }
+    /// A task's settlement state for worktree GC, read from the store that
+    /// owns the workspace's tasks. `run_id` is the run whose worktree is
+    /// being classified, so a replica can ask through that run's own claim
+    /// route. The default reads this host's own store; a replica host
+    /// overrides it to ask its owner.
+    fn lookup_task_for_worktree_gc(&self, _run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
+        match self.get_task(task_id) {
+            Ok(task) => WorktreeGcTaskLookup::Found {
+                status: task.status,
+                pr_status: task.pr_status,
+            },
+            Err(_) => WorktreeGcTaskLookup::Unresolved,
+        }
+    }
+    /// Stable scope for memoizing task lookups during one GC sweep. Replica
+    /// hosts return the claim's owner selector, because one checkout may hold
+    /// claims routed to different owners. `None` disables memoization.
+    fn worktree_gc_task_lookup_scope(&self, _run_id: &str) -> Option<String> {
+        Some("local".to_string())
+    }
+    /// Whether `run_id` is a claimed leaf whose claim this follower has
+    /// settled with its owner. The owner then holds the leaf's delivery, so
+    /// a terminal leaf's worktree is this machine's to reclaim without asking
+    /// about the task. `Some` names the settlement for the GC report; the
+    /// default host pulls no work and holds no claims.
+    fn settled_claim_for_worktree_gc(&self, _run_id: &str) -> Option<String> {
+        None
     }
     fn data_root(&self) -> &Path {
         Path::new("")
@@ -415,46 +826,9 @@ pub trait RuntimeHost: Send + Sync {
     ) -> Result<Value, OrbitError> {
         crate::executor::automation::vcs::run_private_operation(operation, &input)
     }
-    fn v2_runtime_host(&self) -> Result<&dyn RuntimeHost, OrbitError> {
-        Err(OrbitError::Execution(
-            "v2 runtime host is not available on this host".to_string(),
-        ))
-    }
-    fn v2_activity(&self, name: &str) -> Result<ActivityV2, OrbitError> {
-        Err(OrbitError::Execution(format!(
-            "v2 activity '{name}' is not available on this host"
-        )))
-    }
-    fn v2_audit_writer(&self, run_id: &str) -> Result<Arc<V2AuditWriter>, OrbitError> {
-        Err(OrbitError::Execution(format!(
-            "v2 audit writer is not available for run '{run_id}'"
-        )))
-    }
-    /// Create a task capturing a job run failure, skipping creation if an open
-    /// task for the same `job_id` + `error_code` combination already exists.
-    /// When `agent` and `model` are provided, they are recorded on the created
-    /// task so attribution reflects the actual agent that was running.
-    fn maybe_create_failure_task(
-        &self,
-        job_id: &str,
-        run_id: &str,
-        error_code: &str,
-        error_message: &str,
-        agent: Option<&str>,
-        model: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        let _ = (job_id, run_id, error_code, error_message, agent, model);
-        Ok(())
-    }
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         let _ = agent_cli;
         None
-    }
-    fn canonical_model_name(&self, _agent_cli: &str, model: Option<&str>) -> Option<String> {
-        model
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
     }
     fn scoring_enabled(&self) -> bool {
         false
@@ -570,6 +944,24 @@ pub trait RuntimeHost: Send + Sync {
         Ok(None)
     }
 
+    /// Resolve a deny-mode activity's callable tools for one agent launch.
+    ///
+    /// `effective_tools` is every registered agent-facing tool the disallow
+    /// list does not cover. Selected tasks' `required_tools` are admitted as
+    /// in allowlist mode, and one the disallow list covers refuses dispatch
+    /// naming the tool and `activity`. A host without a tool registry cannot
+    /// compute the set, so it refuses rather than guessing.
+    fn resolve_activity_tool_denials(
+        &self,
+        _task_ids: &[String],
+        _activity: &str,
+        _disallow_list: &[String],
+    ) -> Result<ResolvedActivityTools, DispatchError> {
+        Err(unsupported_dispatch_capability(
+            "resolve_activity_tool_denials",
+        ))
+    }
+
     /// Compose and validate the exact task-scoped tools for one agent launch.
     /// Hosts without a task/tool registry preserve the activity baseline.
     fn resolve_activity_tools(
@@ -584,22 +976,29 @@ pub trait RuntimeHost: Send + Sync {
     }
 
     /// Persist a durable checkpoint after a completed top-level job step
-    /// (ORB-10002). `pipeline_snapshot` is the executor's accumulated
-    /// step-output map (step id → raw output) at the moment the step
-    /// finished; `output` is the completing step's own raw output.
+    /// (ORB-10002). `output` is the completing step's own raw output;
+    /// `compound_outputs` holds the other pipeline entries a compound step
+    /// (`parallel:`, `fan_out:`, `loop:`) exposed — nested step outputs and
+    /// nested fan-in aliases — and is empty for a target step. The host
+    /// accumulates by step, so the bytes handed over per checkpoint never
+    /// grow with the run.
     ///
     /// Hosts with run persistence (orbit-core) record this into the run's
-    /// `PipelineState` so an interrupted run can be resumed without
-    /// re-executing completed steps. The default is a no-op for hosts
-    /// without run storage (tests, smoke examples). Checkpoint failures are
-    /// non-fatal to the run: the executor logs and continues.
+    /// `PipelineState` (`step_outputs[step_index]`,
+    /// `compound_outputs[step_index]`, and `pipeline` by key) so an
+    /// interrupted run can be resumed without re-executing completed steps.
+    /// Both halves belong to one write: a step recorded as completed without
+    /// its compound outputs would resume with those entries missing. The
+    /// default is a no-op for hosts without run storage (tests, smoke
+    /// examples). Checkpoint failures are non-fatal to the run: the executor
+    /// logs and continues.
     fn checkpoint_step(
         &self,
         _run_id: &str,
         _step_index: u32,
         _step_id: &str,
         _output: &Value,
-        _pipeline_snapshot: &Value,
+        _compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
         Ok(())
     }
@@ -617,6 +1016,36 @@ pub trait RuntimeHost: Send + Sync {
         Ok(())
     }
 
+    /// [ORB-13907] Admit a job's final recovery for a failed run, once.
+    ///
+    /// A host with run storage records the admission in the run's state
+    /// before answering `Admitted`, so neither a crash during the activity
+    /// nor any resume of the run invokes it again; it skips when final
+    /// recovery is disabled (an empty `workflow.final_recovery_crews`), when
+    /// the run already spent it, or when the run is no longer running. The
+    /// default skips: a host without run storage cannot promise "once".
+    fn admit_final_recovery(
+        &self,
+        _run_id: &str,
+        _request: &FinalRecoveryAdmissionRequest,
+    ) -> Result<FinalRecoveryAdmission, OrbitError> {
+        Ok(FinalRecoveryAdmission::Skipped {
+            reason: "this runtime host does not support final recovery".to_string(),
+        })
+    }
+
+    /// [ORB-13907] Act on an admitted final recovery's decision: record it,
+    /// and apply every decision but `resume` to the task through the
+    /// deterministic applier — or, for a claimed leaf, hand it to the claim
+    /// settlement instead of writing the owner's task.
+    fn apply_final_recovery(
+        &self,
+        _run_id: &str,
+        _application: &FinalRecoveryApplication,
+    ) -> Result<FinalRecoveryApplied, OrbitError> {
+        Err(unsupported_runtime_capability("apply_final_recovery"))
+    }
+
     /// Persist an exact host-validated recovered rebase before reporting recovery
     /// success. Unlike ordinary step checkpoints, durability failure is fatal.
     fn checkpoint_rebase_recovery(
@@ -628,6 +1057,22 @@ pub trait RuntimeHost: Send + Sync {
         Err(DispatchError::JobExecution(
             "host does not support durable rebase recovery checkpoints".to_string(),
         ))
+    }
+
+    /// Whether `checkpoint` is exactly the recovery evidence this host
+    /// certified for `run_id` / `step_id`.
+    ///
+    /// The run store a checkpoint is read back from is writable by managed
+    /// leaves, so the stored bytes are progress data. Authority lives in a
+    /// host-only record this method consults. Hosts without one certify
+    /// nothing and therefore authenticate nothing.
+    fn verify_rebase_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        Ok(false)
     }
 
     fn tool_context_for_activity(

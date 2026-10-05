@@ -1,0 +1,637 @@
+//! Check the reviewer's claims against the repository and the task scope,
+//! and render the findings comment and the PR's review-fixes section.
+
+use std::collections::BTreeMap;
+
+use orbit_automation::review::{
+    combined_task_meaning_digest, task_meaning_digest, validation_evidence, validation_role_counts,
+};
+use orbit_common::OrbitError;
+use orbit_common::fs::selector::overlaps;
+use orbit_engine::review_gate::{
+    REVIEW_ATTEMPT_TRAILER, commit_reviewer_repairs, uncommitted_paths,
+};
+use orbit_types::task::{ContextWideningStep, Task, TaskArtifact};
+use orbit_types::workflow::{
+    CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
+    ReviewAttempt, ReviewCertificate, ReviewReport, ReviewVerdict, ReviewerIdentity,
+};
+
+use super::super::automation_error;
+use crate::OrbitRuntime;
+use crate::application::task::TaskUpdateParams;
+
+use super::context::GateContext;
+
+/// The reviewer's claims, checked against the repository and the task scope.
+pub(super) struct Judgement {
+    pub(super) verdict: ReviewVerdict,
+    pub(super) findings: Vec<orbit_types::workflow::ReviewFinding>,
+    pub(super) validation: Vec<orbit_types::workflow::ReviewValidation>,
+    pub(super) validation_complete: bool,
+    pub(super) escalation: Option<String>,
+    summary: String,
+    pub(super) task_meaning_digest: String,
+    pub(super) selectors_widened: Vec<String>,
+}
+
+impl Judgement {
+    /// Read the reports the reviewer persisted for this attempt on any of
+    /// the bundle's tasks and merge them. Reports from before the attempt
+    /// started are ignored; none at all, or one that is unreadable, names
+    /// another contract, or names another attempt, is an incomplete review,
+    /// never a pass. Benign shape drift is accepted ([`ReviewReport::parse`]).
+    pub(super) fn from_report(
+        runtime: &OrbitRuntime,
+        context: &GateContext,
+        attempt: &ReviewAttempt,
+    ) -> Result<Self, OrbitError> {
+        let task_meaning_digest = context.task_digests.1.clone();
+        let incomplete = |reason: &str| Self {
+            verdict: ReviewVerdict::Incomplete,
+            findings: Vec::new(),
+            validation: Vec::new(),
+            validation_complete: false,
+            escalation: Some(reason.to_string()),
+            summary: String::new(),
+            task_meaning_digest: task_meaning_digest.clone(),
+            selectors_widened: Vec::new(),
+        };
+        let mut reports = Vec::new();
+        let mut stale = false;
+        for task_id in &context.task_ids {
+            let Some(artifact) = runtime.get_task_artifact(task_id, REVIEW_REPORT_ARTIFACT)? else {
+                continue;
+            };
+            let manifest = runtime.get_task_artifact_manifest(task_id)?;
+            if manifest
+                .iter()
+                .find(|file| file.path == REVIEW_REPORT_ARTIFACT)
+                .is_some_and(|file| file.created_at < attempt.started_at)
+            {
+                stale = true;
+                continue;
+            }
+            let report = match ReviewReport::parse(&artifact.content) {
+                Ok(report) => report,
+                Err(error) => {
+                    return Ok(incomplete(&format!(
+                        "report_unreadable: the report on {task_id}: {error}"
+                    )));
+                }
+            };
+            if report.schema_version != REVIEW_CONTRACT_VERSION {
+                return Ok(incomplete(&format!(
+                    "report_contract_mismatch: the report on {task_id} has schema_version {} \
+                     instead of {REVIEW_CONTRACT_VERSION}",
+                    report.schema_version
+                )));
+            }
+            if report.attempt_id != attempt.attempt_id {
+                return Ok(incomplete(&format!(
+                    "report_attempt_mismatch: the report on {task_id} names attempt {} but {} \
+                     was admitted",
+                    report.attempt_id, attempt.attempt_id
+                )));
+            }
+            reports.push(report);
+        }
+        let Some(report) = merge_reports(reports) else {
+            return Ok(incomplete(if stale {
+                "report_stale: review-report.json predates this attempt"
+            } else {
+                "report_missing: the reviewer persisted no review-report.json"
+            }));
+        };
+        Ok(Self {
+            verdict: report.verdict,
+            findings: report.findings,
+            validation: report.validation,
+            validation_complete: false,
+            escalation: report.escalation,
+            summary: report.summary,
+            task_meaning_digest,
+            selectors_widened: Vec::new(),
+        })
+    }
+
+    /// Task criteria, scope, or contract changes during the review
+    /// invalidate it. Selectors may grow — the reviewer through the task API,
+    /// or Orbit widening for a path it changed; anything else re-establishes
+    /// review.
+    pub(super) fn check_task_meaning(
+        &mut self,
+        context: &GateContext,
+        attempt: &ReviewAttempt,
+        admitted_selectors: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), OrbitError> {
+        if self.task_meaning_digest == attempt.task_meaning_digest {
+            return Ok(());
+        }
+        if !selectors_only_grew(context, attempt, admitted_selectors)? {
+            self.downgrade(
+                "task_meaning_changed: task criteria, plan, scope, or relations changed \
+                 during the review",
+            );
+        }
+        Ok(())
+    }
+
+    /// Commit whatever the reviewer changed as its own attributed work: the
+    /// candidate's one reviewer commit, `review: <summary>`, on top of the
+    /// untouched implementation commits [ORB-13989].
+    ///
+    /// A reviewer may change any path a fix requires: a changed path no
+    /// task selector covers widens the reviewed task's `context_files`, with
+    /// review provenance in its history, and does not abandon the review.
+    pub(super) fn commit_repairs(
+        &mut self,
+        runtime: &OrbitRuntime,
+        context: &mut GateContext,
+        reviewer: &ReviewerIdentity,
+        attempt: &ReviewAttempt,
+    ) -> Result<Option<CommitIdentity>, OrbitError> {
+        let changed = uncommitted_paths(&context.workspace_path)?;
+        if changed.is_empty() {
+            return Ok(None);
+        }
+        let out_of_scope = out_of_scope_paths(&changed, &context.tasks);
+        if !out_of_scope.is_empty() {
+            self.widen_reviewer_selectors(runtime, context, &out_of_scope)?;
+        }
+        let finding_ids = self
+            .findings
+            .iter()
+            .filter(|finding| finding.disposition == FindingDisposition::Repaired)
+            .map(|finding| finding.id.clone())
+            .collect::<Vec<_>>();
+        let message = format!(
+            "review: {} [{}]\n\nFindings: {}\nPaths: {}\n{REVIEW_ATTEMPT_TRAILER}: {}\nOrbit-Review-Crew: {}",
+            if self.summary.trim().is_empty() {
+                "reviewer repairs".to_string()
+            } else {
+                self.summary
+                    .trim()
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            },
+            context.task_ids.join(", "),
+            if finding_ids.is_empty() {
+                "none named".to_string()
+            } else {
+                finding_ids.join(", ")
+            },
+            changed.join(", "),
+            attempt.attempt_id,
+            reviewer.crew,
+        );
+        // The provider names the agent family the repair commit is attributed
+        // to; the model alone may carry no family hint.
+        let commit = commit_reviewer_repairs(
+            &context.workspace_path,
+            &repair_author_label(reviewer),
+            &message,
+        )?;
+        Ok(commit)
+    }
+
+    /// Adopt the repair commit an interrupted settlement of this attempt
+    /// already made, widening its paths exactly as [`Self::commit_repairs`]
+    /// did before committing. The interrupted run widened selectors before
+    /// committing, so a repair path outside the admitted selectors is
+    /// reported as widened even though it is in scope by now.
+    pub(super) fn adopt_repairs(
+        &mut self,
+        runtime: &OrbitRuntime,
+        context: &mut GateContext,
+        committed: &[String],
+        admitted_selectors: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), OrbitError> {
+        let out_of_scope = out_of_scope_paths(committed, &context.tasks);
+        if !out_of_scope.is_empty() {
+            self.widen_reviewer_selectors(runtime, context, &out_of_scope)?;
+        }
+        let admitted_tasks = context
+            .tasks
+            .iter()
+            .map(|task| {
+                let mut admitted = task.clone();
+                if let Some(selectors) = admitted_selectors.get(task.id.as_str()) {
+                    admitted.context_files = selectors.clone();
+                }
+                admitted
+            })
+            .collect::<Vec<_>>();
+        for path in out_of_scope_paths(committed, &admitted_tasks) {
+            let selector = format!("file:{}", normalize_git_path(&path));
+            if !self.selectors_widened.contains(&selector) {
+                self.selectors_widened.push(selector);
+            }
+        }
+        Ok(())
+    }
+
+    /// Append `file:<path>` selectors for reviewer-changed paths no task
+    /// covers to the reviewed (first) task — the task whose agent changed
+    /// them — with review provenance in its history, then bind the
+    /// certificate to the post-widening task-meaning digest.
+    fn widen_reviewer_selectors(
+        &mut self,
+        runtime: &OrbitRuntime,
+        context: &mut GateContext,
+        paths: &[String],
+    ) -> Result<(), OrbitError> {
+        let Some(task_id) = context.tasks.first().map(|task| task.id.clone()) else {
+            return Ok(());
+        };
+        let paths = paths
+            .iter()
+            .map(|path| normalize_git_path(path))
+            .collect::<Vec<_>>();
+        let widened = runtime.widen_context_files_for_paths(
+            &task_id,
+            &context.run_id,
+            ContextWideningStep::Review,
+            "review_gate_settle",
+            &paths,
+        )?;
+        if widened.is_empty() {
+            return Ok(());
+        }
+        context.tasks[0] = runtime.get_task(&task_id)?;
+        context.refresh_task_digests()?;
+        self.task_meaning_digest = context.task_digests.1.clone();
+        self.selectors_widened = widened;
+        Ok(())
+    }
+
+    /// Cross-check the claimed verdict against what actually happened.
+    pub(super) fn reconcile_verdict(&mut self, repair: Option<&CommitIdentity>) {
+        let open_findings = open_findings(&self.findings).count();
+        match self.verdict {
+            ReviewVerdict::Accept if repair.is_some() => self.downgrade(
+                "verdict_inconsistent: the reviewer reported no fixes but changed the worktree",
+            ),
+            ReviewVerdict::AcceptWithFixes if repair.is_none() => self
+                .downgrade("verdict_inconsistent: the reviewer reported fixes but changed nothing"),
+            ReviewVerdict::Accept | ReviewVerdict::AcceptWithFixes if open_findings > 0 => {
+                self.downgrade(&format!(
+                    "verdict_inconsistent: {open_findings} finding(s) remain open under an accept"
+                ));
+            }
+            ReviewVerdict::Reject if self.escalation.is_none() => {
+                self.escalation = Some("reject".to_string());
+            }
+            _ => {}
+        }
+        // A pass rests on what the records establish, not on their count:
+        // a required check must have passed, while a declared negative
+        // control, an excluded action, and a superseded attempt carry their
+        // own consistency rules. Delivery coverage reads the same function.
+        if self.verdict.passed() {
+            match validation_evidence(&self.validation) {
+                Ok(()) => self.validation_complete = true,
+                Err(defect) => self.downgrade(&defect.reason()),
+            }
+        }
+    }
+
+    fn downgrade(&mut self, reason: &str) {
+        self.verdict = ReviewVerdict::Incomplete;
+        self.validation_complete = false;
+        self.escalate(reason);
+    }
+
+    fn escalate(&mut self, reason: &str) {
+        self.escalation = Some(match self.escalation.take() {
+            Some(existing) if !existing.is_empty() => format!("{existing}; {reason}"),
+            _ => reason.to_string(),
+        });
+    }
+}
+
+fn open_findings(
+    findings: &[orbit_types::workflow::ReviewFinding],
+) -> impl Iterator<Item = &orbit_types::workflow::ReviewFinding> {
+    findings
+        .iter()
+        .filter(|finding| finding.disposition == FindingDisposition::Open)
+}
+
+/// One report for the bundle: the most severe verdict, every distinct
+/// finding and validation record, and every distinct summary and escalation.
+fn merge_reports(reports: Vec<ReviewReport>) -> Option<ReviewReport> {
+    let mut reports = reports.into_iter();
+    let mut merged = reports.next()?;
+    for report in reports {
+        if verdict_severity(report.verdict) > verdict_severity(merged.verdict) {
+            merged.verdict = report.verdict;
+        }
+        for finding in report.findings {
+            if !merged.findings.contains(&finding) {
+                merged.findings.push(finding);
+            }
+        }
+        for record in report.validation {
+            if !merged.validation.contains(&record) {
+                merged.validation.push(record);
+            }
+        }
+        append_distinct(&mut merged.summary, &report.summary, "\n");
+        if let Some(escalation) = report.escalation {
+            let current = merged.escalation.get_or_insert_with(String::new);
+            append_distinct(current, &escalation, "; ");
+        }
+    }
+    Some(merged)
+}
+
+fn verdict_severity(verdict: ReviewVerdict) -> u8 {
+    match verdict {
+        ReviewVerdict::Accept => 0,
+        ReviewVerdict::AcceptWithFixes => 1,
+        ReviewVerdict::Reject => 2,
+        ReviewVerdict::Incomplete => 3,
+    }
+}
+
+fn append_distinct(current: &mut String, addition: &str, separator: &str) {
+    let addition = addition.trim();
+    if addition.is_empty() || current.split(separator).any(|part| part.trim() == addition) {
+        return;
+    }
+    if !current.trim().is_empty() {
+        current.push_str(separator);
+    }
+    current.push_str(addition);
+}
+
+/// Whether every task still means what was admitted except for selectors
+/// the reviewer added through the task API: restoring the admitted
+/// selectors must reproduce the admitted digest, and the current selectors
+/// must contain every admitted one.
+fn selectors_only_grew(
+    context: &GateContext,
+    attempt: &ReviewAttempt,
+    admitted_selectors: &BTreeMap<String, Vec<String>>,
+) -> Result<bool, OrbitError> {
+    let mut digests = Vec::with_capacity(context.tasks.len());
+    for task in &context.tasks {
+        let Some(admitted) = admitted_selectors.get(task.id.as_str()) else {
+            return Ok(false);
+        };
+        if admitted
+            .iter()
+            .any(|selector| !task.context_files.contains(selector))
+        {
+            return Ok(false);
+        }
+        let mut restored = task.clone();
+        restored.context_files = admitted.clone();
+        digests.push((
+            task.id.to_string(),
+            task_meaning_digest(&restored).map_err(automation_error)?,
+        ));
+    }
+    let restored_digest = combined_task_meaning_digest(&digests).map_err(automation_error)?;
+    Ok(restored_digest == attempt.task_meaning_digest)
+}
+
+/// A repair path is in scope when a task selector's filesystem anchor names
+/// it or a directory/legacy selector contains it. Matching uses the shared
+/// selector grammar, so `symbol:<path>#<symbol>:<kind>` authorizes the
+/// backing file even when `<symbol>` contains `::`.
+fn path_in_scope(path: &str, tasks: &[Task]) -> bool {
+    let path = path.trim_start_matches("./");
+    let changed = format!("file:{path}");
+    tasks.iter().any(|task| {
+        task.context_files
+            .iter()
+            .any(|selector| overlaps(selector, &changed))
+    })
+}
+
+/// Repair paths no task's selectors cover.
+fn out_of_scope_paths(paths: &[String], tasks: &[Task]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| !path_in_scope(path, tasks))
+        .cloned()
+        .collect()
+}
+
+fn normalize_git_path(path: &str) -> String {
+    path.trim().trim_start_matches("./").to_string()
+}
+
+/// The author label a reviewer's repair commit is attributed to.
+pub(super) fn repair_author_label(reviewer: &ReviewerIdentity) -> String {
+    format!("{} / {}", reviewer.provider, reviewer.model)
+}
+
+/// The task comment a settlement posts [ORB-13989]: the verdict, every
+/// finding with what the reviewer changed for it, then the evidence.
+pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
+    let assurance = certificate
+        .assurance
+        .map(|assurance| assurance.as_str().to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let reviewer_commit = if certificate.repair_commits.is_empty() {
+        "none".to_string()
+    } else {
+        certificate
+            .repair_commits
+            .iter()
+            .map(|commit| {
+                format!(
+                    "`{}` `{}` by {}",
+                    commit.commit,
+                    one_line(&commit.subject),
+                    commit.author
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "before-PR review settled attempt `{}`: verdict **{}** (assurance: {}).\n\n\
+         {}\n\n\
+         - Reviewer: crew `{}` ({} / {}){}\n\
+         - Implementation: `{}` on base `{}` ({} commit(s), unchanged by review)\n\
+         - Reviewer commit: {}\n\
+         - Final candidate: `{}`\n\
+         - Selectors widened for reviewer-changed paths: {}\n\
+         - Validation on final candidate: {} record(s) [{}], complete: {}\n\
+         - Consumed: {} reviewer start(s), {}s of {} min\n\
+         - Escalation: {}\n\n\
+         {}",
+        certificate.attempt_id,
+        certificate.verdict.as_str(),
+        assurance,
+        finding_lines(&certificate.findings),
+        certificate.reviewer.crew,
+        certificate.reviewer.provider,
+        certificate.reviewer.model,
+        if certificate.reviewer.same_model_as_implementer {
+            "; same model as the implementer, reported as such"
+        } else {
+            ""
+        },
+        certificate.reviewed_candidate.commit,
+        certificate.base.commit,
+        certificate.implementation_commits.len(),
+        reviewer_commit,
+        certificate.final_candidate.commit,
+        if certificate.selectors_widened.is_empty() {
+            "none".to_string()
+        } else {
+            certificate.selectors_widened.join(", ")
+        },
+        certificate.validation.len(),
+        validation_roles(&certificate.validation),
+        certificate.validation_complete,
+        certificate.consumed.reviewer_starts,
+        certificate.consumed.seconds,
+        certificate.budget.minutes,
+        certificate.escalation.as_deref().unwrap_or("none"),
+        verdict_consequence(certificate.verdict),
+    )
+}
+
+/// What the verdict means for delivery, in one paragraph.
+fn verdict_consequence(verdict: ReviewVerdict) -> &'static str {
+    match verdict {
+        ReviewVerdict::Accept => {
+            "Accepted as implemented; the PR carries the implementation commit(s) only. This \
+             verdict is review evidence, not task approval or merge permission."
+        }
+        ReviewVerdict::AcceptWithFixes => {
+            "Accepted with the reviewer's fixes as a separate commit. Owner validation and the \
+             ownership check run again on that head before the PR opens; a failure there blocks \
+             the task as `reject`. The fixes were validated but not independently reviewed, and \
+             this verdict is not task approval or merge permission."
+        }
+        ReviewVerdict::Reject | ReviewVerdict::Incomplete => {
+            "Delivery stops: no PR is opened, the task is blocked, and the candidate branch keeps \
+             every commit for final recovery or an operator decision. There is no second review \
+             round."
+        }
+    }
+}
+
+/// Every finding of the attempt with its disposition and, for a fix, what
+/// the reviewer changed and where.
+fn finding_lines(findings: &[orbit_types::workflow::ReviewFinding]) -> String {
+    if findings.is_empty() {
+        return "Findings: none.".to_string();
+    }
+    let mut lines = String::from("Findings:");
+    for finding in findings {
+        let disposition = match &finding.disposition {
+            FindingDisposition::Open => "open".to_string(),
+            FindingDisposition::Repaired => "fixed".to_string(),
+            FindingDisposition::Disposed { reason } => format!("disposed: {}", one_line(reason)),
+        };
+        lines.push_str(&format!(
+            "\n- `{}` [{}, {}] {}",
+            finding.id,
+            finding.severity,
+            disposition,
+            one_line(&finding.summary),
+        ));
+        if let Some(change) = finding_change(finding) {
+            lines.push_str(&format!("\n  - Changed: {change}"));
+        }
+    }
+    lines
+}
+
+/// What a fixed finding changed, with its paths; `None` for any other
+/// disposition.
+fn finding_change(finding: &orbit_types::workflow::ReviewFinding) -> Option<String> {
+    if finding.disposition != FindingDisposition::Repaired {
+        return None;
+    }
+    let change = finding
+        .change
+        .as_deref()
+        .map(one_line)
+        .filter(|change| !change.is_empty())
+        .unwrap_or_else(|| "not described by the reviewer".to_string());
+    Some(if finding.paths.is_empty() {
+        change
+    } else {
+        format!("{change} ({})", finding.paths.join(", "))
+    })
+}
+
+/// The PR body's "Review fixes" section: present only when the reviewer
+/// committed fixes, listing each fixed finding and what changed.
+pub(super) fn review_fixes_section(certificate: &ReviewCertificate) -> Option<String> {
+    let commit = certificate.repair_commits.first()?;
+    let mut section = format!(
+        "## Review fixes\n\nThe before-PR reviewer (crew `{}`) fixed its findings in `{}` \
+         (`{}`), a separate commit on top of the implementation. Owner validation reran on \
+         that head.\n",
+        certificate.reviewer.crew,
+        commit.commit,
+        one_line(&commit.subject),
+    );
+    for finding in &certificate.findings {
+        if let Some(change) = finding_change(finding) {
+            section.push_str(&format!(
+                "\n- `{}` [{}] {} — {change}",
+                finding.id,
+                finding.severity,
+                one_line(&finding.summary),
+            ));
+        }
+    }
+    Some(section)
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The classification breakdown of a validation set, so a reader sees which
+/// records were required checks and which were controls or exclusions
+/// without opening the certificate.
+fn validation_roles(records: &[orbit_types::workflow::ReviewValidation]) -> String {
+    let counts = validation_role_counts(records);
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    counts
+        .into_iter()
+        .map(|(role, count)| format!("{count} {}", role.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Write a gate artifact under the executor run's authority.
+pub(super) fn write_artifact(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    run_id: &str,
+    path: &str,
+    content: &[u8],
+) -> Result<(), OrbitError> {
+    runtime.update_task_as_system(
+        task_id,
+        TaskUpdateParams {
+            upsert_artifacts: vec![TaskArtifact {
+                path: path.to_string(),
+                content: content.to_vec(),
+                media_type: "application/json".to_string(),
+                // The record writer derives provenance from the write actor.
+                created_by: None,
+            }],
+            ..TaskUpdateParams::default()
+        },
+        Some(run_id.to_string()),
+    )?;
+    Ok(())
+}

@@ -4,8 +4,12 @@ use orbit_core::OrbitRuntime;
 use crate::command::{CommandOut, Execute};
 
 use super::add::AutoTaskAddArgs;
+use super::delete::AutoTaskDeleteArgs;
 use super::list::AutoTaskListArgs;
 use super::mint::AutoTaskMintArgs;
+use super::recover::AutoTaskRecoverArgs;
+use super::reset::AutoTaskResetArgs;
+use super::restore::AutoTaskRestoreArgs;
 use super::show::AutoTaskShowArgs;
 use super::toggle::AutoTaskToggleArgs;
 use super::update::AutoTaskUpdateArgs;
@@ -35,9 +39,20 @@ pub enum AutoTaskSubcommand {
     Update(AutoTaskUpdateArgs),
     /// Enable or disable a definition (the kill-switch; not a delete)
     Toggle(AutoTaskToggleArgs),
+    /// Delete a definition with its scheduler cursor and delivery consumer
+    /// state; a deleted shipped default stays out of later reseeds
+    Delete(AutoTaskDeleteArgs),
+    /// Reinstate a deleted shipped default with its shipped content
+    Restore(AutoTaskRestoreArgs),
     /// Mint a task from a definition now (ignores schedule, dedupe, and
     /// `enabled`; leaves the scheduler cursor untouched)
     Mint(AutoTaskMintArgs),
+    /// Preview or apply the audited recovery for a delivery consumer stalled
+    /// by a settings change (retains all coverage debt)
+    Recover(AutoTaskRecoverArgs),
+    /// Preview or apply the audited reset of a delivery consumer: forget its
+    /// coverage debt and re-baseline at the branch head
+    Reset(AutoTaskResetArgs),
 }
 
 impl Execute for AutoTaskSubcommand {
@@ -48,7 +63,11 @@ impl Execute for AutoTaskSubcommand {
             AutoTaskSubcommand::Show(args) => args.execute(runtime),
             AutoTaskSubcommand::Update(args) => args.execute(runtime),
             AutoTaskSubcommand::Toggle(args) => args.execute(runtime),
+            AutoTaskSubcommand::Delete(args) => args.execute(runtime),
+            AutoTaskSubcommand::Restore(args) => args.execute(runtime),
             AutoTaskSubcommand::Mint(args) => args.execute(runtime),
+            AutoTaskSubcommand::Recover(args) => args.execute(runtime),
+            AutoTaskSubcommand::Reset(args) => args.execute(runtime),
         }
     }
 }

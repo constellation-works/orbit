@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use crate::state::Ws;
-use axum::extract::Query;
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::job::JobRunListParams;
@@ -16,22 +16,35 @@ use orbit_core::{
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::{Value, json};
 
-use super::denials::{
-    collect_denial_rows, denials_by_reason_summary, denials_by_tool_summary, scan_v2_loop_denials,
-};
+use super::denials::{collect_denial_rows, denials_by_reason_summary, denials_by_tool_summary};
 use super::incidents::{ROLLUP_SCAN_LIMIT, failure_category_summaries};
 use super::{
     AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, HISTORY_DEFAULT_LIMIT,
     HISTORY_MAX_LIMIT, bad_request, blocking, bounded_limit, map_runtime_error, server_error,
     truncate_to_hour,
 };
-use crate::parse::parse_since;
+use crate::parse::{parse_duration_seconds, parse_since};
 use crate::projections::audit_event_to_json;
+use crate::runtime_memo::AUDIT_SUMMARY_TTL;
 
 /// Default header-tile alert threshold for the denials counter. Surfaced via
 /// `?denial_threshold=` and echoed back in the response so the dashboard can
 /// switch the tile to alert state without a second round-trip.
 const DEFAULT_DENIAL_THRESHOLD: i64 = 10;
+
+/// Largest `?offset=` accepted by `GET /audit`. SQLite walks and discards
+/// every skipped row, so an unbounded offset is an unbounded scan. Rejecting
+/// (rather than clamping) keeps a too-deep page from silently returning rows
+/// from the wrong position.
+const AUDIT_MAX_OFFSET: usize = 100_000;
+
+/// Longest `GET /audit/summary` window. Dashboard selections are `1h`, `24h`,
+/// `7d`, and `30d` (`all` falls back to 24h). A wider `since` is rejected.
+const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
+
+/// Inclusive UTC hours in [`MAX_SUMMARY_WINDOW_DAYS`]: 720 elapsed hours plus
+/// the truncated start hour. [`build_sparkline`] never emits more than this.
+const MAX_SUMMARY_SPARKLINE_BUCKETS: usize = MAX_SUMMARY_WINDOW_DAYS * 24 + 1;
 
 pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> Response {
     let since = match q.since.as_deref() {
@@ -52,6 +65,11 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
 
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
     let offset = q.offset.unwrap_or(0);
+    if offset > AUDIT_MAX_OFFSET {
+        return bad_request(format!(
+            "offset must be <= {AUDIT_MAX_OFFSET}; got {offset}"
+        ));
+    }
     let tool = q.tool.filter(|s| !s.is_empty());
     let role = q.role.filter(|s| !s.is_empty());
     let transport = match q
@@ -198,22 +216,30 @@ fn scan_audit_page(
     offset: usize,
     limit: usize,
 ) -> Result<Vec<orbit_core::AuditEvent>, OrbitError> {
-    let wanted = offset.saturating_add(limit);
-    let mut matched = Vec::new();
+    let mut to_skip = offset;
+    let mut page = Vec::new();
     let mut scanned = 0usize;
     filter.limit = HISTORY_MAX_LIMIT;
     filter.offset = 0;
-    while matched.len() < wanted && scanned < AUDIT_POST_FILTER_SCAN_CAP {
+    while page.len() < limit && scanned < AUDIT_POST_FILTER_SCAN_CAP {
         let batch = OrbitRuntime::list_audit_events_filtered(runtime, filter)?;
         let fetched = batch.len();
         scanned += fetched;
-        matched.extend(batch.into_iter().filter(|e| post_filter.matches(e)));
+        // Keep only the requested page; matches before `offset` are counted,
+        // not buffered.
+        for event in batch.into_iter().filter(|e| post_filter.matches(e)) {
+            if to_skip > 0 {
+                to_skip -= 1;
+            } else if page.len() < limit {
+                page.push(event);
+            }
+        }
         if fetched < HISTORY_MAX_LIMIT {
             break;
         }
         filter.offset += fetched;
     }
-    Ok(matched.into_iter().skip(offset).take(limit).collect())
+    Ok(page)
 }
 
 /// Best-effort match of a stringified `arguments_json` payload against a
@@ -242,34 +268,106 @@ fn arguments_json_matches_profile(raw: Option<&str>, expected: &str) -> bool {
     false
 }
 
-pub(super) async fn audit_summary(Ws(runtime): Ws, Query(q): Query<AuditSummaryQuery>) -> Response {
+pub(super) async fn audit_summary(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(q): Query<AuditSummaryQuery>,
+) -> Response {
     let raw_since = q.since.as_deref().unwrap_or(DEFAULT_SUMMARY_WINDOW);
-    let since = match parse_since(raw_since) {
+    // One clock for the parsed cutoff and the sparkline, so a 30-day window
+    // is exactly [`MAX_SUMMARY_SPARKLINE_BUCKETS`] buckets.
+    let now = Utc::now();
+    let since = match summary_since(raw_since, now) {
         Ok(ts) => ts,
         Err(e) => return map_runtime_error(e),
     };
+    let bucket_count = sparkline_bucket_count(since, now);
+    if bucket_count > MAX_SUMMARY_SPARKLINE_BUCKETS {
+        return bad_request(format!(
+            "audit summary since '{raw_since}' covers {bucket_count} hourly buckets; the maximum is {MAX_SUMMARY_SPARKLINE_BUCKETS} ({MAX_SUMMARY_WINDOW_DAYS} days)"
+        ));
+    }
     let denial_threshold = q.denial_threshold.unwrap_or(DEFAULT_DENIAL_THRESHOLD);
-    let raw_since_owned = raw_since.to_string();
+    let window_json = raw_since.to_string();
+    let runtime_for_compute = runtime.clone();
 
-    let runtime_clone = runtime.clone();
-    let bundle = match tokio::task::spawn_blocking(move || {
-        compute_audit_summary_bundle(&runtime_clone, since)
-    })
-    .await
+    let cached = match state
+        .audit_summary_memo()
+        .get_or_compute(
+            &runtime,
+            raw_since.to_string(),
+            AUDIT_SUMMARY_TTL,
+            move || {
+                let bundle = compute_audit_summary_bundle(&runtime_for_compute, since)?;
+                Ok(summary_payload(&bundle, since, now, &window_json))
+            },
+        )
+        .await
     {
-        Ok(Ok(b)) => b,
-        Ok(Err(e)) => return server_error(e),
-        Err(join_err) => {
-            return server_error(OrbitError::Execution(format!(
-                "audit summary aggregation panicked: {join_err}"
-            )));
-        }
+        Ok(body) => body,
+        Err(e) => return server_error(e),
     };
 
-    let sparkline = build_sparkline(since, &bundle.buckets);
-    let denials = bundle.sql_denied + bundle.v2_denials;
+    let mut body = (*cached).clone();
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("denial_threshold".to_string(), json!(denial_threshold));
+    }
+    Json(body).into_response()
+}
 
-    Json(json!({
+struct AuditSummaryBundle {
+    total: i64,
+    sql_denied: i64,
+    v2_denials: i64,
+    failed_events: u64,
+    failure_incidents: u64,
+    failure_incidents_by_class: BTreeMap<String, u64>,
+    failed_events_by_class: BTreeMap<String, u64>,
+    affected_runs_by_class: BTreeMap<String, u64>,
+    failure_categories: Value,
+    affected_run_count: u64,
+    job_run_lifecycle_failures: u64,
+    job_run_lifecycle_incidents: u64,
+    lifecycle_diagnostic_events: u64,
+    lifecycle_diagnostic_incidents: u64,
+    lifecycle_diagnostic_affected_run_count: u64,
+    failed_runs: i64,
+    active_long_runs: i64,
+    buckets: Vec<(String, i64)>,
+    failures_by_tool: Vec<Value>,
+    duration_by_tool: Vec<Value>,
+    failure_rate_by_tool: Vec<Value>,
+    /// Raw `status=failure` over callable tool calls (`run` + `run-mcp`).
+    /// Distinct from `failure_rate_by_tool`, which is unexpected-only with a
+    /// successful + unexpected-failed denominator and a sample-size floor.
+    tool_call_failure_rate: Value,
+    tool_call_failures_by_tool: Vec<Value>,
+    role_split: Vec<Value>,
+    /// Canonical per-actor split [ORB-10888]. Unlike `role_split`, one agent
+    /// appears once regardless of the granularity its label was recorded at,
+    /// and `kind` says whether a row is a real agent at all.
+    actor_split: Vec<Value>,
+    /// Tool calls split by how each row's identity was established
+    /// [ORB-10890]. Every row carries its own `attribution`, so a consumer
+    /// cannot render a self-reported count as an authenticated one; the
+    /// buckets are disjoint, so summing them is the combined denominator.
+    attribution_split: Vec<Value>,
+    mcp_vs_cli_split: Value,
+    denials_by_tool: Value,
+    denials_by_reason: Value,
+}
+
+/// Stable JSON fields for a computed bundle. `denial_threshold` is request
+/// echo, not part of the scan, so the handler stamps it after the memo hit.
+fn summary_payload(
+    bundle: &AuditSummaryBundle,
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
+    window: &str,
+) -> Value {
+    let sparkline = build_sparkline(since, now, &bundle.buckets);
+    let denials = bundle.sql_denied + bundle.v2_denials;
+    json!({
         "events": bundle.total,
         "denials": denials,
         "denials_sql": bundle.sql_denied,
@@ -295,57 +393,20 @@ pub(super) async fn audit_summary(Ws(runtime): Ws, Query(q): Query<AuditSummaryQ
         "failed_runs": bundle.failed_runs,
         "active_long_runs": bundle.active_long_runs,
         "sparkline": sparkline,
-        "denial_threshold": denial_threshold,
         "since": since.to_rfc3339(),
-        "window": raw_since_owned,
+        "window": window,
         "failures_by_tool": bundle.failures_by_tool,
         "duration_by_tool": bundle.duration_by_tool,
         "failure_rate_by_tool": bundle.failure_rate_by_tool,
+        "tool_call_failure_rate": bundle.tool_call_failure_rate,
+        "tool_call_failures_by_tool": bundle.tool_call_failures_by_tool,
         "role_split": bundle.role_split,
         "actor_split": bundle.actor_split,
         "attribution_split": bundle.attribution_split,
         "mcp_vs_cli_split": bundle.mcp_vs_cli_split,
         "denials_by_tool": bundle.denials_by_tool,
         "denials_by_reason": bundle.denials_by_reason,
-    }))
-    .into_response()
-}
-
-struct AuditSummaryBundle {
-    total: i64,
-    sql_denied: i64,
-    v2_denials: i64,
-    failed_events: u64,
-    failure_incidents: u64,
-    failure_incidents_by_class: BTreeMap<String, u64>,
-    failed_events_by_class: BTreeMap<String, u64>,
-    affected_runs_by_class: BTreeMap<String, u64>,
-    failure_categories: Value,
-    affected_run_count: u64,
-    job_run_lifecycle_failures: u64,
-    job_run_lifecycle_incidents: u64,
-    lifecycle_diagnostic_events: u64,
-    lifecycle_diagnostic_incidents: u64,
-    lifecycle_diagnostic_affected_run_count: u64,
-    failed_runs: i64,
-    active_long_runs: i64,
-    buckets: Vec<(String, i64)>,
-    failures_by_tool: Vec<Value>,
-    duration_by_tool: Vec<Value>,
-    failure_rate_by_tool: Vec<Value>,
-    role_split: Vec<Value>,
-    /// Canonical per-actor split [ORB-10888]. Unlike `role_split`, one agent
-    /// appears once regardless of the granularity its label was recorded at,
-    /// and `kind` says whether a row is a real agent at all.
-    actor_split: Vec<Value>,
-    /// Tool calls split by how each row's identity was established
-    /// [ORB-10890]. Every row carries its own `attribution`, so a consumer
-    /// cannot render a self-reported count as an authenticated one; the
-    /// buckets are disjoint, so summing them is the combined denominator.
-    attribution_split: Vec<Value>,
-    mcp_vs_cli_split: Value,
-    denials_by_tool: Value,
-    denials_by_reason: Value,
+    })
 }
 
 /// Heavy synchronous portion of `audit_summary`. Bundled into a single
@@ -357,9 +418,9 @@ fn compute_audit_summary_bundle(
 ) -> Result<AuditSummaryBundle, OrbitError> {
     let stats = runtime.audit_event_stats(Some(since), None)?;
     let total = stats.total;
-    let sql_denied = stats.denied_count;
-
-    let v2_denials = scan_v2_loop_denials(runtime, Some(since), None, None)?.len() as i64;
+    let policy = runtime.audit_policy_denial_stats(Some(&since))?;
+    let sql_denied = policy.sql_denied;
+    let v2_denials = policy.v2_denied;
 
     // ORB-10871: the same window, grouped. Reported next to `total` so the
     // header tiles can state both counts with their denominators.
@@ -456,6 +517,9 @@ fn compute_audit_summary_bundle(
     });
     rate_vec.truncate(8);
 
+    let (tool_call_failure_rate, tool_call_failures_by_tool) =
+        callable_tool_call_failure_stats(&tool_aggs);
+
     let role_vec: Vec<_> = role_aggs
         .iter()
         .map(|r| {
@@ -537,6 +601,8 @@ fn compute_audit_summary_bundle(
         failures_by_tool: failures_vec,
         duration_by_tool: duration_vec,
         failure_rate_by_tool: rate_vec,
+        tool_call_failure_rate,
+        tool_call_failures_by_tool,
         role_split: role_vec,
         actor_split: actor_vec,
         attribution_split: attribution_vec,
@@ -572,21 +638,62 @@ fn raw_failure_counts_by_tool(
     counts
 }
 
+/// `parse_since`, with relative durations measured from `now`.
+///
+/// Absolute timestamps still go through `parse_since`, so their error text
+/// is unchanged. Sharing `now` with the sparkline keeps a `30d` window on
+/// one bucket count instead of drifting when the two clocks cross an hour.
+fn summary_since(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, OrbitError> {
+    match parse_duration_seconds(raw) {
+        Ok(seconds) => {
+            let too_large = || {
+                OrbitError::InvalidInput(format!(
+                    "duration '{raw}' is too large to convert into a timestamp"
+                ))
+            };
+            let seconds = i64::try_from(seconds).map_err(|_| too_large())?;
+            let duration = Duration::try_seconds(seconds).ok_or_else(too_large)?;
+            now.checked_sub_signed(duration).ok_or_else(too_large)
+        }
+        Err(_) => parse_since(raw),
+    }
+}
+
+/// Inclusive UTC hours from the truncated `since` through `now`.
+///
+/// This is arithmetic only. A year-0001 cutoff becomes a large integer and
+/// fails the maximum-bucket check; it does not allocate a row per hour. A
+/// span that does not fit in `usize` saturates so it cannot wrap into a
+/// small accepted window.
+fn sparkline_bucket_count(since: DateTime<Utc>, now: DateTime<Utc>) -> usize {
+    let start = truncate_to_hour(since.min(now));
+    let end = truncate_to_hour(now);
+    let hours = end.signed_duration_since(start).num_hours();
+    usize::try_from(hours.saturating_add(1)).unwrap_or(usize::MAX)
+}
+
 /// Builds a contiguous hourly sparkline covering `[truncate_to_hour(since), now]`,
 /// zero-filling hours not present in `buckets`. Always returns at least 24
 /// buckets so the UI can render a stable baseline width even on a fresh
 /// workspace.
-fn build_sparkline(since: DateTime<Utc>, buckets: &[(String, i64)]) -> Vec<Value> {
+///
+/// The loop runs at most [`MAX_SUMMARY_SPARKLINE_BUCKETS`] times.
+/// `audit_summary` rejects a wider window with 400 before calling this.
+fn build_sparkline(
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
+    buckets: &[(String, i64)],
+) -> Vec<Value> {
     let mut by_bucket: BTreeMap<String, i64> = BTreeMap::new();
     for (ts, count) in buckets {
         by_bucket.insert(ts.clone(), *count);
     }
-    let now = Utc::now();
     let start = truncate_to_hour(since.min(now));
     let end = truncate_to_hour(now);
-    let mut out = Vec::new();
+    let hours = sparkline_bucket_count(since, now).min(MAX_SUMMARY_SPARKLINE_BUCKETS);
+    let mut out = Vec::with_capacity(hours.max(24));
     let mut cursor = start;
-    while cursor <= end {
+    for _ in 0..hours {
         let key = cursor.format("%Y-%m-%dT%H:00:00Z").to_string();
         let count = by_bucket.get(&key).copied().unwrap_or(0);
         out.push(json!({ "ts": key, "count": count }));
@@ -688,4 +795,75 @@ fn count_active_long_runs(
 fn is_named_tool(name: &str) -> bool {
     let trimmed = name.trim();
     !trimmed.is_empty() && trimmed != "unknown"
+}
+
+/// Raw callable-tool failure rate for the audit-summary pane.
+///
+/// Counts `command = tool`, `subcommand IN ('run', 'run-mcp')` rows on named, non-diagnostic
+/// surfaces. The numerator is `status = failure` (expected negatives included);
+/// the denominator is success + failure, with denied rows reported separately.
+/// Unexpected counts use the same classifier as the incident card. Every tool
+/// with at least one failure or denial is listed — unlike unexpected
+/// `failure_rate_by_tool`, this is not
+/// sample-size gated and is not truncated.
+fn callable_tool_call_failure_stats(tool_aggs: &[AuditToolAggregate]) -> (Value, Vec<Value>) {
+    let mut failed: i64 = 0;
+    let mut total: i64 = 0;
+    let mut unexpected: i64 = 0;
+    let mut denied: i64 = 0;
+    let mut by_tool = Vec::new();
+    for tool in tool_aggs {
+        if !is_named_tool(&tool.tool_name) || is_failure_only_diagnostic_surface(&tool.tool_name) {
+            continue;
+        }
+        let tool_total = tool.mcp_total + tool.cli_total - tool.callable_denials;
+        let tool_failed = tool.mcp_failures + tool.cli_failures;
+        failed += tool_failed;
+        total += tool_total;
+        unexpected += tool.callable_unexpected_failures;
+        denied += tool.callable_denials;
+        if tool_failed > 0 || tool.callable_denials > 0 {
+            let rate = if tool_total > 0 {
+                tool_failed as f64 / tool_total as f64
+            } else {
+                0.0
+            };
+            by_tool.push(json!({
+                "tool": tool.tool_name,
+                "failed": tool_failed,
+                "total": tool_total,
+                "rate": rate,
+                "unexpected": tool.callable_unexpected_failures,
+                "denied": tool.callable_denials,
+            }));
+        }
+    }
+    by_tool.sort_by(|a, b| {
+        b["failed"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["failed"].as_i64().unwrap_or(0))
+            .then_with(|| {
+                a["tool"]
+                    .as_str()
+                    .unwrap_or("")
+                    .cmp(b["tool"].as_str().unwrap_or(""))
+            })
+    });
+    let rate = if total > 0 {
+        failed as f64 / total as f64
+    } else {
+        0.0
+    };
+    (
+        json!({
+            "failed": failed,
+            "total": total,
+            "rate": rate,
+            "unexpected": unexpected,
+            "denied": denied,
+            "denominator": "successful + failed callable tool calls (run + run-mcp); denied excluded",
+        }),
+        by_tool,
+    )
 }

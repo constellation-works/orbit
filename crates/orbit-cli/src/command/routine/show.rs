@@ -4,7 +4,8 @@ use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_core::OrbitError;
-use orbit_core::application::routines::recent_fires;
+use orbit_core::application::routines::{RetiredRoutine, RoutineStatusReport, recent_fires};
+use orbit_types::workflow::automation::members::BatchMember;
 use serde_json::json;
 
 const RECENT_FIRE_LIMIT: usize = 10;
@@ -26,6 +27,14 @@ impl RoutineShowArgs {
             .iter()
             .find(|status| status.routine.definition.name == self.name)
         else {
+            // `routine list` hides a routine whose plugin is off; it still
+            // resolves here, reported as inactive with the reason.
+            if let Some(routine) = report
+                .inactive_plugin_routines()
+                .find(|routine| routine.name == self.name)
+            {
+                return Ok(inactive_detail(&report, routine).into());
+            }
             return Err(OrbitError::InvalidInput(format!(
                 "no routine named '{}' (see `orbit routine list`)",
                 self.name
@@ -35,18 +44,14 @@ impl RoutineShowArgs {
         let definition = &status.routine.definition;
 
         let doc = json!({
-            "host_id": report.host_id,
+            "machine_name": report.machine_name,
             "machine_id": report.machine_id,
-            "registry": &report.registry,
             "name": definition.name,
             "description": definition.description,
             "source": status.routine.source_workspace,
             "origin": status.routine.origin.as_str(),
             "path": status.routine.path.display().to_string(),
             "enabled": definition.enabled,
-            "hosts": definition.hosts,
-            "pinned_to_host": status.pinned_to_host,
-            "validation": &status.validation,
             "paused_at": status.paused_at,
             "effective": status.effective(),
             "cron": definition.trigger.cron,
@@ -96,6 +101,23 @@ impl RoutineShowArgs {
                 serde_json::to_string(trigger)
                     .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
             );
+            let batch = status
+                .automation
+                .as_ref()
+                .and_then(|diagnostic| diagnostic.get("batch"))
+                .map(|batch| serde_json::from_value::<Vec<BatchMember>>(batch.clone()))
+                .transpose()
+                .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
+                .unwrap_or_default();
+            if !batch.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "Batch ({} of up to {}): {}",
+                    batch.len(),
+                    trigger.effective_batch_size(),
+                    crate::command::clock::tick::format_batch(&batch)
+                );
+            }
         } else {
             let _ = writeln!(
                 out,
@@ -120,36 +142,14 @@ impl RoutineShowArgs {
         );
         let _ = writeln!(
             out,
-            "Enabled: {} | Pinned to {}: {} | Paused: {}",
+            "Enabled: {} | Paused: {}",
             definition.enabled,
-            report.host_id,
-            status.pinned_to_host,
             status
                 .paused_at
                 .as_deref()
                 .map(|at| format!("yes (since {at})"))
                 .unwrap_or_else(|| "no".to_string())
         );
-        let _ = writeln!(
-            out,
-            "Registry: {}/{}{}",
-            report.registry.source,
-            report.registry.state,
-            report
-                .registry
-                .age_seconds
-                .map(|age| format!(" ({age}s old)"))
-                .unwrap_or_default()
-        );
-        for diagnostic in &status.validation.diagnostics {
-            let _ = writeln!(
-                out,
-                "Validation [{}:{}]: {}",
-                diagnostic.severity.as_str(),
-                diagnostic.code,
-                diagnostic.message
-            );
-        }
         let _ = writeln!(
             out,
             "Effective on this host: {}",
@@ -188,4 +188,32 @@ impl RoutineShowArgs {
         }
         Ok(Payload::detail(doc, out).into())
     }
+}
+
+/// A routine seeded by a plugin that is off where it lives: no schedule state,
+/// only where it is and why it never fires.
+fn inactive_detail(report: &RoutineStatusReport, routine: &RetiredRoutine) -> Payload {
+    let doc = json!({
+        "machine_name": report.machine_name,
+        "machine_id": report.machine_id,
+        "name": routine.name,
+        "source": routine.source_workspace,
+        "origin": routine.origin.as_str(),
+        "path": routine.path.display().to_string(),
+        "target": format!("job:{}", routine.job),
+        "effective": false,
+        "plugin_inactive": true,
+        "skipped_reason": routine.reason,
+    });
+    let out = format!(
+        "Name: {}\nSource: {} ({}, {} origin)\nTarget: job:{}\nEffective on this host: no\n\
+         Inactive: {}\n",
+        routine.name,
+        routine.source_workspace,
+        routine.path.display(),
+        routine.origin.as_str(),
+        routine.job,
+        routine.reason
+    );
+    Payload::detail(doc, out)
 }

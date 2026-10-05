@@ -9,8 +9,8 @@ use axum::http::{HeaderName, HeaderValue, header};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{
-    DEFAULT_TASK_LIST_LIMIT, ExternalRef, OrbitRuntime, Task, TaskComplexity, TaskCreateStatus,
-    TaskPriority, TaskStatus, TaskType,
+    ExternalRef, OrbitRuntime, Task, TaskComplexity, TaskCreateStatus, TaskPriority, TaskStatus,
+    TaskType,
 };
 use orbit_types::identity::{
     agent_family_from_cli, all_agent_families, infer_agent_family_from_model,
@@ -20,10 +20,13 @@ use orbit_types::task::{inline_safe_artifact_media_type, validate_relative_artif
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
+use super::pagination::TaskPageQuery;
 use super::{
     bad_request, blocking, map_runtime_error, non_empty_string, server_error, validate_id,
 };
-use crate::projections::{task_locks_json, task_row_to_json, task_to_json_with_sidecars};
+use crate::projections::{
+    TaskListProjection, task_locks_json, task_row_to_json, task_to_json_with_sidecars,
+};
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
 /// usable human identity. The dashboard is a human-operated surface, so this is
@@ -57,7 +60,8 @@ where
 {
     let rendered = tokio::task::spawn_blocking(move || {
         let task = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
-        let status_by_id = dashboard_status_index(&runtime).map_err(TaskMutationFailure::Render)?;
+        let status_by_id =
+            dashboard_status_index(&runtime, &task).map_err(TaskMutationFailure::Render)?;
         task_to_json_with_sidecars(&runtime, &task, &status_by_id)
             .map_err(TaskMutationFailure::Render)
     })
@@ -121,19 +125,21 @@ pub(super) struct CreateTaskBody {
     plan: String,
     #[serde(default)]
     context_files: Vec<String>,
+    /// Escape for a `context_files` selector that names a target this task is
+    /// about to create, mirroring `orbit task add --allow-missing-context` and
+    /// the `orbit.task.add` tool's `allow_missing_context` input. See
+    /// [`OrbitRuntime::ensure_context_selectors_exist`](orbit_core::OrbitRuntime::ensure_context_selectors_exist).
+    #[serde(default)]
+    allow_missing_context: bool,
     #[serde(default)]
     external_refs: Vec<ExternalRef>,
-    #[serde(default)]
-    workspace_path: Option<String>,
     /// Trap field (ORB-00042): `workspace` is a *workspace selector* and this
     /// endpoint takes it as the `?workspace=<id>` query parameter, never as a
     /// body field. Historically bridge sent `{"workspace": <path>}` here and
     /// serde silently dropped the unknown key, so every task landed in the
     /// default workspace. Deserializing the key just to reject it makes the
-    /// mistake a loud 400. A `#[serde(alias = "workspace")]` on
-    /// `workspace_path` would be wrong semantics (a selector is not a sub-path
-    /// hint), and `#[serde(deny_unknown_fields)]` would break every tolerant
-    /// caller that sends extra keys.
+    /// mistake a loud 400. A `#[serde(deny_unknown_fields)]` would break every
+    /// tolerant caller that sends extra keys.
     #[serde(default)]
     workspace: Option<String>,
     #[serde(default = "default_priority")]
@@ -161,9 +167,9 @@ pub(super) struct CreateTaskBody {
     /// Retired create input, declared so it stays *knowingly* tolerated rather
     /// than falling into [`CreateTaskBody::unsupported`]. `comment` is one of
     /// [`RETIRED_TASK_ADD_INPUT_FIELDS`](orbit_common::protocol::tool_input::RETIRED_TASK_ADD_INPUT_FIELDS):
-    /// the native `orbit.task.add` tool strips it with a warning instead of
-    /// failing, and this endpoint keeps that contract. Comment on a task with
-    /// `POST /tasks/:id/comments`.
+    /// the native `orbit.task.add` tool now rejects it with `invalid_input`.
+    /// This HTTP body still accepts the key so existing dashboard clients are
+    /// not broken; comment on a task with `POST /tasks/:id/comments`.
     #[serde(default)]
     comment: Option<String>,
     /// Trap field (ORB-10648): attribution was consolidated to `model`-only, so
@@ -254,6 +260,14 @@ pub(super) struct UpdateTaskBody {
     comment: Option<String>,
     #[serde(default)]
     status: Option<TaskStatus>,
+    /// Human override of the lifecycle table for this write's `status`, the
+    /// dashboard's equivalent of `orbit task update --force` (ORB-12445). Only
+    /// meaningful with `status`; alone it is a 400, matching the CLI flag's
+    /// `requires = "status"`. The registered `orbit.task.update` tool and the
+    /// MCP surface still have no such field, so no agent can grant itself the
+    /// override.
+    #[serde(default)]
+    force: bool,
     /// Replacement dispatch priority (ORB-10648). Previously undeclared here
     /// even though the record layer could persist it, so an operator's
     /// re-prioritization was dropped while the response reported success.
@@ -267,6 +281,10 @@ pub(super) struct UpdateTaskBody {
     pr_status: Option<Option<String>>,
     #[serde(default)]
     context_files: Option<Vec<String>>,
+    /// Escape for a `context_files` selector that names a target this task is
+    /// about to create. See [`CreateTaskBody::allow_missing_context`].
+    #[serde(default)]
+    allow_missing_context: bool,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
     crew: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
@@ -306,7 +324,10 @@ where
 ///   `auto-task:qa-sweep` matches that whole tag rather than being split.
 /// - `type` (alias `task_type`) — a single task type (`feature`/`bug`/
 ///   `refactor`/`chore`).
-/// - `limit` — positive integer, defaulting to [`DEFAULT_TASK_LIST_LIMIT`].
+/// - `q` (alias `search`) — case-insensitive task ID/title substring.
+/// - `limit` — positive integer, defaulting to [`orbit_core::DEFAULT_TASK_LIST_LIMIT`].
+/// - `cursor` — opaque continuation returned as `next_cursor`; it is rejected
+///   when malformed or reused with a different workspace, endpoint, or filter.
 ///
 /// Unknown keys (including the `?workspace=<id>` selector consumed by the
 /// [`Ws`] extractor) are ignored; an unparseable value is a 400 rather than a
@@ -315,9 +336,21 @@ where
 /// ## Response contract (ORB-10400, consumed by bridge ORB-10398)
 ///
 /// ```json
-/// { "items": [ /* task objects, newest first */ ],
-///   "total": 137, "limit": 50, "truncated": true }
+/// { "items": [ /* task summary rows, newest first */ ],
+///   "total": 137, "limit": 50, "truncated": true,
+///   "offset": 0, "next_cursor": "..." }
 /// ```
+///
+/// Each item is a *summary* row (`"projection": "summary"`): the task's
+/// scalar and short-list fields, `comment_count` / `history_count` /
+/// `artifact_count` in place of the comment, history and artifact bodies, no
+/// `description` / `plan` / `execution_summary` / `acceptance_criteria`, the
+/// governed `status_transitions` without their `required_field`, a
+/// `resolved_crew` read from the crew registry alone, and `job_run_navigable`
+/// from the same local-machine decision as the detail projection.
+/// `GET /api/tasks/:id`
+/// serves the full projection (DANI-10391; see
+/// [`TaskListProjection`]).
 ///
 /// **Every predicate is applied before the limit**, so `items` holds the newest
 /// *matching* tasks — a match older than the newest `limit` unfiltered tasks is
@@ -327,16 +360,24 @@ where
 /// the window (previously indistinguishable, because the handler answered a bare
 /// truncated array with no metadata).
 ///
-/// The cross-workspace `/api/tasks/all` aggregate uses the same envelope. It
-/// takes no filters and its `total` sums the untruncated candidate counts from
-/// active workspaces.
+/// The cursor is an opaque continuation of the stable `created_at DESC, id ASC`
+/// order and is bound to this workspace and the active filters. Inserts newer
+/// than the first page do not disturb an existing continuation. Changing a
+/// task's `created_at`, ID, or filter membership while paging may move it across
+/// the boundary; clients that need a new live snapshot restart without a cursor.
+/// The cross-workspace `/api/tasks/all` aggregate uses the same contract.
 pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Response {
-    let query = match TaskListQuery::parse(query.as_deref()) {
+    let query = match TaskPageQuery::parse(query.as_deref()) {
         Ok(query) => query,
         Err(message) => return bad_request(message),
     };
     match blocking("task list", move || {
-        Ok(task_list_page_json(&runtime, &query))
+        let scope = format!("workspace:{}", runtime.workspace_id()?);
+        let mut query = query;
+        query
+            .bind_cursor(&scope)
+            .map_err(orbit_core::OrbitError::InvalidInput)?;
+        Ok(task_list_page_json(&runtime, &query, &scope))
     })
     .await
     {
@@ -346,126 +387,48 @@ pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Re
     }
 }
 
-/// Server-side filters for `GET /api/tasks`, mirroring `orbit task list`
-/// semantics (ORB-10400).
-struct TaskListQuery {
-    /// Accepted statuses; empty means status-neutral (every lifecycle status).
-    statuses: Vec<TaskStatus>,
-    /// Required tags, AND-combined. Passed verbatim to `list_tasks_by_tags`,
-    /// which normalizes them.
-    tags: Vec<String>,
-    task_type: Option<TaskType>,
-    limit: usize,
-}
-
-impl Default for TaskListQuery {
-    fn default() -> Self {
-        Self {
-            statuses: Vec::new(),
-            tags: Vec::new(),
-            task_type: None,
-            limit: DEFAULT_TASK_LIST_LIMIT,
-        }
-    }
-}
-
-impl TaskListQuery {
-    /// Parse the raw (still percent-encoded) query string.
-    ///
-    /// Repeated keys accumulate and each value may itself be comma-separated,
-    /// matching the CLI's `--status a,b` / repeated `--tag`. Empty values are
-    /// ignored so `?status=` behaves like an omitted filter, and unknown keys
-    /// are skipped because this endpoint shares its query string with the `Ws`
-    /// workspace selector.
-    fn parse(raw_query: Option<&str>) -> Result<Self, String> {
-        let mut parsed = Self::default();
-        let Some(raw_query) = raw_query else {
-            return Ok(parsed);
-        };
-        for (key, value) in url::form_urlencoded::parse(raw_query.as_bytes()) {
-            match key.as_ref() {
-                "status" => {
-                    for raw in split_filter_values(&value) {
-                        let status = raw
-                            .to_ascii_lowercase()
-                            .parse::<TaskStatus>()
-                            .map_err(|error| format!("invalid `status` value `{raw}`: {error}"))?;
-                        if !parsed.statuses.contains(&status) {
-                            parsed.statuses.push(status);
-                        }
-                    }
-                }
-                // A tag is matched whole: only `,` separates values, so a
-                // colon-bearing tag (`auto-task:qa-sweep`) stays intact.
-                "tag" | "tags" => parsed
-                    .tags
-                    .extend(split_filter_values(&value).map(str::to_string)),
-                "type" | "task_type" => {
-                    for raw in split_filter_values(&value) {
-                        parsed.task_type =
-                            Some(raw.to_ascii_lowercase().parse::<TaskType>().map_err(
-                                |error| format!("invalid `type` value `{raw}`: {error}"),
-                            )?);
-                    }
-                }
-                "limit" => {
-                    if let Some(raw) = split_filter_values(&value).next_back() {
-                        parsed.limit = parse_limit(raw)?;
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(parsed)
-    }
-}
-
-/// Split one query value into its comma-separated parts, trimming each and
-/// dropping empties.
-fn split_filter_values(value: &str) -> impl DoubleEndedIterator<Item = &str> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-}
-
-/// Parse `?limit=`, rejecting zero (which would return nothing) the same way the
-/// CLI's `--limit` does.
-fn parse_limit(raw: &str) -> Result<usize, String> {
-    let value: usize = raw
-        .parse()
-        .map_err(|_| format!("invalid `limit` value `{raw}` (expected a positive integer)"))?;
-    if value == 0 {
-        return Err("`limit` must be at least 1".to_string());
-    }
-    Ok(value)
-}
-
 /// Build the `{ items, total, limit, truncated }` page for `GET /api/tasks`.
 fn task_list_page_json(
     runtime: &OrbitRuntime,
-    query: &TaskListQuery,
+    query: &TaskPageQuery,
+    scope: &str,
 ) -> Result<Value, orbit_core::OrbitError> {
     let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
-        filter: orbit_core::application::task::TaskListFilter {
-            statuses: (!query.statuses.is_empty()).then(|| query.statuses.clone()),
-            task_type: query.task_type,
-            tags: query.tags.clone(),
-            ..Default::default()
-        },
-        limit: query.limit,
+        filter: query.filter(),
+        limit: query.limit(),
         ..Default::default()
     })?;
+    let total = page.total_without_cursor;
     let status_by_id = page.status_by_id;
+    let projection = TaskListProjection::new(runtime);
     let items = page
         .items
         .iter()
-        .map(|row| task_row_to_json(runtime, row, &status_by_id))
+        .map(|row| projection.row_to_json(row, &status_by_id))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(
-        json!({ "truncated": page.total > items.len(), "items": items,
-        "total": page.total, "limit": query.limit }),
-    )
+    let offset = query.offset();
+    let next_offset = offset.saturating_add(items.len());
+    let next_cursor = if page.total > items.len() {
+        page.items
+            .last()
+            .map(|row| {
+                query.next_cursor(scope, row.task.created_at, row.task.id.clone(), next_offset)
+            })
+            .transpose()
+            .map_err(|error| {
+                orbit_core::OrbitError::Execution(format!("encode task cursor: {error}"))
+            })?
+    } else {
+        None
+    };
+    Ok(json!({
+        "truncated": total > items.len(),
+        "items": items,
+        "total": total,
+        "limit": query.limit(),
+        "offset": offset,
+        "next_cursor": next_cursor,
+    }))
 }
 
 pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {
@@ -484,10 +447,13 @@ pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {
 /// task resolves that dependency's real status instead of `[missing]`
 /// (ORB-10291). Task *listing* stays workspace-scoped: this index is only
 /// consulted to label dependencies, never to add tasks to the response body.
+/// `task`'s archived dependencies that reached `done` first label as `done`
+/// ([`OrbitRuntime::dependency_status_index`]).
 fn dashboard_status_index(
     runtime: &OrbitRuntime,
+    task: &Task,
 ) -> Result<std::collections::BTreeMap<String, TaskStatus>, orbit_core::OrbitError> {
-    runtime.task_status_index()
+    runtime.dependency_status_index([task])
 }
 
 pub(super) async fn get_task(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
@@ -498,7 +464,7 @@ pub(super) async fn get_task(Ws(runtime): Ws, Path(id): Path<String>) -> Respons
     let id = id.to_string();
     match blocking("task detail", move || {
         let row = runtime.get_task_row(&id)?;
-        Ok(dashboard_status_index(&runtime)
+        Ok(dashboard_status_index(&runtime, &row.task)
             .and_then(|statuses| task_row_to_json(&runtime, &row, &statuses)))
     })
     .await
@@ -540,6 +506,13 @@ pub(super) async fn get_task_artifact(
                 HeaderName::from_static("x-content-type-options"),
                 HeaderValue::from_static("nosniff"),
             );
+            // Artifacts are task-author content served from the dashboard's
+            // origin: sandbox them so an inline-rendered one (SVG, HTML-ish
+            // media) cannot run script or reach the API as this origin.
+            response.headers_mut().insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox; default-src 'none'"),
+            );
             if policy.attachment {
                 response.headers_mut().insert(
                     header::CONTENT_DISPOSITION,
@@ -574,10 +547,9 @@ fn validate_artifact_request_path(path: &str) -> Result<String, String> {
 /// Workspace selection is the [`Ws`] extractor's: the `?workspace=<id>` query
 /// parameter picks the target workspace; omitting it falls back to the
 /// server's configured default workspace; an unknown id is a 404 and an
-/// inactive (stale-path) one a 400 — never a silent fallback. The body's
-/// `workspace_path` is *not* a selector: it is an optional sub-path hint
-/// within the already-selected workspace. A stray `workspace` body key is
-/// rejected with a 400 (see [`CreateTaskBody::workspace`], ORB-00042).
+/// inactive (stale-path) one a 400 — never a silent fallback. A stray
+/// `workspace` body key is rejected with a 400 (see
+/// [`CreateTaskBody::workspace`], ORB-00042).
 pub(super) async fn create_task_action(
     Ws(runtime): Ws,
     Json(body): Json<CreateTaskBody>,
@@ -585,8 +557,7 @@ pub(super) async fn create_task_action(
     if body.workspace.is_some() {
         return bad_request(
             "unsupported body field `workspace`: select the target workspace with the \
-             `?workspace=<id>` query parameter (`workspace_path` is a sub-path hint \
-             within the selected workspace, not a workspace selector)"
+             `?workspace=<id>` query parameter"
                 .to_string(),
         );
     }
@@ -609,6 +580,7 @@ pub(super) async fn create_task_action(
         Err(message) => return bad_request(message),
     };
     let model = body.model.as_deref().and_then(non_empty_string);
+    let allow_missing_context = body.allow_missing_context;
     let params = TaskAddParams {
         parent_id: body.parent_id,
         title: body.title,
@@ -621,7 +593,6 @@ pub(super) async fn create_task_action(
         plan: body.plan,
         comment: None,
         context_files: body.context_files,
-        workspace_path: body.workspace_path,
         priority: body.priority,
         complexity,
         task_type: body.task_type,
@@ -633,6 +604,9 @@ pub(super) async fn create_task_action(
         orchestrator: body.orchestrator,
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
+        if !allow_missing_context {
+            runtime.ensure_context_selectors_exist(&params.context_files)?;
+        }
         runtime.add_task_with_identity(params, None, model)
     })
     .await
@@ -644,6 +618,12 @@ pub(super) async fn create_task_action(
 /// into [`TaskUpdateParams`], `model` becomes the write's provenance, and any
 /// other key is a 400 from [`reject_unsupported_task_body_fields`]. A caller
 /// therefore never receives a `200` for a field this endpoint discarded.
+///
+/// `force` (ORB-12445) makes this the dashboard's counterpart to `orbit task
+/// update --force`: the status change is applied under `StatusAuthority::Forced`
+/// and recorded in task history as `forced`. The dashboard is an operator
+/// surface, so it carries the same human override the bare CLI does; the agent
+/// tool and MCP surfaces still do not declare the field.
 pub(super) async fn update_task_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
@@ -660,7 +640,24 @@ pub(super) async fn update_task_action(
     ) {
         return response;
     }
+    let complexity = match body
+        .complexity
+        .map(TaskComplexity::require_assessed)
+        .transpose()
+    {
+        Ok(complexity) => complexity,
+        Err(message) => return bad_request(message),
+    };
+    if body.force && body.status.is_none() {
+        return bad_request(
+            "`force` overrides the lifecycle table for a status change, so it requires \
+             `status`; send the target status or drop `force`"
+                .to_string(),
+        );
+    }
     let model = body.model.as_deref().and_then(non_empty_string);
+    let allow_missing_context = body.allow_missing_context;
+    let force = body.force;
     let params = TaskUpdateParams {
         title: body.title,
         description: body.description,
@@ -673,7 +670,7 @@ pub(super) async fn update_task_action(
         comment: body.comment,
         status: body.status,
         priority: body.priority,
-        complexity: body.complexity,
+        complexity,
         task_type: body.task_type,
         source_task_id: None,
         planned_by: None,
@@ -684,10 +681,19 @@ pub(super) async fn update_task_action(
         orchestrator: body.orchestrator,
         context_files: body.context_files,
         upsert_artifacts: Vec::new(),
+        trusted_artifact_origin: None,
+        discard_candidate: false,
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {
-        runtime.update_task_with_identity(&id, params, None, model)
+        if !allow_missing_context && let Some(candidates) = params.context_files.as_deref() {
+            runtime.ensure_context_selectors_exist(candidates)?;
+        }
+        if force {
+            runtime.force_update_task_with_identity(&id, params, None, model)
+        } else {
+            runtime.update_task_with_identity(&id, params, None, model)
+        }
     })
     .await
 }
@@ -722,7 +728,7 @@ pub(super) async fn add_task_comment_action(
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task comment", move |runtime| {
-        runtime.update_task_with_identity(&id, params, Some(author), None)
+        runtime.update_task_as_human(&id, params, author)
     })
     .await
 }

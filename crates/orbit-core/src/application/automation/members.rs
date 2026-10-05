@@ -13,13 +13,13 @@ use orbit_store::contracts::TaskListFilter;
 use orbit_types::{
     task::TaskStatus,
     workflow::{
-        JobRunState, RoutineDefinition,
+        JobRunState, JobRunTrigger, RoutineDefinition,
         automation::{members::*, *},
     },
 };
 use serde_json::{Value, json};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn evaluate(
     runtime: &OrbitRuntime,
@@ -49,14 +49,9 @@ pub(crate) fn evaluate(
     let mut effective = trigger.clone();
     effective.retries = effective.retries.min(definition.policy.retries.max);
 
-    // [ORB-11332] Operation mode supplies constraints to this evaluation; it
-    // never owns a cadence of its own. Empty constraints are the pre-existing
-    // behavior.
-    let constraints = crate::application::operation::member_constraints(runtime, &effective)?;
-
     members::evaluate(
         runtime.automation_store()?.as_ref(),
-        &Host::new(runtime, &effective),
+        &Host::new(runtime, &definition.name, &effective),
         MemberEvaluation {
             consumer: &consumer,
             epoch: &epoch,
@@ -64,7 +59,6 @@ pub(crate) fn evaluate(
             enabled: definition.enabled && owned,
             dry_run,
             now,
-            constraints,
         },
     )
     .map_err(automation_error_to_orbit)
@@ -72,19 +66,51 @@ pub(crate) fn evaluate(
 
 pub(crate) struct Host<'a> {
     runtime: &'a OrbitRuntime,
+    /// The state routine this consumer serves; admitted runs name it as their
+    /// trigger [ORB-13016].
+    routine: &'a str,
     trigger: &'a StateTrigger,
+    /// The one policy this consumer observes, admits and fingerprints with
+    /// [ORB-12745, ORB-13638].
+    policy: PreparationPolicy,
     incidents: RefCell<super::incidents::IncidentSession>,
     instructions: RefCell<BTreeMap<String, InstructionSnapshot>>,
+    /// `refs/orbit/automation/<attempt>` → pinned commit, read once per host
+    /// to carry pre-upgrade assessments forward.
+    pinned: RefCell<Option<BTreeMap<String, String>>>,
 }
 
 impl<'a> Host<'a> {
-    pub(crate) fn new(runtime: &'a OrbitRuntime, trigger: &'a StateTrigger) -> Self {
+    pub(crate) fn new(
+        runtime: &'a OrbitRuntime,
+        routine: &'a str,
+        trigger: &'a StateTrigger,
+    ) -> Self {
         Self {
             runtime,
+            routine,
             trigger,
+            policy: preparation::resolve_policy(runtime, Some(trigger)),
             incidents: RefCell::new(super::incidents::IncidentSession::new()),
             instructions: RefCell::new(BTreeMap::new()),
+            pinned: RefCell::new(None),
         }
+    }
+
+    fn eligibility(&self) -> &PreparationEligibility {
+        &self.policy.eligibility
+    }
+
+    /// One instruction snapshot per revision serves every task on a page.
+    fn instructions(&self, revision: &str) -> Result<InstructionSnapshot, AutomationError> {
+        if let Some(snapshot) = self.instructions.borrow().get(revision) {
+            return Ok(snapshot.clone());
+        }
+        let snapshot = preparation::instructions(self.runtime, revision)?;
+        self.instructions
+            .borrow_mut()
+            .insert(revision.to_string(), snapshot.clone());
+        Ok(snapshot)
     }
 
     fn fingerprint(
@@ -92,24 +118,59 @@ impl<'a> Host<'a> {
         task: &orbit_types::task::Task,
         revision: &str,
     ) -> Result<String, AutomationError> {
-        let instructions = {
-            let mut cached = self.instructions.borrow_mut();
-            match cached.get(revision) {
-                Some(snapshot) => snapshot.clone(),
-                None => {
-                    let snapshot = preparation::instructions(self.runtime, revision)?;
-                    cached.insert(revision.to_string(), snapshot.clone());
-                    snapshot
-                }
-            }
-        };
-
-        preparation::fingerprint_with_instructions(self.runtime, task, revision, &instructions)
+        preparation::fingerprint_with_instructions(
+            self.runtime,
+            task,
+            revision,
+            &|revision| self.instructions(revision),
+            &self.policy,
+        )
     }
 
-    #[cfg(test)]
-    pub(crate) fn incident_work_stats(&self) -> super::incidents::IncidentWorkStats {
-        self.incidents.borrow().stats()
+    /// The commit an attempt pinned when it was admitted.
+    fn pinned_revision(&self, attempt_id: &str) -> Result<Option<String>, AutomationError> {
+        if self.pinned.borrow().is_none() {
+            let listing = Source::new(&self.runtime.paths().repo_root).git(&[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/orbit/automation/",
+            ])?;
+            let refs = listing
+                .lines()
+                .filter_map(|line| line.split_once(' '))
+                .map(|(name, object)| (name.to_string(), object.to_string()))
+                .collect();
+            *self.pinned.borrow_mut() = Some(refs);
+        }
+        Ok(self.pinned.borrow().as_ref().and_then(|refs| {
+            refs.get(&format!("refs/orbit/automation/{attempt_id}"))
+                .cloned()
+        }))
+    }
+
+    /// The `material_v1` hash the member's task would certify at the revision
+    /// `assessment`'s attempt pinned.
+    fn legacy_fingerprint(
+        &self,
+        member: &StateMember,
+        assessment: &MemberAssessment,
+    ) -> Result<Option<String>, AutomationError> {
+        let [task_id] = member.task_ids.as_slice() else {
+            return Ok(None);
+        };
+        let Some(revision) = self.pinned_revision(&assessment.receipt_id)? else {
+            return Ok(None);
+        };
+        let task = self.runtime.get_task(task_id)?;
+        let instructions = self.instructions(&revision)?;
+        preparation::legacy_fingerprint(
+            self.runtime,
+            &task,
+            &revision,
+            &instructions,
+            self.eligibility(),
+        )
+        .map(Some)
     }
 }
 
@@ -132,9 +193,7 @@ impl MemberHost for Host<'_> {
             &TaskListFilter {
                 scan_before,
                 statuses: Some(match self.trigger.kind {
-                    StateTriggerKind::PreparationEligible => {
-                        vec![TaskStatus::Proposed, TaskStatus::Backlog]
-                    }
+                    StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
                     StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
                 }),
                 ..Default::default()
@@ -159,13 +218,25 @@ impl MemberHost for Host<'_> {
         let mut incident_inventory = None;
         let mut withheld = BTreeMap::new();
 
+        let active_preparations = match self.trigger.kind {
+            StateTriggerKind::PreparationEligible => {
+                preparation::active_task_pilot_preparations(self.runtime)?
+            }
+            StateTriggerKind::ExecutionFailed => BTreeMap::new(),
+        };
+
         for envelope in tasks.items {
             let task = self.runtime.get_task(&envelope.id)?;
 
             match self.trigger.kind {
                 StateTriggerKind::PreparationEligible => {
-                    if !orbit_automation::members::preparation::eligible(&task) {
+                    if !orbit_automation::members::preparation::eligible(&task, self.eligibility())
+                    {
                         withheld.insert(task.id, "task_ineligible".into());
+                        continue;
+                    }
+                    if let Some(run_ids) = active_preparations.get(&task.id) {
+                        withheld.insert(task.id, already_preparing(run_ids));
                         continue;
                     }
                     let fingerprint = match self.fingerprint(&task, &source.commit) {
@@ -183,6 +254,7 @@ impl MemberHost for Host<'_> {
                         evidence: json!({"task_id":task.id}),
                         first_seen: now,
                         changed_at: now,
+                        crew: bundle_crew(task.crew.as_deref()),
                     });
                 }
                 StateTriggerKind::ExecutionFailed => {
@@ -219,6 +291,22 @@ impl MemberHost for Host<'_> {
                                 continue;
                             }
 
+                            // An incident's task_ids span whatever cohort
+                            // diagnose grouped, not one task's stored crew,
+                            // so the member's own bundle must agree before
+                            // it can carry a crew identity at all [ORB-12796].
+                            let crew = match incident_crew(self.runtime, &task_ids) {
+                                Ok(Some(crew)) => crew,
+                                Ok(None) => {
+                                    withheld.insert(task.id, "incident_mixed_crew".into());
+                                    continue;
+                                }
+                                Err(error) => {
+                                    withheld.insert(task.id, error.to_string());
+                                    continue;
+                                }
+                            };
+
                             candidates.push(StateMember {
                                 fingerprint: key.clone(),
                                 key,
@@ -227,6 +315,7 @@ impl MemberHost for Host<'_> {
                                 evidence,
                                 first_seen: now,
                                 changed_at: now,
+                                crew,
                             });
                         }
                         Err(error) => {
@@ -259,23 +348,34 @@ impl MemberHost for Host<'_> {
         }
 
         // Re-derive the material now: a member whose input moved may not be admitted.
+        // Branch head is invariant for this call; resolve it once rather than
+        // per task_id (each Source::head is several git spawns).
+        if self.trigger.kind == StateTriggerKind::PreparationEligible {
+            let (_, source) = self.head(&self.trigger.branch)?;
+            // Retained pending members may be off the current observation
+            // page, or another pilot may have prepared them since observation.
+            let active_preparations = preparation::active_task_pilot_preparations(self.runtime)?;
+            for id in &member.task_ids {
+                let task = self.runtime.get_task(id)?;
+                if !orbit_automation::members::preparation::eligible(&task, self.eligibility()) {
+                    return Ok(MemberAdmission::Retire("task_ineligible".into()));
+                }
+                if let Some(run_ids) = active_preparations.get(id) {
+                    return Ok(MemberAdmission::Withhold(already_preparing(run_ids)));
+                }
+                if self.fingerprint(&task, &source.commit)? != member.fingerprint {
+                    return Ok(MemberAdmission::Retire("material_changed".into()));
+                }
+            }
+            return Ok(MemberAdmission::Admit);
+        }
+
         for id in &member.task_ids {
             let task = self.runtime.get_task(id)?;
-            let current = match self.trigger.kind {
-                StateTriggerKind::PreparationEligible => {
-                    if !orbit_automation::members::preparation::eligible(&task) {
-                        return Ok(MemberAdmission::Retire("task_ineligible".into()));
-                    }
-                    let (_, source) = self.head(&self.trigger.branch)?;
-                    self.fingerprint(&task, &source.commit)?
-                }
-                StateTriggerKind::ExecutionFailed => {
-                    match super::incidents::observe(self.runtime, &task) {
-                        Ok((key, _)) => key,
-                        Err(error) => {
-                            return Ok(MemberAdmission::Retire(error.to_string()));
-                        }
-                    }
+            let current = match super::incidents::observe(self.runtime, &task) {
+                Ok((key, _)) => key,
+                Err(error) => {
+                    return Ok(MemberAdmission::Retire(error.to_string()));
                 }
             };
 
@@ -285,6 +385,40 @@ impl MemberHost for Host<'_> {
         }
 
         Ok(MemberAdmission::Admit)
+    }
+
+    fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
+        // Hidden task reads say nothing about membership; retire nothing.
+        if !self.runtime.coordination_task_reads_visible() {
+            return Ok(keys.clone());
+        }
+
+        // Task-keyed entries stay while their task holds a status `observe`
+        // queries; an incident key stays while the current inventory has it.
+        let statuses = match self.trigger.kind {
+            StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
+            StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
+        };
+        let indexed = self.runtime.task_status_index_for(keys)?;
+        let incidents = match self.trigger.kind {
+            StateTriggerKind::ExecutionFailed => {
+                Some(self.incidents.borrow_mut().inventory(self.runtime)?)
+            }
+            StateTriggerKind::PreparationEligible => None,
+        };
+
+        Ok(keys
+            .iter()
+            .filter(|key| {
+                indexed
+                    .get(*key)
+                    .is_some_and(|status| statuses.contains(status))
+                    || incidents
+                        .as_ref()
+                        .is_some_and(|inventory| inventory.contains_key(*key))
+            })
+            .cloned()
+            .collect())
     }
 
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError> {
@@ -320,27 +454,46 @@ impl MemberHost for Host<'_> {
         ])?;
 
         let origin = if self.trigger.kind == StateTriggerKind::ExecutionFailed {
-            "triage"
+            "execution_failure"
         } else {
             "preparation"
         };
 
+        // Every batch member travels as an explicit task id; evaluate already
+        // grouped the attempt by stored crew, and prepare partitions those
+        // ids by `max_partition_size`, so one run fans out over a
+        // crew-homogeneous batch [ORB-12746, ORB-12761].
+        let task_ids = attempt.task_ids();
         self.runtime
             .submit_automation_pipeline_run(
                 self.trigger.job_name(),
                 json!({
                     "state_automation": attempt,
-                    "task_ids": attempt.member.task_ids,
+                    "task_ids": task_ids,
                     "source_revision": attempt.member.source.commit,
                     "base_branch": self.trigger.branch,
-                    "max_tasks": attempt.member.task_ids.len(),
+                    "max_tasks": task_ids.len(),
                     "promotion_authorized": false,
                     "automation_origin": origin,
                 }),
                 &attempt.action_key,
+                JobRunTrigger::state_routine(self.routine, &attempt.consumer),
             )
             .map(|run| run.run_id)
             .map_err(Into::into)
+    }
+
+    /// An assessment accepted under `material_v1` hashed every task field and
+    /// the head it pinned, so it can only be checked by recomputing that hash
+    /// at the pinned revision [ORB-13638]. When it still matches, nothing
+    /// that contract covered has changed — in particular none of the default
+    /// material fields — and the task keeps its assessment instead of joining
+    /// a re-pilot wave on upgrade. Any doubt answers `false`.
+    fn carries_forward(&self, member: &StateMember, assessment: &MemberAssessment) -> bool {
+        self.trigger.kind == StateTriggerKind::PreparationEligible
+            && self
+                .legacy_fingerprint(member, assessment)
+                .is_ok_and(|legacy| legacy.as_ref() == Some(&assessment.resulting_fingerprint))
     }
 
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
@@ -362,49 +515,165 @@ impl MemberHost for Host<'_> {
             return Err(AutomationError::Evidence("job_input_mismatch".into()));
         }
 
-        if let Some(state) = self.runtime.read_run_state(id)? {
-            // Only the exact canonical deterministic apply step can provide this
-            // record. Agent prose and unrelated output keys are never searched.
-            let index = 2;
-            if state.step_states.get(&index) == Some(&JobRunState::Success)
-                && let Some(result) = state
-                    .step_outputs
-                    .get(&index)
-                    .and_then(|v| v.get("member_evidence"))
-            {
-                let mut evidence: MemberEvidence = serde_json::from_value(result.clone())
-                    .map_err(|e| AutomationError::Evidence(e.to_string()))?;
-                evidence.action_id = id.into();
-                return Ok(MemberOutcome::Applied(evidence));
-            }
-        }
-
-        if run.state.is_terminal()
+        let stopped = run.state.is_terminal()
             && crate::application::job::run_owner_liveness(&run)
-                == crate::application::job::RunOwnerLiveness::Stopped
-        {
-            return Ok(MemberOutcome::Failed(
-                "stopped_without_member_evidence".into(),
-            ));
+                == crate::application::job::RunOwnerLiveness::Stopped;
+
+        // Only the exact canonical deterministic apply steps can provide this
+        // record. Agent prose and unrelated output keys are never searched.
+        let state = self.runtime.read_run_state(id)?;
+        let apply_output = |index: u32| {
+            state
+                .as_ref()
+                .filter(|state| state.step_states.get(&index) == Some(&JobRunState::Success))
+                .and_then(|state| state.step_outputs.get(&index))
+        };
+        let Some(initial) = apply_output(APPLY_STEP) else {
+            return Ok(if stopped {
+                MemberOutcome::Failed("stopped_without_member_evidence".into())
+            } else {
+                MemberOutcome::Pending
+            });
+        };
+
+        // A member whose partition needed repair settles with the repair apply,
+        // or as failed once the run stopped without reaching it [ORB-12746].
+        let repairs_requested = initial
+            .get("repair_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            != 0;
+        let repair = apply_output(REPAIR_APPLY_STEP);
+        if repairs_requested && repair.is_none() && !stopped {
+            return Ok(MemberOutcome::Pending);
         }
 
-        Ok(MemberOutcome::Pending)
+        let mut applied = Vec::new();
+        for output in [Some(initial), repair].into_iter().flatten() {
+            let mut evidence = member_evidence(output)?;
+            for entry in &mut evidence {
+                entry.action_id = id.into();
+            }
+            applied.extend(evidence);
+        }
+
+        let latest_outcomes = repair.unwrap_or(initial);
+        let mut failed = BTreeMap::new();
+        for member in attempt.members() {
+            if applied.iter().any(|entry| entry.member_key == member.key) {
+                continue;
+            }
+            let reason = latest_outcomes
+                .get("task_outcomes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|outcome| {
+                    outcome
+                        .get("task_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|task_id| member.task_ids.iter().any(|id| id == task_id))
+                })
+                .and_then(|outcome| {
+                    let classification = outcome
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .or_else(|| outcome.get("outcome").and_then(Value::as_str))?;
+                    let detail = outcome
+                        .get("error")
+                        .or_else(|| outcome.get("detail"))
+                        .and_then(Value::as_str)
+                        .map(|detail| format!(": {detail}"))
+                        .unwrap_or_default();
+                    Some(format!("{classification}{detail}"))
+                })
+                .unwrap_or_else(|| {
+                    if repairs_requested && repair.is_none() {
+                        "stopped_before_repair_apply".into()
+                    } else {
+                        "no_member_evidence".into()
+                    }
+                });
+            failed.insert(member.key.clone(), reason);
+        }
+
+        Ok(MemberOutcome::Settled(MemberBatchEvidence {
+            action_id: id.into(),
+            attempt_id: attempt.id.clone(),
+            applied,
+            failed,
+        }))
+    }
+}
+
+/// A temporary hold diagnostic names every durable run the operator can inspect.
+fn already_preparing(run_ids: &BTreeSet<String>) -> String {
+    format!(
+        "already_preparing: {}",
+        run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
+    )
+}
+
+/// The stored `task.crew` shared by every id in an incident's `task_ids`,
+/// or `None` when they disagree. Unlike preparation's single-task read, an
+/// execution-failed member's ids come from incident grouping and can
+/// themselves carry mixed crews [ORB-12796].
+fn incident_crew(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+) -> Result<Option<Option<String>>, AutomationError> {
+    let mut agreed: Option<Option<String>> = None;
+    for id in task_ids {
+        let task = runtime.get_task(id)?;
+        let crew = bundle_crew(task.crew.as_deref());
+        match &agreed {
+            None => agreed = Some(crew),
+            Some(existing) if existing == &crew => {}
+            Some(_) => return Ok(None),
+        }
+    }
+    Ok(Some(agreed.flatten()))
+}
+
+/// Step indices of the two deterministic apply steps in
+/// `task_pilot_pipeline`: the partition apply and the targeted repair apply.
+const APPLY_STEP: u32 = 2;
+const REPAIR_APPLY_STEP: u32 = 4;
+
+/// The `member_evidence` an apply step recorded: one entry per claim member it
+/// applied. A run checkpointed before batching carried a single object.
+fn member_evidence(output: &Value) -> Result<Vec<MemberEvidence>, AutomationError> {
+    match output.get("member_evidence") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .map(|entry| serde_json::from_value(entry.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AutomationError::Evidence(e.to_string())),
+        Some(entry) => serde_json::from_value(entry.clone())
+            .map(|evidence| vec![evidence])
+            .map_err(|e| AutomationError::Evidence(e.to_string())),
     }
 }
 
 /// Recheck the server-issued claim at the deterministic prepare/apply boundary.
+///
+/// `material` names selectors the caller is about to write for a claim member
+/// (a pilot's recommended `context_files`) beyond those the members and the
+/// prepared snapshot already carry; they join the head-freshness comparison.
 pub(crate) fn claim(
     runtime: &OrbitRuntime,
     value: &Value,
+    material: &[String],
 ) -> Result<Option<MemberAttempt>, OrbitError> {
-    let Some(value) = value
+    let Some(claim) = value
         .get("state_automation")
         .filter(|claim| !claim.is_null())
     else {
         return Ok(None);
     };
 
-    let submitted: MemberAttempt = serde_json::from_value(value.clone())
+    let submitted: MemberAttempt = serde_json::from_value(claim.clone())
         .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
 
     let state = runtime
@@ -412,18 +681,10 @@ pub(crate) fn claim(
         .automation_state(&submitted.consumer)?
         .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?;
 
-    // Preparation material is derived from the branch head, so a moved head
-    // invalidates the claim; incident material is not tied to the head.
-    if submitted.kind == StateTriggerKind::PreparationEligible
-        && Source::new(&runtime.paths().repo_root)
-            .head(&state.branch)
-            .map_err(automation_error_to_orbit)?
-            .1
-            != submitted.member.source
-    {
-        return Err(OrbitError::InvalidInput(
-            "state-trigger source changed".into(),
-        ));
+    // Preparation material is derived from the branch head the claim froze;
+    // incident material is not tied to the head.
+    if submitted.kind == StateTriggerKind::PreparationEligible {
+        ensure_preparation_fresh(runtime, &state.branch, &submitted, value, material)?;
     }
 
     let active = state
@@ -434,6 +695,7 @@ pub(crate) fn claim(
     if active.kind != submitted.kind
         || active.id != submitted.id
         || active.member != submitted.member
+        || active.members() != submitted.members()
         || active.action_key != submitted.action_key
         || active.attempt != submitted.attempt
         || active.exhausted
@@ -445,4 +707,152 @@ pub(crate) fn claim(
     }
 
     Ok(Some(active))
+}
+
+/// A drain lands on the integration branch every few minutes, so its head
+/// routinely moves while a pilot runs. The preparation stays valid when the
+/// head only advanced through commits disjoint from the prepared material:
+/// repository instructions and every path a member's context selectors
+/// anchor, before or after the pilot [ORB-12981]. A rewritten branch, a touched
+/// path, or a selector with no repository path to compare is stale.
+fn ensure_preparation_fresh(
+    runtime: &OrbitRuntime,
+    branch: &str,
+    submitted: &MemberAttempt,
+    value: &Value,
+    material: &[String],
+) -> Result<(), OrbitError> {
+    let root = &runtime.paths().repo_root;
+    let source = Source::new(root);
+    let (_, head) = source.head(branch).map_err(automation_error_to_orbit)?;
+    let prepared = &submitted.member.source;
+    if head == *prepared {
+        return Ok(());
+    }
+
+    let stale = |detail: String| {
+        OrbitError::InvalidInput(format!(
+            "stale preparation: state-trigger source changed from {} to {}: {detail}",
+            prepared.commit, head.commit
+        ))
+    };
+
+    source
+        .git(&[
+            "merge-base",
+            "--is-ancestor",
+            &prepared.commit,
+            &head.commit,
+        ])
+        .map_err(|_| stale("the branch no longer descends from the prepared source".into()))?;
+
+    // `--no-renames` reports both sides of a rename; `--relative` keeps paths
+    // in the workspace frame the selectors and instruction scan use.
+    let changed = source
+        .git(&[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--relative",
+            "-z",
+            &prepared.commit,
+            &head.commit,
+        ])
+        .map_err(|error| stale(format!("changed paths unavailable: {error}")))?;
+    let changed = changed
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+
+    if let Some(path) = changed
+        .iter()
+        .find(|path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")))
+    {
+        return Err(stale(format!("repository instructions `{path}` changed")));
+    }
+
+    let mut selectors = material.to_vec();
+    for id in submitted.task_ids() {
+        match runtime.get_task(&id) {
+            Ok(task) => selectors.extend(task.context_files),
+            // The write boundary reports a deleted task stale on its own.
+            Err(OrbitError::NotFound { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    selectors.extend(
+        value
+            .get("tasks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|task| task.get("context_files_before")?.as_array())
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned),
+    );
+    selectors.sort();
+    selectors.dedup();
+
+    for selector in &selectors {
+        let anchor = repository_anchor(root, selector).ok_or_else(|| {
+            stale(format!(
+                "context selector `{selector}` has no repository path to compare"
+            ))
+        })?;
+        let Some(anchor) = anchor else {
+            continue;
+        };
+        if let Some(path) = changed.iter().find(|path| {
+            anchor.is_empty()
+                || **path == anchor
+                || path
+                    .strip_prefix(anchor.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        }) {
+            return Err(stale(format!(
+                "`{path}` changed under prepared context selector `{selector}`"
+            )));
+        }
+    }
+
+    tracing::info!(
+        consumer = %submitted.consumer,
+        attempt = %submitted.id,
+        from = %prepared.commit,
+        to = %head.commit,
+        changed = changed.len(),
+        "preparation revalidated across a head move disjoint from its material"
+    );
+    Ok(())
+}
+
+/// The workspace-relative path a context selector anchors (`""` for the
+/// root), `Some(None)` for an anchor outside the repository, which no commit
+/// can change, and `None` when the selector has no filesystem anchor at all
+/// (`module:`, `command:`, unparseable input).
+fn repository_anchor(root: &std::path::Path, selector: &str) -> Option<Option<String>> {
+    let anchor = orbit_common::fs::selector::anchor_path(selector).ok()?;
+    let relative = if anchor.is_absolute() {
+        let canonical = root.canonicalize().ok();
+        match anchor
+            .strip_prefix(root)
+            .ok()
+            .or_else(|| anchor.strip_prefix(canonical.as_deref()?).ok())
+        {
+            Some(relative) => relative.to_path_buf(),
+            None => return Some(None),
+        }
+    } else {
+        anchor
+    };
+    if relative.starts_with("..") {
+        return Some(None);
+    }
+    let relative = relative.to_string_lossy();
+    Some(Some(if relative == "." {
+        String::new()
+    } else {
+        relative.into_owned()
+    }))
 }

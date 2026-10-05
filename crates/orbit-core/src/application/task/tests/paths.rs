@@ -1,169 +1,83 @@
-//! ORB-10475: `normalize_workspace_path` error coverage. The field is a
-//! repository-relative/absolute filesystem path (never a logical/bridge
-//! workspace id), and its errors must say so with a concrete example.
+//! Context selector and path validation coverage. Task context selectors are
+//! always canonicalized against the repository root, and operator surfaces
+//! reject selectors whose filesystem anchor does not exist. A `symbol:` name
+//! and kind are not looked up.
 
 use orbit_common::OrbitError;
+use orbit_store::maintenance::task_registry::{
+    BindWorkspaceParams, TaskRegistryStore, task_registry_path, write_workspace_config,
+};
 use tempfile::tempdir;
 
-use crate::application::task::paths::{
-    canonicalize_context_files_for_read, normalize_context_files_for_write,
-    normalize_workspace_path, task_path_exists,
-};
+use super::{assert_isolated_child, enter_isolated_child};
+use crate::OrbitRuntime;
 
-fn expect_invalid_input(result: Result<Option<String>, OrbitError>) -> String {
-    match result {
+/// Run one selector through the operator-surface guard and return the
+/// `InvalidInput` message it must produce.
+fn expect_selector_rejection(runtime: &OrbitRuntime, selector: &str) -> String {
+    match runtime.ensure_context_selectors_exist(&[selector.to_string()]) {
         Err(OrbitError::InvalidInput(message)) => message,
-        other => panic!("expected InvalidInput, got {other:?}"),
+        other => panic!("expected InvalidInput for `{selector}`, got {other:?}"),
     }
 }
 
-#[test]
-fn no_workspace_input_resolves_to_none() {
-    let repo_root = tempdir().expect("create repo root");
+/// Shared-root / `--root` layout: tasks are stored for a registered checkout
+/// even when this runtime open has no cwd binding. The guard must use that
+/// checkout, not `parent(orbit-root)`.
+fn explicit_root_runtime() -> (tempfile::TempDir, OrbitRuntime) {
+    assert_isolated_child();
+    let root = tempdir().expect("create tempdir");
+    let data_dir = root.path().join("orbit-root");
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&data_dir).expect("create data dir");
+    std::fs::create_dir_all(repo.join("src")).expect("create repo src");
+    std::fs::write(repo.join("src/main.rs"), b"fn main() {}\n").expect("write source");
+    std::fs::write(data_dir.join("config.toml"), b"[workflow]\n").expect("write orbit config");
 
-    let resolved =
-        normalize_workspace_path(repo_root.path(), None).expect("missing workspace is optional");
-
-    assert_eq!(resolved, None);
-}
-
-#[test]
-fn repository_root_path_is_accepted() {
-    let repo_root = tempdir().expect("create repo root");
-
-    let resolved = normalize_workspace_path(repo_root.path(), Some("."))
-        .expect("repo root path is a valid workspace");
-
-    let canonical_repo_root = repo_root
-        .path()
-        .canonicalize()
-        .expect("canonicalize repo root");
-    assert_eq!(
-        resolved,
-        Some(canonical_repo_root.to_string_lossy().into_owned())
-    );
-}
-
-#[test]
-fn absolute_repository_path_is_accepted() {
-    let repo_root = tempdir().expect("create repo root");
-    let canonical_repo_root = repo_root
-        .path()
-        .canonicalize()
-        .expect("canonicalize repo root");
-
-    let resolved = normalize_workspace_path(
-        repo_root.path(),
-        Some(canonical_repo_root.to_str().unwrap()),
+    write_workspace_config(
+        &data_dir,
+        &orbit_store::maintenance::task_registry::WorkspaceConfig {
+            schema_version: 1,
+            workspace_id: "ws_repo".to_string(),
+        },
     )
-    .expect("absolute repo path is a valid workspace");
+    .expect("write workspace identity");
+    TaskRegistryStore::open(&task_registry_path(&data_dir))
+        .expect("open task registry")
+        .bind_workspace(BindWorkspaceParams {
+            partition_id: Some("ws_repo".to_string()),
+            slug: "repo".to_string(),
+            repo_root: repo,
+            workspace_path: root.path().join("repo"),
+            orbit_dir: data_dir.clone(),
+            repo_fingerprint: None,
+        })
+        .expect("bind stored checkout");
 
-    assert_eq!(
-        resolved,
-        Some(canonical_repo_root.to_string_lossy().into_owned())
-    );
+    let runtime =
+        OrbitRuntime::from_roots(&data_dir, &data_dir).expect("build explicit-root runtime");
+    (root, runtime)
 }
 
 #[test]
-fn logical_workspace_id_is_rejected_with_a_path_form_error() {
-    let repo_root = tempdir().expect("create repo root");
+fn explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors() {
+    if !enter_isolated_child(
+        module_path!(),
+        "explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors",
+    ) {
+        return;
+    }
+    let (_root, runtime) = explicit_root_runtime();
 
-    // `ws_orbit` reads like a bridge/broker logical workspace id; it is not a
-    // directory under the repo root, so it must fail — but the failure must
-    // explain that a *path* was expected, not merely that the directory is
-    // missing.
-    let message =
-        expect_invalid_input(normalize_workspace_path(repo_root.path(), Some("ws_orbit")));
-
-    assert!(
-        message.contains("filesystem path"),
-        "error must state the accepted form is a filesystem path: {message}"
-    );
-    assert!(
-        message.contains("logical workspace id"),
-        "error must call out that a logical/bridge id is not accepted: {message}"
-    );
-    assert!(
-        !message.to_lowercase().contains("workspace id must"),
-        "error must never describe a logical id as the required form: {message}"
-    );
-}
-
-#[test]
-fn out_of_repository_path_is_rejected_naming_the_repository() {
-    let repo_root = tempdir().expect("create repo root");
-    let outside = tempdir().expect("create outside dir");
-    let canonical_outside = outside.path().canonicalize().expect("canonicalize outside");
-
-    let message = expect_invalid_input(normalize_workspace_path(
-        repo_root.path(),
-        Some(canonical_outside.to_str().unwrap()),
-    ));
-
-    assert!(
-        message.contains("inside repository"),
-        "error must name that the path must stay inside the repository: {message}"
-    );
-    let canonical_repo_root = repo_root
-        .path()
-        .canonicalize()
-        .expect("canonicalize repo root");
-    assert!(
-        message.contains(canonical_repo_root.to_string_lossy().as_ref()),
-        "error must cite the repository root it must stay inside: {message}"
-    );
-}
-
-#[test]
-fn path_to_a_file_is_rejected_as_not_a_directory() {
-    let repo_root = tempdir().expect("create repo root");
-    let file_path = repo_root.path().join("not-a-dir.txt");
-    std::fs::write(&file_path, b"content").expect("write file");
-
-    let message = expect_invalid_input(normalize_workspace_path(
-        repo_root.path(),
-        Some("not-a-dir.txt"),
-    ));
-
-    assert!(
-        message.contains("directory"),
-        "error must state a directory is required: {message}"
-    );
-}
-
-#[test]
-fn symbol_context_validation_uses_only_the_workspace_file_anchor() {
-    let workspace = tempdir().expect("create workspace");
-    std::fs::create_dir_all(workspace.path().join("src")).expect("create src");
-    std::fs::write(workspace.path().join("src/lib.rs"), b"pub fn run() {}\n")
-        .expect("write anchor");
-    let selector = "symbol:src/lib.rs#not::a::real::symbol:invented-kind";
-
-    let normalized =
-        normalize_context_files_for_write(vec![selector.to_string()], workspace.path())
-            .expect("opaque symbol metadata must not be resolved");
-
-    assert_eq!(normalized, vec![selector]);
-    assert!(task_path_exists(workspace.path(), selector));
-    assert_eq!(
-        canonicalize_context_files_for_read(&normalized, workspace.path()),
-        normalized
-    );
-}
-
-#[test]
-fn symbol_context_validation_rejects_missing_and_outside_anchors() {
-    let workspace = tempdir().expect("create workspace");
-    let outside = tempdir().expect("create outside root");
-    let outside_file = outside.path().join("outside.rs");
-    std::fs::write(&outside_file, b"fn outside() {}\n").expect("write outside anchor");
-
-    assert!(!task_path_exists(
-        workspace.path(),
-        "symbol:src/missing.rs#run:function"
-    ));
-    assert!(!task_path_exists(
-        workspace.path(),
-        &format!("symbol:{}#run:function", outside_file.display())
-    ));
+    for selector in ["dir:orbit-root", "dir:repo", "file:config.toml"] {
+        let message = expect_selector_rejection(&runtime, selector);
+        assert!(
+            message.contains(selector),
+            "error must name selector: {message}"
+        );
+        assert!(
+            message.contains("does not resolve to an existing in-workspace target"),
+            "data-dir/parent paths must not be treated as in-workspace targets: {message}"
+        );
+    }
 }

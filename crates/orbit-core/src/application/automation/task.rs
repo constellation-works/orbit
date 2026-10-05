@@ -17,6 +17,10 @@ pub(super) fn mint(
     attempt: &BatchAttempt,
 ) -> Result<String, OrbitError> {
     let mut params = crate::application::auto_tasks::scheduler::template_params(definition);
+    // [ORB-13896] After-landing review is reviewed by `operation.review_crew`.
+    if let Some(crew) = super::after_landing::review_crew_override(runtime, definition) {
+        params.crew = Some(crew);
+    }
 
     let invalid = |e: serde_json::Error| OrbitError::InvalidInput(e.to_string());
     let frozen_input = serde_json::to_string_pretty(attempt).map_err(invalid)?;
@@ -31,6 +35,21 @@ pub(super) fn mint(
     params.description.push_str(&format!(
         "\n\nEvidence template (replace action_id with this task ID and fill actual checks/findings):\n```json\n{evidence_template}\n```"
     ));
+
+    // A reissued attempt examines obligations an earlier action left unpaid, so
+    // the new task names that action instead of appearing unrelated to it.
+    if let Some(reissue) = &attempt.reissue {
+        let replaced = reissue
+            .from_action_id
+            .as_deref()
+            .unwrap_or("an unadmitted claim");
+        params.description.push_str(&format!(
+            "\n\nThis action was reissued by {} on {}: {replaced} closed without accepted coverage evidence. Reason: {}. The obligations above are unchanged; coverage still requires evidence from this task's assigned executor.",
+            reissue.by,
+            reissue.at.to_rfc3339(),
+            reissue.reason
+        ));
+    }
 
     runtime
         .add_task_admitted(params, None, None, Some(&attempt.action_key))
@@ -47,6 +66,10 @@ pub(super) fn outcome(
     };
 
     let task = runtime.get_task(id)?;
+    let stopped = matches!(
+        task.status,
+        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
+    );
     let artifact = runtime.get_task_artifact(id, COVERAGE_ARTIFACT)?;
 
     if let Some(artifact) = artifact {
@@ -64,16 +87,16 @@ pub(super) fn outcome(
                 artifact_digest: provenance.sha256.clone(),
                 authorized: owner.is_some(),
                 source_verified: source.verify_batch(&attempt.batch).is_ok(),
+                action_stopped: stopped,
             }));
         }
     }
 
-    if matches!(
-        task.status,
-        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
-    ) {
+    // A closed task with no evidence is the same unevidenced stop as one with
+    // invalid evidence: coverage stays owed and the retry budget applies.
+    if stopped {
         return Ok(ActionOutcome::Failed {
-            retryable: false,
+            retryable: true,
             reason: "task_closed_without_accepted_evidence".into(),
         });
     }
@@ -91,6 +114,14 @@ pub(super) fn job_outcome(
     };
 
     let run = runtime.show_job_run(id)?;
+    let stopped = matches!(
+        run.state,
+        JobRunState::Failed
+            | JobRunState::Cancelled
+            | JobRunState::Interrupted
+            | JobRunState::Success
+    ) && crate::application::job::run_owner_liveness(&run)
+        == crate::application::job::RunOwnerLiveness::Stopped;
 
     // Only a canonical persisted step result can attest job-only examination.
     let input = run.input.as_ref();
@@ -125,19 +156,12 @@ pub(super) fn job_outcome(
                 submitted_by: format!("run:{id}"),
                 authorized: true,
                 source_verified: source.verify_batch(&attempt.batch).is_ok(),
+                action_stopped: stopped,
             }));
         }
     }
 
-    if matches!(
-        run.state,
-        JobRunState::Failed
-            | JobRunState::Cancelled
-            | JobRunState::Interrupted
-            | JobRunState::Success
-    ) && crate::application::job::run_owner_liveness(&run)
-        == crate::application::job::RunOwnerLiveness::Stopped
-    {
+    if stopped {
         return Ok(ActionOutcome::Failed {
             retryable: run.state == JobRunState::Failed,
             reason: "job_stopped_without_accepted_evidence".into(),

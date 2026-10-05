@@ -13,6 +13,9 @@ workspace = true
 
 [dependencies]
 chrono.workspace = true
+flate2.workspace = true
+getrandom.workspace = true
+jsonschema.workspace = true
 orbit-exec = { path = "../orbit-exec" }
 orbit-policy = { path = "../orbit-policy" }
 orbit-common = { path = "../orbit-common" }
@@ -20,12 +23,17 @@ orbit-types = { path = "../orbit-types" }
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
-orbit-common = { path = "../orbit-common", features = ["test-util"] }
 rusqlite.workspace = true
-tempfile = "3"
 tracing-subscriber.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

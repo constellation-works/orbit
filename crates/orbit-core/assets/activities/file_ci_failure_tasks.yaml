@@ -6,7 +6,15 @@ spec:
   type: deterministic
   description: >
     Turn one `collect_ci_evidence` snapshot into quarantined proposed bug tasks.
-    Clusters the snapshot's current, non-stale failures by root cause
+    Files only landing-ref pushes whose job checkout matches the event commit,
+    or job checkouts matching an observed integration/release tip. Unmerged
+    orbit task branches never mint landing repairs: their complete evidence
+    is retained as idempotent artifacts on the branch's owning task and reported
+    in attributed, without changing its status or producing pilot candidates.
+    A missing owner stays retryable; other non-landing failures are reported in
+    excluded_branch_failures. The guard also applies to older snapshots that
+    included task PR failures in current_failures.
+    Clusters the snapshot's current, non-stale landing failures by root cause
     (workflow, failing job, failing step, normalized error signature, and the
     commit the runner actually tested) so one regression repeated across a push
     run and a pull-request run of the same commit becomes one task rather than
@@ -17,7 +25,11 @@ spec:
     fallback. Current failures may include already-failed jobs from an
     in-flight workflow when that evidence is complete; a pending check is
     never present in the snapshot as a current failure and must not be filed. Each surviving cluster is filed at `status: proposed` with the
-    collected evidence rendered inline in the description, so the implementing
+    collected evidence rendered inline in the description, tagged `os:macos`
+    or `os:linux` from the failing jobs' runner labels (or the workflow's
+    literal `runs-on` when the snapshot carries none) so only a host that can
+    reproduce it admits it, and left untagged for a Windows or unrecognised
+    runner, so the implementing
     agent never needs a GitHub credential; no `required_tools` are attached and
     the task can later ship through the ordinary pull-request route only after
     task-pilot validation and explicit CI-sweep admission. Filing itself never
@@ -144,6 +156,19 @@ spec:
               type: array
               items:
                 type: string
+            runner_os:
+              type: array
+              description: >
+                Per run, the failing job's runner OS evidence: `os` (or null),
+                `source` (`job_labels`, `workflow_runs_on` or `unknown`) and
+                the `labels` it was read from.
+            os_tags:
+              type: array
+              items:
+                type: string
+              description: >
+                The `os:` tags filed on the task: `os:macos`/`os:linux` when
+                every run's runner is macOS or Linux, none otherwise.
       pilot_candidates:
         type: array
         description: >
@@ -172,6 +197,12 @@ spec:
               enum: [exact_key, material_coverage, confirmed_duplicate, covered_by_repair]
             match_evidence:
               type: object
+      attributed:
+        type: array
+        description: Task-branch failures retained as artifacts on their owning tasks.
+      excluded_branch_failures:
+        type: array
+        description: Non-landing failures without an owning task branch; no repair is filed.
       repair_assessments:
         type: array
         description: >

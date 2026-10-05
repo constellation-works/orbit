@@ -6,6 +6,7 @@
 //! this command cannot drift from the tool's behavior or relax its checks.
 
 use clap::Args;
+use orbit_common::security::redaction::redact_all;
 use orbit_core::{AgentInvokeRequest, OrbitRuntime};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::json;
@@ -27,16 +28,18 @@ The agent investigates and reports. It changes no task, makes no commit, opens
 no pull request, and dispatches no further work.
 
 Submission is asynchronous: this prints the durable run ID and returns. Track
-and read the invocation with the ordinary run surfaces:
-  orbit run show <RUN_ID>      structured state, outcome, and bounded preview
-  orbit run logs <RUN_ID>      the complete captured output
+and read the invocation with the ordinary run surfaces, or pass --wait to
+block until terminal and print the answer (nonzero exit on failure):
+  orbit run show <RUN_ID>      outcome, the agent's answer, and live progress
+  orbit run logs <RUN_ID> --follow  stream output until terminal
   orbit run cancel <RUN_ID>    stop it and terminate its process tree
 
 Examples:
   orbit run agent 'why does the sweep clock keep restarting?'
   orbit run agent 'explain this failure' --cwd /srv/checkout --crew qa
-  orbit run agent 'long investigation' --timeout 3600 --json
-  orbit run agent 'retryable submit' --idempotency-key incident-4821"
+  orbit run agent 'long investigation' --wait --timeout 1h --json
+  orbit run agent 'retryable submit' --idempotency-key incident-4821
+  orbit run agent 'read Cargo.toml' --provider-sandbox read-only"
 )]
 pub struct RunAgentArgs {
     /// What to investigate.
@@ -53,18 +56,34 @@ pub struct RunAgentArgs {
     #[arg(long)]
     pub crew: Option<String>,
 
-    /// Wall-clock bound in seconds. Defaults to 1800; the maximum is 7200.
-    #[arg(long)]
+    /// Provider wall-clock bound (seconds, or e.g. 30m, 2h). Defaults to 1800;
+    /// maximum 7200. Queue time is excluded.
+    #[arg(long, value_parser = parse_agent_timeout)]
     pub timeout: Option<u64>,
+
+    /// Block until terminal and print the agent's answer; exit nonzero on failure.
+    #[arg(long)]
+    pub wait: bool,
 
     /// Retry handle. Resubmitting with a key a recent submission already used
     /// resolves that run instead of starting a second agent.
     #[arg(long)]
     pub idempotency_key: Option<String>,
 
+    /// Per-invocation provider inner-sandbox override (Codex: read-only,
+    /// workspace-write, or danger-full-access). Values the provider does not
+    /// support are refused.
+    #[arg(long)]
+    pub provider_sandbox: Option<String>,
+
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
+}
+
+fn parse_agent_timeout(raw: &str) -> Result<u64, String> {
+    raw.parse::<u64>()
+        .or_else(|_| crate::parse::parse_duration_seconds(raw).map_err(|error| error.to_string()))
 }
 
 impl Execute for RunAgentArgs {
@@ -90,15 +109,26 @@ impl Execute for RunAgentArgs {
             crew: self.crew.as_deref(),
             timeout_seconds: self.timeout,
             idempotency_key: self.idempotency_key.as_deref(),
+            provider_sandbox: self.provider_sandbox.as_deref(),
             actor: None,
             session_context: &session_context,
         })?;
 
-        let doc = json!({
+        // Submission data can carry sensitive values. Scrub warnings once so
+        // progress on stderr and both output projections share the same boundary.
+        let warnings: Vec<String> = submission
+            .warnings
+            .iter()
+            .map(|warning| redact_all(warning))
+            .collect();
+        let mut doc = json!({
             "run_id": submission.run_id,
             "job_id": submission.job_id,
             "submitted_at": submission.submitted_at,
             "state": if submission.queued { "queued" } else { "submitted" },
+            "queued": submission.queued,
+            "queue_position": submission.queue_position,
+            "waited": self.wait,
             "deduplicated": submission.deduplicated,
             "timeout_seconds": submission.timeout_seconds,
             "authorized_by": submission.admission.authorized_by,
@@ -106,6 +136,8 @@ impl Execute for RunAgentArgs {
             "workspace_path": submission.admission.workspace_path,
             "cwd": submission.admission.cwd,
             "sandboxed": false,
+            "provider_sandbox": submission.provider_sandbox,
+            "warnings": warnings,
         });
         let mut lines = Vec::new();
         if submission.deduplicated {
@@ -130,6 +162,25 @@ impl Execute for RunAgentArgs {
                 submission.admission.authorized_by,
                 submission.admission.authorizer_provenance
             ));
+            lines.push(format!("provider sandbox: {}", submission.provider_sandbox));
+        }
+        lines.extend(warnings.iter().cloned());
+        if self.wait {
+            for warning in &warnings {
+                eprintln!("{warning}");
+            }
+            let result = runtime.wait_agent_invoke_run(&submission.run_id, None)?;
+            doc["state"] = json!(result.outcome);
+            doc["agent_invocation"] = serde_json::to_value(&result).map_err(|error| {
+                orbit_core::OrbitError::Execution(format!("encode agent invocation: {error}"))
+            })?;
+            doc["answer"] = doc["agent_invocation"]["answer"].clone();
+            lines.push(super::show::agent_invocation_lines(
+                &doc["agent_invocation"],
+            ));
+            return Ok(Payload::detail(doc, lines.join("\n"))
+                .with_exit_code(i32::from(result.outcome != "success"))
+                .into());
         }
         lines.push(format!(
             "track it: orbit run show {run_id}  |  orbit run logs {run_id}  |  orbit run cancel {run_id}",

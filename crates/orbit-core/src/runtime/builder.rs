@@ -1,15 +1,15 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_policy::PolicyEngine;
-use orbit_search::{EmbedWorker, VectorStore};
+use orbit_search::LexicalIndex;
 use orbit_store::Store;
 use orbit_store::compose::{
-    WorkspaceTaskBackends, audit_event_store_sqlite, automation_store, coordination_task_backends,
+    CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
     global_executor_def_store, global_policy_def_store, invocation_store_from_store,
-    layered_policy_def_store, operation_store, review_store, task_reservation_store_sqlite,
-    tool_store_sqlite, v2_audit_store_from_store, workspace_job_run_store,
-    workspace_policy_def_store, workspace_task_backends,
+    layered_policy_def_store, plugin_store_sqlite, review_store, tool_store_sqlite,
+    v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
+    workspace_observational_backends, workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceConfig, read_workspace_config_optional,
@@ -35,7 +35,27 @@ use crate::skill_catalog::SkillCatalog;
 /// Job-run partition used when an explicit `--root` data directory is opened
 /// without a selected checkout. Never written to `config.yaml` and never
 /// inserted as a `workspace_checkout_bindings` row.
-const UNBOUND_DATA_DIR_WORKSPACE_ID: &str = "ws_unbound-data-dir";
+///
+/// Public because it is the one partition id no registry ever claims: host
+/// maintenance that decides whether a task-store partition is orphaned must
+/// recognize it rather than delete the tasks every `--root` write lands in
+/// [ORB-12119].
+pub const UNBOUND_DATA_DIR_PARTITION_ID: &str = "ws_unbound-data-dir";
+
+/// How much state a runtime may write while it is being composed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StateAccess {
+    /// An ordinary command: initializes whatever state it needs.
+    Write,
+    /// An observation-only command admitted to its own generation. Incidental
+    /// persistence is best-effort, and it never initializes a task partition
+    /// only to read it.
+    ReadOnly,
+    /// A read-only join of a foreign generation: no operational state writes.
+    /// Tool dispatch may append audit telemetry through its separate,
+    /// migration-free connection without widening these state handles.
+    WriteFree,
+}
 
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config, global skills, and SQLite. Shared root provides existing workspace
@@ -46,22 +66,25 @@ pub(crate) fn build_context_from_roots(
     local_root: &Path,
     binding: Option<&WorkspaceRuntimeBinding>,
     runtime_config: &ResolvedConfig,
-    host_lifetime: HostLifetime,
+    _host_lifetime: HostLifetime,
+    access: StateAccess,
 ) -> Result<OrbitContext, OrbitError> {
+    let write_free = access == StateAccess::WriteFree;
     let persistence = &runtime_config.persistence;
 
-    let store = Store::open(&persistence.audit_db)?;
+    let store = if write_free {
+        Store::open_read_only(&persistence.audit_db)?
+    } else {
+        Store::open(&persistence.audit_db)?
+    };
 
-    // workspace_root IS the .orbit dir. For custom roots outside the repo,
-    // prefer the registry's workspace root over the parent-directory fallback.
-    let repo_root = binding
-        .map(|binding| binding.repo_root.clone())
-        .unwrap_or_else(|| {
-            workspace_root
-                .parent()
-                .unwrap_or(workspace_root)
-                .to_path_buf()
-        });
+    // workspace_root IS the .orbit dir. A cwd checkout binding is authoritative.
+    // Without one, an explicit data dir must not mint parent(orbit-dir) as a
+    // synthetic repository: that root is not the workspace tasks are stored in,
+    // so every consumer of `repo_root` (including the context-selector guard)
+    // would validate against the wrong tree. Recover the stored checkout, and
+    // if none exists keep paths inside the data dir itself.
+    let repo_root = repo_root_for_runtime(global_root, workspace_root, binding, write_free)?;
     let paths = WorkspacePaths::new_with_local(
         repo_root,
         workspace_root.to_path_buf(),
@@ -69,7 +92,9 @@ pub(crate) fn build_context_from_roots(
         global_root.to_path_buf(),
     );
 
-    let task_backends = build_v2_task_backends(global_root, &paths, binding)?;
+    let coordinated = build_v2_task_backends(global_root, &paths, binding, store.clone(), access)?;
+    let task_backends = coordinated.task;
+    let task_reservation_store = coordinated.reservation;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
     let workspace_id = if is_explicit_data_dir(global_root, &paths.orbit_dir) {
         binding
@@ -84,8 +109,8 @@ pub(crate) fn build_context_from_roots(
             .as_ref()
             .map(|config| config.workspace_id.clone())
     }
-    .unwrap_or_else(|| UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
-    let import_report = if configured.is_none() {
+    .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
+    let import_report = if write_free || configured.is_none() {
         orbit_store::workflow::legacy_state::ImportReport::skipped()
     } else {
         match orbit_store::workflow::legacy_state::import_legacy_v2_state(
@@ -113,25 +138,34 @@ pub(crate) fn build_context_from_roots(
             "skipped malformed legacy state records during SQLite import",
         );
     }
-    let semantic_vector_store = Arc::new(VectorStore::open(&persistence.semantic_db)?);
-    let semantic_worker = match host_lifetime {
-        HostLifetime::LongLived => Arc::new(EmbedWorker::start((*semantic_vector_store).clone())),
-        HostLifetime::ShortLived => Arc::new(EmbedWorker::disabled()),
+    let lexical_index = if write_free {
+        LexicalIndex::open_read_only(&persistence.semantic_db)?
+    } else {
+        LexicalIndex::open(&persistence.semantic_db)?
     };
     let job_run_store = workspace_job_run_store(store.clone(), workspace_id);
 
     // Executors and policies are global-only. Jobs always persist run state
     // under the workspace state directory.
     let tool_store = tool_store_sqlite(store.clone());
+    let plugin_store = plugin_store_sqlite(store.clone());
     let audit_event_store = audit_event_store_sqlite(store.clone());
-    let task_reservation_store = task_reservation_store_sqlite(store.clone());
-    let host_store = OrbitHostStore {
-        sqlite: store.clone(),
-        automation: automation_store(store.clone())?,
-        review: review_store(store.clone())?,
-        operation: operation_store(store.clone())?,
-        v2_audit: v2_audit_store_from_store(store.clone()),
-        invocation: invocation_store_from_store(store.clone()),
+    let host_store = if write_free {
+        OrbitHostStore {
+            sqlite: store.clone(),
+            automation: Arc::new(store.clone()),
+            review: Arc::new(store.clone()),
+            v2_audit: v2_audit_store_from_store(store.clone()),
+            invocation: invocation_store_from_store(store.clone()),
+        }
+    } else {
+        OrbitHostStore {
+            sqlite: store.clone(),
+            automation: automation_store(store.clone())?,
+            review: review_store(store.clone())?,
+            v2_audit: v2_audit_store_from_store(store.clone()),
+            invocation: invocation_store_from_store(store.clone()),
+        }
     };
     let executor_def_store = global_executor_def_store(persistence.executor_dir.clone());
     let global_policy_store = global_policy_def_store(persistence.policy_dir.clone());
@@ -147,7 +181,7 @@ pub(crate) fn build_context_from_roots(
 
     let skill_catalog =
         SkillCatalog::layered(persistence.skill_dir.clone(), global_root.join("skills"));
-    if let Err(error) = skill_catalog.ensure_layout() {
+    if !write_free && let Err(error) = skill_catalog.ensure_layout() {
         if error.is_readonly_or_access_failure() {
             tracing::warn!(
                 target: "orbit.core.bootstrap",
@@ -163,12 +197,65 @@ pub(crate) fn build_context_from_roots(
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
     load_external_tools(&store, &mut registry)?;
+    // Plugins register after the builtins so a namespace collision is caught
+    // against the real surface, and each plugin fails closed on its own.
+    // The workspace `[plugin_enablement]` toggles narrow the host state for
+    // this runtime only; every surface below reads the narrowed load.
+    let plugin_load = crate::runtime::plugin::host::load_workspace_plugins(
+        global_root,
+        &paths.orbit_dir,
+        &store,
+        &mut registry,
+        &runtime_config.plugins,
+        &runtime_config.plugin_enablement,
+    );
+    for namespace in runtime_config.plugin_enablement.keys() {
+        if !plugin_load
+            .registered
+            .iter()
+            .any(|entry| &entry.name == namespace)
+        {
+            tracing::warn!(
+                target: "orbit.core.plugin",
+                plugin = %namespace,
+                "[plugin_enablement] names plugin '{namespace}', which is not installed on this \
+                 host; the toggle is ignored"
+            );
+        }
+    }
+    // Config admission needs the installed plugins' schemas to tell a declared
+    // `plugins.<ns>.<key>` from a typo, and a `[plugins.<ns>]` section with no
+    // plugin behind it is a warning, never a failed build (§3). A plugin
+    // switched off in this workspace still owns its section.
+    crate::runtime::plugin::config::publish_plugin_config_contracts(
+        &plugin_load
+            .registered
+            .iter()
+            .filter(|entry| {
+                entry.status == orbit_types::plugin::PluginStatus::Active
+                    || entry.disabled_by
+                        == Some(orbit_types::plugin::PluginDisabledLayer::Workspace)
+            })
+            .filter_map(|entry| entry.loaded.as_deref())
+            .collect::<Vec<_>>(),
+        &runtime_config.plugins,
+    );
+    for diagnostic in &plugin_load.diagnostics {
+        tracing::warn!(
+            target: "orbit.core.plugin",
+            plugin = %diagnostic.plugin,
+            status = diagnostic.status.as_str(),
+            "{}",
+            diagnostic.message
+        );
+    }
 
     let execution_env_policy = runtime_config.execution_env.clone();
     let codex_execution_policy = runtime_config.codex_execution.clone();
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
     let scoring_enabled = runtime_config.scoring_enabled;
+    let automation_stall_window_minutes = runtime_config.automation_stall_window_minutes;
     // Config owns PR settings as plain data; Core is the composition layer
     // that translates them into the execution engine's shape.
     let pr_config = PrConfig {
@@ -176,7 +263,24 @@ pub(crate) fn build_context_from_roots(
     };
     let workflow_base_branch = runtime_config.workflow_base_branch.clone();
     let workflow_auto_ship = runtime_config.workflow_auto_ship;
-    let routines_source = runtime_config.routines_source;
+    let workflow_required_validation_commands = runtime_config
+        .snapshot
+        .workflow_required_validation_commands
+        .clone();
+    let workflow_distributed_completion = runtime_config
+        .snapshot
+        .workflow_distributed_completion
+        .clone();
+    // Config admitted the mode's spelling; Core translates it into the exec
+    // layer's policy, as it does for PR settings above.
+    let validation_env = orbit_exec::ValidationEnvPolicy {
+        login_shell: runtime_config.snapshot.workflow_validation_env_login_shell,
+        path: runtime_config.snapshot.workflow_validation_env_path.clone(),
+        path_mode: orbit_exec::ValidationPathMode::parse(
+            &runtime_config.snapshot.workflow_validation_env_path_mode,
+        )
+        .unwrap_or_default(),
+    };
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
     let system_crew = runtime_config.system_crew.clone();
@@ -189,17 +293,17 @@ pub(crate) fn build_context_from_roots(
             task_backends.document,
             task_backends.history,
             task_backends.artifact,
-            semantic_vector_store,
-            semantic_worker,
+            lexical_index,
             task_reservation_store,
             job_run_store,
             tool_store,
+            plugin_store,
             audit_event_store,
             executor_def_store,
             policy_def_store,
             host_store,
         ),
-        OrbitExecutionAssets::new(Arc::new(registry), skill_catalog),
+        OrbitExecutionAssets::new(Arc::new(registry), skill_catalog, plugin_load),
         OrbitPolicyContext::new(
             PolicyEngine::from_def(&active_policy)?,
             execution_env_policy,
@@ -209,25 +313,51 @@ pub(crate) fn build_context_from_roots(
             persistence,
             actor,
             scoring_enabled,
+            automation_stall_window_minutes,
             pr_config,
+            runtime_config.pr.clone(),
             workflow_base_branch,
             workflow_auto_ship,
-            routines_source,
+            runtime_config.resource_throttle.clone(),
+            workflow_required_validation_commands,
+            validation_env,
+            workflow_distributed_completion,
+            runtime_config.snapshot.task_pilot_freshness(),
             crews,
             default_crew,
             runtime_config.complexity_crews.clone(),
+            runtime_config.snapshot.final_recovery_crews().to_vec(),
             system_crew,
+            runtime_config.system_crew_alias.clone(),
             operation,
+            runtime_config.snapshot.worker_containment(),
         ),
     ))
 }
 
+/// Resolve the task-store partition this runtime reads and writes task
+/// bundles in.
+///
+/// The partition id is the task registry's own namespace
+/// (`workspace_bindings.workspace_id`, the directory name under
+/// `tasks/workspaces/`), not the workspace-registry `ws_*` id: a checkout
+/// bound before `workspace init` supplied an id keeps a minted
+/// `<slug>-<hash>` partition, and an unselected `--root` data directory lands
+/// in [`UNBOUND_DATA_DIR_PARTITION_ID`]. Only
+/// `binding.logical_workspace_id` names a workspace-registry row.
 fn build_v2_task_backends(
     global_root: &Path,
     paths: &WorkspacePaths,
     runtime_binding: Option<&WorkspaceRuntimeBinding>,
-) -> Result<WorkspaceTaskBackends, OrbitError> {
-    let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
+    store: Store,
+    access: StateAccess,
+) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
+    let write_free = access == StateAccess::WriteFree;
+    let registry = if write_free {
+        TaskRegistryStore::open_read_only(&task_registry_path(global_root))?
+    } else {
+        TaskRegistryStore::open(&task_registry_path(global_root))?
+    };
     let config = read_workspace_config_optional(&paths.orbit_dir)?;
     // Several registered repositories may intentionally share one explicit
     // Orbit root. That root has only one compatibility config.yaml and cannot
@@ -238,25 +368,30 @@ fn build_v2_task_backends(
     if is_explicit_data_dir(global_root, &paths.orbit_dir)
         && let Some(binding) = runtime_binding
     {
-        return Ok(coordination_task_backends(
+        if !write_free {
+            ensure_explicit_root_task_binding(&registry, paths, binding)?;
+        }
+        return compose_task_backends(
             registry,
             binding.logical_workspace_id.clone(),
-        ));
+            store,
+            access,
+        );
     }
-    let workspace_id_hint = runtime_binding.map(|binding| binding.workspace_id.as_str());
+    let partition_id_hint = runtime_binding.map(|binding| binding.task_partition_id.as_str());
     // An explicit `--root` data directory is not a checkout. Binding
     // `parent(data-dir)` as `repo_root` mints a synthetic workspace (e.g.
     // `tmp-XXXXXX` for `/tmp`) that later `workspace init --force` cannot
     // reclaim. Skip that mint unless a selected checkout supplied a hint.
-    if workspace_id_hint.is_none() && is_explicit_data_dir(global_root, &paths.orbit_dir) {
-        let workspace_id = config
+    if partition_id_hint.is_none() && is_explicit_data_dir(global_root, &paths.orbit_dir) {
+        let partition_id = config
             .as_ref()
             .map(|config| config.workspace_id.clone())
-            .unwrap_or_else(|| UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
-        return Ok(coordination_task_backends(registry, workspace_id));
+            .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
+        return compose_task_backends(registry, partition_id, store, access);
     }
-    let configured_id = config.as_ref().map(|config| config.workspace_id.as_str());
-    if let (Some(hint), Some(configured)) = (workspace_id_hint, configured_id)
+    let configured_partition_id = config.as_ref().map(|config| config.workspace_id.as_str());
+    if let (Some(hint), Some(configured)) = (partition_id_hint, configured_partition_id)
         && configured != hint
     {
         return Err(OrbitError::WorkspaceError(format!(
@@ -268,40 +403,50 @@ fn build_v2_task_backends(
     // row instead of asking `bind_workspace` for the drifted id, which fails
     // closed and takes every command in the checkout down (ORB-10985). The
     // config write below reconciles the checkout identity back onto it.
-    let workspace_id = match registry.find_checkout_by_orbit_dir(&paths.orbit_dir)? {
+    let partition_id = match registry.find_checkout_by_orbit_dir(&paths.orbit_dir)? {
         Some(bound) => {
-            if configured_id.is_some_and(|configured| configured != bound.workspace_id) {
+            if configured_partition_id.is_some_and(|configured| configured != bound.partition_id) {
                 tracing::warn!(
                     target: "orbit.core.bootstrap",
                     orbit_dir = %paths.orbit_dir.display(),
-                    bound_workspace_id = %bound.workspace_id,
-                    configured_workspace_id = configured_id,
-                    "checkout identity diverged from its task-registry binding; adopting the bound workspace"
+                    bound_partition_id = %bound.partition_id,
+                    configured_partition_id = configured_partition_id,
+                    "checkout identity diverged from its task-registry binding; adopting the bound partition"
                 );
             }
-            Some(bound.workspace_id)
+            Some(bound.partition_id)
         }
-        None => match configured_id.or(workspace_id_hint) {
+        None => match configured_partition_id.or(partition_id_hint) {
             Some(id) => Some(id.to_string()),
-            None => rebind_candidate_workspace_id(&registry, paths)?,
+            None if write_free => None,
+            None => rebind_candidate_partition_id(&registry, paths)?,
         },
     };
+    if write_free {
+        let partition_id = partition_id.ok_or_else(|| {
+            OrbitError::WorkspaceError(
+                "read-only generation join needs an existing task-registry binding".to_string(),
+            )
+        })?;
+        return compose_task_backends(registry, partition_id, store, access);
+    }
     let binding = registry.bind_workspace(BindWorkspaceParams {
-        workspace_id,
+        partition_id,
         slug: workspace_slug(&paths.repo_root),
         repo_root: paths.repo_root.clone(),
         workspace_path: paths.repo_root.clone(),
         orbit_dir: paths.orbit_dir.clone(),
         repo_fingerprint: None,
     })?;
-    if config
-        .as_ref()
-        .is_none_or(|config| config.workspace_id != binding.workspace_id)
+    if !write_free
+        && config
+            .as_ref()
+            .is_none_or(|config| config.workspace_id != binding.partition_id)
         && let Err(error) = write_workspace_config(
             &paths.orbit_dir,
             &WorkspaceConfig {
                 schema_version: 1,
-                workspace_id: binding.workspace_id.clone(),
+                workspace_id: binding.partition_id.clone(),
             },
         )
     {
@@ -319,16 +464,76 @@ fn build_v2_task_backends(
         }
     }
 
-    Ok(workspace_task_backends(
-        registry,
-        binding.workspace_id,
-        paths.orbit_dir.clone(),
-        Some(binding.workspace_path.to_string_lossy().into_owned()),
-        Some(binding.repo_root.to_string_lossy().into_owned()),
-    ))
+    compose_task_backends(registry, binding.partition_id, store, access)
 }
 
-fn rebind_candidate_workspace_id(
+fn compose_task_backends(
+    registry: TaskRegistryStore,
+    workspace_id: String,
+    store: Store,
+    access: StateAccess,
+) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
+    if access == StateAccess::WriteFree {
+        return workspace_observational_backends(registry, workspace_id, store);
+    }
+    // Opening the commit boundary initializes the partition: its directory,
+    // lock file and journal marker. A read must not mint a partition, and an
+    // absent one has no bundles and no pending commit to settle, so the
+    // observation handle reads exactly the same (empty) state.
+    let partition_dir = registry.workspace_partition_dir(&workspace_id)?;
+    let partition_exists = partition_dir.try_exists()?;
+    if access == StateAccess::ReadOnly && !partition_exists {
+        return workspace_observational_backends(registry, workspace_id, store);
+    }
+    match workspace_coordinated_backends(registry.clone(), workspace_id.clone(), store.clone()) {
+        Ok(backends) => Ok(backends),
+        // A partition on storage this process cannot write: the
+        // setup writes are incidental, and the storage itself refuses any
+        // real write, naming its path. Reads stay available, as they were
+        // before the boundary existed. CLI tool dispatch can open a writable
+        // runtime even for a read, so an absent partition must also open as
+        // empty. A real mutation still fails when it tries to write there.
+        Err(error) if error.is_readonly_or_access_failure() => {
+            tracing::warn!(
+                target: "orbit.core.bootstrap",
+                partition_dir = %partition_dir.display(),
+                error = %error,
+                "skipped incidental task-partition coordination setup; opening it observationally"
+            );
+            workspace_observational_backends(registry, workspace_id, store)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Recreate the selected checkout's task-registry binding after its index was
+/// lost. An explicit root has no checkout-local bootstrap path, so the
+/// registry binding supplied by the workspace catalog is the authoritative
+/// identity to restore.
+fn ensure_explicit_root_task_binding(
+    registry: &TaskRegistryStore,
+    paths: &WorkspacePaths,
+    binding: &WorkspaceRuntimeBinding,
+) -> Result<(), OrbitError> {
+    if registry
+        .find_workspace_binding(&binding.logical_workspace_id)?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    registry.bind_workspace(BindWorkspaceParams {
+        partition_id: Some(binding.logical_workspace_id.clone()),
+        slug: workspace_slug(&binding.repo_root),
+        repo_root: binding.repo_root.clone(),
+        workspace_path: binding.repo_root.clone(),
+        orbit_dir: paths.orbit_dir.clone(),
+        repo_fingerprint: None,
+    })?;
+    Ok(())
+}
+
+fn rebind_candidate_partition_id(
     registry: &TaskRegistryStore,
     paths: &WorkspacePaths,
 ) -> Result<Option<String>, OrbitError> {
@@ -336,12 +541,61 @@ fn rebind_candidate_workspace_id(
         registry.find_rebind_candidates(&paths.repo_root, &paths.repo_root, &paths.orbit_dir)?;
     match candidates.as_slice() {
         [] => Ok(None),
-        [candidate] => Ok(Some(candidate.workspace_id.clone())),
+        [candidate] => Ok(Some(candidate.partition_id.clone())),
         _ => Err(OrbitError::WorkspaceError(format!(
             "workspace config is missing and multiple task artifact bindings match '{}'; restore .orbit/config.yaml or choose a workspace binding",
             paths.orbit_dir.display()
         ))),
     }
+}
+
+/// Resolve `paths.repo_root` for this runtime open.
+///
+/// Repo-local `.orbit` directories still fall back to their parent. Explicit
+/// `--root` data directories do not: `parent(data-dir)` is not a checkout.
+fn repo_root_for_runtime(
+    global_root: &Path,
+    workspace_root: &Path,
+    binding: Option<&WorkspaceRuntimeBinding>,
+    write_free: bool,
+) -> Result<PathBuf, OrbitError> {
+    if let Some(binding) = binding {
+        return Ok(binding.repo_root.clone());
+    }
+    if is_explicit_data_dir(global_root, workspace_root) {
+        if let Some(repo_root) = stored_checkout_repo_root(global_root, workspace_root, write_free)?
+        {
+            return Ok(repo_root);
+        }
+        return Ok(workspace_root.to_path_buf());
+    }
+    Ok(workspace_root
+        .parent()
+        .unwrap_or(workspace_root)
+        .to_path_buf())
+}
+
+/// Checkout `repo_root` for the workspace this explicit data dir already
+/// stores tasks in (`config.yaml`), when a machine-local checkout exists.
+fn stored_checkout_repo_root(
+    global_root: &Path,
+    workspace_root: &Path,
+    write_free: bool,
+) -> Result<Option<PathBuf>, OrbitError> {
+    let Some(config) = read_workspace_config_optional(workspace_root)? else {
+        return Ok(None);
+    };
+    let registry = if write_free {
+        TaskRegistryStore::open_read_only(&task_registry_path(global_root))?
+    } else {
+        TaskRegistryStore::open(&task_registry_path(global_root))?
+    };
+    if let Some(checkout) = registry.find_workspace_checkout(&config.workspace_id)? {
+        return Ok(Some(checkout.repo_root));
+    }
+    Ok(registry
+        .find_checkout_by_orbit_dir(workspace_root)?
+        .map(|checkout| checkout.repo_root))
 }
 
 fn is_explicit_data_dir(global_root: &Path, orbit_dir: &Path) -> bool {

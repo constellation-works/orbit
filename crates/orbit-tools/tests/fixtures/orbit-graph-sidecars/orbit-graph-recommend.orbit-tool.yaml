@@ -1,0 +1,64 @@
+schemaVersion: 1
+name: orbit.graph.recommend
+description: Recommend repository files or symbols from leakage-safe verified change history. Requires an explicit repository path and explicit Orbit workspace for authoritative task lookup; never infers authority from cwd.
+parameters:
+- name: schema_version
+  description: Request contract version; currently 1.
+  param_type: integer
+  required: true
+- name: repository
+  description: Explicit absolute path to the Git repository to query.
+  param_type: string
+  required: true
+- name: workspace
+  description: Explicit Orbit workspace ID/name used for task-ID or hybrid lookup.
+  param_type: string
+  required: false
+- name: orbit_root
+  description: Explicit Orbit authority root; required for live task-ID or hybrid public calls.
+  param_type: string
+  required: false
+- name: query
+  description: Free-text change intent; mutually exclusive with task_id.
+  param_type: string
+  required: false
+- name: task_id
+  description: Orbit task ID; mutually exclusive with query.
+  param_type: string
+  required: false
+- name: task_snapshot
+  description: Versioned TaskAssociation; live use still verifies it against the configured public authority, while strict replay requires known_pre_execution evidence.
+  param_type: object
+  required: false
+- name: level
+  description: Destination granularity, file or symbol; defaults to file.
+  param_type: string
+  required: false
+- name: limit
+  description: Top-K result count from 1 through 100.
+  param_type: integer
+  required: false
+- name: branch
+  description: Landing branch history scope; defaults to main.
+  param_type: string
+  required: false
+- name: revision
+  description: Immutable target revision or Git revision expression; defaults to HEAD.
+  param_type: string
+  required: false
+- name: cutoff
+  description: Optional strict chronological cutoff as RFC3339 or unix:seconds.
+  param_type: string
+  required: false
+- name: hybrid
+  description: Use authoritative orbit.search hybrid task hits; workspace is then required.
+  param_type: boolean
+  required: false
+- name: hybrid_limit
+  description: Bounded authoritative search size from 1 through 100; defaults to 20.
+  param_type: integer
+  required: false
+- name: hybrid_hits
+  description: Optional externally captured ranked task hits for offline replay.
+  param_type: array
+  required: false

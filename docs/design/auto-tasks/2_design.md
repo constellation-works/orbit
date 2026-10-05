@@ -1,25 +1,24 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-08
-last_validated: 2026-09-08
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: auto-tasks
 doc_role: design
 type: design
 summary: Current implementation of the auto-task record, due-math, host-local cursor, generic scheduler, CRUD surfaces, the on-demand manual mint, and the dashboard Operations surface.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/operations.js"]
-related_features: [auto-tasks]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730]
+paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations.js"]
+related_features: [auto-tasks, routines]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422]
 ---
 
 # Auto-tasks — Design
 
 This doc covers the shipped implementation: the definition record, discovery,
-due computation, cursor state, the scheduler pass, and the CRUD surfaces. The
-routine machinery it rides on (cron eval, fire records, dashboard health) is
-documented under `docs/design/routines/`.
+due computation, cursor state, the scheduler pass, and the CRUD surfaces. The shared
+host clock and routine due-math it uses are documented under `docs/design/routines/`.
 
 The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
 from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
@@ -28,26 +27,70 @@ and unimplemented; existing scheduling and action semantics remain current.
 
 ## 1. The definition record
 
-`AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task.rs`) is a
+`AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task/definition.rs`) is a
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
-`schedule`, `template`, `dedupe`, and provenance (`created_by/at`,
-`updated_by/at`). `schedule` is an untagged enum — `{ cron: "…" }` or
-`{ every_minutes: N }`. `template` carries `title`, `description`,
-`acceptance_criteria`, `task_type`, `tags`, `priority`, `crew`, and `status`
-(default `backlog`). Minted tasks always receive
-`complexity: unassessed` — an explicit non-answer, not a fabricated
-`low`/`medium`/`hard` assessment. Definitions do not carry complexity;
-the shared template-to-task mapping stamps the value. Per [Run budgets are provider-neutral: wall-clock timeouts, never turn caps](./4_decisions.md#run-budgets-are-provider-neutral-wall-clock-timeouts-never-turn-caps) there are **no turn-based knobs**; `deny_unknown_fields`
+`schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b), and
+provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
+— `{ cron: "…" }` or `{ every_minutes: N }`. `template` carries `title`, `description`,
+`acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
+`crew`, and `status` (default `backlog`). An explicit complexity must be an
+assessed `low`, `medium`, or `hard` value and is copied to every minted task.
+The bundled defaults all carry reviewed explicit assessments. Legacy and custom
+definitions that omit `complexity` remain valid and mint
+`complexity: unassessed`, preserving the historical automated-creation behavior
+without pretending it is an assessment. Per [Run budgets are provider-neutral: wall-clock timeouts, never turn caps](./4_decisions.md#run-budgets-are-provider-neutral-wall-clock-timeouts-never-turn-caps) there are **no turn-based knobs**; `deny_unknown_fields`
 makes a stray `max_turns`/`turns` a hard parse error.
 
-Definitions live as `.orbit/auto_tasks/<name>.yaml` in the active checkout.
+Definitions are gitignored per-user files at
+`<registered-checkout>/.orbit/auto_tasks/<name>.yaml` for the host clock.
 Discovery (`loader.rs`) scans the directory, parses each file fail-closed, and
 rejects any file whose stem ≠ its `name`, so the on-disk identity and the
-`auto-task:<name>` provenance tag stay in lockstep. In a linked-worktree
-runtime, definition discovery and CRUD use `WorkspacePaths::local_dir`;
-host-local cursor state continues to use the shared root. This split makes
-definition edits ordinary branch content instead of transient tracked dirt in
-the registered primary checkout ([Route tracked auto-task definitions through the active worktree](./4_decisions.md#route-tracked-auto-task-definitions-through-the-active-worktree)).
+`auto-task:<name>` provenance tag stay in lockstep. The host clock calls
+`collect_auto_tasks` with the registered checkout's local Orbit directory.
+Gitignored copies in linked worktrees are separate files and do not reach that
+clock. Cursor state remains under the shared runtime root.
+
+`auto_task_show` and manual `auto_task_mint` use the same directory boundary.
+The lookup name must be one definition stem, so an absolute path or a
+parent-directory traversal is rejected before the filesystem is consulted. The
+`auto_tasks` directory must be a real directory directly under the Orbit
+directory, and `<name>.yaml` must be a regular file. A symlinked directory, a
+symlinked definition, or any other non-regular entry is refused before its
+bytes are read. A missing regular file remains absence; mint of an unknown
+in-scope name stays `InvalidInput`. Discovery already skipped those escapes,
+and the direct lookup follows that confinement [ORB-13422].
+
+`auto-task show` reports `definition_source.root` and
+`definition_source.path` in JSON, plus the same root and path in plain text, so
+the inspected YAML is never implicit. A logical `--workspace` name or `ws_*`
+ID issued from a cwd that is **not** a Git-linked worktree of that workspace
+still opens the registered primary checkout. Direct CLI calls from a Git-linked
+worktree still use that worktree's `local_root` for candidate inspection and
+local definition edits. A managed job run's `orbit.auto_task.add` and
+`orbit.auto_task.update` (including an `enabled` change) tool calls are instead
+brokered to the owning host process. The host checks the worker's workspace
+binding and runs CRUD with its registered checkout as `local_root`. Before
+writing, CRUD rejects loader errors, including a file stem/name mismatch. The
+child receives no raw write grant to the registered checkout's `auto_tasks`
+directory. A worktree-local write or shadow is never reported as a host update.
+
+To inspect a candidate definition in isolation from a cwd that is not that
+worktree, pass the linked checkout's absolute path:
+
+```bash
+orbit --workspace /absolute/path/to/linked-worktree auto-task show <name> --json
+```
+
+The path must resolve to the registered checkout or a Git-linked worktree for
+it; unrelated and invalid selectors fail closed. Only the read-only `show`
+and `list` operations open that explicit path as a candidate local definition
+root. Writable auto-task operations given a linked path from another cwd
+retain the registered primary checkout as their local root. Shared
+task/runtime state always remains on the registered primary; `--root` pointed
+at a worktree `.orbit` is still refused as a store shadow. Candidate
+inspection therefore neither redirects a mutation from an unrelated cwd,
+creates a worktree-local shadow task store, nor uses `--root` as a
+candidate-source override.
 
 ## 2. Due computation and catch-up collapse
 
@@ -84,9 +127,9 @@ absolute and need no cursor.
 
 `state.rs` stores one cursor per definition in
 `<orbit_dir>/state/auto-tasks.json` (`{ baseline_at, last_slot, last_fired_at,
-last_task_id, pending? }`). This is workspace-local, gitignored runtime state
-(the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
-git-versioned definition and a definition edit never races the scheduler.
+last_task_id, pending?, last_skip? }`). This is workspace-local, gitignored
+runtime state (the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
+definition YAML and a definition edit never races the scheduler's cursor writes.
 
 Admission and persistence share one stable sidecar lock,
 `.auto-tasks.json.lock`. The JSON file is replaced by rename, so exclusion is
@@ -103,17 +146,29 @@ instead of rendering a silent never-observed baseline.
 before mint and cleared only after the consumed-slot checkpoint. It is not a
 cross-store exactly-once token.
 
+`last_skip` is the most recent `skip_if_unchanged` decision: `{ at, slot,
+reason, ref, cursor_sha, tip_sha, cursor_task_id? }`. It explains why a due
+definition minted nothing — `orbit auto-task show <name>` renders it under
+`cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
+clears it.
+
 ## 4. The scheduler pass
 
 `scheduler::run_auto_task_scheduler_at` loads the workspace's definitions,
 then per enabled definition holds the sidecar lock, re-reads cursors, and
-either baselines, skips, or fires. Dry-run never writes. On first sight it
+either baselines, skips, or fires. Under that lock it first revalidates the
+loaded revision: a definition deleted since discovery skips as
+`definition_removed`, and one whose file no longer loads to the same
+definition skips as `definition_changed`, so a disable or template edit that
+completed before admission never mints (or evaluates a delivery) from the old
+revision. The next pass admits the current revision. Dry-run never writes. On first sight it
 records a baseline and fires nothing; otherwise it evaluates due-math. On
 `Fire`, if `dedupe = skip_if_open` and a task tagged `auto-task:<name>` is
 still open, it skips **without claiming or advancing the cursor** — so the
 pending occurrence fires (once, collapsed) the moment the queue drains.
 Otherwise it claims the slot, mints a `system_created` task from the template
-(tagged for provenance, complexity `unassessed`), and checkpoints
+(tagged for provenance and carrying its assessed complexity, or `unassessed`
+for a legacy omission), and checkpoints
 `last_slot` / `last_task_id`. Every minted title is `[auto-task] ` followed
 by the template title; the prefix is applied at the shared template-to-task
 mapping, so definition YAML titles stay clean and an already-prefixed
@@ -132,22 +187,91 @@ Recovery on the next locked pass:
   mint evidence; retry reconciles from `pending.task_id` or stays
   unresolved.
 
-The pass is the deterministic `run_auto_task_scheduler` action
-(`dispatch.rs`), wrapped in `auto_task_scheduler_pipeline` (`max_active_runs:
-1`), fired by the seeded `auto_task_scheduler` routine (`overlap: forbid`,
-minutely). Those job/routine knobs reduce overlap; they are not storage-level
-idempotency. Because it is a routine, its fires flow to `GET /api/routines`.
+### 4b. `skip_if_unchanged`: nothing landed, nothing to mint
+
+`dedupe` answers "is a prior instance still open"; it cannot answer "is there
+anything to do". A periodic review or validation sweep on a quiet integration
+branch therefore booted a worktree and an agent every interval only to report
+an empty window. The optional `skip_if_unchanged` block is the mint-time
+precondition that closes that gap:
+
+```yaml
+skip_if_unchanged:
+  ref: agent-main                      # integration branch whose tip is compared
+  cursor:
+    tags: [code-review, no-diff-expected, auto-task:code-review]
+    legacy_tags: [code-review-sweep, no-diff-expected]
+```
+
+Evaluated after dedupe, on `Fire` only. `orbit-core`'s
+`auto_tasks::change_probe` resolves the ref's tip, selects the sweep whose
+cursor applies, reads that sweep's cursor, and answers `Unchanged`, `Changed`
+or `Unknown`:
+
+- **Cursor task.** The newest `done` chore carrying every tag in `cursor.tags`;
+  `legacy_tags` is consulted only when the current tags select nothing, so a
+  rename does not reset the cursor. Newer `created_at` wins and the
+  lexicographically smaller id breaks a tie. The chore filter is load-bearing:
+  a `bug` finding filed by the sweep shares its tags and never records a
+  cursor. The `auto-task:<name>` provenance tag in `cursor.tags` is load-bearing
+  too: only minted sweeps carry it, so a hand-filed or full-review chore that
+  shares the other tags cannot become the cursor task. This mirrors the
+  selection the sweep templates describe, which remains the single
+  description of the rule.
+- **Cursor value.** The `sweep-cursor.json` task artifact
+  (`{ schema_version: 1, ref, cursor }`), written by the sweep templates. It is
+  a structured record, never prose parsed out of an execution summary.
+- **Comparison.** `Unchanged` when the tip equals the cursor commit or
+  `git merge-base --is-ancestor <tip> <cursor>` succeeds — both revisions are
+  verified commits first, so a non-zero exit is git's answer, not a failure to
+  answer.
+
+`Unchanged` skips **without claiming or advancing the cursor** (like
+`dedupe_open`), so the first commit past the cursor fires the pending
+occurrence. The skip is recorded as `last_skip` and as the tick report's
+reason, naming both SHAs and the cursor task.
+
+Everything else **fails open and mints**: no completed sweep, no artifact, a
+malformed or foreign-branch record, an unresolvable commit, an unresolvable
+ref, or a probe error. The tick report's reason then says which. A
+precondition that cannot be answered must never be the reason a sweep stops
+running.
+
+`code-review` and `qa-sweep` carry the block; the delivery-triggered
+definitions do not need it (they never fire on a quiet tree).
+
+The host tick calls `run_auto_task_scheduler_at` directly for every registered
+owner checkout after routine evaluation and under the host sweep lock. The pass
+is bounded by the finite discovered workspace and definition collections. Its
+sidecar lock remains the per-workspace exclusion boundary. No scheduler routine,
+job, activity, or job run is created, and fires do not appear on
+`GET /api/routines`; the tick report and Operations auto-task panel expose them.
 
 ## 5. CRUD surfaces
 
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
 add/list/show/update/toggle`) and the registry tools (`orbit.auto_task.*`). Add
-rejects duplicate names; update patches present fields; toggle flips `enabled`
-(disabling is preserved, never a delete). Both surfaces validate the schedule
+rejects duplicate names; update patches present fields; toggle (the CLI command,
+or `orbit.auto_task.update` with `enabled`) flips `enabled`
+(disabling pauses and preserves; removal is `delete`, below). Update and
+toggle re-read the definition and write it while holding the cursor sidecar
+lock (without loading the cursor, so a malformed cursor cannot block the
+kill-switch). Scheduler admission revalidates under the same lock, and
+concurrent edits each patch the latest committed definition instead of
+overwriting one another. Both surfaces validate the schedule
 (cron parse / interval > 0) and crew at write time, so a bad definition is never
 persisted. Successful writes replace the target atomically; a staging or rename
 failure leaves the previous definition bytes intact. In a primary checkout the
 local and shared roots are identical, preserving the operator-facing path.
+
+`delete.rs` owns removal (`orbit auto-task delete`; there is no MCP delete).
+Delete refuses while a minted task is open unless forced. It removes the
+definition and its cursor under the cursor lock, tears a delivery consumer down
+through the audited reset, and writes an audit event. Deleting a shipped
+default also records it under `optedOut` in the auto-task managed-asset
+manifest. Reconciliation then leaves it absent and doctor does not report it
+missing. `orbit auto-task restore` writes the shipped content back and clears
+the opt-out.
 
 `list` is fail-closed-aware. The loader collects a per-file `AutoTaskLoadError`
 for every definition it rejects, and after [ORB-10800] those errors are no longer
@@ -156,6 +280,13 @@ so one malformed file cannot hide the definitions that still work. A definition
 that silently stopped firing is discoverable as a `faulty` row on the
 `orbit doctor` artifacts surface rather than only via the one command that
 happens to touch it.
+
+The CLI's `auto-task add` and `auto-task update` accept `--complexity
+<low|medium|hard>`. Registry-tool callers supply the same optional field inside
+the template object. Add, update, YAML persistence, list/show, and mint all use
+the shared typed template, so an explicit value round-trips without a separate
+projection or default. Omitting the field remains supported for compatible
+custom and legacy definitions.
 
 ### 5a. Managed seeding
 
@@ -177,6 +308,8 @@ exactly one template→task mapping and a manually minted task is field-for-fiel
 identical to a fired one: same field mapping, same `[auto-task] ` title
 convention, same `auto-task:<name>` tag, same `system_created` marker, same
 template-supplied status.
+It also carries the template's explicit complexity; a template that omits the
+field receives the compatibility fallback `unassessed` at this one mapping.
 
 Title provenance is enforced by `OrbitRuntime::add_task_with_identity`, the
 shared creation boundary used by CLI, MCP, dashboard, scheduler, and internal
@@ -188,8 +321,17 @@ input-order-independent precedence: `qa-sweep`, `security-review`,
 The mint is **unconditional**. It ignores schedule due-math, `dedupe`, and
 `enabled`, and it neither reads nor writes the host-local cursor — an operator
 naming a definition explicitly means it, and a manual mint must not perturb
-scheduler state. Unknown names fail loudly (`InvalidInput` naming the
-definition), so the CLI exits non-zero rather than silently no-op'ing.
+scheduler state. Lookup and task creation share that cursor's lock with
+deletion and scheduler admission. The definition is read again under the lock:
+a delete that wins removes the file before a task exists, and a mint that wins
+is an open task by the time a non-force delete checks. The lock is not a
+cursor save, so the cursor bytes stay identical, including when no cursor file
+exists. Unknown names fail loudly (`InvalidInput` naming the
+definition), so the CLI exits non-zero rather than silently no-op'ing. Mint
+loads that definition through the confined show lookup above, so an escaped
+name or a symlinked definition is the same `InvalidInput` and creates no task.
+A regular in-scope definition remains mintable with those scheduling gates
+ignored.
 
 Deliberately rejected:
 
@@ -197,8 +339,8 @@ Deliberately rejected:
   would drift from the scheduler's, and the provenance parity that makes the
   feature worth having is precisely what drift destroys.
 - **Honoring `enabled`/`dedupe`/due-math.** That makes `mint` a "run the
-  scheduler early" button, which the existing `run_auto_task_scheduler` action
-  already is. The gap being closed is *manual mint*, not *early fire*.
+  scheduler early" button, which `orbit clock tick` already is. The gap being
+  closed is *manual mint*, not *early fire*.
 - **Advancing the cursor.** It would consume a real scheduled slot, silently
   cancelling the next automatic fire.
 - **`--dry-run` / `--force` flags.** `--force` has nothing to override — the mint
@@ -212,22 +354,22 @@ scheduler pass and defers that fire, exactly as an open fired instance does. The
 cursor does not advance, so the deferred occurrence fires once when the queue
 drains. This is the behavior the hand-copy workaround could not provide.
 
-Advertisement follows who does the work [ORB-10798]. Authoring a Git-versioned
-definition (`add`, `show`, `update`, `toggle`) is human/admin work: those tools
-are `register_inactive`, reachable through their `orbit auto-task` subcommands
-but absent from MCP `tools/list`. Reading the definitions (`list`) and minting
-one on demand (`orbit.auto_task.mint`) are what an executing agent needs, so
-both are registered at `McpToolScope::WorkspaceRequired`. The MCP tool is a thin
+Advertisement follows who does the work [ORB-10798]. Reading the definitions
+(`list`), minting one on demand (`orbit.auto_task.mint`), and host-brokered
+edits (`add`, and `update`, which also enables or disables a definition) are
+registered at `McpToolScope::WorkspaceRequired`. `show` is `register_inactive`,
+reachable through `orbit auto-task show` but absent from MCP `tools/list`;
+`toggle`, `delete`, and `restore` are CLI subcommands with no registered tool. The MCP tool is a thin
 adapter over the same `auto_task_mint`, so the mint stays unconditional and
 cursor-neutral on every surface.
 
 ## 5c. Dashboard Operations surface [ORB-10876]
 
-The dashboard Operations tab exposes the same CRUD/mint runtime rather than a
+The dashboard Automation tab (`#operations`) exposes the same CRUD/mint runtime rather than a
 second scheduler. `#operations/auto-tasks` lists the selected workspace's
-definitions (name, enabled, schedule, template summary, dedupe, last
-scheduler evaluation, last minted task id, and a structured next-evaluation
-state). Next evaluation is the schedule's next occurrence (§2b) computed by
+definitions (name, enabled, schedule, template summary including complexity,
+dedupe, last scheduler evaluation, last minted task id, and a structured
+next-evaluation state). Next evaluation is the schedule's next occurrence (§2b) computed by
 the scheduler's own arithmetic, never catch-up eligibility: a definition owed
 a make-up fire still shows the upcoming slot, not the owed one. It is also
 never an unqualified future timestamp: disabled rows show `Disabled` (a
@@ -235,9 +377,9 @@ theoretical slot is labeled hypothetical), delivery rows show
 waiting-for-deliveries, a missing cursor is never observed, and inspect
 failures are unavailable. Last scheduler evaluation is the host-local
 cursor; last minted task is the newest tagged instance and is labeled a
-manual mint when the two ids differ. Enable/disable writes `enabled` through `auto_task_toggle`
-with `expected_enabled` compare-and-swap, operator authorization
-(`auto_task.toggle`), and a dashboard-operations audit row. `Mint now` calls
+manual mint when the two ids differ. Enable/disable writes `enabled` through the runtime's `auto_task_toggle`
+with `expected_enabled` compare-and-swap, the governed dashboard operation
+`auto_task.toggle`, and a dashboard-operations audit row. `Mint now` calls
 `auto_task_mint` after the operator acknowledges the unconditional warning
 (`acknowledge_unconditional: true`); the request is refused without that
 disclosure. All-workspace and inactive/unknown workspace selections stay
@@ -309,8 +451,16 @@ accurate.
   YAML is not in a SQLite/search index; discovery is a directory scan. Acceptable
   at the expected cardinality (a handful of chores per workspace).
 - **Workspace-scoped.** The scheduler processes the definitions of the workspace
-  whose routine fired it, not a cross-workspace sweep. Multi-workspace fan-out is
-  a future direction (see 3_vision.md).
+  whose routine fired it, not a cross-workspace sweep. **[slated to change]** —
+  the tick fans out over every registered owner checkout on the host; each
+  checkout's definitions are still evaluated against that checkout's own store.
+- **Repo-global chores run once per owner** (pending change). Everything the
+  scheduler touches is host-local, so N owner checkouts of one repository are N
+  independent schedules by design. A definition whose effect lands on the shared
+  remote (a dependency bump, a release chore) is minted by each owner's clock;
+  `skip_if_open` sees only the local store and cannot dedupe that. Such a
+  definition must dedupe against the remote itself or must not ship as an
+  embedded default.
 - **Description secrets are not redacted** in the definition YAML (task creation
   still redacts when minting). Definitions are operator-authored, so this is
   low-risk, but not zero.

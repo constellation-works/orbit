@@ -7,18 +7,22 @@ sidebar:
 
 ## Setup
 
-Run targeted checks while iterating. Before handing off a task, run the
-repository's fast guardrail gate:
+Prerequisites and the first build are in the repository's
+[`CONTRIBUTING.md`](https://github.com/constellation-works/orbit/blob/main/CONTRIBUTING.md).
+
+Run targeted checks while you iterate. Before you hand off a task, run the fast
+guardrail gate:
 
 ```bash
 make ci-fast
 ```
 
-The full `make ci` workflow is the canonical PR merge gate and runs in CI.
+The full `make ci` is the merge gate and runs in CI on every pull request. For
+the complete pre-review set, see [PR Workflow](../pr-workflow/#checks).
 
 ## Website
 
-The website is independent of the Rust workspace.
+The website is separate from the Rust workspace.
 
 ```bash
 cd website
@@ -28,11 +32,14 @@ npm run check
 npm run build
 ```
 
-Every page is authored by hand under `website/src/content/docs/`; nothing is
-generated at build time. When you change CLI behavior, verify the affected page
+Docs pages under `website/src/content/docs/` are written by hand; none is
+generated from CLI help. When you change CLI behavior, check the affected page
 against `orbit <command> --help` from a current build and update it in the same
 pull request.
 
-## Orbit State
+## Orbit state
 
-Review `.orbit/` changes carefully before committing. Tracked asset changes are product changes. Mutable runtime artifacts are operational data unless the change is intentional.
+`.orbit/` is per-user workspace state. `orbit workspace init` adds it to
+`.gitignore`, so it is never committed. Orbit seeds the shipped defaults
+(activities, jobs, executors, policies, routines, auto-tasks, and skills) from
+`crates/orbit-core/assets/`; change a default there, not in `.orbit/`.

@@ -3,12 +3,12 @@ summary: "Policy & Sandboxing — Decisions"
 type: design
 title: "Policy & Sandboxing — Decisions"
 owner: claude
-last_updated: 2026-09-08
+last_updated: 2026-10-04
 status: Draft
 feature: policy-sandbox
 doc_role: decisions
 tags: ["policy-sandbox"]
-last_validated: 2026-09-08
+last_validated: 2026-10-04
 ---
 
 # Policy & Sandboxing — Decisions
@@ -150,7 +150,7 @@ A timed-out or interrupted child needs a chance to flush state before being kill
 ## Signal handler installation is process-global and refcounted
 
 **Recorded:** 2026-05-11 02:06:39.403286Z · [T20260417-0558-5]
-**Updated:** 2026-09-08 · [ORB-11697]
+**Updated:** 2026-09-16 · [DANI-10447]
 
 ### Context
 Installing parent-side SIGINT/SIGTERM handlers is a process-global operation. Two concurrent `run_process` calls cannot install independent handlers without races, and a panicking call must restore the prior handler so the orbit process itself remains interruptible. Holding the install mutex for each child's entire lifetime also silently serialized every supervised subprocess in the daemon (parallel job branches, MCP `proc.spawn`, web-server `gh` calls).
@@ -158,11 +158,14 @@ Installing parent-side SIGINT/SIGTERM handlers is a process-global operation. Tw
 ### Decision
 `SignalHandlerGuard::install` refcounts a process-wide handler. The first live waiter installs SIGINT/SIGTERM and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal (except `SIG_IGN`) so daemons still shut down. The mutex is held only for that install/drop critical section, never across `raise`. Each waiter registers its child's pgid in a lock-free table and snapshots a signal generation counter. The handler is async-signal-safe: atomic store of the signal, generation, and pending-forward, then `killpg` to every registered group. Waiters poll the generation counter and still run `terminate_process_group` so a missed slot or a race with unregister cannot leave a child running.
 
+The table must never hold a bare pid. `install` registers the child only when `getpgid(pid) == pid` and that group is not the supervisor's own (`getpgrp`); the waiter releases the slot as soon as the child is reaped, before it joins the output drains; and the handler re-validates `getpgid(pgid) == pgid` and skips `getpgrp()` before each `killpg`. A child whose pid is not registered is still terminated by the waiter's own `terminate_process_group` on the next poll. [DANI-10447]
+
 ### Consequences
 - Concurrent `run_process` / `supervise_child` waits overlap. Ctrl-C terminates every live child process group, not only the waiter that would have held an exclusive mutex.
 - The captured SIGINT/SIGTERM is re-raised after restore, so a daemon that installed tokio `ctrl_c` / SIGTERM (or that still has SIG_DFL) actually shuts down instead of swallowing the signal.
 - Panics still restore prior handlers via the last Drop.
 - Cost: at most `MAX_LIVE_PROCESS_GROUPS` children get immediate handler-side `killpg`; additional waiters terminate on the next 100 ms poll instead. The table is not a semaphore.
+- A reaped child's pid is free for the kernel to reuse; because the slot is released at reap and re-validated at delivery, a later SIGINT/SIGTERM cannot fan out to an unrelated process group that inherited the number (the failure mode was a burst of sibling test processes killed by one signal).
 
 ## `NoSandbox` is the default `Sandbox` impl; real isolation is deferred
 
@@ -262,29 +265,10 @@ Resolve the wrapper only from trusted absolute locations, currently `/usr/bin/sa
 - Availability messages describe the trusted absolute location instead of implying arbitrary `PATH` lookup.
 - Cost: the implementation is intentionally macOS-location-specific; if Apple moves or removes the binary, Orbit must update the trusted location list or add a new backend rather than silently accepting a user-supplied replacement.
 
----
-
-## Task References
-
-- **[T20260328-221810]** — Subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
-- **[T20260416-0728]** — Aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
-- **[T20260417-0550]** — Decomposed `orbit-exec` supervision modules.
-- **[T20260417-0558-4]** / **[T20260417-0558-5]** — Hardened `orbit-exec` supervision (process-group reaping, signal-pipe handler).
-- **[T20260419-0503]** — Enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
-- **[T20260426-0622]** — Add this design folder and record the initial ADR set.
-- **[T20260427-51]** — Wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
-- **[T20260428-10]** — Allow Codex CLI state writes under the macOS sandbox.
-- **[T20260428-14]** — Extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
-- **[T20260430-23]** — Shorten the policy sandbox design docs while preserving the shipped contract and ADR history.
-- **[T20260508-13]** — Add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
-- **[T20260509-30]** — Resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
 ## Use Bubblewrap for shipped Linux CLI write confinement
 
 **Recorded:** 2026-08-01 23:26:11.357573Z · [ORB-10552]
-**Paths:** `crates/orbit-exec/src/linux_sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `crates/orbit-core/src/runtime/v2_host/sandbox.rs`
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `crates/orbit-core/src/runtime/v2_host/sandbox.rs`
 
 ### Context
 Linux CLI agents previously ran with the worker account's ambient filesystem rights. The real alternatives were a Bubblewrap mount-namespace boundary, a Landlock allowlist layer, or continued delegation to provider-native sandboxes; Bubblewrap closes the highest-value write gap at the existing executor wrapper seam without turning Orbit into a container runtime.
@@ -301,7 +285,7 @@ Shipped Linux agent executors use the concrete `linux-bwrap` backend. Orbit reso
 ## Sandbox availability is a host precondition, not a runtime fallback
 
 **Recorded:** 2026-08-08 19:13:44.348233Z
-**Paths:** `crates/orbit-exec/src/linux_sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-core/assets/executors/**`, `docs/runbooks/**`
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-core/assets/executors/**`, `docs/runbooks/**`
 
 ### Context
 
@@ -337,7 +321,8 @@ Making a host capable of running the sandbox is an operator responsibility, and 
 ## Derive Linux sandbox write-grant anchors from the effective profile at each spawn
 
 **Recorded:** 2026-08-09 03:42:52.076176Z · [ORB-10602]
-**Paths:** `crates/orbit-exec/src/linux_sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`
+**Status:** Superseded; the current rule-derived anchor-kind contract treats exact rules as file anchors and `<root>/**` rules as directory anchors.
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`
 
 ### Context
 
@@ -378,7 +363,7 @@ Creation is confined to the managed worktree: every component that root owns is 
 ## Derive Linux sandbox write-grant anchors from the effective profile at each spawn
 
 **Recorded:** 2026-08-08 20:36:47.656731Z · [ORB-10602], [ORB-10607]
-**Paths:** `crates/orbit-exec/src/linux_sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `docs/design/policy-sandbox/**`
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `docs/design/policy-sandbox/**`
 
 ### Context
 Bubblewrap can only re-bind an exception beneath a read-only parent when the exception anchor exists. The prior hardcoded path/type inventory drifted from effective policy, while preparing every apparent re-allow would materialize paths shadowed by later workspace denies and filename-shape inference could not distinguish dotted directories from extensionless files.
@@ -419,44 +404,71 @@ Keep `.orbit/config.yaml` beneath the default `.orbit/**` agent-write deny. The 
 - Exact registered checkouts have a bounded recovery command; corrupt bytes remain available as local evidence.
 - Workspace identity changes remain an operator-owned initializer action rather than ordinary repository editing.
 
+## Admit ordinary development programs in shipped agent activities
+
+**Recorded:** 2026-09-27 · [ORB-13317]
+
+Shipped agent activities use `proc_disallowed_programs` for a short set of
+host elevation, remote transfer, service control, namespace, and container
+entry points. A granted plugin program such as `uv` may run unless listed.
+Custom and workspace override activities retain their existing
+`proc_allowed_programs` behavior. The complete program-policy marker is
+forwarded to nested Codex MCP sessions; a missing marker continues to select
+the legacy allowlist. The OS sandbox remains the containment boundary.
+
+## Mask well-known credential locations under Linux Bubblewrap
+
+**Recorded:** 2026-09-29
+**Paths:** `crates/orbit-exec/src/credential_paths.rs`, `crates/orbit-exec/src/linux_sandbox/credentials.rs`, `crates/orbit-exec/src/macos_sandbox/compile.rs`
+
+### Context
+The macOS profile denies reads of `~/.ssh`, `~/.aws`, `~/.config/gh`, keychains, browser profiles and cargo publish tokens. The Linux backend mounts `/` read-only and, being a write-confinement backend, hid none of them, so a confined worker could read every credential its account could. Nothing recorded that as intent: `read_delegated` named the broad host read surface, not these files. No sandboxed flow needs them either. Commit, push and PR creation run in the unsandboxed coordinator, and a claimed leaf returns its result through step output because the sandbox already denies `~/.ssh` on macOS.
+
+### Decision
+One platform-neutral list in `orbit-exec` is the single source of truth. The SBPL compiler emits each entry as a read deny, the brokered plugin backend reads it as exclusions, and the Linux plan masks each existing entry after every other mount: `--tmpfs` for a directory, `--ro-bind /dev/null` for a file. Absent paths are skipped. A masked path that is reachable through a second mount, or that contains a path the plan grants, refuses the plan instead of starting with the mask incomplete.
+
+### Consequences
+- A Linux worker can no longer read the operator's SSH keys, cloud credentials, `gh` token or cargo publish token; SSH-authenticated `git` and a `gh` the worker runs itself do not work inside a confined worker, as on macOS. The read-only `github.*` tools (`github.auth.status`, `github.pr.list`, `github.run.list`, `github.run.view`, `github.run.logs`) are forwarded to the run's plugin broker, which runs `gh` on the host with the host's credentials; no credential enters the sandbox ([plugins/2_agent_call_broker.md](../plugins/2_agent_call_broker.md) §3) [ORB-14017].
+- Adding a credential location is a one-line change that both platforms pick up.
+- Cost: a host that aliases a credential directory (for example a second bind mount of `$HOME`) fails dispatch with a named path until the alias is removed or the executor sandbox is explicitly turned off.
+- Reads outside this list stay delegated; general read-allowlist parity on Linux is still undecided.
+
+## Let `proc.spawn` inherit the enclosing CLI sandbox on Linux and macOS
+
+**Recorded:** 2026-09-30 · [ORB-13689]
+**Paths:** `crates/orbit-tools/src/builtin/proc/spawn.rs`, `docs/design/policy-sandbox/2_design.md`
+
+### Context
+The extra activity-scoped Linux Landlock read ruleset blocked Cargo from reading a benign parent-checkout `.cargo/config.toml` during ORB-13672. The same Linux-only spawn path refused activity-scoped calls on macOS. The CLI worker already runs under Bubblewrap or `sandbox-exec` unless the operator explicitly selects an unwrapped executor.
+
+### Decision
+Use `NoSandbox` for `proc.spawn` so its child inherits the worker's operating-system read and write view. Remove the coupled argument-level `fsProfile` read check; keeping it would still reject reads the parent may make. Preserve the activity program policy, cleared child environment, closed stdin, timeout, and supervision. Plugin backends keep their separate Landlock or `sandbox-exec` boundary.
+
+This deliberately retires the narrower child read guarantee from ORB-11514. Current Polaris STD-04 §R4 is non-binding guidance because Orbit has not vendored Constellation standards; its instruction to preserve previous negative read cases conflicts with this explicit policy decision. The tests now prove the new read scope and keep negative program and environment cases. STD-05 §R10 still shapes the cleared child environment.
+
+### Consequences
+- On Linux and macOS, a child can read any file its enclosing worker can read, including benign paths outside a linked worktree. Linux's unbounded `denyRead` globs are not a child kernel boundary.
+- The outer worker's credential masks and write grants still apply to descendants. On macOS, a provider-specific login-keychain carve-out also reaches the child; on an explicitly unwrapped executor, the child has that parent's ambient host access.
+- Activity-scoped `proc.spawn` no longer depends on a Linux Landlock ABI or a Linux-only path when run on macOS. This change does not repair Bubblewrap writable-ancestor mount planning or checkout-drift failures.
+
 ## Task References
 
-- **[T20260328-221810]** — Subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
-- **[T20260416-0728]** — Aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
-- **[T20260417-0550]** — Decomposed `orbit-exec` supervision modules.
-- **[T20260417-0558-4]** / **[T20260417-0558-5]** — Hardened `orbit-exec` supervision (process-group reaping, signal-pipe handler).
-- **[T20260419-0503]** — Enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
-- **[T20260426-0622]** — Add this design folder and record the initial ADR set.
-- **[T20260427-51]** — Wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
-- **[T20260428-10]** — Allow Codex CLI state writes under the macOS sandbox.
-- **[T20260428-14]** — Extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
-- **[T20260430-23]** — Shorten the policy sandbox design docs while preserving the shipped contract and ADR history.
-- **[T20260508-13]** — Add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
-- **[T20260509-30]** — Resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
-## Task References
-
-- **[T20260328-221810]** — Subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
-- **[T20260416-0728]** — Aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
-- **[T20260417-0550]** — Decomposed `orbit-exec` supervision modules.
-- **[T20260417-0558-4]** / **[T20260417-0558-5]** — Hardened `orbit-exec` supervision (process-group reaping, signal-pipe handler).
-- **[T20260419-0503]** — Enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
-- **[T20260426-0622]** — Add this design folder and record the initial ADR set.
-- **[T20260427-51]** — Wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
-- **[T20260428-10]** — Allow Codex CLI state writes under the macOS sandbox.
-- **[T20260428-14]** — Extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
-- **[T20260430-23]** — Shorten the policy sandbox design docs while preserving the shipped contract and ADR history.
-- **[T20260508-13]** — Add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
-- **[T20260509-30]** — Resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
-- **[ORB-00048]** — Extend the unconditional provider state-dir allowance set to include Grok's `$HOME/.grok` state directory while hardening fourth-family scoreboards and analytics.
-- **[ORB-10552]** — Implement fail-closed Linux Bubblewrap write confinement and preserve the explicit read-policy limitation.
-- **[ORB-10560]** — Amend global deny resolution with profile-intersected host modify exceptions for versioned `.orbit` configuration.
-- **[ORB-10573]** — Amend Linux delivery with trusted, two-gate preparation of missing versioned-config mount anchors.
-- **[ORB-10602]** — Derive write-grant anchors from the effective profile at each spawn; remove the hardcoded target inventory and the context-file materialization gate. [Derive Linux sandbox write-grant anchors from the effective profile at each spawn](#derive-linux-sandbox-write-grant-anchors-from-the-effective-profile-at-each-spawn-1)
-- **[ORB-10607]** — Enforce final-policy materialization, canonical/symlink containment, rule-derived anchor types, and production failed-write attribution. [Derive Linux sandbox write-grant anchors from the effective profile at each spawn](#derive-linux-sandbox-write-grant-anchors-from-the-effective-profile-at-each-spawn-1)
-- **[ORB-10833]** — Retire the remaining unregistered `fs.*` builtins and their private policy helpers. [Retire the remaining unregistered fs builtins and their policy helpers](#retire-the-remaining-unregistered-fs-builtins-and-their-policy-helpers)
-- **[ORB-11376]** — Protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery. [Keep checkout identity outside managed-agent write grants](#keep-checkout-identity-outside-managed-agent-write-grants)
+- [T20260328-221810] — subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
+- [T20260416-0728] — aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
+- [T20260417-0550] — decomposed `orbit-exec` supervision modules.
+- [T20260419-0503] — enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
+- [T20260426-0622] — add this design folder and record the initial ADR set.
+- [T20260427-51] — wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
+- [T20260428-10] — allow Codex CLI state writes under the macOS sandbox.
+- [T20260428-14] — extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
+- [T20260508-13] — add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
+- [T20260509-30] — resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
+- [ORB-10552] — implement fail-closed Linux Bubblewrap write confinement and preserve the explicit read-policy limitation.
+- [ORB-10602] — derive write-grant anchors from the effective profile at each spawn; remove the hardcoded target inventory and the context-file materialization gate.
+- [ORB-10607] — enforce final-policy materialization, canonical/symlink containment, rule-derived anchor types, and production failed-write attribution.
+- [ORB-10833] — retire the remaining unregistered `fs.*` builtins and their private policy helpers.
+- [ORB-11376] — protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery.
+- [ORB-13689] — remove the extra `proc.spawn` read sandbox on Linux and macOS and inherit the enclosing worker boundary.
+- [ORB-14017] — run the read-only `github.*` tools of a confined worker on the host through the run's plugin broker.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

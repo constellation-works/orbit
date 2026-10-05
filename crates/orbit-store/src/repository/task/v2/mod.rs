@@ -14,36 +14,41 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::Utc;
 use orbit_common::fs::io::atomic_write_bytes;
+use orbit_common::security::release::sha256_hex;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
     ArtifactManifestFileV2, ArtifactManifestV2, ExternalRef, TASK_ARTIFACT_FILES_DIR_NAME,
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME, Task, TaskArtifact, TaskComment,
     TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2, TaskHistoryEntry, TaskPriority, TaskRelation,
-    TaskRelationType, TaskStatus, normalize_task_tags, validate_relative_artifact_path,
+    TaskRelationType, TaskStatus, normalize_task_tags, validate_os_tags,
+    validate_relative_artifact_path,
 };
-use sha2::{Digest, Sha256};
 
 use crate::contracts::{
-    TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams, TaskHistoryUpdateParams,
+    RegisteredTaskResolution, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams,
+    TaskHistoryUpdateParams,
 };
 use crate::driver::file::sort::sort_by_created_desc_id_asc;
 use crate::driver::sqlite::task_registry::{TaskIndexFilter, TaskRegistryStore};
+use crate::repository::task::coordination::TaskCommitBoundary;
 use crate::repository::task::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDocumentV2};
 
 mod acceptance;
 mod artifact_paths;
 mod artifacts;
 mod crud;
+mod desktop;
 mod envelope_cache;
 mod index;
 mod listing;
 mod query;
 mod relations;
-mod sequencing;
+pub(crate) mod sequencing;
 mod sidecars;
 mod updates;
 
@@ -62,37 +67,68 @@ pub(crate) struct TaskV2Store {
     workspace_id: String,
     /// Envelope parses reused across listings; see [`envelope_cache`].
     envelope_cache: EnvelopeCache,
+    /// The partition's durable commit boundary, when this store was composed
+    /// with one ([`crate::compose::workspace_coordinated_backends`]).
+    ///
+    /// With it, every ordinary mutation runs inside the boundary and every
+    /// read settles an interrupted commit before exposing state, so an
+    /// admission decision can read readiness and publish without a task write
+    /// slipping in between. Legacy composition retains per-bundle locking,
+    /// but is refused once this partition has activated coordination.
+    coordination: Option<Arc<TaskCommitBoundary>>,
 }
 
 impl TaskV2Store {
-    pub(crate) fn new(
-        registry: TaskRegistryStore,
-        workspace_id: String,
-        workspace_orbit_dir: PathBuf,
-        _workspace_path: Option<String>,
-        _repo_root: Option<String>,
-    ) -> Self {
+    pub(crate) fn claim_boundary(&self) -> Result<&TaskCommitBoundary, OrbitError> {
+        self.coordination
+            .as_deref()
+            .ok_or_else(|| OrbitError::Store("claim lifecycle unavailable".into()))
+    }
+
+    pub(crate) fn new(registry: TaskRegistryStore, workspace_id: String) -> Self {
         Self {
-            bundle_store: TaskBundleStoreV2::new(
-                registry.clone(),
-                workspace_id.clone(),
-                workspace_orbit_dir,
-            ),
+            bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
             registry,
             workspace_id,
             envelope_cache: EnvelopeCache::default(),
+            coordination: None,
         }
     }
 
-    pub(crate) fn new_checkoutless(registry: TaskRegistryStore, workspace_id: String) -> Self {
+    /// The same store, participating in one partition's commit boundary.
+    pub(crate) fn with_commit_boundary(
+        registry: TaskRegistryStore,
+        workspace_id: String,
+        coordination: Arc<TaskCommitBoundary>,
+    ) -> Self {
         Self {
-            bundle_store: TaskBundleStoreV2::new_checkoutless(
-                registry.clone(),
-                workspace_id.clone(),
-            ),
-            registry,
-            workspace_id,
-            envelope_cache: EnvelopeCache::default(),
+            coordination: Some(coordination),
+            ..Self::new(registry, workspace_id)
+        }
+    }
+
+    /// Run an ordinary mutation inside the boundary. Legacy stores acquire
+    /// the same locks and refuse partitions requiring coordinated backends.
+    pub(crate) fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<T, OrbitError>,
+    {
+        match &self.coordination {
+            Some(boundary) => boundary.enter_ordinary(op),
+            None => TaskCommitBoundary::enter_uncoordinated(&self.registry, &self.workspace_id, op),
+        }
+    }
+
+    /// Settle an interrupted commit before a read exposes task state. One
+    /// existence check when nothing is pending.
+    pub(super) fn ensure_recovered(&self) -> Result<(), OrbitError> {
+        match &self.coordination {
+            Some(boundary) => boundary.recover_if_pending(),
+            None => {
+                TaskCommitBoundary::enter_uncoordinated(&self.registry, &self.workspace_id, || {
+                    Ok(())
+                })
+            }
         }
     }
 }

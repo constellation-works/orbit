@@ -1,0 +1,49 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: handoff_land
+spec:
+  type: deterministic
+  description: >
+    Land one authorized handoff on the owner. Observes the pull request, the
+    owner checkout's landing ref, or the no-diff covering commit; records the
+    merge intent before any external call; and supplies the verified merge
+    evidence the owner's guarded review -> done transition runs behind. A
+    changed head or base, a conflict, an unsatisfied branch protection or an
+    exhausted check budget stops the attempt with durable evidence instead of
+    repairing the candidate.
+  input_schema_json:
+    type: object
+    required: [handoff_id]
+    properties:
+      handoff_id:
+        type: string
+      task_id:
+        type: string
+      # Null when the dispatching job did not override the activity's own
+      # budget, which is the ordinary case.
+      max_wait_seconds:
+        type: [integer, "null"]
+        description: >
+          Budget for waiting out required checks on a pull request. Exceeding
+          it stops the attempt with the task left in review.
+      poll_interval_seconds:
+        type: [integer, "null"]
+  output_schema_json:
+    type: object
+    required: [phase, handoff_id]
+    properties:
+      phase:
+        type: string
+      handoff_id:
+        type: string
+      task_id:
+        type: string
+      evidence:
+        type: object
+        description: >
+          What the owner observed about the landing it completed: the merged
+          pull request and its merge commit, the local landing ref that now
+          contains the candidate, or the covering commit of a no-diff delivery.
+  action: handoff_land
+  config: {}

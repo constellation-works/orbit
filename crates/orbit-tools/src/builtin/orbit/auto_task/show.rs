@@ -2,7 +2,7 @@ use orbit_common::OrbitError;
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
-use crate::{OrbitBuiltinAction, Tool, ToolContext};
+use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind};
 
 pub struct OrbitAutoTaskShowTool;
 
@@ -31,6 +31,10 @@ impl Tool for OrbitAutoTaskShowTool {
             ],
             builtin: true,
         }
+    }
+
+    fn execution_kind(&self) -> ToolExecutionKind {
+        ToolExecutionKind::ReadOnly
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {

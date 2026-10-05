@@ -12,6 +12,8 @@
 //! (ADR-0306): a zero-width sink truncates nothing, and a sink that disallows
 //! color renders the same bytes a file redirect would.
 
+use std::io::Write;
+
 use comfy_table::{
     Attribute, Cell, CellAlignment, ColumnConstraint, ContentArrangement, Row, Table as Grid,
     Width, presets,
@@ -112,6 +114,7 @@ pub struct Table {
     rows: Vec<Vec<Cell>>,
     empty_message: String,
     suppress_uniform: bool,
+    trailing_notices: Vec<String>,
 }
 
 /// Build a table whose columns are all plain left-aligned text. Commands with
@@ -129,6 +132,7 @@ impl Table {
             rows: Vec::new(),
             empty_message: "no results".to_string(),
             suppress_uniform: true,
+            trailing_notices: Vec::new(),
         }
     }
 
@@ -150,6 +154,22 @@ impl Table {
         self
     }
 
+    /// Add a trailing notice — a truncation count, say — to print to stderr
+    /// after the table in human modes, or for the renderer to print on
+    /// machine-readable paths.
+    #[must_use]
+    pub fn trailing_notice(mut self, notice: impl Into<String>) -> Self {
+        self.trailing_notices.push(notice.into());
+        self
+    }
+
+    /// Notices for the renderer to print to stderr in machine-readable modes
+    /// (where [`Table::emit`] is not called), or printed after the table in
+    /// human modes.
+    pub(crate) fn trailing_notices(&self) -> &[String] {
+        &self.trailing_notices
+    }
+
     /// Add one record. The row occupies exactly one line however long its cells
     /// are; there is no unbounded variant.
     pub fn add_row<T: Into<Cell>>(&mut self, cells: Vec<T>) {
@@ -158,7 +178,9 @@ impl Table {
 
     /// Write the list to stdout in the sink's mode, or the empty-state line to
     /// stderr when there are no records. Notices about dropped columns go to
-    /// stderr so that they never land in a consumer's record stream.
+    /// stderr so that they never land in a consumer's record stream. This
+    /// table's own trailing notices (a truncation count, say) are printed to
+    /// stderr after the body in both table and plain modes (ORB-12206).
     ///
     /// Called only by `output::render`; a command hands its table back inside a
     /// payload rather than emitting one itself.
@@ -169,6 +191,10 @@ impl Table {
         }
         if sink.mode() == OutputMode::Plain {
             println!("{}", self.render_plain(sink));
+            std::io::stdout().flush().ok();
+            for notice in &self.trailing_notices {
+                eprintln!("{notice}");
+            }
             return;
         }
         let rendered = self.render_at(
@@ -180,6 +206,10 @@ impl Table {
             eprintln!("{notice}");
         }
         println!("{}", rendered.body);
+        std::io::stdout().flush().ok();
+        for notice in &self.trailing_notices {
+            eprintln!("{notice}");
+        }
     }
 
     /// The plain form: the same visible columns and the same cell values as
@@ -188,15 +218,17 @@ impl Table {
     ///
     /// Truncation is disabled by construction rather than by passing a width:
     /// a plain sink has no width, and silently shortening a value on its way
-    /// into a pipe is the failure this form exists to avoid.
-    pub(crate) fn render_plain(&self, sink: &OutputSink) -> String {
+    /// into a pipe is the failure this form exists to avoid. Each value is
+    /// passed through [`escape_plain`] so an embedded tab or line break cannot
+    /// split one record into extra fields or lines (spec §1).
+    fn render_plain(&self, sink: &OutputSink) -> String {
         let visible = self.visible_columns(sink.suppress_uniform_columns());
         self.rows
             .iter()
             .map(|row| {
                 visible
                     .iter()
-                    .map(|index| cell_at(row, *index).content())
+                    .map(|index| escape_plain(&cell_at(row, *index).content()))
                     .collect::<Vec<_>>()
                     .join("\t")
             })
@@ -212,7 +244,7 @@ impl Table {
     /// All three come from the sink in [`Table::emit`]. Tests pass them directly
     /// so geometry and styling are pinned rather than inherited from whatever
     /// terminal ran `cargo test`.
-    pub(crate) fn render_at(
+    fn render_at(
         &self,
         sink_width: Option<usize>,
         styled: bool,
@@ -265,9 +297,17 @@ impl Table {
 
         let body = grid
             .lines()
-            .map(|line| line.trim_end().to_string())
+            .map(|line| trim_line_padding(&line))
             .collect::<Vec<_>>()
             .join("\n");
+        // comfy-table routes its named base colors through crossterm's 256-color
+        // SGR form. Convert only the four foreground colors our role vocabulary
+        // attaches to cells, after layout so escape length cannot affect widths.
+        let body = if styled {
+            basic_role_colors(body)
+        } else {
+            body
+        };
         let notices = if dropped.is_empty() {
             Vec::new()
         } else {
@@ -410,12 +450,64 @@ fn cell_at(row: &[Cell], index: usize) -> Cell {
     row.get(index).cloned().unwrap_or_else(|| Cell::new(""))
 }
 
+/// Encode a plain-form field so it cannot contain the form's field or record
+/// separator: backslash, tab, line feed, and carriage return become `\\`,
+/// `\t`, `\n`, and `\r`. Escaping the backslash keeps the encoding reversible;
+/// a value with none of the four is returned unchanged.
+fn escape_plain(value: &str) -> String {
+    if !value.contains(['\\', '\t', '\n', '\r']) {
+        return value.to_string();
+    }
+    let mut escaped = String::with_capacity(value.len() + 2);
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '\t' => escaped.push_str("\\t"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 fn total_width(layout: &[(usize, usize)]) -> usize {
     layout.iter().map(|(_, width)| width).sum::<usize>() + GUTTER * layout.len().saturating_sub(1)
 }
 
 fn clamp_u16(value: usize) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
+}
+
+fn basic_role_colors(mut body: String) -> String {
+    for (extended, basic) in [
+        ("\x1b[38;5;9m", "\x1b[91m"),  // red
+        ("\x1b[38;5;10m", "\x1b[92m"), // green
+        ("\x1b[38;5;11m", "\x1b[93m"), // yellow
+        ("\x1b[38;5;14m", "\x1b[96m"), // cyan
+    ] {
+        body = body.replace(extended, basic);
+    }
+    body
+}
+
+/// A styled final cell can place its reset after its right padding. Keep the
+/// reset, but discard that padding just as the unstyled line's `trim_end` does.
+fn trim_line_padding(line: &str) -> String {
+    let mut end = line.len();
+    while line[..end].ends_with('m') {
+        let Some(start) = line[..end].rfind("\x1b[") else {
+            break;
+        };
+        if !line[start + 2..end - 1]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b';')
+        {
+            break;
+        }
+        end = start;
+    }
+    format!("{}{}", line[..end].trim_end(), &line[end..])
 }
 
 /// Keep the head and the identifying tail: `crates/orbit-cli/…/table.rs`.

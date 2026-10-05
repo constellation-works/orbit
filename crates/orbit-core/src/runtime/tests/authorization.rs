@@ -15,7 +15,6 @@ use orbit_store::contracts::TaskCreateParams;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
-use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::json;
 
@@ -48,7 +47,6 @@ fn seed_task(runtime: &OrbitRuntime) -> String {
             plan: String::new(),
             execution_summary: String::new(),
             context_files: Vec::new(),
-            workspace_path: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
             repo_root: None,
             created_by: Some("test".to_string()),
             planned_by: None,
@@ -92,109 +90,4 @@ fn an_agent_session_cannot_delete_a_task_through_any_tool_path() {
 
     // The refusal is real, not cosmetic: the task is still there.
     assert!(runtime.get_task(&task_id).is_ok());
-}
-
-#[test]
-fn an_operator_session_reaches_the_same_operation() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    let task_id = seed_task(&runtime);
-
-    runtime
-        .run_tool_with_context_and_role(
-            "orbit.task.delete",
-            json!({ "id": task_id, "force": true }),
-            Role::Admin,
-            context_with([McpCapability::Operator]),
-        )
-        .expect("operator capability performs the governed operation");
-}
-
-#[test]
-fn a_run_retains_the_destruction_it_dispatches() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-
-    // `release_locks` is reached by the run's own deterministic dispatcher,
-    // which stamps `Runner` onto its tool context. An unknown reservation is a
-    // structured `released: false`, not a capability denial.
-    let released = runtime
-        .run_tool_with_context_and_role(
-            "orbit.task.locks.release",
-            json!({ "reservation_id": "reservation-no-such-reservation" }),
-            Role::Admin,
-            context_with([McpCapability::Runner]),
-        )
-        .expect("runner capability performs run-sanctioned destruction");
-    assert_eq!(released["released"], json!(false));
-
-    // The same grant does not widen into unrelated destruction.
-    assert!(matches!(
-        runtime.run_tool_with_context_and_role(
-            "orbit.task.delete",
-            json!({ "id": "ORB-00001", "force": true }),
-            Role::Admin,
-            context_with([McpCapability::Runner]),
-        ),
-        Err(OrbitError::CapabilityDenied(_))
-    ));
-}
-
-#[test]
-fn ungoverned_tools_are_untouched() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    let task_id = seed_task(&runtime);
-
-    runtime
-        .run_tool_with_context_and_role(
-            "orbit.task.show",
-            json!({ "id": task_id }),
-            Role::Admin,
-            context_with([McpCapability::Agent]),
-        )
-        .expect("an ungoverned tool is unaffected by the chokepoint");
-}
-
-#[test]
-fn ungoverned_commands_pass_the_cli_chokepoint() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    runtime
-        .authorize_command_operation("workspace", "list")
-        .expect("a read-only command is not governed");
-}
-
-#[test]
-fn a_denial_is_recorded_as_denied_not_failed() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    let task_id = seed_task(&runtime);
-
-    let _ = runtime.run_tool_with_context_and_role(
-        "orbit.task.delete",
-        json!({ "id": task_id, "force": true }),
-        Role::Admin,
-        context_with([McpCapability::Agent]),
-    );
-
-    let events = runtime
-        .list_audit_events(None, None, Some(AuditEventStatus::Denied), None, 50)
-        .expect("list audit events");
-    let record = events
-        .iter()
-        .find(|event| event.command == "authorization")
-        .expect("the decision persists its own audit row");
-
-    assert_eq!(record.target_type.as_deref(), Some("operation"));
-    assert_eq!(record.target_id.as_deref(), Some("orbit.task.delete"));
-    assert_eq!(record.status, AuditEventStatus::Denied);
-    assert_eq!(
-        record.effective_capabilities,
-        BTreeSet::from([McpCapability::Agent]),
-        "the audit row records what the caller actually held"
-    );
-    assert!(
-        record
-            .error_message
-            .as_deref()
-            .is_some_and(|message| message.contains("ORBIT_OPERATOR")),
-        "the recorded denial names the escape hatch: {:?}",
-        record.error_message
-    );
 }

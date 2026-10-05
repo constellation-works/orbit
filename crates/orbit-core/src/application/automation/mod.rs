@@ -8,6 +8,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 
+mod after_landing;
 mod direct;
 pub(crate) mod incidents;
 mod inspect;
@@ -15,15 +16,28 @@ pub(crate) mod members;
 mod ownership;
 pub(crate) mod preparation;
 mod provider;
+mod recovery;
+mod reset;
 pub(crate) mod source;
+pub(crate) mod stall;
 mod task;
+
+pub use after_landing::{AfterLandingHealth, after_landing_health};
+pub(crate) use direct::record_direct_landing_intent;
+pub use inspect::{
+    UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,
+    inspect_auto_task, inspect_routine, unadmittable_delivery_definitions,
+    unresolvable_delivery_branches, wedged_delivery_consumers,
+};
+pub use recovery::recover_auto_task;
+pub use reset::{ConsumerTeardown, reset_auto_task};
+pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};
+pub use stall::{StalledConsumer, stalled_consumers, stalled_minutes};
+
 #[cfg(test)]
 mod tests;
 
-pub(crate) use direct::record_direct_landing_intent;
-pub use inspect::{inspect_auto_task, inspect_routine};
-
-pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
+pub use orbit_types::workflow::automation::COVERAGE_ARTIFACT;
 
 /// Identity is machine/workspace-qualified in the authoritative host database.
 pub fn consumer_key(runtime: &OrbitRuntime, kind: &str, name: &str) -> Result<String, OrbitError> {
@@ -63,7 +77,7 @@ pub fn evaluate_auto_task(
             consumer: &consumer_key(runtime, "auto-task", &definition.name)?,
             epoch: &epoch,
             trigger: &trigger,
-            enabled: definition.enabled,
+            enabled: runtime.auto_task_enabled(definition),
             dry_run,
             now,
         },
@@ -144,6 +158,35 @@ fn evaluate(
     Ok(diagnostic)
 }
 
+/// Liveness and evidence facts for an admitted delivery auto-task action, as
+/// used by reset, recovery and `orbit doctor`. A consumer without state has
+/// no action. An unreadable outcome stays unknown, so `--force` remains the
+/// only way past an action whose liveness cannot be proved.
+fn auto_task_action_liveness(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    state: Option<&AutomationState>,
+    now: DateTime<Utc>,
+) -> orbit_automation::delivery::ActionLiveness {
+    let Some(state) = state else {
+        return orbit_automation::delivery::ActionLiveness::default();
+    };
+    let host = Host {
+        runtime,
+        action: Action::Task(definition),
+        source: source::Source::new(&runtime.paths().repo_root),
+    };
+
+    delivery::action_liveness(&host, state, now).unwrap_or_else(|error| {
+        tracing::warn!(
+            consumer = state.consumer,
+            %error,
+            "cannot read the admitted action's outcome; treating it as executing"
+        );
+        orbit_automation::delivery::ActionLiveness::default()
+    })
+}
+
 enum Action<'a> {
     Task(&'a AutoTaskDefinition),
     Job(&'a RoutineDefinition),
@@ -164,6 +207,50 @@ impl DeliveryHost for Host<'_> {
         Ok(None)
     }
 
+    fn stall_window_minutes(&self) -> u32 {
+        self.runtime.automation_stall_window_minutes()
+    }
+
+    fn replay_history(
+        &self,
+        branch: &str,
+        state: &AutomationState,
+    ) -> Result<delivery::recovery::HistoryReplayInput, AutomationError> {
+        let receipts = self
+            .runtime
+            .automation_store()?
+            .automation_receipts(&state.consumer, 100)?;
+        let (mut page, record) = self.source.replay_history(branch, state, receipts.len())?;
+        provider::attribute(self.runtime, &mut page.deliveries)?;
+
+        Ok(delivery::recovery::HistoryReplayInput { page, record })
+    }
+
+    fn history_converged(
+        &self,
+        branch: &str,
+        state: &AutomationState,
+    ) -> Result<bool, AutomationError> {
+        let (_, head) = self.source.head(branch)?;
+
+        Ok(self
+            .source
+            .git(&[
+                "merge-base",
+                "--is-ancestor",
+                &state.observed.commit,
+                &head.commit,
+            ])
+            .is_ok())
+    }
+
+    fn report_stall(
+        &self,
+        report: &delivery::stall::StallReport<'_>,
+    ) -> Result<Option<String>, AutomationError> {
+        stall::report(self.runtime, report).map_err(Into::into)
+    }
+
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
         self.source.head(branch)
     }
@@ -180,6 +267,7 @@ impl DeliveryHost for Host<'_> {
             state,
             &mut page,
         )?;
+        provider::attribute(self.runtime, &mut page.deliveries)?;
         // [ORB-11333] Accepted before-PR certificates become exclusions only
         // after the shared rule proves the landed trees; the evaluator then
         // applies them for review consumers alone.
@@ -213,6 +301,10 @@ impl DeliveryHost for Host<'_> {
                     definition.target.job_name(),
                     serde_json::json!({"automation":attempt}),
                     &attempt.action_key,
+                    orbit_types::workflow::JobRunTrigger::state_routine(
+                        &definition.name,
+                        &attempt.batch.consumer,
+                    ),
                 )
                 .map(|run| run.run_id)
                 .map_err(Into::into),
@@ -232,9 +324,7 @@ fn auto_task_admission_deferral(
     definition: &AutoTaskDefinition,
 ) -> Result<Option<String>, OrbitError> {
     if definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
-        && orbit_automation::auto_tasks::scheduler::AutoTaskDispatch::has_open_instance(
-            runtime, definition,
-        )?
+        && runtime.open_auto_task_instance(definition)?.is_some()
     {
         return Ok(Some("open_instance".into()));
     }

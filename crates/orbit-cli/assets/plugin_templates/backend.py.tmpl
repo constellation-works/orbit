@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+
+"""Starter Orbit plugin backend (`backend.type: exec`, envelope v1).
+
+Orbit writes one request envelope on stdin:
+
+    {"schema_version": 1, "tool": "<ns>.<verb>", "input": {...},
+     "context": {"workspace_root": ..., "agent": ..., "model": ...}}
+
+and reads exactly one response object on stdout:
+
+    {"ok": true, "output": {...}}          # output is checked against output_schema
+    {"ok": false, "error": {"code": ..., "message": ...}}
+
+Anything else — a non-zero exit, non-JSON stdout, output the schema rejects —
+is a tool error. There is no partial success.
+"""
+
+import json
+import os
+import sys
+
+
+def status(payload: dict) -> dict:
+    """The one tool this starter declares."""
+    return {
+        "plugin": os.environ.get("ORBIT_PLUGIN", "__ORBIT_PLUGIN_NS__"),
+        "status": "ready",
+        "subject": payload.get("subject") or "Orbit",
+    }
+
+
+HANDLERS = {"status": status}
+
+
+def main() -> int:
+    request = json.load(sys.stdin)
+    # The envelope names the canonical tool (`<ns>.<verb>`); the verb is what
+    # this backend dispatches on, so a renamed namespace changes nothing here.
+    verb = str(request.get("tool", "")).rsplit(".", 1)[-1]
+    handler = HANDLERS.get(verb)
+    if handler is None:
+        json.dump(
+            {
+                "ok": False,
+                "error": {
+                    "code": "unknown_tool",
+                    "message": f"this backend serves {sorted(HANDLERS)}, not '{verb}'",
+                },
+            },
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+        return 0
+
+    try:
+        output = handler(request.get("input") or {})
+    except Exception as error:  # noqa: BLE001 - reported as a tool error
+        json.dump(
+            {"ok": False, "error": {"code": "backend_error", "message": str(error)}},
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+        return 0
+
+    json.dump({"ok": True, "output": output}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

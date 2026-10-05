@@ -3,8 +3,8 @@ summary: "User Interface — Overview"
 type: design
 title: "User Interface — Overview"
 owner: gemini
-last_updated: 2026-08-15
-last_validated: 2026-08-16
+last_updated: 2026-09-24
+last_validated: 2026-10-04
 status: Draft
 feature: user-interface
 doc_role: overview
@@ -27,7 +27,7 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 
 ## 2. Core Concepts
 
-- **Canon Refined and typography:** Layered dark surfaces, fine borders, compact spacing, and muted status colors; `Inter` carries labels and prose while `JetBrains Mono` carries IDs, metrics, timestamps, code, and logs.
+- **Canon Refined and typography:** Layered dark surfaces, fine borders, compact spacing, and muted status colors; self-hosted `Geist` carries labels and prose while `Geist Mono` carries IDs, metrics, timestamps, code, and logs, the same pair the project website uses.
 - **Surfaces:** The dashboard assets and `/api/*` handlers live in `crates/orbit-web/`.
   Static docs and project pages should reuse the same visual grammar without importing
   runtime-only dashboard assumptions.
@@ -37,9 +37,11 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 | Concern | File | Task |
 |---------|------|------|
 | Dashboard assets and HTTP API | `crates/orbit-web/assets/dashboard/`, `crates/orbit-web/src/api/` | Runtime tabs, tables, tiles, logs, and diagnostics. |
+| Dashboard layout | `crates/orbit-web/assets/dashboard/` | `index.html` and the `app.js` entry module at the root with the npm manifest; `js/` holds the feature modules, `css/` the stylesheets, `fonts/` the self-hosted fonts, and `vendor/` the pinned third-party libraries. Routes mirror the tree under `/static/`. |
+| Dashboard styles | `crates/orbit-web/assets/dashboard/css/` | One file per screen plus shared base, shell, and components layers; `DASHBOARD_CSS` in `lib.rs` joins them in cascade order and serves the result as `/static/dashboard.css`. |
 | CLI adapter | `crates/orbit-cli/src/command/web.rs` | Delegates `serve` and `connect` to `orbit-web`. |
 | Theme rules | `./specs/theme.md` | Canon Refined tokens and visual invariants. |
-| Dashboard implementation | [crates/orbit-web/src/lib.rs](../../../crates/orbit-web/src/lib.rs) | HTTP server, embedded dashboard assets, workspace state, and API routing. |
+| Dashboard implementation | [crates/orbit-web/src/serve.rs](../../../crates/orbit-web/src/serve.rs), [assets.rs](../../../crates/orbit-web/src/assets.rs), [state/](../../../crates/orbit-web/src/state/), [api/](../../../crates/orbit-web/src/api/) | HTTP server, embedded dashboard assets, workspace state, and API routing. |
 
 ## Task References
 

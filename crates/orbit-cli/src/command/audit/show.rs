@@ -82,7 +82,7 @@ impl Execute for AuditShowArgs {
         let _ = writeln!(
             out,
             "Caller host:       {}",
-            event.caller_host_id.as_deref().unwrap_or("-")
+            event.caller_machine_name.as_deref().unwrap_or("-")
         );
         let _ = writeln!(
             out,
@@ -92,7 +92,7 @@ impl Execute for AuditShowArgs {
         let _ = writeln!(
             out,
             "Process host ID:   {}",
-            event.process_host_id.as_deref().unwrap_or("-")
+            event.process_machine_name.as_deref().unwrap_or("-")
         );
         let _ = writeln!(
             out,

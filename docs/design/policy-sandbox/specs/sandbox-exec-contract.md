@@ -2,12 +2,14 @@
 type: design
 summary: "Spec: Sandboxed Exec Contract"
 tags: ["policy-sandbox"]
-last_validated: 2026-09-08
+last_validated: 2026-09-21
 ---
 
 # Spec: Sandboxed Exec Contract
 
 `orbit-exec::run_process` is the common validated-spawn primitive. Platform sandbox wrappers can instead create a child and pass it to `supervise_child`, which shares the supervision implementation. This spec names the invariants and failure modes those paths must preserve.
+
+The ORB-11514 / ORB-11546 Linux read-boundary investigation below is historical. ORB-13689 removed the extra activity-scoped `proc.spawn` Landlock and argument-level read checks; that child now inherits its enclosing CLI worker sandbox. The investigation remains evidence about the retained Landlock primitive and possible future read boundaries, not the current `proc.spawn` contract.
 
 ## Why This Exists
 
@@ -26,14 +28,26 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 ## Supervision Invariants
 
 - **Background drains.** `wait_with_optional_timeout` spawns reader threads for stdout and stderr immediately after spawn. The child must never block on a full pipe buffer because the parent is not reading.
-- **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write terminates the child via `terminate_process_group` and surfaces as `OrbitError::Execution(<message>)`.
+- **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write terminates the child via `terminate_process_group` and surfaces as `OrbitError::Execution(<message>)`. A broken pipe (the child closed stdin, or the writer was stopped by the drain bound) is not a failure: the child's exit status and stderr stand.
 - **Poll interval.** The wait loop polls with `WAIT_POLL_INTERVAL = 100ms` (or the remaining deadline, whichever is smaller). The interval is global and not per-request configurable.
 - **Signal handler installation (Unix).** A `SignalHandlerGuard` refcounts process-wide SIGINT and SIGTERM handlers for the duration of the wait loop. The first live waiter installs the handlers and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal so the previous disposition still runs (tokio shutdown, or SIG_DFL terminate). `SIG_IGN` is not re-raised. SIG_DFL additionally writes `process interrupted by signal SIG…` to the process stderr before `raise`. The install mutex is not held across the wait or across `raise`, so concurrent supervised waits overlap. Each waiter registers its child's pgid in a lock-free table; the handler `killpg`s every registered group, records a pending forward, and bumps a generation counter that waiters poll.
 - **Timeout escalation.** When the deadline expires, `terminate_process_group(child, SIGTERM, poll_interval)` is called. If the group does not exit within `TERMINATION_GRACE_PERIOD = 5 seconds`, `kill_process_group` (SIGKILL) is invoked plus a direct `child.kill()`/`child.wait()`.
 - **Parent-signal escalation.** When the parent receives SIGINT or SIGTERM during the wait, the same termination path runs with the received signal. The result reports `exit_code = Some(128 + signal)` and `success = false`.
-- **Clean-exit reaping.** When the child exits cleanly, the wait loop calls `kill_process_group(child.id())` to reap any orphan subprocesses still holding pipe write ends, then joins the reader threads. Without this, an orphan grandchild can keep the pipes open and block reader-thread completion indefinitely.
-- **Stderr annotation.** Timeouts append `process timed out` to stderr; parent-signal interruption appends `process interrupted by signal SIG<NAME>`. The annotations are added before the result is constructed, not by the caller.
+- **Clean-exit reaping.** When the child exits cleanly, the wait loop calls `kill_process_group(child.id())` to reap any orphan subprocesses still holding pipe write ends before the pipe workers settle.
+- **Bounded drain (Unix).** Killing the group closes every pipe end its members hold, but a descendant that left the group (`setsid`, `setpgid`) can keep stdout, stderr, or stdin open indefinitely. However the child ended — exit, timeout, cancellation, capture limit, or parent signal — the supervisor waits at most `DRAIN_BUDGET = 1 second` for the stdout/stderr readers and the stdin writer to finish, then stops them and joins them, so the call returns within that budget of the child ending. A stopped reader still reads what the pipe buffers at that moment, so output written before the stop is retained; later output is discarded, unwritten stdin is abandoned, and the supervisor closes its pipe ends before returning. The workers wait with `poll(2)` on their own non-blocking pipe end plus a socket-pair stop signal; no descriptor is closed from another thread. A stopped drain appends `process pipes were still held open outside its process group; …` to stderr. `run_process_streaming_stdout` hands its consumer a relay the stdout reader forwards into and closes within the same bound, so the consumer reaches EOF. Other platforms keep blocking workers and have no bound.
+- **Stderr annotation.** Timeouts append `process timed out` to stderr; parent-signal interruption appends `process interrupted by signal SIG<NAME>`; a stopped drain appends its note after those. The annotations are added before the result is constructed, not by the caller.
 - **Exit code reporting.** `ExecutionResult::exit_code` is `Some(code)` for clean exits, `Some(128 + signal)` for parent-signal exits, and `None` for timeouts.
+
+## Sandbox strategies
+
+Every strategy reaches the child through the same `Sandbox::spawn` seam, so supervision, capture, and timeout behaviour are identical whichever one is selected.
+
+| Strategy | Used by | What it confines |
+|---|---|---|
+| `NoSandbox` | direct `run_process` callers, activity-scoped `proc.spawn`, registered v1 external tools | Nothing beyond what already confines the parent. A managed CLI child inherits Bubblewrap on Linux or `sandbox-exec` on macOS. |
+| `PluginSandboxProfile` (`orbit-tools`) | plugin `exec` and `mcp` backends | The granted plugin profile: read roots, write roots, and `network: none`, via Landlock on Linux and `sandbox-exec` on macOS. A host that can enforce neither refuses the spawn; `backend.sandbox: none` with the `unsandboxed` grant is the only opt-out. See [plugins §4.3](../../plugins/1_scope.md#43-sandboxing). [ORB-12736] |
+
+A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` from `validate` alone never establishes a boundary (see Migration Rules).
 
 ## Result Shape
 
@@ -53,6 +67,7 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 - **Wait error.** `child.wait_timeout` errors surface as `OrbitError::Execution("wait timeout error: …")`. The child is left to be reaped by the OS rather than force-killed in this path; this is a known soft spot.
 - **Timeout.** `success = false`, `exit_code = None`, stderr suffixed with `process timed out`.
 - **Parent signal.** `success = false`, `exit_code = Some(128 + signal)`, stderr suffixed with the signal name.
+- **Pipe held outside the process group.** The result keeps the child's own outcome (exit status, timeout, cancellation), output after the drain stop is missing, and stderr carries the drain note.
 
 ## Concurrency Constraints
 
@@ -64,18 +79,19 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 
 - New `ExecRequest` fields must default to a backwards-compatible behavior; `EnvironmentMode::default()` and `StdinMode::default()` exist precisely so callers can adopt new fields incrementally.
 - The current `Sandbox` trait only exposes request validation. Adding live confinement requires an explicit confined-spawn seam or platform wrapper before untrusted code runs; returning successfully from `validate` alone cannot establish that boundary.
-- Changes to `TERMINATION_GRACE_PERIOD` or `WAIT_POLL_INTERVAL` require updated current documentation and behavior tests because both constants are observable in timeout/cancel behavior.
+- Changes to `TERMINATION_GRACE_PERIOD`, `WAIT_POLL_INTERVAL`, or `DRAIN_BUDGET` require updated current documentation and behavior tests because these constants are observable in timeout/cancel behavior.
 
 ## Agent Signature
 
 Live-read investigation and spawn-seam clarification revised by codex on 2026-09-07.
+Sandbox-strategy table added with the plugin backend boundary on 2026-09-21 [ORB-12736].
 
 ## Live read enforcement investigation (2026-09-07)
 
 **Design and isolated prototype only. No production read boundary was added.**
-The activity-scoped `proc.spawn` implementation still checks apparent path
-arguments before ordinary spawn. An admitted git shell alias can read outside
-that argument check. The preserved candidate `2c40c430` is not a complete repair
+At the time of this investigation, activity-scoped `proc.spawn` checked apparent path
+arguments before ordinary spawn. An admitted git shell alias could read outside
+that argument check. ORB-13689 later removed the argument check. The preserved candidate `2c40c430` is not a complete repair
 and must not be landed as one. The authoritative original task evidence remains
 in ORB-11514's `read-boundary-probe.py`, `read-boundary-probe.json`, and its
 `enforcement_design_blocked` execution summary. This investigation's command
@@ -216,6 +232,21 @@ The descriptor limit above is supported by the Linux 6.8 implementation's cached
 permission path and lack of general revocation, not by an assumed property of a
 profile regex. [AppArmor file permission implementation](https://raw.githubusercontent.com/torvalds/linux/v6.8/security/apparmor/file.c).
 
+Linux runtime directories and SQLite sidecars are an object-authority exception
+to path-only compilation. The host must open each accepted object while it is
+validating or descriptor-relatively creating it, carry that descriptor through
+engine dispatch, and supply `--bind-fd` as Bubblewrap's bind source. The
+pathname remains the namespace destination only. Replacing a validated name
+with a symlink or different object must either leave the held object as the sole
+writable source or reject the plan before spawn. A second canonicalization or
+metadata check without a retained descriptor does not meet this contract.
+
+The guarantee covers renames and link replacement beneath the opened runtime
+root. It assumes an unprivileged peer cannot remount the runtime root or its
+host ancestors. Bubblewrap consumes and closes the inherited setup descriptors
+before provider exec; the parent closes its copies with the plan after spawn.
+Non-Linux backends do not consume this authority representation.
+
 ### Ownership and eventual implementation targets
 
 Keep one semantic evaluator. `orbit-types/src/policy/policy_def.rs` owns ordered
@@ -240,7 +271,7 @@ Concrete follow-on targets, **not modified here**:
    confined-spawn seam. The current trait only validates; a wrapper must not spawn
    in `validate` and then also take the ordinary unconfined spawn path. Keep
    existing supervision and outer containment; verify attachment before exec.
-4. `orbit-tools/src/builtin/proc/spawn.rs` and `tests/proc_spawn_lockdown.rs`:
+4. `orbit-tools/src/builtin/proc/spawn.rs` and `tests/tools/proc_spawn_lockdown.rs`:
    supply the effective activity authority and use that seam; retain explicit
    path preflight as a fast diagnostic, exact allowlist, and cleared environment.
 5. Existing platform sandbox modules and Core admission: capability/attachment
@@ -249,7 +280,8 @@ Concrete follow-on targets, **not modified here**:
 
 ### Acceptance mapping and operator handoff
 
-Each original ORB-11514 criterion remains required for the production repair.
+These were the original ORB-11514 criteria for a production repair. ORB-13689
+superseded that mandate for `proc.spawn`; the table remains historical evidence.
 
 | Original criterion | Enforcement point and present evidence / unresolved gate |
 | --- | --- |

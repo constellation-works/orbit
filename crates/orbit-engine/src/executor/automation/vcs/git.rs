@@ -1,6 +1,6 @@
 use std::cell::Cell;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{
@@ -8,7 +8,9 @@ use orbit_common::fs::git::{
     with_git_fetch_lock,
 };
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
+use orbit_exec::{
+    EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
+};
 use serde_json::Value;
 
 /// Bounded wall-clock budgets for host Git children.
@@ -77,7 +79,13 @@ impl GitTimeoutBudget {
     }
 
     pub(crate) fn timeout_for(self, args: &[&str]) -> u64 {
-        match args {
+        // Git's global `-c key=value` may precede the operation (notably
+        // `-c core.editor=true rebase --continue`).
+        let mut operation = args;
+        while let ["-c", _, rest @ ..] = operation {
+            operation = rest;
+        }
+        match operation {
             ["fetch", ..] => self.fetch_ms,
             ["worktree", "add", ..] => self.worktree_add_ms,
             ["rebase", ..] => self.rebase_ms,
@@ -137,6 +145,17 @@ pub(crate) struct GitOutcome {
     pub timeout_ms: u64,
 }
 
+/// Raw stdout for Git commands whose output is a fingerprint input. The
+/// timeout verdict is structural; stderr remains diagnostic text only.
+pub(crate) struct GitBytesOutcome {
+    pub stdout: Vec<u8>,
+    pub stderr: String,
+    pub success: bool,
+    pub timed_out: bool,
+    pub timeout_ms: u64,
+    pub exit_code: Option<i32>,
+}
+
 pub(crate) fn git_timeout_error(
     current_dir: &Path,
     args: &[&str],
@@ -173,6 +192,34 @@ pub(crate) fn git_run(current_dir: &Path, args: &[&str]) -> Result<GitOutcome, O
         success: result.success,
         timed_out: result.timed_out,
         timeout_ms,
+    })
+}
+
+/// Supervise host Git with the same secured environment and process-group
+/// cleanup as `git_run`, retaining stdout bytes and optional stdin bytes.
+pub(crate) fn git_run_bytes(
+    current_dir: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+) -> Result<GitBytesOutcome, OrbitError> {
+    let timeout_ms = GitTimeoutBudget::current().timeout_for(args);
+    let mut request = git_request(current_dir, args, timeout_ms);
+    if let Some(bytes) = stdin {
+        request.stdin_mode = StdinMode::Bytes(bytes.to_vec());
+    }
+    let (result, stdout) = run_process_streaming_stdout(&request, &NoSandbox, |mut pipe| {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)
+            .map_err(|error| OrbitError::Execution(format!("read Git stdout: {error}")))?;
+        Ok(bytes)
+    })?;
+    Ok(GitBytesOutcome {
+        stdout,
+        stderr: result.stderr,
+        success: result.success,
+        timed_out: result.timed_out,
+        timeout_ms,
+        exit_code: result.exit_code,
     })
 }
 
@@ -231,18 +278,6 @@ pub(crate) fn git_request(current_dir: &Path, args: &[&str], timeout_ms: u64) ->
     }
 }
 
-/// Byte-preserving adapter for filesystem snapshots and recovery operations.
-pub(crate) fn git_command(current_dir: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new("git");
-    command
-        .current_dir(current_dir)
-        .args(git_args(args))
-        .env_clear()
-        .envs(git_environment())
-        .stdin(std::process::Stdio::null());
-    command
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::executor::automation) enum BaseSyncMode {
     Local,
@@ -279,6 +314,15 @@ pub(crate) fn git_output_paths(
         .collect())
 }
 
+/// Runs Git and trims the *entire* stdout string as one unit.
+///
+/// Safe for single-value output (`rev-parse`, `remote get-url`,
+/// `symbolic-ref`, and the like). Do not use this for `git status
+/// --porcelain` or any other fixed-width, column-oriented format: trimming
+/// the whole string eats the leading status column whenever the result is a
+/// single line (` M path` becomes `M path`), misaligning every column-offset
+/// read by one byte. Column-offset porcelain readers must use
+/// [`git_output_raw`] instead, which preserves each line's leading bytes.
 pub(crate) fn git_output(current_dir: &Path, args: &[&str]) -> Result<String, OrbitError> {
     Ok(git_output_raw(current_dir, args)?.trim().to_string())
 }

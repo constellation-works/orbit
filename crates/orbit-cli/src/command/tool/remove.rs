@@ -1,7 +1,9 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 pub struct ToolRemoveArgs {
@@ -12,7 +14,10 @@ pub struct ToolRemoveArgs {
 impl Execute for ToolRemoveArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         runtime.remove_tool(&self.name)?;
-        println!("Removed tool '{}'", self.name);
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(
+            json!({ "tool": self.name, "removed": true }),
+            format!("Removed tool '{}'", self.name),
+        )
+        .into())
     }
 }

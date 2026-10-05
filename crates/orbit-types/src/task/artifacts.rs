@@ -8,9 +8,6 @@ use crate::identity::{OrbitId, is_valid_adr_id, is_valid_friction_id};
 use crate::task::{ExternalRef, TaskComplexity, TaskError, TaskPriority, TaskStatus, TaskType};
 
 pub const TASK_ARTIFACT_SCHEMA_VERSION: u32 = 1;
-/// Historical task prefix retained for source compatibility. Task parsing is
-/// prefix-agnostic; new ids should be formatted with [`format_task_id`].
-pub const ORB_TASK_ID_PREFIX: &str = "ORB-";
 /// Minimum numeric width used when minting task ids. Parsers accept wider ids.
 pub const ORB_TASK_ID_WIDTH: usize = 5;
 /// Maximum representable allocator value, no longer the five-digit boundary.
@@ -36,7 +33,7 @@ pub fn is_valid_orb_task_id(id: &str) -> bool {
         && suffix.chars().all(|character| character.is_ascii_digit())
 }
 
-/// Validate a stored task-id prefix. `ORB` remains valid for migrated hosts;
+/// Validate a stored task-id prefix. `ORB` remains valid for migrated machines;
 /// other artifact namespaces cannot be interpreted as tasks.
 pub fn is_valid_task_id_prefix(prefix: &str) -> bool {
     (2..=5).contains(&prefix.len())
@@ -92,6 +89,14 @@ pub struct TaskEnvelopeV2 {
     pub pr_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<String>,
+    /// [ORB-12725] `job_run_host` is read for one release; see
+    /// [`crate::task::Task::job_run_machine`].
+    #[serde(
+        default,
+        alias = "job_run_host",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub job_run_machine: Option<crate::task::ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
     /// Named crew responsible for task orchestration, distinct from execution crew.
@@ -164,6 +169,17 @@ pub struct TaskRelationEdge {
     pub relation_type: TaskRelationType,
     pub target: OrbitId,
 }
+
+/// The relation types whose edges form a reachability family, and can
+/// therefore close a cycle.
+///
+/// A caller that pre-filters stored edges before handing them to
+/// [`validate_task_relations_for_source`] — rather than passing the whole
+/// graph — must filter on this list. Anything it omits is metadata the cycle
+/// check never walks, so dropping it cannot change the verdict. This list
+/// must agree with [`cyclic_relation_family`] to avoid admitting a cycle.
+pub const CYCLIC_RELATION_TYPES: &[TaskRelationType] =
+    &[TaskRelationType::BlockedBy, TaskRelationType::ChildOf];
 
 pub fn validate_task_relations_for_source(
     source_id: &str,
@@ -331,6 +347,9 @@ impl ArtifactManifestV2 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactManifestFileV2 {
+    /// Authenticated or trusted put-time origin, never an actor-label inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::task::ExecutionLocation>,
     pub path: String,
     pub blob: String,
     /// Lowercase hex SHA-256 digest; writers should format bytes with `{:x}`.
@@ -362,6 +381,92 @@ impl ArtifactManifestFileV2 {
         }
         Ok(())
     }
+}
+
+/// Common metadata interface for task artifacts across manifest and runtime DTO representations.
+pub trait TaskArtifactMetadata {
+    fn path(&self) -> &str;
+    fn media_type(&self) -> &str;
+    fn size(&self) -> u64;
+    fn created_by(&self) -> Option<&str>;
+}
+
+impl TaskArtifactMetadata for ArtifactManifestFileV2 {
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    fn size(&self) -> u64 {
+        self.size_bytes
+    }
+
+    fn created_by(&self) -> Option<&str> {
+        let trimmed = self.created_by.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+}
+
+impl TaskArtifactMetadata for crate::task::TaskArtifact {
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    fn size(&self) -> u64 {
+        self.content.len() as u64
+    }
+
+    fn created_by(&self) -> Option<&str> {
+        self.created_by
+            .as_deref()
+            .map(str::trim)
+            .filter(|trimmed| !trimmed.is_empty())
+    }
+}
+
+/// Serialize task artifact metadata for task discovery and projection surfaces (`task.show`).
+///
+/// Emits bounded metadata only (`path`, `media_type`, `size`, `created_by`); payload content
+/// is never included and must be retrieved explicitly via `orbit.task.artifact.get`.
+pub fn serialize_task_artifacts<T: TaskArtifactMetadata>(artifacts: &[T]) -> serde_json::Value {
+    serde_json::Value::Array(
+        artifacts
+            .iter()
+            .map(|artifact| {
+                let mut object = serde_json::Map::new();
+                object.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(artifact.path().to_string()),
+                );
+                object.insert(
+                    "media_type".to_string(),
+                    serde_json::Value::String(artifact.media_type().to_string()),
+                );
+                if let Some(created_by) = artifact.created_by() {
+                    object.insert(
+                        "created_by".to_string(),
+                        serde_json::Value::String(created_by.to_string()),
+                    );
+                }
+                object.insert(
+                    "size".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(artifact.size())),
+                );
+                serde_json::Value::Object(object)
+            })
+            .collect(),
+    )
 }
 
 pub fn validate_relative_artifact_path(path: &str) -> Result<(), TaskError> {

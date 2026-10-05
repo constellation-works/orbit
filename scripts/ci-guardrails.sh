@@ -25,8 +25,15 @@ fi
 cargo fmt --all -- --check
 if [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
-  "$repo_root/scripts/check-ci-macos.sh"
-  cargo clippy --workspace --all-targets -- -D warnings
+  # --workspace-build lists them from the same `--workspace --lib --bins
+  # --tests` artifacts the nextest pass below runs, instead of a per-crate
+  # `cargo test -p` build that resolves features differently and recompiles
+  # the workspace chain a second time. [DANI-10428]
+  "$repo_root/scripts/check-ci-macos.sh" --workspace-build
+  # Production must reject unbounded channels. Existing test-only channels
+  # remain exempt in the all-targets pass.
+  cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods
+  cargo clippy --workspace --all-targets -- -D warnings -A clippy::disallowed_methods
   if cargo nextest --version >/dev/null 2>&1; then
     cargo nextest run --no-fail-fast --workspace --lib --bins --tests
   else
@@ -36,10 +43,10 @@ if [[ "$fast" == false ]]; then
   cargo test --no-fail-fast --workspace --doc
   RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
   # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
-  # [ORB-00416] Soft-presence like nextest above — CI installs a pinned version;
+  # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
   # local runs without the tool warn instead of hard-failing.
   if command -v cargo-deny >/dev/null 2>&1; then
-    cargo deny check
+    "$repo_root/scripts/cargo-deny.sh" check
   else
     echo "cargo-deny not found; skipping supply-chain gate (install: cargo install cargo-deny --locked)" >&2
   fi
@@ -50,12 +57,17 @@ fi
 "$repo_root/scripts/test-installer-security.sh"
 "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
 "$repo_root/scripts/check-dependency-direction.sh"
+"$repo_root/scripts/check-workflow-yaml.py"
+"$repo_root/scripts/check-workflow-action-pins.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
+"$repo_root/scripts/test-codeql-extension-schema.py"
+"$repo_root/scripts/check-codeql-extension-schema.py"
 "$repo_root/scripts/check-cli-imports.sh"
 "$repo_root/scripts/check-terminal-state-guard.sh"
 "$repo_root/scripts/check-history-note-size.sh"
 "$repo_root/scripts/check-stability.sh"
 "$repo_root/scripts/check-artifact-redaction-guardrail.sh"
+"$repo_root/scripts/check-web-blocking-handlers.py"
 "$repo_root/scripts/check-ci-failure-reporting.sh"
 "$repo_root/scripts/check-public-artifact-ids.py"
 "$repo_root/scripts/check-changelog-style.sh"
@@ -63,7 +75,10 @@ fi
 "$repo_root/scripts/check-orphan-modules.sh"
 "$repo_root/scripts/check-crate-agent-guides.sh"
 "$repo_root/scripts/check-embedded-asset-portability.py"
-"$repo_root/scripts/sync-activity-assets.sh" --check
+# Execute the shipped MCP Apps script against its deterministic host/DOM fixture.
+"$repo_root/scripts/check-desktop-ui.sh"
+"$repo_root/scripts/check-dashboard-vendor.py"
+"$repo_root/scripts/test-qa-full-sweep.py" --check
 "$repo_root/scripts/sync-plugin-skills.sh" --check
 "$repo_root/scripts/test-validate-codex-plugin.sh"
 "$repo_root/scripts/test-validate-agent-plugin.sh"
@@ -72,3 +87,4 @@ fi
 "$repo_root/scripts/test-build-budget.sh"
 "$repo_root/scripts/test-compiler-cache.sh"
 "$repo_root/scripts/test-compiler-cache-namespaces.sh"
+"$repo_root/scripts/test-cross-revision-check.sh"

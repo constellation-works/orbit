@@ -1,12 +1,14 @@
 use std::path::Path;
 
-use orbit_common::fs::task_io::prune_missing_context_files;
+use orbit_common::text::floor_char_boundary;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, refuses_implementer_writes};
 use serde_json::Value;
 
+use orbit_common::fs::selector::canonical_selector_in_workspace;
+
 use crate::OrbitRuntime;
-use crate::application::task::{canonicalize_context_files_for_read, context_workspace_root};
+use crate::application::task::context_workspace_root;
 use crate::runtime::run_input::singular_task_id_from_input;
 
 /// Ceiling on the number of comments surfaced to an implementing agent.
@@ -109,11 +111,22 @@ fn agent_task_context_json(
         .get("repo_root")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let prune_root = context_workspace_root(fallback_repo_root, workspace_path.as_deref());
-    let canonical_context_files =
-        canonicalize_context_files_for_read(&task.context_files, &prune_root);
-    let (kept_context_files, _dropped) =
-        prune_missing_context_files(&prune_root, canonical_context_files);
+    // The envelope carries the task's full declared footprint: a selector for
+    // a file the task is about to create is scope the implementer needs, and
+    // dropping it here would hand the agent a narrower boundary than the one
+    // its locks and reservations protect [ORB-12490]. A selector that cannot
+    // be canonicalized against this run's root — an unreadable worktree path,
+    // or a declaration written against another checkout — is passed through
+    // verbatim for the same reason; the envelope reports scope, it does not
+    // decide it.
+    let context_root = context_workspace_root(fallback_repo_root, workspace_path.as_deref());
+    let context_files = task
+        .context_files
+        .iter()
+        .map(|entry| {
+            canonical_selector_in_workspace(entry, &context_root).unwrap_or_else(|_| entry.clone())
+        })
+        .collect::<Vec<_>>();
 
     // `json!` with a braced literal always yields `Value::Object`; the fallback
     // arm keeps this total so the agent context never panics on a malformed
@@ -126,12 +139,17 @@ fn agent_task_context_json(
         "description": task.description.clone(),
         "acceptance_criteria": task.acceptance_criteria.clone(),
         "plan": task.plan.clone(),
-        "context_files": kept_context_files,
+        "context_files": context_files,
         "tags": task.tags.clone(),
         "required_tools": task.required_tools.clone(),
         "external_refs": task.external_refs.clone(),
         "workspace_path": workspace_path,
         "repo_root": repo_root,
+        "scratch_dir": scratch_dir_for_context(
+            workspace_path.as_deref(),
+            repo_root.as_deref(),
+            fallback_repo_root,
+        ),
     }) {
         Value::Object(map) => map,
         _ => serde_json::Map::new(),
@@ -224,10 +242,7 @@ fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
 /// or below the budget, so a multi-byte character is dropped rather than split.
 fn truncate_comment_body(message: &str) -> String {
     let budget = MAX_TASK_COMMENTS_BYTES.saturating_sub(COMMENT_TRUNCATION_MARKER.len());
-    let mut cut = budget.min(message.len());
-    while cut > 0 && !message.is_char_boundary(cut) {
-        cut -= 1;
-    }
+    let cut = floor_char_boundary(message, budget);
     format!("{}{COMMENT_TRUNCATION_MARKER}", &message[..cut])
 }
 
@@ -240,24 +255,25 @@ fn workflow_failure_status_note(task_history: &[TaskHistoryEntry]) -> Option<&st
     })
 }
 
-/// Whether the task record refuses the writes an implementer must make.
-///
-/// Mirrors the `update_task` gate in `command::task::update` and its
-/// `orbit.task.update` tool-host twin: `Done` rejects every non-comment
-/// mutation, and `Archived` rejects everything except the bare restore to
-/// backlog. Neither admits an `execution_summary`, so an implement invocation
-/// dispatched against one of these can never persist what it produces.
-///
-/// An implement invocation is not guaranteed to be the only actor
-/// on its task. The executor re-dispatches a failed `agent_implement` step once
-/// after its `recovery_activity` succeeds, and a task can be promoted through
-/// the review/approve surface while an attempt is still running. Naming the
-/// condition in the envelope lets an invocation that has nothing left to do
-/// exit up front, instead of discovering it at its final persist call. See
-/// The envelope is a dispatch-time snapshot, so `agent_implement` also
-/// re-checks status mid-run.
-fn refuses_implementer_writes(status: TaskStatus) -> bool {
-    matches!(status, TaskStatus::Done | TaskStatus::Archived)
+fn scratch_dir_for_context(
+    workspace_path: Option<&str>,
+    repo_root: Option<&str>,
+    fallback_repo_root: &Path,
+) -> String {
+    let root = workspace_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(Path::new)
+        .or_else(|| {
+            repo_root
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(Path::new)
+        })
+        .unwrap_or(fallback_repo_root);
+    orbit_common::fs::path::orbit_scratch_dir(root)
+        .display()
+        .to_string()
 }
 
 fn push_unique_task_id(task_ids: &mut Vec<String>, task_id: &str) {

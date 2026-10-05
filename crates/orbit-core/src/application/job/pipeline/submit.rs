@@ -1,0 +1,628 @@
+use super::*;
+
+/// [ORB-10544] Cap on the run history scanned by the in-flight ship guard.
+/// Non-terminal runs are always among the newest rows, so a bounded window is
+/// enough to spot a duplicate dispatch without walking the whole history.
+const SHIP_IN_FLIGHT_SCAN_LIMIT: usize = 200;
+
+/// One durable pipeline submission: what to run, with what input, and how the
+/// detached worker will find the definition again.
+pub(crate) struct PipelineSubmission<'a> {
+    pub(crate) job_name: &'a str,
+    pub(crate) definition: SubmittedDefinition<'a>,
+    pub(crate) input: Value,
+    pub(crate) resume: Option<&'a ResumePlan>,
+    pub(crate) actor: Option<&'a str>,
+    pub(crate) action_key: Option<&'a str>,
+    /// Caller retry key admitted atomically with the run [ORB-13560].
+    pub(crate) retry_key: Option<RetryKey<'a>>,
+    /// Whether this submission is the canonical trusted-host admission
+    /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
+    /// input; every other submission is refused for supplying it.
+    pub(crate) trusted_host: bool,
+    /// How this run was submitted [ORB-12255].
+    pub(crate) trigger: JobRunTrigger,
+}
+
+/// Where a keyed submission's retry key lives and how far back it is matched.
+///
+/// The key is the string at `input[field]`; it is matched against the job's
+/// newest `scan_limit` runs in the same store transaction that would insert.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RetryKey<'a> {
+    pub(crate) field: &'a str,
+    pub(crate) scan_limit: usize,
+}
+
+/// What a parent-authorized child submission produced.
+#[derive(Debug, Clone)]
+pub(crate) enum ChildSubmission {
+    Submitted(PipelineInvokeResult),
+    /// A keyed submission resolved the run an earlier submission of the same
+    /// retry key admitted. Nothing was written and no worker was spawned.
+    Resolved(PipelineInvokeResult),
+    /// The atomic admission refused the child; `reason` is
+    /// `admissions_stopped`.
+    Skipped(String),
+}
+
+impl ChildSubmission {
+    pub(super) fn run_id(&self) -> Option<&str> {
+        match self {
+            ChildSubmission::Submitted(result) | ChildSubmission::Resolved(result) => {
+                Some(result.run_id.as_str())
+            }
+            ChildSubmission::Skipped(_) => None,
+        }
+    }
+}
+
+impl<'a> PipelineSubmission<'a> {
+    /// An ordinary submission: catalog definition, no resume, no idempotency
+    /// key, and no trusted-host admission.
+    pub(crate) fn catalog(job_name: &'a str, input: Value, actor: Option<&'a str>) -> Self {
+        Self {
+            job_name,
+            definition: SubmittedDefinition::Catalog,
+            input,
+            resume: None,
+            actor,
+            action_key: None,
+            retry_key: None,
+            trusted_host: false,
+            trigger: JobRunTrigger::cli(),
+        }
+    }
+
+    fn with_trigger(mut self, trigger: JobRunTrigger) -> Self {
+        self.trigger = trigger;
+        self
+    }
+}
+
+/// Trusted context for a pipeline child submitted by a running v2 activity.
+///
+/// The parent run id comes from the engine-owned [`orbit_tools::ToolContext`],
+/// never from tool input. The remaining fields make the parent link complete
+/// at the same atomic boundary that creates the child.
+#[derive(Debug, Clone)]
+pub(crate) struct ChildPipelineAdmission {
+    pub parent_run_id: String,
+    pub parent_step_id: Option<String>,
+    pub action: String,
+    pub blocking: bool,
+}
+
+/// How a submitted run's definition reaches its worker.
+pub(crate) enum SubmittedDefinition<'a> {
+    /// Resolve `job_name` from the catalog, at submission and again in the
+    /// worker. Catalog assets are managed, so name resolution stays the
+    /// contract for them.
+    Catalog,
+    /// Pin this exact validated YAML alongside the run [ORB-10801]. A direct
+    /// path is an unmanaged file the submitter happened to name; rereading it
+    /// from a detached worker would let an edit or deletion between submission
+    /// and execution change (or destroy) the run.
+    Snapshot { spec: &'a JobV2, yaml: &'a str },
+}
+
+impl OrbitRuntime {
+    /// Submit a `ship` workflow run (the `task_auto_pipeline` job).
+    ///
+    /// Shared entry point for every non-interactive submission surface
+    /// (dashboard HTTP endpoint, MCP `orbit.workflow.ship`, `orbit run
+    /// ship-sweep`). `base_branch` falls back to the workspace's `[workflow]
+    /// base_branch`; an empty `task_ids` slice selects auto
+    /// (backlog-discovery) mode. One-shot: returns as soon as the run is
+    /// persisted and its worker spawned.
+    ///
+    /// [ORB-10544] An explicit task selection is guarded against duplicate
+    /// dispatch here rather than in any one adapter: if a named task is already
+    /// carried by a non-terminal delivery run, the submission is refused with
+    /// [`OrbitError::ShipRunInFlight`] naming that task and run, so two runs
+    /// cannot contend for one worktree and task reservation no matter which
+    /// surface submitted them. Auto mode has no task ids to key on and is
+    /// unaffected.
+    ///
+    /// An explicit task that selects its delivery job with a `delivery:<job>`
+    /// tag is refused here, before any run exists, when that job cannot
+    /// deliver it in `mode` — including when the plugin contributing it is
+    /// disabled or uninstalled. The gate resolves the same selection again
+    /// before it reserves anything.
+    ///
+    /// [ORB-11187] `completion` is the caller's explicit authorization for this
+    /// run to finish delivery and perform the guarded `review -> done`
+    /// transition. It defaults to
+    /// [`CompletionPolicy::Review`](crate::application::workflow::CompletionPolicy::Review)
+    /// at every surface and is only ever raised by a per-invocation operator
+    /// flag; nothing derives it from workspace configuration or the environment.
+    ///
+    /// [ORB-10709] The workspace claim is checked first, for the case the
+    /// duplicate-dispatch guard structurally cannot cover: it is keyed on task
+    /// id over a bounded window of recent runs, so a stale non-terminal run
+    /// outside that window is invisible to it, and a discovery-mode submission
+    /// carries no task ids at all. The claim check is keyed on neither, so both
+    /// gaps close. `claim_token` is the holder's minted token; `None` falls back
+    /// to [`CLAIM_TOKEN_ENV`](crate::runtime::workspace::claim::CLAIM_TOKEN_ENV).
+    ///
+    /// [ORB-13016] `trigger` is the submitting surface's provenance, recorded
+    /// on the run so dashboard and MCP launches are not reported as `cli`.
+    // Existing public positional API; keep callers stable while submission is composed internally.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_ship_run(
+        &self,
+        mode: crate::application::workflow::ShipMode,
+        base_branch: Option<&str>,
+        task_ids: &[String],
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_ship_run_with_containment(
+            mode,
+            base_branch,
+            task_ids,
+            completion,
+            allowed_crews,
+            actor,
+            claim_token,
+            trigger,
+            false,
+        )
+    }
+
+    /// Submit a ship run with a CLI-only strict containment override.
+    /// The marker is persisted with this run's input; its worker passes the
+    /// policy through the environment to any child workers it starts.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_ship_run_with_containment(
+        &self,
+        mode: crate::application::workflow::ShipMode,
+        base_branch: Option<&str>,
+        task_ids: &[String],
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+        strict_containment: bool,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.validate_strict_worker_containment(strict_containment)?;
+        self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
+        // [ORB-12500] Explicit shipment converges on the same admission
+        // decision the drain, the retained sweep and pull admission make: a
+        // replica serves no owner coordination, and a task a live claim is
+        // already executing is settled or recovered, never shipped beside
+        // itself. Saturation does not stand an operator's explicit invocation
+        // down — the leaf definition's own `max_active_runs` bounds it.
+        self.drain_entry_admission(
+            crate::application::distributed::DrainEntryPoint::ExplicitShip,
+            task_ids,
+            false,
+        )?
+        .into_result()?;
+        let workflow = crate::application::workflow::find_workflow(
+            crate::application::workflow::SHIP_WORKFLOW_ALIAS,
+        )
+        .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'ship'".to_string()))?;
+        let base = base_branch.unwrap_or_else(|| self.workspace_base_branch());
+        let allowed_crews = self.canonical_allowed_crews(allowed_crews)?;
+        let allowlist = self.crew_allowlist(&allowed_crews)?;
+        let mut input = crate::application::workflow::build_ship_input(
+            mode,
+            base,
+            task_ids,
+            completion,
+            &allowed_crews,
+        )?;
+        if strict_containment {
+            input["__worker_containment_strict"] = json!(true);
+        }
+        // Validate explicit selections before inspecting runs or creating a
+        // pipeline record. Auto mode intentionally carries no task ids: the
+        // worker discovers eligible backlog tasks after it starts.
+        for task_id in task_ids {
+            // A task the pipeline cannot start from (`blocked`, `review`,
+            // `done`, `proposed`, ...) would only be discovered after the
+            // run was accepted, reported `submitted`, and then failed or
+            // no-oped at the gate. Refuse it here, naming the status and the
+            // way back into the backlog.
+            let task = self.ensure_task_can_enter_workflow_as_system(
+                task_id,
+                crate::application::workflow::SHIP_WORKFLOW_ALIAS,
+            )?;
+            // A task whose `os:` tags this host cannot satisfy is never started
+            // here; it would only fail on a platform it cannot run on.
+            if let Some(wait) = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
+                .unsatisfied_reason(self.host_os())
+            {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "explicit ship task '{task_id}' {wait}, and this host runs {}; ship it on \
+                     a host of that OS (a pull-drain follower on one claims it from the \
+                     backlog) or change its `os:` tags",
+                    self.host_os()
+                        .map_or(std::env::consts::OS, orbit_types::task::HostOs::as_str)
+                )));
+            }
+            if let Some(allowlist) = allowlist.as_ref() {
+                // [ORB-12606] Report against the crew admission will draw, not
+                // the default chain: a crew-less task whose complexity pool
+                // still has a permitted member is not excluded.
+                self.enforce_admitted_crew_allowlist(
+                    &task,
+                    &input,
+                    allowlist,
+                    &format!("explicit ship task '{task_id}'"),
+                )?;
+            }
+            self.resolve_delivery_route(std::slice::from_ref(&task), mode)?;
+        }
+        if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
+            return Err(conflict);
+        }
+        self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
+    }
+    /// Submit one workspace drain (`workspace_auto_pipeline`).
+    ///
+    /// [ORB-10819] `for_seconds` is the drain window: the run keeps re-listing
+    /// admissible work and shipping it until the window expires. `None` (or
+    /// zero) means one tick, which is what every caller predating the window
+    /// gets. The window bounds only the *start* of new work — a child run
+    /// already in flight when the deadline passes finishes normally.
+    /// `max_active_leaf_runs` is the drain's concurrency ceiling: how many
+    /// `task_auto_pipeline` children may be live at once. Omitted, the job's
+    /// own default applies — this only forwards an explicit override, so the
+    /// default lives in one place, next to the loop that reads it.
+    ///
+    /// [ORB-11242] `allowed_crews` is the run-scoped crew restriction. Empty
+    /// means unrestricted, which is what every caller predating it gets. Names
+    /// are resolved against this host's `[crews.*]` registry *here*, before a
+    /// run record exists, so an unknown or blank name fails the submission
+    /// rather than quietly shrinking what a live drain admits; the canonical
+    /// registry names are what gets persisted and forwarded. It gates what the
+    /// drain may *start* — it does not touch workspace configuration, reassign
+    /// a task's crew, or cancel work another invocation already has in flight.
+    ///
+    /// [ORB-13016] `trigger` is the submitting surface's provenance.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_workspace_auto_run(
+        &self,
+        for_seconds: Option<u64>,
+        max_active_leaf_runs: Option<u32>,
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
+        complexity_crews: &orbit_config::ComplexityCrewPools,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_workspace_auto_run_with_containment(
+            for_seconds,
+            max_active_leaf_runs,
+            completion,
+            allowed_crews,
+            complexity_crews,
+            actor,
+            claim_token,
+            trigger,
+            false,
+        )
+    }
+
+    /// Submit a drain with a strict policy inherited by its leaf workers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_workspace_auto_run_with_containment(
+        &self,
+        for_seconds: Option<u64>,
+        max_active_leaf_runs: Option<u32>,
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
+        complexity_crews: &orbit_config::ComplexityCrewPools,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+        strict_containment: bool,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.validate_strict_worker_containment(strict_containment)?;
+        self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
+        // [ORB-12500] An explicit owner drain is owner coordination work; a
+        // replica executes through pull instead of running one locally.
+        self.drain_entry_admission(
+            crate::application::distributed::DrainEntryPoint::OwnerDrain,
+            &[],
+            false,
+        )?
+        .into_result()?;
+        let workflow = crate::application::workflow::find_workflow(
+            crate::application::workflow::AUTO_WORKFLOW_ALIAS,
+        )
+        .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'auto'".to_string()))?;
+        let mut input = workspace_auto_run_input(
+            for_seconds,
+            max_active_leaf_runs,
+            completion,
+            &self.canonical_allowed_crews(allowed_crews)?,
+        )?;
+        Self::set_auto_crew_overrides(&mut input, complexity_crews);
+        if strict_containment {
+            input["__worker_containment_strict"] = json!(true);
+        }
+        self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
+    }
+
+    fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {
+        if strict && !self.context.settings().worker_containment().enabled {
+            return Err(OrbitError::InvalidInput(
+                "--strict-worker-containment requires machine.worker_containment=true".into(),
+            ));
+        }
+        Ok(())
+    }
+    /// Canonicalize an operator-supplied crew allowlist, rejecting blank or
+    /// unconfigured names [ORB-11242].
+    ///
+    /// Canonical registry names are persisted rather than the operator's
+    /// spelling, so the durable run input says exactly which configured crews
+    /// the window permits regardless of the alias that was typed.
+    pub(crate) fn canonical_allowed_crews(
+        &self,
+        allowed_crews: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        let mut canonical: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for name in allowed_crews {
+            if name.trim().is_empty() {
+                return Err(OrbitError::InvalidInput(
+                    "crew name in the allowlist must not be empty".to_string(),
+                ));
+            }
+            let Some(resolved) = self.canonical_crew_name(Some(name))? else {
+                return Err(OrbitError::InvalidInput(
+                    "crew name in the allowlist must not be empty".to_string(),
+                ));
+            };
+            canonical.insert(resolved);
+        }
+        Ok(canonical.into_iter().collect())
+    }
+    /// The duplicate-dispatch refusal for the newest non-terminal delivery run
+    /// carrying one of `task_ids`, or `None` when the selection is free.
+    ///
+    /// A run's task selection lives in its persisted `input.task_ids`, which is
+    /// what [`Self::submit_ship_run`] writes, so this sees every prior
+    /// submission regardless of the surface that made it.
+    ///
+    /// Only runs of jobs declaring `spec.task_delivery` hold the slot: the ship
+    /// coordinators, the delivery leaves, and any plugin delivery job. The
+    /// workspace drain and preparation jobs may list task IDs without holding
+    /// it; their dispatched children do.
+    fn in_flight_ship_run_for_tasks(
+        &self,
+        task_ids: &[String],
+    ) -> Result<Option<OrbitError>, OrbitError> {
+        if task_ids.is_empty() {
+            return Ok(None);
+        }
+        let delivery_jobs = self.task_delivery_job_ids()?;
+        let runs = self.list_job_runs(crate::application::job::JobRunListParams {
+            limit: Some(SHIP_IN_FLIGHT_SCAN_LIMIT),
+            ..Default::default()
+        })?;
+        Ok(runs.into_iter().find_map(|run| {
+            if run.state.is_terminal() || !delivery_jobs.contains(&run.job_id) {
+                return None;
+            }
+            let task_id = run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("task_ids"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .find(|candidate| task_ids.iter().any(|wanted| wanted == candidate))
+                .map(str::to_string)?;
+            Some(OrbitError::ShipRunInFlight {
+                task_id,
+                run_id: run.run_id,
+            })
+        }))
+    }
+    /// Submit a run for a catalog job id or a direct schemaVersion 2 job YAML
+    /// path — the shared entry point behind `orbit run job` / `orbit job run`.
+    ///
+    /// [ORB-10801] Submission is one-shot: it validates the definition,
+    /// persists the run, and hands it to a detached worker. A direct path is
+    /// snapshotted next to the run before this returns, so the worker executes
+    /// exactly the definition that was validated even if the source file is
+    /// edited or deleted a moment later.
+    pub fn submit_job_run(
+        &self,
+        job_ref: &str,
+        input: Value,
+        actor: Option<&str>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let direct_path = Path::new(job_ref);
+        if !direct_path.is_file() {
+            return self.submit_catalog_job_run(job_ref, input, actor, JobRunTrigger::cli());
+        }
+
+        let (job_name, spec, yaml) = self.load_direct_job_definition(direct_path)?;
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+            definition: SubmittedDefinition::Snapshot {
+                spec: &spec,
+                yaml: &yaml,
+            },
+            ..PipelineSubmission::catalog(&job_name, input.clone(), actor)
+        });
+        self.record_submission_audit(&job_name, &input, actor, &result)?;
+        result
+    }
+    /// Submit an operator UI's no-input catalog action through the shared dispatcher.
+    pub fn submit_no_input_catalog_job_run(
+        &self,
+        job_id: &str,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let entry = self.show_job_catalog_entry(job_id)?;
+        if entry.kind() != orbit_types::workflow::JobKind::Subroutine
+            && !entry.supports_no_input_submission()
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "job '{job_id}' requires task input or a delivery window, or is disabled/subroutine; use Ship or Drain for delivery"
+            )));
+        }
+        self.submit_catalog_job_run(job_id, json!({}), actor, trigger)
+    }
+
+    /// Submit a catalog job by id. This entry point never interprets the id as
+    /// a path, so request surfaces can reject direct files while preserving the
+    /// same catalog validation and subroutine refusal as the CLI. `trigger` is
+    /// the submitting surface's provenance [ORB-13016].
+    pub fn submit_catalog_job_run(
+        &self,
+        job_id: &str,
+        input: Value,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let entry = self.show_job_catalog_entry(job_id)?;
+        if entry.kind() == orbit_types::workflow::JobKind::Subroutine {
+            return Err(OrbitError::InvalidInput(format!(
+                "job '{}' declares `kind: subroutine` and cannot be run directly (asset: {}).",
+                entry.job_id,
+                entry.path.display()
+            )));
+        }
+        self.submit_pipeline_run_with_trigger(&entry.job_id, input, None, actor, trigger)
+    }
+    /// Read and fully validate a direct-path job definition in the submitting
+    /// process, so a broken asset is refused before any run is persisted.
+    fn load_direct_job_definition(
+        &self,
+        yaml_path: &Path,
+    ) -> Result<(String, JobV2, String), OrbitError> {
+        let yaml = std::fs::read_to_string(yaml_path).map_err(|error| {
+            OrbitError::InvalidInput(format!("read {}: {error}", yaml_path.display()))
+        })?;
+        let asset = load_job_asset(&yaml).map_err(|error| {
+            OrbitError::InvalidInput(format!("load {}: {error}", yaml_path.display()))
+        })?;
+        validate_job_retired_sessions(&asset.spec, &yaml_path.display().to_string())
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        Ok((asset.name, asset.spec, yaml))
+    }
+    /// Submit an automation-admitted run under its idempotency `key`.
+    /// `trigger` names what admitted it [ORB-13016].
+    pub(crate) fn submit_automation_pipeline_run(
+        &self,
+        job_name: &str,
+        input: Value,
+        key: &str,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let result = self.submit_persisted_pipeline_run(
+            PipelineSubmission {
+                action_key: Some(key),
+                ..PipelineSubmission::catalog(job_name, input.clone(), Some("automation"))
+            }
+            .with_trigger(trigger),
+        );
+        self.record_submission_audit(job_name, &input, Some("automation"), &result)?;
+        result
+    }
+    pub fn submit_pipeline_run(
+        &self,
+        job_name: &str,
+        input: Value,
+        priority: Option<&str>,
+        actor: Option<&str>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_pipeline_run_with_trigger(
+            job_name,
+            input,
+            priority,
+            actor,
+            JobRunTrigger::cli(),
+        )
+    }
+    pub(crate) fn submit_pipeline_run_with_trigger(
+        &self,
+        job_name: &str,
+        input: Value,
+        priority: Option<&str>,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let result = self.submit_persisted_pipeline_run(
+            PipelineSubmission::catalog(job_name, input.clone(), actor).with_trigger(trigger),
+        );
+
+        self.record_pipeline_audit(
+            "pipeline.invoke",
+            result.as_ref().ok().map(|value| value.run_id.as_str()),
+            actor,
+            match &result {
+                Ok(_) => AuditEventStatus::Success,
+                Err(_) => AuditEventStatus::Failure,
+            },
+            json!({
+                "actor": actor,
+                "job_name": job_name,
+                "priority": priority,
+                "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                "input_hash": input_hash(&input),
+            }),
+            result.as_ref().err().map(|error| error.to_string()),
+        )?;
+
+        result
+    }
+    /// Submit a v2 activity's child through the parent's durable admission
+    /// boundary [ORB-11310].
+    ///
+    /// `Ok(None)` is the benign, idempotent result when the parent auto drain
+    /// has already acknowledged an admissions stop. Direct/non-child callers
+    /// continue to use [`Self::submit_pipeline_run`] and are unchanged.
+    pub(crate) fn submit_child_pipeline_run(
+        &self,
+        job_name: &str,
+        input: Value,
+        priority: Option<&str>,
+        actor: Option<&str>,
+        admission: &ChildPipelineAdmission,
+    ) -> Result<ChildSubmission, OrbitError> {
+        let result = self.submit_persisted_pipeline_run_with_admission(
+            PipelineSubmission::catalog(job_name, input.clone(), actor)
+                .with_trigger(JobRunTrigger::child()),
+            Some(admission),
+        );
+
+        self.record_pipeline_audit(
+            "pipeline.invoke",
+            result.as_ref().ok().and_then(ChildSubmission::run_id),
+            actor,
+            match &result {
+                Ok(_) => AuditEventStatus::Success,
+                Err(_) => AuditEventStatus::Failure,
+            },
+            json!({
+                "actor": actor,
+                "job_name": job_name,
+                "priority": priority,
+                "parent_run_id": admission.parent_run_id,
+                "outcome": match &result {
+                    Ok(ChildSubmission::Skipped(reason)) => reason.as_str(),
+                    _ => "submitted",
+                },
+                "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
+                "input_hash": input_hash(&input),
+            }),
+            result.as_ref().err().map(|error| error.to_string()),
+        )?;
+
+        result
+    }
+}

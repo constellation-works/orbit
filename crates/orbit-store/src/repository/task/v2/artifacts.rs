@@ -1,11 +1,21 @@
 use super::*;
 
+fn immutable_artifact_blob(path: &str, sha256: &str) -> String {
+    // Keep new blobs in the already-durable files directory. The path digest
+    // distinguishes equal contents at different logical artifact paths.
+    format!(
+        "{TASK_ARTIFACT_FILES_DIR_NAME}/.blob-{}-{sha256}",
+        sha256_hex(path.as_bytes())
+    )
+}
+
 impl TaskV2Store {
     pub(crate) fn get_task_artifacts(
         &self,
         id: &str,
     ) -> Result<Option<Vec<TaskArtifact>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
         let bundle = match self.bundle_store.read_bundle(id) {
             Ok(bundle) => bundle,
             Err(OrbitError::NotFound {
@@ -39,7 +49,8 @@ impl TaskV2Store {
         id: &str,
     ) -> Result<Option<Vec<ArtifactManifestFileV2>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
-        let bundle = match self.bundle_store.read_bundle(id) {
+        self.ensure_recovered()?;
+        let bundle = match self.bundle_store.read_bundle_lightweight(id) {
             Ok(bundle) => bundle,
             Err(OrbitError::NotFound {
                 kind: NotFoundKind::Task,
@@ -61,6 +72,7 @@ impl TaskV2Store {
         path: &str,
     ) -> Result<Option<TaskArtifact>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
         let path = normalize_v2_artifact_path(path)?;
         let bundle = match self.bundle_store.read_bundle(id) {
             Ok(bundle) => bundle,
@@ -77,7 +89,7 @@ impl TaskV2Store {
             return Ok(None);
         };
         let bundle_dir = self.bundle_store.bundle_path(id)?;
-        let Some(artifact_file) = resolve_v2_artifact_file_path(&bundle_dir, &file.path)? else {
+        let Some(artifact_file) = resolve_v2_artifact_file_path(&bundle_dir, &file.blob)? else {
             return Ok(None);
         };
         let content = fs::read(&artifact_file).map_err(|err| OrbitError::Io(err.to_string()))?;
@@ -104,7 +116,9 @@ impl TaskV2Store {
             ));
         }
 
-        use orbit_types::workflow::automation::{EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission};
+        use orbit_types::workflow::automation::{
+            COVERAGE_ARTIFACT, CoverageEvidence, EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission,
+        };
         let mut artifacts = fields.upsert_artifacts.clone();
         for artifact in &mut artifacts {
             artifact.path = normalize_v2_artifact_path(&artifact.path)?;
@@ -113,15 +127,23 @@ impl TaskV2Store {
                     "automation evidence authority is reserved for the artifact store".into(),
                 ));
             }
+            // Settlement reads these bytes only after the action stops, when
+            // nobody can fix them; refusing here hands the submitter the
+            // exact error while its run can still re-put the file.
+            if artifact.path == COVERAGE_ARTIFACT
+                && let Err(error) = serde_json::from_slice::<CoverageEvidence>(&artifact.content)
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{COVERAGE_ARTIFACT} is not valid coverage evidence: {error}"
+                )));
+            }
         }
-        if let Some(artifact) = artifacts
-            .iter()
-            .find(|a| a.path == "automation-coverage.json")
+        if let Some(artifact) = artifacts.iter().find(|a| a.path == COVERAGE_ARTIFACT)
             && let Some(run_id) = &fields.owner_run_id
         {
             let witness = EvidenceSubmission {
                 action_id: id.into(),
-                evidence_digest: format!("{:x}", Sha256::digest(&artifact.content)),
+                evidence_digest: sha256_hex(&artifact.content),
                 run_id: run_id.clone(),
             };
             artifacts.push(orbit_types::task::TaskArtifact {
@@ -155,16 +177,30 @@ impl TaskV2Store {
             let now = Utc::now();
             for artifact in &artifacts {
                 let path = normalize_v2_artifact_path(&artifact.path)?;
-                let blob = format!("{TASK_ARTIFACT_FILES_DIR_NAME}/{path}");
-                let destination = files_dir.join(&path);
-                atomic_write_bytes(&destination, &artifact.content)
-                    .map_err(|err| OrbitError::Io(err.to_string()))?;
+                let sha256 = sha256_hex(&artifact.content);
+                let blob = immutable_artifact_blob(&path, &sha256);
+                let destination = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME).join(&blob);
+                match fs::read(&destination) {
+                    Ok(existing) if existing == artifact.content => {}
+                    Ok(_) => {
+                        return Err(OrbitError::Store(format!(
+                            "artifact blob {} has unexpected content",
+                            destination.display()
+                        )));
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        atomic_write_bytes(&destination, &artifact.content)
+                            .map_err(|err| OrbitError::from_write_io(&destination, err))?;
+                    }
+                    Err(err) => return Err(OrbitError::Io(err.to_string())),
+                }
                 by_path.insert(
                     path.clone(),
                     ArtifactManifestFileV2 {
+                        origin: fields.origin.clone(),
                         path: path.clone(),
                         blob,
-                        sha256: format!("{:x}", Sha256::digest(&artifact.content)),
+                        sha256,
                         media_type: artifact.media_type.clone(),
                         size_bytes: artifact.content.len() as u64,
                         created_by: fields.actor.clone(),

@@ -34,22 +34,6 @@ impl ActorIdentity {
         }
     }
 
-    /// Build from a legacy `(Option<String>, Option<String>)` agent/model pair.
-    /// The model wins because the agent family is derivable from it.
-    pub fn from_legacy(agent: Option<&str>, model: Option<&str>) -> Self {
-        if let Some(model) = model.map(str::trim).filter(|s| !s.is_empty()) {
-            return Self::Agent {
-                model: model.to_string(),
-            };
-        }
-        if let Some(agent) = agent.map(str::trim).filter(|s| !s.is_empty()) {
-            return Self::Agent {
-                model: agent.to_string(),
-            };
-        }
-        Self::System
-    }
-
     /// Returns the derived agent family if this is a known `Agent` model.
     pub fn agent_name(&self) -> Option<&str> {
         match self {
@@ -78,30 +62,6 @@ impl ActorIdentity {
     /// Returns `true` if this is an `Agent` variant.
     pub fn is_agent(&self) -> bool {
         matches!(self, Self::Agent { .. })
-    }
-
-    /// Returns `true` if this is the `System` variant.
-    pub fn is_system(&self) -> bool {
-        matches!(self, Self::System)
-    }
-
-    /// Returns `true` if this is a `Human` variant.
-    pub fn is_human(&self) -> bool {
-        matches!(self, Self::Human { .. })
-    }
-
-    /// Decompose into legacy `(Option<String>, Option<String>)` for backward
-    /// compatibility with code that still expects separate agent/model fields.
-    pub fn to_legacy(&self) -> (Option<String>, Option<String>) {
-        match self {
-            Self::System => (None, None),
-            Self::Agent { model } if model.is_empty() => (None, None),
-            Self::Agent { model } => (
-                agent_from_model(model).map(ToOwned::to_owned),
-                Some(model.clone()),
-            ),
-            Self::Human { .. } => (None, None),
-        }
     }
 }
 

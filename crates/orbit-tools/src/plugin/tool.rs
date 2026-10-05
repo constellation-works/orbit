@@ -1,0 +1,232 @@
+//! A plugin tool: one `spec.tools[]` entry bound to its plugin's backend.
+//!
+//! `exec` runs one confined process per call with the versioned JSON
+//! envelope on stdin and `{"ok": …}` on stdout; `mcp` proxies the call to
+//! the plugin's long-lived stdio server for that caller's context — its
+//! workspace and allowed-tools intersection — carrying the same `context`
+//! object as `params._meta.orbit` (§4.2). Both validate the output against
+//! `output_schema` before the caller sees it.
+
+use std::sync::Arc;
+
+use orbit_common::OrbitError;
+use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, supervise_child_cancellable};
+use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
+use orbit_types::tool::{ToolParam, ToolSchema};
+use serde_json::Value;
+
+use super::backend::PluginBackendSpec;
+use super::callback::PluginCallbackSession;
+use super::envelope::{
+    CallSecrets, apply_secret_updates, exec_envelope, parse_response_json, response_output,
+    validate_output,
+};
+use super::mcp::McpBackend;
+use super::schema::CompiledSchema;
+use crate::{Tool, ToolContext, ToolExecutionKind};
+
+/// What the registry knows about a plugin-backed entry beyond its schema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginToolBinding {
+    pub provenance: PluginProvenance,
+    pub execution_kind: PluginExecutionKind,
+    /// Set on an inactive entry: why the plugin is not on the active surface
+    /// and what would fix it.
+    pub diagnostic: Option<String>,
+}
+
+/// How a plugin's tools reach their backend.
+#[derive(Clone)]
+pub enum PluginBackend {
+    /// One process per call.
+    Exec(Arc<PluginBackendSpec>),
+    /// One stdio MCP server per caller context — workspace and allowed-tools
+    /// intersection — per runtime, shared by every tool of the plugin.
+    Mcp(Arc<McpBackend>),
+}
+
+impl PluginBackend {
+    pub fn spec(&self) -> &Arc<PluginBackendSpec> {
+        match self {
+            Self::Exec(spec) => spec,
+            Self::Mcp(backend) => backend.spec(),
+        }
+    }
+}
+
+pub struct PluginTool {
+    /// Canonical `<ns>.<verb>` (or `orbit.<ns>.<verb>`).
+    pub name: String,
+    /// The manifest verb, which is also the `mcp` server's tool name.
+    pub verb: String,
+    pub description: String,
+    pub parameters: Vec<ToolParam>,
+    /// The manifest's resolved `input_schema`, when it declared one; MCP
+    /// advertises it as written.
+    pub input_schema: Option<Value>,
+    pub execution_kind: PluginExecutionKind,
+    /// The tool's `output_schema`, compiled once when the plugin loaded.
+    pub output_schema: Option<CompiledSchema>,
+    pub binding: Arc<PluginToolBinding>,
+    pub backend: PluginBackend,
+}
+
+impl Tool for PluginTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            parameters: self.parameters.clone(),
+            builtin: false,
+        }
+    }
+
+    fn input_schema(&self) -> Option<Value> {
+        self.input_schema.clone()
+    }
+
+    fn execution_kind(&self) -> ToolExecutionKind {
+        match self.execution_kind {
+            PluginExecutionKind::ReadOnly => ToolExecutionKind::ReadOnly,
+            PluginExecutionKind::Mutating => ToolExecutionKind::Mutating,
+        }
+    }
+
+    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        // The backend program itself is not subject to the caller's program
+        // allowlist: it is a fixed program from a manifest the operator
+        // installed and enabled, gated by the activity's `allowed_tools` and
+        // the governed-operation row before this point. What the backend
+        // declares it *spawns* (`requires.programs`) is bounded by that
+        // allowlist, through the same gate `proc.spawn` applies — or, for a
+        // deterministic step with no agent in the loop, by the operator's
+        // grant re-read for this call (`ToolCaller`).
+        self.backend.spec().enforce_programs(ctx, &self.name)?;
+        let secrets = CallSecrets::resolve(self.backend.spec())?;
+        self.execute_with_secrets(ctx, input, &secrets)
+            .map(|output| secrets.mask_json(output))
+            .map_err(|error| secrets.mask_error(error))
+    }
+}
+
+impl PluginTool {
+    // Validate the original answer, then mask it at the common return boundary.
+    // A mask must neither make an invalid answer valid nor reject a valid one.
+    fn execute_with_secrets(
+        &self,
+        ctx: &ToolContext,
+        input: Value,
+        secrets: &CallSecrets,
+    ) -> Result<Value, OrbitError> {
+        let output = match &self.backend {
+            PluginBackend::Exec(spec) => self.execute_process(spec, ctx, input, secrets)?,
+            PluginBackend::Mcp(backend) if ctx.brokered_caller.is_some() => {
+                let call = ctx.broker_call.as_ref().ok_or_else(|| {
+                    OrbitError::PolicyDenied(
+                        "brokered MCP calls require a host-owned session lifetime".to_string(),
+                    )
+                })?;
+                call.sessions
+                    .backend(backend)
+                    .call_with_secrets(ctx, &self.name, &self.verb, input, secrets)?
+            }
+            PluginBackend::Mcp(backend) => {
+                backend.call_with_secrets(ctx, &self.name, &self.verb, input, secrets)?
+            }
+        };
+        validate_output(&self.name, self.output_schema.as_ref(), &output)?;
+        Ok(output)
+    }
+}
+
+impl PluginTool {
+    fn execute_process(
+        &self,
+        spec: &PluginBackendSpec,
+        ctx: &ToolContext,
+        input: Value,
+        secrets: &CallSecrets,
+    ) -> Result<Value, OrbitError> {
+        let cwd = ctx.cwd.clone().ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "plugin tool '{}' requires ToolContext.cwd",
+                self.name
+            ))
+        })?;
+        let envelope = exec_envelope(spec, ctx, &self.name, input, secrets);
+        let stdin = serde_json::to_vec(&envelope).map_err(|error| {
+            OrbitError::Execution(format!("serialize plugin envelope: {error}"))
+        })?;
+        let timeout_ms = spec.timeout_ms();
+        let mut environment = spec.child_environment(ctx, &cwd, Some(&self.name));
+        // Minted before the profile is compiled: the child is granted a read
+        // rule on this one record, and a Landlock rule binds the inode that
+        // exists when it is compiled.
+        //
+        // The session carries *this* caller's intersection, which is what
+        // bounds the child's callbacks — one process per call, so one
+        // ceiling per call [ORB-12801].
+        let mut callback = PluginCallbackSession::mint(
+            &spec.global_root,
+            &spec.provenance,
+            &spec.allowed_tools(ctx),
+        )?;
+        callback.stamp_env(&mut environment);
+        // A call the broker runs for an agent is held to that agent's
+        // profile as well as the plugin's (design
+        // `docs/design/plugins/2_agent_call_broker.md` §5).
+        let profile = match &ctx.brokered_caller {
+            Some(caller) => spec.brokered_sandbox_profile(caller)?,
+            None => spec.sandbox_profile(ctx.workspace_root.as_deref())?,
+        };
+        let sandbox = profile.with_callback_session(&callback);
+        let request = ExecRequest {
+            program: spec.command.to_string_lossy().into_owned(),
+            args: spec.args.clone(),
+            current_dir: Some(cwd.clone()),
+            timeout_ms: Some(timeout_ms),
+            stdin_mode: StdinMode::Bytes(stdin.clone()),
+            environment_mode: EnvironmentMode::ClearAndSet(environment),
+            debug: false,
+        };
+        sandbox.validate(&request)?;
+        secrets.record_delivery();
+        let mut child = sandbox.spawn(&request)?;
+        if let Err(error) = callback.bind_pid(child.id()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        let output = supervise_child_cancellable(
+            child,
+            Some(timeout_ms),
+            Some(stdin),
+            ctx.broker_call.as_ref().map(|call| call.cancelled.as_ref()),
+        )?
+        .result;
+
+        // A backend may report a rotation and then remain alive until a
+        // disconnect cancels it. Apply a complete reply even when supervision
+        // ended the process; a service-side rotation cannot be rolled back.
+        let response = parse_response_json(&self.name, &output.stdout);
+        if let Ok(response) = &response {
+            apply_secret_updates(spec, &self.name, secrets, response.get("secret_updates"));
+        }
+
+        if output.timed_out {
+            return Err(OrbitError::Execution(format!(
+                "plugin tool '{}' timed out after {timeout_ms} ms",
+                self.name
+            )));
+        }
+        if !output.success {
+            return Err(OrbitError::Execution(format!(
+                "plugin tool '{}' exited with {}: {}",
+                self.name,
+                output.exit_code.unwrap_or(1),
+                secrets.mask_delivered(output.stderr.trim())
+            )));
+        }
+        response_output(&self.name, &response?)
+    }
+}

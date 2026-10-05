@@ -1,18 +1,13 @@
-use std::path::{Path, PathBuf};
-use std::process::Child;
+use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::tracing;
-use orbit_exec::{
-    EnvironmentMode, ExecRequest, NoSandbox, Sandbox, StdinMode, run_process,
-    spawn_under_linux_landlock,
-};
-use orbit_policy::PolicyEngine;
-use orbit_types::policy::{FsOperation, ResolvedFsProfile};
+use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
+use super::git_config::enforce_no_persistent_git_config;
 use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext};
 
 pub struct ProcSpawnTool;
@@ -68,8 +63,13 @@ impl Tool for ProcSpawnTool {
             })
             .unwrap_or_default();
 
+        enforce_no_persistent_git_config("proc.spawn", &program, &args)?;
+
         let request = spawn_request(ctx, program, args, proc_spawn_timeout_ms(&input));
-        let exec_result = run_process(&request, &ActivityFsSandbox::new(ctx)?)?;
+        // A managed CLI worker already runs under Bubblewrap (Linux) or
+        // sandbox-exec (macOS). Its children inherit that OS boundary. Adding
+        // Landlock here would narrow reads again and refuse macOS outright.
+        let exec_result = run_process(&request, &NoSandbox)?;
 
         serde_json::to_value(exec_result)
             .map_err(|e| OrbitError::Execution(format!("serialize exec result: {e}")))
@@ -116,130 +116,6 @@ fn spawn_request(
     }
 }
 
-/// Filesystem confinement for an activity-scoped subprocess.
-///
-/// Two layers, doing two different jobs. Explicit path arguments (including
-/// `--key=path`) are resolved symlink-safely by the same policy engine the
-/// filesystem tools use, so `git -C /etc` is refused before the child exists
-/// and the caller is told which rule refused it. That check cannot be the
-/// boundary, though: `bash`, `python3`, and `git` shell aliases all reach the
-/// filesystem from text that never looks like a path argument. The read
-/// boundary is therefore the ruleset applied to the child itself at spawn.
-///
-/// Outside an activity-scoped context there is no resolved profile to enforce,
-/// and `proc.spawn` keeps its unconfined behavior with the program allowlist as
-/// the only gate.
-pub(crate) struct ActivityFsSandbox<'a> {
-    scope: Option<ActivityScope<'a>>,
-}
-
-/// The resolved policy an activity-scoped child is confined to, read once so
-/// the request-time check and the enforced ruleset cannot disagree.
-struct ActivityScope<'a> {
-    policy: &'a PolicyEngine,
-    workspace_root: &'a Path,
-    profile_name: &'a str,
-    profile: ResolvedFsProfile,
-}
-
-impl<'a> ActivityFsSandbox<'a> {
-    /// Fails closed: an activity-scoped context without a resolved filesystem
-    /// policy cannot spawn anything.
-    pub(crate) fn new(ctx: &'a ToolContext) -> Result<Self, OrbitError> {
-        if !ctx.proc_spawn_activity_scoped {
-            return Ok(Self { scope: None });
-        }
-        let (Some(policy), Some(profile_name), Some(workspace_root)) = (
-            ctx.policy_engine.as_deref(),
-            ctx.fs_profile.as_deref(),
-            ctx.workspace_root.as_deref(),
-        ) else {
-            return Err(OrbitError::PolicyDenied(
-                "activity-scoped proc.spawn is missing its resolved filesystem policy".to_string(),
-            ));
-        };
-        let profile = policy.def().effective_profile(profile_name)?;
-        Ok(Self {
-            scope: Some(ActivityScope {
-                policy,
-                workspace_root,
-                profile_name,
-                profile,
-            }),
-        })
-    }
-}
-
-impl Sandbox for ActivityFsSandbox<'_> {
-    fn validate(&self, request: &ExecRequest) -> Result<(), OrbitError> {
-        let Some(scope) = &self.scope else {
-            return Ok(());
-        };
-        let cwd = request
-            .current_dir
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| scope.workspace_root.to_path_buf());
-        for path in request
-            .args
-            .iter()
-            .filter_map(|arg| path_argument(arg, &cwd))
-        {
-            let evaluation = scope.policy.check_resolved(
-                scope.workspace_root,
-                scope.profile_name,
-                FsOperation::Read,
-                &path,
-            )?;
-            if evaluation.allowed {
-                continue;
-            }
-            tracing::warn!(
-                target: "orbit.policy.deny",
-                tool = "proc.spawn",
-                path = evaluation.path.as_str(),
-                profile = evaluation.profile.as_str(),
-                matched_rule = evaluation.matched_rule.as_str(),
-            );
-            return Err(OrbitError::PolicyDenied(format!(
-                "proc.spawn path '{}' is denied by fsProfile '{}' (matched rule: {})",
-                evaluation.path, evaluation.profile, evaluation.matched_rule
-            )));
-        }
-        Ok(())
-    }
-
-    fn spawn(&self, request: &ExecRequest) -> Result<Child, OrbitError> {
-        match &self.scope {
-            Some(scope) => {
-                spawn_under_linux_landlock(request, scope.workspace_root, &scope.profile)
-            }
-            None => NoSandbox.spawn(request),
-        }
-    }
-}
-
-fn path_argument(argument: &str, cwd: &Path) -> Option<PathBuf> {
-    let candidate = argument
-        .strip_prefix('-')
-        .and_then(|option| option.split_once('=').map(|(_, value)| value))
-        .unwrap_or(argument);
-    if candidate.is_empty() || candidate == "-" {
-        return None;
-    }
-    let path = Path::new(candidate);
-    let resolved = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        cwd.join(path)
-    };
-    (path.is_absolute()
-        || candidate.starts_with('.')
-        || resolved.exists()
-        || resolved.symlink_metadata().is_ok())
-    .then_some(resolved)
-}
-
 /// Ceiling for a caller-supplied `timeout_ms`.
 ///
 /// The supervisor deadline is the only thing that ends a child that never
@@ -270,6 +146,54 @@ pub(crate) fn enforce_program_allowlist(
     tool_name: &str,
     program: &str,
 ) -> Result<(), OrbitError> {
+    if let Some(disallowed) = &ctx.proc_disallowed_programs {
+        // Check the requested basename and the physical target. This also
+        // catches an absolute-path spelling or symlink to a listed program.
+        let requested = Path::new(program);
+        let basename = requested.file_name().and_then(|name| name.to_str());
+        let resolved = if requested.components().count() > 1 {
+            std::fs::canonicalize(requested).ok()
+        } else {
+            let child_path = ctx.proc_spawn_environment.as_deref().and_then(|pairs| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| name == "PATH")
+                    .map(|(_, value)| value.as_str())
+            });
+            let path = child_path
+                .map(std::ffi::OsString::from)
+                .or_else(|| std::env::var_os("PATH"));
+            path.and_then(|path| {
+                std::env::split_paths(&path)
+                    .find_map(|dir| std::fs::canonicalize(dir.join(requested)).ok())
+            })
+        };
+        let resolved_basename = resolved
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str());
+        if disallowed.iter().any(|entry| {
+            entry == program
+                || Some(entry.as_str()) == basename
+                || resolved.as_deref() == Some(Path::new(entry))
+                || resolved.as_deref() == std::fs::canonicalize(entry).ok().as_deref()
+                || Some(entry.as_str()) == resolved_basename
+        }) {
+            tracing::warn!(
+                target: "orbit.policy.deny",
+                tool = tool_name,
+                path = program,
+                profile = "proc.disallowed_programs",
+                matched_rule = disallowed.join(", ").as_str(),
+            );
+            return Err(OrbitError::PolicyDenied(format!(
+                "program '{}' is in the activity disallow list: [{}]",
+                program,
+                disallowed.join(", ")
+            )));
+        }
+        return Ok(());
+    }
     // Enforce program allowlist when the call sits inside an activity-scoped
     // tool context, or when a legacy unrestricted context still has a
     // non-empty list. An activity-scoped call with an empty list denies every

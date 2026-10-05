@@ -16,8 +16,12 @@ pub enum ExportFormat {
 }
 
 #[derive(Args)]
+#[command(
+    after_help = "`--format` here names the export file's serialization (json or csv) and shadows the global `--format` (auto|table|json|ndjson), which this command does not accept: the export is written to --output, not to stdout."
+)]
 pub struct AuditExportArgs {
-    /// Export format
+    /// Export file format. Local to this command — it shadows the global
+    /// `--format` output-mode argument, which is not accepted here.
     #[arg(long, default_value = "json")]
     pub format: ExportFormat,
     /// Output file path
@@ -34,7 +38,7 @@ pub struct AuditExportArgs {
 impl Execute for AuditExportArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
-        let events = runtime.list_audit_events(since, self.tool, None, None, 0)?;
+        let events = runtime.export_audit_events(since, self.tool)?;
 
         match self.format {
             ExportFormat::Json => {
@@ -49,26 +53,42 @@ impl Execute for AuditExportArgs {
     }
 }
 
-fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
-    let file =
-        std::fs::File::create(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
-    let mut writer = std::io::BufWriter::new(file);
-
+// pub(super) widened for sibling-layout tests in audit/tests/export.rs
+fn write_json_export<W: Write>(
+    mut writer: W,
+    events: &[AuditEvent],
+    label: &str,
+) -> Result<(), OrbitError> {
     let values: Vec<Value> = events.iter().map(audit_event_to_json).collect();
     let json_bytes = serde_json::to_string_pretty(&Value::Array(values))
         .map_err(|e| OrbitError::Execution(e.to_string()))?;
 
     writer
         .write_all(json_bytes.as_bytes())
-        .map_err(|e| OrbitError::Io(format!("write {path}: {e}")))?;
+        .map_err(|e| OrbitError::Io(format!("write {label}: {e}")))?;
     writer
         .write_all(b"\n")
-        .map_err(|e| OrbitError::Io(format!("write {path}: {e}")))?;
+        .map_err(|e| OrbitError::Io(format!("write {label}: {e}")))?;
+    writer
+        .flush()
+        .map_err(|e| OrbitError::Io(format!("flush {label}: {e}")))?;
+
+    Ok(())
+}
+
+// pub(super) widened for sibling-layout tests in audit/tests/export.rs
+fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
+    let file =
+        std::fs::File::create(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
+    let writer = std::io::BufWriter::new(file);
+
+    write_json_export(writer, events, path)?;
 
     println!("Exported {} events to {path}", events.len());
     Ok(())
 }
 
+// pub(super) widened for sibling-layout tests in audit/tests/export.rs
 fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
     let mut writer =
         csv::Writer::from_path(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
@@ -97,9 +117,9 @@ fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
             "session_id",
             "workspace_id",
             "caller_machine_id",
-            "caller_host_id",
+            "caller_machine_name",
             "process_machine_id",
-            "process_host_id",
+            "process_machine_name",
             "transport",
             "effective_capabilities",
             "origin_session_id",
@@ -139,9 +159,9 @@ fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
                 event.session_id.clone().unwrap_or_default(),
                 event.workspace_id.clone().unwrap_or_default(),
                 event.caller_machine_id.clone().unwrap_or_default(),
-                event.caller_host_id.clone().unwrap_or_default(),
+                event.caller_machine_name.clone().unwrap_or_default(),
                 event.process_machine_id.clone().unwrap_or_default(),
-                event.process_host_id.clone().unwrap_or_default(),
+                event.process_machine_name.clone().unwrap_or_default(),
                 event
                     .transport
                     .map(|value| value.to_string())
@@ -174,23 +194,4 @@ fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
 
     println!("Exported {} events to {path}", events.len());
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn csv_header_appends_trusted_mcp_provenance_columns() {
-        let file = tempfile::NamedTempFile::new().expect("temporary CSV");
-        let path = file.path().to_str().expect("UTF-8 temp path");
-        export_csv(path, &[]).expect("export empty CSV");
-
-        let csv = std::fs::read_to_string(path).expect("read exported CSV");
-        let header = csv.lines().next().expect("CSV header");
-        assert!(header.contains("host,pid,session_id,workspace_id,caller_machine_id"));
-        assert!(header.contains("process_host_id,transport,effective_capabilities"));
-        assert!(header.contains("origin_session_id,mcp_call_id,trace_id,caller_ip,lease_id"));
-        assert!(header.ends_with("task_id,job_run_id,activity_id,step_index"));
-    }
 }

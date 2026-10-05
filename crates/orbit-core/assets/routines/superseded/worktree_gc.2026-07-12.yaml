@@ -1,0 +1,16 @@
+# Superseded `worktree_gc` default (shipped 2026-07-12 to 2026-07-25): the
+# description changed on 2026-07-25. Kept as a provenance shape only — see
+# `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routine.rs`.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Hourly reclamation of clean worktrees from terminal job runs whose branch is
+  merged or whose pull request is closed.
+enabled: false
+trigger:
+  cron: "35 * * * *"
+  missed_run: skip
+target: job:worktree_gc_pipeline
+policy:
+  timeout_minutes: 30
+  overlap: forbid

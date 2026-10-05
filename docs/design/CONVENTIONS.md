@@ -1,14 +1,14 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-24
+last_validated: 2026-09-27
 status: Accepted
 ---
 
 # Design Doc Conventions
 
-Recommended conventions that feature leads follow when writing and maintaining design docs under `docs/design/<feature>/`. The goal is a set of feature folders that read as one coherent documentation system regardless of which agent authored them. These are recommendations (not hard rules enforced by tooling; `orbit-design` has been retired in favor of the more tolerant docs surface — see the `orbit-search` skill).
+Recommended conventions that feature leads follow when writing and maintaining design docs under `docs/design/<feature>/`. The goal is a set of feature folders that read as one coherent documentation system regardless of which agent authored them. These are recommendations (not hard rules enforced by tooling; `orbit-design` has been retired in favor of ordinary repository documentation).
 
 This doc is itself the source of truth for the conventions. When a convention changes, update this doc and then update existing feature folders to match — do not silently diverge.
 
@@ -28,7 +28,7 @@ docs/design/<feature>/
     └── glossary.md     recommended; other lookup-style docs allowed
 ```
 
-- Folder name: lowercase, hyphenated, singular (`knowledge-graph`, `host-registry`).
+- Folder name: lowercase, hyphenated, singular (`host-registry`, `task-artifacts`).
 - No `README.md`, `roadmap.md`, `changelog.md`, `tutorial.md` at this level.
 - No top-level narrative files outside the numbered four (`1_`–`4_`). Existing folders may vary; new work should prefer the layout for coherence.
 
@@ -51,7 +51,7 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
 - `owner` is the accountable agent family, not a committer list or full model string.
 - `last_updated` is the calendar date of the last meaningful content change. Trivial reformat commits should not reset it.
 - `status` is `Draft` until the doc is approved by the feature lead, then `Accepted`. It moves back to `Draft` if a structural rewrite is in flight.
-- `feature` is the folder slug (e.g. `host-registry`, `knowledge-graph`). Lets tooling group docs by feature without parsing paths.
+- `feature` is the folder slug (e.g. `host-registry`, `task-artifacts`). Lets tooling group docs by feature without parsing paths.
 - `doc_role` is one of `overview`, `design`, `vision`, `decisions` — corresponds 1:1 with the filename prefix `1_`/`2_`/`3_`/`4_`.
 
 The template frontmatter also carries the orbit-docs retrieval fields (`type`, `summary`, `tags`, `paths`, `related_features`, `related_artifacts`) so the doc is indexable on day one. `type` and `summary` are required by the strict parser. `summary` must be a non-empty single line. `related_artifacts` accepts task, learning, and friction references (`ORB-NNNNN`, `L-NNNN`, and `FYYYY-MM-NNN`). Decisions are addressed by their titles and links, not artifact IDs, so they do not belong in `related_artifacts`. The tolerant indexer infers these fields for legacy design docs and pattern docs, but new docs should write them explicitly.
@@ -75,7 +75,7 @@ Every numbered doc ends with a **Task References** section listing only the task
 
 ## 4. Decisions
 
-**`4_decisions.md` keeps the reasoning.** A decision is a titled section in its feature's `4_decisions.md`, reviewed in the same change as the code it describes and indexed with the ordinary docs corpus. Orbit tasks carry identity, lifecycle, ownership, and delivery provenance; the decision section carries only the reasoning that should outlive the task.
+**`4_decisions.md` keeps the reasoning.** A decision is a titled section in its feature's `4_decisions.md`, reviewed in the same change as the code it describes. Orbit tasks carry identity, lifecycle, ownership, and delivery provenance; the decision section carries only the reasoning that should outlive the task.
 
 ### 4a. What earns a decision entry
 
@@ -150,7 +150,7 @@ A spec is **prescriptive**. It names invariants ("writes do not fall back"), fai
 - **Draft** — pre-first-review. Owner is still shaping it.
 - **Accepted** — reviewed, approved, load-bearing.
 
-There is no `Deprecated` status at the doc level. If the feature is retired, archive the entire folder under `docs/design/_archive/<feature>/` and annotate the first line of `1_overview.md`.
+There is no `Deprecated` status at the doc level. If the feature is retired, delete the entire folder in the retiring change and fix inbound links; git history preserves the old docs. Live docs that must mention the retirement name the decision and its task ID in plain text instead of linking to the deleted folder.
 
 ---
 
@@ -185,7 +185,7 @@ There is no `Deprecated` status at the doc level. If the feature is retired, arc
 
 ## 11. Enforcement
 
-These are recommendations, not mechanically enforced by `orbit-design` (retired) or the docs indexer. The tolerant indexer (see the `orbit-search` skill) accepts both strict numbered design folders and free-form docs.
+These are recommendations, not mechanically enforced by `orbit-design` (retired) or the docs indexer. Both numbered design folders and free-form docs are acceptable.
 
 Five mechanical checks worth adding later (as optional lints, never blocking):
 
@@ -205,36 +205,34 @@ Until those exist: cross-review and author judgment are the quality mechanism. W
 
 The `Lead` value mirrors each feature folder's frontmatter `owner:` field and
 uses the canonical agent family (`codex`, `claude`, `gemini`, or `grok`).
-Retired features stay listed with their `_archive/` path as a historical record.
+Retired features are removed from this table along with their folder.
 
 | Feature | Folder | Lead |
 |---------|--------|------|
 | Activity / Job | [docs/design/activity-job/](./activity-job/) | codex |
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
-| Automation Triggers | [docs/design/automation-triggers/](./automation-triggers/) | codex |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |
+| Auto-tasks | [docs/design/auto-tasks/](./auto-tasks/) | claude |
+| Automation Triggers | [docs/design/automation-triggers/](./automation-triggers/) | codex |
+| Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
-| Global Store Consolidation | [docs/design/_archive/global-store-consolidation/](./_archive/global-store-consolidation/) | codex |
 | Host Registry | [docs/design/host-registry/](./host-registry/) | claude |
-| Knowledge graph | [docs/design/_archive/knowledge-graph/](./_archive/knowledge-graph/) | claude |
 | MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | claude |
 | MCP Session Context | [docs/design/mcp-session-context/](./mcp-session-context/) | codex |
-| Operation Mode | [docs/design/operation-mode/](./operation-mode/) | codex |
+| Operations as Data | [docs/design/operations-as-data/](./operations-as-data/) | claude |
 | Orbit Core | [docs/design/orbit-core/](./orbit-core/) | claude |
-| Orbit Docs | [docs/design/orbit-docs/](./orbit-docs/) | claude |
-| Orbit Graph | [docs/design/_archive/orbit-graph/](./_archive/orbit-graph/) | claude |
 | Orbit Search | [docs/design/orbit-search/](./orbit-search/) | claude |
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | claude |
-| Resident Orchestrator | [docs/design/resident-orchestrator/](./resident-orchestrator/) | codex |
+| Review Gate | [docs/design/review-gate/](./review-gate/) | codex |
 | Routines | [docs/design/routines/](./routines/) | claude |
+| State Compatibility | [docs/design/state-compatibility/](./state-compatibility/) | claude |
 | Task Artifacts | [docs/design/task-artifacts/](./task-artifacts/) | codex |
+| Task Migration | [docs/design/task-migration/](./task-migration/) | claude |
 | Task Publication | [docs/design/task-publication/](./task-publication/) | codex |
-| Task Sync (archived) | [docs/design/_archive/task-sync/](./_archive/task-sync/) | claude |
 | Terminal Interface | [docs/design/terminal-interface/](./terminal-interface/) | claude |
 | User Interface | [docs/design/user-interface/](./user-interface/) | gemini |
-| Worktree Artifacts | [docs/design/worktree-artifacts/](./worktree-artifacts/) | codex |
 
 Ownership means: the lead is accountable for keeping the folder's docs in sync with implementation, for recording task provenance when decisions change, and for responding to cross-review comments. Ownership does not preclude other agents from editing — it names who's on the hook when things drift.

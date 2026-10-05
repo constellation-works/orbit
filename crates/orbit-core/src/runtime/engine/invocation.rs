@@ -7,7 +7,7 @@ use orbit_common::model::pricing::normalize_token_usage;
 use orbit_store::contracts::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
     InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    InvocationStoreBackend, TaskInvocationMetrics, ToolInvocationMetrics,
+    InvocationStoreBackend, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
 };
 use orbit_store::scoreboard_summary::{NormalizedTokenSummary, OrchestrationModelSummary};
 use orbit_types::telemetry::TokenUsage;
@@ -266,6 +266,8 @@ impl OrbitRuntime {
     }
 
     /// Refreshes the read-side token scoreboard from persisted invocation telemetry.
+    ///
+    /// No-op when the invocation watermark matches the last successful write.
     pub(crate) fn refresh_token_scoreboard(&self) -> Result<(), OrbitError> {
         let store = open_invocation_store(self)?;
         orbit_store::token_scoreboard::write_token_scoreboard(
@@ -307,9 +309,10 @@ impl OrbitRuntime {
             },
         )?;
         let task_orchestrators = self
-            .list_tasks()?
+            .task_candidates(&TaskListFilter::default(), usize::MAX)?
+            .items
             .into_iter()
-            .map(|task| (task.id.to_string(), task.orchestrator))
+            .map(|task| (task.id, task.orchestrator))
             .collect::<HashMap<_, _>>();
 
         let mut grouped = BTreeMap::<BucketKey, BucketAccumulator>::new();

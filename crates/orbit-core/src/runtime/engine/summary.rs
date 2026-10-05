@@ -4,6 +4,7 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_store::scoreboard_summary::{
     ORCHESTRATION_SCHEMA_VERSION, OrchestrationSummary, ScoreboardInputs, ScoreboardWindow,
 };
+use orbit_types::workflow::JobRunState;
 
 use crate::OrbitRuntime;
 
@@ -26,7 +27,9 @@ impl OrbitRuntime {
         window: Option<ScoreboardWindow>,
     ) -> Result<orbit_store::scoreboard_summary::ScoreboardSummary, OrbitError> {
         let window = window.unwrap_or_default();
-        let tasks = self.list_tasks()?;
+        // Every aggregate reads envelope metadata; only the few notable
+        // completions need an execution summary, filled in below.
+        let tasks = self.list_task_metadata()?;
 
         let now = Utc::now();
         let since_recent = now - Duration::days(RECENT_WINDOW_DAYS);
@@ -46,10 +49,11 @@ impl OrbitRuntime {
         let audit_tool_calls_by_surface_recent =
             self.audit_tool_call_counts_by_surface_and_role(Some(&since_recent))?;
         let top_tool_calls = self.audit_top_tool_calls(since_window.as_ref(), TOP_TOOLS_LIMIT)?;
-        let job_runs = self
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery::default())?;
+        let job_runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            state: Some(JobRunState::Success),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
         // Same cutoff `generate_summary_with_inputs` derives internally, applied
         // in SQL so the scoreboard never materializes the friction corpus
         // (ORB-10680).
@@ -59,7 +63,7 @@ impl OrbitRuntime {
         // Notable completions and coverage notes are projected inside
         // generate_summary_with_inputs from this same `tasks` slice — no extra
         // store read, and no model inference (ORB-10873).
-        let summary = orbit_store::scoreboard_summary::generate_summary_with_inputs(
+        let mut summary = orbit_store::scoreboard_summary::generate_summary_with_inputs(
             &self.paths().scoreboard_dir,
             &tasks,
             &ScoreboardInputs {
@@ -81,6 +85,15 @@ impl OrbitRuntime {
                     normalized_tokens: orchestration.normalized_tokens,
                     previous_normalized_tokens,
                 }),
+            },
+        )?;
+        orbit_store::scoreboard_summary::fill_notable_summary_excerpts(
+            &mut summary.notable_completions,
+            |task_id| match self.get_task(task_id) {
+                Ok(task) => Ok(task.execution_summary),
+                // Deleted since the listing: no summary to excerpt.
+                Err(OrbitError::NotFound { .. }) => Ok(String::new()),
+                Err(error) => Err(error),
             },
         )?;
         let _ =

@@ -1,15 +1,25 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 pub use orbit_common::fs::path::global_orbit_dir;
 use orbit_types::workspace::WorkspaceRegistry;
 
-use super::{WorkspaceRegistryHostContext, parse_workspace_registry, validate_workspace_registry};
-use crate::{HostIdentityState, inspect_host_identity};
+use super::{
+    WorkspaceRegistryMachineContext, parse_workspace_registry, validate_workspace_registry,
+};
+use crate::{MachineIdentityState, inspect_machine_identity};
 
 const REGISTRY_FILE_NAME: &str = "workspaces.json";
+
+/// A validated registry snapshot that has not performed any maintenance write.
+#[derive(Debug)]
+pub struct ReadOnlyRegistryLoad {
+    pub registry: WorkspaceRegistry,
+    pub migration_required: bool,
+}
 
 /// Return the path to the machine-global workspace registry.
 pub fn registry_path() -> Result<PathBuf, OrbitError> {
@@ -19,6 +29,15 @@ pub fn registry_path() -> Result<PathBuf, OrbitError> {
 /// Return the workspace registry path under an already-resolved global root.
 pub fn registry_path_for(global_root: &Path) -> PathBuf {
     global_root.join(REGISTRY_FILE_NAME)
+}
+
+/// Return the mtime and length of a registry after validating its selected
+/// root and fixed file name. A missing root, missing registry, invalid path, or
+/// symlinked registry has no fingerprint.
+pub fn registry_file_fingerprint(path: &Path) -> Option<(SystemTime, u64)> {
+    let path = validated_registry_path_if_root_exists(path).ok()??;
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 
 /// Load the machine-global workspace registry.
@@ -32,7 +51,9 @@ pub fn load_registry() -> Result<WorkspaceRegistry, OrbitError> {
 /// but a caller that loads, edits, and saves is not: two such callers (the
 /// scheduled sweep validating checkouts, `orbit workspace init` registering a
 /// new one) interleave, and the second save silently drops the first one's
-/// edit. Wrap the whole read-modify-write in this.
+/// edit. Wrap the whole read-modify-write in this. The owning runtime must
+/// initialize the selected global root before taking this lock; lock acquisition
+/// never creates a directory from its path argument.
 pub fn with_registry_lock<T>(
     path: &Path,
     op: impl FnOnce() -> Result<T, OrbitError>,
@@ -46,33 +67,102 @@ pub fn load_registry_from(path: &Path) -> Result<WorkspaceRegistry, OrbitError> 
     load_registry_from_with_writer(path, write_registry)
 }
 
+/// [`load_registry_from`] for a caller that already classified this machine's
+/// identity. A runtime open needs that classification for itself, so threading
+/// it here resolves the global config once per invocation instead of once more
+/// per registry load [DANI-10371].
+pub fn load_registry_from_with_machine(
+    path: &Path,
+    identity: &MachineIdentityState,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    let snapshot = read_registry_snapshot(path, |_| Ok(identity.into()))?;
+    persist_migration(snapshot, write_registry)
+}
+
+/// Load and validate a registry without creating a lock or persisting migrations.
+///
+/// Callers that only inspect current registry data can use the returned snapshot
+/// directly. A caller that sees `migration_required` must re-read and migrate
+/// while holding [`with_registry_lock`] before it performs maintenance.
+pub fn load_registry_from_read_only(path: &Path) -> Result<ReadOnlyRegistryLoad, OrbitError> {
+    Ok(read_registry_snapshot(path, registry_machine_context)?.load)
+}
+
+/// [`load_registry_from_read_only`] with an already-classified machine
+/// identity; see [`load_registry_from_with_machine`].
+pub fn load_registry_from_read_only_with_machine(
+    path: &Path,
+    identity: &MachineIdentityState,
+) -> Result<ReadOnlyRegistryLoad, OrbitError> {
+    Ok(read_registry_snapshot(path, |_| Ok(identity.into()))?.load)
+}
+
 pub(crate) fn load_registry_from_with_writer(
     path: &Path,
     writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let path = validated_registry_path(path)?;
+    let snapshot = read_registry_snapshot(path, registry_machine_context)?;
+    persist_migration(snapshot, writer)
+}
+
+/// A parsed registry together with the validated path it was read from, so a
+/// migrating caller writes back to exactly the file it read. The path is
+/// `None` only when the global root does not exist yet, which also means no
+/// migration can be pending.
+struct RegistrySnapshot {
+    load: ReadOnlyRegistryLoad,
+    path: Option<PathBuf>,
+}
+
+/// Validate `path` once, then read and parse the registry under it with the
+/// machine facts `context_for` supplies. The context is resolved after the
+/// file is read, so a missing or empty registry never resolves an identity.
+fn read_registry_snapshot(
+    path: &Path,
+    context_for: impl FnOnce(&Path) -> Result<WorkspaceRegistryMachineContext, OrbitError>,
+) -> Result<RegistrySnapshot, OrbitError> {
+    let empty = |path| RegistrySnapshot {
+        load: ReadOnlyRegistryLoad {
+            registry: WorkspaceRegistry::default(),
+            migration_required: false,
+        },
+        path,
+    };
+    let Some(path) = validated_registry_path_if_root_exists(path)? else {
+        return Ok(empty(None));
+    };
     if !path.exists() {
-        return Ok(WorkspaceRegistry::default());
+        return Ok(empty(Some(path)));
     }
     let content =
         std::fs::read_to_string(&path).map_err(|error| OrbitError::Io(error.to_string()))?;
-    let context = registry_host_context(&path)?;
-    let (registry, migrated) = parse_workspace_registry(&content, &context)?;
-    if migrated {
-        writer(&registry, &path)?;
-    }
-    Ok(registry)
+    let context = context_for(&path)?;
+    let (registry, migration_required) = parse_workspace_registry(&content, &context)?;
+    Ok(RegistrySnapshot {
+        load: ReadOnlyRegistryLoad {
+            registry,
+            migration_required,
+        },
+        path: Some(path),
+    })
 }
 
-/// Save the machine-global workspace registry atomically.
-pub fn save_registry(registry: &WorkspaceRegistry) -> Result<(), OrbitError> {
-    save_registry_to(registry, &registry_path()?)
+fn persist_migration(
+    snapshot: RegistrySnapshot,
+    writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    if snapshot.load.migration_required
+        && let Some(path) = &snapshot.path
+    {
+        writer(&snapshot.load.registry, path)?;
+    }
+    Ok(snapshot.load.registry)
 }
 
 /// Validate and atomically save a registry to an explicit path.
 pub fn save_registry_to(registry: &WorkspaceRegistry, path: &Path) -> Result<(), OrbitError> {
     let path = validated_registry_path(path)?;
-    let context = registry_host_context(&path)?;
+    let context = registry_machine_context(&path)?;
     let mut canonical = registry.clone();
     validate_workspace_registry(&mut canonical, &context)?;
     write_registry(&canonical, &path)
@@ -85,22 +175,17 @@ pub fn save_registry_to(registry: &WorkspaceRegistry, path: &Path) -> Result<(),
 /// and inspecting the final component without following it rejects a registry
 /// symlink that would redirect reads or writes outside the selected root.
 fn validated_registry_path(path: &Path) -> Result<PathBuf, OrbitError> {
-    if path.file_name() != Some(OsStr::new(REGISTRY_FILE_NAME)) {
-        return Err(OrbitError::WorkspaceError(format!(
-            "workspace registry path must name '{REGISTRY_FILE_NAME}': {}",
-            path.display()
-        )));
-    }
-
-    let parent = path.parent().ok_or_else(|| {
-        OrbitError::WorkspaceError(format!(
-            "workspace registry path '{}' has no parent directory",
-            path.display()
-        ))
-    })?;
+    let parent = registry_parent(path)?;
     let canonical_parent = parent
         .canonicalize()
         .map_err(|error| OrbitError::Io(format!("canonicalize {}: {error}", parent.display())))?;
+    validated_registry_path_from_canonical_parent(path, canonical_parent)
+}
+
+fn validated_registry_path_from_canonical_parent(
+    path: &Path,
+    canonical_parent: PathBuf,
+) -> Result<PathBuf, OrbitError> {
     let canonical_path = canonical_parent.join(REGISTRY_FILE_NAME);
     if !canonical_path.starts_with(&canonical_parent) {
         return Err(OrbitError::WorkspaceError(format!(
@@ -129,20 +214,61 @@ fn validated_registry_path(path: &Path) -> Result<PathBuf, OrbitError> {
     Ok(canonical_path)
 }
 
-fn registry_host_context(path: &Path) -> Result<WorkspaceRegistryHostContext, OrbitError> {
+/// Read-side variant of [`validated_registry_path`]: a global root that does
+/// not exist yet holds no registry, so loads report an empty registry instead
+/// of failing to canonicalize the missing directory. Nothing under a missing
+/// root can be a symlink, so the strict check is only skipped when there is
+/// nothing to check. Lock and save callers keep the strict path: they must not
+/// create the root as a side effect.
+fn validated_registry_path_if_root_exists(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let parent = registry_parent(path)?;
+    let canonical_parent = match parent.canonicalize() {
+        Ok(canonical_parent) => canonical_parent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "canonicalize {}: {error}",
+                parent.display()
+            )));
+        }
+    };
+    validated_registry_path_from_canonical_parent(path, canonical_parent).map(Some)
+}
+
+fn registry_parent(path: &Path) -> Result<&Path, OrbitError> {
+    if path.file_name() != Some(OsStr::new(REGISTRY_FILE_NAME)) {
+        return Err(OrbitError::WorkspaceError(format!(
+            "workspace registry path must name '{REGISTRY_FILE_NAME}': {}",
+            path.display()
+        )));
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::WorkspaceError(format!(
+            "workspace registry path '{}' has no parent directory",
+            path.display()
+        ))
+    })?;
+
+    Ok(parent)
+}
+
+fn registry_machine_context(path: &Path) -> Result<WorkspaceRegistryMachineContext, OrbitError> {
     let global_root = path.parent().ok_or_else(|| {
         OrbitError::WorkspaceError(format!(
             "registry path '{}' has no parent directory",
             path.display()
         ))
     })?;
-    match inspect_host_identity(global_root)? {
-        HostIdentityState::Present(identity) => Ok(WorkspaceRegistryHostContext {
-            machine_id: Some(identity.machine_id),
-            host_id: Some(identity.host_id),
-        }),
-        HostIdentityState::Legacy { .. } | HostIdentityState::Absent => {
-            Ok(WorkspaceRegistryHostContext::default())
+    Ok((&inspect_machine_identity(global_root)?).into())
+}
+
+impl From<&MachineIdentityState> for WorkspaceRegistryMachineContext {
+    /// Only a complete identity contributes validation facts; an uninitialized
+    /// machine validates as a standalone installation.
+    fn from(identity: &MachineIdentityState) -> Self {
+        Self {
+            machine_id: identity.id().map(ToOwned::to_owned),
         }
     }
 }

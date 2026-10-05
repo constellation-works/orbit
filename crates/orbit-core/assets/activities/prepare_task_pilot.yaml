@@ -6,8 +6,11 @@ spec:
   type: deterministic
   description: >
     Select task-pilot candidates in the active workspace and partition them
-    into bounded groups. With explicit task_ids it selects exactly those
-    workspace tasks, including tasks with non-empty context_files. Without
+    into bounded groups. With explicit task_ids it audits those workspace
+    tasks, including tasks with non-empty context_files. Tasks held by active
+    pilots are skipped as `already_preparing` exclusions with
+    `prepared_by_run_ids`; free tasks are prepared, and an all-held selection
+    succeeds without agent work. Without
     task_ids it selects only proposed/backlog tasks whose context_files are
     empty, excluding no-diff-needed/no-diff-expected tasks and every active,
     review, or terminal status. In a Git workspace this step also fetches the

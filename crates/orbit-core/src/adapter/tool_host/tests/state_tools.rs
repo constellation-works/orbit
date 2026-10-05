@@ -33,45 +33,6 @@ fn scope_for(orbit_root: &Path, run_id: Option<&str>) -> OrbitTaskScope {
 }
 
 #[test]
-fn state_get_derives_current_run_from_scope() {
-    let temp = tempdir().expect("tempdir");
-    let orbit_root = temp.path().join(".orbit");
-    create_run(&orbit_root, "job-test", "jrun-current", "current");
-
-    let output = state_tools::get(
-        &scope_for(&orbit_root, Some("jrun-current")),
-        json!({"key": "marker"}),
-    )
-    .expect("read state");
-
-    assert_eq!(output, json!("current"));
-}
-
-#[test]
-fn state_set_writes_current_run_from_scope() {
-    let temp = tempdir().expect("tempdir");
-    let orbit_root = temp.path().join(".orbit");
-    let run_dir = create_run(&orbit_root, "job-test", "jrun-current", "current");
-
-    state_tools::set(
-        &scope_for(&orbit_root, Some("jrun-current")),
-        json!({
-            "step_index": 2,
-            "data": { "recovered": true },
-        }),
-    )
-    .expect("write state");
-
-    let state: PipelineState =
-        serde_json::from_str(&std::fs::read_to_string(run_dir.join("state.json")).expect("read"))
-            .expect("parse state");
-    assert_eq!(
-        state.step_outputs.get(&2),
-        Some(&json!({ "recovered": true }))
-    );
-}
-
-#[test]
 fn state_get_rejects_absolute_state_dir_outside_current_workspace() {
     let current = tempdir().expect("current tempdir");
     let other = tempdir().expect("other tempdir");

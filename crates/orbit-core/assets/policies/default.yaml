@@ -15,6 +15,7 @@ spec:
     - "!.orbit/routines/**"
     - "!.orbit/config.toml"
     - "!.orbit/resources/**"
+    - "!.orbit/tmp/**"
     - "**/.env"
     - "**/.env.*"
     - "**/*.env"

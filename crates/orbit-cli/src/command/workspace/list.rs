@@ -17,9 +17,19 @@ impl Execute for WorkspaceListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        if workspace_registry::validate_workspaces(&mut registry) {
-            workspace_registry::save_registry_to(&registry, &registry_path)?;
+        let snapshot = workspace_registry::load_registry_from_read_only(&registry_path)?;
+        let mut registry = snapshot.registry;
+        let changed = workspace_registry::validate_workspaces(&mut registry);
+        if snapshot.migration_required || changed {
+            // Re-read under the lock: another writer may have changed the
+            // registry since the read-only inspection.
+            registry = workspace_registry::with_registry_lock(&registry_path, || {
+                let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+                if workspace_registry::validate_workspaces(&mut registry) {
+                    workspace_registry::save_registry_to(&registry, &registry_path)?;
+                }
+                Ok(registry)
+            })?;
         }
         Ok(Payload::detail(
             workspace_list_json(&registry, self.all),
@@ -32,7 +42,7 @@ impl Execute for WorkspaceListArgs {
 /// `workspace list` had no machine-readable form either; one record per
 /// registered workspace, carrying the same fields the text columns show
 /// (ORB-10586).
-pub(super) fn workspace_list_json(registry: &WorkspaceRegistry, include_replicas: bool) -> Value {
+fn workspace_list_json(registry: &WorkspaceRegistry, include_replicas: bool) -> Value {
     Value::Array(
         registry
             .workspaces
@@ -64,10 +74,7 @@ pub(super) fn workspace_list_json(registry: &WorkspaceRegistry, include_replicas
     )
 }
 
-pub(super) fn format_workspace_list(
-    registry: &WorkspaceRegistry,
-    include_replicas: bool,
-) -> String {
+fn format_workspace_list(registry: &WorkspaceRegistry, include_replicas: bool) -> String {
     let workspaces: Vec<_> = registry
         .workspaces
         .iter()

@@ -22,6 +22,7 @@ pub struct ArtifactOrigin {
 pub enum NotFoundKind {
     Tool,
     Task,
+    Friction,
     /// One file stored under a task's artifacts directory.
     Artifact,
     Skill,
@@ -39,6 +40,7 @@ impl std::fmt::Display for NotFoundKind {
         let kind = match self {
             Self::Tool => "tool",
             Self::Task => "task",
+            Self::Friction => "friction record",
             Self::Artifact => "task artifact",
             Self::Skill => "skill",
             Self::Job => "job",
@@ -118,6 +120,17 @@ pub struct WorkspaceClaimHeld {
     pub expires_at: String,
 }
 
+/// A SQLite bootstrap operation exhausted the connection's busy timeout.
+///
+/// The native SQLite code is classified before crossing the storage boundary,
+/// so detached-worker recovery never depends on matching an error string.
+#[derive(Debug, Serialize)]
+pub struct SqliteContention {
+    pub path: String,
+    pub phase: String,
+    pub detail: String,
+}
+
 #[derive(Debug, Error, Serialize)]
 #[non_exhaustive]
 /// Keep this widely propagated error below its 128-byte size budget. Box the
@@ -161,6 +174,36 @@ pub enum OrbitError {
     ToolNotOnThisHost(String),
     #[error("destination capability refused: {0}")]
     CapabilityRefused(String),
+    /// A plugin tool or `orbit <ns>` verb was refused because the plugin is
+    /// switched off in the workspace the call resolved to, although the host
+    /// still has it enabled. The tool never ran; `workspace` names the
+    /// workspace for a human reader.
+    #[error(
+        "plugin '{plugin}' is disabled in workspace '{workspace}'; turn it back on from that \
+         workspace with `orbit plugin enable {plugin} --scope workspace`"
+    )]
+    PluginDisabledInWorkspace { plugin: String, workspace: String },
+    /// A workspace toggle tried to switch on a plugin the host has disabled.
+    /// A toggle can only narrow host state and never grants permissions, so
+    /// the host enable (the consent step) has to come first.
+    #[error(
+        "plugin '{plugin}' is disabled on this host, and a workspace toggle cannot switch it on; \
+         enable it on the host first with `orbit plugin enable {plugin} --grant …`"
+    )]
+    PluginDisabledOnHost { plugin: String },
+    /// A plugin declares `spec.build` and the operator did not consent to
+    /// running it. The message carries the build plan the consent would
+    /// approve.
+    #[error("{0}")]
+    PluginBuildConsentRequired(String),
+    /// A build was asked for where no operator can consent: a managed run, an
+    /// agent sandbox, or a plugin backend.
+    #[error("{0}")]
+    PluginBuildConsentUnavailable(String),
+    /// A plugin's `spec.build` declares a network `fetch` phase on a platform
+    /// that does not run one (macOS). Refused before anything runs.
+    #[error("{0}")]
+    PluginBuildFetchUnsupported(String),
     #[error("Invalid ADR status transition: {0}")]
     AdrInvalidTransition(String),
     #[error("{kind} artifact unavailable for {id}")]
@@ -180,12 +223,10 @@ pub enum OrbitError {
     /// [ORB-11078]. Distinct from a dangling miss, which is audit-visible
     /// and does not block completion.
     #[error(
-        "resolves target '{}' is not in workspace '{}' (found in {}); auto-resolve is workspace-local — resolve it from its owning workspace with orbit.friction.resolve, or land a covering task there",
+        "resolves target '{}' is not in workspace '{}' (found in {}); auto-resolve is workspace-local — resolve it from its owning workspace with `orbit friction resolve <id>` (operator CLI) or `orbit tool run orbit.friction.update` with status resolved (agent path), or land a covering task there",
         .0.friction_id, .0.workspace_id, .0.found_in.join(", ")
     )]
     FrictionNotLocal(Box<FrictionNotLocal>),
-    #[error("companion not installed: {0}")]
-    CompanionNotInstalled(String),
     #[error("invalid input: {0}")]
     InvalidInput(String),
     #[error("sensitive input rejected for `{field}`: {reason}")]
@@ -220,6 +261,16 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// A child process exceeded its deadline. The supervisor signalled the
+    /// owned process group and reaped the leader; descendants that remained in
+    /// that group were signalled with it.
+    #[error("process timed out after {timeout_ms}ms: {detail}")]
+    ProcessTimeout { timeout_ms: u64, detail: String },
+    /// Strict worker containment refused a launch before the worker existed.
+    #[error(
+        "worker containment required but unavailable: {reason}; enable machine.worker_containment and run under a Linux systemd user manager, or drop --strict-worker-containment / machine.worker_containment_strict"
+    )]
+    WorkerContainmentUnavailable { reason: String },
     #[error(
         "recoverable VCS conflict during '{}': original base '{}', target base '{}'; {}; conflicting paths: {}",
         .0.operation,
@@ -253,6 +304,11 @@ pub enum OrbitError {
     FileLockTimeout(Box<crate::fs::io::FileLockTimeout>),
     #[error("store error: {0}")]
     Store(String),
+    #[error(
+        "store error: SQLite database '{}' remained locked during {}: {}",
+        .0.path, .0.phase, .0.detail
+    )]
+    SqliteContention(Box<SqliteContention>),
     #[error("invalid task status transition: {0}")]
     TaskStatusTransition(String),
     /// A workflow run was refused because a dependency that reached `done` has
@@ -273,6 +329,35 @@ pub enum OrbitError {
         "task {task_id} already has an in-flight run ({run_id}); wait for it to finish or cancel it"
     )]
     ShipRunInFlight { task_id: String, run_id: String },
+    /// Completion cannot overtake the linked implementation run while its
+    /// recorded PID and start-time identity still name a running owner.
+    #[error(
+        "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
+    )]
+    TaskCompletionLiveRun { task_id: String, run_id: String },
+    /// A guarded desktop mutation lost its task content compare-and-set.
+    #[error(
+        "task '{task_id}' revision conflict; refresh authoritative state and preserve your draft"
+    )]
+    TaskRevisionConflict { task_id: String },
+    /// The request committed, but subsequent task projection or provenance refresh failed.
+    /// Adapters must report success and reconcile the original request identity.
+    #[error(
+        "desktop write for task '{task_id}' was accepted; refresh failed: {reason}; reconcile the same request identity"
+    )]
+    DesktopWriteAccepted { task_id: String, reason: String },
+    /// A resume was refused because the source run's retry lineage already
+    /// has a non-terminal run. Raised atomically by the store insert on the
+    /// shared resume path, so the CLI, MCP, and HTTP surfaces refuse the
+    /// duplicate identically; the payload names the live run so a caller can
+    /// open, wait on, or cancel it rather than resume again.
+    #[error(
+        "job run '{source_run_id}' already has a live resume in its retry lineage ({run_id}); wait for it to finish or cancel it before resuming again"
+    )]
+    ResumeRunInFlight {
+        source_run_id: String,
+        run_id: String,
+    },
     /// A governed workflow operation was refused because another operator holds
     /// the exclusive workspace claim [ADR-0352, ORB-10709]. Raised by the shared
     /// run-submission path, so the refusal is identical on every surface, and
@@ -294,12 +379,12 @@ pub enum OrbitError {
     /// without matching on message text.
     #[error("job run start conflict: {0}")]
     JobRunStartConflict(String),
-    /// [ORB-11253] A run-control update lost a compare-and-set to a concurrent
-    /// update of the same control. Distinct from
+    /// [ORB-11253, ORB-12260] A control update lost a compare-and-set to a
+    /// concurrent update of the same control. Distinct from
     /// [`OrbitError::JobValidation`] on purpose: nothing is wrong with the
     /// request, it was simply superseded, so the caller re-reads the current
     /// value and decides again rather than correcting anything.
-    #[error("job run control conflict: {0}")]
+    #[error("{0}")]
     JobRunControlConflict(String),
     #[error("workspace error: {0}")]
     WorkspaceError(String),
@@ -412,6 +497,18 @@ impl OrbitError {
         }
     }
 
+    /// The `(source_run_id, run_id)` of a duplicate-resume refusal: the run the
+    /// caller asked to resume and the live run already carrying its lineage.
+    pub fn resume_run_in_flight(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::ResumeRunInFlight {
+                source_run_id,
+                run_id,
+            } => Some((source_run_id, run_id)),
+            _ => None,
+        }
+    }
+
     /// The refused operation, incumbent holder, claim id, and expiry of a
     /// workspace-claim refusal, so projections (HTTP 409 body, MCP structured
     /// error) can name them without re-parsing the message [ORB-10709].
@@ -436,6 +533,13 @@ impl OrbitError {
     pub fn file_lock_timeout(&self) -> Option<&crate::fs::io::FileLockTimeout> {
         match self {
             Self::FileLockTimeout(timeout) => Some(timeout),
+            _ => None,
+        }
+    }
+
+    pub fn sqlite_contention(&self) -> Option<&SqliteContention> {
+        match self {
+            Self::SqliteContention(contention) => Some(contention),
             _ => None,
         }
     }
@@ -549,7 +653,3 @@ impl From<RecordError> for OrbitError {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/error.rs"]
-mod tests;

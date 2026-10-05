@@ -39,7 +39,7 @@ pub(crate) fn seed_default_executors(
 /// explicitly (rather than read from `std::env::consts::OS`) so both the macOS
 /// and Linux seeding paths can be exercised deterministically in tests on a
 /// single CI host. See [ORB-10112].
-pub(super) fn seed_default_executors_for_platform(
+pub(crate) fn seed_default_executors_for_platform(
     store: &dyn ExecutorDefStoreBackend,
     overwrite: bool,
     target_os: &str,
@@ -74,6 +74,11 @@ pub(super) fn seed_default_executors_for_platform(
 /// `target_os`. Shipped assets declare sandbox intent with the macOS backend;
 /// Linux installs translate that marker to the native Bubblewrap backend.
 ///
+/// On any other OS there is no backend, so the declared kind is kept rather
+/// than dropped: dispatch then refuses the executor with the remedies instead
+/// of spawning it bare. Windows runs Orbit inside WSL2, where the Linux build
+/// and Bubblewrap apply unchanged.
+///
 /// This is deliberate platform selection for Orbit's own defaults, so it is
 /// silent. It does NOT relax validation of user-authored executor defs: a
 /// custom def that explicitly requests an incompatible sandbox backend is left
@@ -84,18 +89,11 @@ fn select_shipped_sandbox(
     target_os: &str,
 ) -> Option<ExecutorSandboxKind> {
     match declared {
-        Some(kind) if kind.is_available_on(target_os) => Some(kind),
-        Some(_) if target_os == "linux" => Some(ExecutorSandboxKind::LinuxBwrap),
-        _ => None,
+        Some(kind) if !kind.is_available_on(target_os) && target_os == "linux" => {
+            Some(ExecutorSandboxKind::LinuxBwrap)
+        }
+        other => other,
     }
-}
-
-#[cfg(test)]
-pub(super) fn migrated_default_executor(
-    existing: &ExecutorDef,
-    seeded: &ExecutorDef,
-) -> Option<ExecutorDef> {
-    migrated_default_executor_for_platform(existing, seeded, std::env::consts::OS)
 }
 
 pub(super) fn migrated_default_executor_for_platform(
@@ -136,24 +134,23 @@ pub(super) fn migrated_default_executor_for_platform(
         changed = true;
     }
 
-    // Linux shipped without an OS wrapper before ORB-10552, so an installed
-    // default commonly has `None` rather than a mismatched concrete kind.
-    // Upgrade that old shipped state to Bubblewrap on the next seed. Explicit
+    // Linux shipped without an OS wrapper before ORB-10552, and hosts without
+    // a backend had the declared kind dropped, so an installed default
+    // commonly has `None` rather than a mismatched concrete kind. Restore the
+    // seeded kind on the next seed: Bubblewrap on Linux, and elsewhere the
+    // declared kind so dispatch refuses instead of spawning bare. Explicit
     // `off` is a distinct, platform-independent choice and never enters here.
     if existing.sandbox.is_none()
-        && seeded.sandbox == Some(ExecutorSandboxKind::LinuxBwrap)
-        && target_os == "linux"
+        && seeded.sandbox.is_some_and(|kind| {
+            (kind == ExecutorSandboxKind::LinuxBwrap && target_os == "linux")
+                || !kind.is_available_on(target_os)
+        })
     {
         migrated.sandbox = seeded.sandbox;
         changed = true;
     }
 
     if changed { Some(migrated) } else { None }
-}
-
-#[cfg(test)]
-pub(super) fn parse_default_executor(name: &str, yaml: &str) -> Result<ExecutorDef, OrbitError> {
-    parse_default_executor_for_platform(name, yaml, std::env::consts::OS)
 }
 
 pub(super) fn parse_default_executor_for_platform(
@@ -191,9 +188,10 @@ pub(super) fn parse_default_executor_for_platform(
     );
 
     // Shipped agent assets use their sandbox field as an opt-in marker. Keep
-    // sandbox-exec on macOS, translate it to linux-bwrap on Linux, and omit it
-    // on unsupported platforms. Custom definitions never pass through this
-    // selector, so their explicit concrete choice remains fail-closed.
+    // sandbox-exec on macOS, translate it to linux-bwrap on Linux, and keep
+    // the declared kind on unsupported platforms so dispatch fails closed.
+    // Custom definitions never pass through this selector, so their explicit
+    // concrete choice remains fail-closed.
     def.sandbox = select_shipped_sandbox(def.sandbox, target_os);
 
     Ok(def)

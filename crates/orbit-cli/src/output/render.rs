@@ -9,7 +9,8 @@
 //! from the sink `main` already resolved.
 //!
 //! Everything that is not a record goes to stderr in every mode (spec §5):
-//! empty-state lines, dropped-column notices, and progress.
+//! empty-state lines, dropped-column notices, trailing notices such as a
+//! truncation count, and progress.
 
 use std::io::Write;
 
@@ -36,10 +37,43 @@ pub fn emit(output: CommandOutput, sink: &OutputSink) -> Result<(), OrbitError> 
     }
 
     match sink.mode() {
-        OutputMode::Json => emit_json(&doc, sink.pretty_json()),
-        OutputMode::Ndjson => emit_ndjson(&doc),
+        // A list's trailing notices (a truncation count, say) belong on
+        // stderr in every mode (spec §5). In table and plain modes,
+        // `Table::emit` prints them after the table body (ORB-12206). In
+        // machine-readable modes, `Table::emit` is not called, so we print
+        // them here (ORB-12203).
+        OutputMode::Json => {
+            for notice in table_notices(&view) {
+                eprintln!("{notice}");
+            }
+            emit_json(&doc, sink.pretty_json())
+        }
+        OutputMode::Ndjson => {
+            for notice in table_notices(&view) {
+                eprintln!("{notice}");
+            }
+            emit_ndjson(&doc)
+        }
         OutputMode::Table | OutputMode::Plain => emit_human(doc, view, sink),
     }
+}
+
+/// The trailing notices carried by a payload's table, if it has one. Read
+/// here rather than inside `Table::emit` so a `json`/`ndjson` caller — which
+/// never reaches `emit_human` — still receives them.
+fn table_notices(view: &View) -> Vec<&str> {
+    let View::Blocks(blocks) = view else {
+        return Vec::new();
+    };
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Table(table) => Some(table.trailing_notices()),
+            Block::Text(_) => None,
+        })
+        .flatten()
+        .map(String::as_str)
+        .collect()
 }
 
 /// One document, pretty-printed only for a human (spec §3).
@@ -57,15 +91,23 @@ fn emit_ndjson(doc: &Value) -> Result<(), OrbitError> {
     let mut stdout = std::io::stdout().lock();
     for record in ndjson_records(doc) {
         let line = crate::output::json::render(record, false)?;
-        writeln!(stdout, "{line}").map_err(write_error)?;
-        stdout.flush().map_err(write_error)?;
+        match writeln!(stdout, "{line}") {
+            Ok(()) => {}
+            Err(err) if crate::output::pipe::is_broken_pipe(&err) => return Ok(()),
+            Err(err) => return Err(write_error(err)),
+        }
+        match stdout.flush() {
+            Ok(()) => {}
+            Err(err) if crate::output::pipe::is_broken_pipe(&err) => return Ok(()),
+            Err(err) => return Err(write_error(err)),
+        }
     }
     Ok(())
 }
 
 /// The records a document yields in `ndjson`: a list's elements, or the
 /// document itself when it is a single detail object.
-pub(crate) fn ndjson_records(doc: &Value) -> &[Value] {
+fn ndjson_records(doc: &Value) -> &[Value] {
     match doc {
         Value::Array(records) => records,
         single => std::slice::from_ref(single),

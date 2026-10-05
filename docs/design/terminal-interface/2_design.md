@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-08-02
-last_validated: 2026-08-30
+last_updated: 2026-09-26
+last_validated: 2026-09-26
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -26,7 +26,7 @@ This document describes what `orbit-cli` renders today. It is deliberately a rec
 
 ## 2. Table Construction
 
-`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` is the only row constructor and caps every row at `Row::max_height(1)`, so the unbounded path that made a row span three or four lines is unreachable from a command module [ORB-10567]. The 21 command modules construct either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
+`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` is the only row constructor and caps every row at `Row::max_height(1)`, so the unbounded path that made a row span three or four lines is unreachable from a command module [ORB-10567]. The 27 command modules construct either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
 
 Rendering applies the `NOTHING` preset with `ContentArrangement::Disabled`, two-space right padding on every column but the last, and a dim header row. Widths are computed from the result set: natural widths first, then flexible columns shrink widest-first to a floor of 8, then flexible columns drop from the right with a notice on stderr. Fixed columns never move. Overflow truncates with `…` — tail truncation is `comfy_table`'s, middle truncation (`Column::path`) is applied before the grid sees the cell.
 
@@ -36,7 +36,7 @@ Two selection rules run before layout: a column whose value is identical in ever
 
 The last hand-padded list is gone. `orbit audit list` used to print each event through `print_audit_event_line` in `command/audit/support.rs`, a single `println!` with the format string `"[{}] {:<8} {:<6} {}:{:<20} {}ms"` — literal widths that held only while every value fit, no header, and a left-aligned duration carrying its unit per row. It now builds a `Table` with computed widths, a header, a `filtered` flag per filterable column, and a right-aligned `DURATION (ms)` [ORB-10570]. Satisfies [./specs/table-rendering.md](./specs/table-rendering.md) §2 and §3.
 
-59 modules under `command/` still call `println!` directly for some part of their output — detail views, field labels, confirmations — so line output remains a pattern rather than an isolated case. Record output is nevertheless centralized: command payloads go through `output::render`, while the remaining prose paths use `output::color`, whose `colored` backend is overridden from the sink at startup.
+30 modules under `command/` still call `println!` directly for some part of their output — detail views, field labels, confirmations — so line output remains a pattern rather than an isolated case. Record output is nevertheless centralized: command payloads go through `output::render`, while the remaining prose paths use `output::color`, whose `colored` backend is overridden from the sink at startup.
 
 The audit view still demonstrates the difference between the two renderings. [ORB-10228] added trusted session-context fields (`workspace_id`, `caller_machine_id`, `transport`, `mcp_call_id`) to `audit_event_to_json`; the human table does not expose those fields, while the shared payload keeps them available to JSON consumers.
 
@@ -54,13 +54,13 @@ The eight per-domain wrappers this replaced (`status_color`/`_cell`, `priority_c
 
 `main` resolves the sink, calls `sink.apply_color_policy()` (which overrides `colored`'s own detection process-wide), and passes it to `output::render::emit` — the single consumer. There is no `OnceLock`: [ORB-10586] threaded the payload return through `Execute::execute`, which made the sink available as a renderer parameter, and removed the process-global `sink::install`/`sink::active` path. §9 records the remaining limitations.
 
-Both backends are now told, never asked: `Table::render_at` calls `enforce_styling()` or `force_no_tty()` from `sink.color_allowed()`, and `colored` is overridden at startup. `NO_COLOR=1` on a terminal therefore produces byte-identical output to a redirect on both a table-rendering and a line-rendering command, asserted in `crates/orbit-cli/src/output/tests/gating.rs`. Table width comes from `sink.truncate_width()`, so a zero-width sink truncates nothing. Satisfies [./specs/output-modes.md](./specs/output-modes.md) §1 and [./specs/color-and-styling.md](./specs/color-and-styling.md) §2 [Terminal Output Is a Rendering of a Structured Payload](./4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload), [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
+Both backends are now told, never asked: `Table::render_at` calls `enforce_styling()` or `force_no_tty()` from `sink.color_allowed()`, and `colored` is overridden at startup. `NO_COLOR=1` on a terminal therefore produces byte-identical output to a redirect on both a table-rendering and a line-rendering command. Table width comes from `sink.truncate_width()`, so a zero-width sink truncates nothing. Satisfies [./specs/output-modes.md](./specs/output-modes.md) §1 and [./specs/color-and-styling.md](./specs/color-and-styling.md) §2 [Terminal Output Is a Rendering of a Structured Payload](./4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload), [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 
 **Mode now drives the success path too.** A command returns a payload — a JSON document plus the blocks of its human view — and `output::render::emit` projects it into `table`, plain, `json`, or `ndjson` [ORB-10586]. `--format` and `ORBIT_FORMAT` are live on every list and detail command, `auto` on a pipe produces the plain form, and `ndjson` streams one record per line with a flush per record. Satisfies [./specs/output-modes.md](./specs/output-modes.md) §2–§3. The commands that still return `CommandOutput::Silent` are the mutations and confirmations, which have no record stream to project.
 
 ## 6. Per-Command Structured Output
 
-Legacy `--json`/`--ops` flags remain declared independently where they are accepted (72 `pub json: bool` fields under `crates/orbit-cli/src/command/`), but main now reads those flags as a compatibility mode input. Commands build a `Payload` and the shared renderer chooses the human, JSON, or NDJSON projection.
+Legacy `--json`/`--ops` flags remain declared independently where they are accepted (83 `pub json: bool` fields under `crates/orbit-cli/src/command/`), but main now reads those flags as a compatibility mode input. Commands build a `Payload` and the shared renderer chooses the human, JSON, or NDJSON projection.
 
 The shared path keeps the JSON document and human view together. `orbit tool list` still derives a human `REQUIRED INPUT` summary from the parameter data, but it is rendered from the same collected records as the JSON document. The global `--format json|ndjson` modes are available alongside the legacy booleans; NDJSON emits one complete record per line. The remaining compatibility exceptions are documented in §§7 and 9.
 
@@ -76,11 +76,11 @@ A closed stdout is not an error. `output/pipe.rs` installs a panic hook that tur
 
 ## 8. Test Coverage of Output
 
-There are no output snapshots. `crates/orbit-cli/src/snapshots/` holds a single file, `audit_guard_event_json_shapes.json`, covering audit event JSON shape; `crates/orbit-cli/tests/snapshots/` holds one more, `mcp_tools_list.json`, covering the MCP tool listing. Both assert on JSON.
+Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover the plain and JSON forms of tool, task, and skill lists; they also cover a plain task detail view and the layer provenance of `config show --json`. CLI long-help goldens live under `crates/orbit-cli/tests/help_goldens/` and are compared against the binary's `--help`. `tests/snapshots/` holds the MCP tool listing. The list-command integration goldens capture piped output; the table form needs a terminal, so no golden covers it.
 
-The first rendering assertions arrived with the borderless migration [ORB-10567] and are written as behavior, not golden files. `crates/orbit-cli/src/output/tests/table.rs` renders at pinned widths — passed as an argument rather than read from `COLUMNS`, so a `--nocapture` run cannot change the geometry — and asserts line count, gutter, truncation, alignment, column suppression, and column dropping. `crates/orbit-cli/tests/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
+The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/output/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
 
-`crates/orbit-cli/src/output/tests/gating.rs` asserts ANSI emission [ORB-10570]: that a `NO_COLOR` terminal and a redirect render byte-identically on both a table and a log line, that a terminal *without* `NO_COLOR` renders escapes through both backends (so the equality tests cannot pass vacuously), that a zero-width sink truncates nothing, and that progress is refused off a terminal and in `json`/`ndjson`. Sinks are built with `OutputSink::resolve`, never `from_process`, because `make ci` runs without a TTY. The one test that flips `colored`'s process-global override serializes on a module mutex and restores detection on drop.
+`crates/orbit-cli/src/output/tests/sink.rs` asserts that a non-terminal sink has zero width and refuses color however the environment insists [ORB-10570]. Its sink is built with `OutputSink::resolve`, never `from_process`, because `make ci` runs without a TTY.
 
 ## 9. Concerns & Honest Limitations
 

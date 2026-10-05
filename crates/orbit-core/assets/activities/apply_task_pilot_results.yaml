@@ -5,11 +5,14 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Partition-isolated, fail-closed task-pilot apply boundary. It validates each
-    partition's exact before snapshots, dispositions, canonical in-workspace
+    Task-isolated, fail-closed task-pilot apply boundary. It validates each
+    partition envelope, then each task's exact before snapshot, disposition, in-workspace
     file/dir/symbol selectors, and target existence against the prepared source
-    revision when one was pinned. Stale or malformed partitions are reported
-    without writes while independently valid partitions still apply. Every other task
+    revision when one was pinned. Harmless bare relative file and directory
+    targets are normalized from that pinned tree with the original and normalized
+    values retained. Stale or malformed tasks are reported without writes while
+    independently valid siblings still apply. Each accepted task mutation and
+    idempotency receipt commits atomically. Every other task
     field, lifecycle state, dispatch state, and recommendation remains unchanged
     unless a CI sweep supplies its exact filing record and explicit promotion
     authority. In that mode only a proposed, selector-backed task with no
@@ -35,12 +38,20 @@ spec:
         oneOf:
           - type: object
           - type: "null"
+      prior_applied_count:
+        type: number
+      carried_task_outcomes:
+        type: array
+        items:
+          type: object
   output_schema_json:
     type: object
     required:
       [status, error, mode, workspace_path, source, discovery,
        partition_decisions, partition_count, received_partition_count,
-       failed_partitions, skipped_stale_partitions, tasks, ci_sweep_admission]
+       failed_partitions, skipped_stale_partitions, task_outcomes, applied_count,
+       unresolved_count, repair_count, repair_partitions, repair_prepared,
+       non_repairable_outcomes, tasks, ci_sweep_admission]
     properties:
       status:
         type: string
@@ -73,6 +84,26 @@ spec:
         items:
           type: object
       skipped_stale_partitions:
+        type: array
+        items:
+          type: object
+      task_outcomes:
+        type: array
+        items:
+          type: object
+      applied_count:
+        type: number
+      unresolved_count:
+        type: number
+      repair_count:
+        type: number
+      repair_partitions:
+        type: array
+        items:
+          type: object
+      repair_prepared:
+        type: object
+      non_repairable_outcomes:
         type: array
         items:
           type: object

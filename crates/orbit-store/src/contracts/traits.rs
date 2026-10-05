@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::identity::{Crew, OrbitId};
+use orbit_types::identity::OrbitId;
+use orbit_types::plugin::InstalledPlugin;
 use orbit_types::policy::PolicyDef;
 use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
@@ -8,16 +9,13 @@ use orbit_types::task::{
 };
 use orbit_types::telemetry::AuditEvent;
 use orbit_types::tool::StoredTool;
-use orbit_types::workflow::{
-    ExecutorDef, JobRun, JobRunStartOutcome, JobRunState, KnowledgeRunMetrics, PipelineState,
-    RunStateUpdate,
-};
+use orbit_types::workflow::ExecutorDef;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::friction::{
-    FrictionAddParams, FrictionListFilter, FrictionReportedCount, FrictionUpdateParams,
-    StoredFrictionRecord,
+    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionRehomeParams,
+    FrictionReportedCount, FrictionUpdateParams, StoredFrictionRecord,
 };
 use super::invocation::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
@@ -39,6 +37,54 @@ use crate::contracts::{
 };
 
 pub trait TaskStoreBackend: Send + Sync {
+    /// The claim's accepted handoff, or `None` when none was accepted.
+    fn find_accepted_handoff(
+        &self,
+        _claim_id: &str,
+    ) -> Result<Option<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
+        Err(OrbitError::Store("typed handoff unavailable".into()))
+    }
+
+    fn landing_start_requests(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::LandingStartRequest>, OrbitError> {
+        Err(OrbitError::Store("handoff outbox unavailable".into()))
+    }
+
+    /// The owner's landing attempts, one per handoff. Read-only inspection.
+    fn landing_attempts(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        Err(OrbitError::Store("landing attempts unavailable".into()))
+    }
+
+    /// Internal lifecycle seam; unavailable backends fail closed.
+    fn mutate_execution_claim(
+        &self,
+        _context: Option<&super::ClaimInvocation>,
+        _mutation_id: &str,
+        _mutation: &super::ClaimMutation,
+    ) -> Result<super::ClaimMutationResult, OrbitError> {
+        Err(OrbitError::Store("claim lifecycle unavailable".into()))
+    }
+    fn inspect_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
+        Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
+    /// Repairing claim read: settles an interrupted commit before reading.
+    /// Unavailable backends fail closed.
+    fn resolve_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
+        Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
+    /// Read-only receipt reconciliation. Creates no receipt, binds no run, and
+    /// grants no execution authority; the caller authorizes the identity.
+    fn lookup_admission(
+        &self,
+        _identity: &super::AdmissionIdentity,
+        _request_id: &str,
+    ) -> Result<super::AdmissionLookup, OrbitError> {
+        Err(OrbitError::Store("admission lookup unavailable".into()))
+    }
+
     /// Select metadata before hydration, retaining all-envelope index validation.
     fn task_candidates(
         &self,
@@ -74,6 +120,17 @@ pub trait TaskStoreBackend: Send + Sync {
             .map(|task| (task.id, task.status))
             .collect())
     }
+    /// Return the bounded status projection needed to label one task's
+    /// dependency and relation targets. Backends with a workspace-aware
+    /// registry override this; the default preserves compatibility for small
+    /// test and legacy backends by falling back to their global projection.
+    fn task_status_index_for(
+        &self,
+        _workspace_id: &str,
+        _targets: &BTreeSet<String>,
+    ) -> Result<BTreeMap<OrbitId, TaskStatus>, OrbitError> {
+        self.task_status_index()
+    }
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         let required_tags = normalize_task_tags(tags.to_vec());
         let mut tasks = self.list_tasks()?;
@@ -92,6 +149,38 @@ pub trait TaskStoreBackend: Send + Sync {
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError>;
     fn get_task(&self, id: &str) -> Result<Option<Task>, OrbitError>;
+    /// Resolve one task through the owner this machine's coordination registry
+    /// has registered for it, instead of only within the caller's workspace.
+    ///
+    /// Task ids are globally unique and a dependency may legitimately name a
+    /// task owned by another workspace on this machine, so a dependency read
+    /// has to follow ownership the same way the registry-wide status
+    /// projection already does ([`Self::task_status_index`]). The read is
+    /// authority-preserving: it never widens what the caller may write, never
+    /// writes to the owner's partition, and never reaches another host.
+    ///
+    /// The default resolves within this backend alone — a backend without an
+    /// ownership registry has exactly one authority — so an id it cannot find
+    /// is [`RegisteredTaskResolution::Missing`].
+    fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
+        Ok(match self.get_task(id)? {
+            Some(task) => RegisteredTaskResolution::Resolved(Box::new(task)),
+            None => RegisteredTaskResolution::Missing,
+        })
+    }
+    /// Status history of a dependency target, read through its registered
+    /// owner with the same authority as [`Self::registered_task`].
+    ///
+    /// Dependency satisfaction consults it only for archived targets, to tell
+    /// a task archived after it reached `done` from abandoned work. `None`
+    /// means no readable history, which keeps the archived edge a dead end;
+    /// that is the default for a backend without task history.
+    fn registered_task_history(
+        &self,
+        _id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        Ok(None)
+    }
     fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError>;
     fn search_tasks_filtered(&self, query: &str, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         let required_tags = normalize_task_tags(tags.to_vec());
@@ -100,6 +189,26 @@ pub trait TaskStoreBackend: Send + Sync {
             tasks.retain(|task| task_matches_tags(task, &required_tags));
         }
         Ok(tasks)
+    }
+    /// Stream the tasks matching `query` (all of `tags`) in listing order to
+    /// `visit` until it returns `false`.
+    ///
+    /// `admit` judges each candidate from its envelope alone, before its body
+    /// is read; a backend that can avoid the read for a rejected task does.
+    /// The result equals [`Self::search_tasks_filtered`] followed by `admit`.
+    fn search_tasks_visit(
+        &self,
+        query: &str,
+        tags: &[String],
+        admit: &dyn Fn(&Task) -> bool,
+        visit: &mut dyn FnMut(Task) -> bool,
+    ) -> Result<(), OrbitError> {
+        for task in self.search_tasks_filtered(query, tags)? {
+            if admit(&task) && !visit(task) {
+                break;
+            }
+        }
+        Ok(())
     }
     fn delete_task(&self, id: &str) -> Result<bool, OrbitError>;
 
@@ -120,6 +229,63 @@ pub trait TaskStoreBackend: Send + Sync {
         op()
     }
 
+    /// Atomically apply a freshness-guarded task mutation and its durable
+    /// idempotency receipt. Backends that cannot provide one commit point must
+    /// reject the operation rather than emulate it with partial writes.
+    fn apply_atomic_task_mutation(
+        &self,
+        _id: &str,
+        _params: &AtomicTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        Err(OrbitError::Store(
+            "atomic task mutation is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Payload-bound task creation using the existing permanent allocation action key.
+    fn create_desktop_task(
+        &self,
+        _params: TaskCreateParams,
+        _key: &str,
+        _digest: &str,
+    ) -> Result<(Task, bool), OrbitError> {
+        Err(OrbitError::Store(
+            "guarded desktop creation unsupported by backend".into(),
+        ))
+    }
+    /// Reconcile an accepted creation; a reserved but unpublished bundle returns None.
+    fn lookup_desktop_creation(
+        &self,
+        _key: &str,
+        _digest: &str,
+    ) -> Result<Option<Task>, OrbitError> {
+        Err(OrbitError::Store(
+            "guarded desktop creation unsupported by backend".into(),
+        ))
+    }
+    /// Coherently read a task without claiming write authority or creating a write lock.
+    fn read_desktop_task(&self, _id: &str) -> Result<DesktopTaskRead, OrbitError> {
+        Err(OrbitError::Store(
+            "coherent desktop reads unsupported by backend".into(),
+        ))
+    }
+    /// Content revision including documents, history, comments and artifact manifest.
+    fn desktop_task_revision(&self, _id: &str) -> Result<String, OrbitError> {
+        Err(OrbitError::Store(
+            "guarded desktop writes unsupported by backend".into(),
+        ))
+    }
+    /// One locked bundle commit for edits, comments and review verdict/status.
+    fn apply_desktop_task_mutation(
+        &self,
+        _id: &str,
+        _params: &DesktopTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        Err(OrbitError::Store(
+            "guarded desktop writes unsupported by backend".into(),
+        ))
+    }
+
     /// Status counts per complexity bucket from the generated task index.
     /// Default is empty; the v2 store answers from SQLite without bundle reads.
     fn task_completion_by_complexity(&self) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {
@@ -131,6 +297,24 @@ pub trait TaskStoreBackend: Send + Sync {
     fn task_complexity_by_id(&self) -> Result<BTreeMap<OrbitId, String>, OrbitError> {
         Ok(BTreeMap::new())
     }
+}
+
+/// How one task id resolved against this machine's task ownership registry.
+///
+/// Every variant fails closed: only [`Self::Resolved`] carries a body, and
+/// neither of the other two may be read as a satisfied prerequisite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegisteredTaskResolution {
+    /// A workspace registered on this machine owns the id, and its bundle was
+    /// read from the path the registry binds it to.
+    Resolved(Box<Task>),
+    /// The id is well formed and belongs to a task-id prefix this registry has
+    /// never issued or registered, so its authority is another host's. This
+    /// machine cannot read the body and must not invent one.
+    ForeignAuthority,
+    /// The id belongs to a prefix this registry knows, but no readable task is
+    /// bound to it here — deleted, never published, or not yet imported.
+    Missing,
 }
 
 pub trait SessionLogStoreBackend: Send + Sync {
@@ -182,6 +366,19 @@ pub trait RoutineStoreBackend: Send + Sync {
 
 pub trait FrictionStoreBackend: Send + Sync {
     fn add(&self, params: FrictionAddParams) -> Result<StoredFrictionRecord, OrbitError>;
+    /// Insert `params`, or return the workspace record that already carries
+    /// `dedupe_key`.
+    ///
+    /// The lookup and the insert share one immediate write transaction, so two
+    /// callers that both missed an earlier read still resolve to one id. The
+    /// key is the exact `dedupe-key:` line in the body; that line is what a
+    /// later caller matches, and the body must contain it. The oldest match
+    /// in this workspace is the reusable record.
+    fn add_or_reuse(
+        &self,
+        dedupe_key: &str,
+        params: FrictionAddParams,
+    ) -> Result<StoredFrictionRecord, OrbitError>;
     fn list(&self, filter: &FrictionListFilter) -> Result<Vec<StoredFrictionRecord>, OrbitError>;
     fn show(&self, id: &str) -> Result<Option<StoredFrictionRecord>, OrbitError>;
     /// Workspace IDs other than this store's that already hold `id`.
@@ -191,6 +388,13 @@ pub trait FrictionStoreBackend: Send + Sync {
         id: &str,
         params: FrictionUpdateParams,
     ) -> Result<StoredFrictionRecord, OrbitError>;
+    /// Move `id` into its owning workspace on this host and resolve the
+    /// source with a pointer to the new record, atomically.
+    fn rehome(
+        &self,
+        id: &str,
+        params: FrictionRehomeParams,
+    ) -> Result<FrictionRehomeOutcome, OrbitError>;
     fn resolve(
         &self,
         id: &str,
@@ -211,6 +415,7 @@ pub trait FrictionStoreBackend: Send + Sync {
         resolved_at: DateTime<Utc>,
     ) -> Result<Option<StoredFrictionRecord>, OrbitError>;
     fn tags(&self) -> Result<Vec<String>, OrbitError>;
+    fn tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError>;
     fn reported_by_model(
         &self,
         since: Option<DateTime<Utc>>,
@@ -244,6 +449,13 @@ pub trait InvocationStoreBackend: Send + Sync {
         limit: usize,
     ) -> Result<Vec<TaskInvocationMetrics>, OrbitError>;
     fn list_tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError>;
+    /// Insert-only change signal for the token scoreboard skip path.
+    ///
+    /// `Some(n)` is `MAX(id)` over `invocations` (`0` when the table is empty).
+    /// `None` means the backend cannot cheaply detect changes; callers rewrite.
+    fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, OrbitError> {
+        Ok(None)
+    }
 }
 
 pub trait V2AuditStoreBackend: Send + Sync {
@@ -325,6 +537,16 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         workspace_id: Option<&str>,
     ) -> Result<Vec<ActiveTaskReservation>, OrbitError>;
 
+    /// Read one active reservation by id with the visibility of
+    /// [`Self::inspect_active_task_reservations`]; `None` when it is gone,
+    /// released, expired, or outside the workspace.
+    fn inspect_active_task_reservation(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        reservation_id: &str,
+    ) -> Result<Option<ActiveTaskReservation>, OrbitError>;
+
     fn list_active_task_reservations(
         &self,
         workspace_orbit_dir: &str,
@@ -385,209 +607,33 @@ pub trait TaskReservationStoreBackend: Send + Sync {
     ) -> Result<WorkspaceClaimCheckResult, OrbitError>;
 }
 
-pub trait JobRunStoreBackend: Send + Sync {
-    /// Exact retry children; missing evidence cannot be replaced by a time-window scan.
-    fn job_run_retries(&self, _run_id: &str, _limit: usize) -> Result<Vec<JobRun>, OrbitError> {
-        Err(OrbitError::Store("retry lineage lookup unavailable".into()))
-    }
-
-    fn automation_job_for_key(&self, _key: &str) -> Result<Option<String>, OrbitError> {
-        Err(OrbitError::Store(
-            "automation action lookup unavailable".into(),
-        ))
-    }
-    fn insert_automation_job_run(
-        &self,
-        _job_id: &str,
-        _input: serde_json::Value,
-        _key: &str,
-    ) -> Result<JobRun, OrbitError> {
-        Err(OrbitError::Store(
-            "automation job admission unavailable".into(),
-        ))
-    }
-
-    fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
-    fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError>;
-    /// Number of runs matching `query`, ignoring its `limit`.
-    fn count_job_runs_filtered(&self, query: &JobRunQuery) -> Result<u64, OrbitError>;
-    /// Every recorded `duration_ms` among runs matching `query`, ignoring
-    /// its `limit`.
-    fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError>;
-    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError>;
-    fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
-    fn insert_job_run(
-        &self,
-        job_id: &str,
-        attempt: u32,
-        scheduled_at: DateTime<Utc>,
-        input: Option<serde_json::Value>,
-        retry_source_run_id: Option<String>,
-    ) -> Result<JobRun, OrbitError>;
-    /// Atomically admit and link a child run unless its parent has stopped
-    /// admissions.
-    ///
-    /// The parent-state read, child insert, and parent dispatch checkpoint are
-    /// committed in one backend transaction. That commit is the
-    /// cross-process linearization point shared with an admissions-stop
-    /// update: a stop that commits first makes this return
-    /// [`ChildJobRunAdmissionOutcome::AdmissionsStopped`], while a child that
-    /// commits first is already linked when stop acknowledges.
-    fn admit_child_job_run(
-        &self,
-        params: &ChildJobRunAdmissionParams,
-    ) -> Result<ChildJobRunAdmissionOutcome, OrbitError>;
-    /// [ORB-10965] Apply a `Start` event to a run, atomically and idempotently.
-    ///
-    /// Scheduling is at-least-once, so this is the single point that decides
-    /// which of several competing or repeated deliveries owns execution. The
-    /// read of the current state and the write of the new one happen in one
-    /// immediate transaction, so exactly one caller can observe
-    /// [`JobRunStartOutcome::Started`].
-    ///
-    /// A redelivery from the owner already recorded on the run is a no-op:
-    /// [`JobRunStartOutcome::AlreadyStarted`], with `started_at`, the owner
-    /// identity, and every checkpoint left untouched. A delivery from a
-    /// *different* owner loses to the incumbent and fails with
-    /// [`OrbitError::JobRunStartConflict`]. Genuinely illegal transitions (a
-    /// `Start` from any state other than `pending`, `running`, or terminal)
-    /// still fail with [`OrbitError::JobRunStateTransition`].
-    fn mark_job_run_running(
-        &self,
-        run_id: &str,
-        started_at: DateTime<Utc>,
-        pid: u32,
-    ) -> Result<JobRunStartOutcome, OrbitError>;
-    /// [ORB-10070] Record `pid` (+ its start-time identity token) as the owner
-    /// of a still-`pending` run so orphan reconciliation can distinguish a
-    /// queued run with a live worker from one whose worker died. Returns
-    /// `false` without writing when the run is missing or no longer pending.
-    fn claim_pending_job_run_owner(&self, run_id: &str, pid: u32) -> Result<bool, OrbitError>;
-    fn complete_job_run_step(
-        &self,
-        run_id: &str,
-        params: &JobRunStepParams,
-    ) -> Result<bool, OrbitError>;
-    fn record_job_run_knowledge_metrics(
-        &self,
-        run_id: &str,
-        metrics: KnowledgeRunMetrics,
-    ) -> Result<bool, OrbitError>;
-    fn record_job_run_crew(&self, run_id: &str, crew: &Crew) -> Result<bool, OrbitError>;
-    fn finalize_job_run(
-        &self,
-        run_id: &str,
-        state: JobRunState,
-        finished_at: DateTime<Utc>,
-        duration_ms: Option<u64>,
-    ) -> Result<bool, OrbitError>;
-    fn repair_terminal_job_run_timing(
-        &self,
-        run_id: &str,
-        finished_at: DateTime<Utc>,
-        duration_ms: Option<u64>,
-    ) -> Result<bool, OrbitError>;
-    fn list_all_pending_or_running_runs(&self) -> Result<Vec<JobRun>, OrbitError>;
-    fn archive_job_run(&self, run_id: &str) -> Result<String, OrbitError>;
-    fn delete_job_run(&self, run_id: &str) -> Result<String, OrbitError>;
-    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError>;
-    /// Pipeline state for a list page in one query per chunk, not one per run.
-    ///
-    /// Missing runs and unreadable JSON are omitted / `None` rather than failing
-    /// the page: the MCP list surface degrades those rows the same way a
-    /// per-run `read_run_state` error already does.
-    fn read_run_states(
-        &self,
-        run_ids: &[String],
-    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError>;
-    fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError>;
-    /// [ORB-11253] Read-modify-write a run's pipeline state in one immediate
-    /// transaction.
-    ///
-    /// The plain read/write pair cannot express a change that must survive
-    /// another writer: the run's state is one document that the engine
-    /// (checkpoints, child dispatches) and operator run controls both mutate,
-    /// so two interleaved read-modify-write cycles silently drop whichever
-    /// change landed in between. `update` also receives the run's current
-    /// [`JobRunState`], so a caller that must not mutate a finished run can
-    /// refuse inside the same transaction that would otherwise have written.
-    /// An `Err` from `update` rolls the transaction back, leaving the stored
-    /// state exactly as it was.
-    fn update_run_state(
-        &self,
-        run_id: &str,
-        update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
-    ) -> Result<RunStateUpdate, OrbitError>;
-}
-
-/// Durable inputs for one parent-authorized child admission.
-#[derive(Debug, Clone)]
-pub struct ChildJobRunAdmissionParams {
-    pub parent_run_id: String,
-    pub parent_step_id: Option<String>,
-    pub job_id: String,
-    pub action: String,
-    pub blocking: bool,
-    pub attempt: u32,
-    pub scheduled_at: DateTime<Utc>,
-    pub input: Option<Value>,
-    /// The operation-mode grant this admission must still satisfy, when the
-    /// parent was admitted under one [ORB-11332]. `None` keeps the
-    /// pre-existing stop-only guard.
-    pub authority: Option<ChildAdmissionAuthority>,
-}
-
-/// The grant-bound facts a child admission is rechecked against inside the
-/// admission transaction: grant validity at `now`, exact revision, finite
-/// scope, an unclaimed task, and free leaf capacity [ORB-11332].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChildAdmissionAuthority {
-    pub grant_id: String,
-    pub grant_revision: u32,
-    /// The task this child would carry. `Some` only for a leaf child: it is
-    /// checked against the grant scope and against live claims of the same
-    /// job. Nested children (gate, PR) inherit their parent's claim.
-    pub task_id: Option<String>,
-    /// Effective ceiling on live runs of the child's job. `Some` only for a
-    /// leaf child; nested children are not counted as leaf capacity.
-    pub leaf_ceiling: Option<u32>,
-    pub now: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ChildJobRunAdmissionOutcome {
-    Admitted(Box<JobRun>),
-    AdmissionsStopped,
-    /// The grant-bound recheck refused the child; `reason` is one of
-    /// `grant_missing`, `grant_revision_changed`, `grant_expired`,
-    /// `grant_stopped`, `grant_revoked`, `outside_grant_scope`,
-    /// `task_claimed`, or `capacity_saturated`.
-    Refused {
-        reason: String,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct JobRunStepParams {
-    pub step_index: usize,
-    pub target_type: orbit_types::workflow::JobTargetType,
-    pub target_id: String,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: DateTime<Utc>,
-    pub duration_ms: Option<u64>,
-    pub exit_code: Option<i32>,
-    pub agent_response_json: Option<Value>,
-    pub state: JobRunState,
-    pub error_code: Option<String>,
-    pub error_message: Option<String>,
-}
-
 pub trait ToolStoreBackend: Send + Sync {
     fn list_tools(&self) -> Result<Vec<StoredTool>, OrbitError>;
     fn get_tool(&self, name: &str) -> Result<Option<StoredTool>, OrbitError>;
     fn insert_tool(&self, tool: &StoredTool) -> Result<(), OrbitError>;
     fn delete_tool(&self, name: &str) -> Result<bool, OrbitError>;
     fn set_tool_enabled(&self, name: &str, enabled: bool) -> Result<bool, OrbitError>;
+}
+
+/// Host-local plugin records: what is installed, where, and whether it is
+/// enabled. Never synced; the workspace pin file is the versioned half.
+pub trait PluginStoreBackend: Send + Sync {
+    fn list_plugins(&self) -> Result<Vec<InstalledPlugin>, OrbitError>;
+    fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError>;
+    fn upsert_plugin(&self, plugin: &InstalledPlugin) -> Result<(), OrbitError>;
+    fn delete_plugin(&self, name: &str) -> Result<bool, OrbitError>;
+    /// Record the Orbit version whose conformance run this plugin passed.
+    fn set_plugin_certification(
+        &self,
+        name: &str,
+        orbit_version: Option<&str>,
+    ) -> Result<bool, OrbitError>;
+    fn set_plugin_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+        grants: &[String],
+    ) -> Result<bool, OrbitError>;
 }
 
 pub trait AuditEventStoreBackend: Send + Sync {
@@ -613,6 +659,10 @@ pub trait AuditEventStoreBackend: Send + Sync {
         since: &DateTime<Utc>,
     ) -> Result<Vec<(String, i64)>, OrbitError>;
     fn get_audit_denials_by_role(
+        &self,
+        since: Option<&DateTime<Utc>>,
+    ) -> Result<Vec<(String, i64)>, OrbitError>;
+    fn get_audit_denials_by_operation(
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<(String, i64)>, OrbitError>;

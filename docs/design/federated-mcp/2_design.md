@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-09-04
-last_validated: 2026-09-04
+last_updated: 2026-09-24
+last_validated: 2026-09-24
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -87,10 +87,10 @@ v1 puts `machine_id` on the envelope (`{"machine_id", "workspaces":[…]}`) and 
 Each descriptor keeps today's v1 workspace fields (`id`, `name`, `ship_mode`, `owner_machine_id`, `git_remote`, `base_branch`, `status`, timestamps) plus:
 
 - `selector` — structured, caller-uninterpreted host-qualified route token (`hm_<id>/ws_*`);
-- `host` — destination display identity (local `host_id`, or the remote's configured SSH target);
+- `machine_name` — destination display identity (the local machine name, or the remote's configured SSH target);
 - `machine_id` — destination stable identity;
-- host-reachability — SSH/MCP reachability of the configured destination;
-- workspace checkout-health — repo-root presence at that destination, the same narrow rule as host-registry;
+- `reachability` — SSH/MCP reachability of the configured destination;
+- `checkout_health` — repo-root presence at that destination, or `unknown` when it could not be probed;
 - `capabilities` — classes the destination currently advertises for that workspace (a hint).
 
 Do not overload one `health` field with both SSH reachability and repo-root presence. A down or unreachable host is **included** with an explicit unreachable/unhealthy projection, not omitted. Omission makes every later call a stale-route surprise.
@@ -121,6 +121,8 @@ The precedence above covers everything decidable **before** the destination sees
 
 **A lost answer after dispatch is `outcome_unknown`, not `unreachable_destination`.** Once the request is on the wire the destination may have run and committed it, and killing the SSH child does not undo remote work. `unreachable_destination` means a delivery miss, which invites a retry; retrying a possibly-committed `orbit.task.add` or `orbit.workflow.ship` duplicates it. A loss *before* the request is written — including a failed write — is still `unreachable_destination`, because nothing was delivered. `outcome_unknown` is a post-dispatch outcome and does not enter the precedence ladder.
 
+**Each budget covers the write as well as the answer.** A destination that stops draining stdin, or a stalled transport, would otherwise hold a large request's write forever, with the deadline consulted only afterwards. A write still blocked at its deadline kills the session so the write ends; it is `unreachable_destination` when the request line provably never fully left, and otherwise — for a routed `tools/call` — `outcome_unknown`. The deadline is also checked before each queued message is read, so a destination streaming unrelated messages cannot keep a read alive past it.
+
 ## 7. Operator-configured control-plane uniqueness
 
 A single control-plane per repository is an operator configuration responsibility, not a mux invariant. The mux does not check it. The would-be signal is matching `git_remote` across destinations with differing `owner_machine_id`. Independently inited checkouts have different `ws_*`, so the mux cannot observe the collision without fleet discovery. A violation surfaces as two independent control planes, not an error.
@@ -137,7 +139,7 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - Task reads remain owner-only because the coordination store is owner-authoritative. Use the owner selector for `orbit.task.list` and `orbit.task.show`; a replica selector receives `capability_refused`.
 - Including unreachable hosts makes the list honest and larger; clients must read reachability rather than treating presence as liveness.
 - Capability advertisement can lag destination Core. The destination refuse is the correctness boundary; the gateway is not a second authorization layer.
-- Session authority (`agent` / `operator`) is declared by the destination for a remote-originated session, and the caller's `--operator` is a request the destination intersects with `~/.orbit/mcp-callers.toml` [ORB-11052]. This is a different axis from the capability classes above; a call must clear both. How strong the identity that selects a row is depends on which tier the destination runs. Under Tier 1 it is the self-asserted `--remote-caller-machine-id` label, so a caller that reaches the destination can name a different row: an accident guard, not a security boundary. Under Tier 2 [ORB-11053, ORB-11057, ORB-11134, ORB-11184] a root-managed authorized-keys entry puts the destination bearer in a per-key environment and leaves only the boolean `--accept-ssh` marker and `--caller <hm_…>` in argv. The dedicated account uses a root-owned, mode-2555 Orbit copy setgid to a private, privilege-free group as its login shell; this is load-bearing because sshd sends the forced command through that shell with `-c`. Linux therefore applies its non-dumpable secure-exec policy to the first bearer-bearing process before the dynamic loader runs. Orbit verifies that inherited state, recognizes only the generated shell-command shape without a second exec, and reinforces the state with `PR_SET_DUMPABLE=0` before parsing, then validates the stored digest and key fingerprint. The first Rust statement is defense in depth, not the pre-main boundary. Unsupported hosts, stale/unhardened launchers, and invocations without the protected environment fail before `key-bound` is stamped. Tier 2 is opt-in, and which tier answered rides into the authorization audit row as `caller_identity` rather than being assumed. One limit stays: a destination with no callers file serves remote sessions `agent` only, which cuts existing operator-over-SSH flows on first upgrade. See [the spec](./specs/caller-authorization.md) and the decision entries for [Tier 1](./4_decisions.md#an-mcp-sessions-authority-is-declared-by-the-destination-not-requested-by-the-caller) and [Tier 2](./4_decisions.md#a-caller-identity-is-only-as-strong-as-the-key-sshd-checked-for-it).
+- Session authority (`agent` / `operator`) is resolved from argv at server start, for a remote-originated session exactly as for a local one [ORB-12564]. A federated or remote-proxy client started with `--operator` emits `orbit mcp serve --operator --remote-caller-machine-id <id>` for every destination it opens, and the destination serves that authority: Orbit is a single-user tool, and an SSH login to a destination is ownership of it, so a second authorization statement on the far side would sit in a file the caller can rewrite. This is a different axis from the capability classes above; a call must clear both, and those classes stay destination-derived because they describe the *checkout*. The caller-side guard is the one that matters: a client that declares itself an agent (managed run, agent envelope) never propagates `--operator`, and `child_env` strips `ORBIT_OPERATOR` from agent children. `--remote-caller-machine-id` remains an audit label: it marks the transport as `ssh-mcp` and names the calling machine in the destination's `authorization` rows, and authorizes nothing. A destination carrying a leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` ignores it with one startup warning and an `orbit doctor` row. See [the decision](./4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it). The removed caller-authorization spec is in git history.
 - Transport authentication, selector expiry, health freshness, and cloud coordination-store details are deliberately unresolved. See [3_vision.md](./3_vision.md). Probe cadence stays a vision open question; it does not change live-delivery error precedence.
 - Mixed Orbit versions across destinations can advertise different surfaces; `tool_not_on_this_host` and `capability_refused` must remain distinguishable from "the mux is confused."
 - Two destinations that each declare Owner for the same `git_remote` are a configuration mistake the mux will serve as two control planes.

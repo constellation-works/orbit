@@ -6,7 +6,7 @@ spec:
   type: deterministic
   description: >
     Fail the current workflow when one or more child pipeline wait entries did
-    not reach `status: succeeded`. Use this after any required cleanup steps
+    not reach `status: success`. Use this after any required cleanup steps
     that still need access to the raw child status. Workspace-level sequencers
     may opt into `allow_non_success` to validate, retain, and count exact
     terminal child outcomes without failing solely for a non-success status.

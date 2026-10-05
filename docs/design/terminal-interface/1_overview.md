@@ -2,7 +2,7 @@
 title: Terminal Interface — Overview
 owner: claude
 last_updated: 2026-08-02
-last_validated: 2026-08-30
+last_validated: 2026-09-19
 status: Accepted
 feature: terminal-interface
 doc_role: overview
@@ -22,7 +22,7 @@ Terminal Interface owns what `orbit` writes to stdout and stderr: table layout, 
 
 A CLI's output is read by a human scanning for a status and by a pipeline extracting a field, and those readers want different bytes. The human wants alignment, color, and a screenful; the pipeline wants one record per line and no escape sequences. Historically Orbit sent both readers the same bytes, chosen for the human; the terminal-interface work now resolves the rendering for the detected sink.
 
-The concrete failures were small and additive. `orbit tool list` drew box rules and wrapped long cells across three or four lines, so a row was not a line and `grep` returned fragments ([T20260411-0335] introduced the full-width dynamic arrangement that caused the wrapping); every list is now borderless and one line per record [ORB-10567]. `orbit audit list` formerly used literal padding widths in a format string; it now builds a computed-width table. `output/sink.rs` resolves terminal state and color once, then applies the answer to both table and line renderers. Commands return shared payloads for central rendering; the legacy `--json`/`--ops` flags remain on 72 argument structs, while the global `--format` surface supplies the common modes.
+The concrete failures were small and additive. `orbit tool list` drew box rules and wrapped long cells across three or four lines, so a row was not a line and `grep` returned fragments ([T20260411-0335] introduced the full-width dynamic arrangement that caused the wrapping); the shared list renderer is now borderless and one line per record [ORB-10567]. `orbit audit list` formerly used literal padding widths in a format string; it now builds a computed-width table. `output/sink.rs` resolves terminal state and color once, then applies the answer to both table and line renderers. Commands return shared payloads for central rendering; the legacy `--json`/`--ops` flags remain on their existing command argument types, while the global `--format` surface supplies the common modes.
 
 None of these is severe alone. Together they mean output correctness is a property each command has or lacks individually, which is the thing this feature exists to stop.
 

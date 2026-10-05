@@ -3,19 +3,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { dashboardFile } from './dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
-const assets = fileURLToPath(new URL('../../assets/dashboard/', import.meta.url));
 const test = fileURLToPath(new URL('./dashboard_operations.mjs', import.meta.url));
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const file = name === '/test.mjs' ? test : path.join(assets, name === '/' ? 'index.html' : path.basename(name));
-  if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
-  let data = fs.readFileSync(file);
+  const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' } : dashboardFile(name);
+  if (!served) { res.writeHead(404); res.end(); return; }
+  let data = served.data;
   if (name === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
-  res.setHeader('content-type', file.endsWith('.html') ? 'text/html' : file.endsWith('.css') ? 'text/css' : 'text/javascript');
+  res.setHeader('content-type', served.type);
   res.end(data);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -30,8 +30,10 @@ const assertNoOverflow = async (label) => {
 let browser;
 let page;
 try {
-  browser = await chromium.launch({headless:true});
+  browser = await chromium.launch({headless:true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined});
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const sharedDrainDeadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  await page.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
   // Serve the actual markup/styles with only the Operations module initialized.
   // All API traffic is fixture data; no live scheduler or dashboard is contacted.
   page.on('pageerror', error => console.error(error));
@@ -51,7 +53,8 @@ try {
     }
   });
   await page.evaluate(async () => {
-    const { initRouter, initTabs } = await import('/router.js');
+    const { initRouter, initTabs } = await import('/js/router.js');
+    const { setDockMode } = await import('/js/log-tail.js');
     let tab = 'operations';
     let diag = 'runs';
     let operations = 'routines';
@@ -65,7 +68,7 @@ try {
       getRunDetail: () => null, setRunDetail: () => {}, getRunEvents: () => [], setRunEvents: () => {},
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
-      fitLogPanelToViewport: () => {},
+      fitLogPanelToViewport: () => {}, showDrainDock: () => setDockMode('drain'),
       getActiveAuditSubtab: () => 'events', setAuditSubtab: () => {}, applyAuditHashQuery: () => {},
       syncAuditControls: () => {}, buildAuditHash: () => '#audit/events',
       setActiveAuditSubtabFromButton: () => {},
@@ -83,11 +86,12 @@ try {
     await page.evaluate(() => {
       document.querySelectorAll('.operation-details').forEach((node) => { node.open = false; });
     });
-    for (const tab of ['routines', 'auto-tasks', 'auto-drain']) {
-      await page.click(`#operations-subtabs .subtab[data-subtab="${tab}"]`);
+    for (const tab of ['routines', 'auto-tasks', 'jobs']) {
+      const selector = `#operations-subtabs .subtab[data-subtab="${tab}"]`;
+      await page.click(selector);
       await page.waitForTimeout(200);
-      const reachable = await page.evaluate((name) => {
-        const button = document.querySelector(`#operations-subtabs .subtab[data-subtab="${name}"]`);
+      const reachable = await page.evaluate(([name, selector]) => {
+        const button = document.querySelector(selector);
         const panel = document.getElementById(`operations-${name}-main`);
         const workspace = document.getElementById('workspace-select');
         const bounds = (node) => node.getBoundingClientRect();
@@ -105,7 +109,7 @@ try {
           workspace: workspace && onscreen(workspace),
           clipped,
         };
-      }, tab);
+      }, [tab, selector]);
       if (!reachable.subtab) throw new Error(`${tab} subtab not reachable at ${viewport.name}`);
       if (!reachable.panel) throw new Error(`${tab} panel hidden at ${viewport.name}`);
       if (!reachable.workspace) throw new Error(`workspace selector not reachable at ${viewport.name} / ${tab}`);
@@ -114,6 +118,173 @@ try {
       await page.screenshot({ path: path.join(evidence, `${tab}-${viewport.name}.png`), fullPage: true });
     }
   }
+
+  // ORB-12898: the retired #auto-drain destination opens Tasks with the Drain
+  // dock, and the card fits the dock at its 336px minimum (and the narrower
+  // mid-width column) with no horizontal scroll.
+  await page.evaluate(async () => {
+    const { setDockMode } = await import('/js/log-tail.js');
+    const { setActiveTab } = await import('/js/router.js');
+    setDockMode('log');
+    setActiveTab('auto-drain');
+  });
+  await page.waitForFunction(() => location.hash.startsWith('#tasks'));
+  const drainCheck = async (label, dockWidth) => {
+    const result = await page.evaluate((width) => {
+      const layout = document.querySelector('main.tasks-layout');
+      if (width) layout.style.setProperty('--dock-w', `${width}px`); else layout.style.removeProperty('--dock-w');
+      const dock = document.getElementById('side-dock');
+      const card = document.getElementById('auto-drain-panel');
+      const cardBox = card.getBoundingClientRect();
+      const overflowing = Array.from(card.querySelectorAll('*'))
+        .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > cardBox.right + 1)
+        .map((node) => node.className || node.tagName);
+      return {
+        mode: dock.dataset.mode,
+        dockWidth: Math.round(dock.getBoundingClientRect().width),
+        cardVisible: cardBox.height > 0,
+        firstPanel: dock.querySelector('.dock-pane[data-pane="drain"] > .panel')?.id,
+        scroll: card.scrollWidth > card.clientWidth + 1,
+        overflowing,
+        durations: card.querySelectorAll('.drain-duration[aria-pressed]').length,
+        text: card.textContent,
+      };
+    }, dockWidth);
+    if (result.mode !== 'drain' || !result.cardVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
+    if (result.firstPanel !== 'auto-drain-panel') throw new Error(`auto-drain card is not the first dock card at ${label}: ${result.firstPanel}`);
+    if (result.scroll || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
+    if (result.durations !== 6 || !result.text.includes('Blocked by running')) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
+    await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
+    return result.dockWidth;
+  };
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const minimum = await drainCheck('1440-dock336', 336);
+  if (minimum !== 336) throw new Error(`dock did not sit at its 336px minimum: ${minimum}`);
+  for (const [phase, label] of [['draining', 'Draining'], ['winding_down', 'Winding down'], ['idle', 'idle']]) {
+    await page.evaluate(state => globalThis.setDrainFixturePhase(state), phase);
+    const rendered = await page.evaluate(() => ({
+      card: document.getElementById('auto-drain-panel').dataset.drainState,
+      header: document.getElementById('auto-drain-live').textContent,
+      global: document.getElementById('global-drain-state').textContent,
+      globalHidden: document.getElementById('global-drain-state').hidden,
+      tab: document.getElementById('dock-drain-state').textContent,
+      status: document.getElementById('auto-drain-operation-feedback').textContent,
+    }));
+    if (rendered.card !== phase || !rendered.header.includes(label)) throw new Error(`Drain ${phase} header: ${JSON.stringify(rendered)}`);
+    if (phase === 'draining' && (!rendered.header.includes('left') || !rendered.header.includes('jrun-'))) throw new Error(`Missing server deadline or run link: ${rendered.header}`);
+    if (phase === 'winding_down' && !rendered.header.includes('1 workers still running')) throw new Error(`Missing wind-down count: ${rendered.header}`);
+    if (phase === 'idle' ? !rendered.globalHidden || rendered.tab : rendered.globalHidden || !rendered.global.includes(label) || !rendered.tab.includes(label)) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
+    if (!rendered.status.includes(label)) throw new Error(`Drain ${phase} status announcement: ${rendered.status}`);
+    await drainCheck(`state-${phase}`, 336);
+  }
+  const timeLeft = async target => {
+    await target.evaluate(() => globalThis.setDrainFixturePhase('draining'));
+    return target.locator('#auto-drain-live').textContent();
+  };
+  const firstBrowser = await timeLeft(page);
+  const otherPage = await browser.newPage();
+  await otherPage.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
+  await otherPage.goto(`http://127.0.0.1:${server.address().port}/`);
+  await otherPage.addScriptTag({ type: 'module', url: '/test.mjs' });
+  await otherPage.waitForFunction(() => globalThis.operationsTestsPassed);
+  const secondBrowser = await timeLeft(otherPage);
+  await otherPage.reload();
+  await otherPage.addScriptTag({ type: 'module', url: '/test.mjs' });
+  await otherPage.waitForFunction(() => globalThis.operationsTestsPassed);
+  const afterDrainReload = await timeLeft(otherPage);
+  for (const [name, value] of [['second browser', secondBrowser], ['reload', afterDrainReload]]) {
+    if (!value.includes('left') || !value.includes('jrun-') || !/\d+h \d{2}m left/.test(value)) throw new Error(`Drain deadline missing after ${name}: ${value}`);
+    if (value !== firstBrowser) throw new Error(`Drain deadline differs in ${name}: ${value} vs ${firstBrowser}`);
+  }
+  await otherPage.close();
+  await page.evaluate(() => globalThis.setDrainFixturePhase('draining'));
+  await page.evaluate(async () => { const { setDockMode } = await import('/js/log-tail.js'); setDockMode('log'); });
+  const logBadge = await page.locator('#dock-drain-state').textContent();
+  if (logBadge !== 'Draining') throw new Error(`Drain tab has no live badge while Log is selected: ${logBadge}`);
+  await page.click('.tab[data-tab="runs"]');
+  await page.click('#global-drain-state');
+  if (!page.url().includes('#tasks') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  for (const selector of ['#auto-drain-dot', '#global-drain-state .drain-dot']) {
+    const animation = await page.locator(selector).evaluate(node => getComputedStyle(node).animationName);
+    if (animation !== 'none') throw new Error(`Reduced-motion drain indicator ${selector} animates: ${animation}`);
+  }
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.setViewportSize({ width: 900, height: 900 });
+  await drainCheck('900', null);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await drainCheck('375x812', null);
+  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
+
+  // The Log dock toolbar keeps every control reachable at the 280px (<=1250px
+  // viewport) and 336px dock minimums, while following and while paused with
+  // the buffered action shown. Pausing and buffering go through the real
+  // follow handler and SSE consumer, fed by a fixture stream.
+  await page.evaluate(async () => {
+    const fixtureFetch = globalThis.fetch;
+    globalThis.fetch = (url, options) => new URL(url, location.href).pathname === '/api/log'
+      ? Promise.resolve({ ok: true, status: 200, json: async () => ({ events: [], offset: 0 }) })
+      : fixtureFetch(url, options);
+    globalThis.EventSource = class FixtureStream {
+      static CLOSED = 2;
+      constructor() { globalThis.logFixtureStream = this; this.readyState = 1; }
+      close() { this.readyState = FixtureStream.CLOSED; }
+    };
+    const { initLogTail, setDockMode } = await import('/js/log-tail.js');
+    initLogTail();
+    setDockMode('log');
+  });
+  await page.waitForFunction(() => globalThis.logFixtureStream?.onmessage);
+  const logToolbarCheck = async (label, viewport, dockWidth, paused) => {
+    await page.setViewportSize(viewport);
+    // The dashboard re-applies the saved dock width (or clears --dock-w when
+    // none is saved) from a window resize listener, and Chromium delivers that
+    // event on the next rendered frame. Let it fire before forcing this
+    // fixture's width, or it clears the width mid-measurement and the dock
+    // falls back to its 32% default (384px at 1440).
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.evaluate((width) => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', `${width}px`), dockWidth);
+    const ids = ['all', 'err', 'deny', 'warn'].map(filter => `.log-filters .filter-pill[data-filter="${filter}"]`)
+      .concat(['#log-follow-tail', '#log-wrap-lines'], paused ? ['#log-buffered-count'] : []);
+    const layout = await page.evaluate((selectors) => {
+      const bar = document.querySelector('#side-dock .log-filters');
+      const barBox = bar.getBoundingClientRect();
+      const unreachable = selectors.filter((selector) => {
+        const box = document.querySelector(selector).getBoundingClientRect();
+        return box.width === 0 || box.height === 0 || box.left < barBox.left - 1 || box.right > barBox.right + 1
+          || box.top < barBox.top - 1 || box.bottom > barBox.bottom + 1;
+      });
+      return { dockWidth: Math.round(document.getElementById('side-dock').getBoundingClientRect().width), clipped: bar.scrollWidth > bar.clientWidth + 1, unreachable };
+    }, ids);
+    if (layout.dockWidth !== dockWidth) throw new Error(`Log dock is not ${dockWidth}px at ${label}: ${layout.dockWidth}`);
+    if (layout.clipped || layout.unreachable.length) throw new Error(`Log toolbar clips controls at ${label}: ${JSON.stringify(layout)}`);
+    for (const selector of ids) {
+      await page.focus(selector);
+      const focused = await page.evaluate(sel => document.activeElement === document.querySelector(sel), selector);
+      if (!focused) throw new Error(`Log toolbar control ${selector} not keyboard focusable at ${label}`);
+      // The trial click fails if another element covers the control's centre.
+      await page.click(selector, { trial: true, timeout: 2000 });
+    }
+    await page.screenshot({ path: path.join(evidence, `log-toolbar-${label}.png`), fullPage: true });
+  };
+  const logToolbarSizes = [
+    ['1024-dock280', { width: 1024, height: 900 }, 280],
+    ['1440-dock336', { width: 1440, height: 1000 }, 336],
+  ];
+  for (const [label, viewport, width] of logToolbarSizes) await logToolbarCheck(`${label}-following`, viewport, width, false);
+  await page.click('#log-follow-tail');
+  await page.evaluate(() => {
+    for (let id = 1; id <= 1123; id += 1) {
+      globalThis.logFixtureStream.onmessage({ lastEventId: String(id), data: JSON.stringify({ ts: '2026-09-27T12:00:00Z', level: 'info', code: 'fixture', msg: `event ${id}` }) });
+    }
+  });
+  const buffered = await page.locator('#log-buffered-count').textContent();
+  if (!/buffered · \d+ discarded/.test(buffered)) throw new Error(`Paused SSE events did not show the buffered action: ${buffered}`);
+  for (const [label, viewport, width] of logToolbarSizes) await logToolbarCheck(`${label}-paused`, viewport, width, true);
+  await page.click('#log-buffered-count');
+  const resumed = await page.evaluate(() => getComputedStyle(document.getElementById('log-buffered-count')).display);
+  if (resumed !== 'none') throw new Error('Clicking the buffered action did not flush the paused buffer');
+  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
 
   await page.setViewportSize({ width: 375, height: 812 });
   await page.click('.tab[data-tab="tasks"]');
@@ -140,6 +311,10 @@ try {
   await assertNoOverflow('375x812 / tasks');
   await page.screenshot({ path: path.join(evidence, 'tasks-375x812.png'), fullPage: true });
 
+  // The Health views are only shown while Health is the open section (the
+  // router hides the other sections' views), so open it before measuring.
+  await page.click('.tab[data-tab="diagnostics"]');
+  await page.waitForTimeout(200);
   const navReachable = await page.evaluate(() => {
     const unique = [...document.querySelectorAll('.rail .tab')];
     const subtabs = [...document.querySelectorAll('#diag-subtabs .subtab')];
@@ -173,7 +348,7 @@ try {
   await page.addScriptTag({ type: 'module', url: '/test.mjs' });
   await page.waitForFunction(() => globalThis.operationsTestsPassed, undefined, { timeout: 15000 });
   await page.evaluate(async () => {
-    const { initRouter, initTabs } = await import('/router.js');
+    const { initRouter, initTabs } = await import('/js/router.js');
     let tab = 'tasks';
     let diag = 'runs';
     let operations = 'routines';
@@ -223,7 +398,7 @@ try {
   if (!afterForward.hash.includes('operations/auto-tasks') || !afterForward.autoTasks) {
     throw new Error(`forward did not restore auto-tasks: ${JSON.stringify(afterForward)}`);
   }
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; subtabs, reload, history. Screenshots: ${evidence}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }

@@ -3,37 +3,41 @@
 mod run {
     #![allow(missing_docs)]
 
-    use std::sync::{Arc, Mutex};
-
+    use super::super::super::agent_loop::*;
+    use super::super::super::audit::NullSink;
+    use super::super::super::session::Session;
+    use super::super::super::{
+        ContentBlock, LoopTransport, Message, MessageRole, StopReason, TransportError, TurnRequest,
+        TurnResponse, TurnUsage,
+    };
     use orbit_common::OrbitError;
     use orbit_tools::{
         OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext, ToolContext,
         ToolRegistry,
     };
-    use orbit_types::workflow::activity_job::OnDenial;
+
     use serde_json::{Value, json};
+    use std::collections::{HashSet, VecDeque};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
-    use super::super::super::agent_loop::*;
-    use super::super::super::audit::NullSink;
-    use super::super::super::session::Session;
-    use super::super::super::{
-        ContentBlock, LoopTransport, MessageRole, StopReason, TransportError, TurnRequest,
-        TurnResponse, TurnUsage,
-    };
-
-    #[derive(Default)]
-    struct RecordingTransport {
-        advertised: Mutex<Vec<Vec<String>>>,
-        calls: Mutex<usize>,
+    /// Replays scripted responses in order, asserting every request it
+    /// receives is a well-formed transcript.
+    struct TranscriptTransport {
+        responses: Mutex<VecDeque<(Vec<ContentBlock>, StopReason)>>,
+        requests: Mutex<Vec<Vec<Message>>>,
     }
 
-    impl RecordingTransport {
-        fn advertised(&self) -> Vec<Vec<String>> {
-            self.advertised.lock().expect("advertised mutex").clone()
+    impl TranscriptTransport {
+        fn new(responses: Vec<(Vec<ContentBlock>, StopReason)>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+                requests: Mutex::new(Vec::new()),
+            }
         }
     }
 
-    impl LoopTransport for RecordingTransport {
+    impl LoopTransport for TranscriptTransport {
         fn provider(&self) -> &str {
             "test"
         }
@@ -43,33 +47,17 @@ mod run {
         }
 
         fn send_turn(&self, req: &TurnRequest<'_>) -> Result<TurnResponse, TransportError> {
-            self.advertised
+            assert_matched_transcript(req.messages);
+            self.requests
                 .lock()
-                .expect("advertised mutex")
-                .push(req.tools.iter().map(|tool| tool.name.clone()).collect());
-
-            let mut calls = self.calls.lock().expect("calls mutex");
-            let call_index = *calls;
-            *calls += 1;
-
-            let (content, stop_reason) = if call_index == 0 {
-                (
-                    vec![ContentBlock::ToolUse {
-                        id: "call-1".to_string(),
-                        name: "orbit.task.show".to_string(),
-                        input: json!({ "id": "T-test" }),
-                    }],
-                    StopReason::ToolUse,
-                )
-            } else {
-                (
-                    vec![ContentBlock::Text {
-                        text: "done".to_string(),
-                    }],
-                    StopReason::EndTurn,
-                )
-            };
-
+                .expect("requests mutex")
+                .push(req.messages.to_vec());
+            let (content, stop_reason) = self
+                .responses
+                .lock()
+                .expect("responses mutex")
+                .pop_front()
+                .expect("scripted response available");
             Ok(TurnResponse {
                 content,
                 stop_reason,
@@ -79,91 +67,78 @@ mod run {
                 endpoint: String::new(),
                 http_status: 200,
             })
+        }
+    }
+
+    /// Roles alternate, and every assistant tool_use is answered by a
+    /// tool_result in the next message — what provider encoders require.
+    fn assert_matched_transcript(messages: &[Message]) {
+        for pair in messages.windows(2) {
+            assert_ne!(pair[0].role, pair[1].role, "roles must alternate");
+        }
+        for (index, message) in messages.iter().enumerate() {
+            if message.role != MessageRole::Assistant {
+                continue;
+            }
+            let requested: HashSet<&str> = message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::ToolUse { id, .. } => Some(id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if requested.is_empty() {
+                continue;
+            }
+            let answered: HashSet<&str> = messages
+                .get(index + 1)
+                .map(|next| {
+                    next.content
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::ToolResult { tool_use_id, .. } => {
+                                Some(tool_use_id.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert_eq!(requested, answered, "unanswered tool_use ids");
+        }
+    }
+
+    fn tool_use(id: &str, name: &str) -> ContentBlock {
+        ContentBlock::ToolUse {
+            id: id.to_string(),
+            name: name.to_string(),
+            input: json!({ "id": "T-test" }),
+        }
+    }
+
+    fn text(value: &str) -> ContentBlock {
+        ContentBlock::Text {
+            text: value.to_string(),
         }
     }
 
     #[derive(Default)]
-    struct DenialContinueTransport {
-        calls: Mutex<usize>,
+    struct CountingOrbitHost {
+        executions: AtomicUsize,
     }
 
-    impl LoopTransport for DenialContinueTransport {
-        fn provider(&self) -> &str {
-            "test"
-        }
-
-        fn model(&self) -> &str {
-            "test-model"
-        }
-
-        fn send_turn(&self, req: &TurnRequest<'_>) -> Result<TurnResponse, TransportError> {
-            let mut calls = self.calls.lock().expect("calls mutex");
-            let call_index = *calls;
-            *calls += 1;
-
-            let (content, stop_reason) = if call_index == 0 {
-                (
-                    vec![ContentBlock::ToolUse {
-                        id: "denied-1".to_string(),
-                        name: "orbit.task.delete".to_string(),
-                        input: json!({ "path": "/tmp/blocked.txt" }),
-                    }],
-                    StopReason::ToolUse,
-                )
-            } else {
-                let last_message = req.messages.last().expect("tool result user message");
-                assert_eq!(last_message.role, MessageRole::User);
-                let [
-                    ContentBlock::ToolResult {
-                        tool_use_id,
-                        content,
-                        is_error,
-                    },
-                ] = last_message.content.as_slice()
-                else {
-                    panic!("expected one tool_result block");
-                };
-                assert_eq!(tool_use_id, "denied-1");
-                assert!(*is_error);
-                let payload: Value =
-                    serde_json::from_str(content).expect("denial tool result is json");
-                assert_eq!(payload["error"]["code"], "tool_denied");
-                assert_eq!(payload["tool_name"], "orbit.task.delete");
-                assert_eq!(payload["tool_use_id"], "denied-1");
-
-                (
-                    vec![ContentBlock::Text {
-                        text: "done".to_string(),
-                    }],
-                    StopReason::EndTurn,
-                )
-            };
-
-            Ok(TurnResponse {
-                content,
-                stop_reason,
-                usage: TurnUsage::default(),
-                raw_request_body: Vec::new(),
-                raw_response_body: Vec::new(),
-                endpoint: String::new(),
-                http_status: 200,
-            })
-        }
-    }
-
-    struct FakeOrbitHost;
-
-    impl OrbitToolHost for FakeOrbitHost {
+    impl OrbitToolHost for CountingOrbitHost {
         fn execute(
             &self,
             action: OrbitBuiltinAction,
-            input: Value,
+            _input: Value,
             _agent: Option<String>,
             _model: Option<String>,
             _reservation_owner: Option<ReservationOwnerContext>,
         ) -> Result<Value, OrbitError> {
             assert_eq!(action, OrbitBuiltinAction::TaskShow);
-            assert_eq!(input["id"], "T-test");
+            self.executions.fetch_add(1, Ordering::SeqCst);
             Ok(json!({ "id": "T-test" }))
         }
 
@@ -176,79 +151,78 @@ mod run {
         }
     }
 
-    #[test]
-    fn wildcard_allowlist_advertises_and_executes_task_show() {
-        let mut session = Session::new("test", "test-model", "", None);
-        let cfg = AgentLoopConfig::new_for_run("run-test")
-            .with_allowlist(vec!["orbit.task.*".to_string()])
-            .with_max_iterations(3);
-        let mut registry = ToolRegistry::new();
-        registry.register_builtins();
-        let tool_ctx = ToolContext {
-            allowed_tools: vec!["orbit.task.*".to_string()],
-            orbit_host: Some(Arc::new(FakeOrbitHost)),
-            ..Default::default()
-        };
-        let transport = RecordingTransport::default();
-        let sink = NullSink;
+    struct Harness {
+        registry: ToolRegistry,
+        host: Arc<CountingOrbitHost>,
+        tool_ctx: ToolContext,
+    }
 
-        let outcome = AgentLoop::run(
-            &mut session,
-            &cfg,
-            &transport,
-            &registry,
-            &tool_ctx,
-            &sink,
-            "show the task",
-        )
-        .expect("wildcard should allow orbit.task.show");
+    impl Harness {
+        fn new() -> Self {
+            let mut registry = ToolRegistry::new();
+            registry.register_builtins();
+            let host = Arc::new(CountingOrbitHost::default());
+            let tool_ctx = ToolContext {
+                allowed_tools: vec!["orbit.task.show".to_string()],
+                orbit_host: Some(host.clone()),
+                ..Default::default()
+            };
+            Self {
+                registry,
+                host,
+                tool_ctx,
+            }
+        }
 
-        assert_eq!(outcome.final_message, "done");
-        assert!(
-            outcome
-                .trace
-                .iter()
-                .all(|iteration| iteration.policy_denials.is_empty())
-        );
-        assert!(
-            transport
-                .advertised()
-                .first()
-                .expect("first request")
-                .iter()
-                .any(|name| name == "orbit.task.show")
-        );
+        fn executions(&self) -> usize {
+            self.host.executions.load(Ordering::SeqCst)
+        }
+
+        fn send(
+            &self,
+            session: &mut Session,
+            transport: &TranscriptTransport,
+            prompt: &str,
+        ) -> Result<LoopOutcome, AgentLoopError> {
+            let cfg = AgentLoopConfig::new_for_run("run-test")
+                .with_allowlist(vec!["orbit.task.show".to_string()])
+                .with_advertised_tools(vec![
+                    "orbit.task.show".to_string(),
+                    "orbit.task.delete".to_string(),
+                ])
+                .with_max_iterations(3);
+            session.send(
+                &cfg,
+                transport,
+                &self.registry,
+                &self.tool_ctx,
+                &NullSink,
+                prompt,
+            )
+        }
     }
 
     #[test]
-    fn continue_on_denial_returns_structured_tool_result_error() {
+    fn single_denial_terminate_leaves_no_unanswered_tool_use() {
+        let harness = Harness::new();
         let mut session = Session::new("test", "test-model", "", None);
-        let cfg = AgentLoopConfig::new_for_run("run-test")
-            .with_advertised_tools(vec!["orbit.task.delete".to_string()])
-            .with_on_denial(OnDenial::Continue)
-            .with_max_iterations(3);
-        let mut registry = ToolRegistry::new();
-        registry.register_builtins();
-        let tool_ctx = ToolContext::default();
-        let transport = DenialContinueTransport::default();
-        let sink = NullSink;
+        let transport = TranscriptTransport::new(vec![
+            (
+                vec![tool_use("denied-1", "orbit.task.delete")],
+                StopReason::ToolUse,
+            ),
+            (vec![text("ok")], StopReason::EndTurn),
+        ]);
 
-        let outcome = AgentLoop::run(
-            &mut session,
-            &cfg,
-            &transport,
-            &registry,
-            &tool_ctx,
-            &sink,
-            "try deleting",
-        )
-        .expect("continue should feed denial back to model");
+        harness
+            .send(&mut session, &transport, "delete it")
+            .expect_err("denial terminates the turn");
+        assert_eq!(harness.executions(), 0);
+        assert_matched_transcript(session.history());
 
-        assert_eq!(outcome.final_message, "done");
-        assert_eq!(outcome.trace.len(), 2);
-        assert_eq!(
-            outcome.trace[0].policy_denials,
-            vec!["orbit.task.delete".to_string()]
-        );
+        harness
+            .send(&mut session, &transport, "never mind")
+            .expect("continuation sends a matched transcript");
+        assert_eq!(harness.executions(), 0);
     }
 }

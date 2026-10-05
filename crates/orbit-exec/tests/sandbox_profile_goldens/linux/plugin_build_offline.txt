@@ -1,0 +1,18 @@
+--unshare-all
+--new-session
+--die-with-parent
+--proc /proc
+--dev /dev
+(system runtime binds: host-dependent, elided)
+--ro-bind <HOME>/.cargo/bin/cargo <HOME>/.cargo/bin/cargo
+--ro-bind <HOME>/.rustup/toolchains/stable-golden <HOME>/.rustup/toolchains/stable-golden
+--ro-bind <HOME>/.rustup/settings.toml <HOME>/.rustup/settings.toml
+--tmpfs <HOME>/.ssh
+--remount-ro <HOME>/.ssh
+--tmpfs <HOME>/.aws
+--remount-ro <HOME>/.aws
+--ro-bind /dev/null <HOME>/.cargo/credentials.toml
+--bind <HOME>/.orbit/plugins/demo/.build-golden <HOME>/.orbit/plugins/demo/.build-golden
+--remount-ro /
+--chdir <HOME>/.orbit/plugins/demo/.build-golden/src
+-- <HOME>/.cargo/bin/cargo build

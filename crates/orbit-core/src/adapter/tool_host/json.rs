@@ -1,12 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use orbit_common::OrbitError;
 use orbit_types::task::{
     ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskComment,
-    TaskHistoryEntry, TaskStatus, artifact_presentation, resolve_task_dependencies,
-    resolve_task_relations, task_show_record_field_json, unknown_task_show_field_message,
+    TaskHistoryEntry, TaskStatus, artifact_presentation, is_valid_orb_task_id,
+    resolve_task_dependencies, resolve_task_relations, serialize_task_artifacts,
+    task_os_requirement_json, task_show_record_field_json, unknown_task_show_field_message,
 };
 use serde_json::{Map, Value, json};
 
@@ -43,6 +44,7 @@ pub(super) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
         "relations": resolve_task_relations(task, status_by_id),
         "source_task_id": task.source_task_id(),
         "job_run_id": task.job_run_id,
+        "job_run_machine": task.job_run_machine,
         "crew": task.crew,
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),
@@ -51,21 +53,83 @@ pub(super) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
 }
 
 pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
-    let status_by_id = runtime.task_status_index()?;
+    serialize_task_record(runtime, task, true)
+}
+
+/// Serialize a task returned by a mutating tool.
+///
+/// Write responses carry the task record by default. Append-heavy sidecars are
+/// included only when the caller explicitly projects them with `fields` or
+/// `field`, keeping a write from hydrating comments and history it does not
+/// need. The full `orbit.task.show` path remains available through
+/// [`serialize_task`].
+pub(super) fn serialize_task_write_response(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    fields: Option<&[String]>,
+) -> Result<Value, OrbitError> {
+    match fields {
+        Some(fields) => task_fields_to_json(runtime, task, fields),
+        None => serialize_task_record(runtime, task, false),
+    }
+}
+
+fn serialize_task_record(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    include_sidecars: bool,
+) -> Result<Value, OrbitError> {
+    let status_by_id = task_reference_status_index(runtime, task)?;
     let mut value = task_to_json(task, &status_by_id);
     let object = value.as_object_mut().ok_or_else(|| {
         OrbitError::Execution("task JSON projection did not produce an object".to_string())
     })?;
-    object.insert(
-        "comments".to_string(),
-        serialize_comments(&runtime.get_task_comments(&task.id)?)?,
-    );
-    object.insert(
-        "history".to_string(),
-        serialize_history(&runtime.get_task_history(&task.id)?)?,
-    );
+    if include_sidecars {
+        object.insert(
+            "comments".to_string(),
+            serialize_comments(&runtime.get_task_comments(&task.id)?)?,
+        );
+        object.insert(
+            "history".to_string(),
+            serialize_history(&runtime.get_task_history(&task.id)?)?,
+        );
+    }
     insert_resolved_crew(runtime, task, object);
+    if let Some(requirement) = task_os_requirement_json(task) {
+        object.insert("os_requirement".to_string(), requirement);
+    }
     Ok(value)
+}
+
+/// Resolve only the referenced task IDs needed by one task projection.
+///
+/// The list surface already owns a bounded status page and passes its index to
+/// [`task_to_json`]. Individual task reads use the same registry projection,
+/// bounded to the handful of dependency and relation targets, so they resolve
+/// cross-workspace references without hydrating their bundles.
+///
+/// Relation targets are not always task ids — a `resolves` relation may
+/// legitimately point at a friction, ADR, or learning id (e.g.
+/// `F2026-05-001`). Only ids that parse as task ids are point-read; other
+/// namespaces are skipped rather than sent through `get_task_row`, which
+/// rejects them as invalid input instead of reporting them not found.
+fn task_reference_status_index(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+    let referenced_ids = task
+        .dependencies()
+        .into_iter()
+        .chain(
+            task.relations
+                .iter()
+                .map(|relation| relation.target.clone()),
+        )
+        .filter(|id| is_valid_orb_task_id(id))
+        .collect::<BTreeSet<_>>();
+    let mut status_by_id = runtime.task_status_index_for(&referenced_ids)?;
+    runtime.satisfy_completed_archived_dependencies(&mut status_by_id, [task]);
+    Ok(status_by_id)
 }
 
 /// Enrich a task projection with its resolved crew, when this host can resolve
@@ -103,7 +167,7 @@ pub(super) fn task_fields_to_json(
         .iter()
         .any(|field| matches!(field.as_str(), "resolved_dependencies" | "relations"))
     {
-        Some(runtime.task_status_index()?)
+        Some(task_reference_status_index(runtime, task)?)
     } else {
         None
     };
@@ -168,38 +232,12 @@ fn task_field_to_json(
         "orchestrator" => serde_json::to_value(&task.orchestrator)
             .map_err(serialize_error("serialize orchestrator")),
         "artifacts" => Ok(serialize_task_artifacts(
-            &runtime.get_task_artifacts(&task.id)?,
+            &runtime.get_task_artifact_manifest(&task.id)?,
         )),
         other => task_show_record_field_json(task, other)
+            .or_else(|| runtime.task_crew_field_json(task, other))
             .ok_or_else(|| OrbitError::InvalidInput(unknown_task_show_field_message(other))),
     }
-}
-
-pub(super) fn serialize_task_artifacts(artifacts: &[TaskArtifact]) -> Value {
-    Value::Array(
-        artifacts
-            .iter()
-            .map(|artifact| {
-                let mut object = Map::new();
-                object.insert("path".to_string(), Value::String(artifact.path.clone()));
-                object.insert(
-                    "media_type".to_string(),
-                    Value::String(artifact.media_type.clone()),
-                );
-                if let Some(created_by) = &artifact.created_by {
-                    object.insert("created_by".to_string(), Value::String(created_by.clone()));
-                }
-                object.insert(
-                    "size".to_string(),
-                    Value::Number(serde_json::Number::from(artifact.content.len())),
-                );
-                if let Some(content) = artifact.text_content() {
-                    object.insert("content".to_string(), Value::String(content.to_string()));
-                }
-                Value::Object(object)
-            })
-            .collect(),
-    )
 }
 
 fn serialize_comments(comments: &[TaskComment]) -> Result<Value, OrbitError> {

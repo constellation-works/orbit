@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::fs::io::{create_private_dir, create_private_dir_all, with_shared_file_lock};
 use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
 use orbit_types::policy::{compile_glob_regex, match_glob};
 use orbit_types::task::{
@@ -20,7 +21,8 @@ use orbit_types::workspace::{validate_git_commit_id, validate_source_repository_
 use serde::{Deserialize, Serialize};
 
 use crate::driver::file::task_bundle::{
-    TaskBundleV2, read_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
+    PENDING_WRITE_FILE_NAME, TaskBundleV2, bundle_lock_target, read_bundle_at,
+    recover_pending_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
 };
 use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::fs::yaml::write_yaml_atomic_with;
@@ -31,6 +33,8 @@ pub const TASK_PUBLICATION_FORMAT_VERSION: u32 = 1;
 pub const PUBLICATION_ENVELOPE_FILE_NAME: &str = "orbit-task-publication.yaml";
 /// Root directory holding canonical task projections.
 pub const PUBLICATION_TASKS_DIR_NAME: &str = "tasks";
+/// Capture attempts per task; each retry follows one pending-write recovery.
+const PENDING_WRITE_RECOVERY_ATTEMPTS: usize = 3;
 
 /// Attachment projection recorded in the publication envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -274,7 +278,10 @@ pub struct PublicationSnapshotOutcome {
 
 /// Build a validated publication tree into a caller-supplied empty destination.
 ///
-/// Every canonical bundle is validated before its projection is staged. The
+/// Every canonical bundle is validated before its projection is staged. Each
+/// task is captured under its canonical bundle lock, so a concurrent task
+/// update or artifact replacement yields either the whole old or the whole
+/// new bundle; `include` scans the captured copy that publishes. The
 /// destination path appears only after the envelope and all task trees have
 /// been completed successfully.
 pub fn build_publication_snapshot(
@@ -321,7 +328,7 @@ pub(crate) fn build_publication_snapshot_from_task_workspace(
             destination.display()
         ))
     })?;
-    fs::create_dir_all(parent).map_err(|error| OrbitError::from_write_io(parent, error))?;
+    create_private_dir_all(parent).map_err(|error| OrbitError::from_write_io(parent, error))?;
 
     let binding = registry
         .find_workspace_binding(task_workspace_id)?
@@ -330,10 +337,10 @@ pub(crate) fn build_publication_snapshot_from_task_workspace(
                 "task workspace '{task_workspace_id}' is not registered in the coordination registry"
             ))
         })?;
-    if binding.workspace_id != task_workspace_id {
+    if binding.partition_id != task_workspace_id {
         return Err(OrbitError::InvalidInput(format!(
             "task workspace selector '{task_workspace_id}' resolved to unexpected workspace '{}'",
-            binding.workspace_id
+            binding.partition_id
         )));
     }
 
@@ -346,49 +353,37 @@ pub(crate) fn build_publication_snapshot_from_task_workspace(
     task_ids.dedup();
     validate_sorted_unique_task_ids(&task_ids)?;
 
-    let staging = tempfile::Builder::new()
-        .prefix(".orbit-task-publication-")
+    let mut staging_builder = tempfile::Builder::new();
+    staging_builder.prefix(".orbit-task-publication-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        staging_builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    let staging = staging_builder
         .tempdir_in(parent)
         .map_err(|error| OrbitError::from_write_io(parent, error))?;
     let tasks_root = staging.path().join(PUBLICATION_TASKS_DIR_NAME);
-    fs::create_dir(&tasks_root).map_err(|error| OrbitError::from_write_io(&tasks_root, error))?;
+    create_private_dir(&tasks_root)
+        .map_err(|error| OrbitError::from_write_io(&tasks_root, error))?;
 
     let mut omitted_attachments = Vec::new();
     let mut included_attachment_bytes = 0u64;
     let mut omitted_attachment_bytes = 0u64;
     for task_id in &task_ids {
         let source = registry.canonical_task_bundle_path(task_workspace_id, task_id)?;
-        validate_jsonl_files(task_id, &source)?;
-        let mut bundle = read_bundle_at(&source).map_err(|error| {
-            OrbitError::Store(format!(
-                "task publication validation failed for task '{task_id}' at '{}': {error}",
-                source.display()
-            ))
-        })?;
-        let files = sorted_manifest_files(&bundle);
-        validate_manifest_uniqueness(task_id, &files)?;
-        apply_attachment_policy(
+        let target = tasks_root.join(task_id);
+        let files = capture_task_projection(
             task_id,
             &source,
-            &files,
+            &target,
             policy,
-            scanner,
             &mut included_attachment_bytes,
             &mut omitted_attachment_bytes,
             &mut omitted_attachments,
         )?;
-
-        if let Some(manifest) = &mut bundle.artifact_manifest {
-            manifest.files = files;
-        }
-        if policy.kind == AttachmentPolicyKind::Omit {
-            bundle.artifact_manifest = None;
-        }
-        let target = tasks_root.join(task_id);
-        if policy.kind == AttachmentPolicyKind::Include && bundle.artifact_manifest.is_some() {
-            write_bundle_with_artifacts_at(&target, &bundle, &source)?;
-        } else {
-            write_bundle_at(&target, &bundle)?;
+        if policy.kind == AttachmentPolicyKind::Include {
+            scan_captured_attachments(task_id, &target, &files, policy, scanner)?;
         }
     }
 
@@ -482,13 +477,87 @@ fn validate_manifest_uniqueness(
     Ok(())
 }
 
+/// Capture one task into `target` under the canonical bundle's shared lock.
+///
+/// Lifecycle writers publish across several files and artifact replacement
+/// rewrites blobs before the manifest, so the JSONL check, bundle read,
+/// attachment metadata policy, and blob copy must observe one settled bundle
+/// (ORB-11349). A leftover pending-write record means a writer was interrupted;
+/// it is recovered under the exclusive lock between attempts, never nested
+/// inside the shared one. Returns the canonicalized manifest entries whose
+/// bytes, for `include`, now live under `target`.
 #[allow(clippy::too_many_arguments)]
-fn apply_attachment_policy(
+fn capture_task_projection(
     task_id: &str,
     source: &Path,
+    target: &Path,
+    policy: &AttachmentPolicy,
+    included_bytes: &mut u64,
+    omitted_bytes: &mut u64,
+    omitted: &mut Vec<OmittedAttachment>,
+) -> Result<Vec<ArtifactManifestFileV2>, OrbitError> {
+    for _ in 0..PENDING_WRITE_RECOVERY_ATTEMPTS {
+        let captured = with_shared_file_lock(
+            &bundle_lock_target(source),
+            "task publication",
+            || -> Result<Option<Vec<ArtifactManifestFileV2>>, OrbitError> {
+                if source.join(PENDING_WRITE_FILE_NAME).try_exists()? {
+                    return Ok(None);
+                }
+                validate_jsonl_files(task_id, source)?;
+                let mut bundle = read_bundle_at(source).map_err(|error| {
+                    OrbitError::Store(format!(
+                        "task publication validation failed for task '{task_id}' at '{}': {error}",
+                        source.display()
+                    ))
+                })?;
+                let files = sorted_manifest_files(&bundle);
+                validate_manifest_uniqueness(task_id, &files)?;
+                apply_attachment_metadata_policy(
+                    task_id,
+                    &files,
+                    policy,
+                    included_bytes,
+                    omitted_bytes,
+                    omitted,
+                )?;
+
+                if let Some(manifest) = &mut bundle.artifact_manifest {
+                    manifest.files = files.clone();
+                }
+                if policy.kind == AttachmentPolicyKind::Omit {
+                    bundle.artifact_manifest = None;
+                }
+                if policy.kind == AttachmentPolicyKind::Include
+                    && bundle.artifact_manifest.is_some()
+                {
+                    write_bundle_with_artifacts_at(target, &bundle, source)?;
+                } else {
+                    write_bundle_at(target, &bundle)?;
+                }
+                Ok(Some(files))
+            },
+        )?;
+        if let Some(files) = captured {
+            return Ok(files);
+        }
+        recover_pending_bundle_at(source).map_err(|error| {
+            OrbitError::Store(format!(
+                "task publication could not recover an interrupted write for task '{task_id}' at '{}': {error}",
+                source.display()
+            ))
+        })?;
+    }
+    Err(OrbitError::Store(format!(
+        "task publication found a pending write for task '{task_id}' at '{}' after recovery; retry publication",
+        source.display()
+    )))
+}
+
+fn apply_attachment_metadata_policy(
+    task_id: &str,
     files: &[ArtifactManifestFileV2],
     policy: &AttachmentPolicy,
-    scanner: Option<&dyn AttachmentSensitivityScanner>,
     included_bytes: &mut u64,
     omitted_bytes: &mut u64,
     omitted: &mut Vec<OmittedAttachment>,
@@ -555,7 +624,23 @@ fn apply_attachment_policy(
                 ));
             }
         }
-        let blob_path = source.join(TASK_ARTIFACTS_DIR_NAME).join(&file.blob);
+        *included_bytes = next_total;
+    }
+    Ok(())
+}
+
+/// Scan the staged copy, not the canonical source: the staged bytes were
+/// verified against the captured manifest and are exactly what publishes, so
+/// the scanner can run without holding writers off the canonical bundle.
+fn scan_captured_attachments(
+    task_id: &str,
+    captured: &Path,
+    files: &[ArtifactManifestFileV2],
+    policy: &AttachmentPolicy,
+    scanner: Option<&dyn AttachmentSensitivityScanner>,
+) -> Result<(), OrbitError> {
+    for file in files {
+        let blob_path = captured.join(TASK_ARTIFACTS_DIR_NAME).join(&file.blob);
         let bytes = fs::read(&blob_path).map_err(|error| {
             OrbitError::Store(format!(
                 "task publication could not read attachment for task '{task_id}' at '{}': {error}",
@@ -590,7 +675,6 @@ fn apply_attachment_policy(
             }
             Some(Err(_)) | None => {}
         }
-        *included_bytes = next_total;
     }
     Ok(())
 }

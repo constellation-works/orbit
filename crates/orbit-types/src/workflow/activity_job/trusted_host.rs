@@ -32,7 +32,6 @@
 //! definition that declares the flag without an admission fails closed rather
 //! than degrading to a sandboxed run, so a broken admission path is loud.
 
-use crate::tool::{CallerIdentityProof, RemoteAgentInvokeMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -58,20 +57,14 @@ pub struct TrustedHostAdmission {
     /// How the authorization chokepoint resolved that operator
     /// (`interactive-terminal`, `operator-override`, `session`).
     pub authorizer_provenance: String,
-    /// Destination-resolved remote caller identity, when this admission came
-    /// through SSH MCP rather than a local operator surface. The separate
-    /// proof and mode fields state whether that identity was authenticated.
+    /// Caller label an SSH-originated MCP session forwarded, when this
+    /// admission arrived over SSH rather than from a local operator surface.
+    ///
+    /// Attribution only: an SSH login to this machine is ownership of it, so
+    /// the label names who reached in without being an authenticated
+    /// principal [ORB-12564].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_machine_id: Option<String>,
-    /// Strength of the remote identity proof. It is retained independently of
-    /// the operation's trust mode so cooperative/self-asserted and key-bound
-    /// admissions cannot be confused in the durable run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller_identity: Option<CallerIdentityProof>,
-    /// Destination-selected remote invocation trust mode. Absent for local
-    /// operator admissions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_invoke_mode: Option<RemoteAgentInvokeMode>,
     /// RFC 3339 timestamp of the admission.
     pub authorized_at: String,
     /// Canonical workspace checkout the invocation was admitted against.
@@ -113,18 +106,21 @@ pub fn strip_trusted_host_admission(input: &mut Value) -> bool {
 
 /// Refusal to load an asset that claims trusted-host execution it may not have.
 ///
-/// The offending asset name is replaced with a constant marker. Asset metadata
-/// is operator-controlled input and this error can cross logging boundaries;
-/// the stable diagnostic preserves the validation reason without copying that
-/// input into a value that may be formatted later.
+/// The refusal names the offending activity. An activity's `metadata.name`
+/// identifies a workspace asset file, not secret material, and the operator
+/// reading this error is the person who has to find and edit that file — a
+/// refusal that will not say which asset it refused is not actionable.
+/// Redaction in this workspace covers credentials and user-identifying paths
+/// (`orbit_common::security::redaction`), and the sibling
+/// `AssetLoadError::ToolAllowlist` names the same value on the same grounds.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "an activity declares `trustedHostExecution: true`, which only the built-in \
+    "activity `{activity}` declares `trustedHostExecution: true`, which only the built-in \
      `{TRUSTED_HOST_ACTIVITY}` activity may declare; an unsandboxed provider subprocess is \
      admitted per invocation by an operator, never by an asset"
 )]
 pub struct TrustedHostActivityError {
-    /// Redacted marker retained for source compatibility with error consumers.
+    /// Name of the offending activity asset.
     pub activity: String,
 }
 
@@ -138,7 +134,7 @@ pub fn validate_trusted_host_activity(
 ) -> Result<(), TrustedHostActivityError> {
     if declares_trusted_host && activity != TRUSTED_HOST_ACTIVITY {
         return Err(TrustedHostActivityError {
-            activity: "<redacted>".to_string(),
+            activity: activity.to_string(),
         });
     }
     Ok(())

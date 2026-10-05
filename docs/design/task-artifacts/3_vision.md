@@ -3,8 +3,8 @@ summary: "Task Artifacts — Vision"
 type: design
 title: "Task Artifacts — Vision"
 owner: codex
-last_updated: 2026-08-29
-last_validated: 2026-08-16
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: task-artifacts
 doc_role: vision
@@ -29,7 +29,7 @@ This document captures open questions for the task-artifacts reset, prior work t
 2. Unique in one synced repository registry.
 3. Unique across hosted Orbit Team.
 
-The v2 design picks the narrowest authority that serves the product surface being implemented. For OSS local-first, one machine-local allocator across all local workspaces is enough. For task sync, repository-registry-global is enough. Hosted Team may later introduce org-global or tenant-global allocation. A bare `ORB-00000` is therefore scoped by its authority; cross-authority references need registry or workspace context.
+The v2 design uses the narrowest authority for the implemented surface: one machine-local allocator across local workspaces. A repository-global allocator belonged to the retired Task Sync proposal; current task publication preserves the declaring host's authority. Hosted Team may later introduce org-global or tenant-global allocation. A bare `ORB-00000` is therefore scoped by its authority; cross-authority references need registry or workspace context.
 
 ### 1.2 What happens beyond five digits?
 
@@ -71,9 +71,9 @@ Status-neutral directories make old tasks easy to keep forever. Generated indexe
 
 No compaction should land until retention and audit requirements are clearer.
 
-### 1.9 What is the projection fallback when symlinks are unavailable?
+### 1.9 How are task bundles exposed to a checkout?
 
-The v2 design uses symlinks for `.orbit/tasks/<task-id>` so workspace-relative paths point at canonical bundles under `~/.orbit/tasks/workspaces/<workspace-id>/`. Some filesystems and Windows configurations restrict symlink creation. The reset should prefer symlinks where possible and define a fallback before implementation ships: junctions on platforms that support them, generated read-only command views, or a copy projection with explicit degraded-mode warnings.
+Task and artifact tools resolve canonical bundles under `~/.orbit/tasks/workspaces/<workspace-id>/` through the workspace binding and registry. Orbit intentionally has no checkout-local task projection or filesystem-specific fallback.
 
 ---
 
@@ -89,8 +89,8 @@ The retired decision artifact store used the same envelope-plus-Markdown pattern
 
 ### 2.3 Orbit task sync
 
-[docs/design/_archive/task-sync/](../_archive/task-sync/1_overview.md) documents
-the retired shared-writer Git registry. Live visibility and mutation now route to
+The retired Task Sync design (removed; see git history) proposed a
+shared-writer Git registry. Live visibility and mutation now route to
 the owning host through [remote-access](../remote-access/1_overview.md) and
 [federated-mcp](../federated-mcp/1_overview.md), so the multi-writer registry
 remains superseded.
@@ -124,11 +124,11 @@ Most issue trackers optimize for human triage and reporting. Orbit tasks optimiz
 
 ### 3.2 Local-first with an upgrade path to shared authority
 
-The same task format should work in a single local workspace, an opt-in git registry, and a hosted team product. That is why ID allocation is explicit and why local execution bindings should not be baked into portable task identity.
+The same task format should work in local workspaces and in authority-owned published snapshots, with a hosted team product as a possible future surface. That is why ID allocation is explicit and why local execution bindings should not be baked into portable task identity.
 
 ### 3.3 Searchable prose with structured edges
 
-The design treats prose as Markdown, not as unstructured junk. Search and semantic indexing read it field-by-field. Relations are structured separately so agents can traverse dependencies and lineage without text-parsing prose.
+The design treats prose as Markdown, not as unstructured junk. Task search indexes its prose field-by-field; relations are structured separately so agents can traverse dependencies and lineage without text-parsing prose.
 
 ### 3.4 Audit without making YAML unreadable
 
@@ -136,7 +136,7 @@ The reset keeps `task.yaml` readable by moving audit traffic into append-only lo
 
 ### 3.5 Recoverable local-first task state
 
-Orbit tasks should feel local and inspectable without forcing every user into a conflict protocol. Keeping canonical bundles under `~/.orbit/tasks/workspaces/` gives local-first durability; projecting them into `.orbit/tasks/` keeps agent ergonomics near the code; local registry metadata makes allocation and workspace resolution durable.
+Orbit tasks should feel local and inspectable without forcing every user into a conflict protocol. Keeping canonical bundles under `~/.orbit/tasks/workspaces/` gives local-first durability, while task tools and local registry metadata provide inspection, allocation, and workspace resolution without a checkout projection.
 
 ---
 
@@ -145,9 +145,7 @@ Orbit tasks should feel local and inspectable without forcing every user into a 
 ### 4.1 Orbit-internal
 
 - [docs/design/CONVENTIONS.md](../CONVENTIONS.md) - design folder layout and ADR rules.
-- [docs/design/_archive/task-sync/](../_archive/task-sync/1_overview.md) - archived (superseded) git-sync proposal over the existing task layout; see [remote-access](../remote-access/1_overview.md).
 - [docs/design/task-publication/](../task-publication/1_overview.md) - draft one-way publication proposal using a dedicated private repository while preserving one task authority.
-- [.orbit/adrs/](../../../.orbit/adrs/) - internal precedent for envelope plus Markdown body and monotonic artifact IDs.
 - [docs/design/orbit-search/](../orbit-search/) - per-field indexing of task text.
 - [docs/POSITIONING.md](../../POSITIONING.md) - product doctrine that currently treats task IDs as local search keys.
 

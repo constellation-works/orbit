@@ -1,19 +1,22 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::context::{RuntimeHost, StepRecoveryAdmission};
-use crate::executor::automation::vcs::git::git_command;
+use orbit_types::task::ContextWideningStep;
 
+use crate::context::{RuntimeHost, StepRecoveryAdmission};
+use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
+
+use super::boundary_guard::is_host_owned_path;
 use super::fingerprint::{
     GitWorktreeFingerprint, changed_paths, git_command_error, git_fingerprint, git_output_raw,
     git_stdout, git_stdout_bytes, nul_paths,
 };
-use super::{DispatchError, WorktreeBoundaryGuard, safe_relative_path};
+use super::recovery::safe_relative_path;
+use super::{DispatchError, WorktreeBoundaryGuard};
 
 pub(super) struct RebaseRecoveryCheckpoint {
     metadata: RecoveryMetadata,
@@ -75,8 +78,14 @@ impl WorktreeBoundaryGuard {
             .and_then(Value::as_str)
             .unwrap_or(target);
         validate_failed_step_identity(input, prepared, original).ok_or_else(invalid)?;
+        // The stopped rebase is pinned by its own `onto` metadata below, not by
+        // the moving base ref: a linked worktree shares remote-tracking refs
+        // with every sibling checkout, so `origin/<base>` routinely advances
+        // past the pin while the leaf runs. That advance is reconciled after
+        // continuation, not refused here. The ref must still resolve so the
+        // continuation can read its tip.
+        git_stdout(&self.assigned_root, &["rev-parse", "--verify", &base_ref])?;
         if prepared_target != target
-            || git_stdout(&self.assigned_root, &["rev-parse", "--verify", &base_ref])? != target
             || git_stdout(&self.assigned_root, &["merge-base", original, target])?
                 != original_base_sha
         {
@@ -160,8 +169,7 @@ impl WorktreeBoundaryGuard {
                     "HEAD",
                 ],
             )?
-            .status
-            .success())
+            .success)
     }
 
     pub(super) fn complete_rebase_recovery(
@@ -187,21 +195,13 @@ impl WorktreeBoundaryGuard {
         let after_agent = git_fingerprint(&self.assigned_root)?;
         if after_agent.head != self.assigned_before.head
             || after_agent.branch != self.assigned_before.branch
-            || after_agent.index_sha256 != self.assigned_before.index_sha256
+            || !index_unchanged(&self.assigned_before, &after_agent)
         {
             return Err(invalid(
                 "the provider changed HEAD, branch, or index instead of only repairing files",
             ));
         }
         let changed = changed_paths(&self.assigned_root, &self.assigned_before, &after_agent);
-        if changed
-            .iter()
-            .any(|path| !checkpoint.conflicting_paths.contains(path))
-        {
-            return Err(invalid(
-                "the provider changed a path outside the authorized conflict set",
-            ));
-        }
         if checkpoint
             .conflicting_paths
             .iter()
@@ -211,6 +211,22 @@ impl WorktreeBoundaryGuard {
                 "one or more authorized conflict files were not repaired",
             ));
         }
+        // A resolution may need companion edits beyond the conflict set (a
+        // re-export for a moved module, a caller of a renamed item). Every
+        // other path the provider changed joins the continued commit; only
+        // host-owned `.orbit/` state, and a pre-existing untracked file the
+        // provider removed, stay out of it.
+        let companion_paths = changed
+            .iter()
+            .filter(|path| !checkpoint.conflicting_paths.contains(path))
+            .filter(|path| !is_host_owned_path(path))
+            .filter(|path| {
+                after_agent.path_states.get(*path).is_none_or(|state| {
+                    state.worktree_present || state.index_entry_sha256.is_some()
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         self.validate_rebase_checkpoint(checkpoint, &invalid)?;
         if unmerged_paths(&self.assigned_root)? != checkpoint.conflicting_paths {
             return Err(invalid(
@@ -221,7 +237,7 @@ impl WorktreeBoundaryGuard {
         let mut diff_check_args = vec!["diff", "--check", "--"];
         diff_check_args.extend(checkpoint.conflicting_paths.iter().map(String::as_str));
         let diff_check = git_output_raw(&self.assigned_root, &diff_check_args)?;
-        if !diff_check.status.success() {
+        if !diff_check.success {
             return Err(invalid(
                 "a repaired file still contains conflict markers or whitespace errors",
             ));
@@ -242,23 +258,26 @@ impl WorktreeBoundaryGuard {
             )));
         }
 
-        let mut add_args = vec!["add", "--"];
+        let mut add_args = vec!["add", "--all", "--"];
         add_args.extend(checkpoint.conflicting_paths.iter().map(String::as_str));
+        add_args.extend(companion_paths.iter().map(String::as_str));
         git_mutation(&self.assigned_root, &add_args)?;
         if !unmerged_paths(&self.assigned_root)?.is_empty() {
             return Err(invalid(
-                "staging the authorized conflict set left unresolved entries",
+                "staging the resolved conflict set left unresolved entries",
             ));
         }
+        // Untracked files the continuation commits are no longer untracked;
+        // every other pre-existing untracked payload must survive unchanged.
+        let mut expected_untracked = self.assigned_before.untracked_content.clone();
+        expected_untracked.retain(|path, _| !companion_paths.contains(path));
         let continued = git_mutation_output(
             &self.assigned_root,
             &["-c", "core.editor=true", "rebase", "--continue"],
         )?;
-        if !continued.status.success() {
+        if !continued.success {
             let additional = unmerged_paths(&self.assigned_root)?;
-            let diagnostic = String::from_utf8_lossy(&continued.stderr)
-                .trim()
-                .to_string();
+            let diagnostic = continued.stderr.trim().to_string();
             return Err(invalid(&format!(
                 "rebase --continue failed; additional_conflicting_paths={additional:?}; diagnostic={diagnostic}"
             )));
@@ -270,20 +289,18 @@ impl WorktreeBoundaryGuard {
                 "continued rebase did not leave the checkpointed branch on the pinned base with a candidate commit",
             ));
         }
-        // The stopped index includes every nonconflicting candidate change.
-        // Those staged paths become clean when Git commits them; comparing dirty
-        // path maps across that transition incorrectly rejects the candidate.
-        // Provider edits were checked before continuation. Now require Git to
-        // leave no tracked dirt and preserve the pre-existing untracked payload.
-        if !git_output_raw(&self.assigned_root, &["diff", "--quiet", "HEAD", "--"])?
-            .status
-            .success()
-            || completed.untracked_content != self.assigned_before.untracked_content
-        {
-            return Err(invalid(
-                "host continuation left tracked dirt or changed untracked files",
-            ));
-        }
+        self.require_clean_continuation(&completed, &expected_untracked, &invalid)?;
+        // The pin only records where the rebase stopped. Land the continued
+        // candidate on the base tip that is live now, so the deterministic
+        // retry and the PR see current integration rather than a stale one.
+        let base_sha = self.follow_advanced_base(checkpoint, &expected_untracked, &invalid)?;
+        let completed = git_fingerprint(&self.assigned_root)?;
+        self.widen_task(
+            host,
+            task_ids,
+            ContextWideningStep::Recovery,
+            &companion_paths,
+        );
         Ok(serde_json::json!({
             "run_id": self.run_id,
             "step_id": step_id,
@@ -293,11 +310,101 @@ impl WorktreeBoundaryGuard {
             "head_sha_before": checkpoint.original_head,
             "original_base_sha": checkpoint.original_base_sha,
             "base_ref": checkpoint.base_ref,
-            "base_sha": checkpoint.target_base_sha,
+            "target_base_sha": checkpoint.target_base_sha,
+            "base_sha": base_sha,
             "remote_sha_before": checkpoint.remote_sha_before,
             "head_sha": completed.head,
+            "companion_paths": companion_paths,
             "rewritten": true,
         }))
+    }
+
+    /// The stopped index includes every nonconflicting candidate change.
+    /// Those staged paths become clean when Git commits them; comparing dirty
+    /// path maps across that transition incorrectly rejects the candidate.
+    /// Provider edits were checked before continuation. Now require Git to
+    /// leave no tracked dirt and preserve the pre-existing untracked payload
+    /// the continuation did not commit (`expected_untracked`).
+    fn require_clean_continuation(
+        &self,
+        completed: &GitWorktreeFingerprint,
+        expected_untracked: &BTreeMap<String, String>,
+        invalid: &impl Fn(&str) -> DispatchError,
+    ) -> Result<(), DispatchError> {
+        if !git_output_raw(&self.assigned_root, &["diff", "--quiet", "HEAD", "--"])?.success
+            || &completed.untracked_content != expected_untracked
+        {
+            return Err(invalid(
+                "host continuation left tracked dirt or changed untracked files",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Rebase the continued candidate onto `base_ref`'s current tip when it
+    /// advanced past the pin, returning the base the candidate now sits on.
+    ///
+    /// A tip that does not descend from the pin (a rewound or force-moved
+    /// base) is not followed; the pinned result stands and the deterministic
+    /// retry judges it. A follow-up that conflicts is aborted so the branch
+    /// keeps the already-resolved pinned result: the retry then reports the
+    /// remaining advance instead of a lost resolution.
+    fn follow_advanced_base(
+        &self,
+        checkpoint: &RebaseRecoveryCheckpoint,
+        expected_untracked: &BTreeMap<String, String>,
+        invalid: &impl Fn(&str) -> DispatchError,
+    ) -> Result<String, DispatchError> {
+        let pinned = checkpoint.target_base_sha.as_str();
+        let live = git_stdout(
+            &self.assigned_root,
+            &["rev-parse", "--verify", &checkpoint.base_ref],
+        )?;
+        if live == pinned
+            || !git_output_raw(
+                &self.assigned_root,
+                &["merge-base", "--is-ancestor", pinned, &live],
+            )?
+            .success
+        {
+            return Ok(pinned.to_string());
+        }
+        let followed = git_mutation_output(&self.assigned_root, &["rebase", &live])?;
+        if !followed.success {
+            let additional = unmerged_paths(&self.assigned_root)?;
+            git_mutation(&self.assigned_root, &["rebase", "--abort"])?;
+            let restored = git_fingerprint(&self.assigned_root)?;
+            if !self.completed_authorized_rebase(&restored)? {
+                return Err(invalid(
+                    "aborting the follow-up rebase onto the advanced base did not restore the pinned result",
+                ));
+            }
+            self.require_clean_continuation(&restored, expected_untracked, invalid)?;
+            tracing::warn!(
+                target: "orbit.engine.cli_runner",
+                run_id = %self.run_id,
+                pinned_base = pinned,
+                advanced_base = %live,
+                additional_conflicting_paths = ?additional,
+                "conflict recovery kept the pinned result; the advanced base conflicts again"
+            );
+            return Ok(pinned.to_string());
+        }
+        let followed = git_fingerprint(&self.assigned_root)?;
+        if !self.completed_authorized_rebase(&followed)?
+            || followed.head == live
+            || !git_output_raw(
+                &self.assigned_root,
+                &["merge-base", "--is-ancestor", &live, "HEAD"],
+            )?
+            .success
+        {
+            return Err(invalid(
+                "rebasing onto the advanced base did not leave the checkpointed branch on that base with a candidate commit",
+            ));
+        }
+        self.require_clean_continuation(&followed, expected_untracked, invalid)?;
+        Ok(live)
     }
 
     fn validate_rebase_checkpoint(
@@ -306,14 +413,12 @@ impl WorktreeBoundaryGuard {
         invalid: &impl Fn(&str) -> DispatchError,
     ) -> Result<(), DispatchError> {
         let expected_ref = format!("refs/heads/{}", checkpoint.branch);
+        // `base_ref` may have advanced past the pin while the provider ran;
+        // the stopped rebase's own `onto` below is the pin that matters.
         if git_stdout(
             &self.assigned_root,
             &["rev-parse", "--verify", &expected_ref],
         )? != checkpoint.original_head
-            || git_stdout(
-                &self.assigned_root,
-                &["rev-parse", "--verify", &checkpoint.base_ref],
-            )? != checkpoint.target_base_sha
             || git_stdout(
                 &self.assigned_root,
                 &[
@@ -323,9 +428,7 @@ impl WorktreeBoundaryGuard {
                 ],
             )? != checkpoint.original_base_sha
         {
-            return Err(invalid(
-                "branch, original HEAD, original base, or pinned base moved",
-            ));
+            return Err(invalid("branch, original HEAD, or original base moved"));
         }
         for backend in ["rebase-merge", "rebase-apply"] {
             let path = git_stdout(
@@ -411,6 +514,30 @@ impl RecoveryMetadata {
         }
         Ok(())
     }
+}
+
+/// Whether the provider left the index as it found it. The fingerprint's
+/// index identity covers only dirty paths, so a companion edit that dirties a
+/// clean tracked file changes it without any staging; compare per path
+/// instead. A path dirty on both sides keeps its index entry and staged
+/// delta. A path dirty on one side only was clean (index equal to HEAD) on
+/// the other, so it must carry no staged delta.
+fn index_unchanged(before: &GitWorktreeFingerprint, after: &GitWorktreeFingerprint) -> bool {
+    let paths = before
+        .path_states
+        .keys()
+        .chain(after.path_states.keys())
+        .collect::<BTreeSet<_>>();
+    paths.into_iter().all(|path| {
+        match (before.path_states.get(path), after.path_states.get(path)) {
+            (Some(before), Some(after)) => {
+                before.index_entry_sha256 == after.index_entry_sha256
+                    && before.staged_patch_sha256 == after.staged_patch_sha256
+            }
+            (Some(state), None) | (None, Some(state)) => state.staged_patch_sha256.is_none(),
+            (None, None) => true,
+        }
+    })
 }
 
 fn same_metadata_entry(path: &Path, handle: &fs::File) -> Result<bool, DispatchError> {
@@ -522,19 +649,28 @@ fn unmerged_paths(root: &Path) -> Result<Vec<String>, DispatchError> {
 
 fn git_mutation(root: &Path, args: &[&str]) -> Result<(), DispatchError> {
     let output = git_mutation_output(root, args)?;
-    if output.status.success() {
+    if output.success {
         Ok(())
     } else {
         Err(git_command_error(root, args, &output))
     }
 }
 
-fn git_mutation_output(root: &Path, args: &[&str]) -> Result<Output, DispatchError> {
-    git_command(root, args).output().map_err(|error| {
+fn git_mutation_output(root: &Path, args: &[&str]) -> Result<GitBytesOutcome, DispatchError> {
+    let output = git_run_bytes(root, args, None).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "mutate Git state in '{}' with `git {}`: {error}",
             root.display(),
             args.join(" ")
         ))
-    })
+    })?;
+    if output.timed_out {
+        return Err(DispatchError::GitTimeout {
+            operation: args.join(" "),
+            root: root.to_path_buf(),
+            timeout_ms: output.timeout_ms,
+            diagnostic: output.stderr.trim().to_string(),
+        });
+    }
+    Ok(output)
 }

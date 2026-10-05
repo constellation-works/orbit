@@ -16,7 +16,7 @@ use orbit_types::workflow::{
 use serde_json::json;
 
 use crate::AutomationError;
-use crate::delivery::definition_epoch;
+use crate::delivery::json_definition_epoch;
 
 mod validation;
 
@@ -41,7 +41,7 @@ pub fn task_meaning_digest(task: &Task) -> Result<String, AutomationError> {
     tags.sort();
     tags.dedup();
 
-    definition_epoch(&json!({
+    json_definition_epoch(json!({
         "contract": TASK_MEANING_CONTRACT,
         "id": task.id,
         "title": task.title.trim(),
@@ -61,7 +61,7 @@ pub fn combined_task_meaning_digest(
 ) -> Result<String, AutomationError> {
     let mut ordered = digests.to_vec();
     ordered.sort();
-    definition_epoch(&json!({
+    json_definition_epoch(json!({
         "contract": TASK_MEANING_CONTRACT,
         "tasks": ordered,
     }))

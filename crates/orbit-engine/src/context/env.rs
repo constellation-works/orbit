@@ -11,9 +11,13 @@
 //! `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_AGENT_NAME`, `ORBIT_AGENT_MODEL`,
 //! `ORBIT_SESSION_ID`, `ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID`. Locators and
 //! activity bindings (`ORBIT_ROOT`, `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`,
-//! `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`, `ORBIT_STEP_INDEX`,
-//! `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_*`, `ORBIT_SEARCH_COMPANION*`) are
+//! `ORBIT_WORKTREE_ROOT`, `ORBIT_SCRATCH_DIR`, `ORBIT_BIN`, `ORBIT_STEP_INDEX`,
+//! `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_*`) are
 //! injected by the CLI runner or forwarded from the parent when present.
+
+use orbit_common::security::child_env::{
+    MCP_MANAGED_CONTEXT_ENV, MCP_MANAGED_RUN_ID_ENV, MCP_MANAGED_SESSION_ID_ENV,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct ProvenanceEnv<'a> {
@@ -40,10 +44,10 @@ pub(crate) fn provenance_env(config: ProvenanceEnv<'_>) -> Vec<(String, String)>
     let mut vars = Vec::new();
 
     if let Some(run_id) = config.orbit_run_id {
-        vars.push(("ORBIT_RUN_ID".to_string(), run_id.to_string()));
+        vars.push((MCP_MANAGED_RUN_ID_ENV.to_string(), run_id.to_string()));
     }
     if config.orbit_managed_run_context {
-        vars.push(("ORBIT_MANAGED_RUN_CONTEXT".to_string(), "1".to_string()));
+        vars.push((MCP_MANAGED_CONTEXT_ENV.to_string(), "1".to_string()));
     }
     if let Some(agent_name) = config.orbit_agent_name {
         vars.push(("ORBIT_AGENT_NAME".to_string(), agent_name.to_string()));
@@ -52,7 +56,10 @@ pub(crate) fn provenance_env(config: ProvenanceEnv<'_>) -> Vec<(String, String)>
         vars.push(("ORBIT_AGENT_MODEL".to_string(), model.to_string()));
     }
     if let Some(session_id) = config.orbit_session_id {
-        vars.push(("ORBIT_SESSION_ID".to_string(), session_id.to_string()));
+        vars.push((
+            MCP_MANAGED_SESSION_ID_ENV.to_string(),
+            session_id.to_string(),
+        ));
     }
     if let Some(task_id) = config.orbit_task_id {
         vars.push(("ORBIT_TASK_ID".to_string(), task_id.to_string()));

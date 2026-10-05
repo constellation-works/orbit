@@ -1,16 +1,21 @@
 //! Run lifecycle: detail, cancel, replay, events, logs.
 
-use crate::state::Ws;
-use axum::extract::{Path, Query};
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_common::governance::authorization::DASHBOARD_AUTO_DRAIN_COMPLETE;
+use orbit_common::governance::authorization::{
+    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_STOP,
+};
+use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_common::security::redaction::redact_all;
 use orbit_core::application::job::{
-    ActivityInvocationEvidence, job_run_to_json_with_activity_provenance,
+    ActivityInvocationEvidence, DrainAdmissionsStopRequest, DrainAdmissionsStopResult,
+    job_run_to_json_with_activity_provenance,
 };
-use orbit_core::runtime::run_audit::{RunAuditStep, RunCliInvocationRecord, RunProviderProcess};
+use orbit_core::runtime::audit::run::{RunAuditStep, RunCliInvocationRecord, RunProviderProcess};
 use orbit_core::{InvocationQuery, JobRun, OrbitRuntime, V2AuditEventFilter};
+use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
 use super::routines::{authorization_denied, authorized_caller};
@@ -22,6 +27,10 @@ use super::{
 const RUN_EVENTS_DEFAULT_LIMIT: usize = 100;
 /// Hard cap on rows scanned from a single run's persisted v2 audit events.
 pub(super) const RUN_EVENTS_MAX_SCAN_LINES: usize = 50_000;
+/// Capacity hint for the returned events page. A fixed constant rather than
+/// the caller-supplied `limit` so the allocation size never derives from
+/// request input, regardless of how large a `limit` a caller requests.
+const RUN_EVENTS_PAGE_CAPACITY_HINT: usize = 64;
 /// Maximum bytes included in stdout/stderr previews returned by run-log APIs.
 const RUN_LOG_PREVIEW_MAX_BYTES: usize = 8192;
 /// Maximum lines included in stdout/stderr previews returned by run-log APIs.
@@ -36,7 +45,8 @@ pub(super) struct ShipBody {
     /// mode (ORB-10444) — what the dashboard's one-click Ship sends.
     #[serde(default)]
     mode: Option<String>,
-    /// Base branch override; defaults to the workspace's `[workflow] base_branch`.
+    /// Base branch override; defaults to the registered workspace base
+    /// branch, else `[workflow] base_branch`.
     #[serde(default)]
     base: Option<String>,
     /// [ORB-10709] Token for this workspace's exclusive claim, when another
@@ -59,9 +69,9 @@ pub(super) struct ShipBody {
 /// [ORB-10544] Duplicate dispatch of an explicitly-selected task is refused by
 /// the shared submission path, not here: `submit_ship_run` returns
 /// `OrbitError::ShipRunInFlight` when one of the named tasks is already carried
-/// by a non-terminal run, which `map_runtime_error` projects to this endpoint's
-/// stable 409. Auto (backlog-discovery) mode has no task ids to guard and is
-/// unaffected.
+/// by a non-terminal delivery run, which `map_runtime_error` projects to this
+/// endpoint's stable 409. Auto (backlog-discovery) mode has no task ids to guard
+/// and is unaffected.
 pub(super) async fn ship_workflow_action(
     Ws(runtime): Ws,
     body: Option<Json<ShipBody>>,
@@ -86,6 +96,7 @@ pub(super) async fn ship_workflow_action(
             &[],
             Some("dashboard"),
             body.claim_token.as_deref(),
+            JobRunTrigger::dashboard(),
         )
     })
     .await
@@ -143,34 +154,15 @@ const MIN_AUTO_DRAIN_SECONDS: u64 = 1;
 const AUTO_DRAIN_READINESS_LIMIT: usize = 50;
 
 /// Parses a "30m"/"2h"/"1d"-shaped duration the same way the CLI's `--for`
-/// does. `orbit-web` does not depend on `orbit-cli` (the dependency edge runs
-/// the other way), so this ~20-line parser is duplicated here rather than
-/// shared across that boundary.
+/// does, then requires a non-empty window.
 fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
-    let value = raw.trim();
-    if value.is_empty() {
+    if raw.trim().is_empty() {
         return Err("for_duration must not be empty".to_string());
     }
-    let split_at = value
-        .find(|c: char| c.is_alphabetic())
-        .ok_or_else(|| format!("invalid duration: {raw}"))?;
-    let (num_raw, unit_raw) = value.split_at(split_at);
-    let num: u64 = num_raw
-        .parse()
-        .map_err(|_| format!("invalid duration number: {raw}"))?;
-    let seconds = match unit_raw {
-        "s" => Some(num),
-        "m" => num.checked_mul(60),
-        "h" => num.checked_mul(3600),
-        "d" => num.checked_mul(86400),
-        "w" => num.checked_mul(604800),
-        _ => {
-            return Err(format!(
-                "invalid duration unit: {unit_raw} (expected s/m/h/d/w)"
-            ));
-        }
-    }
-    .ok_or_else(|| format!("duration '{raw}' is too large to represent"))?;
+    let seconds = parse_duration_seconds(raw).map_err(|error| match error {
+        orbit_core::OrbitError::InvalidInput(message) => message,
+        other => other.to_string(),
+    })?;
     if seconds < MIN_AUTO_DRAIN_SECONDS {
         return Err("for_duration must describe a bounded window greater than zero".to_string());
     }
@@ -190,6 +182,7 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// the ones visible now, so it is gated the same way `auto_task.mint`'s
 /// unconditional mint is.
 pub(super) async fn auto_drain_workflow_action(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     body: Option<Json<AutoDrainBody>>,
 ) -> Response {
@@ -199,7 +192,7 @@ pub(super) async fn auto_drain_workflow_action(
         Err(message) => return bad_request(message),
     };
     let completion = if body.complete {
-        match authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE) {
+        match authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session()) {
             Ok(_) => orbit_core::CompletionPolicy::Done,
             Err(denial) => return authorization_denied(denial),
         }
@@ -217,6 +210,7 @@ pub(super) async fn auto_drain_workflow_action(
             &Default::default(),
             Some("dashboard"),
             body.claim_token.as_deref(),
+            JobRunTrigger::dashboard(),
         )
     })
     .await
@@ -235,6 +229,86 @@ pub(super) async fn auto_drain_workflow_action(
 }
 
 #[derive(serde::Deserialize, Default)]
+pub(super) struct AutoDrainStopBody {
+    /// Free-text reason recorded on the coordinator's stop marker and audit.
+    #[serde(default)]
+    reason: Option<String>,
+    /// [ORB-10709] Token for this workspace's exclusive claim, when another
+    /// operator holds one.
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
+/// Stop new admissions for the workspace's live `auto` window
+/// (`POST /workflows/auto/stop?workspace=<id>`) [ORB-12728].
+///
+/// Dashboard counterpart to `orbit run auto --stop`, reusing
+/// `stop_workspace_auto_admissions`: every live coordinator in this concrete
+/// workspace stops admitting, already admitted workers keep running under
+/// their captured completion authority, and a workspace with no coordinator
+/// reports `idle`. On a replica it also delivers every recorded pull
+/// settlement [ORB-13663]. This is not cancellation. Ending an unattended delivery
+/// window early is an operator decision, so it is gated like the other
+/// governed dashboard controls (`--operator` session) and refused before any
+/// runtime call.
+pub(super) async fn auto_drain_stop_action(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    body: Option<Json<AutoDrainStopBody>>,
+) -> Response {
+    let Json(body) = body.unwrap_or_default();
+    if let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, state.operator_session()) {
+        return authorization_denied(denial);
+    }
+    match blocking("auto-drain stop", move || {
+        runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
+            actor: "dashboard",
+            source: "dashboard",
+            reason: body.reason.as_deref(),
+            claim_token: body.claim_token.as_deref(),
+            force: false,
+        })
+    })
+    .await
+    {
+        Ok(result) => Json(auto_drain_stop_to_json(&result)).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// The stop outcome the CLI prints, projected for the pane: the workspace
+/// outcome plus one entry per coordinator naming what changed and which
+/// children are still in flight under it.
+fn auto_drain_stop_to_json(result: &DrainAdmissionsStopResult) -> Value {
+    json!({
+        "workflow": "auto",
+        "outcome": result.outcome,
+        // [ORB-13663] The stop's settle-only pass: pull settlements delivered
+        // and cancelled drains' unlaunched claims ended.
+        "pull_settlements": result.pull_settlements,
+        "coordinators": result
+            .coordinators
+            .iter()
+            .map(|change| json!({
+                "run_id": change.run_id,
+                "job_id": change.job_id,
+                "outcome": change.outcome,
+                "remaining_children": change
+                    .remaining_children
+                    .iter()
+                    .map(|child| json!({
+                        "run_id": child.run_id,
+                        "job_name": child.job_name,
+                        "phase": child.phase,
+                        "child_status": child.child_status,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+#[derive(serde::Deserialize, Default)]
 pub(super) struct AutoDrainReadinessQuery {
     #[serde(default)]
     concurrency: Option<u32>,
@@ -246,23 +320,34 @@ pub(super) struct AutoDrainReadinessQuery {
 /// snapshot `orbit run readiness` prints) rather than a dashboard-local
 /// recomputation of eligibility.
 pub(super) async fn auto_drain_readiness(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(query): Query<AutoDrainReadinessQuery>,
 ) -> Response {
-    match runtime.workspace_auto_readiness(&[], query.concurrency, AUTO_DRAIN_READINESS_LIMIT, &[])
+    match blocking("auto-drain readiness", move || {
+        runtime.workspace_auto_readiness(&[], query.concurrency, AUTO_DRAIN_READINESS_LIMIT, &[])
+    })
+    .await
     {
         Ok(mut payload) => {
-            // So the form can hide/disable the `complete` opt-in before the
-            // operator ever hits the separately-governed 403 at submission.
+            // So the form can hide/disable the `complete` opt-in and the
+            // stop control before the operator ever hits the
+            // separately-governed 403 at submission. Both operations admit
+            // the same operator capability, so one flag describes both.
             if let Some(object) = payload.as_object_mut() {
+                let operator_session = state.operator_session();
                 object.insert(
                     "controls_authorized".to_string(),
-                    Value::Bool(authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE).is_ok()),
+                    Value::Bool(
+                        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, operator_session).is_ok()
+                            && authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, operator_session)
+                                .is_ok(),
+                    ),
                 );
             }
             Json(payload).into_response()
         }
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -282,13 +367,33 @@ pub(super) async fn get_run(Ws(runtime): Ws, Path(id): Path<String>) -> Response
     }
 }
 
-pub(super) async fn cancel_run_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+#[derive(serde::Deserialize, Default)]
+pub(super) struct CancelRunBody {
+    #[serde(default)]
+    reason: Option<String>,
+    /// Stop a drain's in-flight leaves instead of waiting for them.
+    #[serde(default)]
+    force: bool,
+}
+
+pub(super) async fn cancel_run_action(
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+    body: Option<Json<CancelRunBody>>,
+) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
+    let Json(body) = body.unwrap_or_default();
     match blocking("cancel run", move || {
-        Ok(runtime.cancel_job_run_with_context(&id, "dashboard", "web"))
+        Ok(runtime.cancel_job_run_with_options(
+            &id,
+            "dashboard",
+            "web",
+            body.reason.as_deref(),
+            body.force,
+        ))
     })
     .await
     {
@@ -301,6 +406,18 @@ pub(super) async fn cancel_run_action(Ws(runtime): Ws, Path(id): Path<String>) -
             "source": result.source,
             "signal_attempted": result.signal_attempted,
             "signal_outcome": result.signal_outcome,
+            "provider_processes_stopped": result.provider_processes_stopped,
+            // [ORB-13663] Cancelling a follower pull drain settles what it
+            // carried: recorded settlements are delivered and claims nothing
+            // will launch go back to the owner's backlog.
+            "pull_settlements": result.pull_settlements,
+            // A gracefully cancelled pull drain is `cancelling` until these
+            // leaves finish; a forced cancel names what it stopped, and what
+            // it could not confirm stopped (those keep their claims).
+            "waiting_leaves": result.waiting_leaves,
+            "forced_runs": result.forced_runs,
+            "unstopped_leaves": result.unstopped_leaves,
+            "unstopped_children": result.unstopped_children,
         }))
         .into_response(),
         Ok(Err(orbit_core::OrbitError::JobValidation(msg)))
@@ -327,21 +444,24 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     // [ORB-10971] Read the run's pipeline state. This projection used to drop
     // it entirely, so the dashboard could not see the waiting reasons or the
     // child-dispatch lineage the CLI already showed.
-    let state = runtime.read_run_state(&run.run_id).ok().flatten();
-    let evidence = runtime
-        .invocation_records(InvocationQuery {
+    let run_id = run.run_id.as_str();
+    let state = or_warn(runtime.read_run_state(run_id), run_id, "pipeline state");
+    let evidence = or_warn(
+        runtime.invocation_records(InvocationQuery {
             job_run_id: Some(run.run_id.clone()),
             limit: 1_000,
             ..InvocationQuery::default()
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|record| ActivityInvocationEvidence {
-            activity_id: record.activity_id,
-            provider: record.agent,
-            model: record.model,
-        })
-        .collect::<Vec<_>>();
+        }),
+        run_id,
+        "invocation evidence",
+    )
+    .into_iter()
+    .map(|record| ActivityInvocationEvidence {
+        activity_id: record.activity_id,
+        provider: record.agent,
+        model: record.model,
+    })
+    .collect::<Vec<_>>();
     let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
     // Reshape into `{run, steps}` per the dashboard contract: peel the
     // `steps` array off the flat `job_run_to_json` output.
@@ -350,9 +470,11 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         .and_then(|m| m.remove("steps"))
         .unwrap_or(Value::Array(Vec::new()));
 
-    let audit_steps = runtime
-        .collect_run_audit_steps(&run.run_id)
-        .unwrap_or_default();
+    let audit_steps = or_warn(
+        runtime.collect_run_audit_steps(run_id),
+        run_id,
+        "audit steps",
+    );
     let steps = if audit_steps.is_empty() {
         stored_steps
     } else {
@@ -368,17 +490,61 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     // liveness verdict for any that have not reported an exit. Without this a
     // healthy long-running ship-pipeline implementation agent is
     // indistinguishable from a dead child without shell access to the host.
-    let provider_processes = runtime
-        .collect_run_provider_processes(&run.run_id)
-        .unwrap_or_default();
+    let provider_processes = or_warn(
+        runtime.collect_run_provider_processes(run_id),
+        run_id,
+        "provider processes",
+    );
+
+    // A claimed follower leaf names the owner task and claim it works for;
+    // every other run has none. The dashboard's cancel confirmation reads this,
+    // because cancelling a claimed leaf fails the claim on the owner. An
+    // unreadable admission is logged and shown as no claim, like `orbit run show`.
+    let pull_claim = runtime.pull_leaf_claim(run_id).unwrap_or_else(|error| {
+        tracing::warn!(run_id, %error, "pull admission unreadable; run detail shown without its claim");
+        None
+    });
+
+    // A pull drain's launched leaves that are still running: what a graceful
+    // cancel waits for, and what `force` would stop.
+    let claimed_leaves = or_warn(
+        runtime.pull_drain_claimed_leaves(run_id),
+        run_id,
+        "claimed leaves",
+    );
+
+    // A pull drain's crew window: the crews it runs and those it excluded for
+    // its window, with why [ORB-13941]. Null for every other run.
+    let crew_window = runtime
+        .pull_drain_crew_window(run_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(run_id, %error, "pull drain crew window unreadable; run detail shown without it");
+            None
+        });
 
     json!({
         "run": full,
+        "pull_claim": pull_claim,
+        "claimed_leaves": claimed_leaves,
+        "crew_window": crew_window,
         "steps": steps,
         "provider_processes": provider_processes
             .iter()
             .map(run_provider_process_to_json)
             .collect::<Vec<_>>(),
+    })
+}
+
+/// The run detail still renders when one supplementary read fails, but the
+/// failure is logged so it is not mistaken for "nothing recorded".
+fn or_warn<T: Default>(
+    result: Result<T, orbit_core::OrbitError>,
+    run_id: &str,
+    section: &str,
+) -> T {
+    result.unwrap_or_else(|error| {
+        tracing::warn!(run_id, section, %error, "run detail omitted a section");
+        T::default()
     })
 }
 
@@ -467,24 +633,28 @@ pub(super) async fn list_run_events(
 
     let run_id = run_id.to_string();
     match blocking("run events", move || {
+        runtime.show_job_run(&run_id)?;
+        // Pages read forward from the run's first event. Without a kind
+        // filter the page is a plain SQL window; `body_kind` lives inside the
+        // payload, so a filtered page scans under a row budget instead.
+        let (sql_offset, sql_limit, skip) = match kind {
+            None => (offset, limit, 0),
+            Some(_) => (0, RUN_EVENTS_MAX_SCAN_LINES + 1, offset),
+        };
         let rows = runtime.list_v2_audit_events(V2AuditEventFilter {
             workspace_id: String::new(),
             run_id: Some(run_id),
             source: Some("v2_envelope".to_string()),
-            limit: Some(RUN_EVENTS_MAX_SCAN_LINES + 1),
+            limit: Some(sql_limit),
+            offset: Some(sql_offset),
+            oldest_first: true,
             ..Default::default()
         })?;
-        let mut page: Vec<Value> = Vec::with_capacity(limit.min(64));
+        let budget_exceeded = kind.is_some() && rows.len() > RUN_EVENTS_MAX_SCAN_LINES;
+        let mut page: Vec<Value> = Vec::with_capacity(RUN_EVENTS_PAGE_CAPACITY_HINT);
         let mut matched: usize = 0;
-        let mut lines_scanned: usize = 0;
-        let mut budget_exceeded = false;
 
-        for row in rows.into_iter().rev() {
-            lines_scanned = lines_scanned.saturating_add(1);
-            if lines_scanned > RUN_EVENTS_MAX_SCAN_LINES {
-                budget_exceeded = true;
-                break;
-            }
+        for row in rows.into_iter().take(RUN_EVENTS_MAX_SCAN_LINES) {
             let value: Value = match serde_json::from_str(&row.payload_json) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -495,7 +665,7 @@ pub(super) async fn list_run_events(
                     continue;
                 }
             }
-            if matched < offset {
+            if matched < skip {
                 matched = matched.saturating_add(1);
                 continue;
             }
@@ -534,14 +704,18 @@ pub(super) async fn list_run_logs(
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
     let run_id = run_id.to_string();
     match blocking("run logs", move || {
-        runtime.collect_run_cli_invocations(&run_id)
+        runtime.show_job_run(&run_id)?;
+        runtime.collect_run_cli_invocations_bounded(
+            &run_id,
+            Some(limit),
+            Some(RUN_LOG_PREVIEW_MAX_BYTES),
+        )
     })
     .await
     {
         Ok(records) => Json(Value::Array(
             records
                 .into_iter()
-                .take(limit)
                 .map(run_cli_invocation_to_json)
                 .collect(),
         ))
@@ -553,6 +727,8 @@ pub(super) async fn list_run_logs(
 fn run_cli_invocation_to_json(record: RunCliInvocationRecord) -> Value {
     let stdout_preview = bounded_preview(&record.stdout);
     let stderr_preview = bounded_preview(&record.stderr);
+    let stdout_truncated = stdout_preview.truncated || record.stdout_blob_truncated;
+    let stderr_truncated = stderr_preview.truncated || record.stderr_blob_truncated;
     json!({
         "run_id": record.run_id,
         "event_id": record.event_id,
@@ -564,8 +740,8 @@ fn run_cli_invocation_to_json(record: RunCliInvocationRecord) -> Value {
         "stderr_blob_ref": record.stderr_blob_ref,
         "stdout_preview": stdout_preview.text,
         "stderr_preview": stderr_preview.text,
-        "stdout_truncated": stdout_preview.truncated,
-        "stderr_truncated": stderr_preview.truncated,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
         "exit_code": record.exit_code,
         "timed_out": record.timed_out,
         "duration_ms": record.duration_ms,

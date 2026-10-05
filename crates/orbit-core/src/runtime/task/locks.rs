@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::fs::selector::{Selector, canonical_selector_in_workspace};
-use orbit_common::fs::task_io::prune_missing_context_files;
 use orbit_common::protocol::tool_input::{
     optional_string_list_alias, optional_u32_alias, required_string,
 };
@@ -17,14 +17,21 @@ use orbit_store::contracts::{
 };
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_tools::ReservationOwnerContext;
-use orbit_types::identity::normalize_optional_attribution_label;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{
+    EpicHierarchyNode, Task, TaskEnvelopeV2, TaskRelationType, TaskStatus,
+    inherited_only_epic_roots,
+};
 use orbit_types::telemetry::AuditEventStatus;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::runtime::coordination_audit::{CoordinationAuditEvent, record_coordination_audit_event};
-use crate::runtime::task::canonicalize_context_files_for_read;
+use crate::runtime::audit::coordination::{
+    CoordinationAuditEvent, record_coordination_audit_event,
+};
+use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
+
+const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
 
 pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     let workspace_id = workspace_task_reservation_id(runtime)?;
@@ -34,32 +41,12 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
         .list_active_task_reservations(&workspace_orbit_dir(runtime), workspace_id.as_deref())?;
     emit_expired_reservation_events(runtime, &reservation_result.expired_reservations)?;
 
-    let index = TaskLockIndex::from_tasks(runtime.list_tasks()?);
-    let mut tasks: Vec<&Task> = index
-        .tasks()
-        .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review))
-        .collect();
-    tasks.sort_by_key(|task| {
-        (
-            task_lock_status_rank(task.status),
-            task.created_at,
-            task.id.clone(),
-        )
-    });
-
     // Expand each task's lock surface once and reuse it for both projections
-    // below. The expansion prunes every declared selector against the
-    // filesystem and, for an epic root, unions the surface of every
-    // descendant — so computing it per projection doubled the syscalls and the
-    // descendant walk for a listing that has a single answer.
+    // below. The expansion canonicalizes every declared selector, so computing
+    // it per projection doubled the work for a listing that has a single
+    // answer.
     let repo_root = runtime.paths().repo_root.as_path();
-    let locked_surfaces: Vec<(Task, Vec<String>)> = tasks
-        .into_iter()
-        .map(|task| {
-            let files = index.lock_context_files(task, repo_root);
-            (task.clone(), files)
-        })
-        .collect();
+    let locked_surfaces = TaskLockIndex::load(runtime, &[])?.into_active_lock_surfaces(repo_root);
 
     let locked_files: BTreeSet<String> = locked_surfaces
         .iter()
@@ -89,6 +76,22 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
         })
         .collect::<Vec<_>>();
 
+    // Counts distinct task IDs across both projections: a task-bound
+    // reservation names task IDs that need not belong to any active task (the
+    // reserving task may still be `backlog`), so counting only
+    // `locked_surfaces` undercounts whenever a reservation is the sole holder
+    // for a task.
+    let distinct_tasks: BTreeSet<&str> = locked_surfaces
+        .iter()
+        .map(|(task, _)| task.id.as_str())
+        .chain(
+            reservation_result
+                .reservations
+                .iter()
+                .flat_map(|reservation| reservation.task_ids.iter().map(String::as_str)),
+        )
+        .collect();
+
     Ok(json!({
         "locked_files": locked_files.iter().cloned().collect::<Vec<_>>(),
         "by_task": locked_surfaces
@@ -97,7 +100,7 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
             .collect::<Vec<_>>(),
         "by_reservation": by_reservation,
         "total_locked": locked_files.len(),
-        "total_tasks": locked_surfaces.len(),
+        "total_tasks": distinct_tasks.len(),
         "total_reservations": reservation_result.reservations.len(),
     }))
 }
@@ -128,7 +131,7 @@ pub(crate) fn release(
                         runtime,
                         agent.as_deref(),
                         model.as_deref(),
-                    ),
+                    )?,
                 })
                 .to_string(),
             ),
@@ -159,7 +162,7 @@ pub(crate) fn release(
                     runtime,
                     agent.as_deref(),
                     model.as_deref(),
-                ),
+                )?,
             }),
         )?;
     }
@@ -189,8 +192,41 @@ pub(crate) fn reserve(
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
-    let index = TaskLockIndex::load(runtime)?;
-    reserve_with_index(runtime, input, agent, model, reservation_owner, &index)
+    let requested_task_ids = match parse_task_lock_reservation_scope(&input)? {
+        TaskLockReservationScope::TaskIds(task_ids) => task_ids,
+        TaskLockReservationScope::Files(_) => Vec::new(),
+    };
+    let index = TaskLockIndex::load(runtime, &requested_task_ids)?;
+    reserve_with_index(
+        runtime,
+        input,
+        agent,
+        model,
+        reservation_owner,
+        &index,
+        EmptyTaskSurfacePolicy::Refuse,
+    )
+}
+
+/// Whether a task-scope reservation that resolves to zero files is a mistake
+/// to refuse, or a legitimate no-op to admit.
+///
+/// An operator claiming a task's surface before starting work almost
+/// certainly wants a real claim: a task with nothing declared should be told
+/// so, not handed a reservation ID that holds nothing ([`Self::Refuse`]). The
+/// legacy v2 dispatch admission gate uses a compatibility no-op instead: a
+/// task that has not declared any context yet has nothing to serialize
+/// against, so admitting it trivially is correct there ([`Self::Admit`]).
+/// Distributed pull admission must not use that compatibility path: its
+/// ready-queue contract excludes empty surfaces before creating a claim.
+///
+/// Neither value reaches an inherited-only `epic` root: that refusal is decided
+/// ahead of this policy, because the surface such a root is missing is one its
+/// descendants used to supply rather than one nobody in the family ever had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmptyTaskSurfacePolicy {
+    Refuse,
+    Admit,
 }
 
 /// Reserve a task-lock scope using an index loaded by the calling operation.
@@ -206,24 +242,58 @@ pub(crate) fn reserve_with_index(
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
     index: &TaskLockIndex,
+    empty_task_surface_policy: EmptyTaskSurfacePolicy,
 ) -> Result<Value, OrbitError> {
     let reservation_scope = parse_task_lock_reservation_scope(&input)?;
     let ttl_seconds =
         optional_u32_alias(&input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?.unwrap_or(1800);
-    if !(1..=7200).contains(&ttl_seconds) {
-        return Err(OrbitError::InvalidInput(
-            "`ttl_seconds` must be between 1 and 7200 seconds".to_string(),
-        ));
+    if !(1..=MAX_TASK_RESERVATION_TTL_SECONDS).contains(&ttl_seconds) {
+        return Err(OrbitError::InvalidInput(format!(
+            "`ttl_seconds` must be between 1 and {MAX_TASK_RESERVATION_TTL_SECONDS} seconds"
+        )));
     }
 
-    let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref());
+    let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
     let workspace_id = workspace_task_reservation_id(runtime)?;
     let repo_root = runtime.paths().repo_root.as_path();
     let (task_ids, requested_files) = match &reservation_scope {
-        TaskLockReservationScope::TaskIds(task_ids) => (
-            task_ids.clone(),
-            requested_task_files_indexed(index, task_ids, repo_root)?,
-        ),
+        TaskLockReservationScope::TaskIds(task_ids) => {
+            // Validate every id exists before judging whether the bundle
+            // declares a surface, so an unknown task id is still reported as
+            // not-found rather than folded into this refusal.
+            let requested_files = requested_task_files_indexed(index, task_ids, repo_root)?;
+            // Ahead of the policy branch, and so refused on every entry point:
+            // an `epic`-tagged root that declared nothing of its own no longer
+            // inherits the descendant surface it relied on, and the
+            // compatibility no-op that admits an ordinary undeclared task would
+            // otherwise hand exactly the task defined as taken on *whole* a
+            // reservation holding nothing.
+            if let Some(task_id) = task_ids
+                .iter()
+                .find(|task_id| index.is_inherited_only_epic_root(task_id))
+            {
+                return Err(inherited_only_epic_root_error(task_id));
+            }
+            if empty_task_surface_policy == EmptyTaskSurfacePolicy::Refuse {
+                if task_ids
+                    .iter()
+                    .all(|task_id| !index.declares_context_surface(task_id))
+                {
+                    return Err(no_lock_surface_error(task_ids));
+                }
+                // Reached only when every declaration failed
+                // canonicalization: a declared-but-not-yet-created target
+                // keeps its selector, so an empty surface here is an invalid
+                // declaration, not a missing file.
+                if requested_files.is_empty() {
+                    return Err(invalid_lock_surface_error(
+                        task_ids,
+                        &invalid_declared_selectors(index, task_ids, repo_root),
+                    ));
+                }
+            }
+            (task_ids.clone(), requested_files)
+        }
         TaskLockReservationScope::Files(files) => (
             Vec::new(),
             canonicalize_file_lock_selectors(files, repo_root)?,
@@ -346,12 +416,12 @@ pub(crate) fn reserve_with_index(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum TaskLockReservationScope {
+enum TaskLockReservationScope {
     TaskIds(Vec<String>),
     Files(Vec<String>),
 }
 
-pub(super) fn parse_task_lock_reservation_scope(
+fn parse_task_lock_reservation_scope(
     input: &Value,
 ) -> Result<TaskLockReservationScope, OrbitError> {
     let task_ids = optional_string_list_alias(input, &["task_ids", "taskIds", "task-ids"])?;
@@ -450,127 +520,268 @@ pub(crate) fn workspace_task_reservation_id(
 
 /// Return the effective lock surface for one task.
 ///
-/// An active epic root owns the union of every descendant's declared files so
-/// conflict admission can keep unrelated work moving while excluding only
-/// leaves that overlap the epic's actual family.
-pub(crate) fn lock_context_files_for_task(
-    task: &Task,
-    task_lookup: &BTreeMap<String, Task>,
-    workspace_root: &Path,
-) -> Vec<String> {
-    let mut files = existing_context_files_at_root(task, workspace_root)
+/// Every task — leaf, child, or `epic`-tagged root — reserves exactly what it
+/// declares. Hierarchy is metadata: a parent never inherits a child's
+/// footprint, so conflict admission excludes only the work that genuinely
+/// overlaps [ORB-12491].
+pub(crate) fn lock_context_files_for_task(task: &Task, workspace_root: &Path) -> Vec<String> {
+    declared_context_files(&task.context_files, workspace_root)
+        .retained
         .into_iter()
-        .collect::<BTreeSet<_>>();
-    if task.tags.iter().any(|tag| tag == "epic") {
-        for candidate in task_lookup.values() {
-            if task_is_descendant_of(candidate, &task.id, task_lookup) {
-                files.extend(existing_context_files_at_root(candidate, workspace_root));
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// One requested selector of a candidate that overlaps a selector an
+/// `in-progress` / `review` task holds.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) struct TaskLockOverlap {
+    pub(crate) requested_file: String,
+    pub(crate) locking_task_id: String,
+}
+
+/// Selector -> the `in-progress` / `review` tasks holding it.
+///
+/// Expand each active surface exactly once. Expansion is the expensive half —
+/// every selector is checked against the filesystem — so automatic admission
+/// and `orbit task eligible` both build this map once and read it rather than
+/// expanding again. Holder lists are sorted and deduplicated.
+pub(crate) fn active_task_lock_holders<'a>(
+    tasks: impl IntoIterator<Item = &'a Task>,
+    workspace_root: &Path,
+) -> BTreeMap<String, Vec<String>> {
+    let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for task in tasks {
+        if matches!(task.status, TaskStatus::InProgress | TaskStatus::Review) {
+            for file in lock_context_files_for_task(task, workspace_root) {
+                holders.entry(file).or_default().push(task.id.clone());
             }
         }
     }
-    files.into_iter().collect()
-}
-
-fn existing_context_files_at_root(task: &Task, workspace_root: &Path) -> Vec<String> {
-    let canonical = canonicalize_context_files_for_read(&task.context_files, workspace_root);
-    let (kept, _dropped) = prune_missing_context_files(workspace_root, canonical);
-    kept
-}
-
-fn task_is_descendant_of(
-    task: &Task,
-    ancestor_id: &str,
-    task_lookup: &BTreeMap<String, Task>,
-) -> bool {
-    let mut visited = BTreeSet::from([task.id.clone()]);
-    let mut next_parent_id = task.parent_id();
-    for _ in 0..32 {
-        let Some(parent_id) = next_parent_id else {
-            return false;
-        };
-        if parent_id == ancestor_id {
-            return true;
-        }
-        if !visited.insert(parent_id.to_string()) {
-            return false;
-        }
-        let Some(parent) = task_lookup.get(parent_id) else {
-            return false;
-        };
-        next_parent_id = parent.parent_id();
+    for locking_task_ids in holders.values_mut() {
+        locking_task_ids.sort();
+        locking_task_ids.dedup();
     }
-    false
+    holders
 }
 
-/// The task store indexed for lock-surface expansion: the id lookup plus,
-/// for each epic root, every task below it. One operation builds it once; a
-/// reserve that inspects forty active tasks then expands forty surfaces
-/// without re-reading the store or re-walking every task's parent chain for
-/// each epic it meets.
+/// The holders keyed by anchor, so one candidate's overlap check is a prefix
+/// lookup per requested selector rather than a pass over every held one.
+pub(crate) fn lock_holder_index(
+    lock_holders: &BTreeMap<String, Vec<String>>,
+) -> OverlapIndex<&[String]> {
+    let mut index = OverlapIndex::new();
+    for (selector, locking_task_ids) in lock_holders {
+        index.insert(selector, locking_task_ids.as_slice());
+    }
+    index
+}
+
+/// Every (requested selector, holder) pair where `task`'s lock surface
+/// overlaps a held selector, sorted and deduplicated. Empty means the task
+/// collides with no active work.
+pub(crate) fn task_lock_overlaps(
+    task: &Task,
+    holders: &OverlapIndex<&[String]>,
+    workspace_root: &Path,
+) -> Vec<TaskLockOverlap> {
+    let mut conflicts = Vec::new();
+    for requested_file in lock_context_files_for_task(task, workspace_root) {
+        for (_, locking_task_ids) in holders.overlapping(&requested_file) {
+            for locking_task_id in locking_task_ids.iter() {
+                conflicts.push(TaskLockOverlap {
+                    requested_file: requested_file.clone(),
+                    locking_task_id: locking_task_id.clone(),
+                });
+            }
+        }
+    }
+    conflicts.sort();
+    conflicts.dedup();
+    conflicts
+}
+
+/// Envelope metadata indexed for lock-surface expansion: active tasks,
+/// explicitly requested tasks, and their ancestors. One operation builds it
+/// once without hydrating task bodies or sidecars; repeated surface expansion
+/// then reuses it.
 pub(crate) struct TaskLockIndex {
-    tasks: BTreeMap<String, Task>,
-    epic_descendants: BTreeMap<String, Vec<String>>,
+    tasks: BTreeMap<String, TaskEnvelopeV2>,
+    /// The inherited-only `epic` roots in the whole workspace, decided while
+    /// every envelope was still in hand. The retained `tasks` deliberately keep
+    /// only active, requested, and ancestor envelopes, which is not enough to
+    /// see a root's *descendants* — so the rule is answered once at load rather
+    /// than re-read per reservation.
+    inherited_only_epic_root_ids: BTreeSet<String>,
 }
 
 impl TaskLockIndex {
-    pub(crate) fn load(runtime: &OrbitRuntime) -> Result<Self, OrbitError> {
-        Ok(Self::from_tasks(runtime.stores().tasks().list_tasks()?))
+    pub(crate) fn load(
+        runtime: &OrbitRuntime,
+        requested_task_ids: &[String],
+    ) -> Result<Self, OrbitError> {
+        let envelopes = runtime
+            .task_candidates(&Default::default(), usize::MAX)?
+            .items;
+        Ok(Self::from_envelopes(envelopes, requested_task_ids))
     }
 
-    pub(crate) fn from_tasks(tasks: Vec<Task>) -> Self {
-        let tasks = tasks
+    fn from_envelopes(envelopes: Vec<TaskEnvelopeV2>, requested_task_ids: &[String]) -> Self {
+        let all_tasks = envelopes
             .into_iter()
             .map(|task| (task.id.clone(), task))
             .collect::<BTreeMap<_, _>>();
-        let mut epic_descendants: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for task in tasks.values() {
-            for epic_id in epic_ancestor_ids(task, &tasks) {
-                epic_descendants
-                    .entry(epic_id)
-                    .or_default()
-                    .push(task.id.clone());
-            }
+        let requested_task_ids = requested_task_ids.iter().collect::<BTreeSet<_>>();
+        let seed_ids = all_tasks
+            .values()
+            .filter(|task| {
+                matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)
+                    || requested_task_ids.contains(&task.id)
+            })
+            .map(|task| task.id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut retained_ids = seed_ids.clone();
+
+        // Parent envelopes are kept so hierarchy stays readable from the index
+        // under the same guarded walk the bundle-backed implementation used.
+        // They do not widen anyone's lock surface [ORB-12491].
+        for task_id in retained_ids.clone() {
+            retain_task_ancestors(&task_id, &all_tasks, &mut retained_ids);
         }
+
+        let inherited_only_epic_root_ids =
+            inherited_only_epic_roots(all_tasks.values().map(|task| EpicHierarchyNode {
+                id: task.id.as_str(),
+                parent_id: envelope_parent_id(task),
+                tags: &task.tags,
+                declares_context: !task.context_files.is_empty(),
+            }))
+            .into_keys()
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+
+        let tasks = all_tasks
+            .into_iter()
+            .filter(|(task_id, _)| retained_ids.contains(task_id))
+            .collect::<BTreeMap<_, _>>();
         Self {
             tasks,
-            epic_descendants,
+            inherited_only_epic_root_ids,
         }
     }
 
-    pub(crate) fn get(&self, task_id: &str) -> Option<&Task> {
+    pub(crate) fn get(&self, task_id: &str) -> Option<&TaskEnvelopeV2> {
         self.tasks.get(task_id)
     }
 
-    pub(crate) fn tasks(&self) -> impl Iterator<Item = &Task> {
+    pub(crate) fn tasks(&self) -> impl Iterator<Item = &TaskEnvelopeV2> {
         self.tasks.values()
     }
 
-    /// [`lock_context_files_for_task`] over the precomputed epic families.
-    pub(crate) fn lock_context_files(&self, task: &Task, workspace_root: &Path) -> Vec<String> {
-        let mut files = existing_context_files_at_root(task, workspace_root)
+    fn into_active_lock_surfaces(
+        mut self,
+        workspace_root: &Path,
+    ) -> Vec<(TaskEnvelopeV2, Vec<String>)> {
+        let mut active_ids = self
+            .tasks
+            .values()
+            .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review))
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        active_ids.sort_by_key(|task_id| {
+            self.tasks.get(task_id).map(|task| {
+                (
+                    task_lock_status_rank(task.status),
+                    task.created_at,
+                    task.id.clone(),
+                )
+            })
+        });
+
+        active_ids
             .into_iter()
-            .collect::<BTreeSet<_>>();
-        if task.tags.iter().any(|tag| tag == "epic") {
-            for descendant in self
-                .epic_descendants
-                .get(&task.id)
-                .into_iter()
-                .flatten()
-                .filter_map(|id| self.tasks.get(id))
-            {
-                files.extend(existing_context_files_at_root(descendant, workspace_root));
-            }
-        }
-        files.into_iter().collect()
+            .filter_map(|task_id| {
+                let files = self
+                    .tasks
+                    .get(&task_id)
+                    .map(|task| self.lock_context_files(task, workspace_root))?;
+                self.tasks.remove(&task_id).map(|task| (task, files))
+            })
+            .collect()
+    }
+
+    /// [`lock_context_files_for_task`] over indexed envelopes.
+    pub(crate) fn lock_context_files(
+        &self,
+        task: &TaskEnvelopeV2,
+        workspace_root: &Path,
+    ) -> Vec<String> {
+        self.declared_lock_surface(task, workspace_root).retained
+    }
+
+    /// The canonical lock surface for `task` plus the declarations that could
+    /// not be canonicalized at all.
+    ///
+    /// Invalid entries are the only ones a lock surface loses, and they are
+    /// reported rather than dropped in silence: a task whose every declaration
+    /// is unusable would otherwise read as a claim protecting no files.
+    fn declared_lock_surface(
+        &self,
+        task: &TaskEnvelopeV2,
+        workspace_root: &Path,
+    ) -> DeclaredContextFiles {
+        let mut declared = declared_context_files(&task.context_files, workspace_root);
+        declared.retained = declared
+            .retained
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        declared.invalid = declared
+            .invalid
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        declared
+    }
+
+    /// Whether `task_id` has declared any `context_files` entries at all.
+    ///
+    /// A selector for a file the task has not created yet is a declaration
+    /// like any other and reaches [`Self::lock_context_files`] intact, so this
+    /// answers the narrower question a task-scope reservation refuses on:
+    /// nothing declared at all. A root inherits nothing from its children, so
+    /// an empty root declares no surface [ORB-12491].
+    pub(crate) fn declares_context_surface(&self, task_id: &str) -> bool {
+        self.tasks
+            .get(task_id)
+            .is_some_and(|task| !task.context_files.is_empty())
+    }
+
+    /// Whether `task_id` is one of the workspace's inherited-only `epic` roots:
+    /// tagged, declaring nothing of its own, with descendants that do declare
+    /// context ([`inherited_only_epic_roots`]).
+    pub(crate) fn is_inherited_only_epic_root(&self, task_id: &str) -> bool {
+        self.inherited_only_epic_root_ids.contains(task_id)
     }
 }
 
-/// Every epic-tagged ancestor on `task`'s parent chain, under the same hop
-/// and cycle guards as [`task_is_descendant_of`].
-fn epic_ancestor_ids(task: &Task, task_lookup: &BTreeMap<String, Task>) -> Vec<String> {
-    let mut epics = Vec::new();
-    let mut visited = BTreeSet::from([task.id.clone()]);
-    let mut next_parent_id = task.parent_id();
+fn envelope_parent_id(task: &TaskEnvelopeV2) -> Option<&str> {
+    task.relations
+        .iter()
+        .find(|relation| relation.relation_type == TaskRelationType::ChildOf)
+        .map(|relation| relation.target.as_str())
+}
+
+fn retain_task_ancestors(
+    task_id: &str,
+    task_lookup: &BTreeMap<String, TaskEnvelopeV2>,
+    retained_ids: &mut BTreeSet<String>,
+) {
+    let mut visited = BTreeSet::from([task_id.to_string()]);
+    let mut next_parent_id = task_lookup.get(task_id).and_then(envelope_parent_id);
     for _ in 0..32 {
         let Some(parent_id) = next_parent_id else {
             break;
@@ -581,12 +792,9 @@ fn epic_ancestor_ids(task: &Task, task_lookup: &BTreeMap<String, Task>) -> Vec<S
         let Some(parent) = task_lookup.get(parent_id) else {
             break;
         };
-        if parent.tags.iter().any(|tag| tag == "epic") {
-            epics.push(parent.id.clone());
-        }
-        next_parent_id = parent.parent_id();
+        retained_ids.insert(parent.id.clone());
+        next_parent_id = envelope_parent_id(parent);
     }
-    epics
 }
 
 pub(crate) fn requested_task_files_indexed(
@@ -616,7 +824,7 @@ pub(crate) fn task_lock_conflicts_indexed(
         return Vec::new();
     }
 
-    let mut tasks: Vec<&Task> = index
+    let mut tasks: Vec<&TaskEnvelopeV2> = index
         .tasks()
         .filter(|task| {
             matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)
@@ -724,9 +932,8 @@ fn reservation_actor_label(
     runtime: &OrbitRuntime,
     agent: Option<&str>,
     model: Option<&str>,
-) -> String {
-    normalize_optional_attribution_label(model.or(agent), model)
-        .unwrap_or_else(|| runtime.actor_label().to_string())
+) -> Result<String, OrbitError> {
+    runtime.actor().resolve_write_label(agent, model)
 }
 
 fn record_task_lock_audit_event(
@@ -752,11 +959,81 @@ fn record_task_lock_audit_event(
     )
 }
 
+/// A task-scope reservation whose bundle declares no `context_files` at all
+/// would otherwise mint a real reservation ID that holds nothing — a silent
+/// "0 file(s)" success that looks like a claim was taken when it was not.
+/// Refuse it by name instead so the caller declares context or falls back to
+/// explicit `--file` selectors.
+/// Every declared selector on the requested bundle, as stored, that cannot be
+/// canonicalized against the workspace root.
+fn invalid_declared_selectors(
+    index: &TaskLockIndex,
+    task_ids: &[String],
+    workspace_root: &Path,
+) -> Vec<String> {
+    let mut invalid = BTreeSet::new();
+    for task_id in task_ids {
+        if let Some(task) = index.get(task_id) {
+            invalid.extend(index.declared_lock_surface(task, workspace_root).invalid);
+        }
+    }
+    invalid.into_iter().collect()
+}
+
+/// A bundle that declares context whose every selector is unusable holds no
+/// files either, but for a different reason than
+/// [`no_lock_surface_error`]: the declaration exists and needs correcting
+/// rather than supplying. Naming the offending selectors is what makes the
+/// pre-admission repair actionable instead of a guess.
+fn invalid_lock_surface_error(task_ids: &[String], invalid: &[String]) -> OrbitError {
+    let (subject, verb) = if task_ids.len() == 1 {
+        ("task", "declares")
+    } else {
+        ("tasks", "declare")
+    };
+    let listed = if invalid.is_empty() {
+        "none could be canonicalized".to_string()
+    } else {
+        invalid.join(", ")
+    };
+    OrbitError::InvalidInput(format!(
+        "{subject} {} {verb} no usable context surface: no declared selector canonicalizes \
+         against this workspace ({listed}). Declared targets that do not exist yet are kept, so \
+         repair the invalid selectors with `orbit task update --context` before reserving",
+        task_ids.join(", ")
+    ))
+}
+
+fn no_lock_surface_error(task_ids: &[String]) -> OrbitError {
+    let (subject, verb) = if task_ids.len() == 1 {
+        ("task", "declares")
+    } else {
+        ("tasks", "declare")
+    };
+    OrbitError::InvalidInput(format!(
+        "{subject} {} {verb} no context surface to reserve (no `context_files` declared); \
+         nothing would be locked. Add context with `orbit task update --context`, or reserve \
+         explicit selectors with `--file` instead",
+        task_ids.join(", ")
+    ))
+}
+
+/// The refusal an inherited-only `epic` root gets, naming both repairs the
+/// design admits: declare the root's own surface, or retire the root.
+fn inherited_only_epic_root_error(task_id: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "task {task_id} carries the `epic` size tag and declares no `context_files` of its own, \
+         while its descendants do; a root no longer inherits its descendants' surface, so \
+         reserving it would hold nothing while that work runs beside it. Declare its own surface \
+         with `orbit task update --context`, or retire the root"
+    ))
+}
+
 fn first_task_id(task_ids: &[String]) -> Option<&str> {
     task_ids.first().map(String::as_str)
 }
 
-fn task_lock_to_json(task: &Task, context_files: Vec<String>) -> Value {
+fn task_lock_to_json(task: &TaskEnvelopeV2, context_files: Vec<String>) -> Value {
     json!({
         "id": task.id,
         "title": task.title,

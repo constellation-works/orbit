@@ -4,8 +4,12 @@ use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::{apply_default_pragmas, open_private};
-use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
+use rusqlite::functions::FunctionFlags;
+use rusqlite::types::{Value, ValueRef};
+use rusqlite::{Connection, DatabaseName, OpenFlags, Transaction, TransactionBehavior};
 
+use crate::contracts::ForwardCompatibleOpen;
+use crate::contracts::incident::classify_failure;
 use crate::driver::sqlite::migration;
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 
@@ -15,6 +19,68 @@ thread_local! {
 
 fn record_file_open(path: &Path) {
     FILE_OPEN_PATHS.with(|paths| paths.borrow_mut().push(path.to_path_buf()));
+}
+
+/// SQL name of [`unicode_lower`]. The bundled SQLite `lower()` folds ASCII
+/// only, so a query needle lowered in Rust would never match stored
+/// non-ASCII text lowered in SQL.
+pub(crate) const UNICODE_LOWER_SQL: &str = "orbit_unicode_lower";
+
+/// Lowercase `value` one character at a time.
+///
+/// Per-character mapping (unlike `str::to_lowercase`, which renders a
+/// word-final `Σ` as `ς`) keeps substring matching consistent: lowering a
+/// substring yields a substring of the lowered text. Both the query needle and
+/// the stored columns go through this function.
+pub(crate) fn unicode_lower(value: &str) -> String {
+    value.chars().flat_map(char::to_lowercase).collect()
+}
+
+/// Register Orbit's SQL functions on a freshly opened connection. Every
+/// connection a [`Store`] hands out — writer, pooled reader, in-memory, and
+/// observational — goes through here so SQL can call them on any read path.
+pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError> {
+    conn.create_scalar_function(
+        UNICODE_LOWER_SQL,
+        1,
+        FunctionFlags::SQLITE_UTF8
+            | FunctionFlags::SQLITE_DETERMINISTIC
+            | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| {
+            // Like SQLite's `lower()`, only text changes; NULL and numbers pass
+            // through so `instr` coerces them exactly as before.
+            Ok(match ctx.get_raw(0) {
+                ValueRef::Text(bytes) | ValueRef::Blob(bytes) => {
+                    Value::Text(unicode_lower(&String::from_utf8_lossy(bytes)))
+                }
+                other => Value::from(other),
+            })
+        },
+    )
+    .map_err(|error| OrbitError::Store(format!("register {UNICODE_LOWER_SQL}: {error}")))?;
+
+    conn.create_scalar_function(
+        "orbit_failure_class",
+        3,
+        FunctionFlags::SQLITE_UTF8
+            | FunctionFlags::SQLITE_DETERMINISTIC
+            | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| {
+            let surface: String = ctx.get(0)?;
+            let status: String = ctx.get(1)?;
+            let status = status.parse().map_err(|error| {
+                rusqlite::Error::UserFunctionError(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    error,
+                )))
+            })?;
+            let message: Option<String> = ctx.get(2)?;
+            Ok(classify_failure(&surface, status, message.as_deref())
+                .as_str()
+                .to_string())
+        },
+    )
+    .map_err(|error| OrbitError::Store(format!("register orbit_failure_class: {error}")))
 }
 
 /// SQLite store handle: one writer connection behind a mutex (WAL permits a
@@ -30,6 +96,12 @@ pub struct Store {
     /// reads fall back to the writer connection (a second connection would
     /// see a different empty database).
     readers: Option<Arc<ReadPool>>,
+    /// Set when this handle opened a database written by a newer orbit whose
+    /// extra migrations are all additive (ORB-12434). The connection is
+    /// pinned with `PRAGMA query_only=ON` and every write surface refuses
+    /// before it reaches SQLite, so an older binary reads a newer store but
+    /// never rewrites it.
+    forward_compatible: Option<Arc<ForwardCompatibleOpen>>,
 }
 
 pub struct StoreTx<'a> {
@@ -64,6 +136,9 @@ impl Store {
     }
 
     pub(crate) fn set_schema_meta_value(&self, key: &str, value: &str) -> Result<(), OrbitError> {
+        if let Some(refusal) = self.refuse_forward_compatible_write("write store metadata") {
+            return Err(refusal);
+        }
         let conn = self
             .conn
             .lock()
@@ -98,23 +173,102 @@ impl Store {
         let opened = open_private(path)?;
         let conn = opened.connection;
         let read_only = opened.read_only;
+        register_sql_functions(&conn)?;
 
-        if let Err(error) = migration::apply_schema(&conn) {
-            if read_only && error.is_readonly_or_access_failure() {
-                orbit_common::tracing::warn!(
-                    target: "orbit.store.sqlite",
-                    path = %path.display(),
-                    error = %error,
-                    "skipped schema migration while opening a store for immutable reads"
-                );
-            } else {
-                return Err(error);
+        let mut forward_compatible = None;
+        match migration::apply_schema_at_path(&conn, path) {
+            Ok(compatibility) => forward_compatible = compatibility,
+            Err(error) => {
+                if read_only && error.is_readonly_or_access_failure() {
+                    orbit_common::tracing::warn!(
+                        target: "orbit.store.sqlite",
+                        path = %path.display(),
+                        currency = ?opened.currency,
+                        error = %error,
+                        "skipped schema migration while opening a store for observational reads"
+                    );
+                } else {
+                    return Err(error);
+                }
             }
+        }
+        // A newer database is writable by this binary only when every newer
+        // migration keeps older writers safe. Otherwise pin the writer
+        // connection read-only in SQLite itself so a write cannot reach the
+        // file through any path that holds it.
+        if forward_compatible
+            .as_ref()
+            .is_some_and(|forward: &ForwardCompatibleOpen| !forward.writable)
+        {
+            conn.pragma_update(None, "query_only", "ON")
+                .map_err(|error| {
+                    OrbitError::Store(format!(
+                        "cannot pin '{}' read-only for a forward-compatible open: {error}",
+                        path.display()
+                    ))
+                })?;
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
+            forward_compatible: forward_compatible.map(Arc::new),
         })
+    }
+
+    /// Set when this handle opened a database newer than the binary
+    /// supports, in additive-only read-only mode (ORB-12434).
+    pub fn forward_compatible_open(&self) -> Option<&ForwardCompatibleOpen> {
+        self.forward_compatible.as_deref()
+    }
+
+    /// The scoped refusal for a write attempted against a forward-compatible
+    /// read-only handle: name the operation, not the whole workspace.
+    fn refuse_forward_compatible_write(&self, operation: &str) -> Option<OrbitError> {
+        let forward = self
+            .forward_compatible
+            .as_ref()
+            .filter(|forward| !forward.writable)?;
+        Some(OrbitError::Migration(format!(
+            "cannot {operation}: this orbit binary supports {} version {} and the store records \
+             version {}, so it was opened read-only; reads are served normally — upgrade orbit to \
+             write to this store",
+            forward.component, forward.supported_version, forward.state_version
+        )))
+    }
+
+    /// Rebind this handle and all of its writer clones to the current files at
+    /// `path`, then discard idle readers that may retain retired WAL identity.
+    ///
+    /// The runtime uses this at the external-provider return boundary. Those
+    /// children can legitimately open the granted database and its sidecars;
+    /// after they exit, completion accounting must use the authoritative path
+    /// rather than a connection retained from before the child ran.
+    pub fn refresh_file_connections(&self, path: &Path) -> Result<(), OrbitError> {
+        let readers = self.readers.as_ref().ok_or_else(|| {
+            OrbitError::Store(
+                "connection refresh requires a writable file-backed store".to_string(),
+            )
+        })?;
+
+        {
+            // Serialize before the fresh handle's write probe. Otherwise a
+            // sibling transaction can exhaust SQLite's independent busy
+            // timeout even though the shared writer would safely wait for it.
+            let mut current = self
+                .conn
+                .lock()
+                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            let fresh = Self::open(path)?;
+            fresh.check_writable()?;
+            let mut replacement = fresh
+                .conn
+                .lock()
+                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            std::mem::swap(&mut *current, &mut *replacement);
+        }
+
+        readers.clear_idle()?;
+        Ok(())
     }
 
     /// Open an existing database for an observational probe, without creating
@@ -123,19 +277,23 @@ impl Store {
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|error| OrbitError::Store(error.to_string()))?;
+        register_sql_functions(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
+            forward_compatible: None,
         })
     }
 
     pub fn open_in_memory() -> Result<Self, OrbitError> {
         let conn = Connection::open_in_memory().map_err(|e| OrbitError::Store(e.to_string()))?;
         apply_default_pragmas(&conn)?;
+        register_sql_functions(&conn)?;
         migration::apply_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
+            forward_compatible: None,
         })
     }
 
@@ -154,6 +312,9 @@ impl Store {
     where
         F: FnOnce(&mut StoreTx<'_>) -> Result<T, OrbitError>,
     {
+        if let Some(refusal) = self.refuse_forward_compatible_write("open a write transaction") {
+            return Err(refusal);
+        }
         let mut conn = self
             .conn
             .lock()
@@ -183,7 +344,10 @@ impl Store {
     /// deadlock, exactly as the old direct `conn.lock()` did.
     pub(crate) fn read(&self) -> Result<ReadGuard<'_>, OrbitError> {
         match &self.readers {
-            Some(pool) => Ok(ReadGuard::pooled(pool.checkout()?, pool)),
+            Some(pool) => {
+                let (generation, connection) = pool.checkout()?;
+                Ok(ReadGuard::pooled(generation, connection, pool))
+            }
             None => {
                 let guard = self
                     .conn
@@ -211,11 +375,6 @@ impl Store {
 
     pub fn connection(&self) -> Arc<Mutex<Connection>> {
         self.conn.clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn reader_pool_for_test(&self) -> Option<&ReadPool> {
-        self.readers.as_deref()
     }
 
     /// Current schema version recorded in the migration ledger (0 when no
@@ -263,6 +422,25 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(1))
             .map_err(|error| OrbitError::Store(error.to_string()))?;
         check_connection_writable(&conn)
+    }
+
+    /// True when this handle can never persist a write: the database was
+    /// opened observationally (read-only mount, unwritable file, or an
+    /// explicit read-only open) or pinned read-only by a forward-compatible
+    /// open. Cheap and non-mutating, unlike [`Store::check_writable`], so
+    /// callers can skip incidental persistence instead of attempting it.
+    pub fn is_read_only(&self) -> bool {
+        if self
+            .forward_compatible
+            .as_ref()
+            .is_some_and(|forward| !forward.writable)
+        {
+            return true;
+        }
+        self.conn
+            .lock()
+            .map(|conn| conn.is_readonly(DatabaseName::Main).unwrap_or(false))
+            .unwrap_or(false)
     }
 
     /// Prove the database accepts writes without mutating it: acquire the

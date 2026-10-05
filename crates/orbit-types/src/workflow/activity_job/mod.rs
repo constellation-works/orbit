@@ -7,10 +7,18 @@ pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;
 pub mod job_v2;
+pub mod provider_sandbox;
 pub mod retired;
 pub mod schema_header;
 pub mod tool_allowlist;
 pub mod trusted_host;
+
+pub use provider_sandbox::{
+    CODEX_LEAST_RESTRICTIVE_SANDBOX, CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_PROVIDER_SANDBOX,
+    admit_provider_sandbox_mode, format_provider_sandbox, is_least_restrictive_provider_sandbox,
+    least_restrictive_provider_sandbox, least_restrictive_provider_sandbox_warning,
+    parse_provider_sandbox_label, provider_sandbox_modes,
+};
 
 /// The single declaration of the deterministic action catalog. The generated
 /// typed actions make the core/engine ownership boundary exhaustive at compile
@@ -19,9 +27,10 @@ macro_rules! deterministic_action_catalog {
     ($declare:ident) => {
         $declare! {
             core {
-                ApplyTriageDispositions => "apply_triage_dispositions",
+                ApplyBlockedTaskRecovery => "apply_blocked_task_recovery",
                 ApplyTaskPilotResults => "apply_task_pilot_results",
                 ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
+                ConsolidateCodeScanningTasks => "consolidate_code_scanning_tasks",
                 ContextConflictCheck => "context_conflict_check",
                 DrainWindow => "drain_window",
                 FileCiFailureTasks => "file_ci_failure_tasks",
@@ -30,30 +39,36 @@ macro_rules! deterministic_action_catalog {
                 InvokeAndWait => "invoke_and_wait",
                 InvokeDetached => "invoke_detached",
                 ListBacklogTasks => "list_backlog_tasks",
-                ListEpicDescendants => "list_epic_descendants",
-                ListTriageCandidates => "list_triage_candidates",
                 OrbitToolCall => "orbit_tool_call",
                 PipelineSuccessGuard => "pipeline_success_guard",
+                PluginToolCall => "plugin.tool_call",
+                PrepareBlockedTaskRecovery => "prepare_blocked_task_recovery",
                 PrepareTaskPilot => "prepare_task_pilot",
                 PromoteAgentMain => "promote_agent_main",
+                PullRefill => "pull_refill",
                 ReleaseLocks => "release_locks",
                 ReserveLocks => "reserve_locks",
+                ResolveDeliveryJob => "resolve_delivery_job",
                 ResolveWorkspaceShipInput => "resolve_workspace_ship_input",
                 ReviewGateAdmit => "review_gate_admit",
                 ReviewGateSettle => "review_gate_settle",
                 RevertOnRed => "revert_on_red",
-                RunAutoTaskScheduler => "run_auto_task_scheduler",
                 ScanUnresolvedWork => "scan_unresolved_work",
                 Sleep => "sleep",
                 ValidateBundles => "validate_bundles",
             }
             engine {
+                CandidateResume => "candidate_resume",
+                CandidateValidate => "candidate_validate",
+                ClaimHandoff => "claim_handoff",
+                ClaimValidate => "claim_validate",
                 CollectCiEvidence => "collect_ci_evidence",
                 CollectDependabotAlerts => "collect_dependabot_alerts",
                 GitCommit => "git_commit",
                 GitMerge => "git_merge",
                 GitPush => "git_push",
                 GitRebase => "git_rebase",
+                HandoffLand => "handoff_land",
                 LocalShell => "local_shell",
                 PrFailureHandoff => "pr_failure_handoff",
                 PrOpen => "pr_open",
@@ -145,16 +160,18 @@ pub use audit_envelope::{
     V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };
 pub use job_v2::{
-    BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobV2, JobV2Step, JobV2StepBody, JoinMode,
-    LoopBlock, ParallelBlock, PipelineRef, RetrySpec, TargetRef, TargetStep,
+    BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobTaskDelivery, JobV2, JobV2Step,
+    JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, TargetRef,
+    TargetStep,
 };
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;
 pub use tool_allowlist::{
-    ToolAllowlistError, V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS,
-    tool_allowed, validate_activity_tool_allowlist,
-    validate_activity_tool_allowlist_against_registered_tools, validate_tool_allowlist,
-    validate_tool_allowlist_against_registered_tools,
+    ActivityToolDenyPolicy, ActivityToolPolicyMode, ToolAllowlistError,
+    V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS,
+    activity_tool_policy_deprecation, tool_allowed, tools_allowed_by_disallow_list,
+    validate_activity_tool_allowlist, validate_activity_tool_allowlist_against_registered_tools,
+    validate_tool_allowlist, validate_tool_allowlist_against_registered_tools,
 };
 pub use trusted_host::{
     TRUSTED_HOST_ACTIVITY, TRUSTED_HOST_ADMISSION_KEY, TrustedHostActivityError,

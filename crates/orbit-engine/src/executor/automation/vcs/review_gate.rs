@@ -12,11 +12,16 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::CommitIdentity;
 use orbit_types::workflow::automation::SourceRevision;
 
-use super::commit::{commit_reviewer_repairs_in, stage_everything, staged_paths};
+use super::commit::{
+    commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
+};
 use super::git::{
     base_sync_mode_from_input, git_output, git_output_raw, git_success,
     resolve_worktree_start_point,
 };
+
+/// Commit-message trailer naming the review attempt a repair commit belongs to.
+pub const REVIEW_ATTEMPT_TRAILER: &str = "Orbit-Review-Attempt";
 
 /// The pinned candidate a reviewer is handed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,8 +74,17 @@ pub fn candidate_identity(
     workspace_path: &Path,
     base_sha: &str,
 ) -> Result<CandidateIdentity, OrbitError> {
+    candidate_identity_at(workspace_path, base_sha, "HEAD")
+}
+
+/// The candidate at commit-ish `head`, pinned against `base_sha`.
+pub fn candidate_identity_at(
+    workspace_path: &Path,
+    base_sha: &str,
+    head: &str,
+) -> Result<CandidateIdentity, OrbitError> {
     let base = revision(workspace_path, base_sha)?;
-    let head = revision(workspace_path, "HEAD")?;
+    let head = revision(workspace_path, head)?;
     let commits = commits_between(workspace_path, &base.commit, &head.commit)?;
     Ok(CandidateIdentity {
         base,
@@ -125,11 +139,29 @@ pub fn uncommitted_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitErro
         workspace_path,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
-    let mut paths = status
-        .split('\0')
-        .filter(|entry| entry.len() > 3)
-        .map(|entry| entry[3..].to_string())
-        .collect::<Vec<_>>();
+    let mut paths = Vec::new();
+    let mut fields = status.split('\0');
+    while let Some(entry) = fields.next() {
+        if entry.is_empty() {
+            continue;
+        }
+        let mut codes = entry.chars();
+        let (Some(index_state), Some(_worktree_state)) = (codes.next(), codes.next()) else {
+            continue;
+        };
+        // A rename or copy is followed by a second NUL-terminated field holding
+        // the source path, which belongs to the record before it rather than
+        // starting a new record.
+        if matches!(index_state, 'R' | 'C') {
+            let _ = fields.next();
+        }
+        let Some(path) = entry.get(3..) else {
+            continue;
+        };
+        if !path.is_empty() {
+            paths.push(path.to_string());
+        }
+    }
     paths.sort();
     paths.dedup();
     Ok(paths)
@@ -155,6 +187,80 @@ pub fn commit_reviewer_repairs(
         .ok_or_else(|| OrbitError::Execution("reviewer repair commit was not recorded".into()))
 }
 
+/// The repair commit a settlement already made for `attempt_id`, when HEAD
+/// is exactly that commit.
+///
+/// A settlement interrupted after committing reviewer repairs leaves HEAD
+/// one commit past the admitted candidate. That commit is the gate's own
+/// only when its sole parent is the admitted candidate, its message carries
+/// the attempt's [`REVIEW_ATTEMPT_TRAILER`], and Git recorded the reviewer's
+/// author and Orbit's committer. Anything else is someone else's change and
+/// yields `None`.
+pub fn review_repair_at_head(
+    workspace_path: &Path,
+    candidate_commit: &str,
+    attempt_id: &str,
+    reviewer_model: &str,
+) -> Result<Option<CommitIdentity>, OrbitError> {
+    let head = revision(workspace_path, "HEAD")?;
+    let lineage = git_output(
+        workspace_path,
+        &["rev-list", "--parents", "-n", "1", &head.commit],
+    )?;
+    let parents = lineage.split_whitespace().skip(1).collect::<Vec<_>>();
+    if parents != [candidate_commit] {
+        return Ok(None);
+    }
+    let message = git_output_raw(
+        workspace_path,
+        &["log", "-1", "--format=%B", "--end-of-options", &head.commit],
+    )?;
+    let trailer = format!("{REVIEW_ATTEMPT_TRAILER}: {attempt_id}");
+    if !message.lines().any(|line| line.trim() == trailer) {
+        return Ok(None);
+    }
+    let Some(commit) = commits_between(workspace_path, candidate_commit, &head.commit)?.pop()
+    else {
+        return Ok(None);
+    };
+    let (author, committer) = reviewer_repair_identity(reviewer_model);
+    let owned = commit.author == author && commit.committer == committer;
+    Ok(owned.then_some(commit))
+}
+
+/// Paths `commit` changed against its first parent, reported the way
+/// [`uncommitted_paths`] reports them before the commit: a rename or copy
+/// by its destination only.
+pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String>, OrbitError> {
+    let raw = git_output_raw(
+        workspace_path,
+        &[
+            "diff-tree",
+            "-r",
+            "-M",
+            "--no-commit-id",
+            "--name-status",
+            "-z",
+            "--end-of-options",
+            commit,
+        ],
+    )?;
+    let mut paths = Vec::new();
+    let mut fields = raw.split('\0').filter(|field| !field.is_empty());
+    while let Some(status) = fields.next() {
+        // A rename or copy names its source before the destination.
+        if status.starts_with(['R', 'C']) {
+            let _ = fields.next();
+        }
+        if let Some(path) = fields.next() {
+            paths.push(path.to_string());
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 /// What a managed landing looks like against the reviewed candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LandedFacts {
@@ -173,7 +279,13 @@ pub fn fetch_landed_commit(workspace_path: &Path, landed_commit: &str) -> Result
     }
     git_success(
         workspace_path,
-        &["fetch", "--quiet", "origin", landed_commit],
+        &[
+            "fetch",
+            "--quiet",
+            "--end-of-options",
+            "origin",
+            landed_commit,
+        ],
     )
 }
 

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fixture backend: echo the envelope back so tests can see what Orbit sent.
+input="$(cat)"
+printf '{"ok":true,"output":{"echo":%s}}\n' "$input"

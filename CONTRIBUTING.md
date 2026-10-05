@@ -1,121 +1,60 @@
-# Orbit Internal Development Standards
+# Contributing to Orbit
 
-Orbit does not accept external pull requests. Development follows a
-single-writer pipeline that executes on a trusted host; running submitted code
-from an untrusted branch there would expose the maintainer's credentials.
-Unsolicited pull requests will be closed.
+Thanks for pitching in. Orbit welcomes bug fixes, docs, new features, new agent executors, plugins, and skills.
 
-GitHub issues remain open for bug reports and feature requests. Outside input
-reaches Orbit through issues; implementation is handled by the maintainer and
-Orbit's own agents.
+## Ways to help
 
-## Principles
+- **Report a bug or request a feature.** Use the [issue templates](https://github.com/constellation-works/orbit/issues/new/choose). Report security issues privately instead, following [SECURITY.md](SECURITY.md).
+- **Fix something small.** Typos, docs, error messages, and focused bug fixes can go straight to a pull request.
+- **Build something bigger.** Open an issue first for new features, new commands or tools, or changes to persisted formats, so we can agree on the approach before you write it.
+- **Improve the docs.** The website lives in [`website/`](website/) and the design docs in [`docs/design/`](docs/design/).
 
-- Prefer simple, coherent designs over preserving accidental complexity.
-- Fix root causes when practical, not just symptoms.
-- Keep command, engine, executor, store, and type boundaries clean.
-- Treat agent and human experience as product concerns, not just implementation details.
+Areas where help goes furthest: locking, worktree management, execution primitives, reconciliation, audit coverage, tool interfaces, and support for more agent CLIs.
 
-## Setup
+## Set up
 
-```bash
-cargo test --workspace
-```
-
-Use targeted tests while iterating, then run the full workspace suite before
-landing an internal change.
-
-## Toolchain (MSRV)
-
-Orbit's minimum supported Rust version is declared as `rust-version` in the
-workspace `Cargo.toml` (`[workspace.package]`) and enforced by the `msrv` job
-in `.github/workflows/ci.yml` (`cargo check --workspace --locked` on the
-pinned toolchain). If a change genuinely needs a newer compiler or a
-dependency bump raises the floor, bump `rust-version` and the workflow's
-`MSRV` env var together in the same PR, and call it out in the CHANGELOG.
-
-## Testing & Coverage
-
-CI collects workspace test coverage with
-[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on every PR
-(the `Coverage (informational)` job in `.github/workflows/ci.yml`) and
-uploads an lcov report as the `coverage-lcov` workflow artifact. The job is
-**informational only — it never gates a merge**.
-
-Per-crate line-coverage **targets** — goals to steer test investment, not
-gates that fail CI:
-
-| Crate | Target | Why |
-|---|---|---|
-| `orbit-policy` | > 90% | Policy evaluation is the security decision surface; on Linux it is the only enforcement layer. |
-| `orbit-core` | > 80% | Composition root and command handling — regressions here surface everywhere. |
-| `orbit-exec` | > 70% | Process spawning/sandboxing is platform-conditional, so some paths are unreachable on any single CI runner. |
-
-When touching those crates, check the coverage summary in the CI job log (or
-run `cargo llvm-cov -p <crate> --summary-only` locally) and prefer adding
-tests that close the gap toward the target.
-
-## Repository Shape
-
-Rust workspace crates live under `crates/` (for example `crates/orbit-cli`).
-
-- `orbit-cli`: CLI entrypoint
-- `orbit-core`: composition root, command handling, runtime wiring
-- `orbit-engine`: job and activity execution engine
-- `orbit-tools`, `orbit-agent`, `orbit-store`, `orbit-types`, `orbit-policy`, `orbit-exec`: supporting runtime layers
-
-## Change Expectations
-
-- Keep changes scoped and intentional.
-- Add or update tests when behavior changes.
-- Prefer removing legacy paths over carrying compatibility code when the product is still pre-adoption.
-- If you discover friction or recurring issues, fix them in scope or create a concrete follow-up task.
-
-## Supply-chain (cargo-deny)
-
-Dependencies are gated by [`cargo-deny`](https://embarkstudios.github.io/cargo-deny/)
-on every PR (via `scripts/ci-guardrails.sh`) and locally with `make audit`. The
-policy lives in [`deny.toml`](deny.toml): it denies crates with an open RUSTSEC
-advisory or a yanked version, and restricts licenses to a reviewed allow-list.
-
-Run it before landing an internal dependency change:
+You need Rust 1.89 or newer, `git`, and `rg` (ripgrep). Running the `orbit-cli`
+tests also needs `uv` on `PATH` (CI uses 0.11.28). To run the website, you also
+need Node 18+.
 
 ```bash
-cargo install cargo-deny --locked   # one-time
-make audit                          # == cargo deny check
+git clone https://github.com/constellation-works/orbit && cd orbit
+git switch agent-main
+make build          # or: make install, which puts orbit in ~/.orbit/bin
+cargo test -p <crate>
 ```
 
-**Adding a license.** If a new dependency introduces a license not in the
-`[licenses].allow` list, `cargo deny check` fails. Add the SPDX identifier to
-the list in `deny.toml` **only** if it is a permissive/public-domain-equivalent
-license, with a one-line comment naming the crate(s) and (for weak-copyleft
-licenses such as MPL-2.0) a short justification. Copyleft licenses that would
-impose obligations on Orbit's own sources must not be added — replace the
-dependency instead.
+Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering rules.
 
-**Advisory exceptions.** Only when there is no safe upgrade available may an
-advisory be time-boxed in `[advisories].ignore`. Each entry must be an object
-carrying:
+## Make a change
 
-- `id` — the `RUSTSEC-YYYY-NNNN` identifier, and
-- `reason` — why it is safe in Orbit's usage (why the vulnerable path is
-  unreachable or the impact is bounded) **and** a `Re-review YYYY-MM-DD` date
-  (default: ~6 months out).
+1. **Branch from `agent-main`,** and target your PR at `agent-main`. `main` is reserved for releases.
+2. **Keep it scoped.** One change per PR, with no unrelated refactors.
+3. **Follow the code rules** in [CLAUDE.md](CLAUDE.md#code). Lints are enforced, behaviour is tested at the boundary first (integration, golden, e2e) with unit tests only by exception ([test_strategy.md](docs/design-patterns/test_strategy.md)) in a sibling `tests/` dir, and internal IDs stay out of user-facing text.
+4. **Update docs in the same PR.** That includes the affected pages in `docs/design/` and `website/`, and `make goldens UPDATE=1` if you changed CLI help or the MCP surface. Leave `CHANGELOG.md` alone, because it's compiled at release.
+5. **Run the gates** before opening the PR:
 
-Re-review ignored advisories on or before their date and drop the entry once an
-upstream fix lands. Never ignore an advisory that has an available patched
-release — bump the dependency instead.
+   ```bash
+   make ci-fast    # fmt and repository guardrails
+   make ci-lint    # clippy -D warnings
+   make goldens    # CLI help and MCP snapshots
+   ```
 
-## Orbit State
+6. **Write a clear commit message** with a type prefix: `feat:`, `fix:`, `docs:`, `refactor:`, or `chore:`.
 
-Orbit keeps operational state under `.orbit/`. Review those changes carefully before committing.
+Tests that mutate Orbit state, spawn pipeline runs, or depend on the sandbox have specific isolation rules. Read [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) before writing one. The same file covers coverage targets, MSRV bumps, dependency and license policy, and vendored dashboard JS.
 
-- Do not accidentally commit noisy runtime artifacts.
-- Treat tracked asset changes as product changes.
-- Treat mutable run/task state as operational data unless the change is intentional.
+## Review
 
-## Commits
+- CI runs the full `make ci` on GitHub-hosted runners. Fork PRs get no secrets.
+- Linux and macOS CI cancel superseded runs for the same PR within each workflow. Non-PR runs use separate concurrency groups, so pushes to `main` and `agent-main` can finish independently.
+- A maintainer reviews every PR on GitHub and squash-merges it into `agent-main`. Maintainers never run contributed branches through Orbit's own pipeline host.
+- Expect a first response within a week. If a PR stalls, a comment is welcome.
 
-- Use clear commit messages.
-- Agent-authored commits should use the agent commit identity for that commit.
-- Do not leave the repository configured with the agent identity afterward.
+## Using coding agents
+
+Agent-assisted PRs are welcome. [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md) load automatically in most agent CLIs. You are responsible for the diff, so read it, run the gates, and say in the PR description what you verified.
+
+## Community
+
+Everyone taking part agrees to the [Code of Conduct](CODE_OF_CONDUCT.md). Contributions are licensed under the project's [MIT License](LICENSE.md).

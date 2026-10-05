@@ -52,11 +52,13 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         let (agent, model) = self
             .runtime
             .try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
+        let mut session = self.session_context.clone();
+        self.runtime.bind_worker_session(&mut session)?;
         super::dispatch::execute(
             &self.runtime,
             &self.task_scope,
             super::dispatch::ToolCaller {
-                session_context: &self.session_context,
+                session_context: &session,
                 agent,
                 model,
                 reservation_owner,
@@ -68,6 +70,29 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
 
     fn task_scope(&self) -> OrbitTaskScope {
         self.task_scope.clone()
+    }
+
+    fn execute_with_trusted_actor(
+        &self,
+        action: OrbitBuiltinAction,
+        input: Value,
+        actor_label: String,
+        reservation_owner: Option<ReservationOwnerContext>,
+    ) -> Result<Value, OrbitError> {
+        let mut session = self.session_context.clone();
+        self.runtime.bind_worker_session(&mut session)?;
+        super::dispatch::execute(
+            &self.runtime,
+            &self.task_scope,
+            super::dispatch::ToolCaller {
+                session_context: &session,
+                agent: None,
+                model: Some(actor_label),
+                reservation_owner,
+            },
+            action,
+            input,
+        )
     }
 }
 

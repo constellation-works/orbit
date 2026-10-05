@@ -17,18 +17,17 @@
 //! [`AuditEventStatus::Denied`]; the two rows answer different questions
 //! ("what was refused" versus "what call failed").
 
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
-    CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, authorize,
-    governed_command, governed_tool,
+    CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, OperationSurface,
+    authorize, governed_command, governed_plugin_tool, governed_tool,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contracts::AuditEventInsertParams;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::{
-    CallerIdentityProof, McpCapability, RemoteAgentInvokeMode, RemoteCallerGrant,
-    ToolSessionContext,
-};
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 
 use crate::OrbitRuntime;
 use crate::runtime::tool_exec::CapabilityEnforcement;
@@ -41,91 +40,49 @@ pub(crate) const AGENT_INVOKE_OPERATION_ID: &str = "orbit.agent.invoke";
 #[derive(Debug)]
 pub(crate) struct AgentInvokeAuthorizer {
     pub(crate) provenance: CallerProvenance,
-    pub(crate) remote_caller: Option<RemoteCallerGrant>,
+    /// Caller label an SSH-originated MCP session forwarded, for attribution
+    /// in the durable admission. Never a grant [ORB-12564].
+    pub(crate) remote_caller_machine_id: Option<String>,
 }
 
 impl OrbitRuntime {
-    /// Authorize a governed tool call, then require destination-granted remote
-    /// callers to hold `agent` before reaching the ordinary MCP surface.
+    /// Authorize a governed tool call.
     ///
     /// Called from `run_tool_with_context_and_role`, which every tool caller
     /// traverses: CLI `tool run`, the CLI's admin `run_tool` bypass, MCP
     /// `tools/call`, the dashboard, the v2 deterministic dispatcher, and agent
     /// loops. There is deliberately no second tool-side guard anywhere.
+    ///
+    /// An ungoverned tool has no operation-specific check, on any transport. A
+    /// session that arrived over SSH is not a special case: it holds what its
+    /// argv asked for, which is at least `agent` [ORB-12564].
     pub(crate) fn authorize_tool_operation(
         &self,
         tool_name: &str,
         session_context: &ToolSessionContext,
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<(), OrbitError> {
-        if let Some(operation) = governed_tool(tool_name) {
-            let envelope = match capability_enforcement {
-                CapabilityEnforcement::Enforce => CallerEnvelope::from_process_env(session_context),
-                CapabilityEnforcement::McpSessionOnly => {
-                    CallerEnvelope::mcp_session(session_context)
-                }
-            };
-            return self.decide_with_envelope(operation, envelope);
-        }
-        if capability_enforcement != CapabilityEnforcement::McpSessionOnly {
-            return Ok(());
-        }
-
-        let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(session_context));
-        if !caller.grants().contains(&McpCapability::Agent)
-            && let Some(grant) = caller.remote_caller_grant()
-        {
-            return self.deny_remote_agent_tool(tool_name, &caller, grant);
-        }
-
-        Ok(())
-    }
-
-    /// Refuse an ordinary tool when the destination resolved a remote caller
-    /// without the baseline capability for the agent MCP surface.
-    ///
-    /// Governed tools never reach this path: their operation-specific checks
-    /// remain authoritative, so an operator-only grant can still perform an
-    /// operator operation without implicitly gaining ordinary agent tools.
-    fn deny_remote_agent_tool(
-        &self,
-        tool_name: &str,
-        caller: &CallerCapabilities,
-        grant: &orbit_types::tool::RemoteCallerGrant,
-    ) -> Result<(), OrbitError> {
-        let granted = caller
-            .grants()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let granted = if granted.is_empty() {
-            "none".to_string()
-        } else {
-            granted
+        // A plugin tool is authorized by the generic row for its manifest's
+        // execution kind; every other tool by its own row, if it has one.
+        let operation = match self.tool_registry().plugin_binding(tool_name) {
+            Some(binding) => governed_plugin_tool(
+                binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
+            ),
+            None => match governed_tool(tool_name) {
+                Some(operation) => operation,
+                None => return Ok(()),
+            },
         };
-        let message = format!(
-            "operation '{tool_name}' requires the `agent` capability (ordinary MCP tools are \
-             available only to destination-granted agents); caller '{}' was resolved as \
-             `remote-grant` holding [{granted}] from {}",
-            grant.caller_machine_id, grant.source,
-        );
-
-        tracing::warn!(
-            target: "orbit.authorization",
-            operation = tool_name,
-            provenance = %caller.provenance(),
-            granted,
-            caller_machine_id = grant.caller_machine_id,
-            "ordinary MCP tool denied"
-        );
-        self.record_authorization_event(
-            tool_name,
-            caller,
-            AuditEventStatus::Denied,
-            Some(message.clone()),
-        );
-        Err(OrbitError::CapabilityDenied(message))
+        let capability_enforcement = if session_context.worker_invocation.is_some() {
+            CapabilityEnforcement::McpSessionOnly
+        } else {
+            capability_enforcement
+        };
+        let envelope = match capability_enforcement {
+            CapabilityEnforcement::Enforce => CallerEnvelope::from_process_env(session_context),
+            CapabilityEnforcement::McpSessionOnly => CallerEnvelope::mcp_session(session_context),
+        };
+        self.decide_with_envelope(operation, envelope)
     }
 
     /// Admit one trusted-host agent invocation, returning how the authorizing
@@ -136,20 +93,21 @@ impl OrbitRuntime {
     /// `orbit run agent` CLI — calls this before anything durable exists, so a
     /// refusal happens before a run record and long before a process.
     ///
-    /// Two rules beyond the ordinary governed-operation check:
+    /// One rule beyond the ordinary governed-operation check:
     ///
     /// * **The process envelope counts.** The tool chokepoint resolves an MCP
     ///   call session-only, which is right for placement but would let a leaf
     ///   agent shelling out to the CLI look like nothing at all. Resolving the
     ///   process envelope here means a managed run's `ORBIT_MANAGED_RUN_CONTEXT`
     ///   resolves as `agent`, and an agent is refused.
-    /// * **Remote callers need an operation-specific, workspace-scoped grant.**
-    ///   `operator` alone remains insufficient. The caller must have a
-    ///   matched callers-file row must explicitly enable `agent_invoke` for the
-    ///   resolved workspace. The default mode still requires a
-    ///   destination-issued key-bound identity; only an explicit cooperative
-    ///   mode accepts the self-asserted identity of the existing same-account
-    ///   SSH operator channel.
+    ///
+    /// A session that arrived over SSH is admitted on the same terms as a local
+    /// one: holding `operator` is the whole test [ORB-12564]. There is no
+    /// second, destination-side grant, because the caller reached this machine
+    /// through an SSH login that already lets it start any process it likes.
+    /// What keeps an *agent* from reaching here is caller-side and unchanged: a
+    /// federated server running as an agent never propagates operator into a
+    /// destination's argv.
     pub(crate) fn admit_agent_invoke(
         &self,
         session_context: &ToolSessionContext,
@@ -163,64 +121,10 @@ impl OrbitRuntime {
         let caller = CallerCapabilities::resolve(&envelope);
         self.decide_with_envelope(operation, envelope)?;
 
-        if let Some(grant) = caller.remote_caller_grant() {
-            if !grant.agent_invoke {
-                return self.deny_remote_agent_invoke(
-                    &caller,
-                    grant,
-                    "the matched destination policy does not enable `agent_invoke` for this \
-                     workspace",
-                );
-            }
-            let mode = grant.agent_invoke_mode.unwrap_or_default();
-            if mode == RemoteAgentInvokeMode::KeyBound
-                && grant.identity != CallerIdentityProof::KeyBound
-            {
-                return self.deny_remote_agent_invoke(
-                    &caller,
-                    grant,
-                    "the caller identity is self-asserted and the grant's default key-bound mode \
-                     requires the destination-issued SSH acceptance path; the destination owner \
-                     may instead select `agent_invoke_mode = \"cooperative\"` for a trusted \
-                     same-OS-account operator channel",
-                );
-            }
-        }
-
         Ok(AgentInvokeAuthorizer {
             provenance: caller.provenance(),
-            remote_caller: caller.remote_caller_grant().cloned(),
+            remote_caller_machine_id: caller.remote_caller_machine_id().map(ToOwned::to_owned),
         })
-    }
-
-    fn deny_remote_agent_invoke(
-        &self,
-        caller: &CallerCapabilities,
-        grant: &RemoteCallerGrant,
-        reason: &str,
-    ) -> Result<AgentInvokeAuthorizer, OrbitError> {
-        let message = format!(
-            "operation '{AGENT_INVOKE_OPERATION_ID}' admits an unsandboxed host process; remote \
-             caller '{}' was denied because {reason}. The destination controls this grant in {}",
-            grant.caller_machine_id, grant.source,
-        );
-        tracing::warn!(
-            target: "orbit.authorization",
-            operation = AGENT_INVOKE_OPERATION_ID,
-            provenance = %caller.provenance(),
-            caller_machine_id = grant.caller_machine_id,
-            caller_identity = %grant.identity,
-            agent_invoke = grant.agent_invoke,
-            agent_invoke_mode = grant.agent_invoke_mode.map(|mode| mode.to_string()),
-            "trusted host admission denied to a remote caller"
-        );
-        self.record_authorization_event(
-            AGENT_INVOKE_OPERATION_ID,
-            caller,
-            AuditEventStatus::Denied,
-            Some(message.clone()),
-        );
-        Err(OrbitError::CapabilityDenied(message))
     }
 
     /// Authorize a governed CLI command, or pass an ungoverned one through.
@@ -253,7 +157,7 @@ impl OrbitRuntime {
         operation: &'static GovernedOperation,
         envelope: CallerEnvelope,
     ) -> Result<(), OrbitError> {
-        let caller = CallerCapabilities::resolve(&envelope);
+        let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);
 
         match authorize(operation, &caller) {
             Ok(()) => {
@@ -267,6 +171,7 @@ impl OrbitRuntime {
                     );
                     self.record_authorization_event(
                         operation.id,
+                        operation.surface,
                         &caller,
                         AuditEventStatus::Success,
                         Some("authorized through the operator override".to_string()),
@@ -280,15 +185,13 @@ impl OrbitRuntime {
                     operation = operation.id,
                     provenance = %denial.provenance,
                     granted = %denial.granted,
-                    caller_machine_id = denial
-                        .remote_caller_grant
-                        .as_ref()
-                        .map(|grant| grant.caller_machine_id.as_str()),
+                    caller_machine_id = denial.remote_caller_machine_id.as_deref(),
                     "governed operation denied"
                 );
                 let message = denial.to_string();
                 self.record_authorization_event(
                     operation.id,
+                    operation.surface,
                     &caller,
                     AuditEventStatus::Denied,
                     Some(message.clone()),
@@ -311,42 +214,53 @@ impl OrbitRuntime {
     fn record_authorization_event(
         &self,
         operation_id: &str,
+        surface: OperationSurface,
         caller: &CallerCapabilities,
         status: AuditEventStatus,
         error_message: Option<String>,
     ) {
+        // A `Tool`-surface operation is authorized from inside
+        // `execute_registered_tool`, itself running inside
+        // `execute_tool_dispatch_with_audit_store`'s audited closure — that
+        // wrapper already writes its own row with `tool_name` set to the same
+        // operation ID on the same denial. Setting it here too would make
+        // `orbit audit list --tool <name>` and the denial-by-operation
+        // breakdown double-count every tool-surface refusal. A
+        // `CliCommand`/`Dashboard`-surface operation performs its own
+        // destruction directly and never gets that second row, so it needs
+        // this one to carry the operation name.
+        let tool_name = match surface {
+            OperationSurface::Tool => None,
+            OperationSurface::CliCommand | OperationSurface::Dashboard => {
+                Some(operation_id.to_string())
+            }
+        };
         let params = AuditEventInsertParams {
             execution_id: audit_execution_id("authz"),
             command: "authorization".to_string(),
             subcommand: Some(caller.provenance().to_string()),
-            tool_name: None,
+            tool_name,
             target_type: Some("operation".to_string()),
             target_id: Some(operation_id.to_string()),
-            role: self.actor_label().to_string(),
+            // Coarse actor kind (`human` / `operator` / family), not the
+            // `human:<os-user>` attribution label [ORB-12274].
+            role: self.actor().audit_role().to_string(),
             status,
             exit_code: i32::from(status != AuditEventStatus::Success),
             duration_ms: 1,
             working_directory: std::env::current_dir()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| ".".to_string()),
-            // A destination-side grant is recorded next to the effective set,
-            // not folded into it: `effective` alone cannot distinguish a
-            // caller this machine capped from one that never asked for more
-            // [ORB-11052]. `effective_capabilities` below stays the resolved
+            // A session that arrived over SSH names the machine it came from
+            // beside the effective set. The label is attribution, not a second
+            // authorization statement: it is what the caller's federated
+            // server forwarded, and it never contributed to this decision
+            // [ORB-12564]. `effective_capabilities` below stays the resolved
             // set every existing query reads.
-            arguments_json: caller.remote_caller_grant().map(|grant| {
+            arguments_json: caller.remote_caller_machine_id().map(|caller_machine_id| {
                 serde_json::json!({
-                    "caller_machine_id": grant.caller_machine_id,
-                    "granted_capabilities": grant.granted_capabilities,
+                    "caller_machine_id": caller_machine_id,
                     "effective_capabilities": caller.grants(),
-                    "source": grant.source,
-                    // Which tier answered. Both tiers produce a grant that
-                    // looks identical once resolved, so a trail that recorded
-                    // only the grant would leave a reader to assume whether
-                    // the caller had to hold a key to select it [ORB-11053].
-                    "caller_identity": grant.identity,
-                    "agent_invoke": grant.agent_invoke,
-                    "agent_invoke_mode": grant.agent_invoke_mode,
                 })
                 .to_string()
             }),
@@ -357,12 +271,10 @@ impl OrbitRuntime {
             pid: std::process::id(),
             session_id: None,
             workspace_id: None,
-            caller_machine_id: caller
-                .remote_caller_grant()
-                .map(|grant| grant.caller_machine_id.clone()),
-            caller_host_id: None,
+            caller_machine_id: caller.remote_caller_machine_id().map(ToOwned::to_owned),
+            caller_machine_name: None,
             process_machine_id: None,
-            process_host_id: None,
+            process_machine_name: None,
             transport: None,
             effective_capabilities: caller.grants().clone(),
             origin_session_id: None,
@@ -382,4 +294,27 @@ impl OrbitRuntime {
             );
         }
     }
+}
+
+/// What a caller the chokepoint has already admitted actually holds.
+///
+/// A handler that has to draw one more distinction *inside* an authorized call
+/// asks here instead of reading `effective_capabilities` off the session. A
+/// session's asserted set is not where every surface keeps its authority:
+/// `orbit tool run` builds a session with no capabilities at all and expresses
+/// the caller's authority in the process envelope, so a raw session read
+/// refuses the owner on the owner's own machine [ORB-12582].
+///
+/// The resolution is the shared one, in the shared order: a session that
+/// asserts grants is taken at its word, and the process envelope is consulted
+/// only for a session that asserts nothing. An MCP session is therefore never
+/// widened by whatever process happens to host its server — and a session that
+/// asserts nothing does not reach a handler that calls this, because the
+/// governed floor on that handler's tool refused it first.
+pub(crate) fn resolved_caller_capabilities(
+    session: &ToolSessionContext,
+) -> BTreeSet<McpCapability> {
+    CallerCapabilities::resolve(&CallerEnvelope::from_process_env(session))
+        .grants()
+        .clone()
 }

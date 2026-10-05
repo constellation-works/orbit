@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "repository": { "type": "string", "description": "Explicit absolute path to the Git repository to query." },
+    "query": { "type": "string", "description": "Free-text change intent." },
+    "limit": { "type": "integer", "description": "Top-K result count." }
+  },
+  "required": ["repository"]
+}

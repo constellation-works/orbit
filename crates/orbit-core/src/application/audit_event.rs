@@ -1,6 +1,7 @@
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
     AuditRoleAggregate, AuditToolAggregate, AuditToolCallCountsByRole,
@@ -57,6 +58,38 @@ impl OrbitRuntime {
             })
     }
 
+    /// Every matching event, newest first, read in pages so an export is
+    /// never cut at the store's default page size.
+    pub fn export_audit_events(
+        &self,
+        since: Option<DateTime<Utc>>,
+        tool: Option<String>,
+    ) -> Result<Vec<AuditEvent>, OrbitError> {
+        const PAGE: usize = 1000;
+        let mut filter = AuditEventFilter {
+            since,
+            tool_name: tool,
+            limit: PAGE,
+            ..AuditEventFilter::default()
+        };
+        let mut events: Vec<AuditEvent> = Vec::new();
+        loop {
+            let page = self.stores().audit_events().list_audit_events(&filter)?;
+            let fetched = page.len();
+            // Pages run newest first by id; an event recorded mid-export
+            // shifts later pages, so skip rows an earlier page returned.
+            let oldest_seen = events.last().map(|event| event.id);
+            events.extend(
+                page.into_iter()
+                    .filter(|event| oldest_seen.is_none_or(|oldest| event.id < oldest)),
+            );
+            if fetched < PAGE {
+                return Ok(events);
+            }
+            filter.offset += fetched;
+        }
+    }
+
     pub fn list_audit_events_filtered(
         &self,
         filter: &AuditEventFilter,
@@ -109,62 +142,6 @@ impl OrbitRuntime {
             .insert_audit_event_record(params)
     }
 
-    pub fn record_id_allocation_audit(&self, kind: &str, id: &str) -> Result<(), OrbitError> {
-        let worktree_root = self
-            .paths()
-            .local_dir
-            .as_path()
-            .parent()
-            .map(|path| path.to_path_buf())
-            .unwrap_or_else(|| self.paths().local_dir.clone());
-        let payload = serde_json::json!({
-            "kind": kind,
-            "id": id,
-            "worktree_root": worktree_root.to_string_lossy(),
-        });
-        let arguments_json = serde_json::to_string(&payload).map_err(|error| {
-            OrbitError::Execution(format!("serialize id allocation audit: {error}"))
-        })?;
-        self.record_audit_event(&AuditEventInsertParams {
-            execution_id: audit_execution_id("audit-id-allocation"),
-            command: "id".to_string(),
-            subcommand: Some("allocate".to_string()),
-            tool_name: Some(format!("orbit.{kind}.add")),
-            target_type: Some("id_allocation".to_string()),
-            target_id: Some(id.to_string()),
-            role: "admin".to_string(),
-            status: AuditEventStatus::Success,
-            exit_code: 0,
-            duration_ms: 0,
-            working_directory: self.paths().repo_root.to_string_lossy().into_owned(),
-            arguments_json: Some(arguments_json),
-            stdout_truncated: None,
-            stderr_truncated: None,
-            error_message: None,
-            host: std::env::var("HOSTNAME").ok(),
-            pid: std::process::id(),
-            session_id: None,
-            workspace_id: None,
-            caller_machine_id: None,
-            caller_host_id: None,
-            process_machine_id: None,
-            process_host_id: None,
-            transport: None,
-            effective_capabilities: Default::default(),
-            origin_session_id: None,
-            mcp_call_id: None,
-            lease_id: None,
-            task_id: None,
-            job_run_id: std::env::var("ORBIT_RUN_ID").ok().filter(|s| !s.is_empty()),
-            activity_id: std::env::var("ORBIT_ACTIVITY_ID")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            step_index: std::env::var("ORBIT_STEP_INDEX")
-                .ok()
-                .and_then(|s| s.parse().ok()),
-        })
-    }
-
     /// Hourly count buckets `(rfc3339_hour_start, count)` for audit events at or
     /// after `since`. Empty hours are NOT in the result; callers must zero-fill
     /// when rendering a sparkline that needs every bucket.
@@ -186,6 +163,80 @@ impl OrbitRuntime {
         self.stores()
             .audit_events()
             .get_audit_denials_by_role(since)
+    }
+
+    /// Canonical SQLite capability/policy decisions by operation, excluding
+    /// coordination and settlement refusals and duplicate invocation evidence.
+    pub fn audit_denials_by_operation(
+        &self,
+        since: Option<&DateTime<Utc>>,
+    ) -> Result<Vec<(String, i64)>, OrbitError> {
+        self.stores()
+            .audit_events()
+            .get_audit_denials_by_operation(since)
+    }
+
+    /// Shared policy-denial population for the dashboard and audit CLI.
+    /// Raw `AuditStats::denied_count` remains the forensic row count.
+    pub fn audit_policy_denial_stats(
+        &self,
+        since: Option<&DateTime<Utc>>,
+    ) -> Result<AuditPolicyDenialStats, OrbitError> {
+        use orbit_store::contracts::V2AuditEventFilter;
+        use orbit_types::workflow::activity_job::{
+            V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_STEP_DENIED,
+        };
+
+        let mut operations: BTreeMap<String, i64> = self
+            .audit_denials_by_operation(since)?
+            .into_iter()
+            .collect();
+        let sql_denied = operations.values().sum();
+        let mut v2_denied = 0;
+        const PAGE: usize = 1000;
+        for event_type in V2_DENIAL_EVENT_TYPES {
+            let mut offset = 0;
+            loop {
+                let events = self.list_v2_audit_events(V2AuditEventFilter {
+                    since: since.copied(),
+                    event_type: Some((*event_type).to_string()),
+                    limit: Some(PAGE),
+                    offset: Some(offset),
+                    ..Default::default()
+                })?;
+                let fetched = events.len();
+                for event in events {
+                    let Ok(payload) =
+                        serde_json::from_str::<serde_json::Value>(&event.payload_json)
+                    else {
+                        continue;
+                    };
+                    let operation = if *event_type == V2_EVENT_TYPE_FS_CALL_DENIED {
+                        format!("fs.{}", payload["op"].as_str().unwrap_or("unknown"))
+                    } else if *event_type == V2_EVENT_TYPE_STEP_DENIED {
+                        payload["step_id"].as_str().unwrap_or("step").to_string()
+                    } else {
+                        payload["tool_name"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                            .to_string()
+                    };
+                    *operations.entry(operation).or_default() += 1;
+                    v2_denied += 1;
+                }
+                if fetched < PAGE {
+                    break;
+                }
+                offset += fetched;
+            }
+        }
+        let mut by_operation: Vec<_> = operations.into_iter().collect();
+        by_operation.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(AuditPolicyDenialStats {
+            sql_denied,
+            v2_denied,
+            by_operation,
+        })
     }
 
     /// Per-role counts for audited tool invocations. `failed` counts every
@@ -317,4 +368,14 @@ pub fn compute_p95(sorted_durations: &[i64]) -> i64 {
     let idx = ((sorted_durations.len() as f64) * 0.95).ceil() as usize;
     let idx = idx.min(sorted_durations.len()) - 1;
     sorted_durations[idx]
+}
+
+/// Decision counts shared by the audit CLI and dashboard KPI.
+pub struct AuditPolicyDenialStats {
+    /// Canonical SQLite capability and policy decisions.
+    pub sql_denied: i64,
+    /// Policy decisions in the workspace's v2 audit envelope.
+    pub v2_denied: i64,
+    /// Combined decisions by operation.
+    pub by_operation: Vec<(String, i64)>,
 }

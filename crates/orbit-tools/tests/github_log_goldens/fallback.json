@@ -1,0 +1,1936 @@
+[
+  {
+    "name": "an_empty_failed_step_read_recovers_the_failed_jobs_own_log",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "an_in_progress_parent_readiness_error_recovers_a_completed_failed_job",
+    "input": {
+      "run": "34060485218",
+      "job": 101560010340,
+      "scope": "failed"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 512,
+    "run_error": "failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "readiness_does_not_read_a_running_failed_job",
+    "input": {
+      "run": "34060485218",
+      "job": 101560010340
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "in_progress",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "run_error": "failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "a_successful_job_is_never_read_as_failed_step_evidence",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560019999": [
+        "passing job output\n"
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "job_metadata_naming_another_run_is_refused",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 99,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "a_job_url_from_another_run_is_refused",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/77777777",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "an_unavailable_job_log_is_reported_rather_than_fabricated",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384
+  },
+  {
+    "name": "an_empty_job_log_falls_through_to_the_next_failed_job",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ],
+      "101560019999": [
+        ""
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "an_oversized_job_log_is_bounded_and_keeps_the_failing_tail",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n",
+        {
+          "text": "2026-09-06T21:20:00.0000000Z Compiling something very verbose\n",
+          "repeat": 20000
+        },
+        "2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 8192
+  },
+  {
+    "name": "whole_run_scope_recovers_checkout_evidence_from_a_job_log",
+    "input": {
+      "run": "34060485218",
+      "scope": "all"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "a_narrowed_job_must_belong_to_the_run",
+    "input": {
+      "run": "34060485218",
+      "job": "424242"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "a_job_from_a_previous_rerun_attempt_is_refused",
+    "input": {
+      "run": "34060485218",
+      "job": 101560010340
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010341,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "run_error": "failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "a_failing_run_scoped_read_stays_an_error_instead_of_falling_back",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "run_error": "unscripted transport failure"
+  },
+  {
+    "name": "auth_and_network_failures_do_not_trigger_job_log_recovery/0",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "run_error": "HTTP 401: Bad credentials"
+  },
+  {
+    "name": "auth_and_network_failures_do_not_trigger_job_log_recovery/1",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "run_error": "error connecting to api.github.com: network is unreachable"
+  },
+  {
+    "name": "auth_and_network_failures_do_not_trigger_job_log_recovery/2",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "run_error": "HTTP 401 while run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "the_job_log_endpoint_is_a_read_of_this_repository_only",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "the_registered_tool_reads_every_log_request_in_the_selected_workspace/None",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true
+  },
+  {
+    "name": "the_registered_tool_reads_every_log_request_in_the_selected_workspace/acme/orbit",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true
+  },
+  {
+    "name": "a_repository_that_could_traverse_the_endpoint_is_rejected",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit?per_page=9"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384
+  },
+  {
+    "name": "source_read_limit_defers_without_retrying_or_returning_a_partial_unit",
+    "input": {
+      "run": "34060485218",
+      "job": 101560010340
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        {
+          "text": "bounded line\n",
+          "repeat": 700000
+        }
+      ]
+    },
+    "max_bytes": 16384,
+    "run_error": "failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "live_long_job_logs_retain_complete_command_and_checkout/offline_capture",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "run_log": [
+      "setup\tCheckout\tHEAD is now at a529122350000000000000000000000000000000\n",
+      "##[group]Run cargo check\n##[endgroup]\n",
+      {
+        "text": "Checking dependency\n",
+        "repeat": 2000
+      },
+      "error[E0063]: missing field `owner_machine_id`\n  --> crates/orbit-core/src/runtime.rs:92:7\n##[error]Process completed with exit code 101.\n"
+    ]
+  },
+  {
+    "name": "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.pr.list/None",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.pr.list",
+    "selected": true,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.pr.list/acme/orbit",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.pr.list",
+    "selected": true,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.pr.list/None",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.pr.list",
+    "selected": false,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.pr.list/acme/orbit",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.pr.list",
+    "selected": false,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.list/None",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.run.list",
+    "selected": true,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.list/acme/orbit",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.run.list",
+    "selected": true,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.list/None",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.run.list",
+    "selected": false,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.list/acme/orbit",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.run.list",
+    "selected": false,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.view/None",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.run.view",
+    "selected": true,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.view/acme/orbit",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.run.view",
+    "selected": true,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.view/None",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.run.view",
+    "selected": false,
+    "registered": true
+  },
+  {
+    "name": "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.view/acme/orbit",
+    "input": {
+      "run": "34060485218",
+      "repo": "acme/orbit"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "tool": "github.run.view",
+    "selected": false,
+    "registered": true
+  }
+]

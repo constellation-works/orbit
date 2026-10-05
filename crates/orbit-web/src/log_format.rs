@@ -9,11 +9,18 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
+use orbit_common::fs::reverse_lines::{REVERSE_READ_BLOCK, ReverseLines};
+use orbit_common::security::redaction::redact_all;
 use orbit_core::OrbitError;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::parse::parse_since;
+
+/// Longest single log record the web surfaces buffer. The SSE stream drops a
+/// longer record, and the snapshot tail skips an unterminated trailing one
+/// this large instead of reading it into memory.
+pub(crate) const MAX_LOG_RECORD_BYTES: usize = 1 << 20;
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq, PartialOrd, Ord)]
 #[clap(rename_all = "lower")]
@@ -144,7 +151,7 @@ pub(crate) fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, 
 
 /// Block size for reverse JSONL scans. Sparse filters may still walk every
 /// block to offset 0; a dense tail stops once `limit` matches are in hand.
-pub(crate) const TAIL_READ_BLOCK: usize = 64 * 1024;
+const TAIL_READ_BLOCK: usize = REVERSE_READ_BLOCK;
 
 pub(crate) fn read_recent_matching_events(
     path: &Path,
@@ -164,10 +171,9 @@ pub(crate) fn read_recent_matching_events(
 
 /// Newest matching JSONL events from a seekable reader, scanning backwards.
 ///
-/// `block_size` is the read window so tests can force a line to span blocks
-/// without a huge fixture. Production callers use [`TAIL_READ_BLOCK`].
-pub(crate) fn read_recent_matching_events_from<R: Read + Seek>(
-    mut reader: R,
+/// `block_size` is the read window. Callers use [`TAIL_READ_BLOCK`].
+fn read_recent_matching_events_from<R: Read + Seek>(
+    reader: R,
     filters: &Filters,
     limit: usize,
     block_size: usize,
@@ -175,104 +181,165 @@ pub(crate) fn read_recent_matching_events_from<R: Read + Seek>(
     if limit == 0 {
         return Ok(Vec::new());
     }
+    // `limit` ultimately originates at the request boundary. Grow this vector
+    // only as matching records are found rather than preallocating from it.
+    let mut newest_first = Vec::new();
+    for line in ReverseLines::with_block_size(reader, block_size)? {
+        if let Some(event) = parse_matching_event(&line?, filters) {
+            newest_first.push(event);
+            if newest_first.len() == limit {
+                break;
+            }
+        }
+    }
+    newest_first.reverse();
+    Ok(newest_first)
+}
+
+/// Newest matching events of a snapshot plus the byte cursor that resumes
+/// exactly after the bytes those events were drawn from.
+#[derive(Debug)]
+pub(crate) struct RenderedLogTail {
+    pub events: Vec<RenderedLogEvent>,
+    pub cursor: u64,
+}
+
+/// Snapshot the newest matching events of the log at `path` together with a
+/// replay cursor bound to the same file extent.
+///
+/// The extent is fixed by one `stat` of the open handle; bytes appended later
+/// are neither scanned nor covered by the cursor, so a stream resumed at
+/// `cursor` delivers each record exactly once across snapshot and stream.
+pub(crate) fn read_recent_rendered_tail(
+    path: &Path,
+    filters: &Filters,
+    limit: usize,
+) -> io::Result<RenderedLogTail> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(RenderedLogTail {
+                events: Vec::new(),
+                cursor: 0,
+            });
+        }
+        Err(err) => return Err(err),
+    };
+    let len = file.metadata()?.len();
+    read_rendered_tail_from(&mut file, len, filters, limit, TAIL_READ_BLOCK)
+}
+
+/// [`read_recent_rendered_tail`] over the first `len` bytes of `reader`.
+///
+/// Newline-terminated records are always complete. An unterminated final
+/// record counts only when it parses as JSON: a finished record written
+/// without a newline is served and the cursor moves past it (its newline later
+/// reads as an empty, skipped line), while a partial write leaves the cursor at
+/// its start so the stream reads it whole once it completes.
+fn read_rendered_tail_from<R: Read + Seek>(
+    reader: &mut R,
+    len: u64,
+    filters: &Filters,
+    limit: usize,
+    block_size: usize,
+) -> io::Result<RenderedLogTail> {
     let block_size = if block_size == 0 {
         TAIL_READ_BLOCK
     } else {
         block_size
     };
-
-    let mut pos = reader.seek(SeekFrom::End(0))?;
-    if pos == 0 {
-        return Ok(Vec::new());
-    }
-
-    let mut newest_first = Vec::with_capacity(limit);
-    let mut carry = Vec::new();
-    let mut buf = Vec::new();
-
-    while pos > 0 && newest_first.len() < limit {
-        let chunk_len = u64::min(block_size as u64, pos);
-        let start = pos - chunk_len;
-        reader.seek(SeekFrom::Start(start))?;
-        buf.clear();
-        buf.resize(chunk_len as usize, 0);
-        reader.read_exact(&mut buf)?;
-        if !carry.is_empty() {
-            buf.extend_from_slice(&carry);
+    let records_end = complete_records_end(reader, len, block_size)?;
+    // An unterminated tail longer than the stream's record cap is treated like
+    // a partial write (not served, cursor left at its start) without being
+    // read: the file's tail is untrusted length, so never allocate from it.
+    let final_record = match usize::try_from(len - records_end) {
+        Ok(tail_len) if tail_len <= MAX_LOG_RECORD_BYTES => {
+            let mut unterminated = vec![0; tail_len];
+            reader.seek(SeekFrom::Start(records_end))?;
+            reader.read_exact(&mut unterminated)?;
+            std::str::from_utf8(&unterminated)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         }
-
-        let (next_carry, complete) = split_tail_chunk(&buf, start > 0)?;
-        carry = next_carry;
-        pos = start;
-
-        for line in complete.into_iter().rev() {
-            if let Some(event) = parse_matching_event(&line, filters) {
-                newest_first.push(event);
-                if newest_first.len() == limit {
-                    break;
-                }
-            }
-        }
-    }
-
-    newest_first.reverse();
-    Ok(newest_first)
-}
-
-/// Split a reverse-scan block into an incomplete prefix (belongs to earlier
-/// bytes) and complete lines in chronological order, including a final
-/// fragment that has no trailing newline.
-fn split_tail_chunk(chunk: &[u8], has_earlier_bytes: bool) -> io::Result<(Vec<u8>, Vec<String>)> {
-    if chunk.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-    if has_earlier_bytes {
-        match chunk.iter().position(|&b| b == b'\n') {
-            None => Ok((chunk.to_vec(), Vec::new())),
-            Some(i) => {
-                let carry = chunk[..i].to_vec();
-                let lines = decode_lines(&chunk[i + 1..])?;
-                Ok((carry, lines))
-            }
-        }
+        _ => None,
+    };
+    let cursor = if final_record.is_some() {
+        len
     } else {
-        Ok((Vec::new(), decode_lines(chunk)?))
-    }
+        records_end
+    };
+
+    let final_match = final_record.filter(|event| limit > 0 && filters.matches(event));
+    let earlier_limit = limit - usize::from(final_match.is_some());
+    let mut events = read_recent_matching_events_from(
+        Prefix::new(reader, records_end),
+        filters,
+        earlier_limit,
+        block_size,
+    )?;
+    events.extend(final_match);
+    Ok(RenderedLogTail {
+        events: events.iter().map(render_log_event_for_web).collect(),
+        cursor,
+    })
 }
 
-fn decode_lines(bytes: &[u8]) -> io::Result<Vec<String>> {
-    if bytes.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut lines = Vec::new();
-    let mut start = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'\n' {
-            lines.push(decode_line(&bytes[start..i])?);
-            start = i + 1;
+/// Offset just past the last newline within the first `len` bytes, or 0.
+fn complete_records_end<R: Read + Seek>(
+    reader: &mut R,
+    len: u64,
+    block_size: usize,
+) -> io::Result<u64> {
+    let mut block = vec![0; block_size];
+    let mut end = len;
+    while end > 0 {
+        let start = end.saturating_sub(block_size as u64);
+        let window = &mut block[..(end - start) as usize];
+        reader.seek(SeekFrom::Start(start))?;
+        reader.read_exact(window)?;
+        if let Some(newline) = window.iter().rposition(|&byte| byte == b'\n') {
+            return Ok(start + newline as u64 + 1);
         }
+        end = start;
     }
-    if start < bytes.len() {
-        lines.push(decode_line(&bytes[start..])?);
-    }
-    Ok(lines)
+    Ok(0)
 }
 
-fn decode_line(raw: &[u8]) -> io::Result<String> {
-    let line =
-        std::str::from_utf8(raw).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    Ok(line.strip_suffix('\r').unwrap_or(line).to_string())
+/// The first `len` bytes of a reader, so a reverse scan starts at a fixed
+/// extent instead of whatever the file has grown to.
+struct Prefix<R> {
+    inner: R,
+    len: u64,
+    pos: u64,
 }
 
-pub(crate) fn read_recent_rendered_events(
-    path: &Path,
-    filters: &Filters,
-    limit: usize,
-) -> io::Result<Vec<RenderedLogEvent>> {
-    Ok(read_recent_matching_events(path, filters, limit)?
-        .into_iter()
-        .map(|event| render_log_event_for_web(&event))
-        .collect())
+impl<R> Prefix<R> {
+    fn new(inner: R, len: u64) -> Self {
+        Self { inner, len, pos: 0 }
+    }
+}
+
+impl<R: Read + Seek> Read for Prefix<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let remaining = self.len.saturating_sub(self.pos);
+        let max = usize::try_from(remaining).map_or(buf.len(), |r| r.min(buf.len()));
+        let n = self.inner.read(&mut buf[..max])?;
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl<R: Read + Seek> Seek for Prefix<R> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let target = match pos {
+            SeekFrom::Start(offset) => Some(offset),
+            SeekFrom::End(delta) => self.len.checked_add_signed(delta),
+            SeekFrom::Current(delta) => self.pos.checked_add_signed(delta),
+        }
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?;
+        self.pos = self.inner.seek(SeekFrom::Start(target))?;
+        Ok(self.pos)
+    }
 }
 
 pub(crate) fn parse_matching_event(raw: &str, filters: &Filters) -> Option<Value> {
@@ -355,7 +422,25 @@ pub(crate) fn format_code(target: &str, level: &str, fields: &Value) -> String {
     }
 }
 
+/// Copy of `value` with every string scrubbed by [`redact_all`], so a token in
+/// any field never reaches rendered HTML. Redaction runs on the raw text,
+/// before HTML escaping, the same way the run and incident views do it.
+fn redact_strings(value: &Value) -> Value {
+    match value {
+        Value::String(s) => Value::String(redact_all(s)),
+        Value::Array(items) => Value::Array(items.iter().map(redact_strings).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, item)| (key.clone(), redact_strings(item)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
+    let redacted = redact_strings(fields);
+    let fields = &redacted;
     let getf = |k: &str| fields.get(k).and_then(Value::as_str).unwrap_or("");
     let getn = |k: &str| -> String {
         fields

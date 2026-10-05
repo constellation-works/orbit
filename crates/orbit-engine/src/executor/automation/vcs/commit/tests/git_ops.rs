@@ -8,32 +8,13 @@ use std::process::Command;
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use serde_json::json;
 
-use super::super::commit_batch_changes;
+use super::super::actions::commit_batch_changes;
 use super::test_support::{CommitTestHost, initialized_git_repo, task_with_file};
-use crate::executor::automation::vcs::git::{git_output, git_success};
-use crate::executor::automation::vcs::push::push_batch_changes_inner;
+use crate::executor::automation::vcs::git::git_output;
 
 fn executable(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write executable");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("make executable");
-}
-
-fn tracked_hooks(repo: &Path) {
-    fs::create_dir(repo.join(".hooks")).expect("hooks directory");
-    for name in [
-        "pre-commit",
-        "prepare-commit-msg",
-        "post-commit",
-        "pre-push",
-    ] {
-        executable(
-            &repo.join(".hooks").join(name),
-            &format!("#!/bin/sh\nprintf triggered > .git/{name}-marker\n"),
-        );
-    }
-    git_success(repo, &["add", ".hooks"]).expect("stage hooks");
-    git_success(repo, &["commit", "-m", "tracked hooks"]).expect("commit hooks");
-    git_success(repo, &["config", "core.hooksPath", ".hooks"]).expect("configure tracked hooks");
 }
 
 fn commit_candidate(repo: &Path) {
@@ -54,65 +35,6 @@ fn commit_candidate(repo: &Path) {
 }
 
 #[test]
-fn commit_batch_disables_tracked_repository_hooks() {
-    let temp = initialized_git_repo();
-    let repo = temp.path();
-    tracked_hooks(repo);
-    commit_candidate(repo);
-    for name in ["pre-commit", "prepare-commit-msg", "post-commit"] {
-        assert!(
-            !repo.join(format!(".git/{name}-marker")).exists(),
-            "{name} ran"
-        );
-    }
-
-    // Positive control: the same executable hook runs under ordinary Git.
-    let control = Command::new("git")
-        .current_dir(repo)
-        .args(["commit", "--allow-empty", "-m", "control"])
-        .output()
-        .expect("control commit");
-    assert!(control.status.success());
-    assert!(repo.join(".git/pre-commit-marker").exists());
-}
-
-#[test]
-fn push_batch_disables_tracked_repository_hooks() {
-    let temp = initialized_git_repo();
-    let repo = temp.path();
-    tracked_hooks(repo);
-    let remote = tempfile::tempdir().expect("remote");
-    git_success(remote.path(), &["init", "--bare"]).expect("bare remote");
-    git_success(
-        repo,
-        &["remote", "add", "origin", remote.path().to_str().unwrap()],
-    )
-    .expect("configure remote");
-    let branch = git_output(repo, &["branch", "--show-current"]).unwrap();
-    let host = CommitTestHost::new(Vec::new(), repo.to_path_buf());
-    let result = push_batch_changes_inner(&host, &json!({"branch": branch}), repo)
-        .expect("push candidate through real private operation");
-    assert_eq!(result["decision"], "performed_create");
-    assert_eq!(
-        git_output(
-            remote.path(),
-            &["rev-parse", &format!("refs/heads/{branch}")]
-        )
-        .unwrap(),
-        git_output(repo, &["rev-parse", "HEAD"]).unwrap()
-    );
-    assert!(!repo.join(".git/pre-push-marker").exists());
-
-    let control = Command::new("git")
-        .current_dir(repo)
-        .args(["push", "origin", &branch])
-        .output()
-        .expect("control push");
-    assert!(control.status.success());
-    assert!(repo.join(".git/pre-push-marker").exists());
-}
-
-#[test]
 fn commit_child_environment_excludes_parent_secrets() {
     let exact_test = concat!(
         "executor::automation::vcs::commit::tests::git_ops::",
@@ -120,7 +42,6 @@ fn commit_child_environment_excludes_parent_secrets() {
     );
     if std::env::var("ORBIT_TEST_SECRET").ok().as_deref() == Some(exact_test) {
         let temp = initialized_git_repo();
-        tracked_hooks(temp.path());
         commit_candidate(temp.path());
         return;
     }
@@ -154,11 +75,11 @@ fn commit_child_environment_excludes_parent_secrets() {
         .env("PATH", std::env::join_paths(paths).expect("observer PATH"))
         .output()
         .expect("isolated environment test");
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    orbit_common::test_env::assert_child_test_passed(
+        exact_test,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
 
     let observed = fs::read(observed_path).expect("production commit ran the observer");

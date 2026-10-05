@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- launchd agent driving `orbit sweep` every minute [ORB-10021] / ADR-0204.
+<!-- launchd agent driving `orbit clock tick` every minute [ORB-10021, ORB-12237].
      launchd also fires on wake, which pairs with `missed_run: catch_up_once`
      for laptop sleep gaps. Installed by `orbit routine init` with the
      install-clock flag. -->
@@ -11,7 +11,8 @@
     <key>ProgramArguments</key>
     <array>
         <string>{{ORBIT_BIN}}</string>
-        <string>sweep</string>
+        <string>clock</string>
+        <string>tick</string>
     </array>
     <key>StartInterval</key>
     <integer>{{CADENCE_SECONDS}}</integer>

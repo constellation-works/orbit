@@ -204,9 +204,130 @@ fn looks_like_remote_auth_or_network_failure(stderr_lower: &str) -> bool {
         || stderr_lower.contains("the requested url returned error: 403")
 }
 
+/// `-c` overrides `run_git` accepts, as `(key, required value)`. Keys compare
+/// case-insensitively, as Git's do. None of them names a program for Git to
+/// run, and `core.hooksPath` is admitted only when it disables hooks.
+const ADMITTED_CONFIG_OVERRIDES: &[(&str, Option<&str>)] = &[
+    ("core.hooksPath", Some("/dev/null")),
+    ("gc.auto", None),
+    ("protocol.file.allow", None),
+    ("user.name", None),
+    ("user.email", None),
+];
+
+/// The read, checkout and history plumbing `run_git` drives. Commands that
+/// exist to run caller-named programs (`rebase -x`, `bisect run`,
+/// `submodule foreach`, `difftool -x`, `archive --exec`) and aliases stay out.
+const ADMITTED_SUBCOMMANDS: &[&str] = &[
+    "add",
+    "branch",
+    "cat-file",
+    "checkout",
+    "commit",
+    "fetch",
+    "for-each-ref",
+    "init",
+    "ls-tree",
+    "merge-base",
+    "remote",
+    "rev-parse",
+    "status",
+    "symbolic-ref",
+    "worktree",
+];
+
+/// Long options that hand Git a program to execute. Git accepts any unique
+/// prefix of a long option, so a prefix of these is refused too.
+const PROGRAM_OPTIONS: &[&str] = &["upload-pack", "receive-pack", "exec"];
+
+/// Admit an argv for `git` before it reaches the process boundary.
+///
+/// `run_git` never goes through a shell, so an argument can only become a
+/// command by asking Git to run one. This refuses every argv-borne way to do
+/// that: a NUL byte, a global option other than an admitted `-c` override or
+/// `--git-dir`, a subcommand outside [`ADMITTED_SUBCOMMANDS`], a long option
+/// naming a program, and an `init` from a non-empty `--template`, whose hooks
+/// later commands would run.
+fn admitted_git_args<'a>(args: &[&'a str]) -> Result<Vec<&'a str>, OrbitError> {
+    let refuse = |reason: String| {
+        Err(OrbitError::InvalidInput(format!(
+            "refusing to run git: {reason}"
+        )))
+    };
+    if args.iter().any(|arg| arg.contains('\0')) {
+        return refuse("an argument contains a NUL byte".to_string());
+    }
+
+    let mut index = 0;
+    while let Some(&arg) = args.get(index) {
+        if !arg.starts_with('-') {
+            break;
+        }
+        if arg == "-c" {
+            let Some(&setting) = args.get(index + 1) else {
+                return refuse("`-c` has no setting".to_string());
+            };
+            if !is_admitted_config_override(setting) {
+                return refuse(format!("config override `{setting}` is not admitted"));
+            }
+            index += 2;
+        } else if arg == "--git-dir" {
+            index += 2;
+        } else if arg.starts_with("--git-dir=") {
+            index += 1;
+        } else {
+            return refuse(format!("global option `{arg}` is not admitted"));
+        }
+    }
+
+    let Some(&subcommand) = args.get(index) else {
+        return refuse("no subcommand".to_string());
+    };
+    if !ADMITTED_SUBCOMMANDS.contains(&subcommand) {
+        return refuse(format!("subcommand `{subcommand}` is not admitted"));
+    }
+
+    for &arg in &args[index + 1..] {
+        let Some(option) = arg.strip_prefix("--").filter(|option| !option.is_empty()) else {
+            continue;
+        };
+        let (name, value) = match option.split_once('=') {
+            Some((name, value)) => (name, Some(value)),
+            None => (option, None),
+        };
+        if PROGRAM_OPTIONS
+            .iter()
+            .any(|program_option| program_option.starts_with(name))
+        {
+            return refuse(format!("option `{arg}` names a program for git to run"));
+        }
+        if subcommand == "init" && "template".starts_with(name) && value != Some("") {
+            return refuse(format!("option `{arg}` installs hooks from a template"));
+        }
+    }
+
+    Ok(args.to_vec())
+}
+
+fn is_admitted_config_override(setting: &str) -> bool {
+    let (key, value) = match setting.split_once('=') {
+        Some((key, value)) => (key, Some(value)),
+        None => (setting, None),
+    };
+    ADMITTED_CONFIG_OVERRIDES
+        .iter()
+        .any(|(admitted_key, required_value)| {
+            admitted_key.eq_ignore_ascii_case(key)
+                && required_value.is_none_or(|required| value == Some(required))
+        })
+}
+
+/// Run `git` with `args` in `workspace_path`. An argv the admission above
+/// refuses fails with [`OrbitError::InvalidInput`] before any process starts.
 pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput, OrbitError> {
+    let admitted = admitted_git_args(args)?;
     let output = Command::new("git")
-        .args(args)
+        .args(&admitted)
         .current_dir(workspace_path)
         .output()
         .map_err(|error| {

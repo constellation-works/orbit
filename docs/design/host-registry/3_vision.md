@@ -3,13 +3,13 @@ summary: "Host Registry — Vision"
 type: design
 title: "Host Registry — Vision"
 owner: codex
-last_updated: 2026-08-23
-last_validated: 2026-09-07
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: host-registry
 doc_role: vision
 tags: [host-registry, machine-identity, workspace-catalog]
-paths: ["crates/orbit-types/src/identity/host.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs"]
+paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-config/src/**"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
 related_artifacts: [ORB-11008, ORB-11009]
 ---
@@ -19,20 +19,22 @@ related_artifacts: [ORB-11008, ORB-11009]
 Keep the registry small: one durable local machine identity, one validated local
 workspace catalog, and one shared composition seam for opening Core runtimes.
 
-The proposed federated MCP mux is specified in
+The implemented federated MCP mux is specified in
 [federated-mcp](../federated-mcp/1_overview.md) ([ORB-11009], citing prior
-policy [ORB-11008]). That folder is the contract home. This vision does not
-restate the mux, selector, capability split, or list schema.
+policy [ORB-11008]). That folder is the contract home. Federated MCP is a
+separate stdio mode and an explicit exception to the direct v1 boundary below.
+This vision does not restate its selector, capability split, or list schema.
 
 ## Current v1 boundary
 
-V1 exposes machine-local MCP discovery and resolves every workspace-scoped tool
-on the accepting machine. Direct SSH stdio reaches a chosen remote server, but
-there is no federation gateway, cross-host workspace list, or host-qualified
-workspace selector. The local host registry remains neither a fleet inventory
-nor a routing authority for another machine. Owner and replica checkout roles
-stay the catalog vocabulary a federated surface must map onto; they are not a
-fleet control plane.
+Direct v1 exposes machine-local MCP discovery and resolves every
+workspace-scoped tool on the accepting machine. Direct SSH stdio reaches one
+chosen remote server; this surface has no cross-host workspace list or
+host-qualified selector. The implemented federated stdio mode is a separate
+exception: it lists and routes to the accepting machine and configured SSH
+destinations through host-qualified selectors. The local host registry remains
+neither a fleet inventory nor a general routing authority. Owner and replica
+checkout roles stay catalog vocabulary, not a fleet control plane.
 
 ## Questions that require evidence
 
@@ -40,9 +42,12 @@ fleet control plane.
 
 Remove obsolete registry tables and code only through a migration-safe change. Their historical presence does not justify reviving a fleet control plane.
 
-### Host rename recovery
+### Machine display-name changes
 
-The current two-file rename is ordered but not transactional. If stale owner display names become operationally significant, add a deterministic repair/check command or one recoverable journal before expanding rename semantics.
+`machine.name` changes through global config, while `machine.id` and
+`machine.task_prefix` remain fixed. The workspace catalog no longer stores an
+owner display-name projection, so changing the name does not require a second
+registry write or a repair path.
 
 ### Legacy catalog repair
 
@@ -50,7 +55,11 @@ Identity-bearing legacy catalogs with no explicit checkout role fail safely but 
 
 ### Authenticated authorization
 
-If Core later authorizes remote calls, it needs an authenticated principal or grant separate from machine_id, host_id, caller IP and SSH audit labels. Existing registry and session fields must not be promoted into credentials by implication.
+Direct MCP sessions currently receive authority from the server argv, and Core
+enforces the resulting capabilities. The forwarded `caller_machine_id` and
+observed caller IP remain audit metadata. If future remote policy needs to
+distinguish principals, it needs an authenticated principal or explicit grant
+separate from machine IDs, display names and audit labels.
 
 ### Federated routing contract
 
@@ -65,7 +74,8 @@ If a future operation truly needs no checkout, define a narrow server-owned API 
 
 ### Schema evolution
 
-New host or catalog schema versions need explicit forward migration, crash-safe writes, future-version rejection tests and rollback classification.
+New persisted identity or catalog formats need explicit forward migration,
+crash-safe writes, future-version rejection checks and rollback classification.
 
 ## Task References
 

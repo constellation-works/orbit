@@ -3,13 +3,13 @@ summary: "MCP Session Context — Design"
 type: design
 title: "MCP Session Context — Design"
 owner: codex
-last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: mcp-session-context
 doc_role: design
 tags: ["mcp-session-context", "mcp", "workspace", "audit"]
-paths: ["crates/orbit-common/src/types/tool.rs", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/command/tool/**", "crates/orbit-store/src/sqlite/audit_event_store/**"]
+paths: ["crates/orbit-types/src/tool/**", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/command/**", "crates/orbit-store/src/driver/sqlite/audit_event_store/**", "crates/orbit-agent/src/providers/codex/**", "crates/orbit-engine/src/activity_job/cli_runner/**", "crates/orbit-common/src/security/child_env.rs"]
 related_features: ["mcp-session-context"]
 related_artifacts: []
 ---
@@ -30,7 +30,7 @@ related_artifacts: []
 | trace_id | MCP adapter | Fresh correlation ID for one tools/call |
 | orchestrator | The server's launch binding | Crew name attributed to tasks the session creates; never an authorization or execution input |
 
-Clients cannot populate trusted fields through initialize metadata or tool JSON. Initialize accepts only the workspace selector under _meta.orbit.workspace, plus the compatibility spelling _meta["orbit.workspace"].
+Clients cannot populate trusted fields through initialize metadata or tool JSON. Initialize accepts a workspace selector under _meta.orbit.workspace (plus the compatibility spelling _meta["orbit.workspace"]) and an untrusted self-reported actor claim; caller/process/transport/correlation fields remain server-owned.
 
 A session may also be bound at launch: `orbit mcp serve --workspace <selector>` seeds the trusted envelope's workspace before any client connects. That binding is decided by whoever wrote the launch configuration, not by the connecting client, but it is still only a selector — it is resolved against the registry on every call and overridden by an explicit per-call workspace.
 
@@ -61,17 +61,23 @@ Steps 2 and 3 are one session field, resolved once at initialize: an announced w
 
 Process cwd is not an MCP fallback. The server resolves the selector against its registry, opens the selected local runtime, writes the resolved workspace_id into context, and normalizes an explicit workspace argument to the selected checkout path before Core dispatch.
 
+For Codex, `orbit mcp setup` writes `env_vars` on the local `[mcp_servers.orbit]` entry. The list forwards the managed binding names `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_RUN_ID`, `ORBIT_SESSION_ID`, `ORBIT_WORKSPACE`, and `ORBIT_REGISTRY_ROOT`, the agent identity names `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`, and the policy names `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_TOOLS`, `ORBIT_ACTIVITY_TOOL_POLICY`, `ORBIT_ACTIVITY_TOOLS_DENY`, `ORBIT_ACTIVITY_NAME`, `ORBIT_ACTIVITY_FS_PROFILE`, and `ORBIT_PROC_ALLOWED_PROGRAMS` from Codex's environment. A managed Codex launch overrides that list and supplies a complete enabled orbit MCP entry: `command` is the selected `ORBIT_BIN` and `args` are `mcp serve`. This works when the user's Codex config has no orbit entry and does not put managed envelope values in argv. A job run exports `ORBIT_RUN_ID`; a source inspection exports `ORBIT_SESSION_ID` instead. Either identity, together with the managed marker, allows `ORBIT_WORKSPACE` to bind the nested server. The forwarded identity and activity names make the nested server record agent attribution and use the same tool policy (allowlist, or deny-mode disallow list), filesystem profile, and process program list as the managed run. The selector remains subject to registry resolution and per-call override.
+
 Global tools do not require a workspace selector.
 
-orbit.task.show is the one exception to the precedence above. Task IDs are a machine-global primary key in the coordination task registry, so a call carrying only {id} resolves the owning workspace from that registry and ignores the workspace announced at initialize — the announced workspace is ambient, like cwd, and is the right default for authoring but the wrong one for addressing an ID. A workspace passed in the tool input still wins and still filters: the call binds that workspace, and a task owned elsewhere is not found there. When the registry knows the ID but its owning checkout is unreadable or inactive, the error names that workspace rather than reporting the ID as unknown.
+orbit.task.show and orbit.task.artifact.get are the ID-resolved exceptions to the precedence above. Task IDs are a machine-global primary key in the coordination task registry, so a call carrying only {id} resolves the owning workspace from that registry and ignores the workspace announced at initialize — the announced workspace is ambient, like cwd, and is the right default for authoring but the wrong one for addressing an ID. A workspace passed in the tool input still wins and still filters: the call binds that workspace, and a task owned elsewhere is not found there. When the registry knows the ID but its owning checkout is unreadable or inactive, the error names that workspace rather than reporting the ID as unknown.
 
 ## 4. Adapter and tool surface
 
-OrbitToolServer holds one context for its stdio session. Initialize may replace only the workspace selector. For every tools/call, the adapter clones the session context and mints one fresh trace_id without writing it back.
+OrbitToolServer holds one context for its stdio session. Initialize may replace the workspace selector and the untrusted self-reported actor claim. For every tools/call, the adapter clones the session context and mints one fresh trace_id without writing it back.
 
-tools/list comes from the authoritative host on every request. Each definition carries a ToolSchema and one McpToolScope: Global or WorkspaceRequired. Scope controls only workspace-selector injection and server dispatch; it is not authorization metadata.
+tools/list is derived from the authoritative host and its validated result is cached per session/selector. Each definition carries a ToolSchema, one McpToolScope (Global or WorkspaceRequired) and, for a plugin tool that declares one, its own input schema, which is advertised as written instead of the schema derived from the ToolSchema parameters ([plugins §4.2](../plugins/1_scope.md#42-execution-protocol)). Scope controls only workspace-selector injection and server dispatch; it is not authorization metadata.
 
-Because tools/list is answered per session, the injected selector documents the session the caller is actually in: optional in a bound session, required in an unbound one. Both spellings describe the same server rule; only the obligation on the caller differs.
+Workspace-bound schema decoration follows the same session selector. In particular, the `orbit.friction.add` and `orbit.friction.update` tag schemas enumerate the bound workspace's operator-owned taxonomy with descriptions. Before a workspace is bound, the schema falls back to the shipped taxonomy and explicitly notes that `.orbit/frictions/tags.yaml` may extend it. The tools-list cache key includes the normalized session selector so re-initializing a connection for another workspace cannot retain the previous workspace's vocabulary.
+
+Because tools/list is answered per session, the injected selector documents the session the caller is actually in: optional in a bound session, required in an unbound one. The JSON schema also marks `workspace` required for an unbound workspace-scoped call. Federated tools/list requires its host-qualified selector. `orbit.task.show` keeps its v1 ID-only exemption. `orbit.search` additionally advertises that at least one of `query` or `tag` must be supplied; its MCP surface does not expose the CLI `path` filter.
+
+For a plugin tool that does not declare `workspace` in its input schema, the MCP adapter moves that argument into the per-call routing context before dispatch. The plugin receives only its declared input. If the plugin itself declares `workspace`, the adapter preserves it in the plugin input.
 
 ## 5. Core dispatch and audit
 
@@ -79,10 +85,14 @@ The server passes a resolved workspace call to Core through execute_tool_command
 
 Audit records include resolved workspace when applicable, caller/process metadata, transport, trace ID, and caller IP when present.
 
+The managed MCP audit row records `job_run_id` from `ORBIT_RUN_ID` for a job run or `session_id` from `ORBIT_SESSION_ID` for a source inspection. The session ID is read only when the managed marker and a run or inspection identity are present.
+
 Model-authored fields with names resembling audit fields do not override the supplied ToolSessionContext.
 
 ## 6. Explicitly deferred
 
 MCP performs no lease validation, placement routing, broker negotiation, or Orbit principal authentication.
+
+Managed activity enforcement still depends on the provider CLI forwarding its environment into the nested MCP server. A host-held invocation binding would remove that dependency; it is a separate authorization change.
 
 Capability authorization is no longer deferred: Core's tool chokepoint authorizes a governed operation from the session's effective capabilities alone, and the serving process decides those once at startup — `orbit mcp serve` grants agent, `orbit mcp serve --operator` grants agent and operator ([ORB-10916], [ORB-10927]). McpCapability is still not MCP exposure metadata; `tools/list` advertises the same surface to every session.

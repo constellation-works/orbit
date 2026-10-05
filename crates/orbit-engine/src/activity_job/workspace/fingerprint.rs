@@ -1,13 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
-use std::io::Write;
-use std::path::Path;
-use std::process::Output;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::time::SystemTime;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::executor::automation::vcs::git::git_command;
+use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
 
 use super::super::dispatcher::DispatchError;
 
@@ -46,12 +46,102 @@ const DIFF_IDENTITY_FLAGS: [&str; 5] = [
     "--no-renames",
 ];
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PrimaryBeforeCacheKey {
+    run_id: String,
+    root: PathBuf,
+    head: String,
+    index_mtime: SystemTime,
+}
+
+type PrimaryBeforeCell = OnceLock<Result<GitWorktreeFingerprint, DispatchError>>;
+
+#[derive(Default)]
+struct PrimaryBeforeCache {
+    entries: BTreeMap<PrimaryBeforeCacheKey, Arc<PrimaryBeforeCell>>,
+    recent_runs: VecDeque<String>,
+}
+
+const PRIMARY_BEFORE_CACHE_RUN_LIMIT: usize = 128;
+
+// Agent fan-out invokes this module concurrently. Per-key OnceLocks ensure a
+// shared primary snapshot is produced once, while the run LRU bounds daemon
+// memory after completed runs no longer have an explicit owner here.
+static PRIMARY_BEFORE_CACHE: LazyLock<Mutex<PrimaryBeforeCache>> =
+    LazyLock::new(|| Mutex::new(PrimaryBeforeCache::default()));
+
+/// Reuse a primary checkout's pre-provider snapshot within one run while HEAD
+/// and the index mtime remain stable. If the index cannot be identified, fall
+/// back to an uncached fingerprint rather than weakening invalidation.
+pub(crate) fn cached_primary_before_fingerprint(
+    run_id: &str,
+    root: &Path,
+) -> Result<GitWorktreeFingerprint, DispatchError> {
+    let head = git_stdout(root, &["rev-parse", "--verify", "HEAD"])?;
+    let Some(index_mtime) = git_index_mtime(root) else {
+        return git_fingerprint_with_head(root, head);
+    };
+    let key = PrimaryBeforeCacheKey {
+        run_id: run_id.to_string(),
+        root: root.to_path_buf(),
+        head: head.clone(),
+        index_mtime,
+    };
+    let cell = {
+        let mut cache = match PRIMARY_BEFORE_CACHE.lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(position) = cache.recent_runs.iter().position(|cached| cached == run_id) {
+            cache.recent_runs.remove(position);
+        }
+        cache.recent_runs.push_back(run_id.to_string());
+        if let Some(cell) = cache.entries.get(&key) {
+            Arc::clone(cell)
+        } else {
+            while cache.recent_runs.len() > PRIMARY_BEFORE_CACHE_RUN_LIMIT {
+                if let Some(expired) = cache.recent_runs.pop_front() {
+                    cache.entries.retain(|key, _| key.run_id != expired);
+                }
+            }
+            let cell = Arc::new(OnceLock::new());
+            cache.entries.insert(key, Arc::clone(&cell));
+            cell
+        }
+    };
+    cell.get_or_init(|| git_fingerprint_with_head(root, head))
+        .clone()
+}
+
+fn git_index_mtime(root: &Path) -> Option<SystemTime> {
+    let dot_git = root.join(".git");
+    let git_dir = if dot_git.is_dir() {
+        dot_git
+    } else {
+        let contents = fs::read_to_string(&dot_git).ok()?;
+        let path = contents.trim().strip_prefix("gitdir:")?.trim();
+        let path = PathBuf::from(path);
+        if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        }
+    };
+    fs::metadata(git_dir.join("index")).ok()?.modified().ok()
+}
+
 pub(crate) fn git_fingerprint(root: &Path) -> Result<GitWorktreeFingerprint, DispatchError> {
     let head = git_stdout(root, &["rev-parse", "--verify", "HEAD"])?;
+    git_fingerprint_with_head(root, head)
+}
+
+fn git_fingerprint_with_head(
+    root: &Path,
+    head: String,
+) -> Result<GitWorktreeFingerprint, DispatchError> {
     let branch_output = git_output_raw(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
     let branch = branch_output
-        .status
-        .success()
+        .success
         .then(|| {
             String::from_utf8_lossy(&branch_output.stdout)
                 .trim()
@@ -59,8 +149,6 @@ pub(crate) fn git_fingerprint(root: &Path) -> Result<GitWorktreeFingerprint, Dis
         })
         .filter(|branch| !branch.is_empty());
 
-    let index = git_stdout_bytes(root, &["ls-files", "--stage", "-z", "--"])?;
-    let tracked_patch = git_diff_bytes(root, &["HEAD"])?;
     let status = git_stdout_bytes(
         root,
         &[
@@ -72,18 +160,27 @@ pub(crate) fn git_fingerprint(root: &Path) -> Result<GitWorktreeFingerprint, Dis
             "--",
         ],
     )?;
-    let (tracked_dirty_paths, untracked_paths) = parse_porcelain_v2(&status)?;
+    let (mut tracked_dirty_paths, untracked_paths) = parse_porcelain_v2(&status)?;
+    tracked_dirty_paths.sort();
+    tracked_dirty_paths.dedup();
     let untracked_content = untracked_content_identities(root, &untracked_paths)?;
 
-    let mut dirty_paths = tracked_dirty_paths;
+    let mut dirty_paths = tracked_dirty_paths.clone();
     dirty_paths.extend(untracked_content.keys().cloned());
     dirty_paths.sort();
     dirty_paths.dedup();
 
+    // A clean porcelain snapshot avoids both index enumeration and every
+    // diff. Dirty snapshots scope each command to exactly the reported paths.
+    let index = if tracked_dirty_paths.is_empty() {
+        Vec::new()
+    } else {
+        git_stdout_bytes_for_paths(root, &["ls-files", "--stage", "-z"], &tracked_dirty_paths)?
+    };
     let index_entries = index_entries_by_path(&index);
-    let has_tracked_dirty = dirty_paths
-        .iter()
-        .any(|path| !untracked_content.contains_key(path));
+    let has_tracked_dirty = !tracked_dirty_paths.is_empty();
+    let git_diff_bytes =
+        |root: &Path, extra: &[&str]| git_diff_bytes_for_paths(root, extra, &tracked_dirty_paths);
     let staged_patches = if has_tracked_dirty {
         split_combined_diff(&git_diff_bytes(root, &["--cached", "HEAD"])?)
     } else {
@@ -122,27 +219,18 @@ pub(crate) fn git_fingerprint(root: &Path) -> Result<GitWorktreeFingerprint, Dis
         head,
         branch,
         index_sha256: sha256_identity("git-index-v1", &index),
-        tracked_patch_sha256: sha256_identity("git-tracked-patch-v1", &tracked_patch),
+        tracked_patch_sha256: tracked_patch_identity(&staged_patches, &worktree_patches),
         untracked_content,
         dirty_paths,
         path_states,
     })
 }
 
-pub(crate) fn untracked_file_identity(
-    root: &Path,
-    path: &str,
-) -> Result<Option<String>, DispatchError> {
-    let args = ["hash-object", "--no-filters", "--", path];
-    let output = git_output_raw(root, &args)?;
-    if output.status.success() {
-        let identity = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(Some(format!("git-blob:{identity}")));
-    }
-
-    match fs::symlink_metadata(root.join(path)) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        _ => Err(git_command_error(root, &args, &output)),
+fn untracked_file_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
+    match untracked_path_kind(root, path)? {
+        UntrackedPathKind::Missing => Ok(None),
+        UntrackedPathKind::Symlink => untracked_symlink_identity(root, path),
+        UntrackedPathKind::File => untracked_regular_file_identity(root, path),
     }
 }
 
@@ -197,13 +285,54 @@ pub(crate) fn changed_paths(
     paths.into_iter().collect()
 }
 
-fn git_diff_bytes(root: &Path, extra: &[&str]) -> Result<Vec<u8>, DispatchError> {
-    let mut args = Vec::with_capacity(8 + extra.len());
+fn git_diff_bytes_for_paths(
+    root: &Path,
+    extra: &[&str],
+    paths: &[String],
+) -> Result<Vec<u8>, DispatchError> {
+    let mut args = Vec::with_capacity(8 + extra.len() + paths.len());
     args.push("diff");
     args.extend(DIFF_IDENTITY_FLAGS);
     args.extend(extra.iter().copied());
     args.push("--");
+    args.extend(paths.iter().map(String::as_str));
     git_stdout_bytes(root, &args)
+}
+
+fn git_stdout_bytes_for_paths(
+    root: &Path,
+    prefix: &[&str],
+    paths: &[String],
+) -> Result<Vec<u8>, DispatchError> {
+    let mut args = Vec::with_capacity(prefix.len() + 1 + paths.len());
+    args.extend(prefix.iter().copied());
+    args.push("--");
+    args.extend(paths.iter().map(String::as_str));
+    git_stdout_bytes(root, &args)
+}
+
+fn tracked_patch_identity(
+    staged: &BTreeMap<String, Vec<u8>>,
+    worktree: &BTreeMap<String, Vec<u8>>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"git-tracked-path-patches-v2");
+    hasher.update([0]);
+    for path in staged
+        .keys()
+        .chain(worktree.keys())
+        .collect::<BTreeSet<_>>()
+    {
+        let staged_patch = staged.get(path).map(Vec::as_slice).unwrap_or_default();
+        let worktree_patch = worktree.get(path).map(Vec::as_slice).unwrap_or_default();
+        hasher.update((path.len() as u64).to_be_bytes());
+        hasher.update(path.as_bytes());
+        hasher.update((staged_patch.len() as u64).to_be_bytes());
+        hasher.update(staged_patch);
+        hasher.update((worktree_patch.len() as u64).to_be_bytes());
+        hasher.update(worktree_patch);
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 fn parse_porcelain_v2(bytes: &[u8]) -> Result<(Vec<String>, Vec<String>), DispatchError> {
@@ -392,14 +521,17 @@ fn strip_diff_prefix(path: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Decode a C-quoted Git path. Escapes and raw bytes are collected as bytes
+/// and decoded once, so an octal-escaped UTF-8 sequence (`\303\251`) yields
+/// the same path the status scan reports rather than one char per byte.
 fn unescape_git_c_quoted(input: &str) -> Option<(String, &str)> {
     let input = input.strip_prefix('"')?;
-    let mut decoded = String::new();
+    let mut decoded = Vec::new();
     let mut bytes = input.as_bytes();
     while let Some((head, rest)) = bytes.split_first() {
         match *head {
             b'"' => {
-                return Some((decoded, std::str::from_utf8(rest).ok()?));
+                return Some((lossy_path(&decoded), std::str::from_utf8(rest).ok()?));
             }
             b'\\' => {
                 let (escaped, remaining) = unescape_git_escape(rest)?;
@@ -407,7 +539,7 @@ fn unescape_git_c_quoted(input: &str) -> Option<(String, &str)> {
                 bytes = remaining;
             }
             byte => {
-                decoded.push(char::from(byte));
+                decoded.push(byte);
                 bytes = rest;
             }
         }
@@ -415,27 +547,102 @@ fn unescape_git_c_quoted(input: &str) -> Option<(String, &str)> {
     None
 }
 
-fn unescape_git_escape(bytes: &[u8]) -> Option<(char, &[u8])> {
+fn unescape_git_escape(bytes: &[u8]) -> Option<(u8, &[u8])> {
     let (head, rest) = bytes.split_first()?;
     match *head {
-        b'n' => Some(('\n', rest)),
-        b't' => Some(('\t', rest)),
-        b'r' => Some(('\r', rest)),
-        b'a' => Some(('\u{0007}', rest)),
-        b'b' => Some(('\u{0008}', rest)),
-        b'f' => Some(('\u{000c}', rest)),
-        b'v' => Some(('\u{000b}', rest)),
-        b'\\' => Some(('\\', rest)),
-        b'"' => Some(('"', rest)),
+        b'n' => Some((b'\n', rest)),
+        b't' => Some((b'\t', rest)),
+        b'r' => Some((b'\r', rest)),
+        b'a' => Some((0x07, rest)),
+        b'b' => Some((0x08, rest)),
+        b'f' => Some((0x0c, rest)),
+        b'v' => Some((0x0b, rest)),
         b'0'..=b'7' => {
             if bytes.len() < 3 {
                 return None;
             }
             let octal = std::str::from_utf8(&bytes[..3]).ok()?;
             let value = u8::from_str_radix(octal, 8).ok()?;
-            Some((char::from(value), &bytes[3..]))
+            Some((value, &bytes[3..]))
         }
-        byte => Some((char::from(byte), rest)),
+        byte => Some((byte, rest)),
+    }
+}
+
+enum UntrackedPathKind {
+    Missing,
+    Symlink,
+    File,
+}
+
+fn untracked_path_kind(root: &Path, path: &str) -> Result<UntrackedPathKind, DispatchError> {
+    match fs::symlink_metadata(root.join(path)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(UntrackedPathKind::Missing)
+        }
+        Err(error) => Err(DispatchError::CliInvocationPermanent(format!(
+            "snapshot Git state in '{}': inspect untracked path '{}': {error}",
+            root.display(),
+            path
+        ))),
+        Ok(metadata) if metadata.file_type().is_symlink() => Ok(UntrackedPathKind::Symlink),
+        Ok(_) => Ok(UntrackedPathKind::File),
+    }
+}
+
+fn untracked_regular_file_identity(
+    root: &Path,
+    path: &str,
+) -> Result<Option<String>, DispatchError> {
+    let args = ["hash-object", "--no-filters", "--", path];
+    let output = git_output_raw(root, &args)?;
+    if output.success {
+        return Ok(Some(git_blob_label(&output.stdout)));
+    }
+
+    match fs::symlink_metadata(root.join(path)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        _ => Err(git_command_error(root, &args, &output)),
+    }
+}
+
+fn untracked_symlink_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
+    let target = match fs::read_link(root.join(path)) {
+        Ok(target) => target,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "snapshot Git state in '{}': read untracked symlink '{}': {error}",
+                root.display(),
+                path
+            )));
+        }
+    };
+    git_blob_identity(root, &os_path_bytes(&target)).map(Some)
+}
+
+fn git_blob_identity(root: &Path, bytes: &[u8]) -> Result<String, DispatchError> {
+    let args = ["hash-object", "--stdin"];
+    let output = git_output_with_stdin(root, &args, bytes)?;
+    if output.success {
+        return Ok(git_blob_label(&output.stdout));
+    }
+    Err(git_command_error(root, &args, &output))
+}
+
+fn git_blob_label(stdout: &[u8]) -> String {
+    format!("git-blob:{}", String::from_utf8_lossy(stdout).trim())
+}
+
+fn os_path_bytes(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        path.to_string_lossy().as_bytes().to_vec()
     }
 }
 
@@ -445,13 +652,20 @@ fn untracked_content_identities(
 ) -> Result<BTreeMap<String, String>, DispatchError> {
     let mut identities = BTreeMap::new();
     let mut batch_paths = Vec::new();
+    let mut record_per_path = |path: &String| -> Result<(), DispatchError> {
+        if let Some(identity) = untracked_file_identity(root, path)? {
+            identities.insert(path.clone(), identity);
+        }
+        Ok(())
+    };
     for path in paths {
-        if path.contains('\n') {
-            if let Some(identity) = untracked_file_identity(root, path)? {
-                identities.insert(path.clone(), identity);
+        match untracked_path_kind(root, path)? {
+            UntrackedPathKind::Missing => {}
+            UntrackedPathKind::Symlink => record_per_path(path)?,
+            UntrackedPathKind::File if path.contains('\n') || path.starts_with('"') => {
+                record_per_path(path)?
             }
-        } else {
-            batch_paths.push(path.clone());
+            UntrackedPathKind::File => batch_paths.push(path.clone()),
         }
     }
 
@@ -464,7 +678,7 @@ fn untracked_content_identities(
         let stdin = remaining.join("\n");
         let stdin = format!("{stdin}\n");
         let output = git_output_with_stdin(root, &args, stdin.as_bytes())?;
-        if output.status.success() {
+        if output.success {
             let hashes = String::from_utf8_lossy(&output.stdout)
                 .lines()
                 .map(str::trim)
@@ -532,54 +746,56 @@ pub(crate) fn git_stdout(root: &Path, args: &[&str]) -> Result<String, DispatchE
 
 pub(crate) fn git_stdout_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, DispatchError> {
     let output = git_output_raw(root, args)?;
-    if output.status.success() {
+    if output.success {
         return Ok(output.stdout);
     }
     Err(git_command_error(root, args, &output))
 }
 
-pub(crate) fn git_output_raw(root: &Path, args: &[&str]) -> Result<Output, DispatchError> {
-    git_command(root, args).output().map_err(|error| {
-        DispatchError::CliInvocationPermanent(format!(
-            "snapshot Git state in '{}': {error}",
-            root.display()
-        ))
-    })
+pub(crate) fn git_output_raw(root: &Path, args: &[&str]) -> Result<GitBytesOutcome, DispatchError> {
+    git_output_with_optional_stdin(root, args, None)
 }
 
 fn git_output_with_stdin(
     root: &Path,
     args: &[&str],
     stdin_bytes: &[u8],
-) -> Result<Output, DispatchError> {
-    let io_error = |error: std::io::Error| {
+) -> Result<GitBytesOutcome, DispatchError> {
+    git_output_with_optional_stdin(root, args, Some(stdin_bytes))
+}
+
+fn git_output_with_optional_stdin(
+    root: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+) -> Result<GitBytesOutcome, DispatchError> {
+    let output = git_run_bytes(root, args, stdin).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "snapshot Git state in '{}': {error}",
             root.display()
         ))
-    };
-    // Feed stdin from a file, not a pipe we still own: `hash-object --stdin-paths`
-    // waits for EOF, and `Child::wait_with_output` waits for the child, so a
-    // parent-written pipe deadlocks.
-    let mut temp = tempfile::Builder::new()
-        .prefix("orbit-git-stdin-")
-        .tempfile()
-        .map_err(io_error)?;
-    temp.write_all(stdin_bytes).map_err(io_error)?;
-    temp.flush().map_err(io_error)?;
-    let stdin = fs::File::open(temp.path()).map_err(io_error)?;
-    let mut command = git_command(root, args);
-    command.stdin(stdin);
-    command.output().map_err(io_error)
+    })?;
+    if output.timed_out {
+        return Err(DispatchError::GitTimeout {
+            operation: args.join(" "),
+            root: root.to_path_buf(),
+            timeout_ms: output.timeout_ms,
+            diagnostic: output.stderr.trim().to_string(),
+        });
+    }
+    Ok(output)
 }
 
-pub(crate) fn git_command_error(root: &Path, args: &[&str], output: &Output) -> DispatchError {
-    let stderr = String::from_utf8_lossy(&output.stderr);
+pub(crate) fn git_command_error(
+    root: &Path,
+    args: &[&str],
+    output: &GitBytesOutcome,
+) -> DispatchError {
     DispatchError::CliInvocationPermanent(format!(
-        "snapshot Git state in '{}' with `git {}` failed (status {}): {}",
+        "snapshot Git state in '{}' with `git {}` failed (exit code {:?}): {}",
         root.display(),
         args.join(" "),
-        output.status,
-        stderr.trim()
+        output.exit_code,
+        output.stderr.trim()
     ))
 }

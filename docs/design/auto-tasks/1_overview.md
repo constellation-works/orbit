@@ -1,27 +1,32 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Accepted
 feature: auto-tasks
 doc_role: overview
 type: design
-summary: Dynamically-defined recurring task templates minted by one generic scheduler routine — periodic work as data, not code.
+summary: Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code.
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
-related_features: [auto-tasks]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095]
+related_features: [auto-tasks, routines]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932]
 ---
 
 # Auto-tasks — Overview
 
 Auto-tasks turn recurring chores into **data instead of code**. An auto-task
-definition is a git-versioned YAML record with a schedule, an `enabled` toggle,
-a task template, and a dedupe policy. One generic scheduler routine reads the
+definition is a YAML record under `.orbit/auto_tasks/` (per-user checkout state) with a schedule, an `enabled` toggle,
+a task template, and a dedupe policy. One generic scheduler pass reads the
 enabled definitions, fires the due ones, and mints a task from each template.
 Adding a new periodic chore is a new definition (`orbit auto-task add`), never
 new orbit code or a new routine.
+
+The scheduler pass is called directly by the host clock tick (`orbit clock tick`, alias
+`orbit sweep`) for every registered owner checkout. No routine, job, activity, or job run
+mediates auto-task evaluation. See
+[Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine).
 
 ## 1. Motivation
 
@@ -43,19 +48,21 @@ becomes just the first definition.
   a knob in the identity `config.yaml` ([L-0014] keeps runtime config out of
   `config.yaml`).
 - **Cursor** — per-definition last-fired state, host-local at
-  `<orbit_dir>/state/auto-tasks.json`, so the git-versioned definition is never
+  `<orbit_dir>/state/auto-tasks.json`, so the definition YAML is never
   churned by a scheduler fire.
-- **Scheduler** — one deterministic activity (`run_auto_task_scheduler`) wrapped
-  in the `auto_task_scheduler_pipeline` job, fired by the seeded
-  `auto_task_scheduler` routine. Its fires appear on the dashboard routines
-  surface.
+- **Scheduler** — the host clock tick calls the evaluator directly after routine
+  evaluation. No job run is created; fire evidence is the minted task, the cursor,
+  and the tick report row. Auto-tasks are shown on the Operations auto-task panel,
+  not on the routines surface.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
   definition immediately, reusing the scheduler's mint path so the result is
   indistinguishable from a fired instance. Unconditional and cursor-inert: it
-  ignores schedule, `dedupe`, and `enabled`, and never touches
-  `<orbit_dir>/state/auto-tasks.json` (ORB-10439).
+  ignores schedule, `dedupe`, and `enabled`, and never reads or writes
+  `<orbit_dir>/state/auto-tasks.json`. Lookup and mint share that file's lock
+  with deletion, so a definition removed before admission is not minted
+  (ORB-10439, ORB-13432).
 - **Default catalog** — Orbit embeds a small catalog of workspace definitions.
   Initialization materializes a missing catalog file under `.orbit/auto_tasks/`
   but every default is `enabled: false`. Seeding neither mints a task nor
@@ -69,20 +76,20 @@ becomes just the first definition.
 
 | Concern | File | Task |
 |---|---|---|
-| Definition schema | `crates/orbit-types/src/workflow/auto_task.rs` | ORB-10149 |
+| Definition schema | `crates/orbit-types/src/workflow/auto_task/definition.rs` | ORB-10149 |
 | Discovery (fail-closed) | `crates/orbit-core/src/application/auto_tasks/loader.rs` | ORB-10149 |
 | Due-math + catch-up | `crates/orbit-core/src/application/auto_tasks/schedule.rs` | ORB-10149 |
 | Host-local cursor | `crates/orbit-core/src/application/auto_tasks/state.rs` | ORB-10149 |
 | Scheduler pass | `crates/orbit-core/src/application/auto_tasks/scheduler.rs` | ORB-10149 |
 | CRUD (CLI + MCP shared) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10149 |
 | Manual mint (`mint`, CLI + MCP) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10439, ORB-10798 |
-| Deterministic action | `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs` | ORB-10149 |
-| Seeded assets | `crates/orbit-core/assets/{activities,jobs,routines}/…` | ORB-10149 |
+| Deterministic action (slated for retirement) | `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs` | ORB-10149 |
+| Seeded assets (scheduler routine/job/activity slated for retirement) | `crates/orbit-core/assets/{activities,jobs,routines}/…` | ORB-10149 |
 | Default auto-task catalog | `crates/orbit-core/assets/auto_tasks/…` | ORB-10549, ORB-10550, ORB-10950 |
 
 ## Embedded default catalog
 
-These four YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -97,7 +104,37 @@ definition of the same name.
   each actionable finding is filed as a durable Orbit task, and a clean review
   is a successful no-op (ORB-10950).
 - `code-review` — disabled-by-default six-hourly review of commits merged
-  since the previous sweep's recorded cursor.
+  since the previous sweep's recorded cursor. Its cursor selector requires the
+  `auto-task:code-review` provenance tag, so only a minted sweep can be the
+  cursor task.
+- `full-code-review` — disabled-by-default, minted on demand (its monthly cron
+  stays off until enabled). The minted coordinator pins one integration-branch
+  commit, partitions the tree into areas of roughly 90k lines along crate and
+  module boundaries, and files one area-review chore per area tagged
+  `full-code-review` + `no-diff-expected` — never `code-review` — at `hard`
+  complexity or below with no pinned crew. Area reviewers read the whole area
+  at that commit and file findings as `bug`s tagged `code-review` +
+  `full-code-review`.
+- `doc-duties` — disabled-by-default daily validation of the oldest tracked
+  documentation. Existing `last_validated` dates take precedence; documents
+  without the key use git last-touched dates and completed task summaries for
+  rotation, without gaining frontmatter solely for this task.
+- `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
+  own run evidence (failed and interrupted runs, step failures, worker logs)
+  since the previous scan's `run-failure-cursor.json` artifact. Failures
+  sharing a normalized signature at least 3 times across at least 2 runs are
+  filed as one redacted friction or proposed task per pattern unless an
+  existing task or friction already tracks it. The scan never mutates run
+  state — its run reads pass `--no-reconcile`, so an orphaned run it lists is
+  not finalized — and a window with no new pattern is a successful no-op.
+- `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
+  orphaned in-progress/review, aged proposed, and dependency-unblocked idle
+  tasks. Its execution summary recommends human follow-up without changing task
+  status or dispatching work.
+- `delivery-code-review` — disabled-by-default review of newly landed
+  deliveries. `operation.review_policy = after-landing` enables it without a
+  toggle. The former `delivery-qa` default is retired and is not seeded;
+  hands-on QA stays with `qa-sweep` and `qa-full-sweep`.
 
 ## Workspace-authored definitions in this repo
 
@@ -105,8 +142,8 @@ Orbit's own checkout also carries extra `.orbit/auto_tasks/` files that are
 **not** embedded defaults. They may be enabled, name a family-specific crew, or
 encode this repository's branches and gates. Re-init preserves them:
 
-- `doc-duties`, `model-price-audit`, `release-prep`, and this repository's
-  enabled copies of catalog names such as `code-review` and
+- `model-price-audit`, `release-prep`, `skill-validation`, and
+  this repository's enabled copies of catalog names such as `code-review` and
   `security-review`.
 
 ## Task References
@@ -117,7 +154,7 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-10440 — Daily friction-curation definition.
 - ORB-10514 — Original workspace-authored CI-failure auto-task.
 - ORB-10549 — Embedded the portable, disabled friction-curation default and
-  workspace materialization contract; [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](./4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates-one-generic-scheduler-routine) should be updated through the
+  workspace materialization contract; [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](./4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates--one-generic-scheduler-routine) should be updated through the
   Orbit ADR surface after this task lands.
 - ORB-10550 — Added the disabled qa-sweep default and standardized agent-facing
   friction tool invocations on the registered `orbit tool run` surface.
@@ -127,6 +164,12 @@ encode this repository's branches and gates. Re-init preserves them:
   are no longer listed as if they were embedded defaults.
 - ORB-11095 — Added centralized finding-title provenance and established the
   shipped definition's canonical `code-review` name.
+- ORB-12931 — Added the disabled weekly `run-failure-patterns` default that
+  mines unfiled recurring run failures.
+- ORB-12932 — Added the disabled weekly, report-only `backlog-hygiene` default.
+- ORB-13636 — Added the disabled `full-code-review` coordinator default and
+  keyed the `code-review` cursor selector on its provenance tag after
+  hand-filed full-review chores shadowed the last real sweep.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.

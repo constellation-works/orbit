@@ -2,10 +2,10 @@
 type: runbook
 summary: Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations.
 tags: [operations, backup, restore, state, sqlite, task-publication]
-paths: ["crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state.rs"]
+paths: ["crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state/**"]
 related_features: [orbit-core, remote-access, task-publication]
 related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077, ORB-11376, ORB-11426]
-last_validated: 2026-09-06
+last_validated: 2026-09-20
 ---
 
 # Inventory and Protect Orbit State
@@ -18,36 +18,41 @@ restore a store database, or move task bundles between machines.
 Two roots hold Orbit state. **Workspace state** lives in `<repo>/.orbit/`;
 **user/machine state** lives in `~/.orbit/` (override with `--root <dir>`, highest
 precedence). Path layout is defined in
-`crates/orbit-common/src/types/workspace.rs` (`WorkspacePaths`) and
+`crates/orbit-types/src/workspace/registry.rs` (`WorkspacePaths`) and
 `crates/orbit-config/src/persistence.rs` (`PersistenceConfig`).
 
 ### Workspace `.orbit/`
+
+`orbit workspace init` scaffolds `.orbit/resources/` plus
+`.orbit/state/{audit,job-runs,logs,scoreboard,worktrees}`. It does not create
+`.orbit/knowledge` or `.orbit/state/diagnostics`; leftover empty copies from
+older inits are unused and may be `rmdir`'d. Init tolerates both absence and
+presence. Path fields live on `WorkspacePaths` in
+`crates/orbit-types/src/workspace/registry.rs`.
 
 | Path | What it is | Authoritative or regenerable |
 |---|---|---|
 | `config.yaml` | workspace identity (`workspace_id`) | authoritative |
 | `config.toml` | optional workspace runtime config (layers over global per key, with security-sensitive exceptions—see [CONFIG.md](../CONFIG.md)) | authoritative |
-| `tasks/` | projection of canonical task bundles: symlinks → `~/.orbit/tasks/workspaces/<ws-id>/` | regenerable (`orbit task reindex`) |
 | `frictions/` | legacy friction import/rollback tree; live records and taxonomy are published under the global root | preserve until migration evidence is no longer needed |
 | `resources/` | workspace overrides for activities/jobs/executors/policies | authoritative |
 | `graph/`, `knowledge/graph/` | retired graph state left by older Orbit versions | non-authoritative; remove explicitly with `orbit doctor --remove-graph` |
 | `state/layout.version` | plain-text workspace layout version marker | regenerable marker (see [upgrades](./upgrades.md)) |
 | `state/layout.lock` | advisory lock taken during layout upgrades | transient |
-| `state/semantic.db` | semantic/vector index (docs and tasks) | regenerable (`orbit semantic index`) |
+| `state/semantic.db` | lexical task index (FTS5 chunks) | regenerable (`orbit search reindex`) |
 | `state/scoreboard/` | rolling counters (`pr.json`, `task_review.json`, `tokens.json`, …) | mostly regenerable |
-| `state/job-runs/` | legacy file-based run bundles; new runs live in SQLite | not used for new runs; retain if old run evidence matters |
+| `state/job-runs/` | run-definition snapshots (`jrun-*.job.yaml`); new run history lives in SQLite | retain if old run evidence matters |
 | `state/audit/blobs/` | redacted content-addressed blobs referenced by global `v2_audit_events` | preserve with audit history when detailed output matters |
-| `state/logs/`, `state/diagnostics/`, `state/worktrees/` | workspace-local scratch and diagnostics | regenerable |
+| `state/logs/`, `state/worktrees/` | workspace-local worker stdio logs and linked worktrees | regenerable |
 
 ### Global `~/.orbit/`
 
 | Path | What it is | Authoritative or regenerable |
 |---|---|---|
-| `config.toml` | global runtime config (created by `orbit init`) | authoritative |
+| `config.toml` | global runtime config **and** this machine's stable identity in its `[machine]` table (`id`, `name`, `task_prefix`), both created by `orbit init` | authoritative |
 | `workspaces.json` | registry of workspaces on this machine (logical workspaces + local checkouts, including declared owner and `owner`/`replica` role) | authoritative |
-| `host.toml` | this machine's stable identity (`machine_id`, `host_id`, `task_prefix`) | authoritative |
 | `registry-cache.json` | legacy file from the removed fleet-registry path | inert; no live reader or refresher, so remove only after backup if cleanup is desired |
-| `orbit.db` (+ `-wal`, `-shm`) | **the** store DB for audit events (`audit_events`, `v2_audit_events`), job runs + checkpoints (`job_runs`, `job_run_steps`), task reservations, indexes, routine state, and the `schema_meta` migration ledger | **authoritative** for live history; old host/profile tables may remain from shipped migrations but are not registry, routing, health, or authorization authority |
+| `orbit.db` (+ `-wal`, `-shm`) | **the** store DB for audit events (`audit_events`, `v2_audit_events`), job runs + checkpoints (`job_runs`, `job_run_steps`, and `job_run_id_allocations`, which keeps archived and deleted run ids reserved), task reservations, indexes, routine state, and the `schema_meta` migration ledger | **authoritative** for live history; old host/profile tables may remain from shipped migrations but are not registry, routing, health, or authorization authority |
 | `tasks/index.sqlite` | global task-ID allocator + registry index | regenerable (`orbit task reindex`) |
 | `tasks/workspaces/<ws-id>/<task-id>/` | canonical task bundles (survive repo moves) | **authoritative** |
 | `frictions/workspaces/<ws-id>/` | live tag taxonomy plus the published legacy record tree used for one-time import/rollback | mixed: taxonomy is authoritative configuration; record files are legacy evidence after SQLite import |
@@ -55,8 +60,21 @@ precedence). Path layout is defined in
 | other `resources/`, `skills/` | default executor/policy defs and skills; `resources/.orbit-global-defaults.json` records which embedded default set was last reconciled here | regenerable (`orbit init` reseeds) |
 | `state/logs/orbit.jsonl` (+ rotated archives) | unified JSONL log sink for all Orbit processes | disposable |
 | `state/task-publication/` | private Git object/work-tree caches plus pending-push reconciliation records | regenerable after a cleanly recorded success; retain during push-success/local-record recovery |
-| `embed/` | semantic-search companion binary + models | regenerable (`orbit semantic install`) |
+| `embed/` | retired search downloads | removable after stopping older binaries; see upgrades |
 | `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |
+
+Policy definitions under global or workspace `resources/policies/` may use
+`.yaml` or `.yml`. Named lookup, listing, and updates use the same file for a
+given name. If both variants exist, `.yaml` takes precedence; the `.yml` file
+remains untouched. When only `.yml` exists, updates keep that extension, so
+`orbit init` can add shipped default rules without discarding operator rules.
+
+Task bundles are not projected into workspace `.orbit/` directories. During
+the layout-v3 upgrade, Orbit removes only checkout task links that match the
+legacy canonical target shape and leaves ambiguous entries untouched. Stop all
+older Orbit processes before installing the upgraded binary, then open each
+workspace once with the new binary. An older process left running can recreate
+the retired links until it is restarted.
 
 > **Registry compatibility residue.** The immutable Store migration ledger can leave
 > `hosts`, `host_aliases`, `workspace_ownership`, `host_workspace_presence`,
@@ -66,17 +84,23 @@ precedence). Path layout is defined in
 > crew discovery, or authorization.
 
 > **Live registry refresh (ORB-10294).** A running `orbit web serve` no longer needs a
-> restart to pick up `workspaces.json` changes. It reloads the registry at each request
-> boundary, so a native `orbit workspace init` / `remove` — or a re-pointed checkout
-> binding — becomes visible through `/api/workspaces` and routable through the
-> workspace-scoped API on the next request; a removed workspace's cached runtime is evicted
-> without disturbing the others. **Operator recovery semantics:** a checkout path that
-> disappears after startup is reported `invalid` (inactive) rather than deleted — restore or
-> re-point the path and the next request re-activates it, no restart needed. A malformed or
-> half-written `workspaces.json` (e.g. an editor mid-save) never replaces the last good
-> in-memory set: the server keeps serving the previous workspaces and logs a credential-safe
-> diagnostic (the registry path plus the parse error, never the file contents) until the file
-> parses again. A malformed registry present *at server startup* is still fatal — fix the file
+> restart to pick up `workspaces.json` changes. Request handlers `stat` the registry file
+> and reload it only when mtime or length has changed, so a native `orbit workspace init` /
+> `remove` — or a re-pointed checkout binding — becomes visible through `/api/workspaces`
+> and routable through the workspace-scoped API on the next request after that write; a
+> removed workspace's cached runtime is evicted without disturbing the others. Unchanged
+> requests do not re-read or re-validate the file and do not serialize on the refresh
+> lock. The server samples the registry fingerprint before each load; if a native
+> write lands during startup or refresh, the next request reloads the newer file.
+> **Operator recovery semantics:** a checkout path that disappears after a registry
+> write that `orbit web` reloads is reported `invalid` (inactive) rather than deleted —
+> restoring the path changes its checkout fingerprint, so the next request can
+> re-activate it; re-pointing a binding requires rewriting `workspaces.json`.
+> A malformed or half-written `workspaces.json` (e.g. an editor mid-save) never
+> replaces the last good in-memory set:
+> the server keeps serving the previous workspaces and logs a credential-safe diagnostic
+> (the registry path plus the parse error, never the file contents) until the file parses
+> again. A malformed registry present *at server startup* is still fatal — fix the file
 > before launching. See [remote-access design §2.1](../design/remote-access/2_design.md) and
 > [Registry snapshots are authoritative; runtimes are cached](../design/remote-access/4_decisions.md#registry-snapshots-are-authoritative-runtimes-are-cached).
 
@@ -97,51 +121,49 @@ precedence). Path layout is defined in
 
 ### Retired graph state and task selectors
 
-[Retire and delete Orbit's code-graph subsystem](../design/_archive/orbit-graph/4_decisions.md#retire-and-delete-orbits-code-graph-subsystem) retired graph as an Orbit capability. Task `symbol:<path>#<symbol>:<kind>` context
+The "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) retired graph as an Orbit capability. Task `symbol:<path>#<symbol>:<kind>` context
 selectors now use only `<path>` as a canonical workspace-contained file anchor; the symbol and
 kind are opaque descriptive metadata. No health, task, or dashboard path probes graph state or
 resolves symbols through it.
 
 Older worktrees may still contain worktree-local `.orbit/graph`, while the shared workspace may
 contain `.orbit/knowledge/graph`. `orbit doctor --remove-graph` removes exactly those two
-locations and is safe to repeat. Ordinary `orbit doctor` is read-only with respect to both.
+locations when each is reached without an intermediate symlink, and is safe to repeat. An
+intermediate symlink is reported and left unfollowed, so a directory outside the resolved root
+is not deleted. A symlink at the final `graph` component is unlinked without being followed.
+Ordinary `orbit doctor` is read-only with respect to both.
 
-### Git-committed versus local state
+### Per-user `.orbit/` state
 
-`orbit workspace init` manages a selective `.gitignore` block. It keeps generated state
-local while allowing the versioned configuration and definition directories that Orbit
-owns today:
+`orbit workspace init` manages a `.gitignore` block that ignores the whole of
+`.orbit/` as per-user checkout state. There are no `!` re-includes. Seeded
+defaults for routines, auto-tasks, and resources come from the binary via
+`init` / `workspace sync`, not from git. Task publication is the mechanism for
+sharing task records across owners.
 
 ```gitignore
-.orbit/*
-!.orbit/auto_tasks/
-!.orbit/resources/
-!.orbit/routines/
-!.orbit/config.toml
-.orbit/**/*.lock
+# Orbit per-user state — not a repository artifact.
+.orbit/
 ```
 
-Any additional operator-authored paths require an explicit repository policy; do not
-assume workspace initialization commits them.
+The block is written even when `--root` keeps Orbit's data directory outside
+the checkout, because delivery worktrees are still created under
+`<checkout>/.orbit/state/worktrees/`. Unignored, each one is an untracked nested
+checkout and the run's primary-checkout snapshot fails. `orbit workspace sync`
+adds the block to a checkout that lacks it.
 
-#### Finalizing generated onboarding files
+If git still tracks files under `.orbit/` from an older block, `orbit doctor`
+reports them. Sync rewrites the ignore block but does not run git; untrack once
+with `git rm -r --cached .orbit`.
 
-`orbit workspace init` updates `.gitignore` and creates untracked definition files under
-`.orbit/auto_tasks/` and `.orbit/routines/`. Orbit intentionally does not auto-commit,
-stash, or discard working-tree modifications.
-
-For local delivery (`--ship-mode local`), the base branch landing checkout must be clean
-to ensure safe fast-forward merges. Operators should review and finalize generated
-onboarding definitions before dispatching local implementation workflows:
-
-```bash
-git add .gitignore .orbit/auto_tasks .orbit/routines
-git commit -m "chore: initialize Orbit workspace definitions"
-```
-
-If local shipping is attempted while the landing checkout remains dirty, the workflow
-fails early before agent implementation runs, reporting the unmerged or dirty landing
-state so operators can safely commit or remediate the files without lost work.
+`orbit workspace init` updates `.gitignore` and writes definition files under
+`.orbit/`. Those files are ignored, so they do not dirty the checkout. Orbit
+intentionally does not auto-commit, stash, or discard operator modifications.
+With `--mcp`, it also writes the detected clients' repo-local MCP configuration
+files (for example `.mcp.json` and `.claude/settings.json`). The init report
+lists every checkout file it wrote. Review and commit the listed files before
+the first local ship, which requires a clean base checkout. PR delivery uses a
+separate worktree and does not impose that local landing check.
 
 ### Recover a missing or corrupt checkout identity
 
@@ -234,7 +256,7 @@ from the captured settings only after the old source identity is restored.
   the matching database when detailed audit output matters, and retain legacy
   `state/job-runs/` if its old run evidence matters. Git already backs up any selected
   artifacts the repository deliberately commits.
-- **Global root:** `~/.orbit/config.toml`, `host.toml`, `workspaces.json`, `tasks/`
+- **Global root:** `~/.orbit/config.toml` (settings and the `[machine]` identity), `workspaces.json`, `tasks/`
   (canonical bundles), `orbit.db`, `frictions/`, and `resources/` whenever it contains operator-authored YAML or
   `.retired-managed/` recovery copies. The database holds non-derivable audit and run history.
 - **Safe to lose or regenerate:** retired `graph/` and `knowledge/graph/`, `state/semantic.db`,
@@ -264,7 +286,7 @@ file-copy a live DB, copy `*.db`, `*.db-wal`, and `*.db-shm` together.
 
 Task publication is an explicit, task-only durability channel. It does not
 replace the global-root/database backup above: audit events, run history,
-claims, reservations, configuration, host identity, and runtime caches are not
+claims, reservations, configuration, machine identity, and runtime caches are not
 published. No task mutation publishes automatically, and v1 seeds no publication
 routine. A future routine trigger must be configured separately.
 
@@ -284,7 +306,7 @@ rm -f ~/.orbit/orbit.db-wal ~/.orbit/orbit.db-shm
 
 # Rebuild derived indexes as needed.
 orbit task reindex
-orbit semantic index      # if semantic search is installed
+orbit search reindex      # rebuild lexical task chunks
 orbit doctor --remove-graph # remove retired local/shared graph state, if present
 
 orbit doctor              # verify; see health-checks.md

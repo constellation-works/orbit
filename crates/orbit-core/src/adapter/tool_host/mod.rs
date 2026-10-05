@@ -2,19 +2,19 @@ mod agent_tools;
 mod artifact_redaction;
 mod auto_task_tools;
 mod command_tools;
+mod desktop;
 mod dispatch;
-mod docs_tools;
+mod drain_tools;
 mod friction_tools;
 mod host;
 mod hub_registry;
 mod input;
 mod json;
-mod operation_mode_tools;
 mod pipeline_tools;
 mod search_tools;
-mod semantic_tools;
 mod state_tools;
 mod task_tools;
+pub(crate) mod worker_tools;
 mod workflow_tools;
 
 #[cfg(test)]

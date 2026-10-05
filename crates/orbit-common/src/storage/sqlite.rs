@@ -1,7 +1,7 @@
 //! Shared SQLite connection defaults for every Orbit SQLite store.
 //!
 //! Historically each store (orbit-store `Store`, its ID allocator and task
-//! registry, and orbit-search's `VectorStore`) hand-rolled its own pragma
+//! registry, and orbit-search's `LexicalStore`) hand-rolled its own pragma
 //! setup, and the copies drifted (missing `foreign_keys` here, missing
 //! `busy_timeout` there). [`apply_default_pragmas`] is the single source of
 //! truth: call it on every freshly opened connection, then layer any
@@ -10,85 +10,253 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::OrbitError;
+use crate::{OrbitError, SqliteContention};
 
 /// Default `busy_timeout` applied to every Orbit SQLite connection, in
 /// milliseconds. Writers under WAL still serialize; this bounds how long a
 /// contending connection spins before surfacing `database is locked`.
 pub const DEFAULT_BUSY_TIMEOUT_MS: u32 = 5_000;
 
+/// Bytes in a WAL file header. A `-wal` of at most this size carries no
+/// frames, so the main database file already holds every committed page.
+const WAL_HEADER_BYTES: u64 = 32;
+
+/// Leading bytes of every SQLite database file.
+const DATABASE_MAGIC: &[u8] = b"SQLite format 3\0";
+
+/// Bytes of the database header this module reads: through offsets 18 and 19,
+/// the write and read file-format versions.
+const DATABASE_HEADER_BYTES: u64 = 20;
+
+/// File-format version recorded at offsets 18 and 19 while a database is in
+/// WAL mode. Rollback-journal databases record `1`.
+const WAL_FILE_FORMAT: u8 = 2;
+
 /// A file-backed SQLite connection opened under Orbit's filesystem policy.
 pub struct OpenedConnection {
     /// The ready-to-use SQLite connection.
     pub connection: Connection,
-    /// Whether the database was opened in immutable read-only mode.
+    /// Whether the database was opened for observation only, without any
+    /// ability to write.
     pub read_only: bool,
+    /// Whether this connection keeps up with commits made after it was opened.
+    /// Writable connections are always [`ObservationCurrency::Live`].
+    pub currency: ObservationCurrency,
+}
+
+/// A live SQLite connection that keeps one WAL file set linked.
+///
+/// Linux runtime sandboxes bind the database, WAL, and shared-memory files by
+/// descriptor so a pathname replacement cannot redirect a grant. SQLite may
+/// normally unlink those sidecars when its last connection closes. Keeping a
+/// connection alive until the sandboxed provider exits prevents the bound
+/// descriptors from becoming a coherent but obsolete file set.
+pub struct WalFileSetLease {
+    path: PathBuf,
+    _connection: Mutex<Connection>,
+}
+
+impl std::fmt::Debug for WalFileSetLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WalFileSetLease")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Keep an existing WAL database's sidecars linked until this lease is dropped.
+///
+/// Returns `None` for a missing database or a database that is not in WAL mode.
+/// The connection does not hold a transaction, so it does not pin a read
+/// snapshot or prevent ordinary checkpoints; it only prevents last-close WAL
+/// cleanup from replacing the descriptor-backed sandbox file set.
+pub fn lease_wal_file_set(path: &Path) -> Result<Option<WalFileSetLease>, OrbitError> {
+    if !path
+        .try_exists()
+        .map_err(|error| sqlite_path_error("inspect", path, error))?
+    {
+        return Ok(None);
+    }
+
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|error| sqlite_operation_error(Some(path), "open WAL file-set lease", &error))?;
+    connection
+        .busy_timeout(std::time::Duration::from_millis(u64::from(
+            DEFAULT_BUSY_TIMEOUT_MS,
+        )))
+        .map_err(|error| sqlite_operation_error(Some(path), "set lease busy_timeout", &error))?;
+    let journal_mode = connection
+        .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+        .map_err(|error| {
+            sqlite_operation_error(Some(path), "inspect lease journal mode", &error)
+        })?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Ok(None);
+    }
+
+    connection
+        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| {
+            sqlite_operation_error(Some(path), "initialize WAL file-set lease", &error)
+        })?;
+
+    Ok(Some(WalFileSetLease {
+        path: path.to_path_buf(),
+        _connection: Mutex::new(connection),
+    }))
 }
 
 /// Open an Orbit SQLite database without exposing its persisted state.
 ///
 /// Writable databases are created or repaired to owner-only access on Unix.
 /// The database is hardened before SQLite can create WAL/SHM sidecars, and
-/// pre-existing sidecars are repaired as part of the same operation. Newly
-/// created parent directories are owner-only as well. An existing read-only
-/// database on writable storage has group/other permissions removed before it
-/// is opened immutable. A database on a read-only filesystem is opened
-/// immutable before any directory creation or permission change is attempted.
+/// pre-existing sidecars are repaired as part of the same operation; a
+/// symlinked or otherwise irregular sidecar fails the open without its target
+/// being touched. Newly created parent directories are owner-only as well.
+/// An existing read-only database on writable storage has group/other
+/// permissions removed before it is opened for observation. A database on a
+/// read-only filesystem is opened observationally before any directory
+/// creation or permission change is attempted; see [`open_observational`] for
+/// how such a database is read.
 pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
-    match fs::metadata(path) {
+    let path = validated_sqlite_path(path)?;
+
+    match fs::metadata(&path) {
         Ok(metadata) => {
-            let filesystem_read_only = filesystem_is_read_only(path)?;
+            let filesystem_read_only = filesystem_is_read_only(&path)?;
             if filesystem_read_only || metadata.permissions().readonly() {
-                return open_private_read_only(path, filesystem_read_only);
+                return open_private_read_only(&path, filesystem_read_only);
             }
-            harden_sqlite_files(path)?;
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
+        Err(error) => return Err(sqlite_path_error("inspect", &path, error)),
     }
 
-    if let Some(parent) = path.parent() {
-        create_private_dir_all(parent)?;
-    }
-    prepare_private_database_file(path)?;
+    prepare_private_database_file(&path)?;
+    // Sidecars left beside a newly created database are checked too, before
+    // SQLite opens them by path.
+    harden_sqlite_files(&path)?;
 
-    let connection = Connection::open(path).map_err(|error| {
-        OrbitError::Store(format!(
-            "cannot open SQLite database '{}': {error}",
-            path.display()
-        ))
-    })?;
-    let pragmas = apply_default_pragmas(&connection)?;
-    if pragmas.write_denied || filesystem_is_read_only(path)? {
+    let connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|error| sqlite_operation_error(Some(&path), "cannot open SQLite database", &error))?;
+    let pragmas = apply_default_pragmas_for_path(&connection, &path)?;
+    if pragmas.write_denied || filesystem_is_read_only(&path)? {
         drop(connection);
-        return Ok(OpenedConnection {
-            connection: open_immutable(path)?,
-            read_only: true,
-        });
+        return open_observational(&path, ObservationRequirement::PublishedMainFile);
     }
-    harden_sqlite_files(path)?;
+    harden_sqlite_files(&path)?;
 
     Ok(OpenedConnection {
         connection,
         read_only: false,
+        currency: ObservationCurrency::Live,
     })
 }
 
-pub(super) fn open_private_read_only(
+/// Observe a database Orbit may not write.
+///
+/// Orbit's stores accept [`ObservationCurrency::MainFileOnly`] deliberately:
+/// state published as a static file set — a read-only mount of a directory
+/// whose last writer closed cleanly, and so left no wal-index behind — carries
+/// no sidecars at all, and refusing it would make such a deployment unreadable
+/// rather than stale. Every caller is handed the currency it got, and
+/// [`open_observational`] warns when the degraded read is in use.
+fn open_private_read_only(
     path: &Path,
     filesystem_read_only: bool,
 ) -> Result<OpenedConnection, OrbitError> {
+    let path = validated_sqlite_path(path)?;
+
     if !filesystem_read_only {
-        harden_read_only_sqlite_files(path)?;
+        harden_read_only_sqlite_files(&path)?;
     }
-    Ok(OpenedConnection {
-        connection: open_immutable(path)?,
-        read_only: true,
-    })
+    open_observational(&path, ObservationRequirement::PublishedMainFile)
+}
+
+/// Resolve a SQLite file path through its existing parent and reject traversal
+/// and final-component symlinks before any SQLite or database-file permission
+/// operation.
+///
+/// Orbit callers provide complete paths because the database may live in a
+/// caller-selected state root. The root remains caller-owned, but path
+/// traversal and symlink redirection are not part of that contract. Creating
+/// missing parents preserves the existing first-open behavior; once they exist,
+/// all subsequent operations use the canonical parent path.
+fn validated_sqlite_path(path: &Path) -> Result<PathBuf, OrbitError> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "SQLite path '{}' must not contain parent-directory traversal",
+            path.display()
+        )));
+    }
+
+    let file_name = path.file_name().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "SQLite path '{}' must name a database file",
+            path.display()
+        ))
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "SQLite path '{}' must have a parent directory",
+            path.display()
+        ))
+    })?;
+
+    create_private_dir_all(parent)?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|error| sqlite_path_error("resolve parent for", parent, error))?;
+    let canonical_path = canonical_parent.join(file_name);
+
+    if !canonical_path.starts_with(&canonical_parent) {
+        return Err(OrbitError::InvalidInput(format!(
+            "SQLite path '{}' escapes its parent directory",
+            path.display()
+        )));
+    }
+
+    match fs::symlink_metadata(&canonical_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(OrbitError::InvalidInput(format!(
+                "SQLite path must not be a symlink: {}",
+                path.display()
+            )));
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(OrbitError::InvalidInput(format!(
+                "SQLite path must be a regular file: {}",
+                path.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(sqlite_path_error("inspect", &canonical_path, error)),
+    }
+
+    Ok(canonical_path)
 }
 
 /// Create a sensitive SQLite-adjacent state directory.
@@ -114,6 +282,9 @@ fn prepare_private_database_file(path: &Path) -> Result<(), OrbitError> {
     }
 }
 
+/// Restrict the database and its existing sidecars to owner-only access
+/// through no-follow descriptors; see
+/// [`crate::fs::io::set_private_file_permissions`].
 fn harden_sqlite_files(path: &Path) -> Result<(), OrbitError> {
     harden_existing_file(path)?;
     for sidecar in sqlite_sidecar_paths(path) {
@@ -142,13 +313,19 @@ fn harden_read_only_sqlite_files(path: &Path) -> Result<(), OrbitError> {
 fn harden_existing_read_only_file(path: &Path) -> Result<(), OrbitError> {
     use std::os::unix::fs::PermissionsExt;
 
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
+    let file = match open_read_no_follow(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(sqlite_path_error("inspect", path, error)),
     };
-    let owner_only_mode = metadata.permissions().mode() & 0o700;
-    fs::set_permissions(path, fs::Permissions::from_mode(owner_only_mode))
+
+    let owner_only_mode = file
+        .metadata()
+        .map_err(|error| sqlite_path_error("inspect", path, error))?
+        .permissions()
+        .mode()
+        & 0o700;
+    file.set_permissions(fs::Permissions::from_mode(owner_only_mode))
         .map_err(|error| sqlite_path_error("harden", path, error))
 }
 
@@ -157,11 +334,46 @@ fn harden_existing_read_only_file(_path: &Path) -> Result<(), OrbitError> {
     Ok(())
 }
 
+/// Open a database or sidecar file for reading without traversing a final
+/// symlink, so inspection stays inside the directory
+/// [`validated_sqlite_path`] resolved.
+#[cfg(unix)]
+fn open_read_no_follow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_read_no_follow(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+
 fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 2] {
     [
         path_with_suffix(path, "-wal"),
         path_with_suffix(path, "-shm"),
     ]
+}
+
+/// Metadata for an existing sidecar, or `None` when it is absent.
+///
+/// A symlinked or otherwise irregular sidecar is rejected: read-only opens
+/// decide what to trust from these files, and SQLite would follow a link out
+/// of the state directory [`validated_sqlite_path`] just checked.
+fn sidecar_metadata(path: &Path) -> Result<Option<fs::Metadata>, OrbitError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(metadata)),
+        Ok(_) => Err(OrbitError::InvalidInput(format!(
+            "SQLite sidecar must be a regular file: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(sqlite_path_error("inspect", path, error)),
+    }
 }
 
 fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -186,8 +398,8 @@ pub struct PragmaOutcome {
     /// such as `delete` when the filesystem refuses WAL sidecars).
     pub journal_mode: String,
     /// The connection refused a persistence pragma because its backing store
-    /// is read-only. Callers that need sidecar-free reads should reopen it as
-    /// an immutable SQLite URI.
+    /// is read-only. Callers that need sidecar-free reads should reopen it
+    /// with [`open_observational`].
     pub write_denied: bool,
 }
 
@@ -212,13 +424,27 @@ impl PragmaOutcome {
 ///   that need commit-durable acks (e.g. the task registry) override to
 ///   `FULL` after calling this.
 pub fn apply_default_pragmas(conn: &Connection) -> Result<PragmaOutcome, OrbitError> {
-    let (journal_mode, mut write_denied) = request_wal_journal_mode(conn);
+    apply_default_pragmas_inner(conn, None)
+}
+
+fn apply_default_pragmas_for_path(
+    conn: &Connection,
+    path: &Path,
+) -> Result<PragmaOutcome, OrbitError> {
+    apply_default_pragmas_inner(conn, Some(path))
+}
+
+fn apply_default_pragmas_inner(
+    conn: &Connection,
+    path: Option<&Path>,
+) -> Result<PragmaOutcome, OrbitError> {
+    let (journal_mode, mut write_denied) = request_wal_journal_mode(conn, path);
     conn.pragma_update(None, "busy_timeout", DEFAULT_BUSY_TIMEOUT_MS)
-        .map_err(|e| OrbitError::Store(format!("failed to set busy_timeout: {e}")))?;
+        .map_err(|error| sqlite_operation_error(path, "set busy_timeout", &error))?;
     conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(|e| OrbitError::Store(format!("failed to enable foreign keys: {e}")))?;
+        .map_err(|error| sqlite_operation_error(path, "enable foreign keys", &error))?;
     if let Err(error) = conn.pragma_update(None, "synchronous", "NORMAL") {
-        let mapped = OrbitError::Store(format!("failed to set synchronous=NORMAL: {error}"));
+        let mapped = sqlite_operation_error(path, "set synchronous=NORMAL", &error);
         if mapped.is_readonly_or_access_failure() {
             write_denied = true;
             tracing::warn!(
@@ -236,38 +462,262 @@ pub fn apply_default_pragmas(conn: &Connection) -> Result<PragmaOutcome, OrbitEr
     })
 }
 
-/// Open an existing SQLite database without creating WAL/SHM sidecars.
+fn sqlite_operation_error(path: Option<&Path>, phase: &str, error: &rusqlite::Error) -> OrbitError {
+    use rusqlite::ErrorCode;
+
+    let contention = matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    );
+    let detail = sqlite_error_detail(error);
+    if contention && let Some(path) = path {
+        return OrbitError::SqliteContention(Box::new(SqliteContention {
+            path: path.display().to_string(),
+            phase: phase.to_string(),
+            detail,
+        }));
+    }
+
+    let operation = match phase {
+        "set busy_timeout" => "failed to set busy_timeout",
+        "enable foreign keys" => "failed to enable foreign keys",
+        "set synchronous=NORMAL" => "failed to set synchronous=NORMAL",
+        _ => phase,
+    };
+    let path = path.map_or_else(String::new, |path| format!(" for '{}'", path.display()));
+    OrbitError::Store(format!("{operation}{path}: {detail}"))
+}
+
+fn sqlite_error_detail(error: &rusqlite::Error) -> String {
+    match error.sqlite_error() {
+        Some(sqlite) => format!(
+            "{} [code={:?}, extended_code={}]",
+            error, sqlite.code, sqlite.extended_code
+        ),
+        None => error.to_string(),
+    }
+}
+
+/// What a caller needs from an observational open.
 ///
-/// `immutable=1` is required for a database on a genuinely read-only mount:
-/// SQLite's ordinary read-only mode may still try to create WAL shared-memory
-/// state before the first SELECT.
-pub fn open_immutable(path: &Path) -> Result<Connection, OrbitError> {
+/// A database whose current state cannot be read without writing leaves only a
+/// degraded read, and which of the two answers is right — refuse, or read the
+/// main file alone — belongs to the caller, not to whichever sidecars happen
+/// to be on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationRequirement {
+    /// The connection must observe commits made after it is opened, or the
+    /// open must fail explaining what writable storage still owes it.
+    CurrentState,
+    /// The caller also accepts [`ObservationCurrency::MainFileOnly`], having
+    /// weighed that degraded read against not reading the database at all.
+    PublishedMainFile,
+}
+
+/// Whether a connection keeps up with commits another process makes after the
+/// connection was opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationCurrency {
+    /// Ordinary access: every statement re-reads the database files, so a
+    /// commit that lands after this connection was opened becomes visible to
+    /// the next query.
+    Live,
+    /// `immutable=1`: the connection reads the main database file alone and is
+    /// free to cache it forever.
+    ///
+    /// It is not a guaranteed snapshot. It ignores every `-wal`, including one
+    /// a writer creates after the open, so later commits stay invisible; and
+    /// because `immutable=1` promises SQLite that the bytes never change, a
+    /// writer that later checkpoints into the main file can leave this
+    /// connection returning results that are not merely stale but internally
+    /// inconsistent. It is only sound for a database published as a static
+    /// file set, and only a caller that passes
+    /// [`ObservationRequirement::PublishedMainFile`] ever receives it.
+    /// Observing current state again means opening a new connection.
+    MainFileOnly,
+}
+
+/// Open an existing SQLite database for reads that must not write to it, and
+/// must not create a WAL/SHM sidecar.
+///
+/// Two SQLite behaviors bound what is possible here. An ordinary read-only
+/// connection stays current, but a WAL-mode database drives it through the
+/// `-shm` wal-index, which SQLite creates — a write — when it is absent; on a
+/// read-only mount that attempt fails outright. `immutable=1` needs no
+/// sidecars, but it buys that by reading the main file alone and trusting it
+/// never changes. Reporting either as current is how a read-only Orbit mount
+/// turned an observation into `attempt to write a readonly database`, and how
+/// a checkpointed database kept reporting its pre-open row count.
+///
+/// The database's own state decides which reads are possible, and
+/// `requirement` decides whether the degraded one is acceptable; see
+/// [`observation_currency`].
+pub fn open_observational(
+    path: &Path,
+    requirement: ObservationRequirement,
+) -> Result<OpenedConnection, OrbitError> {
+    let currency = observation_currency(path, requirement)?;
+    let connection = open_read_only_connection(path, currency)?;
+
+    // Opening is lazy, so an unreadable database or an unusable wal-index would
+    // otherwise surface as an opaque failure inside whichever query happened to
+    // run first.
+    connection
+        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| {
+            observational_unavailable(
+                path,
+                &format!("its first read failed: {}", sqlite_error_detail(&error)),
+            )
+        })?;
+
+    if currency == ObservationCurrency::MainFileOnly {
+        tracing::warn!(
+            target: "orbit.common.sqlite",
+            path = %path.display(),
+            "no wal-index is published alongside the database; reading its main file alone, which \
+             will not show commits made from writable storage after this open"
+        );
+    }
+
+    Ok(OpenedConnection {
+        connection,
+        read_only: true,
+        currency,
+    })
+}
+
+/// Decide how `path` can be observed without writing to it, or explain why its
+/// current state cannot be read at all.
+///
+/// The database file's own header decides first: a rollback-journal database
+/// needs no shared memory, so an ordinary read-only connection reads it live
+/// and creates nothing. A WAL-mode database needs the wal-index, and a
+/// read-only connection may only use one that is already published, because
+/// SQLite creates both the `-wal` and the `-shm` when either is missing.
+///
+/// That leaves a WAL-mode database whose sidecars are incomplete. A `-wal`
+/// holding frames, or a `-shm` published without the `-wal` it indexes, may be
+/// hiding committed pages the main file does not have; reporting the main file
+/// alone would be a silent, stale success, so those always fail closed.
+///
+/// A WAL-mode database with no wal-index at all is the one case the caller
+/// decides. Nothing on disk proves it is quiescent — sidecar absence only says
+/// no writer holds it *right now* — so the degraded
+/// [`ObservationCurrency::MainFileOnly`] read is offered to
+/// [`ObservationRequirement::PublishedMainFile`] and refused to
+/// [`ObservationRequirement::CurrentState`].
+fn observation_currency(
+    path: &Path,
+    requirement: ObservationRequirement,
+) -> Result<ObservationCurrency, OrbitError> {
+    let [wal_path, shm_path] = sqlite_sidecar_paths(path);
+    let wal = sidecar_metadata(&wal_path)?;
+    let shm = sidecar_metadata(&shm_path)?;
+
+    if !database_uses_wal(path)? {
+        return Ok(ObservationCurrency::Live);
+    }
+
+    match (wal, shm) {
+        (Some(_), Some(_)) => Ok(ObservationCurrency::Live),
+        (None, Some(_)) => Err(observational_unavailable(
+            path,
+            "its '-shm' wal-index is published without the '-wal' sidecar it indexes",
+        )),
+        (Some(wal), None) if wal.len() > WAL_HEADER_BYTES => Err(observational_unavailable(
+            path,
+            "its '-wal' sidecar holds committed frames but its '-shm' wal-index is missing",
+        )),
+        (Some(_) | None, None) => match requirement {
+            ObservationRequirement::PublishedMainFile => Ok(ObservationCurrency::MainFileOnly),
+            ObservationRequirement::CurrentState => Err(observational_unavailable(
+                path,
+                "it is in WAL mode with no published '-shm' wal-index, so a reader that may not \
+                 create one can only read the main file alone",
+            )),
+        },
+    }
+}
+
+/// Whether the database file records WAL mode in its header.
+///
+/// A missing or truncated file, and any file that does not carry the SQLite
+/// magic, is reported as not WAL: there are no committed WAL frames to miss,
+/// and SQLite gives a better diagnosis of the file itself than this check
+/// could.
+fn database_uses_wal(path: &Path) -> Result<bool, OrbitError> {
+    let file = match open_read_no_follow(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
+    };
+
+    let mut header = Vec::with_capacity(DATABASE_HEADER_BYTES as usize);
+    file.take(DATABASE_HEADER_BYTES)
+        .read_to_end(&mut header)
+        .map_err(|error| sqlite_path_error("read the header of", path, error))?;
+    if header.len() < DATABASE_HEADER_BYTES as usize || !header.starts_with(DATABASE_MAGIC) {
+        return Ok(false);
+    }
+
+    Ok(header[18] == WAL_FILE_FORMAT || header[19] == WAL_FILE_FORMAT)
+}
+
+fn open_read_only_connection(
+    path: &Path,
+    currency: ObservationCurrency,
+) -> Result<Connection, OrbitError> {
     let mut uri = url::Url::from_file_path(path).map_err(|()| {
         OrbitError::Store(format!(
             "cannot represent SQLite path '{}' as a file URI",
             path.display()
         ))
     })?;
-    uri.query_pairs_mut().append_pair("immutable", "1");
+    if currency == ObservationCurrency::MainFileOnly {
+        uri.query_pairs_mut().append_pair("immutable", "1");
+    }
+
     let conn = Connection::open_with_flags(
         uri.as_str(),
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW
             | OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|error| {
-        OrbitError::Store(format!(
-            "cannot open SQLite database '{}' for immutable reads: {error}",
-            path.display()
-        ))
+        sqlite_operation_error(
+            Some(path),
+            "cannot open SQLite database for observational reads",
+            &error,
+        )
     })?;
+
     conn.pragma_update(None, "query_only", "ON")
-        .map_err(|error| OrbitError::Store(format!("failed to set query_only: {error}")))?;
+        .map_err(|error| sqlite_operation_error(Some(path), "set query_only", &error))?;
     conn.pragma_update(None, "busy_timeout", DEFAULT_BUSY_TIMEOUT_MS)
-        .map_err(|error| OrbitError::Store(format!("failed to set busy_timeout: {error}")))?;
+        .map_err(|error| sqlite_operation_error(Some(path), "set busy_timeout", &error))?;
     conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(|error| OrbitError::Store(format!("failed to enable foreign keys: {error}")))?;
+        .map_err(|error| sqlite_operation_error(Some(path), "enable foreign keys", &error))?;
     Ok(conn)
+}
+
+/// The database's current state cannot be read from this process, and cannot
+/// be repaired without writable storage. Name the writable step an operator
+/// still owes rather than reporting the main file's older contents as current.
+///
+/// Deliberately not phrased as a read-only/permission failure: callers that
+/// downgrade those to a warning and continue would turn this back into the
+/// silent stale read it exists to prevent.
+fn observational_unavailable(path: &Path, reason: &str) -> OrbitError {
+    OrbitError::Store(format!(
+        "cannot observe current SQLite state '{}': {reason}. Checkpoint the database from \
+         writable storage (`PRAGMA wal_checkpoint(TRUNCATE)`) or publish its '-wal' and '-shm' \
+         sidecars alongside it, then retry the observation",
+        path.display()
+    ))
 }
 
 /// Whether `path` resides on a filesystem mounted read-only.
@@ -309,7 +759,7 @@ pub fn filesystem_is_read_only(_path: &Path) -> Result<bool, OrbitError> {
 /// Request WAL and report the journal mode SQLite settled on. Never fails:
 /// WAL is a performance/concurrency upgrade, not a correctness requirement,
 /// so refusals degrade to a warning plus the active mode.
-fn request_wal_journal_mode(conn: &Connection) -> (String, bool) {
+fn request_wal_journal_mode(conn: &Connection, path: Option<&Path>) -> (String, bool) {
     match conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0)) {
         Ok(mode) => {
             if !mode.eq_ignore_ascii_case("wal") && !mode.eq_ignore_ascii_case("memory") {
@@ -322,9 +772,11 @@ fn request_wal_journal_mode(conn: &Connection) -> (String, bool) {
             (mode, false)
         }
         Err(error) => {
+            let detail = sqlite_error_detail(&error);
             tracing::warn!(
                 target: "orbit.common.sqlite",
-                error = %error,
+                path = path.map(|path| path.display().to_string()),
+                error = detail,
                 "could not set WAL mode; continuing with the active journal mode",
             );
             let write_denied = OrbitError::Store(error.to_string()).is_readonly_or_access_failure();

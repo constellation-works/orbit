@@ -38,10 +38,11 @@ pub const REVIEW_REPORT_ARTIFACT: &str = "review-report.json";
 /// Task artifact carrying the settled gate result for the latest attempt.
 pub const REVIEW_GATE_ARTIFACT: &str = "review-gate.json";
 
-/// Candidate default budgets per delivery candidate lineage.
-pub const DEFAULT_REVIEW_REVIEWER_STARTS: u32 = 2;
-pub const DEFAULT_REVIEW_REPAIR_CYCLES: u32 = 2;
-pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
+/// Default budgets per delivery run lineage. One reviewer that runs the
+/// repository's full validation must fit several times over, so a retried or
+/// re-reviewed candidate is not starved by the first invocation.
+pub const DEFAULT_REVIEW_REVIEWER_STARTS: u32 = 3;
+pub const DEFAULT_REVIEW_MINUTES: u32 = 90;
 
 /// When automatic code review applies to a managed delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +50,7 @@ pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
 pub enum ReviewTiming {
     /// No automatic review managed by this policy.
     None,
-    /// Hold PR creation for a fresh reviewer and scoped repairs.
+    /// Hold PR creation for a fresh reviewer that fixes what it finds.
     BeforePr,
     /// Accumulate uncovered landed deliveries for a scheduled review.
     AfterLanding,
@@ -66,15 +67,19 @@ impl ReviewTiming {
     }
 }
 
-/// Limits captured for one candidate lineage. They cover retries,
-/// interruptions, and delivery invalidations; nothing resets them.
+/// Limits captured for one delivery run lineage: the run that first admitted
+/// the candidate and every resume of it. They cover retries, interruptions,
+/// and candidate invalidations within that lineage; a fresh delivery run
+/// starts a new lineage with a fresh budget.
+///
+/// Budgets captured before [ORB-13989] also carry a `repair_cycles` limit.
+/// The reviewer now fixes its findings in the one reviewer commit an attempt
+/// may add, so nothing is charged against it and reading ignores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewBudget {
     /// Fresh reviewer invocations allowed for the lineage.
     pub reviewer_starts: u32,
-    /// Repair/validation cycles allowed for the lineage.
-    pub repair_cycles: u32,
-    /// Aggregate reviewer, repair, and final-validation wall time.
+    /// Aggregate reviewer runtime after which no further start is admitted.
     pub minutes: u32,
 }
 
@@ -82,7 +87,6 @@ impl Default for ReviewBudget {
     fn default() -> Self {
         Self {
             reviewer_starts: DEFAULT_REVIEW_REVIEWER_STARTS,
-            repair_cycles: DEFAULT_REVIEW_REPAIR_CYCLES,
             minutes: DEFAULT_REVIEW_MINUTES,
         }
     }
@@ -113,7 +117,8 @@ pub struct ReviewAdmission {
 
 impl ReviewAdmission {
     /// Read the snapshot carried by a run input. A present but malformed
-    /// snapshot is an error, never silently ignored.
+    /// snapshot, or one captured under a contract version this build does
+    /// not support, is an error, never silently ignored or reinterpreted.
     pub fn from_run_input(input: &Value) -> Result<Option<Self>, String> {
         let Some(raw) = input.get(REVIEW_ADMISSION_KEY) else {
             return Ok(None);
@@ -121,9 +126,16 @@ impl ReviewAdmission {
         if raw.is_null() {
             return Ok(None);
         }
-        serde_json::from_value(raw.clone())
-            .map(Some)
-            .map_err(|error| format!("invalid `{REVIEW_ADMISSION_KEY}` run input: {error}"))
+        let admission: Self = serde_json::from_value(raw.clone())
+            .map_err(|error| format!("invalid `{REVIEW_ADMISSION_KEY}` run input: {error}"))?;
+        if admission.contract_version != REVIEW_CONTRACT_VERSION {
+            return Err(format!(
+                "unsupported `{REVIEW_ADMISSION_KEY}` run input: contract_version {} is not the \
+                 supported review contract version {REVIEW_CONTRACT_VERSION}",
+                admission.contract_version
+            ));
+        }
+        Ok(Some(admission))
     }
 
     /// Whether this admission holds PR creation for a reviewer.
@@ -142,18 +154,28 @@ pub struct CommitIdentity {
     pub subject: String,
 }
 
-/// The reviewer's structured decision. Both pass variants require every
-/// finding resolved or explicitly disposed and final validation satisfied.
+/// The reviewer's structured decision [ORB-13989]. Both accepting variants
+/// require every finding fixed or explicitly disposed and final validation
+/// satisfied.
+///
+/// Evidence written before [ORB-13989] spells the same decisions
+/// `passed_without_repairs`, `passed_with_repairs` and `changes_required`;
+/// those labels still read, so stored ledgers and certificates stay readable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewVerdict {
-    /// The candidate passed as implemented.
-    PassedWithoutRepairs,
-    /// The candidate passed after reviewer-authored repairs, which did not
-    /// receive an independent second review.
-    PassedWithRepairs,
-    /// Findings remain that the reviewer could not or may not repair.
-    ChangesRequired,
+    /// No findings: the candidate is accepted as implemented.
+    #[serde(alias = "passed_without_repairs")]
+    Accept,
+    /// The reviewer fixed every finding in its own commit on the candidate.
+    /// Its fixes were validated but did not receive a second review.
+    #[serde(alias = "passed_with_repairs")]
+    AcceptWithFixes,
+    /// Findings remain that cannot be fixed in review: a wrong approach, a
+    /// scope or criteria mismatch, a safety issue, or fixes that fail
+    /// validation.
+    #[serde(alias = "changes_required")]
+    Reject,
     /// The review could not be completed honestly: missing evidence,
     /// unavailable validation, exhausted budget, or a failed invocation.
     Incomplete,
@@ -163,29 +185,26 @@ impl ReviewVerdict {
     /// Stable label for projections.
     pub fn as_str(self) -> &'static str {
         match self {
-            ReviewVerdict::PassedWithoutRepairs => "passed_without_repairs",
-            ReviewVerdict::PassedWithRepairs => "passed_with_repairs",
-            ReviewVerdict::ChangesRequired => "changes_required",
+            ReviewVerdict::Accept => "accept",
+            ReviewVerdict::AcceptWithFixes => "accept_with_fixes",
+            ReviewVerdict::Reject => "reject",
             ReviewVerdict::Incomplete => "incomplete",
         }
     }
 
     /// Whether the verdict lets the candidate open a PR.
     pub fn passed(self) -> bool {
-        matches!(
-            self,
-            ReviewVerdict::PassedWithoutRepairs | ReviewVerdict::PassedWithRepairs
-        )
+        matches!(self, ReviewVerdict::Accept | ReviewVerdict::AcceptWithFixes)
     }
 
     /// The assurance label a passed verdict carries.
     pub fn assurance(self) -> Option<ReviewAssurance> {
         match self {
-            ReviewVerdict::PassedWithoutRepairs => Some(ReviewAssurance::IndependentReview),
-            ReviewVerdict::PassedWithRepairs => {
+            ReviewVerdict::Accept => Some(ReviewAssurance::IndependentReview),
+            ReviewVerdict::AcceptWithFixes => {
                 Some(ReviewAssurance::IndependentReviewWithSelfAuthoredRepairs)
             }
-            ReviewVerdict::ChangesRequired | ReviewVerdict::Incomplete => None,
+            ReviewVerdict::Reject | ReviewVerdict::Incomplete => None,
         }
     }
 }
@@ -307,7 +326,7 @@ pub struct ReviewValidation {
 pub enum FindingDisposition {
     /// Still open; blocks a pass verdict.
     Open,
-    /// Repaired by the reviewer in this attempt.
+    /// Fixed by the reviewer in this attempt's reviewer commit.
     Repaired,
     /// Disposed by an authorized decision with a recorded reason.
     Disposed { reason: String },
@@ -322,6 +341,10 @@ pub struct ReviewFinding {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
     pub disposition: FindingDisposition,
+    /// What the reviewer changed to fix this finding, in one line. Absent on
+    /// open findings and in reports written before [ORB-13989].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<String>,
 }
 
 /// The structured report the reviewer persists as
@@ -341,6 +364,192 @@ pub struct ReviewReport {
     /// Why the review stopped when the verdict is not a pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<String>,
+}
+
+impl ReviewReport {
+    /// Read a persisted report, tolerating benign shape drift that leaves its
+    /// meaning unambiguous: a bare-string `disposition`, enum labels in other
+    /// case or with `-`/space separators, `pass`/`fail`/`skipped` outcomes,
+    /// a single path string, a numeric finding id or string `schema_version`,
+    /// a missing `schema_version`, `summary` or finding `severity`, and
+    /// `null` lists. Anything else that does not match the contract is
+    /// refused with the offending field's path named.
+    pub fn parse(content: &[u8]) -> Result<Self, String> {
+        let mut value: Value = serde_json::from_slice(content)
+            .map_err(|error| format!("review report is not JSON: {error}"))?;
+        normalize_report(&mut value);
+        serde_json::from_value(value.clone()).map_err(|error| locate_report_error(&value, error))
+    }
+}
+
+/// Name the first field of a normalized report that fails its type, so a
+/// reviewer can fix exactly that field; a missing field already names
+/// itself.
+fn locate_report_error(report: &Value, error: serde_json::Error) -> String {
+    fn check<T: serde::de::DeserializeOwned>(path: &str, value: Option<&Value>) -> Option<String> {
+        let value = value.cloned().unwrap_or(Value::Null);
+        serde_json::from_value::<T>(value)
+            .err()
+            .map(|error| format!("{path}: {error}"))
+    }
+    if let Some(located) = check::<ReviewVerdict>("verdict", report.get("verdict")) {
+        return located;
+    }
+    if let Some(Value::Array(findings)) = report.get("findings") {
+        for (index, finding) in findings.iter().enumerate() {
+            let path = format!("findings[{index}]");
+            let located = check::<FindingDisposition>(
+                &format!("{path}.disposition"),
+                finding.get("disposition"),
+            )
+            .or_else(|| check::<ReviewFinding>(&path, Some(finding)));
+            if let Some(located) = located {
+                return located;
+            }
+        }
+    }
+    if let Some(Value::Array(records)) = report.get("validation") {
+        for (index, record) in records.iter().enumerate() {
+            let path = format!("validation[{index}]");
+            let located =
+                check::<ValidationOutcome>(&format!("{path}.outcome"), record.get("outcome"))
+                    .or_else(|| {
+                        record.get("role").and_then(|role| {
+                            check::<ValidationRole>(&format!("{path}.role"), Some(role))
+                        })
+                    })
+                    .or_else(|| check::<ReviewValidation>(&path, Some(record)));
+            if let Some(located) = located {
+                return located;
+            }
+        }
+    }
+    error.to_string()
+}
+
+fn normalize_report(report: &mut Value) {
+    let Some(report) = report.as_object_mut() else {
+        return;
+    };
+    match report.get("schema_version") {
+        None | Some(Value::Null) => {
+            report.insert(
+                "schema_version".to_string(),
+                Value::from(REVIEW_CONTRACT_VERSION),
+            );
+        }
+        Some(Value::String(raw)) => {
+            if let Ok(version) = raw.trim().parse::<u32>() {
+                report.insert("schema_version".to_string(), Value::from(version));
+            }
+        }
+        Some(_) => {}
+    }
+    normalize_label_field(report, "verdict", &[]);
+    if matches!(report.get("summary"), None | Some(Value::Null)) {
+        report.insert("summary".to_string(), Value::String(String::new()));
+    }
+    for list in ["findings", "validation"] {
+        if report.get(list).is_some_and(Value::is_null) {
+            report.remove(list);
+        }
+    }
+    if let Some(Value::Array(findings)) = report.get_mut("findings") {
+        findings
+            .iter_mut()
+            .filter_map(Value::as_object_mut)
+            .for_each(normalize_finding);
+    }
+    if let Some(Value::Array(records)) = report.get_mut("validation") {
+        for record in records.iter_mut().filter_map(Value::as_object_mut) {
+            normalize_label_field(
+                record,
+                "outcome",
+                &[
+                    ("pass", "passed"),
+                    ("success", "passed"),
+                    ("fail", "failed"),
+                    ("failure", "failed"),
+                    ("skipped", "not_run"),
+                ],
+            );
+            if record.get("role").is_some_and(Value::is_null) {
+                record.remove("role");
+            }
+            normalize_label_field(record, "role", &[]);
+        }
+    }
+}
+
+fn normalize_finding(finding: &mut serde_json::Map<String, Value>) {
+    if let Some(Value::Number(id)) = finding.get("id") {
+        let id = id.to_string();
+        finding.insert("id".to_string(), Value::String(id));
+    }
+    if matches!(finding.get("severity"), None | Some(Value::Null)) {
+        finding.insert(
+            "severity".to_string(),
+            Value::String("unspecified".to_string()),
+        );
+    }
+    if matches!(finding.get("summary"), None | Some(Value::Null))
+        && let Some(title) = finding.get("title").cloned()
+    {
+        finding.insert("summary".to_string(), title);
+    }
+    match finding.get("paths") {
+        Some(Value::Null) => {
+            finding.remove("paths");
+        }
+        Some(Value::String(path)) => {
+            let paths = Value::Array(vec![Value::String(path.clone())]);
+            finding.insert("paths".to_string(), paths);
+        }
+        _ => {}
+    }
+    let disposition = match finding.remove("disposition") {
+        Some(Value::String(kind)) => {
+            let mut object = serde_json::Map::new();
+            object.insert("kind".to_string(), Value::String(kind));
+            Some(object)
+        }
+        Some(Value::Object(mut object)) => {
+            if !object.contains_key("kind")
+                && let Some(status) = object.remove("status")
+            {
+                object.insert("kind".to_string(), status);
+            }
+            Some(object)
+        }
+        Some(other) => {
+            finding.insert("disposition".to_string(), other);
+            None
+        }
+        None => None,
+    };
+    if let Some(mut disposition) = disposition {
+        normalize_label_field(&mut disposition, "kind", &[("fixed", "repaired")]);
+        finding.insert("disposition".to_string(), Value::Object(disposition));
+    }
+}
+
+/// Canonicalize an enum label: trimmed, lower case, `-` and spaces as `_`,
+/// then mapped through `aliases`. Non-string values are left for serde to
+/// refuse.
+fn normalize_label_field(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    aliases: &[(&str, &str)],
+) {
+    let Some(Value::String(raw)) = object.get(key) else {
+        return;
+    };
+    let label = raw.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    let label = aliases
+        .iter()
+        .find(|(alias, _)| *alias == label)
+        .map_or(label.clone(), |(_, canonical)| (*canonical).to_string());
+    object.insert(key.to_string(), Value::String(label));
 }
 
 /// The pinned, immutable input handed to the reviewer.
@@ -387,7 +596,6 @@ pub struct ReviewerIdentity {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewConsumption {
     pub reviewer_starts: u32,
-    pub repair_cycles: u32,
     pub seconds: u64,
 }
 
@@ -421,6 +629,12 @@ pub struct ReviewCertificate {
     /// The reason the gate stopped, for non-pass verdicts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<String>,
+    /// Selectors the gate appended because a repaired finding declared an
+    /// out-of-scope repair path. Empty when the reviewer already widened
+    /// through the task API or no such repair occurred. Absent on certificates
+    /// issued before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selectors_widened: Vec<String>,
     pub issued_at: DateTime<Utc>,
 }
 
@@ -511,22 +725,98 @@ pub struct ReviewAttempt {
     pub candidate: SourceRevision,
     pub started_at: DateTime<Utc>,
     pub state: ReviewAttemptState,
-    #[serde(default)]
-    pub repair_cycles: u32,
+    /// Reviewer runtime charged to the lineage for this attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_seconds: Option<u64>,
+    /// Set when the attempt was closed without a reviewer verdict — its
+    /// reviewer step failed or its run ended first — and settled
+    /// `incomplete` with the reviewer runtime spent so far. A resumed run of
+    /// the same lineage may still settle it with a verdict; the charge is
+    /// then replaced by the attempt's total reviewer runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_at: Option<DateTime<Utc>>,
+    /// Runtime of the reviewer invocations that finished for this attempt,
+    /// summed across retries and resumed runs. Retry backoff, recovery
+    /// activities and time no reviewer process ran are never part of it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reviewer_seconds: u64,
+    /// The reviewer invocation running for this attempt, if one started and
+    /// has not reported its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_running: Option<ReviewerInvocation>,
+}
+
+/// A reviewer invocation that started for an attempt and has not finished.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewerInvocation {
+    /// The run executing the reviewer.
+    pub run_id: String,
+    pub started_at: DateTime<Utc>,
+    /// The invocation's own wall-clock bound; no reviewer process outlives it.
+    pub deadline: DateTime<Utc>,
+}
+
+/// A reviewer invocation starting or ending for an attempt, as the engine
+/// observes it around the reviewer step's dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewerInvocationEvent {
+    /// The reviewer process is about to start under its own wall-clock bound.
+    Started { timeout_seconds: u64 },
+    /// The reviewer process ended, successfully or not, after running this
+    /// long.
+    Finished { runtime_seconds: u64 },
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl ReviewAttempt {
-    /// Recorded elapsed time once settled, or wall time from `started_at` to
-    /// `now` while the attempt is still open. A clock behind `started_at`
-    /// counts as zero rather than wrapping.
+    /// Recorded charge once settled, otherwise the reviewer runtime so far
+    /// (see [`Self::reviewer_runtime_at`]).
     pub fn elapsed_at(&self, now: DateTime<Utc>) -> u64 {
-        if let Some(elapsed) = self.elapsed_seconds {
-            return elapsed;
-        }
-        u64::try_from(now.signed_duration_since(self.started_at).num_seconds()).unwrap_or(0)
+        self.elapsed_seconds
+            .unwrap_or_else(|| self.reviewer_runtime_at(now))
     }
+
+    /// Reviewer process runtime spent on this attempt, counting a running
+    /// invocation up to `bound` — the latest instant it can still have been
+    /// running, such as the end of a run that died with it — and never past
+    /// its own deadline.
+    pub fn reviewer_runtime_at(&self, bound: DateTime<Utc>) -> u64 {
+        let running = self.reviewer_running.as_ref().map_or(0, |running| {
+            seconds_between(running.started_at, bound.min(running.deadline))
+        });
+        self.reviewer_seconds.saturating_add(running)
+    }
+
+    /// The run that still holds this attempt: the one running its reviewer,
+    /// else the admitting run while the attempt is open.
+    pub fn holder_run_id(&self) -> Option<&str> {
+        match (&self.reviewer_running, &self.state) {
+            (Some(running), _) => Some(running.run_id.as_str()),
+            (None, ReviewAttemptState::Open) => Some(self.run_id.as_str()),
+            (None, ReviewAttemptState::Settled { .. }) => None,
+        }
+    }
+}
+
+/// Whole seconds from `start` to `end`; a clock behind `start` counts as zero.
+pub fn seconds_between(start: DateTime<Utc>, end: DateTime<Utc>) -> u64 {
+    u64::try_from(end.signed_duration_since(start).num_seconds()).unwrap_or(0)
+}
+
+/// An operator decision starting a fresh budget while retaining attempt history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewResetDecision {
+    /// All attempts through this index belong to the previous budget.
+    pub after_attempt_index: u32,
+    pub reason: String,
+    pub actor: String,
+    pub recorded_at: DateTime<Utc>,
+    pub previous_budget: ReviewBudget,
+    pub previous_consumption: ReviewConsumption,
+    pub budget: ReviewBudget,
 }
 
 /// Aggregate review consumption for one delivery candidate lineage. Retry,
@@ -538,6 +828,9 @@ pub struct ReviewLedger {
     pub budget: ReviewBudget,
     pub attempts: Vec<ReviewAttempt>,
     pub consumed_seconds: u64,
+    /// Audited budget resets; absent in ledgers written before reset support.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decisions: Vec<ReviewResetDecision>,
     /// Compare-and-set handle.
     pub revision: u32,
     pub updated_at: DateTime<Utc>,
@@ -557,28 +850,41 @@ impl ReviewLedger {
             budget,
             attempts: Vec::new(),
             consumed_seconds: 0,
+            decisions: Vec::new(),
             revision: 0,
             updated_at: now,
         }
     }
 
-    /// What the lineage has consumed so far.
+    /// Last attempt retired by an operator reset, or zero for the original budget.
+    pub fn reset_through(&self) -> u32 {
+        self.decisions
+            .last()
+            .map_or(0, |decision| decision.after_attempt_index)
+    }
+
+    /// What the current budget has consumed so far.
     pub fn consumed(&self) -> ReviewConsumption {
         ReviewConsumption {
-            reviewer_starts: u32::try_from(self.attempts.len()).unwrap_or(u32::MAX),
-            repair_cycles: self.attempts.iter().map(|a| a.repair_cycles).sum(),
+            reviewer_starts: u32::try_from(
+                self.attempts
+                    .iter()
+                    .filter(|a| a.index > self.reset_through())
+                    .count(),
+            )
+            .unwrap_or(u32::MAX),
             seconds: self.consumed_seconds,
         }
     }
 
     /// What the lineage may still spend after settled consumption. An open
-    /// attempt's running wall time is not included; use [`Self::remaining_at`]
+    /// attempt's reviewer runtime is not included; use [`Self::remaining_at`]
     /// for a live leftover.
     pub fn remaining(&self) -> ReviewConsumption {
         Self::remaining_from(self.budget, self.consumed())
     }
 
-    /// Remaining allowance at `now`, counting an open attempt's elapsed wall
+    /// Remaining allowance at `now`, counting an open attempt's reviewer
     /// time so a resumed invocation sees leftover seconds rather than the
     /// full captured budget.
     pub fn remaining_at(&self, now: DateTime<Utc>) -> ReviewConsumption {
@@ -594,11 +900,48 @@ impl ReviewLedger {
             reviewer_starts: budget
                 .reviewer_starts
                 .saturating_sub(consumed.reviewer_starts),
-            repair_cycles: budget.repair_cycles.saturating_sub(consumed.repair_cycles),
             seconds: u64::from(budget.minutes)
                 .saturating_mul(60)
                 .saturating_sub(consumed.seconds),
         }
+    }
+
+    /// The ledger as `attempt_id`'s settlement left it: attempts admitted
+    /// later are dropped, so a settlement finished after a restart reports
+    /// what the lineage had consumed then. `None` when the attempt is not
+    /// part of this lineage.
+    pub fn as_of(&self, attempt_id: &str) -> Option<ReviewLedger> {
+        let position = self
+            .attempts
+            .iter()
+            .position(|attempt| attempt.attempt_id == attempt_id)?;
+        let mut ledger = self.clone();
+        ledger.attempts.truncate(position.saturating_add(1));
+        let index = ledger.attempts.last()?.index;
+        let original_budget = self
+            .decisions
+            .first()
+            .map_or(self.budget, |d| d.previous_budget);
+        ledger.decisions.retain(|d| d.after_attempt_index < index);
+        ledger.budget = ledger
+            .decisions
+            .last()
+            .map_or(original_budget, |d| d.budget);
+        let reset_through = ledger.reset_through();
+        // Only settlement charges seconds, so settled consumption is the
+        // sum of the kept attempts' recorded elapsed time.
+        ledger.consumed_seconds = ledger
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.index > reset_through)
+            .filter_map(|attempt| attempt.elapsed_seconds)
+            .fold(0, u64::saturating_add);
+        Some(ledger)
+    }
+
+    /// The run that still holds an attempt of this lineage, if any.
+    pub fn holder_run_id(&self) -> Option<&str> {
+        self.attempts.iter().find_map(ReviewAttempt::holder_run_id)
     }
 
     /// The still-open attempt, if any.

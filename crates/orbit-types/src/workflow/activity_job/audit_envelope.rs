@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::tool_allowlist::ActivityToolPolicyMode;
+
 /// Schema version for the §7 v2 audit envelope. Per §12 Q10 resolution,
 /// versioning is PER EVENT TYPE — each variant of `V2AuditEventKind` can be
 /// versioned independently. This constant is the envelope schema itself.
@@ -62,6 +64,14 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
     },
+    RunCancelled {
+        actor: String,
+        source: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        previous_state: String,
+        final_state: String,
+    },
     StepStarted {
         step_id: String,
     },
@@ -98,6 +108,21 @@ pub enum V2AuditEventKind {
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
+    },
+    /// [ORB-13907] The job-level final recovery hook ran, or was skipped, for
+    /// a failed top-level step.
+    FinalRecoveryAttempted {
+        step_id: String,
+        final_recovery_activity: String,
+        /// `skipped`, `resume`, `settled`, or `escalated`.
+        outcome: String,
+        /// The decision acted on; absent when skipped.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<String>,
+        /// Why it was skipped, or what it settled or escalated; bounded and
+        /// redacted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     StepDenied {
         step_id: String,
@@ -186,6 +211,14 @@ pub enum V2AuditEventKind {
         effective_tools: Vec<String>,
         /// Compatibility projection of `effective_tools`.
         tools: Vec<String>,
+        /// Policy mode the activity declared (`allow` or `deny`). Absent on
+        /// records written before deny mode existed, which were all
+        /// allowlist runs. [ORB-13315]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_policy: Option<ActivityToolPolicyMode>,
+        /// A deny-mode activity's `tool_disallow_list`; absent in allow mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_disallow_list: Option<Vec<String>>,
     },
     /// [ORB-11354] An operator-admitted provider subprocess is about to run
     /// **outside** the executor's filesystem sandbox.
@@ -202,15 +235,10 @@ pub enum V2AuditEventKind {
         authorized_by: String,
         /// How the authorization chokepoint resolved that operator.
         authorizer_provenance: String,
-        /// Destination-resolved remote caller, absent for local admission.
+        /// Caller label forwarded by an SSH-originated session, absent for a
+        /// local admission. Attribution only.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caller_machine_id: Option<String>,
-        /// How the destination established the remote caller identity.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        caller_identity: Option<crate::tool::CallerIdentityProof>,
-        /// Destination-selected trust mode for the remote invocation grant.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_invoke_mode: Option<crate::tool::RemoteAgentInvokeMode>,
         /// RFC 3339 timestamp the admission was stamped.
         authorized_at: String,
         /// Canonical checkout the invocation was admitted against.
@@ -258,6 +286,25 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid_start_time: Option<String>,
     },
+    /// [ORB-13899] The provider child produced output since the previous
+    /// observation. Emitted at most once per supervision interval while the
+    /// child runs, and only when its stdout grew, so the event time is the
+    /// run's last observed activity.
+    ///
+    /// Pairs with `cli.invocation.process` the same way
+    /// `cli.invocation.finished` does. `latest_message` is the newest
+    /// assistant message Orbit could read from the output tail — bounded and
+    /// redacted — and absent when the tail carried none.
+    CliInvocationActivity {
+        provider: String,
+        /// Bytes the child has written to stdout so far.
+        observed_bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latest_message: Option<String>,
+        /// Whether `latest_message` was cut to its bound.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        latest_message_truncated: bool,
+    },
     /// §7.6 — CLI backend subprocess finished (either naturally or by
     /// wall-clock timeout). `timed_out == true` iff the subprocess was killed
     /// because it exceeded `wall_clock_timeout_ms`.
@@ -287,12 +334,14 @@ impl V2AuditEventKind {
         match self {
             V2AuditEventKind::RunStarted { .. } => "run.started",
             V2AuditEventKind::RunFinished { .. } => "run.finished",
+            V2AuditEventKind::RunCancelled { .. } => "run.cancelled",
             V2AuditEventKind::StepStarted { .. } => "step.started",
             V2AuditEventKind::StepFinished { .. } => "step.finished",
             V2AuditEventKind::StepSkipped { .. } => "step.skipped",
             V2AuditEventKind::StepRetry { .. } => "step.retry",
             V2AuditEventKind::StepRecoveryAttempted { .. } => "step.recovery_attempted",
             V2AuditEventKind::StepPostRecoveryAttempt { .. } => "step.post_recovery_attempt",
+            V2AuditEventKind::FinalRecoveryAttempted { .. } => "job.final_recovery_attempted",
             V2AuditEventKind::StepDenied { .. } => V2_EVENT_TYPE_STEP_DENIED,
             V2AuditEventKind::StepJoin { .. } => "step.join",
             V2AuditEventKind::FanoutDispatched { .. } => "fanout.dispatched",
@@ -315,6 +364,7 @@ impl V2AuditEventKind {
             }
             V2AuditEventKind::CliInvocationStarted { .. } => "cli.invocation.started",
             V2AuditEventKind::CliInvocationProcess { .. } => "cli.invocation.process",
+            V2AuditEventKind::CliInvocationActivity { .. } => "cli.invocation.activity",
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }

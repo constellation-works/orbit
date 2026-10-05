@@ -1,1 +1,2 @@
+mod tee;
 mod wait;

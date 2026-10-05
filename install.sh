@@ -290,6 +290,36 @@ install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 log "Installed Orbit to ${INSTALL_DIR}/${BINARY_NAME}"
 "${INSTALL_DIR}/${BINARY_NAME}" --version
 
+# The signed binary owns distro detection and the exact Bubblewrap probe, so
+# shell installation and later `orbit init` follow one preparation path. A
+# piped/nonterminal install must never wait for a sudo password.
+case "$TARGET" in
+  *-unknown-linux-gnu)
+    log "Preparing Linux sandbox prerequisites..."
+    if [ -t 2 ]; then
+      prepare_flags=""
+    else
+      prepare_flags="--non-interactive"
+    fi
+    # A failed preparation still fails the install, but the binary is already
+    # in place, so say how to finish instead of leaving only the raw error.
+    # shellcheck disable=SC2086
+    "${INSTALL_DIR}/${BINARY_NAME}" init --host-prerequisites-only $prepare_flags \
+      || fail "Orbit is installed at ${INSTALL_DIR}/${BINARY_NAME}, but Linux sandbox preparation failed (see above). Fix the reported cause and run 'orbit init', or rerun with ORBIT_SKIP_HOST_PREREQUISITES=1 when an image build or administrator owns the sandbox packages"
+    ;;
+esac
+
+# The installed sweep clock unit names an orbit binary by absolute path, so an
+# install at a different location than the one the unit was written for leaves
+# launchd/systemd invoking a binary that may no longer exist — and it fails
+# every wake-up silently. Repointing it is best-effort: a host with no unit has
+# nothing to converge, and an install must not fail over the repair.
+if clock_report="$("${INSTALL_DIR}/${BINARY_NAME}" clock repair 2>&1)"; then
+  log "$clock_report"
+else
+  warn "could not converge the sweep clock unit: ${clock_report}"
+fi
+
 case ":$PATH:" in
   *:"$INSTALL_DIR":*)
     ;;

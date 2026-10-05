@@ -1,12 +1,12 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::runtime::run_audit::RunAuditEvent;
+use orbit_core::runtime::audit::run::RunAuditEvent;
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
 
 use super::format::format_timestamp;
-use super::steps::{resolve_run, resolve_step_filter};
+use super::steps::{RunRead, resolve_run, resolve_step_filter};
 
 #[derive(Args)]
 #[command(
@@ -27,6 +27,12 @@ pub struct RunEventsArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Report stored run records as-is: skip stale-run reconciliation, which
+    /// finalizes an orphaned pending or running run as interrupted and
+    /// releases its task reservations
+    #[arg(long)]
+    pub no_reconcile: bool,
 }
 
 impl Execute for RunEventsArgs {
@@ -36,6 +42,7 @@ impl Execute for RunEventsArgs {
             self.run_id.as_deref(),
             self.step_id.as_deref(),
             self.event_type.as_deref(),
+            RunRead::from_no_reconcile(self.no_reconcile),
         )
     }
 }
@@ -45,8 +52,9 @@ fn run_events_payload(
     run_id: Option<&str>,
     step_id: Option<&str>,
     event_type: Option<&str>,
+    read: RunRead,
 ) -> CommandOut {
-    let run = resolve_run(runtime, run_id)?;
+    let run = resolve_run(runtime, run_id, read)?;
     let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let step_filter = resolve_step_filter(&run, &audit_steps, step_id)?;
     let events = filter_run_audit_events(
@@ -82,7 +90,7 @@ fn run_events_payload(
     Ok(Payload::detail_table(doc, table).into())
 }
 
-pub(crate) fn filter_run_audit_events(
+fn filter_run_audit_events(
     events: Vec<RunAuditEvent>,
     step_filter: Option<&str>,
     event_type: Option<&str>,
@@ -101,6 +109,10 @@ pub(crate) fn summarize_audit_event(event: &RunAuditEvent) -> String {
     match event.event_type.as_deref() {
         Some("run.started") => field_summary(raw, "job_name"),
         Some("run.finished") => field_summary(raw, "outcome"),
+        Some("run.cancelled") => join_present(&[
+            ("actor", raw_str(raw, "actor")),
+            ("reason", raw_str(raw, "reason")),
+        ]),
         Some("step.started") => field_summary(raw, "step_id"),
         Some("step.finished") => join_present(&[
             ("step", raw_str(raw, "step_id")),

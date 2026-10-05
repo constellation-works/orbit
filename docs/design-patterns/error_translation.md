@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-08-23
+last_validated: 2026-10-04
 ---
 # Crate-Boundary Error Translation
 
@@ -45,8 +45,7 @@ maps each surfaced family to a specific `OrbitError` variant. From
 `crates/orbit-engine/src/activity_job/dispatcher.rs`:
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
+#[derive(Debug, Error, Clone)]
 pub enum DispatchError {
     JobValidation(String),
     DeterministicActionUnavailable { activity: String, action: String },
@@ -55,29 +54,46 @@ pub enum DispatchError {
 }
 ```
 
-The translator lives next to the error and preserves validation failures while
-collapsing the remaining dispatch failures:
+The translator lives next to the error. It preserves validation failures as
+`JobValidation`, recoverable VCS conflicts, and live-completion refusals; other
+dispatch errors collapse to `InvalidInput`.
 
 ```rust
 pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
     match error {
         DispatchError::JobValidation(message) => OrbitError::JobValidation(message),
-        unavailable @ DispatchError::DeterministicActionUnavailable { .. } =>
-            OrbitError::JobValidation(unavailable.to_string()),
-        other => OrbitError::InvalidInput(other.to_string()),
+        unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
+            OrbitError::JobValidation(unavailable.to_string())
+        }
+        DispatchError::RecoverableVcsConflict {
+            operation,
+            original_base_sha,
+            target_base_sha,
+            conflicting_paths,
+            diagnostic,
+        } => OrbitError::RecoverableVcsConflict(Box::new(RecoverableVcsConflict {
+            operation,
+            original_base_sha,
+            target_base_sha,
+            conflicting_paths,
+            diagnostic,
+        })),
+        DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
+            OrbitError::TaskCompletionLiveRun { task_id, run_id }
+        }
+        other => OrbitError::InvalidInput(format!("{other}")),
     }
 }
 ```
 
-Other live translators in the same shape are `selector_error_to_orbit`
-(`orbit-common::fs::selector`) and `rpc_error_to_orbit`
-(`orbit-search::rpc`).
+For the current set of boundary translators and their owning crates, see the
+registry in [`scripts/check-error-translation.sh`](../../scripts/check-error-translation.sh).
 
 Patterns to copy:
 
 - **Translator lives in the source crate, next to the error.** Not in `orbit-common`, not in each caller. The crate that *defined* `FooError` owns the kind→variant mapping. Re-export at the crate root so callers can `use crate_foo::foo_error_to_orbit;`.
 - **Discriminator field drives the mapping.** A typed `kind: String` (or an enum, equivalently) lets the translator branch without exposing internal `thiserror` variants to consumers.
-- **One named match per surfaced variant; everything else passes through.** "`InvalidData` → `InvalidInput`, `Io` → `Io`, default → `Execution`" is the right granularity — name the kinds callers will actually branch on, dump the rest into the generic bucket.
+- **One named match per surfaced variant; everything else passes through.** Preserve the distinctions callers need, then keep unmapped variants in the generic bucket chosen by the public error contract.
 - **`.map_err(translator)?`, not `.map_err(|e| translator(e))?`.** The translator's signature is `FnOnce(E) -> OrbitError`, so the bare path works as a closure. The shorter form reads better at boundary sites.
 
 Use this shape for every new crate in the workspace per the architecture diagram in `ARCHITECTURE.md`. A new typed error should land in the same PR as its translator. `scripts/check-error-translation.sh` (ORB-10013, wired into `make ci-fast` and CI guardrails) enforces the mechanically checkable core: registered boundary errors must export their translator from the owning crate, translators may not live in caller crates, and no foreign error type may be mapped to `OrbitError` variants at a call site.

@@ -1,0 +1,81 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: candidate_validate
+spec:
+  type: deterministic
+  description: >
+    Run the workspace's `workflow.required_validation_commands` on the owner's
+    committed candidate, using the same command runner, environment and
+    failure text as `claim_validate`, and attach one captured log per command
+    to every task the run delivers. The candidate must be a clean checkout of
+    a named branch containing `base_sha`. Commands run with the toolchain
+    environment `workflow.validation_env` resolves (the owner's login shell
+    by default), recorded as `validation_env`. A failing command fails the
+    step with its output after its log is attached, so step recovery can
+    repair the candidate and retry; a command that fails for lack of a tool
+    fails as a `validation_environment` failure that no recovery repairs.
+    With `ownership_base_sha`, every path the candidate changed since that
+    commit is first attributed to the delivered tasks; a path no selector owns
+    widens a task's selectors with review provenance rather than failing. An
+    empty requirement list runs nothing and records
+    `skipped_no_required_commands`.
+  input_schema_json:
+    type: object
+    required: [job_run_id, workspace_path, completed_task_ids]
+    properties:
+      job_run_id:
+        type: string
+      workspace_path:
+        type: string
+      completed_task_ids:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      # The base the candidate was synchronized onto. The candidate must
+      # contain it; a later advance of the base tip is not a refusal.
+      base_sha:
+        type: [string, "null"]
+      # The implementation head a before-PR reviewer commit sits on. Paths
+      # changed since it are attributed to the delivered tasks, widening
+      # their selectors for any path settlement did not already cover.
+      ownership_base_sha:
+        type: [string, "null"]
+  output_schema_json:
+    type: object
+    required: [phase, decision, commands, validation]
+    properties:
+      phase:
+        type: string
+      decision:
+        type: string
+        enum: [passed, skipped_no_required_commands]
+      note:
+        type: string
+        description: Why no command ran, when the requirement list is empty.
+      commands:
+        type: array
+        items:
+          type: string
+      branch:
+        type: string
+      owned_paths:
+        type: array
+        description: Paths changed since ownership_base_sha and attributed to the delivered tasks, when requested.
+        items:
+          type: string
+      tested_head:
+        type: string
+      validation:
+        type: array
+        description: Digest-pinned task artifact references, one per command.
+        items:
+          type: object
+      validation_env:
+        type: [object, "null"]
+        description: >
+          How PATH was resolved for the commands: source (`login_shell`,
+          `config` or `launcher_fallback`), PATH and the login-shell outcome.
+  action: candidate_validate
+  config: {}

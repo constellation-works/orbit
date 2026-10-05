@@ -184,6 +184,25 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                 );
             }
         }
+        V2AuditEventKind::FinalRecoveryAttempted {
+            step_id,
+            final_recovery_activity,
+            outcome,
+            decision,
+            detail,
+        } => {
+            tracing::warn!(
+                target: "orbit.job.final_recovery_attempted",
+                job_run_id = job_run_id,
+                task_id = task_id,
+                step_id = step_id.as_str(),
+                final_recovery_activity = final_recovery_activity.as_str(),
+                outcome = outcome.as_str(),
+                decision = decision.as_deref(),
+                detail = detail.as_deref(),
+                "final recovery attempted",
+            );
+        }
         V2AuditEventKind::StepDenied { step_id, reason } => {
             tracing::error!(
                 target: "orbit.job.step_denied",

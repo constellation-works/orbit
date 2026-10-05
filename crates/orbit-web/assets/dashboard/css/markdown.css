@@ -1,0 +1,69 @@
+/* Rendered markdown (task fields, plugin panels). Loaded after
+   task-detail.css so .markdown-body rules win ties with .field-block ones. */
+
+.markdown-body {
+  color: #cecece;
+  line-height: 1.6;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  word-break: break-word;
+}
+.markdown-body p { margin-top: 0; margin-bottom: 12px; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body a { color: var(--accent); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body a:focus-visible,
+.ac-list a:focus-visible,
+.artifact-preview a:focus-visible {
+  text-decoration: underline;
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 2px;
+}
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.markdown-body pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 400px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+}
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  margin-top: 16px; margin-bottom: 8px; font-weight: 600; color: var(--fg); font-size: 14px;
+}
+.markdown-body ul, .markdown-body ol {
+  padding-left: 20px; margin-top: 0; margin-bottom: 12px;
+}
+.markdown-body table {
+  width: 100%; border-collapse: collapse; margin-bottom: 12px;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+}
+.markdown-body th {
+  background: rgba(255, 255, 255, 0.05);
+}
+.markdown-body blockquote {
+  margin: 0 0 12px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--fg-dim);
+}

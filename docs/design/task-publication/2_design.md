@@ -2,7 +2,7 @@
 title: Task Publication — Design
 owner: codex
 last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_validated: 2026-09-19
 status: Accepted
 feature: task-publication
 doc_role: design
@@ -34,7 +34,7 @@ write permission.
 | Concern | Authority |
 |---|---|
 | Task allocation, lifecycle, relations, and comments | Declared workspace owner |
-| Task bundles in `~/.orbit/tasks/workspaces/<workspace-id>/` | Declared workspace owner |
+| Task bundles in `~/.orbit/tasks/workspaces/<task-workspace-id>/` | Declared workspace owner |
 | Publication-repository binding and lineage | Owner machine's Orbit registry |
 | Publication branch advancement | Declared workspace owner |
 | Repository visibility, collaborators, and retention | Git host and operator |
@@ -43,7 +43,9 @@ write permission.
 
 Only the owner may publish. Consumers do not import a fetched tree into their
 live task store automatically. Consequently publication is a derived durability
-channel, not replicated task-store leadership.
+channel, not replicated task-store leadership. Publication metadata records the
+logical workspace ID; the owner runtime supplies the corresponding
+task-workspace partition when it enumerates or restores bundles.
 
 ## 2. Publication Repository and Binding
 
@@ -70,7 +72,7 @@ authority_machine_id: hm_example
 ```
 
 The binding lives with machine-local workspace-registry state, not in a task
-bundle or source-controlled `.orbit/config.toml`. It must not contain embedded
+bundle or workspace `.orbit/config.toml`. It must not contain embedded
 credentials, claim tokens, checkout paths, SSH command lines, or
 credential-bearing URLs. Authentication uses the operator's existing Git/SSH credential
 configuration.
@@ -146,7 +148,7 @@ source_repository_fingerprint: <portable-source-identity>
 authority_machine_id: hm_example
 generation: 42
 published_at: 2026-08-29T00:00:00Z
-task_schema_version: 2
+task_schema_version: 1
 previous_publication: <git-oid-or-null>
 attachment_policy: include
 task_ids: [ORB-00001, ORB-00002]
@@ -205,12 +207,21 @@ workspace, branch, generation, and the commit id it is about to push — into th
 same Orbit-owned cache. That record is what phase 8's "reconcile by commit ID"
 reads on the next run: a branch tip equal to the pending commit that the owner
 never recorded is reconciled and reported without republishing, while any other
-unexpected tip is an authority conflict.
+unexpected tip is an authority conflict. Reconciliation keeps the pending record,
+because the owner records the reconciled commit only afterwards; the record is
+removed once a later run's last success names that commit, so a lost save can
+reconcile again instead of turning into an authority conflict.
 
 Task bundles have per-bundle durability rather than one workspace-wide read
 transaction. A v1 publication is therefore a validated set of individually
 consistent bundle observations, not a claim that every task was captured at
 the same instant. A later publication converges on newer owner state.
+Each bundle observation is taken under the task's canonical bundle lock, the
+same lock lifecycle writes and artifact replacement hold, and its admitted
+attachment bytes are copied inside that observation; the sensitivity scanner
+then reads the staged copy that publishes, so a concurrent update yields the
+whole old or the whole new bundle. An interrupted write's pending record is
+recovered under the exclusive lock before the bundle is observed again.
 
 ## 5. Compare-and-Swap and Competing Writers
 
@@ -260,15 +271,15 @@ Restore is explicit and fail-closed:
    and every included attachment checksum.
 3. Require an empty destination or a deliberate operator-selected recovery
    mode. Any non-identical live task-ID collision aborts the restore.
-4. Restore canonical bundles, rebuild registry indexes and checkout
-   projections, and advance the local allocator beyond the restored IDs.
+4. Restore canonical bundles, rebuild registry indexes, and advance the local
+   allocator beyond the restored IDs.
 5. Report every omitted attachment; an incomplete publication cannot produce a
    "complete backup restored" result.
 
 The `orbit-store` recovery implementation follows this contract by consuming
-the inspector's validated snapshot, staging bundle and projection trees, and
-rolling back bundle publication, registry indexing, projection replacement,
-and allocator advancement as one recovery operation [ORB-11076]. Exact-content
+the inspector's validated snapshot, staging bundle trees, and rolling back
+bundle publication, registry indexing, and allocator advancement as one
+recovery operation [ORB-11076]. Exact-content
 retries require the explicit identical-retry mode and do not replay bundle
 streams or advance the allocator.
 

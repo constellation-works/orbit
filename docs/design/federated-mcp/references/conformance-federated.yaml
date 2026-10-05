@@ -76,13 +76,11 @@ honest_limitations:
   implicit_failover: none
 
 validation:
-  registration_and_coexistence: crates/orbit-cli/src/command/mcp/setup/tests/dispatch.rs
-  registration_argv: crates/orbit-cli/src/command/mcp/setup/providers/tests/simple_json.rs
   config_and_selector: crates/orbit-mcp/src/federated/tests/config.rs
   aggregate_list: crates/orbit-mcp/src/federated/tests/host.rs
   local_membership: crates/orbit-mcp/src/federated/tests/local.rs
   fail_closed_routes: crates/orbit-mcp/src/federated/tests/route.rs
-  federated_serve: crates/orbit-cli/tests/mcp_roundtrip.rs
+  federated_serve: crates/orbit-cli/tests/mcp/mcp_roundtrip.rs
   capability_classes: crates/orbit-mcp/src/federated/tests/capability.rs
 
 task_references:

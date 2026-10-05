@@ -1,0 +1,63 @@
+provider: claude
+fs_profile: reviewer
+cwd: <ROOT>/inspection
+managed_worktree: false
+read:
+  <ROOT>/inspection/**
+  !<ROOT>/inspection/**/.env
+  !<ROOT>/inspection/**/.env.*
+  !<ROOT>/inspection/**/*.env
+  !<ROOT>/inspection/**/*.env.*
+modify:
+  !<ROOT>/inspection/.orbit/**
+  !<ROOT>/inspection/**/.env
+  !<ROOT>/inspection/**/.env.*
+  !<ROOT>/inspection/**/*.env
+  !<ROOT>/inspection/**/*.env.*
+  <ROOT>/home/.orbit/state/logs
+  <ROOT>/home/.orbit/state/audit
+  <ROOT>/home/.orbit/tasks
+  <ROOT>/home/.orbit/orbit.db
+  <ROOT>/home/.orbit/orbit.db-wal
+  <ROOT>/home/.orbit/orbit.db-shm
+  <ROOT>/home/.codex
+  <ROOT>/home/.claude
+  <ROOT>/home/.gemini
+  <ROOT>/home/.grok
+  !<ROOT>/home/.orbit/state/recovery-authority/**
+runtime write authority:
+  <ROOT>/home/.orbit/state/logs
+  <ROOT>/home/.orbit/state/audit
+  <ROOT>/home/.orbit/tasks
+  <ROOT>/home/.orbit/orbit.db
+  <ROOT>/home/.orbit/orbit.db-wal
+  <ROOT>/home/.orbit/orbit.db-shm
+bwrap:
+  --die-with-parent
+  --new-session
+  --unshare-all
+  --share-net
+  --ro-bind / /
+  --dev /dev
+  --proc /proc
+  --tmpfs /tmp
+  --ro-bind <ROOT> <ROOT>
+  --ro-bind <ROOT>/home <ROOT>/home
+  --ro-bind <ROOT>/home/.orbit <ROOT>/home/.orbit
+  --ro-bind <ROOT>/home/.orbit/state <ROOT>/home/.orbit/state
+  --bind-fd <fd> <ROOT>/home/.orbit/state/logs
+  --bind-fd <fd> <ROOT>/home/.orbit/state/audit
+  --bind-fd <fd> <ROOT>/home/.orbit/tasks
+  --bind-fd <fd> <ROOT>/home/.orbit/orbit.db
+  --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-wal
+  --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-shm
+  --bind <ROOT>/home/.codex <ROOT>/home/.codex
+  --bind <ROOT>/home/.claude <ROOT>/home/.claude
+  --bind <ROOT>/home/.gemini <ROOT>/home/.gemini
+  --bind <ROOT>/home/.grok <ROOT>/home/.grok
+  --ro-bind <ROOT>/home/.orbit/state/recovery-authority <ROOT>/home/.orbit/state/recovery-authority
+  --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugins
+  --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugin-secrets
+  --chdir <ROOT>/inspection
+  --
+  /usr/bin/true

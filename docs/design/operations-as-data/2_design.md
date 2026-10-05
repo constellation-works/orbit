@@ -2,7 +2,7 @@
 title: Operations as Data — Design
 owner: claude
 last_updated: 2026-09-09
-last_validated: 2026-09-09
+last_validated: 2026-09-30
 status: Accepted
 feature: operations-as-data
 doc_role: design
@@ -93,6 +93,16 @@ redaction policy for `Add`/`Update`, for example — pattern-match on the inner
 verb. Core's handler match remains exhaustive, so a new verb cannot omit runtime
 wiring.
 
+The `list` spec also declares the tool-only `response_mode` parameter (no CLI
+flag; `list` is not advertised over MCP, where agents list frictions with
+`orbit.search`). Omitting
+it preserves the legacy record-array response for matches and every empty
+result. The explicit `with_notes` mode has one stable object shape,
+`{records, notes}`, so callers can request search guidance without making the
+default response conditional. The tool description and parameter description
+advertise both alternatives because the generic tool schema has no output
+schema field.
+
 ## 4. CLI adapter
 
 `orbit_cli::command::operation_args` builds a `clap::Command` subcommand per
@@ -117,9 +127,14 @@ present-and-empty; **required** parameters pass through verbatim so that
 "you passed only whitespace" is reported by the handler, where the domain rules
 live. That reproduces the pre-migration behavior exactly.
 
-Audit metadata is derived too. `command/operation.rs`'s friction arm reads
+Audit metadata is derived too. `command/operation_registry.rs`'s friction arm reads
 `invocation.spec.name` and `invocation.target_id()` — the latter resolved by
 looking up the spec's positional parameter — instead of matching verb by verb.
+
+The friction CLI injects `response_mode: with_notes` for list calls so its
+human table can include search guidance. Its machine-readable document projects
+the envelope's `records` back to the historical array, keeping `--json`
+compatible.
 
 ## 5. Dashboard adapter
 
@@ -132,6 +147,9 @@ and dashboard-specific defaults (the `limit` cap, the human-actor fallback for
 `model`, the `tag_options` enrichment on GET). A REST path is an interface design
 choice, not a property of the verb, so deriving it was rejected rather than
 deferred.
+
+The dashboard list adapter explicitly requests `with_notes`, maps `records` to
+its `items` field, and forwards non-empty notes for the hint UI.
 
 ## 6. The touch-it-move-it ratchet
 
@@ -163,7 +181,7 @@ The step-by-step procedure is [references/cookbook.md](references/cookbook.md).
 - **Help stability is a convention, not a type.** The adapter matches
   `#[derive(Args)]`'s conventions because it was written to; nothing in the type
   system enforces that a future clap upgrade keeps them aligned. The frozen
-  `friction_help/*.txt` fixtures are the actual guard, and every future noun
+  `help_goldens/friction/*.txt` fixtures are the actual guard, and every future noun
   migration must capture its own before starting.
 - **Only one noun is migrated.** Readers of `orbit-tools` and `orbit-cli` will
   meet both the registry-driven and hand-wired shapes until the ratchet moves

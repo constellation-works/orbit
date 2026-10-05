@@ -14,9 +14,8 @@
 //!   task/comment, an arbitrary `--model` pass-through) should use one of these
 //!   frozen constants so the fixture value never changes.
 //!
-//! Exposed behind the `test-util` feature so integration tests in sibling
-//! crates — which cannot see another crate's `#[cfg(test)]` items — can share
-//! the same constants.
+//! Always available so integration tests in sibling crates can share the same
+//! constants without changing `orbit-common`'s feature set.
 
 /// Frozen Claude model literal for attribution/input test fixtures.
 pub const TEST_CLAUDE_MODEL: &str = "claude-opus-4-7";
@@ -32,9 +31,3 @@ pub const TEST_GEMINI_MODEL: &str = "gemini-3.1-pro";
 
 /// Frozen grok model literal for attribution/input test fixtures.
 pub const TEST_GROK_MODEL: &str = "grok-4";
-
-/// Convenience default test model (codex family) for tests that just need
-/// *some* model string and do not care which.
-pub fn test_model() -> &'static str {
-    TEST_CODEX_MODEL
-}

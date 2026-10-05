@@ -1,0 +1,986 @@
+//! Managed-asset reconciliation: materialize embedded default catalogs and
+//! retire the ones a later release dropped, by content provenance recorded
+//! in a per-directory manifest.
+
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Component, Path, PathBuf};
+
+use orbit_common::OrbitError;
+use orbit_common::fs::io::{atomic_write_text, is_readonly_or_access_error};
+use orbit_common::security::release::sha256_hex;
+use serde::{Deserialize, Serialize};
+
+pub(crate) const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
+const MANAGED_ASSET_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub(super) const ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ManagedAssetReconciliation {
+    pub refreshed: usize,
+    pub retired: usize,
+    pub warnings: Vec<String>,
+    pub actions: Vec<ManagedAssetAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagedAssetReconcileMode {
+    Apply,
+    Check,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagedAssetOutcome {
+    Created,
+    Refreshed,
+    Retired,
+    Migrated,
+    Preserved,
+    BindingDrift,
+    Unchanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManagedAssetAction {
+    pub name: String,
+    pub path: PathBuf,
+    pub outcome: ManagedAssetOutcome,
+    pub detail: Option<String>,
+}
+
+/// How a manifest key maps to the file it manages, relative to the managed
+/// directory.
+///
+/// Four of the five artifact kinds are flat single-document catalogs whose
+/// manifest key is the definition name ([`ManagedAssetLayout::YamlStem`]).
+/// Skills are directory trees — one `SKILL.md` plus optional reference files
+/// per skill id — so their manifest keys are the relative paths themselves
+/// ([`ManagedAssetLayout::RelativePath`]).
+// ADR-0366 extends ADR-0346's provenance mechanism to tree-shaped assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagedAssetLayout {
+    /// `<name>.yaml` — activities, jobs, auto-tasks, routines.
+    YamlStem,
+    /// `<name>` verbatim, a `/`-separated relative path — skills.
+    RelativePath,
+}
+
+impl ManagedAssetLayout {
+    /// Resolve one manifest key to its path relative to the managed directory.
+    pub(super) fn relative_path(self, name: &str) -> PathBuf {
+        match self {
+            Self::YamlStem => PathBuf::from(format!("{name}.yaml")),
+            Self::RelativePath => PathBuf::from(name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ManagedAssetManifest {
+    pub(super) schema_version: u32,
+    pub(super) asset_kind: String,
+    pub(super) assets: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) routine_provenance: BTreeMap<String, RoutineAssetProvenance>,
+    /// Shipped defaults an operator deleted. Reconciliation leaves them
+    /// absent instead of re-creating them, and doctor does not report them
+    /// missing. A name drops out once the binary stops shipping it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(super) opted_out: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RoutineAssetProvenance {
+    pub template_digest: String,
+    pub rendered_digest: String,
+    pub binding: RoutineMaterializationBinding,
+}
+
+/// The per-workspace values a shipped routine template is rendered against.
+///
+/// Templates no longer render a host pin [ORB-12236]; the binding is the
+/// routine name plus, only for a template that declares a state trigger, the
+/// owner machine and observed branch that trigger requires [ORB-12745]. A
+/// manifest written before the host pin was retired still carries a `hosts`
+/// entry, which is why `deny_unknown_fields` is off here: the stale entry
+/// loads and its routine reconciles as an ordinary managed refresh. Restore
+/// `deny_unknown_fields` after 2026-12-01.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutineMaterializationBinding {
+    pub name: String,
+    /// The registered machine id a state trigger names as its owner; `None`
+    /// for a template without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_machine: Option<String>,
+    /// The branch a state trigger observes; `None` for a template without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+/// Materialize the current embedded resource set and reconcile assets retired
+/// since the previous manifest-aware seed.
+///
+/// The manifest records the digest Orbit last wrote for each managed file.
+/// Retired files that still match that digest are deleted. Locally modified
+/// retired files are moved outside the recursively loaded catalog tree, so
+/// their content survives without keeping a removed subsystem active. A
+/// legacy directory without a manifest is migrated conservatively: exact
+/// current defaults gain provenance, while every other YAML file stays in
+/// place and produces an actionable warning. Every asset path is resolved
+/// through [`resolve_confined_asset_path`] first: one that crosses a link or a
+/// wrongly typed component is reported and left untouched in both modes.
+// ADR-0346: content provenance, rather than filenames, authorizes retirement.
+pub(crate) fn reconcile_managed_assets<'a>(
+    dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    files: &'a [(&'a str, &'a str)],
+    overwrite: bool,
+    render: impl FnMut(&'a str, &'a str) -> Result<Cow<'a, str>, OrbitError>,
+) -> Result<ManagedAssetReconciliation, OrbitError> {
+    reconcile_managed_assets_in_mode(
+        dir,
+        asset_kind,
+        layout,
+        files,
+        overwrite,
+        ManagedAssetReconcileMode::Apply,
+        render,
+    )
+}
+
+pub(crate) fn reconcile_managed_assets_in_mode<'a>(
+    dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    files: &'a [(&'a str, &'a str)],
+    overwrite: bool,
+    mode: ManagedAssetReconcileMode,
+    mut render: impl FnMut(&'a str, &'a str) -> Result<Cow<'a, str>, OrbitError>,
+) -> Result<ManagedAssetReconciliation, OrbitError> {
+    validate_managed_asset_name(asset_kind, ManagedAssetLayout::YamlStem, "asset kind")?;
+    for (name, _) in files {
+        validate_managed_asset_name(name, layout, "embedded asset")?;
+    }
+
+    let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let previous = load_managed_asset_manifest(&manifest_path, asset_kind, layout)?;
+    let current_names: BTreeSet<&str> = files.iter().map(|(name, _)| *name).collect();
+    let opted_out: BTreeSet<String> = previous
+        .as_ref()
+        .map(|manifest| {
+            manifest
+                .opted_out
+                .iter()
+                .filter(|name| current_names.contains(name.as_str()))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut result = ManagedAssetReconciliation::default();
+    let mut next_assets = BTreeMap::new();
+
+    if let Some(previous) = &previous {
+        for (name, managed_digest) in &previous.assets {
+            if current_names.contains(name.as_str()) {
+                continue;
+            }
+            let relative = layout.relative_path(name);
+            let path = dir.join(&relative);
+            let resolved = resolve_confined_asset_path(dir, &relative)?;
+            if let ConfinedAssetPath::Unsafe(component) = resolved {
+                // Retirement would read, delete, or move through a link to a
+                // target outside this catalog. Keep the provenance so a later
+                // pass retires the asset once the operator repairs the path.
+                next_assets.insert(name.clone(), managed_digest.clone());
+                let warning = format!(
+                    "retired managed {asset_kind} `{name}` was left in place because '{}' is linked or is not the expected file or directory type; Orbit did not read, remove, or preserve anything through it. Replace it with a regular file inside '{}' or remove the link, then rerun `orbit workspace sync`",
+                    component.display(),
+                    dir.display()
+                );
+                result.warnings.push(warning.clone());
+                result.actions.push(ManagedAssetAction {
+                    name: name.clone(),
+                    path,
+                    outcome: ManagedAssetOutcome::Preserved,
+                    detail: Some(warning),
+                });
+                continue;
+            }
+            if resolved == ConfinedAssetPath::Missing {
+                result.actions.push(ManagedAssetAction {
+                    name: name.clone(),
+                    path,
+                    outcome: ManagedAssetOutcome::Retired,
+                    detail: Some(
+                        "removed stale manifest provenance for an absent artifact".to_string(),
+                    ),
+                });
+                result.retired += 1;
+                continue;
+            }
+            let content = fs::read_to_string(&path).map_err(|error| {
+                OrbitError::Io(format!(
+                    "read retired managed {asset_kind} '{}': {error}",
+                    path.display()
+                ))
+            })?;
+            if sha256_hex(content.as_bytes()) == *managed_digest {
+                if mode == ManagedAssetReconcileMode::Apply {
+                    fs::remove_file(&path).map_err(|error| {
+                        OrbitError::Io(format!(
+                            "retire managed {asset_kind} '{}': {error}",
+                            path.display()
+                        ))
+                    })?;
+                }
+            } else {
+                if let Some(component) =
+                    unsafe_preservation_component(dir, asset_kind, layout, name)?
+                {
+                    next_assets.insert(name.clone(), managed_digest.clone());
+                    let warning = format!(
+                        "retired managed {asset_kind} `{name}` was locally modified, but its preservation destination '{}' is linked or is not a directory; Orbit left the file in the active catalog. Repair that path, then rerun `orbit workspace sync`",
+                        component.display()
+                    );
+                    result.warnings.push(warning.clone());
+                    result.actions.push(ManagedAssetAction {
+                        name: name.clone(),
+                        path,
+                        outcome: ManagedAssetOutcome::Preserved,
+                        detail: Some(warning),
+                    });
+                    continue;
+                }
+                let preserved = if mode == ManagedAssetReconcileMode::Apply {
+                    preserve_modified_retired_asset(dir, asset_kind, layout, name, &path)?
+                } else {
+                    retired_preservation_path(dir, asset_kind, layout, name)
+                };
+                let warning = format!(
+                    "retired managed {asset_kind} `{name}` was locally modified; Orbit {} it from the active catalog and preserved it at '{}'. Review that file, then migrate it under a new user-authored name or delete it",
+                    if mode == ManagedAssetReconcileMode::Apply {
+                        "removed"
+                    } else {
+                        "would remove"
+                    },
+                    preserved.display()
+                );
+                result.warnings.push(warning.clone());
+                result.actions.push(ManagedAssetAction {
+                    name: name.clone(),
+                    path: path.clone(),
+                    outcome: ManagedAssetOutcome::Preserved,
+                    detail: Some(warning),
+                });
+            }
+            result.actions.push(ManagedAssetAction {
+                name: name.clone(),
+                path,
+                outcome: ManagedAssetOutcome::Retired,
+                detail: None,
+            });
+            result.retired += 1;
+        }
+    }
+
+    for (name, embedded) in files {
+        let relative = layout.relative_path(name);
+        let path = dir.join(&relative);
+        if opted_out.contains(*name) {
+            result.actions.push(ManagedAssetAction {
+                name: (*name).to_string(),
+                path,
+                outcome: ManagedAssetOutcome::Unchanged,
+                detail: Some(format!(
+                    "shipped {asset_kind} `{name}` was deleted by an operator and stays opted out"
+                )),
+            });
+            continue;
+        }
+        let rendered = render(name, embedded)?;
+        let rendered_digest = sha256_hex(rendered.as_bytes());
+        let previous_digest = previous
+            .as_ref()
+            .and_then(|manifest| manifest.assets.get(*name));
+
+        let resolved = resolve_confined_asset_path(dir, &relative)?;
+        if let ConfinedAssetPath::Unsafe(component) = &resolved {
+            // Writing here would create or overwrite a file outside this
+            // catalog. Leave the path alone and carry forward only the
+            // provenance already recorded: nothing new was written.
+            if let Some(previous_digest) = previous_digest {
+                next_assets.insert((*name).to_string(), previous_digest.clone());
+            }
+            let warning = format!(
+                "managed {asset_kind} `{name}` was not written because '{}' is linked or is not the expected file or directory type; Orbit left it and any link target untouched. Replace it with a regular file inside '{}' or remove the link, then rerun `orbit workspace sync`",
+                component.display(),
+                dir.display()
+            );
+            result.warnings.push(warning.clone());
+            result.actions.push(ManagedAssetAction {
+                name: (*name).to_string(),
+                path,
+                outcome: ManagedAssetOutcome::Preserved,
+                detail: Some(warning),
+            });
+            continue;
+        }
+
+        let exists = matches!(resolved, ConfinedAssetPath::File(_));
+        if exists {
+            if previous_digest.is_none() {
+                let existing = fs::read_to_string(&path).map_err(|error| {
+                    OrbitError::Io(format!(
+                        "read existing {asset_kind} '{}': {error}",
+                        path.display()
+                    ))
+                })?;
+                if sha256_hex(existing.as_bytes()) == rendered_digest {
+                    next_assets.insert((*name).to_string(), rendered_digest);
+                    result.actions.push(ManagedAssetAction {
+                        name: (*name).to_string(),
+                        path: path.clone(),
+                        outcome: ManagedAssetOutcome::Migrated,
+                        detail: Some(
+                            "recorded provenance for an exact existing shipped artifact"
+                                .to_string(),
+                        ),
+                    });
+                } else if previous.is_some() {
+                    let warning = format!(
+                        "untracked user-authored {asset_kind} '{}' collides with bundled default `{name}` and was preserved in place. Move or rename it, then rerun `orbit init` to install the bundled default",
+                        path.display()
+                    );
+                    result.warnings.push(warning.clone());
+                    result.actions.push(ManagedAssetAction {
+                        name: (*name).to_string(),
+                        path: path.clone(),
+                        outcome: ManagedAssetOutcome::Preserved,
+                        detail: Some(warning),
+                    });
+                }
+                continue;
+            }
+
+            if !overwrite {
+                let Some(previous_digest) = previous_digest else {
+                    continue;
+                };
+                let existing = fs::read_to_string(&path).map_err(|error| {
+                    OrbitError::Io(format!(
+                        "read existing {asset_kind} '{}': {error}",
+                        path.display()
+                    ))
+                })?;
+
+                // A digest match proves this is an unedited file Orbit wrote.
+                // Refresh it during ordinary bootstrap when a newer binary
+                // ships different content; otherwise a removed tool or schema
+                // value can leave the runtime unable to load its own catalog.
+                // Any mismatch is a local edit and must remain untouched.
+                if sha256_hex(existing.as_bytes()) == *previous_digest
+                    && previous_digest != &rendered_digest
+                {
+                    if mode == ManagedAssetReconcileMode::Apply {
+                        write_confined_asset(&path, &rendered, true, asset_kind)?;
+                    }
+                    next_assets.insert((*name).to_string(), rendered_digest);
+                    result.refreshed += 1;
+                    result.actions.push(ManagedAssetAction {
+                        name: (*name).to_string(),
+                        path: path.clone(),
+                        outcome: ManagedAssetOutcome::Refreshed,
+                        detail: None,
+                    });
+                } else {
+                    next_assets.insert((*name).to_string(), previous_digest.clone());
+                    let modified = sha256_hex(existing.as_bytes()) != *previous_digest;
+                    result.actions.push(ManagedAssetAction {
+                        name: (*name).to_string(),
+                        path: path.clone(),
+                        outcome: if modified {
+                            ManagedAssetOutcome::Preserved
+                        } else {
+                            ManagedAssetOutcome::Unchanged
+                        },
+                        detail: modified.then(|| {
+                            format!(
+                                "locally modified managed {asset_kind} '{}' was preserved; restore the Orbit-written bytes or move/rename the file, then rerun `orbit workspace sync`",
+                                path.display()
+                            )
+                        }),
+                    });
+                }
+                continue;
+            }
+
+            // The manifest records the last embedded content written for this
+            // asset. If it already matches the current embedded content, this
+            // bootstrap has nothing to refresh. Avoid touching the asset so a
+            // steady-state runtime can operate with global resources mounted
+            // read-only.
+            if previous_digest == Some(&rendered_digest) {
+                next_assets.insert((*name).to_string(), rendered_digest);
+                result.actions.push(ManagedAssetAction {
+                    name: (*name).to_string(),
+                    path: path.clone(),
+                    outcome: ManagedAssetOutcome::Unchanged,
+                    detail: None,
+                });
+                continue;
+            }
+        }
+
+        if mode == ManagedAssetReconcileMode::Apply {
+            write_confined_asset(&path, &rendered, exists, asset_kind)?;
+        }
+        next_assets.insert((*name).to_string(), rendered_digest);
+        result.refreshed += 1;
+        result.actions.push(ManagedAssetAction {
+            name: (*name).to_string(),
+            path,
+            outcome: ManagedAssetOutcome::Created,
+            detail: None,
+        });
+    }
+
+    // The legacy sweep only makes sense for the flat YAML catalogs: a skill
+    // tree's untracked files are ordinary reference material inside an
+    // otherwise-managed directory, not stray definitions the loader would pick
+    // up.
+    if previous.is_none() && layout == ManagedAssetLayout::YamlStem && dir.exists() {
+        let ambiguous = ambiguous_legacy_yaml_files(dir, &next_assets)?;
+        if !ambiguous.is_empty() {
+            result.warnings.push(format!(
+                "untracked {asset_kind} YAML assets have no managed provenance and were preserved in place: {}. If any came from an older Orbit release, move or delete them manually before retrying catalog/list commands",
+                ambiguous
+                    .iter()
+                    .map(|path| format!("'{}'", path.display()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+
+    let manifest = ManagedAssetManifest {
+        schema_version: MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
+        asset_kind: asset_kind.to_string(),
+        assets: next_assets,
+        routine_provenance: BTreeMap::new(),
+        opted_out,
+    };
+    if mode == ManagedAssetReconcileMode::Apply && previous.as_ref() != Some(&manifest) {
+        let encoded = encode_managed_asset_manifest(&manifest)?;
+        let recorded = record_managed_manifest_write(
+            &manifest_path,
+            asset_kind,
+            atomic_write_text(&manifest_path, &encoded),
+            &mut result.warnings,
+        )?;
+        if !recorded {
+            // An adoption only records provenance once the manifest lands;
+            // the skipped write is reported through `result.warnings`.
+            for action in result
+                .actions
+                .iter_mut()
+                .filter(|action| action.outcome == ManagedAssetOutcome::Migrated)
+            {
+                action.detail = Some(
+                    "exact existing shipped artifact; its provenance was not recorded because the manifest write was denied"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    for warning in &result.warnings {
+        tracing::warn!(
+            target: "orbit.core.managed_assets",
+            asset_kind,
+            warning,
+            "managed asset reconciliation requires operator attention"
+        );
+    }
+
+    Ok(result)
+}
+
+/// Record that an operator deleted the shipped default `name`, so later
+/// reconciliation leaves it absent. Any provenance for it is dropped: the file
+/// is gone, and a hand-written replacement is user-authored.
+///
+/// A directory that was never reconciled gains a manifest here; without one
+/// the next seed would treat the directory as legacy and re-create the file.
+pub(crate) fn record_managed_asset_opt_out(
+    dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    name: &str,
+) -> Result<(), OrbitError> {
+    validate_managed_asset_name(name, layout, "opted-out asset")?;
+    let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let previous = load_managed_asset_manifest(&manifest_path, asset_kind, layout)?;
+    let mut next = previous.clone().unwrap_or_else(|| ManagedAssetManifest {
+        schema_version: MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
+        asset_kind: asset_kind.to_string(),
+        assets: BTreeMap::new(),
+        routine_provenance: BTreeMap::new(),
+        opted_out: BTreeSet::new(),
+    });
+    next.assets.remove(name);
+    next.opted_out.insert(name.to_string());
+    if previous.as_ref() == Some(&next) {
+        return Ok(());
+    }
+    write_managed_asset_manifest(&manifest_path, &next)
+}
+
+/// Clear an operator opt-out and record `digest` as the provenance of the
+/// shipped content just written back for `name`.
+pub(crate) fn restore_managed_asset(
+    dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    name: &str,
+    digest: String,
+) -> Result<(), OrbitError> {
+    validate_managed_asset_name(name, layout, "restored asset")?;
+    let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let mut next =
+        load_managed_asset_manifest(&manifest_path, asset_kind, layout)?.unwrap_or_else(|| {
+            ManagedAssetManifest {
+                schema_version: MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
+                asset_kind: asset_kind.to_string(),
+                assets: BTreeMap::new(),
+                routine_provenance: BTreeMap::new(),
+                opted_out: BTreeSet::new(),
+            }
+        });
+    next.opted_out.remove(name);
+    next.assets.insert(name.to_string(), digest);
+    write_managed_asset_manifest(&manifest_path, &next)
+}
+
+pub(crate) fn retired_preservation_path(
+    active_dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    name: &str,
+) -> PathBuf {
+    let (base, backup_relative) = retired_preservation_root(active_dir, asset_kind);
+    base.join(backup_relative).join(layout.relative_path(name))
+}
+
+/// Persist one managed-asset manifest. Callers compare against the previous
+/// manifest first so a steady-state bootstrap performs no write at all.
+///
+/// Explicit repair paths (`orbit doctor --fix-stale-artifacts`) use this
+/// fail-closed helper. Reconciliation uses [`record_managed_manifest_write`]
+/// so a read-only global root does not fail a later read-only command.
+pub(super) fn write_managed_asset_manifest(
+    manifest_path: &Path,
+    manifest: &ManagedAssetManifest,
+) -> Result<(), OrbitError> {
+    let encoded = encode_managed_asset_manifest(manifest)?;
+    atomic_write_text(manifest_path, &encoded).map_err(|error| {
+        managed_asset_manifest_io_error(manifest_path, &manifest.asset_kind, error)
+    })
+}
+
+pub(super) fn encode_managed_asset_manifest(
+    manifest: &ManagedAssetManifest,
+) -> Result<String, OrbitError> {
+    let asset_kind = &manifest.asset_kind;
+    let mut encoded = serde_json::to_string_pretty(manifest).map_err(|error| {
+        OrbitError::Store(format!(
+            "serialize managed {asset_kind} asset manifest: {error}"
+        ))
+    })?;
+    encoded.push('\n');
+    Ok(encoded)
+}
+
+/// Read-only / permission denials on a needed manifest write are a
+/// deployment shape (immutable global root, sandboxed runner), not a
+/// reason to refuse a later read-only command.
+pub(crate) fn managed_manifest_write_is_skippable(error: &io::Error) -> bool {
+    is_readonly_or_access_error(error)
+}
+
+fn managed_asset_manifest_io_error(
+    manifest_path: &Path,
+    asset_kind: &str,
+    error: io::Error,
+) -> OrbitError {
+    OrbitError::Io(format!(
+        "write managed {asset_kind} asset manifest '{}': {error}",
+        manifest_path.display()
+    ))
+}
+
+/// Record a needed manifest write, warning (instead of failing closed) when
+/// the destination is EROFS/EACCES. Other I/O failures stay fatal. Returns
+/// whether the manifest was persisted.
+pub(crate) fn record_managed_manifest_write(
+    manifest_path: &Path,
+    asset_kind: &str,
+    write_result: Result<(), io::Error>,
+    warnings: &mut Vec<String>,
+) -> Result<bool, OrbitError> {
+    match write_result {
+        Ok(()) => Ok(true),
+        Err(error) if managed_manifest_write_is_skippable(&error) => {
+            warnings.push(format!(
+                "could not write managed {asset_kind} asset manifest '{}': {error}; continuing without updating it",
+                manifest_path.display()
+            ));
+            Ok(false)
+        }
+        Err(error) => Err(managed_asset_manifest_io_error(
+            manifest_path,
+            asset_kind,
+            error,
+        )),
+    }
+}
+
+pub(super) fn load_managed_asset_manifest(
+    path: &Path,
+    expected_kind: &str,
+    layout: ManagedAssetLayout,
+) -> Result<Option<ManagedAssetManifest>, OrbitError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(path).map_err(|error| {
+        OrbitError::Io(format!(
+            "read managed asset manifest '{}': {error}",
+            path.display()
+        ))
+    })?;
+    let manifest: ManagedAssetManifest = serde_json::from_str(&raw).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "managed asset manifest '{}' is invalid: {error}; repair it or move it aside only after reviewing the managed YAML files",
+            path.display()
+        ))
+    })?;
+    let supported_schema = manifest.schema_version == MANAGED_ASSET_MANIFEST_SCHEMA_VERSION
+        || (expected_kind == "routine"
+            && manifest.schema_version == ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION);
+    if !supported_schema {
+        return Err(OrbitError::InvalidInput(format!(
+            "managed asset manifest '{}' uses unsupported schemaVersion {}; expected {}{}",
+            path.display(),
+            manifest.schema_version,
+            MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
+            if expected_kind == "routine" {
+                format!(" or {ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION}")
+            } else {
+                String::new()
+            }
+        )));
+    }
+    if manifest.asset_kind != expected_kind {
+        return Err(OrbitError::InvalidInput(format!(
+            "managed asset manifest '{}' is for `{}`, expected `{expected_kind}`",
+            path.display(),
+            manifest.asset_kind
+        )));
+    }
+    for name in manifest.assets.keys() {
+        validate_managed_asset_name(name, layout, "manifest asset")?;
+    }
+    Ok(Some(manifest))
+}
+
+/// Reject any manifest key that would not stay inside the managed directory.
+///
+/// A stem is a single path component of the safe charset. A relative path is a
+/// `/`-separated sequence of such components: no absolute prefix, no `.`/`..`
+/// component, and a restricted charset per component, so a manifest can never
+/// steer a write or a removal outside the directory it manages.
+fn validate_managed_asset_name(
+    name: &str,
+    layout: ManagedAssetLayout,
+    source: &str,
+) -> Result<(), OrbitError> {
+    let component_ok = |component: &str| {
+        !component.is_empty()
+            && component != "."
+            && component != ".."
+            && component.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || byte == b'.'
+            })
+    };
+    let valid = match layout {
+        // A stem is one component and never carries an extension separator.
+        ManagedAssetLayout::YamlStem => {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        }
+        ManagedAssetLayout::RelativePath => {
+            !name.is_empty()
+                && !name.starts_with('/')
+                && !name.contains('\\')
+                && name.split('/').all(component_ok)
+        }
+    };
+    if !valid {
+        return Err(OrbitError::InvalidInput(format!(
+            "{source} name `{name}` is not a safe managed asset path"
+        )));
+    }
+    Ok(())
+}
+
+/// Where one managed path resolves beneath its catalog directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfinedAssetPath {
+    /// Every intermediate component is a real directory and the final one a
+    /// regular file.
+    File(PathBuf),
+    /// A component does not exist; every component before it is a real
+    /// directory, so creating the rest stays inside the catalog.
+    Missing,
+    /// The first component that is a symlink (dangling or not) or is not the
+    /// expected directory or regular-file type.
+    Unsafe(PathBuf),
+}
+
+/// Resolve `relative` beneath `dir` without following links, so reading,
+/// writing, or removing the result cannot act on a target outside `dir`.
+///
+/// `dir` itself is the trusted catalog root. The relative path is re-checked
+/// even when it came from a validated manifest key. Every managed-asset read,
+/// write, retirement, and doctor repair goes through this one boundary.
+pub(crate) fn resolve_confined_asset_path(
+    dir: &Path,
+    relative: &Path,
+) -> Result<ConfinedAssetPath, OrbitError> {
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "managed artifact path '{}' must remain relative to '{}'",
+            relative.display(),
+            dir.display()
+        )));
+    }
+    let mut target = dir.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        target.push(component);
+        let metadata = match fs::symlink_metadata(&target) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(ConfinedAssetPath::Missing);
+            }
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect managed artifact '{}': {error}",
+                    target.display()
+                )));
+            }
+        };
+        let expected_type = if components.peek().is_some() {
+            metadata.is_dir()
+        } else {
+            metadata.is_file()
+        };
+        if metadata.file_type().is_symlink() || !expected_type {
+            return Ok(ConfinedAssetPath::Unsafe(target));
+        }
+    }
+    Ok(ConfinedAssetPath::File(target))
+}
+
+/// Write one managed asset whose path [`resolve_confined_asset_path`] proved
+/// confined. An existing file is replaced by rename, which swaps the directory
+/// entry instead of writing through whatever it names; a new file is created
+/// exclusively, so a link appearing at the final component fails the write
+/// rather than redirecting it.
+fn write_confined_asset(
+    path: &Path,
+    content: &str,
+    replace_existing: bool,
+    asset_kind: &str,
+) -> Result<(), OrbitError> {
+    let written = if replace_existing {
+        atomic_write_text(path, content)
+    } else {
+        create_new_text(path, content)
+    };
+    written.map_err(|error| {
+        OrbitError::Io(format!(
+            "write managed {asset_kind} '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn create_new_text(path: &Path, content: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(content.as_bytes())
+}
+
+fn retired_preservation_root(active_dir: &Path, asset_kind: &str) -> (PathBuf, PathBuf) {
+    (
+        active_dir.parent().unwrap_or(active_dir).to_path_buf(),
+        Path::new(".retired-managed").join(managed_asset_kind_directory(asset_kind)),
+    )
+}
+
+/// The first existing directory component of a retired asset's preservation
+/// destination that is a link or not a directory, if any. Components below
+/// the catalog's parent are inspected without following links, so moving a
+/// modified asset aside can never place it outside that tree.
+pub(super) fn unsafe_preservation_component(
+    active_dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    name: &str,
+) -> Result<Option<PathBuf>, OrbitError> {
+    let (base, backup_relative) = retired_preservation_root(active_dir, asset_kind);
+    let relative = backup_relative.join(layout.relative_path(name));
+    let Some(parent) = relative.parent() else {
+        return Ok(None);
+    };
+    let mut target = base;
+    for component in parent.components() {
+        target.push(component);
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Ok(Some(target));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect retired managed asset backup '{}': {error}",
+                    target.display()
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub(super) fn preserve_modified_retired_asset(
+    active_dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    name: &str,
+    source: &Path,
+) -> Result<PathBuf, OrbitError> {
+    if let Some(component) = unsafe_preservation_component(active_dir, asset_kind, layout, name)? {
+        return Err(OrbitError::InvalidInput(format!(
+            "refusing to preserve retired managed {asset_kind} `{name}` through '{}': it is linked or is not a directory",
+            component.display()
+        )));
+    }
+    let (base, backup_relative) = retired_preservation_root(active_dir, asset_kind);
+    let backup_root = base.join(backup_relative);
+    let relative = layout.relative_path(name);
+
+    let mut suffix = 0usize;
+    loop {
+        // Disambiguate on the file stem so a preserved `SKILL.md` keeps its
+        // extension and stays readable in place.
+        let destination = if suffix == 0 {
+            backup_root.join(&relative)
+        } else {
+            let file_name = relative
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "retired managed {asset_kind} `{name}` has no file name to preserve"
+                    ))
+                })?;
+            let (stem, extension) = file_name
+                .rsplit_once('.')
+                .map_or((file_name, String::new()), |(stem, extension)| {
+                    (stem, format!(".{extension}"))
+                });
+            backup_root
+                .join(&relative)
+                .with_file_name(format!("{stem}.{suffix}{extension}"))
+        };
+        // `symlink_metadata` so a dangling link also counts as occupied.
+        if fs::symlink_metadata(&destination).is_ok() {
+            suffix += 1;
+            continue;
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                OrbitError::Io(format!(
+                    "create retired managed asset backup '{}': {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        fs::rename(source, &destination).map_err(|error| {
+            OrbitError::Io(format!(
+                "preserve modified retired {asset_kind} '{}' as '{}': {error}",
+                source.display(),
+                destination.display()
+            ))
+        })?;
+        return Ok(destination);
+    }
+}
+
+fn managed_asset_kind_directory(asset_kind: &str) -> String {
+    match asset_kind {
+        "activity" => "activities".to_string(),
+        "job" => "jobs".to_string(),
+        other => format!("{other}s"),
+    }
+}
+
+fn ambiguous_legacy_yaml_files(
+    dir: &Path,
+    managed_assets: &BTreeMap<String, String>,
+) -> Result<Vec<PathBuf>, OrbitError> {
+    let mut ambiguous = Vec::new();
+    let entries = fs::read_dir(dir).map_err(|error| {
+        OrbitError::Io(format!(
+            "inspect legacy managed asset directory '{}': {error}",
+            dir.display()
+        ))
+    })?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| OrbitError::Io(error.to_string()))?
+            .path();
+        let is_yaml = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension == "yaml" || extension == "yml");
+        if !is_yaml {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|stem| stem.to_str());
+        if stem.is_none_or(|stem| !managed_assets.contains_key(stem)) {
+            ambiguous.push(path);
+        }
+    }
+    ambiguous.sort();
+    Ok(ambiguous)
+}

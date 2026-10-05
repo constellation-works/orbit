@@ -11,6 +11,9 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::generation::{
+    CompatibilityIdentity, GENERATION_CONTRACT, LEGACY_GENERATION_CONTRACT,
+};
 use serde::Serialize;
 
 /// How much of a failing step's stderr to carry into the report.
@@ -71,6 +74,31 @@ pub fn run_step(
     root_argument: Option<&Path>,
     args: &[&str],
 ) -> ConvergenceStep {
+    run_step_reporting(executable, cwd, root_argument, args, false)
+}
+
+/// [`run_step`] for a step whose own output is the report.
+///
+/// Most convergence steps are silent when they work, so their success needs no
+/// detail. A step that repairs host state — rewriting the clock unit at a
+/// moved binary path — has to say what it changed, or the operator learns
+/// nothing from a bare `ok`.
+pub fn run_reporting_step(
+    executable: &Path,
+    cwd: &Path,
+    root_argument: Option<&Path>,
+    args: &[&str],
+) -> ConvergenceStep {
+    run_step_reporting(executable, cwd, root_argument, args, true)
+}
+
+fn run_step_reporting(
+    executable: &Path,
+    cwd: &Path,
+    root_argument: Option<&Path>,
+    args: &[&str],
+    report_output: bool,
+) -> ConvergenceStep {
     let command = args.join(" ");
     let mut process = Command::new(executable);
     if let Some(root) = root_argument {
@@ -82,7 +110,9 @@ pub fn run_step(
             command,
             status: StepStatus::Succeeded,
             exit_code: output.status.code(),
-            detail: None,
+            detail: report_output
+                .then(|| first_line(&String::from_utf8_lossy(&output.stdout)))
+                .flatten(),
         },
         Ok(output) => ConvergenceStep {
             command,
@@ -181,10 +211,83 @@ fn run_process(command: &mut Command) -> std::io::Result<Output> {
     }
 }
 
+/// The first non-empty line of a step's own report.
+fn first_line(value: &str) -> Option<String> {
+    value
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(truncate)
+}
+
 fn truncate(value: &str) -> String {
     let trimmed = value.trim();
     match trimmed.char_indices().nth(DETAIL_LIMIT) {
         Some((offset, _)) => format!("{}…", &trimmed[..offset]),
         None => trimmed.to_string(),
+    }
+}
+
+/// Require a candidate's explicit writable compatibility report. A successful
+/// additive-newer read-only inspection is not a safe downgrade.
+pub(super) fn probe_writable_state(
+    executable: &Path,
+    cwd: &Path,
+    root_argument: Option<&Path>,
+) -> Result<bool, OrbitError> {
+    let mut command = Command::new(executable);
+    if let Some(root) = root_argument {
+        command.arg("--root").arg(root);
+    }
+    let output = run_process(
+        command
+            .current_dir(cwd)
+            .args(["migrate", "--dry-run", "--json"]),
+    )
+    .map_err(|error| OrbitError::Execution(format!("candidate inspection: {error}")))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let Ok(report) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return Ok(false);
+    };
+    Ok(report["up_to_date"] == true
+        && report["forward_compatible"]["read_only"] == false
+        && ["schema", "layout"].iter().all(|name| {
+            let component = &report[*name];
+            matches!((component["current"].as_u64(), component["supported"].as_u64()),
+                (Some(current), Some(supported)) if current == supported)
+        }))
+}
+
+/// A trusted release must implement admission before it can replace a protected
+/// installation. Older or unrecognized candidates fail before any installation.
+///
+/// Returns the compatibility the candidate reports under
+/// `compatibility-generation-v2`, which its pin records so compatible builds
+/// can join it; `None` for a candidate that only speaks
+/// `executable-generation-v1`.
+pub(super) fn require_admission_contract(
+    executable: &Path,
+) -> Result<Option<CompatibilityIdentity>, OrbitError> {
+    let output = run_process(Command::new(executable).args(["update", "--contract", "--json"]))
+        .map_err(|error| {
+            OrbitError::Execution(format!("candidate admission contract unavailable: {error}"))
+        })?;
+    let report = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+    match report {
+        Some(report)
+            if output.status.success()
+                && report["schema_version"] == 1
+                && report["contract"] == LEGACY_GENERATION_CONTRACT =>
+        {
+            Ok((report["admission_contract"] == GENERATION_CONTRACT)
+                .then(|| serde_json::from_value(report["compatibility"].clone()).ok())
+                .flatten())
+        }
+        _ => Err(OrbitError::Execution(
+            "replacement does not support executable generation admission; nothing was replaced"
+                .into(),
+        )),
     }
 }

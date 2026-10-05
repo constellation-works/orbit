@@ -1,0 +1,1002 @@
+#![allow(missing_docs)]
+// Tests use unwrap/expect to keep fixture setup readable.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+//! End-to-end coverage for the task surface after ORB-10428: direct audited
+//! status classification through `update --status`, and `orbit task lint` —
+//! which reports context that needs repair and, with `--restore-pruned`,
+//! re-declares what an earlier prune recorded ([ORB-12490]). Lock
+//! administration lives under `task locks` (`list`/`release`).
+
+use std::fs;
+use std::path::Path;
+use std::process::Output;
+
+use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::test_env;
+use serde_json::{Value, json};
+use tempfile::{TempDir, tempdir};
+
+/// [ORB-12245] `done` and `archived` are terminal on the governed surface.
+/// A human on the bare CLI can still override the table with `--force`, and
+/// the override is named in the task's history.
+#[test]
+fn update_status_reopens_terminal_tasks_only_with_an_explicit_force() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Terminal task");
+    workspace.drive_to_done(&id);
+
+    let refused = workspace.run_raw(&["task", "update", &id, "--status", "rejected"]);
+    assert!(!refused.status.success(), "done must not reopen silently");
+    let refusal = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert!(
+        refusal.contains("cannot move from 'done' to 'rejected'"),
+        "the refusal must name the pair: {refusal}"
+    );
+
+    let reopened = workspace.task_json(&[
+        "task", "update", &id, "--status", "rejected", "--force", "--json",
+    ]);
+    assert_eq!(reopened["status"], json!("rejected"));
+    assert!(!reopened["execution_summary"].as_str().unwrap().is_empty());
+
+    let forced = reopened["history"]
+        .as_array()
+        .expect("task history")
+        .last()
+        .expect("forced event")
+        .clone();
+    assert_eq!(forced["event"], json!("forced"));
+    assert_eq!(forced["from_status"], json!("done"));
+    assert_eq!(forced["to_status"], json!("rejected"));
+
+    // Reconsidering a rejection needs no override.
+    let reconsidered =
+        workspace.task_json(&["task", "update", &id, "--status", "backlog", "--json"]);
+    assert_eq!(reconsidered["status"], json!("backlog"));
+}
+
+/// `orbit task archive` shelves a task from any status; restoring it is the
+/// same human override as reopening a completed one.
+#[test]
+fn update_status_restores_an_archived_task_with_force() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Restore me");
+    workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
+    workspace.run(&["task", "archive", &id], "archive");
+
+    let refused = workspace.run_raw(&["task", "update", &id, "--status", "backlog"]);
+    assert!(
+        !refused.status.success(),
+        "archived must not restore silently"
+    );
+
+    let restored = workspace.task_json(&[
+        "task", "update", &id, "--status", "backlog", "--force", "--json",
+    ]);
+    assert_eq!(restored["status"], json!("backlog"));
+}
+
+/// Completion evidence is required wherever the status is set: the CLI is no
+/// more able to mint a `done` task out of a proposal than an agent is.
+#[test]
+fn update_status_refuses_completion_without_review_and_evidence() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Fabricated completion");
+
+    let skipped = workspace.run_raw(&["task", "update", &id, "--status", "done"]);
+    assert!(!skipped.status.success());
+    assert!(
+        String::from_utf8_lossy(&skipped.stderr).contains("reachable only from 'review'"),
+        "completion must not skip review"
+    );
+
+    workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--plan",
+            "1) do it",
+            "--status",
+            "in-progress",
+        ],
+        "start",
+    );
+    workspace.run(&["task", "update", &id, "--status", "review"], "to review");
+
+    let unproven = workspace.run_raw(&["task", "update", &id, "--status", "done"]);
+    assert!(!unproven.status.success());
+    assert!(
+        String::from_utf8_lossy(&unproven.stderr).contains("execution summary"),
+        "completion must name its missing evidence"
+    );
+
+    let done = workspace.task_json(&[
+        "task",
+        "update",
+        &id,
+        "--execution-summary",
+        "did it",
+        "--status",
+        "done",
+        "--json",
+    ]);
+    assert_eq!(done["status"], json!("done"));
+}
+
+#[test]
+fn update_status_performs_approve_and_reject_transitions() {
+    let workspace = TestWorkspace::new();
+
+    // proposed -> backlog (former `approve`).
+    let id = workspace.add_task("Approve via update");
+    let task = workspace.task_json(&["task", "update", &id, "--status", "backlog", "--json"]);
+    assert_eq!(task["status"], json!("backlog"));
+
+    // proposed -> rejected (former `reject`).
+    let id = workspace.add_task("Reject via update");
+    let task = workspace.task_json(&["task", "update", &id, "--status", "rejected", "--json"]);
+    assert_eq!(task["status"], json!("rejected"));
+}
+
+/// [ORB-13985] `--discard-candidate` records the operator's discard in task
+/// history, alongside a requeue, so the next run implements fresh; it is
+/// refused while a run is still working on the task.
+#[test]
+fn update_discard_candidate_records_the_discard_unless_a_run_is_active() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Discard a candidate");
+    workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--plan",
+            "1) do it",
+            "--status",
+            "in-progress",
+        ],
+        "start",
+    );
+
+    let refused = workspace.run_raw(&["task", "update", &id, "--discard-candidate"]);
+    assert!(
+        !refused.status.success(),
+        "an active run's candidate is not the operator's to discard"
+    );
+    let refusal = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert!(refusal.contains("in-progress"), "{refusal}");
+    let discards = |task: &Value| {
+        task["history"]
+            .as_array()
+            .expect("task history")
+            .iter()
+            .filter(|entry| entry["event"] == json!("candidate_discarded"))
+            .count()
+    };
+    let current = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(discards(&current), 0, "a refused discard records nothing");
+
+    workspace.run(&["task", "update", &id, "--status", "blocked"], "block");
+    let requeued = workspace.task_json(&[
+        "task",
+        "update",
+        &id,
+        "--status",
+        "backlog",
+        "--discard-candidate",
+        "--json",
+    ]);
+    assert_eq!(requeued["status"], json!("backlog"));
+    assert_eq!(discards(&requeued), 1);
+}
+
+#[test]
+fn task_update_complexity_roundtrips_through_a_real_task_record() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Complexity update");
+
+    let updated = workspace.task_json(&["task", "update", &id, "--complexity", "medium", "--json"]);
+    assert_eq!(updated["complexity"], json!("medium"));
+
+    let shown = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(shown["complexity"], json!("medium"));
+}
+
+#[test]
+fn task_update_repeats_dependencies_and_clears_context() {
+    let workspace = TestWorkspace::new();
+    let dependency_a = workspace.add_task("First dependency");
+    let dependency_b = workspace.add_task("Second dependency");
+    let id = workspace.add_task("List update");
+    fs::write(workspace.work.join("one.rs"), "// one\n").expect("write one file");
+
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--dependencies",
+            &dependency_a,
+            "--dependencies",
+            &dependency_b,
+            "--context",
+            "file:one.rs",
+        ],
+        "update repeated dependencies and context",
+    );
+
+    let dependencies =
+        workspace.task_json(&["task", "show", &id, "--fields", "dependencies", "--json"]);
+    assert_eq!(dependencies, json!([dependency_a, dependency_b]));
+
+    workspace.run(&["task", "update", &id, "--context", ""], "clear context");
+    let context =
+        workspace.task_json(&["task", "show", &id, "--fields", "context_files", "--json"]);
+    assert_eq!(context, json!([]));
+}
+
+#[test]
+fn task_update_rejects_missing_context_file_and_leaves_task_unchanged() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Target task");
+    let before = workspace.task_json(&["task", "show", &id, "--json"]);
+
+    let output = workspace.run_raw(&["task", "update", &id, "--context", "file:does/not/exist.rs"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("file:does/not/exist.rs"),
+        "stderr must name selector: {stderr}"
+    );
+
+    let after = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        before, after,
+        "task must be unchanged after rejected context update"
+    );
+}
+
+#[test]
+fn task_add_rejects_missing_context_file() {
+    let workspace = TestWorkspace::new();
+    let output = workspace.run_raw(&[
+        "task",
+        "add",
+        "--title",
+        "Add with missing context",
+        "--complexity",
+        "low",
+        "--context",
+        "file:does/not/exist.rs",
+    ]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("file:does/not/exist.rs"),
+        "stderr must name selector: {stderr}"
+    );
+}
+
+#[test]
+fn task_update_and_add_accept_valid_context_selectors() {
+    let workspace = TestWorkspace::new();
+    fs::write(
+        workspace.work.join("existing.rs"),
+        "pub fn my_symbol() {}\n",
+    )
+    .expect("write existing file");
+    fs::create_dir_all(workspace.work.join("existing_dir")).expect("create existing dir");
+
+    let added = workspace.task_json(&[
+        "task",
+        "add",
+        "--title",
+        "Add with valid context",
+        "--complexity",
+        "low",
+        "--context",
+        "file:existing.rs,dir:existing_dir,symbol:existing.rs#my_symbol:function",
+        "--json",
+    ]);
+    assert_eq!(
+        added["context_files"],
+        json!([
+            "file:existing.rs",
+            "dir:existing_dir",
+            "symbol:existing.rs#my_symbol:function"
+        ])
+    );
+
+    let id = added["id"].as_str().unwrap();
+    let updated = workspace.task_json(&[
+        "task",
+        "update",
+        id,
+        "--context",
+        "file:existing.rs",
+        "--json",
+    ]);
+    assert_eq!(updated["context_files"], json!(["file:existing.rs"]));
+}
+
+/// [ORB-13753] Scope extensions must send the full union: a tool update with
+/// only additions previously dropped the task's original selectors.
+#[test]
+fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears() {
+    let workspace = TestWorkspace::new();
+    let routing = workspace.task_json(&["workspace", "show", "--format", "json"]);
+    let work = fs::canonicalize(&workspace.work).expect("canonical fixture work");
+    assert_eq!(routing["registered"], json!(true));
+    assert_eq!(
+        routing["checkout"]["repo_root"],
+        json!(work.to_string_lossy())
+    );
+    assert_eq!(
+        routing["checkout"]["orbit_dir"],
+        json!(work.join(".orbit").to_string_lossy())
+    );
+
+    for name in ["existing.rs", "replacement.rs", "[]"] {
+        fs::write(workspace.work.join(name), "pub fn fixture() {}\n").expect("fixture file");
+    }
+    fs::create_dir(workspace.work.join("existing_dir")).expect("fixture directory");
+    let id = workspace.add_task("Context replacement semantics");
+    let original = json!(["file:existing.rs", "dir:existing_dir"]);
+
+    for (field, replacement, empty) in [
+        ("context_files", json!(["file:replacement.rs"]), json!([])),
+        ("context_files", json!("file:replacement.rs"), json!(",")),
+        ("context", json!("file:replacement.rs"), json!(",")),
+    ] {
+        workspace.run(
+            &[
+                "task",
+                "update",
+                &id,
+                "--context",
+                "file:existing.rs,dir:existing_dir",
+            ],
+            "seed context",
+        );
+        let omitted =
+            json!({"id": id, "model": "codex", "comment": "Preserve context"}).to_string();
+        let updated =
+            workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &omitted]);
+        assert_eq!(updated["context_files"], original);
+        assert_eq!(
+            workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
+            original,
+            "omitting both context fields must preserve the durable list"
+        );
+
+        let invalid = json!({"id": id, "model": "codex", field: ""}).to_string();
+        let refused = workspace.run_raw(&["tool", "run", "orbit.task.update", "--input", &invalid]);
+        assert!(
+            !refused.status.success(),
+            "empty {field} string must be rejected"
+        );
+        assert_eq!(
+            workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
+            original,
+            "rejection must leave the durable context unchanged"
+        );
+
+        for (value, expected) in [
+            (replacement, json!(["file:replacement.rs"])),
+            (json!("[]"), json!(["file:[]"])),
+            (empty, json!([])),
+        ] {
+            let input = json!({"id": id, "model": "codex", field: value}).to_string();
+            let updated =
+                workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
+            assert_eq!(
+                updated["context_files"], expected,
+                "replacement via {field}"
+            );
+            assert_eq!(
+                workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
+                expected,
+                "supplied {field} must replace the whole durable list, including clearing"
+            );
+        }
+    }
+}
+
+/// The existence guard is an operator-surface default, not a wall: work that
+/// creates a file records its selector with the explicit escape.
+#[test]
+fn allow_missing_context_accepts_a_not_yet_existing_selector() {
+    let workspace = TestWorkspace::new();
+
+    let added = workspace.task_json(&[
+        "task",
+        "add",
+        "--title",
+        "Create a new module",
+        "--complexity",
+        "low",
+        "--context",
+        "file:src/future.rs",
+        "--allow-missing-context",
+        "--json",
+    ]);
+    assert_eq!(added["context_files"], json!(["file:src/future.rs"]));
+
+    let id = added["id"].as_str().expect("task id");
+    let updated = workspace.task_json(&[
+        "task",
+        "update",
+        id,
+        "--context",
+        "file:src/other_future.rs",
+        "--allow-missing-context",
+        "--json",
+    ]);
+    assert_eq!(
+        updated["context_files"],
+        json!(["file:src/other_future.rs"])
+    );
+}
+
+#[test]
+fn locks_list_projects_files_held_by_active_tasks() {
+    let workspace = TestWorkspace::new();
+    fs::write(workspace.work.join("held.rs"), "// held\n").expect("write held file");
+
+    let id = workspace.add_task("Holds a lock");
+    workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--plan",
+            "1) hold the file",
+            "--context",
+            "file:held.rs",
+            "--status",
+            "in-progress",
+        ],
+        "start with context",
+    );
+
+    let output = workspace.run(&["task", "locks", "list", "--json"], "task locks list");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("locked JSON");
+    assert_eq!(value["total_tasks"], json!(1));
+    assert_eq!(value["locked_files"], json!(["file:held.rs"]));
+    assert_eq!(value["by_task"][0]["id"], json!(id));
+    // ORB-10651: the CLI must project the same `by_reservation` /
+    // `total_reservations` fields the underlying `orbit.task.locks` tool
+    // returns, not a hand-built projection that omits them.
+    assert_eq!(value["by_reservation"], json!([]));
+    assert_eq!(value["total_reservations"], json!(0));
+
+    let text = workspace.run(&["task", "locks", "list"], "task locks list text");
+    let stdout = String::from_utf8_lossy(&text.stdout);
+    assert!(stdout.contains("file:held.rs"), "{stdout}");
+}
+
+/// [ORB-12490] The sweep that dropped selectors whose target had disappeared
+/// is retired: a declaration for a file that does not exist is the scope the
+/// task owns, and the lint now reports it without touching it.
+#[test]
+fn lint_sweep_keeps_declared_context_when_its_target_disappears() {
+    let workspace = TestWorkspace::new();
+    fs::write(workspace.work.join("real.rs"), "// real\n").expect("write real file");
+    fs::write(workspace.work.join("ghost.rs"), "// ghost\n").expect("write ghost file");
+
+    let id = workspace.add_task("Has a disappearing target");
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--context",
+            "file:real.rs,file:ghost.rs",
+        ],
+        "set context files",
+    );
+    fs::remove_file(workspace.work.join("ghost.rs")).expect("remove ghost file");
+
+    let sweep = workspace.run(&["task", "lint", "--json"], "lint sweep");
+    let sweep: Value = serde_json::from_slice(&sweep.stdout).expect("sweep JSON");
+    assert_eq!(sweep["dry_run"], json!(true));
+    assert_eq!(sweep["tasks_needing_repair"], json!(0));
+
+    // An unrelated edit does not shrink the declaration either.
+    workspace.run(
+        &["task", "update", &id, "--title", "Still has one"],
+        "unrelated edit",
+    );
+    let task = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        task["context_files"],
+        json!(["file:real.rs", "file:ghost.rs"])
+    );
+
+    let single = workspace.task_json(&["task", "lint", &id, "--json"]);
+    let missing = single["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|finding| finding["check"] == json!("context_target_missing"))
+        .expect("a missing-target warning");
+    assert_eq!(missing["severity"], json!("warning"));
+    assert!(
+        missing["message"]
+            .as_str()
+            .expect("message")
+            .contains("file:ghost.rs"),
+        "{missing}"
+    );
+}
+
+/// [ORB-12490] A task that declares nothing is reported for operator repair
+/// and never handed a guessed scope — not even by `--restore-pruned`, which
+/// restores only what task history recorded.
+#[test]
+fn lint_reports_an_empty_declaration_and_restores_no_guessed_scope() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Never declared anything");
+
+    let dry = workspace.run(&["task", "lint", "--json"], "lint sweep dry run");
+    let dry: Value = serde_json::from_slice(&dry.stdout).expect("dry-run JSON");
+    assert_eq!(dry["dry_run"], json!(true));
+    assert_eq!(dry["total_restorable"], json!(0));
+    let entry = dry["tasks"]
+        .as_array()
+        .expect("swept tasks")
+        .iter()
+        .find(|entry| entry["id"] == json!(id))
+        .expect("the task with no declaration");
+    assert_eq!(entry["empty_surface"], json!(true));
+    assert_eq!(entry["restorable"], json!([]));
+
+    let applied = workspace.run(
+        &["task", "lint", "--restore-pruned", "--json"],
+        "lint sweep restore",
+    );
+    let applied: Value = serde_json::from_slice(&applied.stdout).expect("restore JSON");
+    assert_eq!(applied["tasks_written"], json!(0));
+    assert_eq!(
+        workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
+        json!([])
+    );
+
+    let single = workspace.task_json(&["task", "lint", &id, "--json"]);
+    assert!(
+        single["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["check"] == json!("context_surface")),
+        "{single}"
+    );
+}
+
+#[test]
+fn task_add_attributes_from_model_flag_and_managed_identity_env() {
+    let ambient = TestWorkspace::new();
+    let workspace = TestWorkspace::new();
+
+    let explicit = workspace.task_json(&[
+        "task",
+        "add",
+        "--title",
+        "Explicit model",
+        "--description",
+        "Model flag attribution",
+        "--complexity",
+        "low",
+        "--model",
+        "gpt-6-sol",
+        "--json",
+    ]);
+    assert_eq!(explicit["created_by"], json!("codex"));
+
+    let ambient_registry = ambient.home.join(".orbit");
+    let ambient_registry = ambient_registry
+        .to_str()
+        .expect("ambient registry path is UTF-8");
+    let before = ambient.task_json(&["task", "list", "--json"]);
+    let _ambient_env = test_env::scoped([
+        ("ORBIT_ROOT", Some("/sentinel/orbit-root")),
+        ("ORBIT_SESSION_ID", Some("sentinel-session")),
+        ("ORBIT_TASK_ID", Some("sentinel-task")),
+        ("ORBIT_RUN_ID", Some("sentinel-run")),
+        ("ORBIT_ACTIVITY_ID", Some("sentinel-activity")),
+        ("ORBIT_STEP_INDEX", Some("sentinel-step")),
+        ("ORBIT_AGENT_NAME", Some("sentinel-agent")),
+        ("ORBIT_AGENT_MODEL", Some("sentinel-model")),
+        ("ORBIT_OPERATOR", Some("1")),
+        ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+        ("ORBIT_TASK_ACTOR_KIND", Some("sentinel-actor")),
+        ("ORBIT_REGISTRY_ROOT", Some(ambient_registry)),
+        ("ORBIT_WORKSPACE", Some("trimmed-surface-test")),
+    ]);
+
+    for _ in 0..2 {
+        let output = run_orbit_with_identity(
+            &workspace.work,
+            &workspace.home,
+            &[
+                "task",
+                "add",
+                "--title",
+                "Managed identity",
+                "--description",
+                "Environment attribution",
+                "--complexity",
+                "low",
+                "--json",
+            ],
+            "codex",
+            "gpt-5.6-terra",
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let managed: Value = serde_json::from_slice(&output.stdout).expect("managed task JSON");
+        assert_eq!(managed["created_by"], json!("codex"));
+    }
+
+    let after = ambient.task_json(&["task", "list", "--json"]);
+    assert_eq!(after, before, "ambient sentinel workspace was modified");
+
+    let fixture_tasks = workspace.task_json(&["task", "list", "--json"]);
+    let fixture_tasks = fixture_tasks.as_array().expect("fixture task list");
+    assert_eq!(fixture_tasks.len(), 3);
+    assert!(
+        fixture_tasks
+            .iter()
+            .all(|task| task["created_by"] == json!("codex")),
+        "full model strings normalize to the canonical family"
+    );
+}
+
+#[test]
+fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability() {
+    let workspace = TestWorkspace::new();
+    // ORB-10651: reservation ids must have the `reservation-<id>` form or
+    // `release` now rejects them before reaching the "no matching row" path
+    // this test otherwise exercises.
+    const RELEASE: &[&str] = &[
+        "task",
+        "locks",
+        "release",
+        "reservation-no-such-reservation",
+        "--confirm",
+    ];
+
+    let refused = workspace.run_raw(&[
+        "task",
+        "locks",
+        "release",
+        "reservation-no-such-reservation",
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--confirm"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    // ORB-10453: `orbit task locks release` reaches an MCP-inactive tool
+    // through the admin `runtime.run_tool` path — the bypass this task closed.
+    // The tool chokepoint governs that path too, so an unidentified caller is
+    // refused there rather than silently executing.
+    let ungoverned = workspace.run_raw(RELEASE);
+    assert!(!ungoverned.status.success());
+    let denial = String::from_utf8_lossy(&ungoverned.stderr);
+    assert!(denial.contains("capability denied"), "{denial}");
+    assert!(denial.contains("operator or runner"), "{denial}");
+
+    // With the capability claimed, the tool runs its own business logic: an
+    // unknown reservation yields a structured `released: false`, NOT the
+    // `ensure_tool_agent_facing` rejection.
+    let output = workspace.run_as_operator(RELEASE, "task locks release");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("release JSON");
+    assert_eq!(value["released"], json!(false));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("inactive on the agent tool surface"),
+        "locks-release must bypass the agent-surface gate:\n{stderr}"
+    );
+}
+
+#[test]
+fn locks_reserve_requires_the_same_operator_capability_as_release() {
+    let workspace = TestWorkspace::new();
+    fs::write(workspace.work.join("reserve_me.rs"), "// reserve\n").expect("write fixture file");
+    const RESERVE: &[&str] = &[
+        "task",
+        "locks",
+        "reserve",
+        "--file",
+        "file:reserve_me.rs",
+        "--json",
+    ];
+
+    // ORB-12251: an unidentified caller could previously reserve a surface it
+    // was then refused `release` on — creating a claim it was not trusted to
+    // clear. `reserve` must be refused the same way `release` already is.
+    let ungoverned = workspace.run_raw(RESERVE);
+    assert!(!ungoverned.status.success());
+    let denial = String::from_utf8_lossy(&ungoverned.stderr);
+    assert!(denial.contains("capability denied"), "{denial}");
+    assert!(denial.contains("operator or runner"), "{denial}");
+
+    let output = workspace.run_as_operator(RESERVE, "task locks reserve");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("reserve JSON");
+    assert_eq!(value["reserved"], json!(true));
+    let reservation_id = value["reservation_id"]
+        .as_str()
+        .expect("reservation id")
+        .to_string();
+
+    // The same operator capability that created the reservation can also
+    // release it — the symmetry this task requires.
+    workspace.run_as_operator(
+        &["task", "locks", "release", &reservation_id, "--confirm"],
+        "task locks release",
+    );
+}
+
+#[test]
+fn audit_prune_refuses_unconfirmed_then_deletes_when_confirmed() {
+    let workspace = TestWorkspace::new();
+    workspace.add_task("Create an audit event");
+    let before = workspace.task_json(&["audit", "list", "--limit", "100", "--json"]);
+    assert!(!before.as_array().expect("audit rows").is_empty());
+
+    let refused = workspace.run_raw(&["audit", "prune", "--older-than", "0s"]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--confirm"));
+    let after_refusal = workspace.task_json(&["audit", "list", "--limit", "100", "--json"]);
+    assert_eq!(after_refusal, before);
+
+    let confirmed = workspace.run_as_operator(
+        &["audit", "prune", "--older-than", "0s", "--confirm"],
+        "confirmed audit prune",
+    );
+    assert!(String::from_utf8_lossy(&confirmed.stdout).contains("Pruned"));
+    let after = workspace.task_json(&["audit", "list", "--limit", "100", "--json"]);
+    assert!(after.as_array().expect("audit rows").is_empty());
+}
+
+#[test]
+fn run_cancel_confirmation_precedes_run_lookup() {
+    let workspace = TestWorkspace::new();
+
+    let refused = workspace.run_raw(&["run", "cancel", "jrun-does-not-exist"]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--confirm"));
+
+    let confirmed = workspace.run_raw(&["run", "cancel", "jrun-does-not-exist", "--confirm"]);
+    assert!(!confirmed.status.success());
+    let stderr = String::from_utf8_lossy(&confirmed.stderr);
+    assert!(stderr.contains("jrun-does-not-exist"), "{stderr}");
+    assert!(!stderr.contains("pass --confirm"), "{stderr}");
+}
+
+#[test]
+fn migrate_bare_invocation_inspects_and_confirm_applies() {
+    let workspace = TestWorkspace::new();
+    let marker = workspace.work.join(".orbit/state/layout.version");
+    fs::write(&marker, "1\n").expect("restore prior layout version");
+
+    let preview = workspace.run_raw(&["migrate"]);
+    assert!(!preview.status.success());
+    assert_eq!(
+        fs::read_to_string(&marker).expect("read previewed marker"),
+        "1\n",
+        "bare migrate must not advance the layout"
+    );
+    assert!(
+        String::from_utf8_lossy(&preview.stderr).contains("migrate --confirm"),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+
+    workspace.run(&["migrate", "--confirm"], "confirmed migration");
+    assert_eq!(
+        fs::read_to_string(&marker).expect("read applied marker"),
+        "3\n",
+        "confirmed migrate must advance the layout"
+    );
+}
+
+#[test]
+fn workspace_remove_is_recoverable_by_reinitializing_the_checkout() {
+    let workspace = TestWorkspace::new();
+
+    workspace.run_as_operator(
+        &["workspace", "remove", "trimmed-surface-test"],
+        "deregister workspace",
+    );
+    let unregistered = workspace.run(&["workspace", "show"], "show unregistered workspace");
+    assert!(
+        String::from_utf8_lossy(&unregistered.stdout).contains("not registered as a workspace")
+    );
+
+    workspace.run(
+        &["workspace", "init", "--name", "trimmed-surface-test"],
+        "reregister workspace",
+    );
+    let restored = workspace.run(&["workspace", "show"], "show restored workspace");
+    assert!(String::from_utf8_lossy(&restored.stdout).contains("name:"));
+    assert!(String::from_utf8_lossy(&restored.stdout).contains("trimmed-surface-test"));
+}
+
+struct TestWorkspace {
+    _temp: TempDir,
+    home: std::path::PathBuf,
+    work: std::path::PathBuf,
+}
+
+impl TestWorkspace {
+    fn new() -> Self {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let work = home.join("work");
+        fs::create_dir_all(&home).expect("create home");
+        fs::create_dir_all(work.join(".git")).expect("create work repo");
+
+        let workspace = Self {
+            _temp: temp,
+            home,
+            work,
+        };
+        workspace.run(
+            &["workspace", "init", "--name", "trimmed-surface-test"],
+            "initialize workspace",
+        );
+        workspace
+    }
+
+    fn add_task(&self, title: &str) -> String {
+        let output = self.run(
+            &[
+                "task",
+                "add",
+                "--title",
+                title,
+                "--description",
+                "Created by the trimmed-surface integration test.",
+                "--acceptance-criteria",
+                "status lands where the update says",
+                "--complexity",
+                "medium",
+                "--json",
+            ],
+            "add task",
+        );
+        let task: Value = serde_json::from_slice(&output.stdout).expect("task add JSON");
+        assert_eq!(task["status"], json!("proposed"));
+        task["id"].as_str().expect("task id").to_string()
+    }
+
+    fn drive_to_done(&self, id: &str) {
+        self.run(&["task", "update", id, "--approve"], "approve");
+        self.run(
+            &[
+                "task",
+                "update",
+                id,
+                "--plan",
+                "1) do it",
+                "--status",
+                "in-progress",
+            ],
+            "start",
+        );
+        self.run(
+            &[
+                "task",
+                "update",
+                id,
+                "--execution-summary",
+                "did it",
+                "--status",
+                "review",
+            ],
+            "to review",
+        );
+        self.run(&["task", "update", id, "--status", "done"], "to done");
+    }
+
+    fn task_json(&self, args: &[&str]) -> Value {
+        let output = self.run(args, "task JSON command");
+        serde_json::from_slice(&output.stdout).expect("task JSON output")
+    }
+
+    fn run(&self, args: &[&str], label: &str) -> Output {
+        let output = self.run_raw(args);
+        assert!(
+            output.status.success(),
+            "{label} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    fn run_raw(&self, args: &[&str]) -> Output {
+        run_orbit(&self.work, &self.home, args)
+    }
+
+    /// Run a governed command as an explicit operator [ORB-10453].
+    ///
+    /// A test binary is not a terminal, so the capability chokepoint resolves
+    /// it as an unidentified caller; claiming the capability is the same
+    /// deliberate act the denial message asks for.
+    fn run_as_operator(&self, args: &[&str], label: &str) -> Output {
+        let output = run_orbit_as_operator(&self.work, &self.home, args);
+        assert!(
+            output.status.success(),
+            "{label} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+}
+
+fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> Output {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .args(args);
+    command.output().expect("run orbit")
+}
+
+fn run_orbit_as_operator(cwd: &Path, home: &Path, args: &[&str]) -> Output {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("ORBIT_OPERATOR", "1")
+        .args(args);
+    command.output().expect("run orbit as operator")
+}
+
+fn run_orbit_with_identity(
+    cwd: &Path,
+    home: &Path,
+    args: &[&str],
+    agent: &str,
+    model: &str,
+) -> Output {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        // A managed identity this fixture synthesizes itself, on top of a
+        // cleared environment — never the host run's (ORB-11300).
+        .env("ORBIT_AGENT_NAME", agent)
+        .env("ORBIT_AGENT_MODEL", model)
+        .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+        .env("ORBIT_RUN_ID", "task-trimmed-surface-managed")
+        .args(args);
+    command.output().expect("run orbit with managed identity")
+}

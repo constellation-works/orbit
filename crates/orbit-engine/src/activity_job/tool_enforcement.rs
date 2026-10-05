@@ -1,7 +1,4 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_agent::loop_engine::audit::{AuditSink, LoopAuditEvent};
 use orbit_types::workflow::activity_job::{V2AuditEventKind, tool_allowed};
@@ -51,7 +48,10 @@ impl EnforcedAuditSink {
     }
 
     pub fn tripped(&self) -> Option<EnforcementDecision> {
-        self.tripped.lock().expect("tripped mutex").clone()
+        self.tripped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -77,10 +77,11 @@ impl AuditSink for EnforcedAuditSink {
                     tool_name: tool_name.clone(),
                     reason: reason.clone(),
                 });
-                *self.tripped.lock().expect("tripped mutex") = Some(EnforcementDecision::Denied {
-                    tool_name: tool_name.clone(),
-                    reason: reason.clone(),
-                });
+                *self.tripped.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some(EnforcementDecision::Denied {
+                        tool_name: tool_name.clone(),
+                        reason: reason.clone(),
+                    });
                 self.inner.emit(event);
             }
             LoopAuditEvent::ToolCallRequested { tool_name, .. }
@@ -101,10 +102,11 @@ impl AuditSink for EnforcedAuditSink {
                     reason: reason.clone(),
                 };
                 self.inner.emit(&denial);
-                *self.tripped.lock().expect("tripped mutex") = Some(EnforcementDecision::Denied {
-                    tool_name: tool_name.clone(),
-                    reason,
-                });
+                *self.tripped.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some(EnforcementDecision::Denied {
+                        tool_name: tool_name.clone(),
+                        reason,
+                    });
             }
             _ => self.inner.emit(event),
         }

@@ -6,27 +6,48 @@ spec:
   type: deterministic
   description: >
     Materialize the admissible work for one workspace drain iteration. Returns
-    the loose backlog leaves that may start right now, in `list_backlog`
-    priority/age order and one task per dispatch, plus at most one backlog epic
-    root. The two are independent answers, not a choice: an `in-progress` epic
-    root already reserves the union of its descendants' `context_files`, so
-    `list_backlog_tasks` excludes exactly the leaves that overlap it and
+    the backlog leaves that may start right now, in backlog priority/age order
+    and one task per dispatch. The backlog snapshot behind this is the same one
+    `orbit run readiness` reads, so the two cannot disagree about which task
+    takes a slot. Every candidate is an ordinary leaf admitted on its own
+    declared footprint — parent/child relations change nothing — so an
+    `in-progress` task excludes exactly the leaves that overlap it and
     conflict-free chores keep shipping alongside it. Leaves are capped at the
     number of free leaf-run slots (`max_active_leaf_runs` minus the live
     `task_auto_pipeline` runs), and tasks a live child is already carrying are
     excluded — a detached leaf stays `backlog` until its child moves it to
     `in-progress`, so the child's run input is the only claim record until then.
-    An epic root is offered only when no `epic_pipeline` run is pending or
-    running, because that job admits one active run and a second dispatch would
-    queue rather than execute; `active_epic_run_id` names the live run when one
-    exists. Epic children are never selected. `idle` means the iteration
-    started nothing, which includes a saturated drain with a full backlog
-    behind it; `sleep_seconds` is the wait that fits — the short poll when work
-    is queued, the long one when nothing is. The ceiling in force is
-    `max_active_leaf_runs`: the value an operator set live on this run
+    The leaves that fill those slots are pairwise conflict-free. Candidates are
+    taken in priority/age order, but one is admitted only when its effective
+    lock footprint is free of every footprint already spoken for: a task lock
+    held by an `in-progress` or `review` task, a task a live `task_auto_pipeline`
+    wrapper is already carrying, and the leaves selected earlier in this same
+    iteration. A candidate that would collide is skipped rather than allowed to
+    consume a slot and then queue at `task_gate_pipeline`, and the iteration
+    continues to independent work behind it. `deferred_conflicts` explains each
+    skip with the blocking task IDs, the overlapping selectors, and whether the
+    blocker holds the lock (`held_lock`), is a live wrapper's claim
+    (`live_claim`), or was chosen earlier this iteration (`same_wave`). Final
+    lock acquisition stays with `reserve_locks`; this is a prediction, not a
+    reservation. `max_tasks` bounds how much backlog one iteration expands
+    footprints for, and `candidate_pool_truncated` reports the case where that
+    bound, not the free slots, ended the wave. Each pass also records what it
+    left waiting — admissible tasks it did not start, lock deferrals, and
+    backlog tasks it could not admit at all — on the drain run's state, where
+    `orbit run show` reports it after the drain ends.
+    `idle` means the iteration started nothing, which includes a saturated
+    drain with a full backlog behind it; `sleep_seconds` is the wait that fits
+    — the short poll when work is queued, the long one when nothing is. The
+    ceiling in force is `max_active_leaf_runs`: the value an operator set live
+    on this run
     (`worker_limit_source: run_control`, with the change itself in
     `worker_limit`) when one exists, otherwise the `max_active_leaf_runs` this
-    run was submitted with.
+    run was submitted with. While sustained host resource pressure holds
+    (`[workflow.resource_throttle]`), the pass admits nothing, reports the
+    held resources in `resource_throttle`, records them on the drain's last
+    pass and waits the short poll; live children are never touched. Readings
+    that cannot be used fail open and are listed in
+    `resource_telemetry_unknown`.
   input_schema_json:
     type: object
     properties:
@@ -46,15 +67,7 @@ spec:
   output_schema_json:
     type: object
     required:
-      [
-        loose_task_ids,
-        loose_task_dispatches,
-        has_leaves,
-        epic_task_id,
-        has_epic,
-        idle,
-        sleep_seconds,
-      ]
+      [loose_task_ids, loose_task_dispatches, has_leaves, idle, sleep_seconds]
     properties:
       loose_task_ids:
         type: array
@@ -66,18 +79,20 @@ spec:
           type: object
       has_leaves:
         type: boolean
-      epic_task_id:
-        oneOf:
-          - type: string
-          - type: "null"
-      has_epic:
-        type: boolean
       idle:
         type: boolean
       sleep_seconds:
         type: number
       pending_backlog:
         type: number
+      deferred_conflicts:
+        type: array
+        items:
+          type: object
+      candidate_pool_size:
+        type: number
+      candidate_pool_truncated:
+        type: boolean
       active_leaf_runs:
         type: number
       free_slots:
@@ -93,13 +108,13 @@ spec:
         oneOf:
           - type: object
           - type: "null"
-      active_epic_run_id:
+      resource_throttle:
         oneOf:
-          - type: string
+          - type: object
           - type: "null"
-      active_epic_task_id:
-        oneOf:
-          - type: string
-          - type: "null"
+      resource_telemetry_unknown:
+        type: array
+        items:
+          type: string
   action: classify_workspace_auto_tasks
   config: {}

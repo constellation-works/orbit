@@ -1,4 +1,6 @@
 use super::*;
+use crate::contracts::TaskListFilter;
+use crate::fs::path_safety::normalize_path;
 
 impl TaskV2Store {
     pub(crate) fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
@@ -9,6 +11,42 @@ impl TaskV2Store {
         params: TaskCreateParams,
         key: Option<&str>,
     ) -> Result<Task, OrbitError> {
+        self.in_boundary(|| self.create_task_locked(params, key, None))
+    }
+
+    pub(crate) fn lookup_desktop_creation(
+        &self,
+        key: &str,
+        digest: &str,
+    ) -> Result<Option<Task>, OrbitError> {
+        self.in_boundary(
+            || match self.registry.task_action(&self.workspace_id, key, digest)? {
+                Some(id) => self.get_task(&id),
+                None => Ok(None),
+            },
+        )
+    }
+    pub(crate) fn create_desktop_task(
+        &self,
+        params: TaskCreateParams,
+        key: &str,
+        digest: &str,
+    ) -> Result<(Task, bool), OrbitError> {
+        self.in_boundary(|| {
+            if let Some(task) = self.lookup_desktop_creation(key, digest)? {
+                return Ok((task, true));
+            }
+            self.create_task_locked(params, Some(key), Some(digest))
+                .map(|task| (task, false))
+        })
+    }
+
+    fn create_task_locked(
+        &self,
+        params: TaskCreateParams,
+        key: Option<&str>,
+        digest: Option<&str>,
+    ) -> Result<Task, OrbitError> {
         if params.title.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
                 "task title must not be empty".to_string(),
@@ -18,6 +56,13 @@ impl TaskV2Store {
             return Err(OrbitError::InvalidInput(
                 "task actor must not be empty".to_string(),
             ));
+        }
+        // The one choke point every creation path reaches — CLI, MCP,
+        // dashboard, auto-task mint, import — so the reserved `os:` namespace
+        // cannot be bypassed by any of them.
+        validate_os_tags(&normalize_task_tags(params.tags.clone()))?;
+        if let Some(boundary) = &self.coordination {
+            boundary.guard_ordinary_footprint(params.status, &params.context_files)?;
         }
         let relations = relations_from_create_params(&params)?;
         self.registry
@@ -30,7 +75,7 @@ impl TaskV2Store {
             self.registry.reserve_task_action(
                 &self.workspace_id,
                 key,
-                &format!("{:x}", Sha256::digest(bytes)),
+                digest.unwrap_or(&sha256_hex(&bytes)),
             )?
         } else {
             self.registry.allocate_task_id(&self.workspace_id)?
@@ -51,6 +96,7 @@ impl TaskV2Store {
             .collect();
         let bundle = TaskBundleV2 {
             envelope: orbit_types::task::TaskEnvelopeV2 {
+                job_run_machine: None,
                 schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
                 id: id.clone(),
                 title: params.title,
@@ -103,12 +149,8 @@ impl TaskV2Store {
 
     /// Materialize tasks on the lightweight bundle path: no artifact hashing.
     pub(crate) fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
-        if let Some(tasks) = self.indexed_tasks(TaskIndexFilter {
-            status: None,
-            priority: None,
-            job_run_id: None,
-            tags: Vec::new(),
-        })? {
+        self.ensure_recovered()?;
+        if let Some(tasks) = self.indexed_tasks(TaskIndexFilter::default())? {
             return Ok(tasks);
         }
 
@@ -131,11 +173,12 @@ impl TaskV2Store {
         external_ref: Option<&ExternalRef>,
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
+        self.ensure_recovered()?;
         let mut tasks = match self.indexed_tasks(TaskIndexFilter {
-            status,
+            statuses: status.into_iter().collect(),
             priority,
             job_run_id: job_run_id.map(ToOwned::to_owned),
-            tags: Vec::new(),
+            ..Default::default()
         })? {
             Some(tasks) => tasks,
             None => self.list_tasks()?,
@@ -160,15 +203,14 @@ impl TaskV2Store {
     }
 
     pub(crate) fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
+        self.ensure_recovered()?;
         let required_tags = normalize_task_tags(tags.to_vec());
         if required_tags.is_empty() {
             return self.list_tasks();
         }
         if let Some(tasks) = self.indexed_tasks(TaskIndexFilter {
-            status: None,
-            priority: None,
-            job_run_id: None,
             tags: required_tags.clone(),
+            ..Default::default()
         })? {
             return Ok(tasks);
         }
@@ -183,6 +225,7 @@ impl TaskV2Store {
 
     pub(crate) fn get_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
         match self.bundle_store.read_bundle(id) {
             Ok(bundle) => self.task_from_bundle(bundle).map(Some),
             Err(OrbitError::NotFound {
@@ -191,6 +234,127 @@ impl TaskV2Store {
             }) => Ok(None),
             Err(err) => Err(err),
         }
+    }
+
+    /// Resolve `id` through the registry's ownership binding, so a dependency
+    /// owned by another workspace on this machine reads from its owner instead
+    /// of being reported missing because this partition has no bundle for it.
+    ///
+    /// Read-only and authority-preserving. The owner's bundle is read at the
+    /// path the registry registered for it, no binding or index row is
+    /// written, and the owner partition's commit boundary is deliberately not
+    /// settled from here: recovering another workspace's interrupted commit
+    /// would be a write to a workspace this caller does not own, so an
+    /// unreadable owner bundle fails closed as an error instead.
+    pub(crate) fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        let Some(binding) = self.registry.find_task_binding(id)? else {
+            let known = match orbit_types::task::task_id_prefix(id) {
+                Some(prefix) => self.registry.task_prefix_is_known(prefix)?,
+                None => false,
+            };
+            return Ok(if known {
+                RegisteredTaskResolution::Missing
+            } else {
+                RegisteredTaskResolution::ForeignAuthority
+            });
+        };
+        if binding.partition_id == self.workspace_id {
+            return match self.get_task(id)? {
+                Some(task) => Ok(RegisteredTaskResolution::Resolved(Box::new(task))),
+                None => {
+                    self.ensure_registered_bundle_absent(
+                        &binding,
+                        &self.bundle_store.bundle_path(id)?,
+                    )?;
+                    Ok(RegisteredTaskResolution::Missing)
+                }
+            };
+        }
+        Ok(match self.read_registered_owner_bundle(&binding)? {
+            Some(bundle) => {
+                RegisteredTaskResolution::Resolved(Box::new(self.task_from_bundle(bundle)?))
+            }
+            None => RegisteredTaskResolution::Missing,
+        })
+    }
+
+    /// Read `id`'s status history through its registered owner, with the
+    /// authority and fail-closed reads of [`Self::registered_task`]. `None`
+    /// when no local workspace holds the task.
+    pub(crate) fn registered_task_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        let Some(binding) = self.registry.find_task_binding(id)? else {
+            return Ok(None);
+        };
+        if binding.partition_id == self.workspace_id {
+            return self.get_task_history(id);
+        }
+        Ok(self
+            .read_registered_owner_bundle(&binding)?
+            .map(|bundle| super::sidecars::task_history_from_events(bundle.events)))
+    }
+
+    /// Read the bundle another workspace partition registered for a task,
+    /// without settling that partition's commit boundary. `None` when the
+    /// bundle is gone.
+    fn read_registered_owner_bundle(
+        &self,
+        binding: &crate::contracts::TaskBundleBinding,
+    ) -> Result<Option<TaskBundleV2>, OrbitError> {
+        let id = binding.task_id.as_str();
+        let owner = TaskBundleStoreV2::new(self.registry.clone(), binding.partition_id.clone());
+        let canonical = owner.bundle_path(id)?;
+        // The registry normalizes a path when it stores the binding, resolving
+        // symlinks once the directory exists, while the owner derives its path
+        // lexically from its root. Normalize both sides the same way so a
+        // store under a symlinked ancestor (macOS `/tmp`, `/var`) is not
+        // refused; a binding that names any other bundle still differs.
+        if normalize_path(&canonical) != normalize_path(&binding.canonical_path) {
+            return Err(OrbitError::Store(format!(
+                "task '{id}' is bound to workspace '{}' at '{}', which is not its canonical bundle path '{}'; reindex that workspace before reading it as a dependency",
+                binding.partition_id,
+                binding.canonical_path.display(),
+                canonical.display()
+            )));
+        }
+        match owner.read_bundle(id) {
+            Ok(bundle) => Ok(Some(bundle)),
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Task,
+                ..
+            }) => {
+                self.ensure_registered_bundle_absent(binding, &canonical)?;
+                Ok(None)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Classify a registered binding whose bundle read found no task.
+    ///
+    /// A bundle read reports an unopenable directory the same way it reports
+    /// an absent one, and the binding says this machine did hold the task. A
+    /// directory that is still there is therefore unreadable rather than
+    /// gone — a distinction a caller has to act on differently, so it is an
+    /// error naming the owner instead of a prerequisite declared missing.
+    fn ensure_registered_bundle_absent(
+        &self,
+        binding: &crate::contracts::TaskBundleBinding,
+        bundle_dir: &Path,
+    ) -> Result<(), OrbitError> {
+        if bundle_dir.try_exists().unwrap_or(false) {
+            return Err(OrbitError::Store(format!(
+                "task '{}' is registered to workspace '{}' but its bundle at '{}' could not be read; check that workspace's permissions or reindex it",
+                binding.task_id,
+                binding.partition_id,
+                bundle_dir.display()
+            )));
+        }
+        Ok(())
     }
 
     pub(crate) fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
@@ -202,42 +366,77 @@ impl TaskV2Store {
         query: &str,
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
+        let mut matches = Vec::new();
+        self.search_tasks_visit(query, tags, &|_| true, &mut |task| {
+            matches.push(task);
+            true
+        })?;
+        Ok(matches)
+    }
+
+    /// Stream the tasks matching `query` in listing order (newest first) to
+    /// `visit` until it returns `false`.
+    ///
+    /// `admit` sees each candidate's envelope-only task before anything of it
+    /// is read, so tasks the caller would discard anyway (a status, tag or path
+    /// filter) cost no read, and stopping early costs none for the tasks that
+    /// were never reached. An admitted task is first pruned from its envelope
+    /// and search documents (no event log, no consistency checks); only a task
+    /// that can match is read whole on the lightweight listing path, which
+    /// decides the match. Artifact payloads stay unopened and only the manifest
+    /// paths participate in matching. A match is admitted again as hydrated, so
+    /// an update that raced the envelope read is judged on the task actually
+    /// returned.
+    ///
+    /// Integrity is judged for the bundles this reads whole: a damaged bundle
+    /// the caller does not admit, that lies past the point where `visit`
+    /// stopped, or whose search documents hold no match, no longer fails the
+    /// search.
+    pub(crate) fn search_tasks_visit(
+        &self,
+        query: &str,
+        tags: &[String],
+        admit: &dyn Fn(&Task) -> bool,
+        visit: &mut dyn FnMut(Task) -> bool,
+    ) -> Result<(), OrbitError> {
+        self.ensure_recovered()?;
         // Candidate materialization is lightweight; artifact content search
         // below may still open matching text blobs on demand.
         let lowered = query.to_lowercase();
-        let bundles = self.candidate_bundles_by_tags(tags)?;
-        self.search_bundles(bundles, &lowered)
-    }
-
-    /// The bundles `list_tasks_by_tags` would materialize, in the same order,
-    /// handed over whole so a caller that also needs the sidecars does not
-    /// read each bundle again.
-    fn candidate_bundles_by_tags(&self, tags: &[String]) -> Result<Vec<TaskBundleV2>, OrbitError> {
-        let required_tags = normalize_task_tags(tags.to_vec());
-        if let Some(bundles) = self.indexed_bundles(TaskIndexFilter {
-            status: None,
-            priority: None,
-            job_run_id: None,
-            tags: required_tags.clone(),
-        })? {
-            return Ok(bundles);
+        let candidates = self.task_candidates(
+            &TaskListFilter {
+                tags: tags.to_vec(),
+                ..Default::default()
+            },
+            usize::MAX,
+        )?;
+        for envelope in candidates.items {
+            if !admit(&Self::metadata_task(&envelope)) {
+                continue;
+            }
+            if !self.may_match(&envelope, &lowered) {
+                continue;
+            }
+            let Some(bundle) = self.bundle_store.read_bundle_if_settled(&envelope.id)? else {
+                continue;
+            };
+            let Some(task) = self.matching_task(bundle, &lowered)? else {
+                continue;
+            };
+            if admit(&task) && !visit(task) {
+                break;
+            }
         }
-        let mut bundles = self.bundle_store.list_bundles()?;
-        bundles.retain(|bundle| {
-            required_tags
-                .iter()
-                .all(|required| bundle.envelope.tags.iter().any(|tag| tag == required))
-        });
-        sort_by_created_desc_id_asc(
-            &mut bundles,
-            |bundle| &bundle.envelope.created_at,
-            |bundle| &bundle.envelope.id,
-        );
-        Ok(bundles)
+        Ok(())
     }
 
     pub(crate) fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
-        self.bundle_store.delete_bundle(id)
+        self.in_boundary(|| {
+            if let Some(boundary) = &self.coordination {
+                boundary.refuse_unscoped_claim_write(id)?;
+            }
+            self.bundle_store.delete_bundle(id)
+        })
     }
 }

@@ -15,7 +15,7 @@ const TASK_STATUS_ENUM: &[&str] = &[
     "blocked",
     "rejected",
 ];
-const TASK_COMPLEXITY_ENUM: &[&str] = &["low", "medium", "hard"];
+const TASK_COMPLEXITY_ENUM: &[&str] = &["low", "medium", "hard", "xhard"];
 const AGENT_FAMILY_ENUM: &[&str] = &["codex", "claude", "gemini", "grok"];
 
 /// Build the canonical JSON input schema for an Orbit tool.
@@ -51,8 +51,21 @@ pub fn tool_input_schema_for(tool_name: &str, params: &[ToolParam]) -> Map<Strin
     if !required.is_empty() {
         schema.insert("required".to_string(), Value::Array(required));
     }
-    schema.insert("additionalProperties".to_string(), Value::Bool(true));
+    schema.insert(
+        "additionalProperties".to_string(),
+        Value::Bool(tool_arguments_allow_additional_properties(tool_name)),
+    );
     schema
+}
+
+/// Whether the advertised argument object accepts undeclared keys.
+///
+/// Registered task tools refuse extras at runtime; their schemas match that
+/// contract. Other tools keep `additionalProperties: true` until
+/// they grow the same check. Transport wrappers (`_meta`, `workspace`) are
+/// not modeled as additional argument properties.
+pub fn tool_arguments_allow_additional_properties(tool_name: &str) -> bool {
+    !tool_name.starts_with("orbit.task.")
 }
 
 /// Build the canonical JSON-Schema fragment for one tool parameter.
@@ -122,7 +135,7 @@ pub fn tool_parameter_enum_values(
     match (tool_name, param_name) {
         ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_ENUM),
         ("orbit.task.add" | "orbit.task.update", "status") => Some(TASK_STATUS_ENUM),
-        ("orbit.task.add", "complexity") => Some(TASK_COMPLEXITY_ENUM),
+        ("orbit.task.add" | "orbit.task.update", "complexity") => Some(TASK_COMPLEXITY_ENUM),
         (_, "model") => Some(AGENT_FAMILY_ENUM),
         _ => None,
     }

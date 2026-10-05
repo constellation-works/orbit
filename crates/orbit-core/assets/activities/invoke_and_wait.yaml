@@ -21,7 +21,7 @@ spec:
     a successful child Run should follow this activity with
     `pipeline_success_guard` after any cleanup that depends on the raw
     child status. The returned `status` mirrors the child Run's terminal state:
-    `succeeded`,
+    `success`,
     `failed`, `cancelled`, `interrupted`, or `timeout`. A `timeout` here means the
     WAIT side of the activity exceeded `timeout_seconds`; the child
     Run itself may still be running — callers that care must inspect
@@ -30,8 +30,8 @@ spec:
     admission immediately before dispatch, so an admission granted before a
     long gate wait cannot dispatch work whose status has since changed.
     Neither case submits a child Run: stale `review` / `done`
-    tasks return a succeeded no-op output with `skipped: true`, while a task
-    withdrawn during the wait returns `skipped: true` with a non-succeeded
+    tasks return a successful no-op output with `skipped: true`, while a task
+    withdrawn during the wait returns `skipped: true` with a non-success
     `status` and an `error` naming the task and its status, so a following
     release step still runs and `pipeline_success_guard` then fails the
     parent. A task id that resolves to no task at all fails the activity.
@@ -46,7 +46,7 @@ spec:
       timeout_seconds:
         type: number
         minimum: 1
-        maximum: 7200
+        maximum: 21600
       poll_interval_seconds:
         type: number
         minimum: 1
@@ -65,11 +65,14 @@ spec:
     properties:
       status:
         type: string
-        enum: [succeeded, failed, cancelled, interrupted, timeout, pending, running]
+        enum: [success, failed, cancelled, interrupted, timeout, pending, running]
       run_id:
         type: string
       finished_at:
         type: string
+      duration_ms:
+        type: integer
+        minimum: 0
       pipeline:
         type: object
       error:

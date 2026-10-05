@@ -33,47 +33,54 @@ impl McpToolClass {
     }
 }
 
-/// Classify one advertised MCP tool by behavior.
+/// Classify public tools and internal drain operations by behavior.
 ///
 /// Accepts either the canonical (`orbit.task.add`) or advertised
 /// (`orbit_task_add`) spelling. Task reads are `control_plane` because the
 /// coordination store is owner-authoritative. A name this host does not
-/// advertise is unclassified here; routing rejects it earlier with
+/// advertise or serve internally is unclassified here; public routing rejects it with
 /// `tool_not_on_this_host`, which precedes `capability_refused`.
 pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
     match mcp_advertised_tool_name(tool_name).as_str() {
         "orbit_task_add"
         | "orbit_task_update"
-        | "orbit_task_start"
-        | "orbit_task_approve"
         | "orbit_task_list"
+        | "orbit_task_eligible"
+        | "orbit_task_review_reset"
         | "orbit_task_show"
         | "orbit_task_artifact_get"
         | "orbit_task_artifact_put"
         | "orbit_friction_add"
-        | "orbit_friction_list"
         | "orbit_friction_update"
         | "orbit_auto_task_list"
         | "orbit_auto_task_mint"
+        | "orbit_auto_task_add"
+        | "orbit_auto_task_update"
         | "orbit_search"
-        | "orbit_workflow_ship"
-        // Grants are durable coordination records on the owning workspace;
-        // enabling, stopping, or revoking one runs no process on the
-        // destination host [ORB-11332].
-        | "orbit_operation_explain"
-        | "orbit_operation_enable"
-        | "orbit_operation_list"
-        | "orbit_operation_stop"
-        | "orbit_operation_revoke" => McpToolClass::ControlPlane,
+        // The internal distributed drain answers for the owner's
+        // coordination store — receipts, claims, and the ship contract
+        // admission would resolve — so a replica must refuse it rather than
+        // answer about itself [ORB-12495].
+        | "orbit_drain_probe"
+        | "orbit_drain_receipt_lookup"
+        // [ORB-13625] Admission, binding and settlement are owner store
+        // transactions; a replica answering them would mint claims no owner
+        // holds.
+        | "orbit_task_pull"
+        | "orbit_drain_claim_bind"
+        | "orbit_drain_claim_settle"
+        | "orbit_workflow_ship" => McpToolClass::ControlPlane,
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason
         // `orbit.command.exec` is Execute [ORB-11354].
-        "orbit_agent_invoke"
+        "orbit_pipeline_invoke"
+        | "orbit_workflow_auto"
+        | "orbit_routine_control"
+        | "orbit_agent_invoke"
         | "orbit_command_exec"
         | "orbit_workflow_run_list"
         | "orbit_workflow_run_show"
-        | "orbit_workflow_run_resume"
-        | "orbit_workflow_run_workers" => McpToolClass::Execute,
+        | "orbit_workflow_run_resume" => McpToolClass::Execute,
         _ => McpToolClass::Unclassified,
     }
 }

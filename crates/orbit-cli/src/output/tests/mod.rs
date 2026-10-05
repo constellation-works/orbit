@@ -1,5 +1,2 @@
-mod color;
-mod gating;
-mod render;
+mod pipe;
 mod sink;
-mod table;

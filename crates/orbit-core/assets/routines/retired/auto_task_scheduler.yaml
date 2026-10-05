@@ -1,0 +1,20 @@
+# Retired `auto_task_scheduler` default (last shipped 2026-09-11). Every clock
+# tick now evaluates auto-task definitions directly, so this routine has no job
+# to fire. Kept as a provenance shape only, so `orbit workspace sync` can tell an
+# Orbit-seeded copy from an operator-authored one — see `RETIRED_ROUTINE_FILES`
+# in `application/routine.rs`.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  The generic auto-task scheduler: mint tasks from every due, enabled
+  `.orbit/auto_tasks` definition. Catch-up collapses and `skip_if_open`
+  dedupe are enforced by the scheduler; each definition's own schedule
+  governs its cadence.
+enabled: false
+trigger:
+  cron: "* * * * *"
+  missed_run: skip
+target: job:auto_task_scheduler_pipeline
+policy:
+  timeout_minutes: 30
+  overlap: forbid

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
-use crate::fs::path_safety::validate_workspace_id;
+use crate::fs::path_safety::validate_partition_id;
 use crate::fs::yaml::{parse_yaml_with, write_yaml_atomic_with};
 
 use crate::contracts::WorkspaceConfig;
@@ -45,29 +45,9 @@ pub fn workspace_id_for_orbit_dir(orbit_dir: &Path) -> Result<String, OrbitError
 pub fn read_workspace_config_optional(
     orbit_dir: &Path,
 ) -> Result<Option<WorkspaceConfig>, OrbitError> {
-    let display_path = workspace_config_path(orbit_dir);
-    let Some(path) = validated_workspace_config_path(orbit_dir)? else {
-        return Ok(None);
-    };
-
-    let raw = match fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(OrbitError::Io(err.to_string())),
-    };
-    let doc: WorkspaceConfigDoc = parse_yaml_with(&raw, &display_path, |_, e| {
-        OrbitError::InvalidInput(format!(
-            "invalid workspace config '{}': {e}",
-            display_path.display()
-        ))
-    })?;
-    validate_workspace_config_doc(doc).map(Some)
-}
-
-/// Resolve the config path before reading it and require the resolved file to
-/// remain below the resolved orbit directory. This removes traversal and
-/// symlink components from the path presented to the filesystem read.
-fn validated_workspace_config_path(orbit_dir: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    // Workspace paths may contain aliases and symlinks, so resolve the fixed
+    // config filename before reading and reject any path that escapes the
+    // resolved orbit directory.
     let canonical_orbit_dir = match orbit_dir.canonicalize() {
         Ok(path) => path,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -86,14 +66,25 @@ fn validated_workspace_config_path(orbit_dir: &Path) -> Result<Option<PathBuf>, 
         ));
     }
 
-    Ok(Some(canonical_config_path))
+    let raw = match fs::read_to_string(&canonical_config_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(OrbitError::Io(err.to_string())),
+    };
+    let doc: WorkspaceConfigDoc = parse_yaml_with(&raw, &canonical_config_path, |_, e| {
+        OrbitError::InvalidInput(format!(
+            "invalid workspace config '{}': {e}",
+            canonical_config_path.display()
+        ))
+    })?;
+    validate_workspace_config_doc(doc).map(Some)
 }
 
 pub fn write_workspace_config(
     orbit_dir: &Path,
     config: &WorkspaceConfig,
 ) -> Result<(), OrbitError> {
-    let workspace_id = validate_workspace_id(&config.workspace_id)?;
+    let workspace_id = validate_partition_id(&config.workspace_id)?;
     if config.schema_version != CONFIG_SCHEMA_VERSION {
         return Err(OrbitError::InvalidInput(format!(
             "unsupported workspace config schema_version {}",
@@ -119,6 +110,6 @@ fn validate_workspace_config_doc(doc: WorkspaceConfigDoc) -> Result<WorkspaceCon
     }
     Ok(WorkspaceConfig {
         schema_version: doc.schema_version,
-        workspace_id: validate_workspace_id(&doc.workspace_id)?,
+        workspace_id: validate_partition_id(&doc.workspace_id)?,
     })
 }

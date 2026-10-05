@@ -8,9 +8,8 @@
 //! clusters that can never block one another.
 //!
 //! Surfaces come from the same expansion conflict admission uses — declared
-//! selectors, pruned of paths that no longer exist, unioned across descendants
-//! for an epic root. A contention picture admission does not share is not
-//! worth reading.
+//! selectors, pruned of paths that no longer exist. A contention picture
+//! admission does not share is not worth reading.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -77,9 +76,9 @@ impl LockContentionReport {
 impl OrbitRuntime {
     /// Lock contention across every task whose status appears in `statuses`.
     ///
-    /// The whole task table is loaded regardless of `statuses`, because an
-    /// epic root's lock surface is the union over its descendants and those
-    /// can sit at any status. Only the selected tasks are expanded.
+    /// The whole task table is loaded regardless of `statuses`, because
+    /// parent-chain reads span tasks at any status. Only the selected tasks
+    /// are expanded.
     pub fn task_lock_contention(
         &self,
         statuses: &[TaskStatus],
@@ -95,7 +94,7 @@ impl OrbitRuntime {
             .filter(|task| statuses.contains(&task.status))
             .map(|task| LockSurface {
                 task_id: task.id.clone(),
-                selectors: lock_context_files_for_task(task, &lookup, repo_root),
+                selectors: lock_context_files_for_task(task, repo_root),
             })
             .collect();
         Ok(compute_contention(&surfaces))

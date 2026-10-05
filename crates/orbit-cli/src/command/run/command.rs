@@ -15,18 +15,18 @@ use super::readiness::ReadinessCommand;
 use super::ship;
 use super::show::RunShowArgs;
 use super::sweep;
+use super::task_pilot;
 use super::trace::RunTraceArgs;
-use super::triage;
 
 const RUN_AFTER_HELP: &str = "\
 Workflow entrypoints:
-  orbit run auto [--for 30m]
+  orbit run auto [--for 30m] [--concurrency <N>] [--complete]
   orbit run auto --stop
-  orbit run ship [task_id ...]
+  orbit run ship [task_id ...] [--complete]
   orbit run ship-sweep [--dry-run] [--json]
-  orbit run triage [task_id ...]
+  orbit run task-pilot [task_id ...]
   orbit run job <job_id> [--input key=value] [--json] [--debug]
-  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS]
+  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
 
 Run history:
   orbit run history [--limit 50]
@@ -54,11 +54,10 @@ Maintenance:
 {usage-heading} {usage}
 
 Workflows:
-  auto        Drain the workspace backlog for a window (loose leaves, plus one epic); --stop ends new admissions
+  auto        Drain the workspace backlog for a window; --stop ends new admissions
   ship        Ship backlog or explicitly selected tasks through the gated task pipeline
   ship-sweep  Dispatch ship runs in every registered workspace with ready backlog tasks
-  triage      Triage tasks blocked by failed runs; re-backlog environmental failures
-  readiness   Explain why backlog tasks are waiting in auto-drain
+  task-pilot  Preflight proposed/backlog tasks and persist validated selectors
   job         Run an arbitrary job by ID
   agent       Invoke an agent on the host for exploration or debugging (operator only)
 
@@ -72,6 +71,7 @@ Audits:
 Maintenance:
   cancel       Cancel a pending or running job run
   concurrency  Change how many tasks a running drain keeps in flight
+  readiness    Explain why backlog tasks are waiting in auto-drain
 
 Options:
 {options}
@@ -90,7 +90,7 @@ impl Execute for RunCommand {
 
 #[derive(Subcommand)]
 pub enum RunSubcommand {
-    /// Drain the workspace backlog for a window (loose leaves, plus one epic)
+    /// Drain the workspace backlog for a window
     Auto(auto::AutoCommand),
     /// Ship backlog or explicitly selected tasks through the gated task pipeline
     Ship(ship::ShipCommand),
@@ -100,8 +100,9 @@ pub enum RunSubcommand {
     /// Dispatch ship runs in every registered workspace with ready backlog tasks
     #[command(name = "ship-sweep")]
     ShipSweep(sweep::ShipSweepCommand),
-    /// Triage tasks blocked by failed runs; re-backlog environmental failures
-    Triage(triage::TriageCommand),
+    /// Preflight proposed/backlog tasks and persist validated selectors
+    #[command(name = "task-pilot")]
+    TaskPilot(task_pilot::TaskPilotCommand),
     /// Explain why backlog tasks can or cannot start in auto-drain
     Readiness(ReadinessCommand),
     /// Show recent job runs, optionally filtered to one job
@@ -132,8 +133,8 @@ impl Execute for RunSubcommand {
             RunSubcommand::ShipLocal(command) => command.execute(runtime),
             // Normally dispatched before runtime init (see main.rs); the
             // registry-driven sweep never uses the cwd-derived runtime.
-            RunSubcommand::ShipSweep(command) => command.execute_without_runtime(),
-            RunSubcommand::Triage(command) => command.execute(runtime),
+            RunSubcommand::ShipSweep(command) => command.execute_without_runtime(None),
+            RunSubcommand::TaskPilot(command) => command.execute(runtime),
             RunSubcommand::Readiness(command) => command.execute(runtime),
             RunSubcommand::History(command) => command.execute(runtime),
             RunSubcommand::Show(command) => command.execute(runtime),

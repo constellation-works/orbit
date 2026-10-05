@@ -1,65 +1,84 @@
 ---
 title: Activities and Jobs
-description: "How Orbit represents executable work units and workflow orchestration."
+description: "How Orbit defines reusable execution units (activities) and the workflows that chain them (jobs)."
 sidebar:
   order: 3
 ---
 
 ## Activity
 
-An activity is a reusable execution unit. Schema v2 activities declare `schemaVersion: 2`, `kind: Activity`, metadata, and a typed `spec`.
-
-Supported activity types:
+An activity is a reusable execution unit. It is a YAML file with
+`schemaVersion: 2`, `kind: Activity`, `metadata`, and a typed `spec`.
 
 | Type | Use |
 |------|-----|
-| `agent_loop` | Run an agent with an instruction, provider, and tool allowlist. Agent execution uses the CLI path only; `spec.backend: http` and `auto` fail catalog load. Remove a leftover backend with `orbit doctor --fix-retired-activity-backends`. |
+| `agent_loop` | Run an agent with an instruction and a tool policy. The run's crew picks the provider and model. The retired `backend:` selector is covered in [Retired backend selection](../../reference/config/#retired-backend-selection). |
 | `deterministic` | Run a registered deterministic action. |
 
-For a task-backed `agent_loop`, the activity's `tools` are a baseline. Orbit
-adds the task's exact `required_tools` and deduplicates the union before provider
-launch. The list is immutable after task creation. A task with no requirements
-receives the baseline unchanged. Unknown,
-inactive, malformed, wildcard, and non-agent-facing requirements fail admission
-before launch. If one agent activity selects multiple tasks, their requirements
-are all included in the same union. The effective list is included in the CLI envelope,
-`ORBIT_ACTIVITY_TOOLS`, and audit evidence.
+For a task-backed `agent_loop`, the activity's
+[tool policy](../agents/#tool-policy) is a baseline, and the task's
+`required_tools` (fixed at creation; see
+[Transition rules](../tasks/#transition-rules)) extend it:
+
+- An allowlist (`tools`) gains the task's requirements, deduplicated. A task
+  with no requirements gets the list unchanged.
+- A disallow list (`tool_disallow_list`) can't be overridden. A requirement it
+  covers is refused before launch.
+
+Unknown, inactive, malformed, wildcard, and non-agent-facing requirements are
+also refused before launch. When one agent activity runs several tasks, it
+gets the union of their requirements. The effective list is recorded in the
+CLI envelope, `ORBIT_ACTIVITY_TOOLS`, and the audit trail.
 
 ## Job
 
-A job is a workflow. It has schedule state, optional default input, concurrency limits, and ordered steps.
+A job is a workflow: ordered steps, plus an `enabled` or `disabled` state,
+optional default input, and a concurrency limit. A job runs when something
+invokes it: `orbit run`, a task ship, or a [routine](../scheduling/#routine)
+firing on the sweep clock.
 
-Step bodies can reference an activity, inline an activity spec, or compose control flow:
+Each step has exactly one body:
 
-- `target: activity:<name>`
-- `spec: ...`
+- `target: activity:<name>` runs a catalog activity
+- `spec: ...` inlines an activity spec
 - `parallel`
-- `fan_out` and `fan_in`
+- `fan_out` with `fan_in`
 - `loop`
 
-## Why Both Exist
+## Why both exist
 
-Activities make execution behavior reusable. Jobs make orchestration explicit. This keeps the dispatch surface inspectable and avoids hiding agent behavior inside code.
+Activities make execution reusable. Jobs make orchestration explicit. Agent
+behavior stays in YAML you can inspect, not hidden in code.
 
-**Example:** A job step referencing a reusable activity.
+**Example:** a job step that references a reusable activity.
 
 ```yaml
-# .orbit/activities/analyze_code.yaml
+# .orbit/resources/activities/analyze_code.yaml
 schemaVersion: 2
 kind: Activity
-name: analyze_code
+metadata:
+  name: analyze_code
 spec:
   type: agent_loop
-  provider: gemini
-  model: gemini-3.1-pro
+  description: Analyze the provided code.
   instruction: "Analyze the provided code."
+  tools:
+    - orbit.task.show
 
 ---
-# .orbit/jobs/review_pr.yaml
+# .orbit/resources/jobs/review_pr.yaml
 schemaVersion: 2
 kind: Job
-name: review_pr
-steps:
-  - id: analysis
-    target: activity:analyze_code
+metadata:
+  name: review_pr
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: analysis
+      target: activity:analyze_code
 ```
+
+The activity names no provider or model. The run resolves a
+[crew](../agents/#crews) at dispatch and applies its provider, model, and
+effort.

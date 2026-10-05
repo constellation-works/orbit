@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_types::plugin::InstalledPlugin;
 use orbit_types::telemetry::AuditEvent;
 use orbit_types::tool::StoredTool;
 
 use crate::contracts::{AuditEventFilter, AuditEventInsertParams};
 use crate::contracts::{
-    AuditEventStoreBackend, TaskReservationCheckParams, TaskReservationCheckResult,
-    TaskReservationListResult, TaskReservationOwnedConflictsParams,
+    AuditEventStoreBackend, PluginStoreBackend, TaskReservationCheckParams,
+    TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
     TaskReservationOwnedConflictsResult, TaskReservationReleaseByOwnerParams,
     TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
     TaskReservationReleaseResult, TaskReservationReserveParams, TaskReservationReserveResult,
@@ -14,6 +15,7 @@ use crate::contracts::{
     WorkspaceClaimAcquireResult, WorkspaceClaimCheckParams, WorkspaceClaimCheckResult,
     WorkspaceClaimReleaseParams, WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
 };
+use crate::repository::task::TaskCommitBoundary;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 use crate::{ActiveTaskReservation, Store};
 
@@ -42,6 +44,48 @@ impl ToolStoreBackend for SqliteToolStoreBackend {
     fn set_tool_enabled(&self, name: &str, enabled: bool) -> Result<bool, OrbitError> {
         self.store
             .with_transaction(|tx| tx.set_tool_enabled(name, enabled))
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SqlitePluginStoreBackend {
+    pub(crate) store: Store,
+}
+
+impl PluginStoreBackend for SqlitePluginStoreBackend {
+    fn list_plugins(&self) -> Result<Vec<InstalledPlugin>, OrbitError> {
+        self.store.list_plugins()
+    }
+
+    fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError> {
+        self.store.get_plugin(name)
+    }
+
+    fn upsert_plugin(&self, plugin: &InstalledPlugin) -> Result<(), OrbitError> {
+        self.store.with_transaction(|tx| tx.upsert_plugin(plugin))
+    }
+
+    fn delete_plugin(&self, name: &str) -> Result<bool, OrbitError> {
+        self.store.with_transaction(|tx| tx.delete_plugin(name))
+    }
+
+    fn set_plugin_certification(
+        &self,
+        name: &str,
+        orbit_version: Option<&str>,
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .with_transaction(|tx| tx.set_plugin_certification(name, orbit_version))
+    }
+
+    fn set_plugin_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+        grants: &[String],
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .with_transaction(|tx| tx.set_plugin_enabled(name, enabled, grants))
     }
 }
 
@@ -101,6 +145,13 @@ impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<(String, i64)>, OrbitError> {
         self.store.get_audit_denials_by_role(since)
+    }
+
+    fn get_audit_denials_by_operation(
+        &self,
+        since: Option<&DateTime<Utc>>,
+    ) -> Result<Vec<(String, i64)>, OrbitError> {
+        self.store.get_audit_denials_by_operation(since)
     }
 
     fn get_audit_tool_call_counts_by_role(
@@ -188,6 +239,20 @@ impl ScopedStore<AuditEvent> for SqliteAuditEventStoreBackend {
 #[derive(Clone)]
 pub(crate) struct SqliteTaskReservationStoreBackend {
     pub(crate) store: Store,
+    /// The partition's mandatory commit boundary. Reservation
+    /// mutations then share the serialization an admission decision holds, so
+    /// a reservation cannot be taken between an admission's readiness read and
+    /// its commit (ORB-12528).
+    pub(crate) coordination: std::sync::Arc<TaskCommitBoundary>,
+}
+
+impl SqliteTaskReservationStoreBackend {
+    fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<T, OrbitError>,
+    {
+        self.coordination.enter_ordinary(op)
+    }
 }
 
 impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
@@ -200,63 +265,96 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
             .inspect_active_task_reservations(workspace_orbit_dir, workspace_id)
     }
 
+    fn inspect_active_task_reservation(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        reservation_id: &str,
+    ) -> Result<Option<ActiveTaskReservation>, OrbitError> {
+        self.store.inspect_active_task_reservation(
+            workspace_orbit_dir,
+            workspace_id,
+            reservation_id,
+        )
+    }
+
     fn list_active_task_reservations(
         &self,
         workspace_orbit_dir: &str,
         workspace_id: Option<&str>,
     ) -> Result<TaskReservationListResult, OrbitError> {
-        self.store
-            .list_active_task_reservations(workspace_orbit_dir, workspace_id)
+        // Listing marks expired rows released, so it is a mutation.
+        self.in_boundary(|| {
+            self.store
+                .list_active_task_reservations(workspace_orbit_dir, workspace_id)
+        })
     }
 
     fn check_task_reservation_conflicts(
         &self,
         params: TaskReservationCheckParams,
     ) -> Result<TaskReservationCheckResult, OrbitError> {
-        self.store.check_task_reservation_conflicts(&params)
+        self.in_boundary(|| self.store.check_task_reservation_conflicts(&params))
     }
 
     fn reserve_task_reservation(
         &self,
         params: TaskReservationReserveParams,
     ) -> Result<TaskReservationReserveResult, OrbitError> {
-        self.store.reserve_task_reservation(&params)
+        self.in_boundary(|| {
+            let conflicts = self
+                .coordination
+                .frozen_claim_conflicts(&params.requested_files)?;
+            if !conflicts.is_empty() {
+                return Ok(TaskReservationReserveResult {
+                    reserved: false,
+                    reservation_id: None,
+                    expires_at: None,
+                    reserved_files: Vec::new(),
+                    conflicts,
+                    expired_reservations: Vec::new(),
+                });
+            }
+            self.store.reserve_task_reservation(&params)
+        })
     }
 
     fn release_task_reservation(
         &self,
         params: TaskReservationReleaseParams,
     ) -> Result<TaskReservationReleaseResult, OrbitError> {
-        self.store.release_task_reservation(&params)
+        self.in_boundary(|| self.store.release_task_reservation(&params))
     }
 
     fn release_task_reservations_by_owner_run_id(
         &self,
         params: TaskReservationReleaseByOwnerParams,
     ) -> Result<TaskReservationReleaseByOwnerResult, OrbitError> {
-        self.store
-            .release_task_reservations_by_owner_run_id(&params)
+        self.in_boundary(|| {
+            self.store
+                .release_task_reservations_by_owner_run_id(&params)
+        })
     }
 
     fn list_owned_task_reservation_conflicts(
         &self,
         params: TaskReservationOwnedConflictsParams,
     ) -> Result<TaskReservationOwnedConflictsResult, OrbitError> {
-        self.store.list_owned_task_reservation_conflicts(&params)
+        self.in_boundary(|| self.store.list_owned_task_reservation_conflicts(&params))
     }
 
     fn acquire_workspace_claim(
         &self,
         params: WorkspaceClaimAcquireParams,
     ) -> Result<WorkspaceClaimAcquireResult, OrbitError> {
-        self.store.acquire_workspace_claim(&params)
+        self.in_boundary(|| self.store.acquire_workspace_claim(&params))
     }
 
     fn release_workspace_claim(
         &self,
         params: WorkspaceClaimReleaseParams,
     ) -> Result<WorkspaceClaimReleaseResult, OrbitError> {
-        self.store.release_workspace_claim(&params)
+        self.in_boundary(|| self.store.release_workspace_claim(&params))
     }
 
     fn show_workspace_claim(
@@ -264,14 +362,17 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
         workspace_orbit_dir: &str,
         workspace_id: Option<&str>,
     ) -> Result<WorkspaceClaimStatusResult, OrbitError> {
-        self.store
-            .show_workspace_claim(workspace_orbit_dir, workspace_id)
+        // Showing marks expired claims released, so it is a mutation.
+        self.in_boundary(|| {
+            self.store
+                .show_workspace_claim(workspace_orbit_dir, workspace_id)
+        })
     }
 
     fn check_workspace_claim(
         &self,
         params: WorkspaceClaimCheckParams,
     ) -> Result<WorkspaceClaimCheckResult, OrbitError> {
-        self.store.check_workspace_claim(&params)
+        self.in_boundary(|| self.store.check_workspace_claim(&params))
     }
 }

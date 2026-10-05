@@ -46,21 +46,13 @@ registry=(
   "AutomationError:orbit-automation:automation_error_to_orbit"
   "SelectorParseError:orbit-common:selector_error_to_orbit"
   "CatalogError:orbit-engine:catalog_error_to_orbit"
-  "RpcError:orbit-search:rpc_error_to_orbit"
   "DispatchError:orbit-engine:dispatch_error_to_orbit"
 )
 
 # --- Allowlist: fn names matching *_error_to_orbit that are NOT crate-boundary
 # translators. Each entry needs a justifying comment.
 #
-#   spawn_error_to_orbit — orbit-search/src/subprocess.rs. Private helper that
-#   renders a std::io::Error spawn failure with companion-path context. Its
-#   input type belongs to std, not to a workspace crate, so there is no owning
-#   crate to host a boundary translator (error_translation.md "you don't have
-#   a typed error yet" case).
-allowlist=(
-  "spawn_error_to_orbit"
-)
+allowlist=()
 
 is_allowlisted() {
   local name="$1"

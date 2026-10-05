@@ -26,15 +26,30 @@ class GuardrailTests(unittest.TestCase):
         self.log = self.root / "cargo.log"
         self.metadata = self.root / "metadata.json"
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
-                        GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata))
+                        GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
+                        GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"))
         self.write_executable(self.bin / "cargo", '''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
+elif sys.argv[1] == "test" and "--message-format" in sys.argv:
+    # `--no-run --message-format json`: report one test binary per package
+    # named in the fixture metadata, the way a workspace build does.
+    for package in json.load(open(os.environ["GUARD_TEST_METADATA"]))["packages"]:
+        print(json.dumps({"reason": "compiler-artifact", "package_id": package["id"],
+                          "profile": {"test": True}, "executable": os.environ["GUARD_TEST_BIN"]}))
 elif sys.argv[1] == "test":
     print("fixture_test: test")
+''')
+        # Stands in for a compiled test binary: logs its argv like the cargo
+        # stub and lists one libtest-style test.
+        self.write_executable(self.bin / "fixture-test-bin", '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["fixture-test-bin"] + sys.argv[1:]) + "\\n")
+print("fixture_test: test")
 ''')
         self.write_executable(self.bin / "rg", "#!/bin/bash\nexit 1\n")
 
@@ -55,6 +70,8 @@ elif sys.argv[1] == "test":
         workflows = self.root / ".github/workflows"
         workflows.mkdir(parents=True)
         (self.root / "Cargo.toml").touch()
+        self.metadata.write_text(json.dumps(dict(
+            packages=[dict(id="path+file:///fixture/orbit-types#0.1.0", name="orbit-types")])))
         (workflows / "ci-macos.yml").write_text('''on:
   pull_request:
     paths:
@@ -72,14 +89,107 @@ jobs:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["fmt", "--all", "--", "--check"]])
 
+    def test_fast_propagates_desktop_ui_failure(self):
+        self.prepare_ci()
+        self.write_executable(self.scripts / "check-desktop-ui.sh", "#!/bin/bash\nexit 17\n")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 17)
+
+    def test_fast_invokes_web_blocking_handler_check(self):
+        self.prepare_ci()
+        self.write_executable(
+            self.scripts / "check-web-blocking-handlers.py",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["check-web-blocking-handlers.py"] + sys.argv[1:]) + "\\n")
+''',
+        )
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["check-web-blocking-handlers.py"], calls)
+
+    def test_fast_invokes_codeql_extension_schema_check(self):
+        self.prepare_ci()
+        self.write_executable(
+            self.scripts / "check-codeql-extension-schema.py",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["check-codeql-extension-schema.py"] + sys.argv[1:]) + "\\n")
+''',
+        )
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["check-codeql-extension-schema.py"], calls)
+
+    def test_fast_invokes_dashboard_vendor_check(self):
+        self.prepare_ci()
+        self.write_executable(
+            self.scripts / "check-dashboard-vendor.py",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["check-dashboard-vendor.py"] + sys.argv[1:]) + "\\n")
+''',
+        )
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["check-dashboard-vendor.py"], calls)
+
     def test_full_still_checks_workflow_test_matches(self):
+        # The full run lists the workflow's filtered tests from one workspace
+        # build (the artifacts the nextest pass reuses), never from a
+        # per-package `cargo test -p` build. [DANI-10428]
         self.prepare_ci()
         result = self.run_guard("ci-guardrails.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertIn(["test", "-p", "orbit-types", "--locked", "fixture_test", "--", "--list"], calls)
+        self.assertIn(["test", "--workspace", "--lib", "--bins", "--tests", "--locked", "--no-run",
+                       "--message-format", "json"], calls)
+        self.assertIn(["fixture-test-bin", "--list", "fixture_test"], calls)
+        self.assertNotIn("-p", [argument for call in calls for argument in call])
+
+    def test_macos_check_defaults_to_per_package_listing(self):
+        # Without --workspace-build (the macOS job and local runs, whose `-p`
+        # artifacts are already warm) the per-package listing is unchanged.
+        self.prepare_ci()
+        result = self.run_guard("check-ci-macos.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(calls, [["test", "-p", "orbit-types", "--locked", "fixture_test", "--", "--list"]])
+
+    def test_macos_check_rejects_unknown_flags(self):
+        self.prepare_ci()
+        result = self.run_guard("check-ci-macos.sh", "--fast")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage:", result.stderr)
+
+    def test_full_invokes_cargo_deny_guard(self):
+        self.prepare_ci()
+        # The gate is soft-presence: stub the tool so the test does not depend
+        # on the host having cargo-deny installed.
+        self.write_executable(self.bin / "cargo-deny", "#!/bin/bash\nexit 0\n")
+        self.write_executable(
+            self.scripts / "cargo-deny.sh",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["cargo-deny.sh"] + sys.argv[1:]) + "\\n")
+''',
+        )
+        result = self.run_guard("ci-guardrails.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["cargo-deny.sh", "check"], calls)
 
     def dependency_result(self, owner, dependency, kind=None):
+        (self.root / "Cargo.toml").write_text(
+            '[workspace]\n[workspace.dependencies]\ntempfile = "3"\n'
+        )
         manifests = {}
         for name in {owner, dependency}:
             path = self.root / f"{name}.toml"
@@ -102,13 +212,426 @@ jobs:
         self.assertIn(f"forbidden dependency 'orbit-common' found in {self.root}/orbit-types.toml", result.stdout)
 
     def test_dev_only_dependency_rejects_production_edge(self):
-        result = self.dependency_result("orbit-core", "orbit-exec")
+        result = self.dependency_result("orbit-cli", "orbit-engine")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must remain dev-only", result.stdout)
 
     def test_dev_only_dependency_accepts_test_edge(self):
-        result = self.dependency_result("orbit-core", "orbit-exec", "dev")
+        result = self.dependency_result("orbit-cli", "orbit-engine", "dev")
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_workspace_dependency_must_be_inherited(self):
+        self.dependency_result("orbit-common", "orbit-types")
+        manifest = self.root / "orbit-common.toml"
+        manifest.write_text('[dev-dependencies]\ntempfile = "3"\n')
+        result = self.run_guard("check-dependency-direction.sh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dev-dependencies.tempfile must inherit", result.stdout)
+
+        manifest.write_text('[dev-dependencies]\ntempfile.workspace = true\n')
+        result = self.run_guard("check-dependency-direction.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_goldens_runs_mcp_conformance_and_cli_snapshot_tests(self):
+        result = self.run_guard("check-goldens.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(
+            calls,
+            [
+                ["test", "-p", "orbit-core", "--test", "ci_failure_goldens"],
+                [
+                    "test",
+                    "-p",
+                    "orbit-tools",
+                    "--test",
+                    "tools",
+                    "--",
+                    "public_tool_surface::github_log_goldens::",
+                    "mcp_definitions::",
+                ],
+                ["test", "-p", "orbit-cli", "--test", "output", "--", "help_goldens::", "output_goldens::"],
+                [
+                    "test",
+                    "-p",
+                    "orbit-cli",
+                    "--test",
+                    "mcp",
+                    "mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot",
+                    "--",
+                    "--exact",
+                ],
+                ["test", "-p", "orbit-exec", "--test", "sandbox_profile_goldens"],
+                ["test", "-p", "orbit-core", "--test", "sandbox_profile_goldens"],
+            ],
+        )
+
+    def test_goldens_update_sets_regeneration_env_vars(self):
+        self.write_executable(
+            self.bin / "cargo",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps({
+        "argv": sys.argv[1:],
+        "help": os.environ.get("ORBIT_UPDATE_HELP_GOLDENS"),
+        "output": os.environ.get("ORBIT_UPDATE_OUTPUT_GOLDENS"),
+        "mcp": os.environ.get("ORBIT_MCP_UPDATE_SNAPSHOT"),
+        "sandbox": os.environ.get("ORBIT_UPDATE_SANDBOX_GOLDENS"),
+        "logs": os.environ.get("ORBIT_UPDATE_LOG_GOLDENS"),
+    }) + "\\n")
+''',
+        )
+        result = self.run_guard("check-goldens.sh", "--update")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(len(calls), 6)
+        for call in calls:
+            self.assertEqual(call["help"], "1")
+            self.assertEqual(call["output"], "1")
+            self.assertEqual(call["mcp"], "1")
+            self.assertEqual(call["sandbox"], "1")
+            self.assertEqual(call["logs"], "1")
+
+    def test_goldens_rejects_unknown_flags(self):
+        result = self.run_guard("check-goldens.sh", "--fast")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
+
+
+class WorkflowActionPinGuardrailTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.scripts = self.root / "scripts"
+        self.scripts.mkdir()
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.log = self.root / "curl_calls.log"
+        self.status_map = self.root / "curl_status_map.json"
+        self.status_map.write_text("{}")
+        self.env = dict(
+            os.environ,
+            PATH=f"{self.bin}:{os.environ['PATH']}",
+            FAKE_CURL_LOG=str(self.log),
+            FAKE_CURL_STATUS_MAP_FILE=str(self.status_map),
+        )
+        self.env.pop("ORBIT_STRICT_WORKFLOW_ACTION_PINS", None)
+        self.write_executable(self.bin / "curl", '''#!/usr/bin/env python3
+import json, os, sys
+url = sys.argv[-1]
+log = os.environ.get("FAKE_CURL_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(url + "\\n")
+    with open(log) as f:
+        attempt = sum(line.rstrip("\\n") == url for line in f)
+else:
+    attempt = 1
+mapping = json.loads(open(os.environ["FAKE_CURL_STATUS_MAP_FILE"]).read())
+status = mapping.get(url)
+if isinstance(status, list):
+    status = status[min(attempt - 1, len(status) - 1)]
+if status is None:
+    status = "000"
+sys.stdout.write(status)
+if status == "000":
+    sys.exit(1)
+''')
+
+    def write_executable(self, path, content):
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def set_statuses(self, mapping):
+        self.status_map.write_text(json.dumps(mapping))
+
+    def write_workflow(self, name, uses_lines):
+        workflows = self.root / ".github/workflows"
+        workflows.mkdir(parents=True, exist_ok=True)
+        body = "jobs:\n  job:\n    steps:\n" + "".join(
+            f"      - uses: {line}\n" for line in uses_lines
+        )
+        (workflows / name).write_text(body)
+
+    def run_guard(self, *arguments, env_overrides=None):
+        shutil.copy2(SCRIPTS / "check-workflow-action-pins.sh", self.scripts / "check-workflow-action-pins.sh")
+        env = dict(self.env)
+        if env_overrides:
+            env.update(env_overrides)
+        return subprocess.run(
+            ["/bin/bash", str(self.scripts / "check-workflow-action-pins.sh"), *arguments],
+            env=env, text=True, capture_output=True,
+        )
+
+    def pin_url(self, owner, sha):
+        return f"https://api.github.com/repos/{owner}/commits/{sha}"
+
+    def pin_call_count(self, url):
+        return sum(line == url for line in self.log.read_text().splitlines())
+
+    def test_passes_when_all_pins_resolve(self):
+        good_sha = "a" * 40
+        self.write_workflow("check.yml", [f"actions/checkout@{good_sha} # v1"])
+        self.set_statuses({
+            self.pin_url("actions/checkout", good_sha): "200",
+        })
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fails_when_a_pin_does_not_resolve(self):
+        bad_sha = "b" * 40
+        self.write_workflow("check.yml", [f"actions/setup-node@{bad_sha} # v7.0.0"])
+        url = self.pin_url("actions/setup-node", bad_sha)
+        for status in ("404", "422"):
+            with self.subTest(status=status):
+                self.log.write_text("")
+                self.set_statuses({url: status})
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"actions/setup-node@{bad_sha} does not resolve (status {status})", result.stderr)
+                self.assertIn(".github/workflows/check.yml:", result.stderr)
+                self.assertEqual(self.pin_call_count(url), 1)
+
+    def test_retries_curl_000_then_skips_with_warning(self):
+        bad_sha = "c" * 40
+        self.write_workflow("check.yml", [f"actions/setup-node@{bad_sha} # v7.0.0"])
+        url = self.pin_url("actions/setup-node", bad_sha)
+        self.set_statuses({url: ["000", "000", "000"]})
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("inconclusive resolving", result.stderr)
+        self.assertIn("status 000 after 3 attempts", result.stderr)
+        self.assertIn("skipping", result.stderr)
+        self.assertEqual(self.pin_call_count(url), 3)
+
+    def test_retries_rate_limits_and_server_errors_then_skips(self):
+        sha = "e" * 40
+        self.write_workflow("check.yml", [f"actions/checkout@{sha} # v1"])
+        url = self.pin_url("actions/checkout", sha)
+        for status in ("403", "429", "500", "503"):
+            with self.subTest(status=status):
+                self.log.write_text("")
+                self.set_statuses({url: [status, status, status]})
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"status {status} after 3 attempts", result.stderr)
+                self.assertIn("skipping", result.stderr)
+                self.assertEqual(self.pin_call_count(url), 3)
+
+    def test_strict_mode_fails_when_result_remains_inconclusive(self):
+        sha = "f" * 40
+        self.write_workflow("check.yml", [f"actions/checkout@{sha} # v1"])
+        url = self.pin_url("actions/checkout", sha)
+        self.set_statuses({url: ["403", "403", "403"]})
+        result = self.run_guard(env_overrides={"ORBIT_STRICT_WORKFLOW_ACTION_PINS": "1"})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("strict mode requires resolution", result.stderr)
+        self.assertEqual(self.pin_call_count(url), 3)
+
+    def test_dedupes_repeated_pins(self):
+        sha = "d" * 40
+        self.write_workflow(
+            "a.yml",
+            [f"actions/checkout@{sha} # v1", f"actions/checkout@{sha} # v1"],
+        )
+        self.set_statuses({
+            self.pin_url("actions/checkout", sha): "200",
+        })
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.log.read_text().splitlines()
+        commit_calls = [c for c in calls if c.endswith(f"/commits/{sha}")]
+        self.assertEqual(len(commit_calls), 1)
+
+
+class WorkflowYamlGuardrailTests(unittest.TestCase):
+    def setUp(self):
+        try:
+            import yaml  # noqa: F401
+        except ImportError:
+            self.skipTest("PyYAML not installed; the guard skips locally without it")
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / "scripts").mkdir()
+        self.workflows = self.root / ".github/workflows"
+        self.workflows.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "check-workflow-yaml.py", self.root / "scripts")
+
+    def write_workflow(self, name, run):
+        (self.workflows / name).write_text(
+            "on: push\njobs:\n  test:\n    steps:\n      - name: filtered tests\n"
+            f"        run: {run}\n")
+
+    def run_guard(self):
+        return subprocess.run(
+            ["python3", str(self.root / "scripts/check-workflow-yaml.py")],
+            text=True, capture_output=True,
+        )
+
+    def test_passes_when_every_workflow_parses(self):
+        self.write_workflow("ci.yml", "cargo test -p orbit-cli --locked")
+        self.write_workflow(
+            "ci-macos.yaml", "|\n          cargo test -p orbit-cli --locked generation_root::")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("2 workflow files parsed", result.stdout)
+
+    def test_trailing_colon_filter_fails_with_its_line(self):
+        # A plain scalar ending in `:` is a mapping key; GitHub then creates
+        # no jobs for the workflow and the leg silently stops running.
+        self.write_workflow("ci-macos.yml", "cargo test -p orbit-cli --locked generation_root::")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(".github/workflows/ci-macos.yml:6: invalid YAML", result.stderr)
+
+    def test_workflow_without_jobs_fails(self):
+        (self.workflows / "empty.yml").write_text("on: push\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("empty.yml: a workflow must be a mapping with a `jobs` mapping",
+                      result.stderr)
+
+
+class CargoDenyGuardrailTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.log = self.root / "cargo_deny.log"
+        self.fake_deny = self.bin / "cargo-deny"
+        self.write_fake_deny()
+        self.env = dict(
+            os.environ,
+            PATH=f"{self.bin}:{os.environ['PATH']}",
+            FAKE_DENY_LOG=str(self.log),
+            FAKE_DENY_EXIT="0",
+        )
+        for key in (
+            "CARGO_DENY_DB_PATH",
+            "ORBIT_CARGO_DENY_DB_PATH",
+            "CARGO_DENY_DISABLE_FETCH",
+            "ORBIT_CARGO_DENY_DISABLE_FETCH",
+            "CARGO_DENY_OFFLINE",
+            "ORBIT_CARGO_DENY_OFFLINE",
+        ):
+            self.env.pop(key, None)
+
+    def write_fake_deny(self):
+        self.fake_deny.write_text('''#!/usr/bin/env python3
+import json, os, sys
+log = os.environ.get("FAKE_DENY_LOG")
+config_content = None
+config_path = None
+if "--config" in sys.argv:
+    idx = sys.argv.index("--config") + 1
+    if idx < len(sys.argv):
+        config_path = sys.argv[idx]
+        if os.path.exists(config_path):
+            config_content = open(config_path).read()
+entry = {
+    "argv": sys.argv[1:],
+    "config_path": config_path,
+    "config_content": config_content,
+}
+if log:
+    with open(log, "a") as f:
+        f.write(json.dumps(entry) + "\\n")
+sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
+''')
+        self.fake_deny.chmod(0o755)
+
+    def run_script(self, *args, env_overrides=None):
+        env = dict(self.env)
+        if env_overrides:
+            env.update(env_overrides)
+        return subprocess.run(
+            ["/bin/bash", str(SCRIPTS / "cargo-deny.sh"), *args],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+    def test_default_invocation_passes_through(self):
+        result = self.run_script("check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(entries[0]["argv"], ["check"])
+        self.assertIsNone(entries[0]["config_path"])
+
+    def test_writable_override_injects_db_path_and_cleans_up(self):
+        override_dir = self.root / "writable_dbs"
+        override_dir.mkdir()
+        result = self.run_script("check", env_overrides={"CARGO_DENY_DB_PATH": str(override_dir)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn("--config", entries[0]["argv"])
+        self.assertIn(f'db-path = "{override_dir}"', entries[0]["config_content"])
+        # Temporary config file must be cleaned up on exit
+        self.assertFalse(os.path.exists(entries[0]["config_path"]))
+
+    def test_orbit_prefix_override_supported(self):
+        override_dir = self.root / "orbit_writable_dbs"
+        override_dir.mkdir()
+        result = self.run_script("check", env_overrides={"ORBIT_CARGO_DENY_DB_PATH": str(override_dir)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(f'db-path = "{override_dir}"', entries[0]["config_content"])
+
+    def test_direct_repo_path_resolves_container(self):
+        repo_dir = self.root / "advisory-db-3157b0e258782691"
+        (repo_dir / "crates").mkdir(parents=True)
+        result = self.run_script("check", env_overrides={"CARGO_DENY_DB_PATH": str(repo_dir)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(f'db-path = "{self.root}"', entries[0]["config_content"])
+
+    def test_offline_mode_appends_disable_fetch(self):
+        result = self.run_script("check", env_overrides={"CARGO_DENY_OFFLINE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn("--disable-fetch", entries[0]["argv"])
+
+    def test_explicit_failure_propagated_without_skip(self):
+        result = self.run_script("check", env_overrides={"FAKE_DENY_EXIT": "42"})
+        self.assertEqual(result.returncode, 42)
+
+    def test_real_cargo_deny_with_writable_fixture(self):
+        if not shutil.which("cargo-deny"):
+            self.skipTest("cargo-deny not installed")
+        system_advisory = Path.home() / ".cargo/advisory-dbs"
+        if not system_advisory.exists():
+            self.skipTest("system advisory-dbs snapshot not found")
+        fixture = self.root / "fixture-advisory-dbs"
+        shutil.copytree(str(system_advisory), str(fixture))
+        env = dict(os.environ, CARGO_DENY_DB_PATH=str(fixture), CARGO_DENY_DISABLE_FETCH="1")
+        res = subprocess.run(
+            ["/bin/bash", str(SCRIPTS / "cargo-deny.sh"), "check", "advisories"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, f"stdout: {res.stdout}\nstderr: {res.stderr}")
+        self.assertTrue((fixture / "db.lock").exists())
+
+    def test_real_cargo_deny_missing_data_fails_without_skip(self):
+        if not shutil.which("cargo-deny"):
+            self.skipTest("cargo-deny not installed")
+        empty_fixture = self.root / "empty-dbs"
+        empty_fixture.mkdir()
+        env = dict(os.environ, CARGO_DENY_DB_PATH=str(empty_fixture), CARGO_DENY_DISABLE_FETCH="1")
+        res = subprocess.run(
+            ["/bin/bash", str(SCRIPTS / "cargo-deny.sh"), "check", "advisories"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("error", res.stderr.lower())
 
 
 if __name__ == "__main__":

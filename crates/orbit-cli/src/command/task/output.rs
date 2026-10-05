@@ -7,7 +7,7 @@ use orbit_core::{
     resolve_task_relations,
 };
 use orbit_types::task::{
-    ArtifactManifestFileV2, TaskArtifact, TaskComment, TaskHistoryEntry,
+    ArtifactManifestFileV2, TaskComment, TaskHistoryEntry, serialize_task_artifacts,
     task_show_record_field_json, unknown_task_show_field_message,
 };
 use serde_json::{Value, json};
@@ -73,7 +73,7 @@ pub(crate) fn task_to_json_for_runtime(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
 ) -> Result<Value, OrbitError> {
-    let status_by_id = runtime.task_status_index()?;
+    let status_by_id = runtime.dependency_status_index([task])?;
     Ok(task_to_json_with_sidecars(runtime, task, &status_by_id)?.doc)
 }
 
@@ -102,6 +102,9 @@ pub(crate) fn task_to_json_with_sidecars(
         "history".to_string(),
         serde_json::to_value(&history).map_err(|e| OrbitError::Io(e.to_string()))?,
     );
+    if let Some(requirement) = orbit_types::task::task_os_requirement_json(task) {
+        object.insert("os_requirement".to_string(), requirement);
+    }
     let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
     object.insert(
         "artifacts".to_string(),
@@ -326,10 +329,11 @@ pub(super) fn task_field_to_json(
         "orchestrator" => {
             serde_json::to_value(&task.orchestrator).map_err(|e| OrbitError::Io(e.to_string()))
         }
-        "artifacts" => Ok(task_artifacts_to_json(
-            &runtime.get_task_artifacts(&task.id)?,
+        "artifacts" => Ok(serialize_task_artifacts(
+            &runtime.get_task_artifact_manifest(&task.id)?,
         )),
         other => task_show_record_field_json(task, other)
+            .or_else(|| runtime.task_crew_field_json(task, other))
             .ok_or_else(|| OrbitError::InvalidInput(unknown_task_show_field_message(other))),
     }
 }
@@ -505,7 +509,7 @@ fn write_single_task_field(
         }
         "artifacts" => {
             use crate::output::color::bold;
-            let artifacts = runtime.get_task_artifacts(&task.id)?;
+            let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
             for (index, artifact) in artifacts.iter().enumerate() {
                 if index > 0 {
                     text.push('\n');
@@ -516,17 +520,14 @@ fn write_single_task_field(
                     bold("Artifact:"),
                     artifact.path,
                     artifact.media_type,
-                    artifact.content.len()
+                    artifact.size_bytes
                 );
-                if let Some(content) = artifact.text_content() {
-                    text.push_str(content);
-                } else {
-                    let _ = writeln!(text, "[binary content omitted]");
-                }
             }
             Ok(())
         }
-        other => match task_show_record_field_json(task, other) {
+        other => match task_show_record_field_json(task, other)
+            .or_else(|| runtime.task_crew_field_json(task, other))
+        {
             Some(Value::String(value)) => {
                 text.push_str(&value);
                 Ok(())
@@ -541,30 +542,6 @@ fn write_single_task_field(
             ))),
         },
     }
-}
-
-pub(crate) fn task_artifacts_to_json(artifacts: &[TaskArtifact]) -> Value {
-    Value::Array(
-        artifacts
-            .iter()
-            .map(|artifact| {
-                let mut object = serde_json::Map::new();
-                object.insert("path".to_string(), Value::String(artifact.path.clone()));
-                object.insert(
-                    "media_type".to_string(),
-                    Value::String(artifact.media_type.clone()),
-                );
-                object.insert(
-                    "size".to_string(),
-                    Value::Number(serde_json::Number::from(artifact.content.len())),
-                );
-                if let Some(content) = artifact.text_content() {
-                    object.insert("content".to_string(), Value::String(content.to_string()));
-                }
-                Value::Object(object)
-            })
-            .collect(),
-    )
 }
 
 pub(crate) fn task_artifact_manifest_to_json(files: &[ArtifactManifestFileV2]) -> Value {

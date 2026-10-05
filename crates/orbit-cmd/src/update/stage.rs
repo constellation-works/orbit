@@ -7,7 +7,7 @@
 //! same-directory rename, which is atomic — so a crash can leave a stray
 //! staging file, but never a half-written `orbit`.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
@@ -17,15 +17,11 @@ use orbit_common::security::release::{
     checksum_for_asset, sha256_hex, verify_checksum_signature, verify_sha256_digest,
 };
 
-use super::source::ReleaseSource;
+use super::source::{MAX_ARCHIVE_BYTES, ReleaseSource};
 
 /// Name of the archive member every Orbit release archive must contain, and
 /// nothing else.
 const ARCHIVE_MEMBER: &str = "orbit";
-
-/// Largest release archive we will buffer. A published `orbit` archive is a
-/// few tens of megabytes; anything past this is a redirect to the wrong thing.
-const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// A verified replacement executable staged beside its destination.
 #[derive(Debug)]
@@ -244,14 +240,33 @@ fn extract_release_executable(archive: &[u8], asset: &str) -> Result<Vec<u8>, Or
 
 /// Write the staged executable beside `destination` so the swap is a
 /// same-directory rename.
+///
+/// The file is created fresh (`create_new` never follows a pre-planted
+/// symlink at the predictable name) and synced before the rename, so a crash
+/// cannot swap in a truncated binary.
 fn write_staging_file(destination: &Path, executable: &[u8]) -> Result<PathBuf, OrbitError> {
     let path = sibling_staging_path(destination, ".orbit-update-staged")?;
-    std::fs::write(&path, executable).map_err(|error| {
+    let stage_error = |error: std::io::Error| {
         OrbitError::Io(format!(
             "failed to stage the replacement executable at '{}': {error}",
             path.display()
         ))
-    })?;
+    };
+    // A leftover from a crashed update under a reused PID; removing a symlink
+    // removes the link, never its target.
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(stage_error(error)),
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(stage_error)?;
+    file.write_all(executable)
+        .and_then(|()| file.sync_all())
+        .map_err(stage_error)?;
     set_executable_mode(&path)?;
     Ok(path)
 }

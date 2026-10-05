@@ -1,1 +1,0 @@
-Backfill allocation: this ID was already used by the committed docs/design/orbit-graph/4_decisions.md entry (ORB-10011, Selector parser consolidation into orbit-common::utility::selector) but the allocation record was missing from this workspace ADR store. Re-pointed during ORB-10016 to keep the store and docs consistent; the orbit-cmd extraction ADR was re-allocated as ADR-0203.

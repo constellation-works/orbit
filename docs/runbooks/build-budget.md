@@ -4,7 +4,7 @@ summary: Run Cargo builds within Orbit's host-wide cross-worktree admission and 
 tags: [operations, performance, rust]
 paths: ["Makefile", "scripts/build-budget.py"]
 related_artifacts: [ORB-11754, ORB-11760]
-last_validated: 2026-09-08
+last_validated: 2026-09-30
 ---
 
 # Bound Concurrent Orbit Repository Builds
@@ -16,7 +16,7 @@ private Cargo target directory.
 ## Supported entry points
 
 The repository's heavy Make targets enter the budget automatically: `build`, `release`,
-`run`, `check`, `test`, `clippy`, `ci`, `ci-lint`, `install`, and `watch`. `make ci` holds
+`run`, `check`, `test`, `clippy`, `ci`, `ci-lint`, `goldens`, `install`, and `watch`. `make ci` holds
 one slot around the complete CI script; its nested Cargo commands inherit that admission
 instead of reacquiring a slot. `dev` is covered through its `build` prerequisite.
 

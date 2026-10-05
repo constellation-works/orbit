@@ -7,8 +7,13 @@ without requiring an Orbit source checkout.
 
 ## Select the store before reading or writing
 
-Call `orbit_workspace_list({})` on the configured MCP connection first. Inspect
-host, workspace, ownership, availability, and capabilities where returned.
+In a managed activity, use the injected task and inherited workspace binding;
+its allowlist may omit `orbit.workspace.list`. For an unbound MCP session, call
+`orbit_workspace_list({})` on the configured connection first. For CLI-only use,
+inspect `orbit workspace list` and `orbit workspace show` on the intended host,
+then use its registered workspace in tool calls. MCP setup is not a prerequisite
+for local task tracking. Inspect host, workspace, ownership, availability and
+capabilities where returned.
 
 - Direct server: pass the returned logical workspace ID as `workspace`.
   The server can also resolve registered names and paths, but IDs avoid
@@ -30,22 +35,24 @@ records in a second store merely to get past a connection error.
 
 | Need | MCP / registered tool | CLI administration |
 |---|---|---|
-| Workspace discovery | `orbit_workspace_list` | `orbit workspace list/show` |
-| Task create/read/update/start/approve | `orbit_task_add/list/show/update/start/approve` | Registered `orbit.task.*` tools preserve agent attribution |
-| Task attachments | `orbit_task_artifact_put` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
-| Retrieval | `orbit_search` | `orbit search`; semantic install/index is separate |
-| Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |
+| Workspace discovery | `orbit_workspace_list`; `include: ["crews"]` adds each workspace's configured crews (or `crews_error`) | `orbit workspace list/show`; `orbit config show` |
+| Task create/read/update | `orbit_task_add/list/show/update` | Registered `orbit.task.*` tools preserve agent attribution; lifecycle writes use `orbit.task.update` with `status` |
+| Pick up work without collisions | `orbit_task_eligible` (read only; `explain: true` names each blocking selector and holder) | `orbit task eligible`: backlog/proposed tasks whose lock surface overlaps no in-progress or review task. Lock overlap is the only test; check dependencies yourself |
+| Task attachments | `orbit_task_artifact_put`, `orbit_task_artifact_get` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
+| Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
+| Friction | `orbit_friction_add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
-| Observe/resume workflows | `orbit_workflow_run_show/list/resume` | `orbit run show/history/events/trace/logs/cancel`; job replay/resume |
-| Operation mode | `orbit_operation_explain/list` (read); `orbit_operation_enable/stop/revoke` (operator-governed) | `orbit operation explain/enable/list/show/stop/revoke`, `orbit run auto --grant` |
-| Auto-tasks | `orbit_auto_task_list/mint` | Definition add/show/update/toggle are CLI operations; do not assume they are advertised over MCP |
-| Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and working directory, never a shell string |
-| Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |
-| Setup and maintenance | Discover any server extensions; do not guess | config, doctor, semantic, docs, audit, GC, policy, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
+| Observe/resume workflows | `orbit_workflow_run_show/list/resume`; resize a live auto drain with operator-only `orbit_workflow_auto` `action: "resize"` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; job replay/resume |
+| Delivery evidence | `orbit_task_show` with `field: "delivery"` alone and optional `run_id` (read only; needs no operator authority) | What one delivery run committed and landed for one task of this workspace, read only from the host's commit and merge step records: typed status, base/head and landed SHAs, PR number, timestamps and provenance. Missing, inconsistent or foreign evidence is `unavailable` with a reason, never inferred; a local fast-forward records no landed SHA. Without `run_id` it reads the newest task-delivery run submitted with the task. Full run details stay on operator-only `orbit_workflow_run_show` |
+| Auto-tasks | `orbit_auto_task_add/list/update/mint`; `update` `enabled` enables or disables a definition | Those four are also CLI commands. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are CLI-only (`orbit auto-task`) |
+| Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
+| Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; returns a run ID, or the answer with `--wait` |
+| Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval, revocation and recovery remain owner-dashboard actions. See [distributed-drain.md](setup/distributed-drain.md). |
+| Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
 Provider/gateway prefixes are transport wrappers around these names. A connected
-server may expose additional discovery such as crews; use its advertised schema
-rather than assuming every installation has that extension.
+server may expose additional tools; use its advertised schema rather than
+assuming every installation has that extension.
 
 Bare `orbit mcp serve` and ordinary `orbit mcp init` integrations have agent
 capability. `orbit workspace init --mcp` deliberately installs an operator
@@ -72,41 +79,95 @@ What it is not:
 
 - It is **not** a task, and it performs no task transition. It does not commit,
   push, open or merge a pull request, or dispatch further work.
-- It is **not** available to a managed run. A local operator may admit one
-  directly. A remote operator also needs a callers-file row that explicitly
-  enables `agent_invoke` for the resolved workspace. The omitted mode requires
-  a destination-issued key-bound SSH identity; an explicit `cooperative` mode
-  instead trusts the existing same-OS-account SSH operator channel and records
-  its machine ID as self-asserted. Ordinary remote `operator` capability is not
-  enough. Each admission covers one invocation only.
+- It is **not** available to a managed run. Any operator session may admit one,
+  local or arriving over SSH: a remote caller reached this machine through an
+  SSH login that already lets it start any process it likes, so `operator` is
+  the whole test. Start the calling federated or remote-proxy server with
+  `--operator` and the invocation works; a session served as `agent` is
+  refused. Each admission covers one invocation only.
 - It is **not** resumable. A resumed run would carry an admission nobody granted
   now; submit a new invocation instead.
 
 Required arguments are the `prompt` and an absolute `cwd` inside the workspace's
-checkout. `crew` selects the provider/model, `timeout_seconds` bounds the run
-(default 1800, maximum 7200), and `idempotency_key` makes a resubmission resolve
+checkout or a linked worktree under `.orbit/state/worktrees/`. `crew` selects the provider/model, `timeout_seconds` bounds the run
+(default 1800, enforced ceiling 7200, excluding queue time), and `idempotency_key` makes a resubmission resolve
 the run the first attempt created rather than starting a second agent.
 
-Track it with the ordinary run surfaces — `orbit_workflow_run_show`, or
-`orbit run show|logs|cancel <RUN_ID>`. `show` carries the invocation's outcome,
-whether it terminated its response envelope, a bounded preview of the answer,
-and a durable reference to the full captured output. A provider that exits zero
-without terminating its envelope stopped mid-turn: the run records `failed`, and
-the exit code alone is never evidence the investigation succeeded.
+The CLI accepts `--wait` to block until terminal and print the same `answer`
+projection; a failed, timed-out, cancelled or interrupted run exits nonzero.
+`--timeout` bounds provider execution, accepts seconds or durations such as
+`30m` and `2h`, and excludes queue time. MCP `wait_seconds` is an optional
+integer from 0 to 600: a finished run returns `answer` and `agent_invocation`;
+an unfinished one returns its run ID and actual state for later observation.
+The wait deadline never cancels or changes the invocation outcome.
 
-Remote sessions are additionally capped by the destination's caller policy.
+Submissions report `queued` and `queue_position` (one-based among waiting
+runs, null if runnable) plus a warning when the concurrency limit is saturated.
+These describe admission time; the run may start before the response arrives.
+The shipped job retains eight concurrent provider processes as a host resource
+guard because these processes have no executor sandbox or memory budget.
+
+`orbit run logs <RUN_ID> --follow` streams retained redacted provider tracing
+lines and stops at any terminal outcome. JSON modes emit JSONL records
+`{run_id, provider, stream, text}`. Completed captures supply output not yet
+streamed; with `--step`, each capture is emitted when its invocation finishes.
+Provider lines are retained in the JSONL feed by default while stderr diagnostics
+stay at WARN. Explicit `RUST_LOG` and tracing retention limit live history;
+if the live feed differs from the capture, follow mode replays that capture with
+a diagnostic (some lines may repeat). Use the ordinary
+`orbit run logs` command to read durable captures. Ctrl-C ends observation
+without cancelling the run.
+
+`provider_sandbox` is an optional per-invocation override of the provider's own
+inner sandbox (not Orbit's executor sandbox — that is already off, reported as
+`sandboxed: false`). Pass a mode the provider accepts, such as Codex
+`read-only` or `workspace-write`, to run an exploration tighter than the crew
+default without editing config. Values the provider does not support are
+refused. The submission result and `orbit run show` report the effective mode
+as `provider:mode` (for example `codex:danger-full-access`, `claude:default`).
+When that mode is the provider's least-restrictive inner sandbox
+(`danger-full-access` for Codex), the result includes a `warnings` entry and
+Orbit logs the same at WARN: the provider may use host integrations (browser,
+computer use, …) beyond the working directory.
+
+Track it with the ordinary run surfaces — `orbit_workflow_run_show`, or
+`orbit run show|logs|cancel <RUN_ID>`. The full MCP response puts
+`agent_invocation` at the top level; `view: "bounded"` and
+`orbit run show --json` put it at `.run.agent_invocation`:
+
+- `answer` is the result: `summary`, `findings`, `next_steps`, every other
+  field the agent put in its envelope `result` under `extra` (a
+  `report_markdown`, for instance), and a bounded `final_message` where the
+  surface includes it. The full MCP response omits `answer.final_message` and
+  the raw `preview` once an answer exists, while retaining
+  `final_message_blob_ref` and `stdout_blob_ref`; use `orbit run logs <RUN_ID>`
+  to read the complete captured output.
+- `progress` is what the agent is doing while it runs: its newest
+  `latest_message` and `last_activity_at`, sampled about every ten seconds
+  while it writes output. A provider that prints nothing until it exits shows
+  none.
+- `outcome`, `failure_reason`, `completed_envelope`, the effective
+  `provider_sandbox`, and `stdout_blob_ref`, the durable reference to the full
+  captured output — present for a failed invocation too.
+
+The response envelope is required. A provider that exits zero without
+terminating it stopped mid-turn, and one whose envelope has no `result` object
+returned no answer: either way the run records `failed` with a
+`failure_reason` naming why, and the exit code alone is never evidence the
+investigation succeeded.
+
+A session that arrived over SSH is admitted on the same terms as a local one.
 The durable admission and `trusted_host.execution_admitted` event retain the
-destination-resolved caller machine ID, the invocation mode, the actual
-identity proof (`key-bound` or `self-asserted`), the workspace checkout, and
-cwd. See [remote-access.md](setup/remote-access.md). Do not relaunch a server
-with more privileges to work around a denied call.
+forwarded caller machine ID — attribution, not a grant — plus the workspace
+checkout and cwd. See [remote-access.md](../../orbit-setup/references/remote-access.md). Do not
+relaunch a server with more privileges to work around a denied call.
 
 ## Common MCP arguments
 
 These are JSON arguments to the named tool, not shell commands:
 
 ```json
-{"workspace":"<selector>","query":"<problem terms>","kind":"task","hybrid":true,"limit":5,"model":"<agent-family>"}
+{"workspace":"<selector>","query":"<problem terms>","kind":"task","limit":5,"model":"<agent-family>"}
 ```
 
 Use with `orbit_search` before filing a task. Search closed history as well with

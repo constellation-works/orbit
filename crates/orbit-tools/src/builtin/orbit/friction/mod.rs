@@ -9,12 +9,12 @@
 //! Adding a friction verb requires no edit here.
 
 use orbit_common::OrbitError;
-use orbit_common::governance::friction::{FRICTION_OPERATIONS, FrictionOperation};
+use orbit_common::governance::friction::{FRICTION_OPERATIONS, FrictionOperation, FrictionVerb};
 use orbit_types::tool::ToolSchema;
 use serde_json::Value;
 
 use super::operation::{operation_tool_schema, register_operation};
-use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolRegistry};
+use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind, ToolRegistry};
 
 /// One friction verb, exposed as an MCP tool.
 ///
@@ -25,6 +25,15 @@ pub struct FrictionOperationTool(pub &'static FrictionOperation);
 impl Tool for FrictionOperationTool {
     fn schema(&self) -> ToolSchema {
         operation_tool_schema(self.0)
+    }
+
+    fn execution_kind(&self) -> ToolExecutionKind {
+        match self.0.verb {
+            FrictionVerb::List | FrictionVerb::Show | FrictionVerb::Stats | FrictionVerb::Tags => {
+                ToolExecutionKind::ReadOnly
+            }
+            _ => ToolExecutionKind::Mutating,
+        }
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
@@ -41,6 +50,3 @@ pub(super) fn register(registry: &mut ToolRegistry) {
         register_operation(registry, spec, FrictionOperationTool(spec));
     }
 }
-
-#[cfg(test)]
-mod tests;

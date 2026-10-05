@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Orbit SessionStart hook: emit a workspace-init prompt when the user's cwd is
-# not inside an initialized Orbit workspace. Pure filesystem walk — no `orbit`
-# binary dependency and no state mutation. Mirrors the discovery rules in
+# Orbit SessionStart hook: tell the session when the user's cwd is not inside
+# an initialized Orbit workspace. Pure filesystem walk — no `orbit` binary
+# dependency and no state mutation. Mirrors the discovery rules in
 # `crates/orbit-core/src/runtime/resolve.rs` (find_orbit_dir_walk_up +
-# is_initialized_orbit_root).
+# is_initialized_orbit_root); the `plugin_hook_workspace_probe` integration test
+# runs this script against a real `orbit workspace init` so the two cannot drift.
 set -eu
 
 target_dir=""
@@ -36,10 +37,12 @@ is_initialized_orbit_dir() {
   if [ "$candidate" = "$global_orbit" ]; then
     return 1
   fi
-  if [ -f "$candidate/config.toml" ]; then
+  # `orbit workspace init` writes `config.yaml`; `config.toml` and the
+  # `resources` + `state` layout are the other markers the runtime accepts.
+  if [ -f "$candidate/config.yaml" ] || [ -f "$candidate/config.toml" ]; then
     return 0
   fi
-  if [ -d "$candidate/resources" ] && [ -d "$candidate/tasks" ] && [ -d "$candidate/state" ]; then
+  if [ -d "$candidate/resources" ] && [ -d "$candidate/state" ]; then
     return 0
   fi
   return 1
@@ -57,14 +60,18 @@ while :; do
   current="$parent"
 done
 
-# Uninitialized: surface a single systemMessage to the agent.
+# Uninitialized. `systemMessage` is shown to the user only; the session model
+# reads `additionalContext`, so the guidance it needs goes there.
 cat <<'JSON'
 {
   "continue": true,
   "suppressOutput": false,
-  "systemMessage": "Orbit is not initialized in this workspace. The Orbit MCP server is connected but exposes zero tools until a workspace exists. Tell the user to run `orbit init` once (creates ~/.orbit), then `orbit workspace init` from this repo root — then restart Claude Code so the plugin hooks reload."
+  "systemMessage": "Orbit has no workspace here. Run `orbit init` once per machine, then `orbit workspace init --name <name>` from the repository root.",
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "The Orbit plugin is installed, but no Orbit workspace was found at or above this directory. The Orbit MCP tools are connected, but orbit_workspace_list will not list this project and workspace-scoped calls for it fail until it is registered. If the user wants Orbit here, tell them to run `orbit init` once per machine (it creates ~/.orbit), then `orbit workspace init --name <name>` from the repository root. No restart is needed afterwards: call orbit_workspace_list and pass the returned ws_ ID as `workspace`. Do not initialize a workspace unless the user asks."
+  }
 }
 JSON
 
 exit 0
-

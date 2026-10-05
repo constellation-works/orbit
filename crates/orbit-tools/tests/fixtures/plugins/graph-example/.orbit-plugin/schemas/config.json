@@ -1,0 +1,7 @@
+{
+  "type": "object",
+  "properties": {
+    "index_dir": { "type": "string", "description": "Directory for the graph index relative to the workspace." },
+    "explorer_port": { "type": "integer", "description": "Local port for the graph explorer UI." }
+  }
+}

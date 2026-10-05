@@ -13,12 +13,16 @@ verifies the archive SHA-256, and exposes it as the `orbit` command.
 # Install globally
 npm install -g @orbit-tools/cli
 orbit --version
+orbit init  # on Linux, also prepares and verifies Bubblewrap for this user
 
 # One-shot via npx
 npx -y @orbit-tools/cli mcp serve
 ```
 
 All arguments are forwarded to the native `orbit` binary.
+The npm install lifecycle never requests administrator privileges. On Linux,
+`orbit init` is the explicit onboarding step that prepares the host when
+needed; a denied or unsupported host receives a precise readiness error.
 
 ## Supported platforms
 

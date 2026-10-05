@@ -6,6 +6,8 @@ use orbit_types::task::{
 
 #[derive(Default, Clone)]
 pub(crate) struct TaskRecordUpdateParams {
+    pub(crate) artifact_origin: Option<orbit_types::task::ExecutionLocation>,
+    pub(crate) job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub(crate) artifact_owner_run_id: Option<String>,
     pub(crate) actor: String,
     pub(crate) title: Option<String>,
@@ -93,7 +95,6 @@ pub struct TaskAddParams {
     pub plan: String,
     pub comment: Option<String>,
     pub context_files: Vec<String>,
-    pub workspace_path: Option<String>,
     pub priority: TaskPriority,
     /// Required at create time. Human/agent surfaces must pass an assessed
     /// value; automated mint and `Default` use [`TaskComplexity::Unassessed`].
@@ -124,7 +125,6 @@ impl Default for TaskAddParams {
             plan: String::new(),
             comment: None,
             context_files: Vec::new(),
-            workspace_path: None,
             priority: TaskPriority::Medium,
             complexity: TaskComplexity::Unassessed,
             task_type: None,
@@ -140,6 +140,8 @@ impl Default for TaskAddParams {
 
 #[derive(Default, Clone)]
 pub struct TaskUpdateParams {
+    /// Trusted transport context; never populated by task input parsing.
+    pub trusted_artifact_origin: Option<orbit_types::task::ExecutionLocation>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub acceptance_criteria: Option<Vec<String>>,
@@ -166,11 +168,16 @@ pub struct TaskUpdateParams {
     pub orchestrator: Option<Option<String>>,
     pub context_files: Option<Vec<String>>,
     pub upsert_artifacts: Vec<TaskArtifact>,
+    /// Discard the candidate the task's last failed run preserved, so its
+    /// next run implements fresh instead of resuming it [ORB-13985].
+    /// Recorded as a task history event; refused while a run owns the task.
+    pub discard_candidate: bool,
 }
 
 impl From<TaskUpdateParams> for TaskRecordUpdateParams {
     fn from(p: TaskUpdateParams) -> Self {
         Self {
+            artifact_origin: p.trusted_artifact_origin,
             title: p.title,
             description: p.description,
             acceptance_criteria: p.acceptance_criteria,

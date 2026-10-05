@@ -36,12 +36,21 @@ fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
     assert_eq!(std::fs::read(&backup).expect("read backup"), previous);
     #[cfg(unix)]
     {
-        let installed = std::process::Command::new(&destination)
-            .output()
-            .expect("launch intact replacement");
-        let retained = std::process::Command::new(&backup)
-            .output()
-            .expect("launch retained backup");
+        #[cfg(target_os = "linux")]
+        use orbit_common::test_process::retry_executable_busy;
+
+        let launch = |path: &std::path::Path| {
+            #[cfg(target_os = "linux")]
+            {
+                retry_executable_busy(|| std::process::Command::new(path).output())
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                std::process::Command::new(path).output()
+            }
+        };
+        let installed = launch(&destination).expect("launch intact replacement");
+        let retained = launch(&backup).expect("launch retained backup");
         assert!(installed.status.success());
         assert!(retained.status.success());
         assert_eq!(installed.stdout, b"orbit replacement-complete\n");
@@ -55,10 +64,12 @@ fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
     assert!(message.contains("staging file was removed"), "{message}");
 }
 
+// Linux: ETXTBSY forbids truncating a running image; rollback must replace it atomically.
 #[cfg(target_os = "linux")]
 #[test]
 fn rollback_replaces_a_running_executable_atomically() {
     use crate::update::stage::restore_backup;
+    use orbit_common::test_process::retry_executable_busy;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     use std::time::{Duration, Instant};
@@ -78,16 +89,20 @@ fn rollback_replaces_a_running_executable_atomically() {
     std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o751))
         .expect("make previous executable runnable");
 
-    let mut running = Command::new(&destination)
+    orbit_common::test_env::assert_child_test_exists(
+        "update::tests::stage::running_replacement_process_fixture",
+    );
+    let mut command = Command::new(&destination);
+    command
         .args([
             "--ignored",
             "--exact",
             "update::tests::stage::running_replacement_process_fixture",
         ])
         .env("ORBIT_TEST_REPLACEMENT_READY", &ready)
-        .env("ORBIT_TEST_REPLACEMENT_RELEASE", &release)
-        .spawn()
-        .expect("launch installed replacement");
+        .env("ORBIT_TEST_REPLACEMENT_RELEASE", &release);
+    let mut running =
+        retry_executable_busy(|| command.spawn()).expect("launch installed replacement");
     wait_for_path(&ready, Duration::from_secs(5));
 
     restore_backup(&destination, &backup).expect("atomically restore previous executable");
@@ -130,6 +145,7 @@ fn rollback_replaces_a_running_executable_atomically() {
     }
 }
 
+// Linux: child keeps the executable mapped while rollback exercises the kernel ETXTBSY boundary.
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "subprocess fixture for rollback_replaces_a_running_executable_atomically"]

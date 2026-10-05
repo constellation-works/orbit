@@ -10,14 +10,17 @@
 use std::str::FromStr;
 
 use chrono::{DateTime, TimeZone, Utc};
-use orbit_common::OrbitError;
-use orbit_common::governance::friction::{FrictionVerb, effective_title, normalize_title};
+use orbit_common::governance::friction::{
+    FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb, effective_title,
+    normalize_friction_tag_aliases, normalize_title,
+};
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string, required_string,
 };
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
-    FrictionAddParams, FrictionListFilter, FrictionStoreBackend, FrictionUpdateParams,
-    StoredFrictionRecord,
+    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionStoreBackend,
+    FrictionUpdateParams, StoredFrictionRecord,
 };
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 use serde_json::{Value, json};
@@ -35,6 +38,12 @@ pub(super) fn dispatch(
     input: Value,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
+    if matches!(
+        verb,
+        FrictionVerb::Add | FrictionVerb::Update | FrictionVerb::Resolve | FrictionVerb::Rehome
+    ) {
+        runtime.ensure_coordination_task_write_permitted()?;
+    }
     match verb {
         FrictionVerb::Add => add(runtime, input, model),
         FrictionVerb::List => list(runtime, input),
@@ -43,32 +52,47 @@ pub(super) fn dispatch(
         FrictionVerb::Tags => tags(runtime),
         FrictionVerb::Update => update(runtime, input),
         FrictionVerb::Resolve => resolve(runtime, input),
+        FrictionVerb::Rehome => rehome(runtime, input),
     }
 }
 
 fn add(runtime: &OrbitRuntime, input: Value, model: Option<String>) -> Result<Value, OrbitError> {
-    let body = required_string(&input, &["body", "description"], "body")?;
-    let title = optional_raw_string(&input, "title")?
+    let (params, substitutions) = add_params(&input, model)?;
+    if let Some(task_id) = params.during_task.as_deref() {
+        runtime.ensure_friction_task_exists(task_id)?;
+    }
+    let stored = crate::runtime::friction::store_for(runtime)?.add(params)?;
+    record_to_json_with_tag_normalizations(stored, substitutions)
+}
+
+pub(super) fn add_params(
+    input: &Value,
+    model: Option<String>,
+) -> Result<(FrictionAddParams, Vec<(String, String)>), OrbitError> {
+    let body = required_string(input, &["body", "description"], "body")?;
+    let title = optional_raw_string(input, "title")?
         .map(|raw| normalize_title(&raw))
         .transpose()?;
-    let tags = optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default();
-    let during_task =
-        optional_string(&input, "during_task")?.or(optional_string(&input, "task_id")?);
+    let tags = optional_csv_or_string_list_alias(input, &["tags", "tag"])?.unwrap_or_default();
+    let (tags, substitutions) = normalize_friction_tag_aliases(tags);
+    let during_task = optional_string(input, "during_task")?.or(optional_string(input, "task_id")?);
     let model = model
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             OrbitError::InvalidInput("orbit.friction.add requires `model`".to_string())
         })?;
-    let stored = crate::runtime::friction::store_for(runtime)?.add(FrictionAddParams {
-        model,
-        title,
-        body,
-        tags,
-        during_task,
-        created_at: Utc::now(),
-    })?;
-    record_to_json(stored)
+    Ok((
+        FrictionAddParams {
+            model,
+            title,
+            body,
+            tags,
+            during_task,
+            created_at: Utc::now(),
+        },
+        substitutions,
+    ))
 }
 
 fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -81,6 +105,16 @@ fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
 /// Translate the wire filter into the store filter, including the page, so
 /// SQLite decides which rows exist before any body is decoded.
 fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
+    let response_mode = optional_string(&input, "response_mode")?;
+    let with_notes = match response_mode.as_deref() {
+        None => false,
+        Some(FRICTION_LIST_RESPONSE_MODE_WITH_NOTES) => true,
+        Some(value) => {
+            return Err(OrbitError::InvalidInput(format!(
+                "`response_mode` must be `{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES}`, got '{value}'"
+            )));
+        }
+    };
     let month_bounds = optional_string(&input, "month")?
         .map(|raw| parse_month_bounds(&raw))
         .transpose()?;
@@ -110,21 +144,22 @@ fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, Orbi
         .into_iter()
         .map(record_to_json)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(list_payload(records, filter.q.as_deref()))
+    Ok(list_payload(records, filter.q.as_deref(), with_notes))
 }
 
-/// Keep the historical JSON array when the page has hits or the needle is a
-/// single token. Wrap only the empty multi-word miss so a curator can see that
-/// the substring matcher — not an empty group — produced zero rows.
-fn list_payload(records: Vec<Value>, query: Option<&str>) -> Value {
-    if records.is_empty()
-        && let Some(query) = query
-        && let Some(note) = empty_whitespace_query_note(query)
-    {
-        return json!({
-            "records": [],
-            "notes": [note],
-        });
+/// Preserve the historical array unless the caller explicitly requests the
+/// stable notes envelope. The envelope shape does not depend on query results.
+fn list_payload(records: Vec<Value>, query: Option<&str>, with_notes: bool) -> Value {
+    if with_notes {
+        let notes = if records.is_empty() {
+            query
+                .and_then(empty_whitespace_query_note)
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        return json!({ "records": records, "notes": notes });
     }
     Value::Array(records)
 }
@@ -139,15 +174,14 @@ fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
 fn show_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
     let Some(stored) = store.show(&id)? else {
-        return Err(OrbitError::InvalidInput(format!(
-            "friction record not found: {id}"
-        )));
+        return Err(OrbitError::not_found(NotFoundKind::Friction, id));
     };
     record_to_json(stored)
 }
 
 fn stats(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
-    let tasks = runtime.list_tasks()?;
+    // Rates read only status and attribution, so envelope metadata suffices.
+    let tasks = runtime.list_task_metadata()?;
     crate::runtime::friction::store_for(runtime)?.stats(&tasks)
 }
 
@@ -160,7 +194,13 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let status = optional_string(&input, "status")?
         .map(|status| parse_status(&status))
         .transpose()?;
-    let tags = optional_csv_or_string_list_alias(&input, &["tags", "tag"])?;
+    let (tags, substitutions) = match optional_csv_or_string_list_alias(&input, &["tags", "tag"])? {
+        Some(tags) => {
+            let (tags, substitutions) = normalize_friction_tag_aliases(tags);
+            (Some(tags), substitutions)
+        }
+        None => (None, Vec::new()),
+    };
     let body = optional_string(&input, "body")?;
     // An explicit empty `title` clears the stored one, which restores
     // derivation from the body — distinct from omitting the field entirely.
@@ -169,29 +209,84 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         Some(raw) if raw.trim().is_empty() => Some(None),
         Some(raw) => Some(Some(normalize_title(&raw)?)),
     };
-    if status.is_none() && tags.is_none() && body.is_none() && title.is_none() {
+    // Like `title`, an explicit empty `rehome_to` clears the disposition.
+    let rehome_to = optional_raw_string(&input, "rehome_to")?.map(|raw| {
+        let raw = raw.trim();
+        (!raw.is_empty()).then(|| raw.to_string())
+    });
+    let move_record = match input.get("move") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(value)) => Some(*value),
+        Some(_) => {
+            return Err(OrbitError::InvalidInput(
+                "`move` must be a boolean".to_string(),
+            ));
+        }
+    };
+    if move_record.is_some() && !matches!(rehome_to, Some(Some(_))) {
         return Err(OrbitError::InvalidInput(
-            "orbit.friction.update requires `status`, `tags`, `body`, or `title`".to_string(),
+            "`move` applies only with a non-empty `rehome_to`".to_string(),
         ));
     }
-    let stored = crate::runtime::friction::store_for(runtime)?.update(
-        &id,
-        FrictionUpdateParams {
-            status,
-            tags,
-            title,
-            body,
-            resolved_by_task: None,
-            updated_at: Utc::now(),
-        },
-    )?;
-    record_to_json(stored)
+    let edits = FrictionUpdateParams {
+        status,
+        tags,
+        title,
+        body,
+        resolved_by_task: None,
+        rehome_to: None,
+        updated_at: Utc::now(),
+    };
+    let has_edits = edits.status.is_some()
+        || edits.tags.is_some()
+        || edits.body.is_some()
+        || edits.title.is_some();
+    if let Some(Some(to_workspace)) = &rehome_to
+        && move_record != Some(false)
+    {
+        let outcome = runtime.rehome_friction(&id, to_workspace, has_edits.then_some(edits))?;
+        return rehome_to_json(outcome, substitutions);
+    }
+    if !has_edits && rehome_to.is_none() {
+        return Err(OrbitError::InvalidInput(
+            "orbit.friction.update requires `status`, `tags`, `body`, `title`, or `rehome_to`"
+                .to_string(),
+        ));
+    }
+    let stored = crate::runtime::friction::store_for(runtime)?
+        .update(&id, FrictionUpdateParams { rehome_to, ..edits })?;
+    record_to_json_with_tag_normalizations(stored, substitutions)
 }
 
 fn resolve(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
     let stored = crate::runtime::friction::store_for(runtime)?.resolve(&id, Utc::now())?;
     record_to_json(stored)
+}
+
+fn rehome(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+    let id = required_string(&input, &["id"], "id")?;
+    let to_workspace = required_string(&input, &["to_workspace"], "to_workspace")?;
+    rehome_to_json(
+        runtime.rehome_friction(&id, &to_workspace, None)?,
+        Vec::new(),
+    )
+}
+
+/// The resolved source record, with the owning workspace's copy as
+/// `rehomed_as` and any tags the target taxonomy lacks as `dropped_tags`.
+fn rehome_to_json(
+    outcome: FrictionRehomeOutcome,
+    substitutions: Vec<(String, String)>,
+) -> Result<Value, OrbitError> {
+    let mut value = record_to_json_with_tag_normalizations(outcome.source, substitutions)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("rehomed_as".to_string(), record_to_json(outcome.target)?);
+        if !outcome.dropped_tags.is_empty() {
+            object.insert("dropped_tags".to_string(), json!(outcome.dropped_tags));
+        }
+    }
+    Ok(value)
 }
 
 fn parse_timestamp(field: &str, raw: &str) -> Result<DateTime<Utc>, OrbitError> {
@@ -280,63 +375,27 @@ fn record_to_json(stored: StoredFrictionRecord) -> Result<Value, OrbitError> {
     Ok(value)
 }
 
-fn record_title(record: &FrictionRecord) -> String {
-    effective_title(record.title.as_deref(), &record.body, &record.id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn stored_record(title: Option<&str>, body: &str) -> StoredFrictionRecord {
-        StoredFrictionRecord {
-            record: FrictionRecord {
-                id: "F2026-05-007".to_string(),
-                title: title.map(ToString::to_string),
-                model: "codex".to_string(),
-                created_at: Utc.with_ymd_and_hms(2026, 5, 17, 4, 5, 0).unwrap(),
-                status: FrictionStatus::Resolved,
-                tags: vec!["tooling".to_string()],
-                resolved_at: Some(Utc.with_ymd_and_hms(2026, 5, 17, 4, 10, 0).unwrap()),
-                during_task: None,
-                resolved_by_task: Some("ORB-00093".to_string()),
-                body: body.to_string(),
-            },
-            path: Some("frictions/2026-05/F007.md".into()),
-        }
-    }
-
-    #[test]
-    fn record_to_json_includes_resolved_by_task() {
-        let value = record_to_json(stored_record(None, "Resolved by task")).unwrap();
-
-        assert_eq!(value["resolved_by_task"], json!("ORB-00093"));
-    }
-
-    #[test]
-    fn record_to_json_prefers_the_stored_title() {
-        let value = record_to_json(stored_record(
-            Some("Queued runs never reach a worker"),
-            "## What happened\n\nSomething else entirely.",
-        ))
-        .unwrap();
-
-        assert_eq!(value["title"], json!("Queued runs never reach a worker"));
-    }
-
-    /// A record written before the field existed still projects a usable
-    /// handle, so the corpus needs no rewrite to become readable.
-    #[test]
-    fn record_to_json_derives_a_title_for_a_record_without_one() {
-        let value = record_to_json(stored_record(
-            None,
-            "## What happened\n\nThe worker exited before claiming the run.\n\n## Evidence\n\nOne log line.",
-        ))
-        .unwrap();
-
-        assert_eq!(
-            value["title"],
-            json!("The worker exited before claiming the run.")
+pub(super) fn record_to_json_with_tag_normalizations(
+    stored: StoredFrictionRecord,
+    substitutions: Vec<(String, String)>,
+) -> Result<Value, OrbitError> {
+    let mut value = record_to_json(stored)?;
+    if !substitutions.is_empty()
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert(
+            "tag_normalizations".to_string(),
+            json!(
+                substitutions
+                    .into_iter()
+                    .map(|(input, stored)| json!({ "input": input, "stored": stored }))
+                    .collect::<Vec<_>>()
+            ),
         );
     }
+    Ok(value)
+}
+
+fn record_title(record: &FrictionRecord) -> String {
+    effective_title(record.title.as_deref(), &record.body, &record.id)
 }

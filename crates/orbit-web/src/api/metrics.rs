@@ -10,7 +10,9 @@ use orbit_core::metrics::aggregate as aggregate_knowledge_stats;
 use orbit_core::{InvocationInsertParams, InvocationQuery};
 use serde::Deserialize;
 
-use super::{LimitQuery, blocking, map_runtime_error, non_empty_string};
+use super::{
+    HISTORY_MAX_LIMIT, LimitQuery, blocking, bounded_limit, map_runtime_error, non_empty_string,
+};
 
 const INVOCATIONS_DEFAULT_LIMIT: usize = 20;
 
@@ -44,10 +46,12 @@ pub(super) struct OrchestratorMetricsQuery {
     until: Option<String>,
 }
 
+/// Aggregates the most recent runs. An omitted `limit` covers the widest
+/// window the history endpoints allow rather than every run ever recorded.
 pub(super) async fn knowledge_metrics(Ws(runtime): Ws, Query(q): Query<LimitQuery>) -> Response {
     match blocking("knowledge metrics", move || {
         runtime.list_job_runs(JobRunListParams {
-            limit: q.limit,
+            limit: Some(bounded_limit(q.limit, HISTORY_MAX_LIMIT)),
             ..Default::default()
         })
     })
@@ -151,7 +155,7 @@ impl MetricsInvocationsQuery {
             agent: optional_query_string(self.agent),
             model: optional_query_string(self.model),
             tool_name: optional_query_string(self.tool_name),
-            limit: self.limit.unwrap_or(INVOCATIONS_DEFAULT_LIMIT),
+            limit: bounded_limit(self.limit, INVOCATIONS_DEFAULT_LIMIT),
         })
     }
 }

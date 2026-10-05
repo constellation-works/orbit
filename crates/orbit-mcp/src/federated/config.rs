@@ -1,4 +1,4 @@
-//! Operator-configured federated destinations and the host-qualified selector.
+//! Operator-configured federated destinations and the machine-qualified selector.
 //!
 //! Remote membership is the operator file [`DESTINATIONS_FILE`]. Local
 //! membership is implicit: the accepting machine is always a destination,
@@ -17,12 +17,12 @@ use serde::Deserialize;
 pub const DESTINATIONS_FILE: &str = "mcp-destinations.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostQualifiedSelector {
+pub struct MachineQualifiedSelector {
     machine_id: String,
     workspace_id: String,
 }
 
-impl HostQualifiedSelector {
+impl MachineQualifiedSelector {
     pub fn machine_id(&self) -> &str {
         &self.machine_id
     }
@@ -32,7 +32,7 @@ impl HostQualifiedSelector {
     }
 }
 
-impl FromStr for HostQualifiedSelector {
+impl FromStr for MachineQualifiedSelector {
     type Err = OrbitError;
 
     fn from_str(token: &str) -> Result<Self, Self::Err> {
@@ -48,7 +48,7 @@ impl FromStr for HostQualifiedSelector {
     }
 }
 
-impl fmt::Display for HostQualifiedSelector {
+impl fmt::Display for MachineQualifiedSelector {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}/{}", self.machine_id, self.workspace_id)
     }
@@ -75,7 +75,7 @@ fn unknown_selector(token: &str) -> OrbitError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DestinationTransport {
     /// The accepting machine. Listed and routed in-process; never over SSH.
-    Local { host_id: String },
+    Local { machine_name: String },
     /// An operator-configured SSH remote.
     Ssh { target: String },
 }
@@ -91,11 +91,11 @@ pub struct Destination {
 }
 
 impl Destination {
-    pub fn local(machine_id: impl Into<String>, host_id: impl Into<String>) -> Self {
+    pub fn local(machine_id: impl Into<String>, machine_name: impl Into<String>) -> Self {
         Self {
             machine_id: machine_id.into(),
             transport: DestinationTransport::Local {
-                host_id: host_id.into(),
+                machine_name: machine_name.into(),
             },
         }
     }
@@ -113,14 +113,14 @@ impl Destination {
         matches!(self.transport, DestinationTransport::Local { .. })
     }
 
-    /// Display identity attributed to a descriptor's `host` field.
+    /// Display identity attributed to a descriptor's `machine_name` field.
     ///
-    /// Local destinations use the accepting machine's `host_id`. Remotes use
-    /// the operator's configured SSH target — the v1 discovery envelope still
-    /// carries no `host_id`.
-    pub fn host_display(&self) -> &str {
+    /// Local destinations use the accepting machine's `machine.name`. Remotes
+    /// use the operator's configured SSH target — the v1 discovery envelope
+    /// still carries no display name.
+    pub fn machine_name_display(&self) -> &str {
         match &self.transport {
-            DestinationTransport::Local { host_id } => host_id,
+            DestinationTransport::Local { machine_name } => machine_name,
             DestinationTransport::Ssh { target } => target,
         }
     }
@@ -193,11 +193,11 @@ pub fn load_destinations(path: &Path) -> Result<DestinationsFile, OrbitError> {
 /// identity.
 pub fn federated_membership(
     local_machine_id: impl Into<String>,
-    local_host_id: impl Into<String>,
+    local_machine_name: impl Into<String>,
     remotes: DestinationsFile,
 ) -> Vec<Destination> {
     let local_machine_id = local_machine_id.into();
-    let local = Destination::local(local_machine_id.clone(), local_host_id);
+    let local = Destination::local(local_machine_id.clone(), local_machine_name);
     let remotes = remotes
         .destinations
         .into_iter()

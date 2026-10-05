@@ -5,7 +5,7 @@ tags: [operations, logs, tracing, rotation, routines]
 paths: ["crates/orbit-common/src/observability/log_rotation.rs", "crates/orbit-core/src/application/routines/sweep.rs"]
 related_features: [auditability, routines]
 related_artifacts: [ORB-00423]
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Inspect and Retain Logs
@@ -19,8 +19,10 @@ All Orbit processes—the CLI, `orbit web serve`, and the MCP server—append st
 events to one global JSONL sink:
 
 ```text
-~/.orbit/state/logs/orbit.jsonl        # override: $ORBIT_LOG_PATH
+~/.orbit/state/logs/orbit.jsonl        # default writer and reader path
 ```
+
+`orbit log tail` can read another sink with `--path` or `$ORBIT_LOG_PATH`.
 
 One JSON object is written per line:
 `{"timestamp", "level", "target", "fields": {..., "message"}}`. Secret-looking values
@@ -28,8 +30,8 @@ One JSON object is written per line:
 `Authorization` or `x-api-key` headers; and `sk-…` keys) are redacted before reaching the
 sink.
 
-Before diagnosing a missing or unexpected log, confirm the actual binary, effective
-`ORBIT_LOG_PATH`, `RUST_LOG`, root, and config file used by the process.
+Before diagnosing a missing or unexpected log, confirm the actual binary, reader path
+(`--path` or `$ORBIT_LOG_PATH`), `RUST_LOG`, root, and config file used by the process.
 
 ## Read and filter logs
 
@@ -64,7 +66,7 @@ log_max_total_mb = 500
 log_max_file_mb = 100
 ```
 
-Rotation is implemented in `orbit-common/src/utility/log_rotation.rs`.
+Rotation is implemented in `crates/orbit-common/src/observability/log_rotation.rs`.
 
 ## Routine sweep log on macOS
 
@@ -82,6 +84,11 @@ Two behaviors keep it bounded on an always-on host [ORB-00423]:
   nothing was due; `--verbose` restores one row per routine.
 - Each pass opportunistically rolls and prunes `sweep.log` through the same rotation machinery
   and `[runtime]` caps as the JSONL sink, producing `sweep.log.<UTC-timestamp>` archives.
+- Consecutive clock ticks refused by an older executable generation are recorded
+  as one line when that generation releases its pin. The line gives UTC start,
+  end, last refusal, and refused tick count, and says the executable changed
+  under live Orbit processes. The active hold is kept in
+  `~/.orbit/.generation-clock-hold.json` so separate tick processes can share it.
 
 On Linux, the sweep unit logs to the journal, which rotates independently.
 
@@ -89,7 +96,9 @@ On Linux, the sweep unit logs to the journal, which rotates independently.
 
 Confirm that the effective active path exists and receives a new expected event. For retention,
 compare the active file and archives against the configured per-file, total-size, and age caps;
-remember that the global JSONL rotation check occurs at process start, while sweep rotation runs
-opportunistically on each pass.
+remember that global JSONL rotation walks archives from long-lived processes (`mcp serve`,
+`sweep` / `clock tick`, `web serve`) and when the active file exceeds its budget on first write,
+while sweep-log rotation runs opportunistically on each pass. Short-lived commands, including
+`orbit --help`, do not open the JSONL file.
 
 Related: [Inspect the audit trail](./audit-trail.md) for durable invocation and pipeline events.

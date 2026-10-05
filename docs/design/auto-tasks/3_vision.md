@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Vision
 owner: claude
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Accepted
 feature: auto-tasks
 doc_role: vision
@@ -10,41 +10,51 @@ type: design
 summary: Forward-looking directions for the auto-task primitive — cross-workspace scope, richer templates, and dispatch coupling.
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
-related_features: [auto-tasks]
-related_artifacts: [ORB-10149, ORB-11315]
+related_features: [auto-tasks, routines]
+related_artifacts: [ORB-10149, ORB-11315, ORB-12237]
 ---
 
 # Auto-tasks — Vision
 
-Forward-looking directions for the primitive. Everything here is speculative and
-deliberately unbuilt; the shipped surface is in 2_design.md.
+Forward-looking directions for the primitive. Open items remain speculative unless
+marked graduated; the shipped contract is in 2_design.md.
 
 The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
-from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
-immutable batches and separate successful-coverage checkpoints. It is proposed
-and unimplemented; existing scheduling and action semantics remain current.
+from [ORB-11315] has since shipped in part: delivery-trigger consumers and
+`preparation_eligible` state routines use the existing sweep clock with durable
+batches and checkpoints. Broader multi-member coordination, policy-driven
+waiver/migration workflows, and usage accounting remain proposals; the current
+contract and limits are in [automation-triggers/2_design.md](../automation-triggers/2_design.md).
 
 ## 1. Open Questions
 
-1. **Cross-workspace scheduling.** Today the scheduler processes only the
-   definitions of the workspace whose routine fired it. Should there be one
-   host-level pass that fans out over every routine-source workspace's
-   `auto_tasks/`, mirroring the routine sweep's discovery?
+1. **Cross-workspace scheduling.** *Graduated* — delivered in [ORB-12237] through
+   clock consolidation ([Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine)):
+   the host tick fans out over every registered owner checkout's `auto_tasks/`,
+   mirroring routine discovery, with no routine in between. The current contract is in
+   [routines/2_design.md §3](../routines/2_design.md#3-clock-tick).
 2. **Dispatch coupling.** A minted task lands in `backlog`; the orchestrator
    still triages/ships it. Should a definition optionally auto-dispatch its
    task (e.g. straight into `workflow_ship`) under a crew, or does that
    re-introduce the "periodic work is code" coupling auto-tasks removed?
 3. **Retention / expiry.** Should a definition support a `max_open` or a
    sunset date so one-off recurring campaigns retire themselves?
-4. **Observability depth.** Routine fires are visible on `/api/routines`, but
-   per-definition history (which slots minted which tasks) currently lives only
-   in the cursor's `last_task_id`. Is a fuller per-definition ledger warranted?
+4. **Observability depth.** Auto-task records no longer appear on
+   `/api/routines`; `GET /api/auto-tasks` reports each definition's last scheduler
+   evaluation and minted task. Time-trigger cursors retain `last_task_id`, while
+   delivery-trigger consumers persist batches, receipts and coverage checkpoints.
+   Is a unified longer-term ledger warranted?
+5. **Per-owner vs. repo-global definitions.** Under the multi-owner model every
+   owner checkout mints every enabled definition. Most defaults are per-owner by
+   nature (curate *my* frictions, review *my* merged commits). If a repo-global
+   chore ever needs to run once across owners, the additive answer is an
+   `owner:` field on the definition — deliberately not designed until it bites.
 
 ## 2. Prior Work
 
 ### Within orbit
-- **Routines** (`docs/design/routines/`) — the scheduler machinery auto-tasks
-  ride on (cron eval, fire records, host pinning, dashboard health).
+- **Routines** (`docs/design/routines/`) — the sibling consumer of the same host
+  clock; auto-tasks share its due-math and, after the consolidation, its tick.
 - **qa-sweep** (ORB-10039) — a bespoke periodic sweep that auto-tasks generalize;
   qa-sweep V1 (ORB-10148) is the first auto-task definition.
 - **Triage pipeline** (ORB-10129) — the closest existing "routine fires a job of
@@ -67,7 +77,7 @@ task's provenance tag, and observability is the existing task + routine surfaces
 
 ### Orbit-internal
 - `docs/design/routines/` — scheduler substrate.
-- [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](./4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates-one-generic-scheduler-routine) — the auto-task primitive decision.
+- [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](./4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates--one-generic-scheduler-routine) — the auto-task primitive decision.
 - [Run budgets are provider-neutral: wall-clock timeouts, never turn caps](./4_decisions.md#run-budgets-are-provider-neutral-wall-clock-timeouts-never-turn-caps) — provider-neutral run budgets (no turn caps).
 
 ### External

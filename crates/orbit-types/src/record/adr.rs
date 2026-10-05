@@ -23,7 +23,6 @@
 //!
 //! See [`AdrStatus::validate_transition`] for the implementation.
 
-use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -227,33 +226,4 @@ pub fn validate_adr_id(id: &str) -> Result<(), RecordError> {
 /// natural width.
 pub fn legacy_id_for(feature: &str, local_number: u32) -> String {
     format!("{feature}/ADR-{local_number:03}")
-}
-
-/// Lowercase + trim + dedupe ADR tag strings.
-///
-/// ADR tags share the task free-form label semantics, while
-/// `related_features` remains the constrained structural feature reference.
-pub fn normalize_adr_tags(raw_tags: Vec<String>) -> Vec<String> {
-    let mut normalized = Vec::with_capacity(raw_tags.len());
-    let mut seen = BTreeSet::new();
-    for raw in raw_tags {
-        let tag = raw.trim().to_lowercase();
-        if !tag.is_empty() && seen.insert(tag.clone()) {
-            normalized.push(tag);
-        }
-    }
-    normalized
-}
-
-/// Trim + dedupe ADR applicability path globs, preserving case.
-pub fn normalize_adr_paths(raw_paths: Vec<String>) -> Vec<String> {
-    let mut normalized = Vec::with_capacity(raw_paths.len());
-    let mut seen = BTreeSet::new();
-    for raw in raw_paths {
-        let path = raw.trim().to_string();
-        if !path.is_empty() && seen.insert(path.clone()) {
-            normalized.push(path);
-        }
-    }
-    normalized
 }

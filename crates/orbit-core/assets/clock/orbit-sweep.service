@@ -1,4 +1,4 @@
-# Oneshot service driving `orbit sweep` [ORB-10021] / ADR-0204.
+# Oneshot service driving `orbit clock tick` [ORB-10021, ORB-12237].
 # Installed as a systemd *user* unit by `orbit routine init --install-clock`.
 [Unit]
 Description=Orbit routine sweep (fires due routines on this host)
@@ -6,8 +6,14 @@ Description=Orbit routine sweep (fires due routines on this host)
 [Service]
 Type=oneshot
 KillMode=process
+# Backstop for work left in this unit's cgroup [ORB-12903]: pipeline workers
+# normally leave it for their own bounded `orbit-worker-*.scope`, but with
+# `machine.worker_containment = false` they stay here. MemoryHigh throttles
+# rather than kills, so a restart still never takes an in-flight run down.
+MemoryHigh=70%
+TasksMax=4096
 # User managers do not inherit an interactive shell PATH. `%h` is expanded by
 # systemd for the service user, keeping provider and Rust tool launchers
 # discoverable without embedding a host-specific home directory.
 Environment=PATH=%h/.local/bin:%h/.orbit/bin:%h/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart={{ORBIT_BIN}} sweep
+ExecStart={{ORBIT_BIN}} clock tick

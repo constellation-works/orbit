@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::optional_string_list_alias;
 use orbit_engine::DispatchError;
-use orbit_tools::ToolContext;
+use orbit_tools::{ToolCaller, ToolContext, WitnessedProgramGrant};
 use orbit_types::policy::Role;
 use orbit_types::task::{
     TaskReferenceIndex, UnsatisfiableTaskDependency, unmet_task_dependencies_with_index,
@@ -16,15 +16,15 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::runtime::task::locks::{
-    TaskLockIndex, emit_expired_reservation_events, merge_task_lock_conflicts, parse_task_ids,
-    requested_task_files_indexed, reserve_with_index, task_lock_conflicts_indexed,
-    workspace_orbit_dir, workspace_task_reservation_id,
+    EmptyTaskSurfacePolicy, TaskLockIndex, emit_expired_reservation_events,
+    merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed, reserve_with_index,
+    task_lock_conflicts_indexed, workspace_orbit_dir, workspace_task_reservation_id,
 };
 
-use super::{
-    backlog_exclusion, ci_failure_tasks, dependabot_alert_tasks, pipeline_actions, scan_unresolved,
-    task_pilot, triage, workspace_auto,
-};
+use super::admission::{backlog_exclusion, scan_unresolved};
+use super::ci_failure::filing as ci_failure_filing;
+use super::dependabot::{consolidate as dependabot_consolidate, filing as dependabot_filing};
+use super::{blocked_recovery, pipeline_actions, task_pilot, workspace_auto};
 
 /// Whether `action` is dispatchable by this runtime — the capability probe
 /// behind `RuntimeHost::has_deterministic_action` [ORB-10385].
@@ -57,18 +57,15 @@ pub(crate) fn run_deterministic(
         .insert(McpCapability::Runner);
     if matches!(
         deterministic_action,
-        CoreDeterministicAction::PrepareTaskPilot
-            | CoreDeterministicAction::ApplyTaskPilotResults
-            | CoreDeterministicAction::ListTriageCandidates
-            | CoreDeterministicAction::ApplyTriageDispositions
+        CoreDeterministicAction::PrepareTaskPilot | CoreDeterministicAction::ApplyTaskPilotResults
     ) {
         let claim_input = input.get("prepared").unwrap_or(input);
-        if let Some(claim) = crate::application::automation::members::claim(runtime, claim_input)
+        let claim = crate::application::automation::members::claim(runtime, claim_input, &[])
             .map_err(|error| DispatchError::DeterministicActionFailed {
                 action: action.into(),
                 message: error.to_string(),
-            })?
-        {
+            })?;
+        if let Some(claim) = claim {
             let owner = tool_context
                 .reservation_owner
                 .as_ref()
@@ -82,6 +79,14 @@ pub(crate) fn run_deterministic(
         }
     }
     match deterministic_action {
+        // The one deterministic action a plugin contributes behaviour through
+        // (design `docs/design/plugins/1_scope.md` §4.5). It reaches a plugin
+        // tool and nothing else: an ordinary built-in still goes through
+        // `orbit_tool_call`, so a plugin activity cannot use this variant to
+        // borrow Orbit's own authority under plugin provenance.
+        CoreDeterministicAction::PluginToolCall => {
+            plugin_tool_call(runtime, action, config, input, tool_context)
+        }
         CoreDeterministicAction::OrbitToolCall => {
             // The `config` block shape (see deterministic_reference.yaml):
             //   config: { tool_name: <name>, args: <object> }
@@ -147,7 +152,7 @@ pub(crate) fn run_deterministic(
                     message: error.to_string(),
                 }
             })?;
-            let index = TaskLockIndex::load(runtime).map_err(|error| {
+            let index = TaskLockIndex::load(runtime, &task_ids).map_err(|error| {
                 DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: error.to_string(),
@@ -222,37 +227,32 @@ pub(crate) fn run_deterministic(
         // engine-private `collect_ci_evidence` step; this action only reads
         // that JSON and writes tasks.
         CoreDeterministicAction::FileCiFailureTasks => {
-            ci_failure_tasks::file_ci_failure_tasks(runtime, input).map_err(|error| {
+            ci_failure_filing::file_ci_failure_tasks(runtime, input).map_err(|error| {
                 DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: error.to_string(),
                 }
             })
         }
-        CoreDeterministicAction::FileDependabotAlertTasks => {
-            dependabot_alert_tasks::file_dependabot_alert_tasks(runtime, input).map_err(|error| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                }
-            })
-        }
-        // Fire every due, enabled auto-task definition and mint a task from
-        // its template [ORB-10149]. Reads definitions from this workspace's
-        // `.orbit/auto_tasks/`; catch-up collapses and `skip_if_open` dedupe
-        // are enforced in the scheduler core.
-        CoreDeterministicAction::RunAutoTaskScheduler => {
-            crate::application::auto_tasks::run_scheduler_action_json(runtime, input).map_err(
+        CoreDeterministicAction::ConsolidateCodeScanningTasks => {
+            dependabot_consolidate::consolidate_code_scanning_tasks(runtime, input).map_err(
                 |error| DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: error.to_string(),
                 },
             )
         }
+        CoreDeterministicAction::FileDependabotAlertTasks => {
+            dependabot_filing::file_dependabot_alert_tasks(runtime, input).map_err(|error| {
+                DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: error.to_string(),
+                }
+            })
+        }
         // The admissible work for one drain iteration [ORB-10819]: the
-        // conflict-free backlog leaves, plus one backlog epic root when no
-        // `epic_pipeline` run is live. Leaves and epic are independent — an
-        // active epic excludes overlapping leaves through its lock
+        // conflict-free backlog leaves this tick may start. Every candidate is
+        // an ordinary leaf; overlapping work is excluded through its lock
         // reservation, not through a blanket hold.
         CoreDeterministicAction::ClassifyWorkspaceAutoTasks => {
             workspace_auto::classify_workspace_auto_tasks(runtime, action, input)
@@ -262,6 +262,11 @@ pub(crate) fn run_deterministic(
         // here cancels or shortens an in-flight child run.
         CoreDeterministicAction::DrainWindow => {
             workspace_auto::drain_window(runtime, action, input)
+        }
+        // [ORB-13625] One follower pull-drain iteration: reconcile earlier
+        // admissions, then top free slots up from the owner.
+        CoreDeterministicAction::PullRefill => {
+            super::pull::refill::pull_refill(runtime, action, input)
         }
         // ADR-0223: scheduled shipment resolves only the active runtime's
         // canonical ship input; cross-workspace enumeration stays in the
@@ -278,32 +283,12 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ListBacklogTasks => {
             backlog_exclusion::list_backlog_tasks(runtime, action, input)
         }
-        // Resolve one epic's unfinished descendants once, in a deterministic
-        // dependency-first order, so the enclosing workflow can drain them
-        // with an ordinary sequential loop.
-        CoreDeterministicAction::ListEpicDescendants => {
-            workspace_auto::list_epic_descendants(runtime, action, input)
-        }
-        // Materialize blocked tasks attributable to a terminally-failed job
-        // run for the triage pipeline [ORB-10129]. Human-blocked tasks (no
-        // `job_run_id`, or a non-failed run) never appear; tasks whose
-        // re-backlog budget is exhausted take the gave-up path here.
-        CoreDeterministicAction::ListTriageCandidates => {
-            triage::list_triage_candidates(runtime, action, input)
-        }
         // Workspace drain scan [ORB-10779]: proposed/backlog/blocked
         // tasks, failed/timeout job-runs, and unresolved check_later notes.
         // Read-only; empty is success. Optional `fail_if_nonempty` fails
-        // closed for a workspace-wide leftover set; `epic_pipeline` now
-        // gates on `list_epic_descendants` instead [ORB-10818].
+        // closed for a workspace-wide leftover set.
         CoreDeterministicAction::ScanUnresolvedWork => {
             scan_unresolved::scan_unresolved_work(runtime, action, input)
-        }
-        // Apply the triage agent's per-task verdicts under deterministic
-        // bounds: candidates-only, `environmental`-only re-backlog, durable
-        // re-backlog budget, idempotent under overlap [ORB-10129].
-        CoreDeterministicAction::ApplyTriageDispositions => {
-            triage::apply_triage_dispositions(runtime, action, input)
         }
         // Materialize a workspace-scoped task-pilot working set and partition
         // it into bounded groups without promoting or dispatching any task.
@@ -311,6 +296,15 @@ pub(crate) fn run_deterministic(
         // Validate all agent proposals before writing, then replace only the
         // exact prepared tasks' context_files fields.
         CoreDeterministicAction::ApplyTaskPilotResults => task_pilot::apply(runtime, action, input),
+        // Re-check one blocked task's episode and open a detached base
+        // checkout for final recovery, then apply its decision through the
+        // shared final-recovery applier and remove that checkout.
+        CoreDeterministicAction::PrepareBlockedTaskRecovery => {
+            blocked_recovery::prepare(runtime, action, input, recovery_run_id(&tool_context))
+        }
+        CoreDeterministicAction::ApplyBlockedTaskRecovery => {
+            blocked_recovery::apply(runtime, action, input, recovery_run_id(&tool_context))
+        }
         // [ORB-11333] Reserve a fresh reviewer start for the committed,
         // base-synchronized candidate and hand it a pinned manifest; then
         // settle the reviewer's report into an honest verdict, reviewer-
@@ -379,7 +373,12 @@ pub(crate) fn run_deterministic(
                 }));
             }
 
-            let lock_index = TaskLockIndex::load(runtime).map_err(|err| {
+            let task_ids =
+                parse_task_ids(input).map_err(|err| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("{err}"),
+                })?;
+            let lock_index = TaskLockIndex::load(runtime, &task_ids).map_err(|err| {
                 DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: format!("{err}"),
@@ -392,6 +391,7 @@ pub(crate) fn run_deterministic(
                 tool_context.model_name.clone(),
                 tool_context.reservation_owner.clone(),
                 &lock_index,
+                EmptyTaskSurfacePolicy::Admit,
             )
             .map_err(|err| DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
@@ -409,19 +409,29 @@ pub(crate) fn run_deterministic(
             update_run_waiting_reasons(runtime, input, None, non_empty(waiting_on_locks), action)?;
             Ok(output)
         }
-        // Thin passthrough over `orbit.task.locks.release` so workflows
-        // can free admission-window reservations after child runs finish.
-        CoreDeterministicAction::ReleaseLocks => runtime
-            .run_tool_with_context_and_role(
-                "orbit.task.locks.release",
-                input.clone(),
-                Role::Admin,
-                tool_context,
-            )
-            .map_err(|err| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("{err}"),
-            }),
+        CoreDeterministicAction::ReleaseLocks => {
+            // The activity dispatcher adds execution context to core action
+            // input. It is not part of the task tool's argument contract.
+            // Strip only those fields so unknown tool arguments still fail
+            // validation, and retain the trusted owner in tool_context.
+            let mut args = input.clone();
+            if let Some(object) = args.as_object_mut() {
+                for field in ["run_id", "job_run_id", "step_id"] {
+                    object.remove(field);
+                }
+            }
+            runtime
+                .run_tool_with_context_and_role(
+                    "orbit.task.locks.release",
+                    args,
+                    Role::Admin,
+                    tool_context,
+                )
+                .map_err(|err| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("{err}"),
+                })
+        }
         // Submit a child v2 Job and block on its terminal state.
         // Chains `orbit.pipeline.invoke` + `orbit.pipeline.wait` so
         // workflows can model "dispatch and join" as a single step
@@ -444,12 +454,94 @@ pub(crate) fn run_deterministic(
         }
         // Post-loop gate signal: the admission window never opened in
         // time. Emits a `gate.starvation` audit event with task_ids and
-        // conflicting_files so an epic-orchestrator parent can decide
-        // to replan, then fails the Run with a structured error.
+        // conflicting_files so a supervising parent can decide to
+        // replan, then fails the Run with a structured error.
         CoreDeterministicAction::GateStarvationFail => {
             pipeline_actions::gate_starvation_fail(runtime, action, input)
         }
+        // The gate's first step: the job this bundle is delivered by — the
+        // default `task_<mode>_pipeline`, or the job its tasks select with a
+        // `delivery:<job>` tag. A selection that cannot be served fails here,
+        // before any reservation is taken.
+        CoreDeterministicAction::ResolveDeliveryJob => {
+            pipeline_actions::resolve_delivery_job(runtime, action, input)
+        }
     }
+}
+
+/// `plugin.tool_call { tool: <ns>.<verb>, input: {…} }` (§4.5).
+///
+/// The call goes through the ordinary audited tool dispatch, so the row it
+/// writes carries the plugin's provenance and the governed-operation row for
+/// the tool's `execution_kind` decides it. A name the registry does not hold
+/// as a plugin tool is refused here rather than executed: the action exists to
+/// let a routine drive a plugin, not to widen what a deterministic step may
+/// call.
+///
+/// A step the dispatcher marked deterministic carries the plugin's program
+/// grant re-read from its witness for this call, which is what bounds the
+/// programs the backend may spawn (§4.3) [ORB-13270].
+fn plugin_tool_call(
+    runtime: &OrbitRuntime,
+    action: &str,
+    config: &Value,
+    input: &Value,
+    mut tool_context: ToolContext,
+) -> Result<Value, DispatchError> {
+    let failed = |message: String| DispatchError::DeterministicActionFailed {
+        action: action.to_string(),
+        message,
+    };
+    let tool_name = input
+        .get("tool")
+        .or_else(|| config.get("tool"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| failed("missing `tool` in config or input".to_string()))?
+        .to_string();
+    let args = input
+        .get("input")
+        .or_else(|| config.get("input"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let Some(binding) = runtime.tool_registry().plugin_binding(&tool_name) else {
+        return Err(failed(format!(
+            "tool '{tool_name}' is not a plugin tool on this host; `plugin.tool_call` dispatches \
+             only tools contributed by an installed plugin — check `orbit plugin list`, or use \
+             `orbit_tool_call` for a built-in tool"
+        )));
+    };
+    if let ToolCaller::DeterministicStep(step) = &mut tool_context.caller {
+        let plugin = binding.provenance.name.clone();
+        let installed = runtime
+            .stores()
+            .plugins()
+            .get_plugin(&plugin)
+            .map_err(|error| format!("cannot read the plugin record: {error}"));
+        let programs = installed.and_then(|installed| {
+            crate::runtime::plugin::grants::call_time_program_grants(
+                &runtime.global_root(),
+                &plugin,
+                installed.as_ref(),
+            )
+        });
+        step.witnessed = Some(WitnessedProgramGrant { plugin, programs });
+    }
+
+    runtime
+        .execute_in_process_tool_dispatch(
+            &tool_name,
+            args,
+            crate::adapter::command::ToolEntryPoint::Cli,
+            tool_context.session_context.clone(),
+            |args| {
+                runtime.run_tool_with_context_and_role(&tool_name, args, Role::Admin, tool_context)
+            },
+        )
+        .map(|outcome| outcome.value)
+        .map_err(|error| failed(error.to_string()))
 }
 
 /// [ORB-11187] This activity resolves the *workspace's* shipping defaults —
@@ -463,23 +555,10 @@ fn resolve_workspace_ship_input(
     runtime: &OrbitRuntime,
     action: &str,
 ) -> Result<Value, DispatchError> {
-    if let Some(binding) = runtime.workspace_runtime_binding() {
-        return crate::application::workflow::build_ship_input(
-            binding.ship_mode,
-            runtime.workflow_base_branch(),
-            &[],
-            COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
-            &[],
-        )
-        .map_err(|error| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("resolve workspace ship input: {error}"),
-        });
-    }
-
-    crate::application::workflow::build_ship_input(
-        crate::application::workflow::ShipMode::Local,
-        runtime.workflow_base_branch(),
+    let mode = super::admission::backlog_exclusion::workspace_ship_mode(runtime);
+    let mut input = crate::application::workflow::build_ship_input(
+        mode,
+        runtime.workspace_base_branch(),
         &[],
         COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
         &[],
@@ -487,7 +566,14 @@ fn resolve_workspace_ship_input(
     .map_err(|error| DispatchError::DeterministicActionFailed {
         action: action.to_string(),
         message: format!("resolve workspace ship input: {error}"),
-    })
+    })?;
+    // build_ship_input deliberately omits base_sync for PR submissions. The
+    // drain renders this output into each child, so make that default explicit
+    // here without changing the public ship input contract.
+    if mode == crate::application::workflow::ShipMode::Pr {
+        input["base_sync"] = Value::String("remote".to_string());
+    }
+    Ok(input)
 }
 
 /// The dependency picture for a bundle, split by what the caller should do
@@ -505,8 +591,8 @@ pub(super) struct BundleDependencyAdmission {
 
 impl BundleDependencyAdmission {
     /// Failure message for the unsatisfiable set. Prefixed with a stable
-    /// `task.dependencies.unsatisfiable:` marker so an operator (or an
-    /// epic-level orchestrator parsing run errors) can tell this apart from
+    /// `task.dependencies.unsatisfiable:` marker so an operator (or a
+    /// parent job parsing run errors) can tell this apart from
     /// `gate.starvation`, which means the opposite thing: waiting was
     /// legitimate but ran out of budget.
     pub(super) fn unsatisfiable_message(&self) -> String {
@@ -534,12 +620,15 @@ fn dependency_admission_for_input(
         return Ok(BundleDependencyAdmission::default());
     };
     let task_ids = parse_task_ids(&serde_json::json!({ "task_ids": raw_task_ids }))?;
-    let status_by_id = runtime.task_status_index()?;
+    let tasks = task_ids
+        .iter()
+        .map(|task_id| runtime.get_task(task_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let status_by_id = runtime.dependency_status_index(&tasks)?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let mut waiting_on = BTreeSet::new();
     let mut unsatisfiable = Vec::new();
-    for task_id in task_ids {
-        let task = runtime.get_task(&task_id)?;
+    for task in tasks {
         let dead_ends =
             unsatisfiable_task_dependencies_with_index(&task, &status_by_id, &reference_index);
         let dead_end_ids = dead_ends
@@ -564,7 +653,7 @@ fn dependency_admission_for_input(
 // pure parsing helper directly rather than through a full lock-conflict
 // integration setup — see docs/design-patterns/test_layout.md migration
 // recipe step 6.
-pub(super) fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
+fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
     output
         .get("conflicts")
         .and_then(Value::as_array)
@@ -583,7 +672,7 @@ pub(super) fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
 // writer directly for no-op, error, lock, and lost-update coverage rather
 // than only through a full `reserve_locks` setup — see
 // docs/design-patterns/test_layout.md migration recipe step 6.
-pub(super) fn update_run_waiting_reasons(
+fn update_run_waiting_reasons(
     runtime: &OrbitRuntime,
     input: &Value,
     waiting_on_deps: Option<Vec<String>>,
@@ -614,4 +703,11 @@ pub(super) fn update_run_waiting_reasons(
 
 fn non_empty(values: Vec<String>) -> Option<Vec<String>> {
     (!values.is_empty()).then_some(values)
+}
+
+fn recovery_run_id(tool_context: &ToolContext) -> Option<&str> {
+    tool_context
+        .reservation_owner
+        .as_ref()
+        .map(|owner| owner.owner_run_id.as_str())
 }

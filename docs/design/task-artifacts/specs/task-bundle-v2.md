@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-09-08
+last_validated: 2026-09-28
 ---
 
 # Spec: Task Bundle V2
@@ -23,12 +23,6 @@ Every canonical task bundle lives at:
 
 ```text
 ~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/
-```
-
-The workspace-local projection lives at:
-
-```text
-.orbit/tasks/<task-id> -> ~/.orbit/tasks/workspaces/<workspace-id>/<task-id>
 ```
 
 `<task-id>` must be the canonical ID inside the current allocation authority. The canonical v2 format is `ORB-` plus a decimal suffix formatted with at least five digits (for example, `ORB-00000`); parsers accept wider decimal suffixes and the allocator is bounded by `u32::MAX`. `<workspace-id>` is assigned once per workspace as `<slug>-<6char>` and stored in `.orbit/config.yaml`. Old `T<YYYYMMDD>-<N>` IDs are not valid v2 identifiers or lookup aliases.
@@ -60,7 +54,7 @@ directory, including all manifest-referenced artifact blobs, then published by
 an atomic directory rename. An interrupted create must leave the canonical task
 path absent rather than expose a partial bundle.
 
-## Local Store and Workspace Projection
+## Local Store and Canonical Lookup
 
 The home-directory bundle is the active source of truth for task content. Local-first Orbit must keep allocation and local operational metadata under:
 
@@ -83,9 +77,9 @@ schema_version: 1
 workspace_id: orbit-a3f9c2
 ```
 
-`.orbit/tasks/` is a symlink projection to canonical bundles. Task mutations must make the canonical bundle and registry metadata durable before reporting success. If `.orbit/tasks/` is deleted, Orbit rebuilds projection links from `.orbit/config.yaml` and `index.sqlite`. If `.orbit/config.yaml` is missing, Orbit must prompt to rebind by matching the checkout path, repo root, and optional remote fingerprints against `index.sqlite`; ambiguous matches must not silently attach to a workspace.
+Task and artifact tools must resolve bundles from the workspace binding and canonical registry path. Task mutations must make the canonical bundle and registry metadata durable before reporting success. They must not create a checkout-local task-bundle projection. If `.orbit/config.yaml` is missing, Orbit must prompt to rebind by matching the checkout path, repo root, and optional remote fingerprints against `index.sqlite`; ambiguous matches must not silently attach to a workspace.
 
-Delete verifies that any projection entry is a symlink, unregisters the task binding and generated index rows, removes the canonical bundle directory, then removes the projection entry. A projection path that exists as a non-symlink must stop the delete before unregistering rather than removing unrelated workspace files.
+Delete publishes a canonical-bundle tombstone, unregisters the task binding and generated index rows, then removes the tombstone. Legacy checkout task links are handled only by the guarded workspace-layout upgrade, which must never follow them or remove ambiguous entries.
 
 ## Envelope
 
@@ -167,7 +161,8 @@ durable: the note carries a copy, and the copy is what gets dropped. Discarding
 a value that exists nowhere else is not permitted at write time — the note is a
 durable record and a lossy write cannot be undone later.
 
-The one such elision today is the `workflow_run_failed` note, whose
+The one such elision today is the `workflow_run_failed` note (and the
+`workflow_run_interrupted` note built by the same helper), whose
 `error_message` is retained in full by `job_run_steps.error_message` and read
 back with `orbit run show <run_id> --json` (field `.run.steps[].error_message`).
 Its size threshold is declared exactly once, in `orbit-engine`'s
@@ -219,7 +214,7 @@ The local registry must maintain generated status and terminal-month views or re
 
 The initial registry projections are:
 
-- `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity)`. `complexity` is `low`/`medium`/`hard`, or empty when the envelope left it unset. SQL `NULL` means the row has not been rewritten since the column was added.
+- `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity)`. `complexity` is `low`/`medium`/`hard`/`xhard`/`unassessed`, or empty when the envelope left it unset. SQL `NULL` means the row has not been rewritten since the column was added.
 - `task_bundle_tags(task_id, workspace_id, tag)`.
 - `task_bundle_relations(source_task_id, workspace_id, relation_type, target_task_id)`. The physical column name is historical; `produces` and `resolves` rows may store non-task artifact IDs in `target_task_id`.
 
@@ -236,7 +231,7 @@ The file bundle does not provide all-or-nothing transactions across Markdown sid
 - `task.yaml` remains canonical for structured metadata.
 - JSONL tail corruption is repaired only at the final partial row; corruption before the tail is an error.
 - The last event with `to_status` must match `task.yaml.status`; a mismatch on a *settled* bundle is corruption and must fail reads. A mismatch observed while a writer is mid-publication is not corruption and must not be observable at all — see [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
-- Generated indexes are invalid when count or `updated_at` stamps differ from registered bundle envelopes and must be rebuilt from bundles.
+- Generated indexes are invalid when the row count, `updated_at`, or any indexed listing field (status, priority, job run, `created_at`, tags) differs from registered bundle envelopes and must be rebuilt from bundles.
 - Artifact manifest entries must reference existing relative files with matching size and SHA-256; unmanifested files are ignored until a future compaction/prune command removes them.
 
 Malformed registered bundles surface as a typed `task_bundle_corrupt`
@@ -296,7 +291,9 @@ files:
 
 Artifact paths must be relative, UTF-8, slash-separated, canonical paths and must not contain `.`, `..`, or leading `./` components. Writers that ingest hand-authored manifests should normalize leading `./` before validation. `sha256` must be a 64-character lowercase hex SHA-256 digest; writer code should format digest bytes with lowercase hex (`{:x}`), not uppercase.
 
-The bundle format does not guarantee cross-file transactions *across a crash*. Writers must keep single-file updates atomic and keep post-crash partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite or artifact files written before manifest rewrite.
+`path` is the logical artifact name; readers must open the separate `blob` path from the manifest. Existing manifests may use `files/<path>`. Replacement writes use immutable, content-addressed files under `artifacts/files/`, then atomically publish the complete updated manifest. A failure before manifest publication leaves the previous artifact set and hashes intact. Unreferenced blobs from interrupted or superseded writes may remain and are ignored by readers.
+
+The bundle format does not guarantee cross-file transactions *across a crash*. Writers must keep single-file updates atomic and keep post-crash partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite. Artifact replacement relies on immutable blobs and atomic manifest publication, so an interrupted replacement needs no repair to remain readable.
 
 A *live* writer is a different case, and readers must not be exposed to its intermediate states. See [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
 
@@ -308,17 +305,16 @@ Cutover from the current pre-reset task schema must:
 2. Allocate a canonical `ORB-00000` ID.
 3. Record allocation and workspace binding metadata in `~/.orbit/tasks/index.sqlite`.
 4. Materialize the canonical bundle under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`.
-5. Create `.orbit/tasks/<task-id>` as a symlink to the canonical bundle.
-6. Move YAML `description` to `description.md`.
-7. Render YAML `acceptance_criteria` into `acceptance.md`.
-8. Preserve existing `plan.md`.
-9. Preserve existing `execution-summary.md`.
-10. Convert YAML `history` to `events.jsonl`.
-11. Convert YAML `comments` to `comments.jsonl`.
-12. Preserve any legacy review-thread files as inert sidecars.
-13. Rewrite `task.yaml` with schema version 1 and no old ID aliases.
-14. Rewrite or release active task-lock reservations.
-15. Record generated status, terminal-month, relation, tag, and semantic-index rebuild inputs.
+5. Move YAML `description` to `description.md`.
+6. Render YAML `acceptance_criteria` into `acceptance.md`.
+7. Preserve existing `plan.md`.
+8. Preserve existing `execution-summary.md`.
+9. Convert YAML `history` to `events.jsonl`.
+10. Convert YAML `comments` to `comments.jsonl`.
+11. Preserve any legacy review-thread files as inert sidecars.
+12. Rewrite `task.yaml` with schema version 1 and no old ID aliases.
+13. Rewrite or release active task-lock reservations.
+14. Record generated status, terminal-month, relation, tag, and lexical-index rebuild inputs.
 
 Cutover must be idempotent for interrupted local runs. A partially converted task must either repair cleanly on rerun or fail with a diagnostic that names the task ID and incomplete step. The command may emit an old-ID-to-new-ID report for humans, but that report is not a persisted lookup contract.
 
@@ -329,10 +325,14 @@ Last revised by `claude` on 2026-08-09 for [ORB-10343].
 ## Bounded list reads
 
 ORB-11205: bounded task queries validate the generated index against every
-registered, settled envelope, then apply metadata predicates and newest-first
-ordering (task ID ascending for ties) before loading bundles. Exact totals
-count metadata matches; they do not certify off-page body, event, or artifact
-integrity. A selected bundle with envelope, body, or event-log damage fails
+registered, settled envelope, then select from the index: SQL answers the
+status, priority, job-run, tag and continuation predicates, newest-first
+ordering (task ID ascending for ties), the limit and the total, so only the
+selected envelopes leave the parse cache and only the selected bundles load.
+Predicates the index does not project (search, type, parent, external
+references) narrow the indexed candidates in memory before the limit. Exact
+totals count metadata matches; they do not certify off-page body, event, or
+artifact integrity. A selected bundle with envelope, body, or event-log damage fails
 the request and is never replaced with another row. Listing and search
 materialization use a locked lightweight bundle read: they still apply the
 canonical bundle lock and event/envelope status consistency, but they do not
@@ -343,57 +343,43 @@ full-bundle verification.
 Status, type, priority, parent, job run, tags and external-reference predicates
 use metadata. Readiness and context-path predicates currently use an explicit
 residual fallback, hydrating metadata matches before filtering and limiting.
+The default status-aware listing (`orbit task list`, MCP `task.list`) is one
+such query with terminal statuses ordered last, not two queries: the index
+orders non-terminal tasks before done, archived and rejected ones, each
+partition newest first, and the limit spans both.
 Missing/stale indexes require a lightweight bundle scan (task fields only) and
 best-effort index repair; task-field errors encountered reading that scan
 propagate. An update racing selected-row hydration causes one rescan with
 filter-before-limit semantics. In-flight creation/deletion retains the
 existing list-read tolerance.
 
+Each page carries the dependency-status projection its rows need: every task
+in the listed workspace plus each relation target the selected envelopes name,
+resolved wherever it is registered (plus one indexed task per otherwise
+unrepresented foreign prefix, so a missing target under a known prefix keeps
+its `missing` label). Nothing else from other workspaces is projected.
+
 Dashboard list and detail projections retain comments, history and the sorted
 artifact manifest from each validated bundle. The aggregate selects the global
 newest 50 from workspace metadata before hydration and shares one request-scoped
 global dependency-status projection. Storage and rendering run on the blocking
 pool, including cold workspace selection and runtime construction in the
-shared workspace extractor. Envelope validation and dependency-status work remain linear in corpus
-size; there is no persistent validation cache or content integrity audit added.
+shared workspace extractor. Envelope validation remains linear in the
+workspace's corpus size; there is no persistent validation cache or content
+integrity audit added.
 
 ### Reproducing the bounded-read measurements
 
-The ignored `task_list_io_benchmark` store test generates three temporary
-workspaces, each containing `ORBIT_TASK_BENCH_SIZE` tasks (100, 1000 or 10000).
-Each task has a roughly 8 KB description, a nonempty plan, eight comments,
-twelve history events and a 1 KB artifact. Every tenth task has the selective
-tag. It measures unfiltered and selective limit-50 reads, detail, and the
-global newest-50 aggregate. `ORBIT_TASK_BENCH_MODE=baseline` uses the frozen
-settled-index read algorithm from `424529c518d59631bb55e1df579454ff5e10307a`;
-`candidate` uses the bounded store query. Counters distinguish full bundle
-loads from envelope-only freshness reads (each full bundle also reads an
-envelope). Residual and rebuild costs are covered separately by the listing
-regression tests.
-
-For example, after building test binaries outside the checkout:
-
-```sh
-export CARGO_TARGET_DIR=/tmp/orbit-task-bench-target
-export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-ORBIT_TASK_BENCH_SIZE=1000 ORBIT_TASK_BENCH_MODE=candidate \
-ORBIT_TASK_BENCH_ROOT=/tmp/orbit-task-bench-1000 \
-cargo test -p orbit-store task_list_io_benchmark -- --ignored --nocapture
-
-ORBIT_TASK_BENCH_SIZE=1000 ORBIT_TASK_BENCH_MODE=candidate \
-ORBIT_TASK_BENCH_ROOT=/tmp/orbit-task-bench-1000 \
-cargo test -p orbit-web task_response_benchmark -- --ignored --nocapture
-```
-
-The fixture root must be new and temporary. Omitting it from the store test
-automatically removes the generated corpus after the measurement. To compare
-actual HTTP implementations, archive the baseline commit into a temporary
-directory and add only `api/tests/task_response_bench.rs` and its test-module
-registration. Run that identical harness on the same retained corpus, setting
-the mode label to `baseline`. Build both binaries first, then run benchmarks
-serially without compilation overlap. HTTP measurements include response
-serialization and an unrelated workspace request under four concurrent lists
-on one Tokio worker.
+The ORB-11205 measurements came from an ignored `task_list_io_benchmark`
+store test and the dashboard's ignored `task_response_benchmark` harness. The
+store harness was retired with the store unit tests. To reproduce the
+measurements, check out `630bc95d241c1441de9c31f980bc016948b84f5d`, the last
+commit with `crates/orbit-store/src/repository/task/v2/tests/listing_bench.rs`,
+and follow that file's module docs. It generated three temporary workspaces of
+`ORBIT_TASK_BENCH_SIZE` tasks (100, 1000 or 10000), with
+`ORBIT_TASK_BENCH_MODE=baseline` running the frozen settled-index read
+algorithm from `424529c518d59631bb55e1df579454ff5e10307a` and `candidate` the
+bounded store query.
 
 Both harnesses warm each operation before eleven timed samples, reporting the
 median and nearest-rank p95 (the maximum with eleven samples). Linux `VmHWM`

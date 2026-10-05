@@ -1,19 +1,19 @@
 //! Fail-closed, same-authority recovery from a validated task publication.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::create_dir_symlink;
+use orbit_common::fs::io::create_private_dir_all;
 
 use crate::driver::file::task_bundle::{
     read_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
 };
-use crate::driver::sqlite::task_registry::{
-    ProjectionRebuildResult, TaskRegistryStore, parse_orb_task_number,
-};
+use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
 
 use super::inspect::{ValidatedPublicationBundle, load_validated_publication};
+use super::log_rollback_failure;
 use super::{OmittedAttachment, PublicationInspectRequest};
 
 const RESTORE_LABEL: &str = "publication restore";
@@ -52,7 +52,6 @@ pub struct PublicationRestoreOutcome {
     pub generation: u64,
     pub restored_task_ids: Vec<String>,
     pub already_present_task_ids: Vec<String>,
-    pub projection: ProjectionRebuildResult,
     pub omitted_attachments: Vec<OmittedAttachment>,
     pub completeness: PublicationRecoveryCompleteness,
 }
@@ -63,35 +62,12 @@ pub fn restore_publication(
     registry: &TaskRegistryStore,
     request: PublicationRestoreRequest,
 ) -> Result<PublicationRestoreOutcome, OrbitError> {
-    restore_publication_inner(registry, request, None)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RestoreFailurePoint {
-    BundlePublication,
-    IndexRebuild,
-    ProjectionRebuild,
-    AllocatorAdvance,
-}
-
-#[cfg(test)]
-pub(super) fn restore_publication_with_failure(
-    registry: &TaskRegistryStore,
-    request: PublicationRestoreRequest,
-    failure: RestoreFailurePoint,
-) -> Result<PublicationRestoreOutcome, OrbitError> {
-    restore_publication_inner(registry, request, Some(failure))
-}
-
-fn restore_publication_inner(
-    registry: &TaskRegistryStore,
-    request: PublicationRestoreRequest,
-    failure: Option<RestoreFailurePoint>,
-) -> Result<PublicationRestoreOutcome, OrbitError> {
     // The inspector owns repository fetch, branch/commit lineage, envelope
     // pairing, schema support, bundle validation, JSONL validation, omission
     // validation, and attachment checksum verification. Recovery consumes that
-    // exact result rather than recreating a second validation path.
+    // exact result rather than recreating a second validation path. The
+    // snapshot owns the private checkout its `source_dir`s point into, so it
+    // stays alive until staging below has copied every artifact from it.
     let validated = load_validated_publication(request.publication.clone())?;
     let envelope = &validated.inspection.envelope;
     let task_workspace_id = request.task_workspace_id.clone();
@@ -130,7 +106,7 @@ fn restore_publication_inner(
                 missing.push(published);
             }
             Some(binding) => {
-                let identical = binding.workspace_id == task_workspace_id
+                let identical = binding.partition_id == task_workspace_id
                     && read_bundle_at(&binding.canonical_path)
                         .is_ok_and(|bundle| bundle == published.bundle);
                 if request.mode != PublicationRestoreMode::AllowIdenticalRetry || !identical {
@@ -144,23 +120,20 @@ fn restore_publication_inner(
     }
 
     if missing.is_empty() {
-        return Ok(outcome(
-            envelope,
-            Vec::new(),
-            already_present,
-            ProjectionRebuildResult {
-                projected: 0,
-                repaired: 0,
-                degraded_reason: None,
-            },
-        ));
+        return Ok(outcome(envelope, Vec::new(), already_present));
     }
 
     let workspace_root = registry.workspaces_dir().join(&task_workspace_id);
-    fs::create_dir_all(&workspace_root)
+    create_private_dir_all(&workspace_root)
         .map_err(|error| OrbitError::from_write_io(&workspace_root, error))?;
-    let staging = tempfile::Builder::new()
-        .prefix(".orbit-publication-restore-")
+    let mut staging_builder = tempfile::Builder::new();
+    staging_builder.prefix(".orbit-publication-restore-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        staging_builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    let staging = staging_builder
         .tempdir_in(&workspace_root)
         .map_err(|error| OrbitError::from_write_io(&workspace_root, error))?;
     for published in &missing {
@@ -179,40 +152,29 @@ fn restore_publication_inner(
         previous_allocator,
     );
 
-    for (index, published) in missing.iter().enumerate() {
+    for published in &missing {
         let task_id = &published.bundle.envelope.id;
         let source = staging.path().join(task_id);
         let destination = registry.canonical_task_bundle_path(&task_workspace_id, task_id)?;
         fs::rename(&source, &destination)
             .map_err(|error| OrbitError::from_write_io(&destination, error))?;
         guard.published_dirs.push(destination);
-        if index == 0 {
-            inject(failure, RestoreFailurePoint::BundlePublication)?;
-        }
     }
 
-    for task_id in &restored_ids {
-        let path = registry.canonical_task_bundle_path(&task_workspace_id, task_id)?;
-        registry.register_task_bundle(task_id, &task_workspace_id, &path)?;
-        guard.registered_ids.push(task_id.clone());
-    }
+    // The bundles are already in place, so the whole restored set is bound in a
+    // single commit rather than one WAL fsync per task.
+    let bindings = restored_ids
+        .iter()
+        .map(|task_id| {
+            registry
+                .canonical_task_bundle_path(&task_workspace_id, task_id)
+                .map(|path| (task_id.clone(), path))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    registry.register_task_bundles(&task_workspace_id, &bindings)?;
+    guard.registered_ids.extend(restored_ids.iter().cloned());
 
     rebuild_workspace_index(registry, &task_workspace_id)?;
-    inject(failure, RestoreFailurePoint::IndexRebuild)?;
-
-    let projection = if let Some(checkout) = registry.find_workspace_checkout(&task_workspace_id)? {
-        let swap = ProjectionSwap::publish(registry, &checkout.orbit_dir, &task_workspace_id)?;
-        let result = swap.result.clone();
-        guard.projection = Some(swap);
-        inject(failure, RestoreFailurePoint::ProjectionRebuild)?;
-        result
-    } else {
-        ProjectionRebuildResult {
-            projected: 0,
-            repaired: 0,
-            degraded_reason: None,
-        }
-    };
 
     let target_allocator = restored_ids
         .iter()
@@ -223,10 +185,9 @@ fn restore_publication_inner(
         .max(previous_allocator);
     registry.bump_allocator_to_at_least(target_allocator)?;
     guard.advanced_allocator = Some(target_allocator);
-    inject(failure, RestoreFailurePoint::AllocatorAdvance)?;
 
     guard.commit();
-    Ok(outcome(envelope, restored_ids, already_present, projection))
+    Ok(outcome(envelope, restored_ids, already_present))
 }
 
 fn assert_destination_pairing(
@@ -241,7 +202,7 @@ fn assert_destination_pairing(
                 request.task_workspace_id
             ))
         })?;
-    if binding.workspace_id != request.task_workspace_id {
+    if binding.partition_id != request.task_workspace_id {
         return Err(restore_error(
             "task workspace selector resolved to another workspace",
         ));
@@ -262,16 +223,28 @@ fn assert_destination_pairing(
 }
 
 fn canonical_destination_has_entries(workspace_root: &Path) -> Result<bool, OrbitError> {
-    let mut entries = match fs::read_dir(workspace_root) {
+    let entries = match fs::read_dir(workspace_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(OrbitError::from_write_io(workspace_root, error)),
     };
-    entries
-        .next()
-        .transpose()
-        .map(|entry| entry.is_some())
-        .map_err(|error| OrbitError::from_write_io(workspace_root, error))
+    for entry in entries {
+        let entry = entry.map_err(|error| OrbitError::from_write_io(workspace_root, error))?;
+        if partition_infrastructure_name(&entry.file_name()) {
+            continue;
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Coordinated composition writes markers and lock files into an otherwise
+/// empty partition (`.task-commit-required`, `.task-commit-pending`,
+/// `.task-commit.lock`). Restore staging uses a `.orbit-publication-restore-`
+/// prefix. EmptyDestination means "no leftover canonical task content", not
+/// "the directory is byte-empty".
+fn partition_infrastructure_name(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|value| value.starts_with('.'))
 }
 
 fn stage_bundle(root: &Path, published: &ValidatedPublicationBundle) -> Result<(), OrbitError> {
@@ -304,7 +277,6 @@ fn outcome(
     envelope: &super::PublicationEnvelope,
     restored_task_ids: Vec<String>,
     already_present_task_ids: Vec<String>,
-    projection: ProjectionRebuildResult,
 ) -> PublicationRestoreOutcome {
     let completeness = if envelope.omitted_attachments.is_empty() {
         PublicationRecoveryCompleteness::Complete
@@ -317,96 +289,8 @@ fn outcome(
         generation: envelope.generation,
         restored_task_ids,
         already_present_task_ids,
-        projection,
         omitted_attachments: envelope.omitted_attachments.clone(),
         completeness,
-    }
-}
-
-fn inject(
-    selected: Option<RestoreFailurePoint>,
-    current: RestoreFailurePoint,
-) -> Result<(), OrbitError> {
-    if selected == Some(current) {
-        return Err(restore_error(format!("injected failure after {current:?}")));
-    }
-    Ok(())
-}
-
-struct ProjectionSwap {
-    projection_dir: PathBuf,
-    backup_dir: PathBuf,
-    _staging: tempfile::TempDir,
-    had_previous: bool,
-    result: ProjectionRebuildResult,
-    committed: bool,
-}
-
-impl ProjectionSwap {
-    fn publish(
-        registry: &TaskRegistryStore,
-        orbit_dir: &Path,
-        workspace_id: &str,
-    ) -> Result<Self, OrbitError> {
-        let staging = tempfile::Builder::new()
-            .prefix(".orbit-restore-projection-")
-            .tempdir_in(orbit_dir)
-            .map_err(|error| OrbitError::from_write_io(orbit_dir, error))?;
-        let staged_tasks = staging.path().join("tasks");
-        fs::create_dir(&staged_tasks)
-            .map_err(|error| OrbitError::from_write_io(&staged_tasks, error))?;
-        let tasks = registry.tasks_for_workspace(workspace_id)?;
-        for task in &tasks {
-            let link = staged_tasks.join(&task.task_id);
-            create_dir_symlink(&task.canonical_path, &link)
-                .map_err(|error| OrbitError::from_write_io(&link, error))?;
-        }
-
-        let projection_dir = orbit_dir.join("tasks");
-        let backup_dir = staging.path().join("previous-tasks");
-        let had_previous = projection_dir.exists();
-        if had_previous {
-            fs::rename(&projection_dir, &backup_dir)
-                .map_err(|error| OrbitError::from_write_io(&projection_dir, error))?;
-        }
-        if let Err(error) = fs::rename(&staged_tasks, &projection_dir) {
-            if had_previous {
-                let _ = fs::rename(&backup_dir, &projection_dir);
-            }
-            return Err(OrbitError::from_write_io(&projection_dir, error));
-        }
-        Ok(Self {
-            projection_dir,
-            backup_dir,
-            _staging: staging,
-            had_previous,
-            result: ProjectionRebuildResult {
-                projected: tasks.len(),
-                repaired: 0,
-                degraded_reason: None,
-            },
-            committed: false,
-        })
-    }
-
-    fn commit(&mut self) {
-        self.committed = true;
-    }
-
-    fn rollback(&mut self) {
-        let _ = fs::remove_dir_all(&self.projection_dir);
-        if self.had_previous {
-            let _ = fs::rename(&self.backup_dir, &self.projection_dir);
-        }
-        self.committed = true;
-    }
-}
-
-impl Drop for ProjectionSwap {
-    fn drop(&mut self) {
-        if !self.committed {
-            self.rollback();
-        }
     }
 }
 
@@ -418,7 +302,6 @@ struct RestoreGuard<'a> {
     advanced_allocator: Option<u32>,
     published_dirs: Vec<PathBuf>,
     registered_ids: Vec<String>,
-    projection: Option<ProjectionSwap>,
     armed: bool,
 }
 
@@ -437,37 +320,36 @@ impl<'a> RestoreGuard<'a> {
             advanced_allocator: None,
             published_dirs: Vec::new(),
             registered_ids: Vec::new(),
-            projection: None,
             armed: true,
         }
     }
 
     fn commit(&mut self) {
-        if let Some(projection) = &mut self.projection {
-            projection.commit();
-        }
         self.armed = false;
     }
 
     fn rollback(&mut self) {
-        if let Some(projection) = &mut self.projection {
-            projection.rollback();
-        }
         for task_id in self.registered_ids.iter().rev() {
-            let _ = self
-                .registry
-                .unregister_task_bundle(task_id, &self.workspace_id);
+            log_rollback_failure(
+                "unregister restored task",
+                self.registry
+                    .unregister_task_bundle(task_id, &self.workspace_id),
+            );
         }
-        let _ = self
-            .registry
-            .replace_workspace_task_indexes(&self.workspace_id, &self.previous_envelopes);
+        log_rollback_failure(
+            "restore workspace task indexes",
+            self.registry
+                .replace_workspace_task_indexes(&self.workspace_id, &self.previous_envelopes),
+        );
         for dir in self.published_dirs.iter().rev() {
-            let _ = fs::remove_dir_all(dir);
+            log_rollback_failure("remove restored bundle", fs::remove_dir_all(dir));
         }
         if let Some(current) = self.advanced_allocator {
-            let _ = self
-                .registry
-                .restore_allocator_after_failed_restore(current, self.previous_allocator);
+            log_rollback_failure(
+                "restore task id allocator",
+                self.registry
+                    .restore_allocator_after_failed_restore(current, self.previous_allocator),
+            );
         }
         self.armed = false;
     }

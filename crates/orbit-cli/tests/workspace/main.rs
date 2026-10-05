@@ -1,0 +1,28 @@
+//! Workspace and machine setup through the built `orbit` binary: init,
+//! registration and selection, sync, routines, sweeps and worktree GC routing.
+//!
+//! One integration-test binary per area keeps link cost down; add a module
+//! here rather than a new top-level `tests/*.rs` file
+//! (`docs/design-patterns/test_strategy.md`).
+
+// Integration fixtures unwrap setup invariants.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+#[path = "../support/fixture_crew.rs"]
+mod fixture_crew;
+#[path = "../support/git_repo.rs"]
+mod git_repo;
+
+mod ambient_authority_isolation;
+mod generation_root;
+mod init_interactive_stdin;
+mod init_minted_prefix;
+mod routine_root;
+mod routine_state_seed;
+mod ship_sweep_root;
+mod sweep_root;
+mod sweep_workspace;
+mod workspace_selector;
+mod workspace_source_remote;
+mod workspace_sync;
+mod worktree_gc_routing;

@@ -52,6 +52,12 @@ write_test_binary() {
 if [ -n "${ORBIT_TEST_EXEC_MARKER:-}" ]; then
   printf '%s\n' executed > "$ORBIT_TEST_EXEC_MARKER"
 fi
+if [ -n "${ORBIT_TEST_CALLS:-}" ]; then
+  printf '%s\n' "$*" >> "$ORBIT_TEST_CALLS"
+fi
+if [ "${ORBIT_TEST_FAIL_HOST_PREP:-0}" = 1 ] && [ "${1:-}" = init ]; then
+  exit 1
+fi
 printf '%s\n' "orbit test 0.0.0"
 BIN
   chmod 755 "$dir/orbit"
@@ -136,6 +142,7 @@ run_shell_install() {
     ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
     ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE=1 \
     ORBIT_TEST_EXEC_MARKER="$marker" \
+    ORBIT_TEST_CALLS="$marker.calls" \
     sh "$ROOT/install.sh"
 }
 
@@ -205,6 +212,16 @@ good_marker="$TMP_ROOT/marker-good"
 run_shell_install "$good_release" "$good_install_dir" "$good_marker" > "$TMP_ROOT/good.log" 2>&1
 test -x "$good_install_dir/orbit"
 test -f "$good_marker"
+if [[ "$TARGET" == *-unknown-linux-gnu ]]; then
+  if ! grep -Fxq 'init --host-prerequisites-only --non-interactive' "$good_marker.calls"; then
+    echo "FAIL: shell installer did not invoke Linux onboarding" >&2
+    exit 1
+  fi
+  if ORBIT_TEST_FAIL_HOST_PREP=1 run_shell_install "$good_release" "$TMP_ROOT/install-prep-failure" "$TMP_ROOT/marker-prep-failure" > "$TMP_ROOT/prep-failure.log" 2>&1; then
+    echo "FAIL: shell installer claimed success after Linux onboarding failed" >&2
+    exit 1
+  fi
+fi
 
 npm_checksums="$TMP_ROOT/npm-checksums.txt"
 npm_signature="$TMP_ROOT/npm-checksums.txt.sig"

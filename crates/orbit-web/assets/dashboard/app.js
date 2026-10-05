@@ -1,17 +1,20 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { requestPanel, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
-import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './tasks.js';
-import { applyAuditHashQuery, buildAuditChips, buildAuditHash, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './audit.js';
-import { renderScoreboard } from './scoreboard.js';
-import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './reliability.js';
-import { initLogTail, fitLogPanelToViewport } from './log-tail.js';
-import { renderDiagnosticsSideCard, renderDiagnostics } from './diagnostics.js';
-import { renderMarkdown } from './markdown.js';
-import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
-import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
-import { fetchAndRenderOperations, initOperations } from './operations.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './js/common.js';
+import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
+import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
+import { renderScoreboard } from './js/scoreboard.js';
+import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
+import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
+import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
+import { renderMarkdown } from './js/markdown.js';
+import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
+import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
+import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
+import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
+import { fetchAndRenderPlugins } from './js/plugins.js';
 import {
   renderRunDetailEmpty,
   renderRunDetailMeta,
@@ -29,6 +32,7 @@ import {
   setActiveRunEventsError,
   getActiveRunLogs,
   setActiveRunLogs,
+  setActiveRunLogsError,
   getActiveRunSubtab,
   setActiveRunSubtab,
   getExpandedStepIndices,
@@ -36,7 +40,9 @@ import {
   clearExpandedStepIndices,
   toggleExpandedStepIndex,
   initRunDetail,
-} from './run-detail.js';
+  beginRunDetailFetch,
+  runDetailFetchCurrent,
+} from './js/run-detail.js';
 
 const STATUS_ORDER = [
   "in-progress",
@@ -51,7 +57,6 @@ const STATUS_ORDER = [
 ];
 
 const DEFAULT_INACTIVE_STATUSES = new Set(["someday", "done", "rejected", "archived"]);
-const STATUS_UPDATE_TARGETS = STATUS_ORDER;
 // ORB-10874: the statuses shown when no `status` filter is represented in the
 // URL — a single source both the initial in-memory state and the hash-parsing
 // default (applyTasksHashQuery) read from, so they cannot drift apart.
@@ -71,9 +76,15 @@ const $ = (id) => document.getElementById(id);
 let searchQuery = "";
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
-// ORB-10874: paging metadata from task-list envelopes so the count can state a
-// shown/total/server-limit fact instead of an ambiguous `N/50`.
+// Paging metadata from task-list envelopes drives the visible range and
+// Previous/Next availability.
 let lastTasksMeta = null;
+let taskPageCursor = null;
+let taskPreviousCursors = [];
+let taskPageLoading = false;
+let taskPageError = null;
+let taskFetchSequence = 0;
+let taskScrollResetPending = false;
 let lastRuns = [];
 let lastRunsMeta = null;
 let lastRunsLoading = true;
@@ -100,6 +111,14 @@ function taskContext() {
   return {
     getTasks: () => lastTasks,
     getTasksMeta: () => lastTasksMeta,
+    getTaskPagination: () => ({
+      canPrevious: taskPreviousCursors.length > 0,
+      canNext: Boolean(lastTasksMeta && lastTasksMeta.next_cursor),
+      loading: taskPageLoading,
+      error: taskPageError,
+    }),
+    navigateTaskPage,
+    resetTaskPagination,
     replaceTask: (updatedTask) => {
       const index = lastTasks.findIndex((task) => task.id === updatedTask.id);
       if (index >= 0) {
@@ -112,7 +131,6 @@ function taskContext() {
     setActiveStatuses: (statuses) => { activeStatuses = statuses; },
     statusOrder: STATUS_ORDER,
     defaultActiveStatuses: DEFAULT_ACTIVE_STATUSES,
-    statusUpdateTargets: STATUS_UPDATE_TARGETS,
     fmtAbsTime,
     refreshDashboard,
   };
@@ -157,6 +175,10 @@ function routerContext() {
     setKnowledgeSubtab: (v) => { activeKnowledgeSubtab = v; },
     getOperationsSubtab: () => activeOperationsSubtab,
     setOperationsSubtab: (v) => { activeOperationsSubtab = v; },
+    // ORB-12724: the Config sub-view is owned by config.js, which needs it to
+    // decide which endpoint a refresh reads; the router only routes to it.
+    getConfigSubtab,
+    setConfigSubtab,
     getRunId: getActiveRunId,
     setRunId: setActiveRunId,
     getRunSubtab: getActiveRunSubtab,
@@ -182,6 +204,7 @@ function routerContext() {
     // fetches need).
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fitLogPanelToViewport,
+    showDrainDock: () => setDockMode("drain"),
 
     // audit pass-throughs (re-exported here for router; imported at top of this file)
     applyAuditHashQuery,
@@ -290,7 +313,7 @@ function renderLocksPanel(payload) {
   const totalTasks = Number.isFinite(Number(payload && payload.total_tasks))
     ? Number(payload.total_tasks)
     : byTask.length;
-  count.textContent = `${totalLocked} files / ${totalTasks} tasks`;
+  count.textContent = `${totalLocked} files · ${totalTasks} tasks`;
 
   if (byTask.length === 0) {
     const empty = el("div", { class: "locks-empty", text: "No files currently locked." });
@@ -300,48 +323,62 @@ function renderLocksPanel(payload) {
     return;
   }
 
+  // One line per task: who holds the locks, its status, how many paths and
+  // which run. The paths themselves fold away, and stay open across refreshes
+  // once opened, so a dozen tasks never bury the dock in file paths.
   const nodes = byTask.map((task) => {
     const taskId = String(task.id || "");
-    const group = el("div", { class: "lock-task-group" });
+    const files = Array.isArray(task.context_files) ? task.context_files : [];
+    const group = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-group" });
     group.dataset.key = `lock-task-${taskId}`;
     group.dataset.hash = JSON.stringify(task);
 
     const idButton = el("button", {
       class: "lock-task-id mono",
-      text: `[${taskId}]`,
+      text: taskId,
       title: `Open ${taskId} in the task list`,
     });
+    idButton.type = "button";
     idButton.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       openVisibleTask(taskId, taskContext());
     });
 
-    const header = el("div", { class: "lock-task-header" }, [
+    const header = el("summary", { class: "lock-task-header" }, [
       idButton,
-      el("span", { class: "lock-separator", text: "·" }),
       statusPill(task.status || "unknown"),
+      el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
     ]);
     if (task.job_run_id) {
-      header.appendChild(el("span", { class: "lock-separator", text: "·" }));
       header.appendChild(el("span", {
         class: "lock-job mono",
-        text: `job_run=${task.job_run_id}`,
-        title: task.job_run_id,
+        text: shortRunId(task.job_run_id),
+        title: `job_run=${task.job_run_id}`,
       }));
     }
     group.appendChild(header);
 
-    const files = Array.isArray(task.context_files) ? task.context_files : [];
+    const list = el("div", { class: "lock-file-list" });
     for (const path of files) {
-      group.appendChild(el("div", {
+      list.appendChild(el("div", {
         class: "lock-file-row mono",
         text: String(path),
         title: String(path),
       }));
     }
+    group.appendChild(list);
     return group;
   });
   syncNodes(body, nodes);
+}
+
+// `jrun-20260925-0324-c9` reads as `…0324-c9`: the date is today's more often
+// than not, and the tail is what tells two runs apart.
+function shortRunId(runId) {
+  const text = String(runId || "");
+  const match = /^jrun-\d{8}-(.+)$/.exec(text);
+  return match ? `…${match[1]}` : text;
 }
 
 function fmtTimestamp(iso) {
@@ -656,14 +693,17 @@ function buildFrictionTagPicker(friction, detail) {
 }
 
 async function patchFriction(friction, patch, control, detail) {
+  const visit = captureWorkspaceVisit();
   if (!friction || !friction.id) return;
   if (control) control.disabled = true;
   for (const node of detail.querySelectorAll(".action-error")) node.remove();
   try {
-    const updated = await patchJson(`/api/frictions/${encodeURIComponent(friction.id)}`, patch);
+    const updated = await patchJson(visit.path(`/api/frictions/${encodeURIComponent(friction.id)}`), patch);
+    if (!visit.isCurrent()) return;
     activeFrictionId = updated.id || friction.id;
     await fetchAndRenderFrictions();
   } catch (e) {
+    if (!visit.isCurrent()) return;
     detail.prepend(el("div", { class: "action-error", text: e.message || "friction update failed" }));
     if (patch.status && control) control.value = friction.status || "open";
   } finally {
@@ -672,15 +712,18 @@ async function patchFriction(friction, patch, control, detail) {
 }
 
 async function resolveFriction(friction, btn, detail) {
+  const visit = captureWorkspaceVisit();
   const oldText = btn.textContent;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>wait`;
   for (const node of detail.querySelectorAll(".action-error")) node.remove();
   try {
-    const updated = await postJson(`/api/frictions/${encodeURIComponent(friction.id)}/resolve`);
+    const updated = await postJson(visit.path(`/api/frictions/${encodeURIComponent(friction.id)}/resolve`));
+    if (!visit.isCurrent()) return;
     activeFrictionId = updated.id || friction.id;
     await fetchAndRenderFrictions();
   } catch (e) {
+    if (!visit.isCurrent()) return;
     detail.prepend(el("div", { class: "action-error", text: e.message || "resolve failed" }));
   } finally {
     btn.disabled = false;
@@ -756,23 +799,23 @@ function wireFrictionResponsiveDetail() {
   });
 }
 
-/* Global task ID resolver (ORB-00211 / ORB-11560).
+/* Task ID resolver (ORB-00211 / ORB-11560), on the Tasks search box.
+   Typing filters the list; Enter on a task ID opens that task even when the
+   filter, the page, or the selected workspace hides it.
    GET /api/tasks/:id is workspace-scoped. A raw fetch without ?workspace=
    hits the server default (often not the selected workspace) and reports an
    existing task as not found — the Diagnostics jump failure on ws_orbit.
-   - Only fires on a task id shaped like ^[A-Z]{2,5}-\d+$ (case-insens)
-     after trim/upper.
-   - 250ms debounce; Enter looks up immediately.
+   - Only fires on Enter, on a task id shaped like ^[A-Z]{2,5}-\d+$
+     (case-insens) after trim/upper.
    - Lookup uses the selected workspace first when one is selected; aggregate
      mode probes active workspaces and adopts the owner.
    - Stale replies after a workspace change or a newer lookup are ignored.
    - Not-found is reserved for a confirmed miss; loading / 403 / 5xx / network
      have distinct copy.
 */
-function wireGlobalTaskResolver() {
-  const input = $("global-task-id");
+function wireTaskIdResolver() {
+  const input = $("task-search");
   if (!input) return;
-  let debounce = null;
   let lookupSeq = 0;
   const ID_RE = /^[A-Z]{2,5}-\d+$/i;
 
@@ -787,7 +830,7 @@ function wireGlobalTaskResolver() {
       wrap.classList.remove("error");
       wrap.classList.remove("pending");
     }
-    const err = $("global-task-id-error");
+    const err = $("task-lookup-status");
     if (err) err.textContent = "";
   }
 
@@ -798,7 +841,7 @@ function wireGlobalTaskResolver() {
       wrap.classList.toggle("error", kind === "error");
       wrap.classList.toggle("pending", kind === "pending");
     }
-    const err = $("global-task-id-error");
+    const err = $("task-lookup-status");
     if (err) err.textContent = msg;
   }
 
@@ -848,16 +891,21 @@ function wireGlobalTaskResolver() {
   }
 
   function adoptWorkspace(workspaceId) {
-    if (!workspaceId || workspaceId === getWorkspace()) return;
+    if (!workspaceId || workspaceId === getWorkspace()) return false;
     setWorkspace(workspaceId);
     persistScopeToUrl();
     const selector = $("workspace-select");
     if (selector) selector.value = workspaceId;
+    return true;
   }
 
-  function openLookedUpTask(task, workspaceId) {
-    adoptWorkspace(workspaceId);
+  async function openLookedUpTask(task, workspaceId, seq) {
+    const workspaceChanged = adoptWorkspace(workspaceId);
     sAT("tasks", { refresh: false });
+    if (workspaceChanged) {
+      await refreshDashboard();
+      if (seq !== lookupSeq || getWorkspace() !== workspaceId) return;
+    }
     searchQuery = "";
     const ts = $("task-search");
     if (ts) ts.value = "";
@@ -905,7 +953,7 @@ function wireGlobalTaskResolver() {
       }
       if (discardIfStale()) return;
       if (primary.res.ok && primary.body && primary.body.id) {
-        openLookedUpTask(primary.body, primary.workspaceId);
+        await openLookedUpTask(primary.body, primary.workspaceId, seq);
         return;
       }
 
@@ -933,7 +981,7 @@ function wireGlobalTaskResolver() {
 
     const hit = probed.find((result) => result && result.res && result.res.ok && result.body && result.body.id);
     if (hit) {
-      openLookedUpTask(hit.body, hit.workspaceId);
+      await openLookedUpTask(hit.body, hit.workspaceId, seq);
       return;
     }
     if (probed.some((result) => result && result.network)) {
@@ -950,32 +998,16 @@ function wireGlobalTaskResolver() {
     showLookupStatus("error", `${id} not found`);
   }
 
-  function scheduleLookup() {
-    if (debounce) clearTimeout(debounce);
-    const raw = (input.value || "").trim();
-    if (!raw) {
-      lookupSeq += 1;
-      clearLookupStatus();
-      return;
-    }
-    const candidate = raw.toUpperCase();
-    if (!ID_RE.test(candidate)) {
-      lookupSeq += 1;
-      return;
-    }
-    debounce = setTimeout(() => lookupTask(candidate), 250);
-  }
-
+  // Editing the query abandons any lookup still in flight.
   input.addEventListener("input", () => {
+    lookupSeq += 1;
     clearLookupStatus();
-    scheduleLookup();
   });
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     const candidate = (input.value || "").trim().toUpperCase();
     if (!ID_RE.test(candidate)) return;
     if (event.preventDefault) event.preventDefault();
-    if (debounce) clearTimeout(debounce);
     lookupTask(candidate);
   });
 }
@@ -1056,16 +1088,45 @@ function resetHealthStrip() {
 // active status chips are sent as `?status=a,b` instead of over-fetching every
 // status and filtering client-side. That keeps the `total`/`limit`/`truncated`
 // envelope meaningful for the filter actually in effect (see formatTaskCount
-// in tasks.js). Omitted when every status (or none) is active: the endpoint's
-// status-neutral response is correct for all-active, while an empty selection
-// is applied client-side because the API has no empty status set.
-function tasksListPath() {
+// in tasks.js). Omitted only when every status is active; an empty selection is
+// sent explicitly as `status=none` so the server applies it before pagination.
+function resetTaskPagination() {
+  taskPageCursor = null;
+  taskPreviousCursors = [];
+  taskPageError = null;
+  lastTasksMeta = null;
+  taskScrollResetPending = true;
+}
+
+function tasksListPath(base = "/api/tasks") {
   const sp = new URLSearchParams();
   if (activeStatuses.size > 0 && activeStatuses.size < STATUS_ORDER.length) {
     sp.set("status", STATUS_ORDER.filter((s) => activeStatuses.has(s)).join(","));
+  } else if (activeStatuses.size === 0) {
+    sp.set("status", "none");
   }
+  if (searchQuery) sp.set("q", searchQuery);
+  if (taskPageCursor) sp.set("cursor", taskPageCursor);
   const qs = sp.toString();
-  return qs ? `/api/tasks?${qs}` : "/api/tasks";
+  return qs ? `${base}?${qs}` : base;
+}
+
+function navigateTaskPage(direction) {
+  if (taskPageLoading) return;
+  if (direction === "next") {
+    const next = lastTasksMeta && lastTasksMeta.next_cursor;
+    if (!next) return;
+    taskPreviousCursors.push(taskPageCursor);
+    taskPageCursor = next;
+  } else if (direction === "previous") {
+    if (taskPreviousCursors.length === 0) return;
+    taskPageCursor = taskPreviousCursors.pop();
+  } else {
+    return;
+  }
+  taskPageError = null;
+  taskScrollResetPending = true;
+  fetchAndRenderTasks().catch((error) => console.error("Failed to navigate task pages", error));
 }
 
 function fetchAndRenderTasks() {
@@ -1073,7 +1134,11 @@ function fetchAndRenderTasks() {
   // every workspace's tasks; otherwise the single/selected workspace's tasks
   // (the workspace query param is applied by fetchJson).
   const aggregate = isAggregateView();
-  const path = aggregate ? "/api/tasks/all" : tasksListPath();
+  const path = tasksListPath(aggregate ? "/api/tasks/all" : "/api/tasks");
+  const sequence = ++taskFetchSequence;
+  taskPageLoading = true;
+  taskPageError = null;
+  renderTaskPagination(taskContext());
   // /api/crews is per-workspace and 400s without a concrete workspace, so in
   // aggregate mode skip the crew fetch and let the crew controls degrade to a
   // disabled "crew unavailable" fallback rather than rejecting the Promise.all
@@ -1090,10 +1155,32 @@ function fetchAndRenderTasks() {
     const tasks = listItems(payload);
     lastTasks = tasks;
     lastTasksMeta = payload && !Array.isArray(payload)
-      ? { total: payload.total, limit: payload.limit, truncated: payload.truncated }
+      ? {
+          total: payload.total,
+          limit: payload.limit,
+          truncated: payload.truncated,
+          offset: payload.offset || 0,
+          next_cursor: payload.next_cursor || null,
+        }
       : null;
     renderTasks(tasks, taskContext());
-  }, "tasks-count");
+    if (taskScrollResetPending) {
+      const body = $("tasks-body");
+      if (body) body.scrollTop = 0;
+      taskScrollResetPending = false;
+    }
+  }, "tasks-count").catch((error) => {
+    if (sequence === taskFetchSequence) {
+      taskPageError = error.message || String(error);
+      renderTaskPagination(taskContext());
+    }
+    throw error;
+  }).finally(() => {
+    if (sequence === taskFetchSequence) {
+      taskPageLoading = false;
+      renderTaskPagination(taskContext());
+    }
+  });
 }
 
 // ORB-00030: discover servable workspaces and, in global mode, install a
@@ -1113,18 +1200,30 @@ async function initWorkspaceSelector() {
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
     const only = dashboardWorkspaces.find((workspace) => workspace.status === "active");
-    if (only) setWorkspace(only.id);
+    if (only) {
+      const linkedAll = isAggregateLinked();
+      setWorkspace(only.id);
+      // A link asking for "all" has nothing to aggregate here; repair the address.
+      if (linkedAll) persistScopeToUrl();
+    }
     return; // single mode: selected implicitly, no selector needed
   }
 
   // Default to the workspace flagged by the server (the cwd workspace, if the
   // server was launched inside one) so every tab works out of the box; else the
   // first active workspace. "All workspaces" (aggregate) is an explicit choice.
-  if (!getWorkspace()) {
+  // A link can also name a workspace that is gone or unavailable; the selector
+  // has no option for it, so keeping it would fail every panel with no way to
+  // recover from the selector. Treat it like no workspace and repair the URL.
+  // An explicit aggregate link (`workspace=all`) is a choice, not a missing one.
+  const linked = getWorkspace();
+  const linkedIsServable = isAggregateLinked() || dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
+  if (!linkedIsServable) {
     const def = dashboardWorkspaces.find((w) => w.is_default);
     const firstActive = dashboardWorkspaces.find((w) => w.status === "active");
     const initial = (def || firstActive || dashboardWorkspaces[0]).id;
     setWorkspace(initial);
+    if (linked) persistScopeToUrl();
   }
   buildWorkspaceSelector();
 }
@@ -1190,18 +1289,22 @@ function activeRefreshJobs() {
   // The health strip is global; refresh on every tick alongside the active tab.
   // The per-workspace summary (/api/audit/summary) is replaced by a placeholder
   // instead of fetched in aggregate mode.
-  const jobs = [];
+  const jobs = [fetchAndRenderHostResources()];
   if (aggregate) {
     renderAggregatePlaceholders();
   } else {
     jobs.push(fetchAndRenderSummary());
   }
+  // Keep the chrome indicator current even when Tasks and its dock are hidden.
+  jobs.push(fetchAndRenderAutoDrainPane());
 
   if (activeTab === "tasks") {
     jobs.push(fetchAndRenderTasks());
     // /api/tasks/locks is per-workspace; skip it in aggregate mode (the locks
     // panel shows the placeholder rendered above).
     if (!aggregate && !document.hidden) jobs.push(fetchAndRenderTaskLocks());
+    // The dock's Drain card; without a concrete workspace it renders its own
+    // read-only note instead of fetching.
     return jobs;
   }
 
@@ -1221,6 +1324,16 @@ function activeRefreshJobs() {
 
   if (activeTab === "operations") {
     jobs.push(fetchAndRenderOperations());
+    return jobs;
+  }
+
+  if (activeTab === "plugins") {
+    jobs.push(fetchAndRenderPlugins());
+    return jobs;
+  }
+
+  if (activeTab === "config") {
+    jobs.push(fetchAndRenderConfig());
     return jobs;
   }
 
@@ -1246,10 +1359,7 @@ function activeRefreshJobs() {
     // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
     // ahead of the guard below rather than being placeheld with the rest.
     if (activeDiagSubtab === "reliability") {
-      jobs.push(
-        fetchAndRenderReliability()
-          .catch((e) => console.error("Failed to fetch reliability metrics", e))
-      );
+      jobs.push(fetchAndRenderReliability());
       return jobs;
     }
     if (aggregate && activeDiagSubtab === "runs") {
@@ -1337,26 +1447,41 @@ function fetchAndRenderTaskLocks() {
 }
 
 function fetchAndRenderRunDetail() {
-  if (!getActiveRunId()) return Promise.resolve();
-  return fetchJson(`/api/runs/${encodeURIComponent(getActiveRunId())}`).then((data) => {
+  const runId = getActiveRunId();
+  if (!runId) return Promise.resolve();
+  const token = beginRunDetailFetch("detail");
+  return fetchJson(`/api/runs/${encodeURIComponent(runId)}`).then((data) => {
+    if (!runDetailFetchCurrent("detail", token)) return;
     setActiveRunDetail(data);
     renderRunDetailMeta();
     renderRunKnowledge();
     renderRunGantt();
     renderRunSteps();
   }).catch((e) => {
-    renderRunDetailEmpty(`Run not found: ${getActiveRunId()}`);
+    if (!runDetailFetchCurrent("detail", token)) return;
+    // Only a 404 means the run does not exist; a 500 or a dropped connection is
+    // a failed read, and telling the operator the run is missing sends them
+    // hunting for a run that is fine.
+    renderRunDetailEmpty(
+      e.status === 404
+        ? `Run not found: ${runId}`
+        : `Unable to load run ${runId}: ${e.message}. Use Refresh to retry.`,
+    );
     throw e;
   });
 }
 
 function fetchAndRenderRunEvents() {
-  if (!getActiveRunId()) return Promise.resolve();
-  return fetchJson(`/api/runs/${encodeURIComponent(getActiveRunId())}/events?limit=${RUN_EVENTS_LIMIT}`).then((events) => {
+  const runId = getActiveRunId();
+  if (!runId) return Promise.resolve();
+  const token = beginRunDetailFetch("events");
+  return fetchJson(`/api/runs/${encodeURIComponent(runId)}/events?limit=${RUN_EVENTS_LIMIT}`).then((events) => {
+    if (!runDetailFetchCurrent("events", token)) return;
     setActiveRunEvents(events);
     renderRunEvents();
     renderRunGantt();
   }).catch((error) => {
+    if (!runDetailFetchCurrent("events", token)) return;
     setActiveRunEvents([]);
     if (error.status !== 404) setActiveRunEventsError(error.message);
     renderRunEvents();
@@ -1365,18 +1490,24 @@ function fetchAndRenderRunEvents() {
 }
 
 function fetchAndRenderRunLogs() {
-  if (!getActiveRunId()) return Promise.resolve();
-  return fetchJson(`/api/runs/${encodeURIComponent(getActiveRunId())}/logs?limit=${RUN_EVENTS_LIMIT}`).then((logs) => {
+  const runId = getActiveRunId();
+  if (!runId) return Promise.resolve();
+  const token = beginRunDetailFetch("logs");
+  return fetchJson(`/api/runs/${encodeURIComponent(runId)}/logs?limit=${RUN_EVENTS_LIMIT}`).then((logs) => {
+    if (!runDetailFetchCurrent("logs", token)) return;
     setActiveRunLogs(logs);
     renderRunSteps();
-  }).catch(() => {
+  }).catch((error) => {
+    if (!runDetailFetchCurrent("logs", token)) return;
     setActiveRunLogs([]);
+    if (error.status !== 404) setActiveRunLogsError(error.message);
     renderRunSteps();
   });
 }
 
 function fetchAndRenderSummary() {
-  return requestPanel("audit-summary-body", "summary", () => fetchJson(`/api/audit/summary?since=24h`), (data) => {
+  const since = effectiveAuditWindow() || "24h";
+  return requestPanel("audit-summary-body", "summary", () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
     lastSummary = data;
     renderHealthStrip(data);
     renderAuditSummary(data, auditContext());
@@ -1448,21 +1579,30 @@ function renderHealthStrip(data) {
   const failed = $("tile-failed");
   if (failed) {
     failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
-    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Distinct from Recent Runs' failed filter (durable Failed state, no window, most recent page) and Errors (step/event failures this month). Click to open failed runs.`;
-    failed.style.cursor = "pointer";
-    if (!failed.dataset.failedNavBound) {
-      failed.dataset.failedNavBound = "1";
-      failed.addEventListener("click", () => {
-        setRunFilter("failed");
-        sAT("diagnostics/runs");
-      });
-    }
+    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Distinct from Runs' failed filter (durable Failed state, no window, most recent page) and Errors (step/event failures this month). Opens failed runs.`;
   }
+  const windowTag = $("kpi-window");
+  if (windowTag) windowTag.textContent = windowLabel;
 
   setRailCount("rail-count-audit", data.events);
-  setRailCount("rail-count-diagnostics", data.failed_runs, true);
-  setRailCount("rail-count-diag-errors", data.failed_runs, true);
+  setRailCount("rail-count-diag-runs", data.failed_runs, true);
   renderSparkline(data.sparkline || []);
+}
+
+// Each health count opens the view that explains it.
+function wireHealthStrip() {
+  const go = (id, route, before) => {
+    const node = $(id);
+    if (!node) return;
+    node.addEventListener("click", () => {
+      if (before) before();
+      sAT(route);
+    });
+  };
+  go("tile-failed", "diagnostics/runs", () => setRunFilter("failed"));
+  go("tile-active", "diagnostics/runs", () => setRunFilter("active"));
+  go("tile-denials", "audit/policy");
+  go("tile-events", "audit/events");
 }
 
 function formatBigInt(n) {
@@ -1498,10 +1638,10 @@ function renderSparkline(buckets) {
   svg.appendChild(path);
 }
 
+// The connection line names the destination the way the rail does, not by its
+// route: an operator on Runs should not read "diagnostics/runs".
 function refreshLabel() {
-  if (activeTab === "diagnostics") return `diagnostics/${activeDiagSubtab}`;
-  if (activeTab === "run-detail") return `run/${getActiveRunId() || "?"}`;
-  return activeTab;
+  return destinationLabel(activeTab, activeDiagSubtab);
 }
 
 
@@ -1528,6 +1668,8 @@ async function refreshDashboard() {
 // Invalidate caches at the scope boundary, including programmatic selections.
 // Panel state is reset synchronously by common.js before another frame paints.
 onWorkspaceChange(() => {
+  resetTaskPagination();
+  taskFetchSequence += 1;
   lastTasks = [];
   lastTasksMeta = null;
   cacheCrewPayload({ crews: [] });
@@ -1551,10 +1693,12 @@ wireSearch(tasksContext);
 wireFrictionSearch();
 wireFrictionStatusFilter();
 wireFrictionResponsiveDetail();
-wireGlobalTaskResolver();
+wireTaskIdResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 $("refresh-btn").addEventListener("click", refreshDashboard);
+initHostResources();
+wireHealthStrip();
 wireReliabilityWindowSelector();
 setScopeChangeListener(() => {
   persistScopeToUrl();
@@ -1572,6 +1716,7 @@ setScopeChangeListener(() => {
   refreshDashboard();
 });
 initOperations({ getWorkspaces: () => dashboardWorkspaces, formatAbsoluteTime: fmtAbsTime });
+initConfig();
 
 initRuns(runsContext());
 initRunDetail(runDetailContext());

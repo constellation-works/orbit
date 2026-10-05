@@ -36,9 +36,8 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     // rule (ORB-10427) — never re-spelled per call site.
     let identity = WorktreeIdentity::from_input(input, None)?;
     let task_ids = &identity.task_ids;
-    // `identity.run_id` names the stable checkout (epic pipelines pin
-    // `epic-<task-id>`). Execution authority stays on the admitted job when
-    // the dispatcher supplied `job_run_id`.
+    // `identity.run_id` names the stable checkout. Execution authority stays
+    // on the admitted job when the dispatcher supplied `job_run_id`.
     let worktree_run_id = &identity.run_id;
     let job_run_id =
         input_string_field(input, "job_run_id").unwrap_or_else(|| worktree_run_id.clone());
@@ -110,7 +109,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         }
     }
 
-    let branch_name = branch_name_for_tasks(&identity.branch_prefix, task_ids);
+    let branch_name = branch_name_for_tasks(&identity.branch_prefix, task_ids, worktree_run_id);
 
     let worktree_path = identity.path(repo_root)?;
 
@@ -118,6 +117,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     // checkout whose HEAD is not `base_sha`, so admission never sees a
     // checkpoint that later commit provenance would reject.
     let branch_name = ensure_worktree(repo_root, &worktree_path, &base_sha, &branch_name)?;
+    orbit_common::fs::path::ensure_orbit_scratch_dir(&worktree_path)?;
 
     // ORB-10602: mount-anchor materialization deliberately does *not* happen
     // here any more. Setup only ever saw a snapshot of the task's context files
@@ -127,6 +127,17 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     // see `activity_job::cli_runner::spawn::spawn_linux_bwrap`.
 
     let workspace_path_str = worktree_path.to_string_lossy().to_string();
+
+    // ORB-13985: the run a single task was last linked to, read before this
+    // run stamps its own id; `candidate_resume` looks there for a candidate
+    // that run's failure handoff preserved.
+    let prior_job_run_id = match task_ids.as_slice() {
+        [task_id] => host
+            .get_task(task_id)?
+            .job_run_id
+            .filter(|prior| prior != &job_run_id),
+        _ => None,
+    };
 
     for task_id in task_ids {
         host.admit_task_for_workflow(task_id, "worktree_setup")?;
@@ -139,20 +150,22 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         )?;
     }
 
-    Ok(worktree_setup_output(
+    let mut output = worktree_setup_output(
         &job_run_id,
         workspace_path_str,
         branch_name,
         start_point,
         base_sha,
-    ))
+    );
+    output["prior_job_run_id"] = json!(prior_job_run_id);
+    Ok(output)
 }
 
 // pub(crate) widened for tests/ layout migration (ORB-00240); test reaches via
 // exposed surface per docs/design-patterns/test_layout.md. (Logged via
 // orbit.task.update model=grok on ORB-00240 before this edit for the visibility
 // change on internal test helpers.)
-pub(crate) fn worktree_setup_output(
+fn worktree_setup_output(
     run_id: &str,
     workspace_path: String,
     head_ref: String,
@@ -179,7 +192,7 @@ pub(crate) fn worktree_setup_output(
 // exposed surface per docs/design-patterns/test_layout.md. (Logged via
 // orbit.task.update model=grok on ORB-00240 before this edit for the visibility
 // change on internal test helpers.)
-pub(crate) fn ensure_worktree(
+fn ensure_worktree(
     repo_root: &Path,
     worktree_path: &Path,
     start_point: &str,
@@ -520,16 +533,12 @@ fn is_empty_dir(path: &Path) -> Result<bool, OrbitError> {
     Ok(entries.next().is_none())
 }
 
-fn branch_name_for_tasks(branch_prefix: &str, task_ids: &[String]) -> String {
+fn branch_name_for_tasks(branch_prefix: &str, task_ids: &[String], run_id: &str) -> String {
     if task_ids.len() == 1 {
-        let short_ts = format!(
-            "{:08x}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        return format!("{branch_prefix}/{}-{short_ts}", task_ids[0]);
+        // A retry for the same run must address the same ref even after the
+        // checkout has been removed and only its candidate branch remains.
+        let run_hash = format!("{:x}", Sha256::digest(run_id.as_bytes()));
+        return format!("{branch_prefix}/{}-{}", task_ids[0], &run_hash[..8]);
     }
 
     let mut sorted_ids = task_ids.to_vec();

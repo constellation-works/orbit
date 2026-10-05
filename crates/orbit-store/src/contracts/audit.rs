@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
+use orbit_types::plugin::{PluginProvenance, PluginSecretUpdateStatus};
 use orbit_types::telemetry::{AuditAttribution, AuditEventStatus};
 use orbit_types::tool::{McpCapability, McpTransport};
 
@@ -26,9 +27,9 @@ pub struct AuditEventInsertParams {
     pub session_id: Option<String>,
     pub workspace_id: Option<String>,
     pub caller_machine_id: Option<String>,
-    pub caller_host_id: Option<String>,
+    pub caller_machine_name: Option<String>,
     pub process_machine_id: Option<String>,
-    pub process_host_id: Option<String>,
+    pub process_machine_name: Option<String>,
     pub transport: Option<McpTransport>,
     pub effective_capabilities: BTreeSet<McpCapability>,
     pub origin_session_id: Option<String>,
@@ -96,6 +97,12 @@ pub struct AuditToolAggregate {
     pub cli_total: i64,
     pub mcp_failures: i64,
     pub cli_failures: i64,
+    /// Denied tool invocations (`command = tool`, `run` or `run-mcp`).
+    /// These are excluded from the raw call-rate denominator.
+    pub callable_denials: i64,
+    /// Raw failed tool invocations classified as unexpected by the shared
+    /// incident classifier. Includes every matching row, without a scan cap.
+    pub callable_unexpected_failures: i64,
     pub avg_duration_ms: f64,
 }
 
@@ -154,6 +161,24 @@ pub struct AuditInvocationFields<'a> {
     /// [`AuditEventInsertParams::role`] or to the `actor_*` projection derived
     /// from it, so no query that reads trusted identity can pick it up.
     pub self_reported_actor: Option<&'a str>,
+    /// The plugin behind this tool call: name, version, and manifest digest
+    /// (design `docs/design/plugins/1_scope.md` §4.4). `None` for every
+    /// built-in and legacy external tool.
+    pub plugin: Option<&'a PluginProvenance>,
+    /// The names of the declared secrets the plugin call's request carried
+    /// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names
+    /// only: no value reaches an audit row. Empty for every other call.
+    pub plugin_secrets: &'a [String],
+    /// Each secret the plugin's backend asked to rotate, by name, and whether
+    /// the update was applied or refused (design
+    /// `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). `None`, or an
+    /// empty map, for every call that rotated nothing.
+    pub plugin_secret_updates: Option<&'a BTreeMap<String, PluginSecretUpdateStatus>>,
+    /// Set when a run's plugin broker executed the call for a sandboxed
+    /// agent (design `docs/design/plugins/2_agent_call_broker.md` §4.4): the
+    /// authenticated peer's PID. The row is then written `brokered`. `None`
+    /// for every in-process call.
+    pub brokered_peer_pid: Option<u32>,
 }
 
 /// Per-(actor, attribution) aggregate of audited tool calls [ORB-10890].

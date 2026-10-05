@@ -2,30 +2,31 @@
 
 use clap::Args;
 use orbit_core::{
-    CompletionPolicy, DrainAdmissionsStopRequest, OperationDrainRequest, OrbitRuntime,
+    CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime, WorkspacePullRequest,
 };
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_notices};
 
 pub(super) const AUTO_WORKFLOW: &str = "auto";
 
 #[derive(Args)]
 #[command(
-    about = "Drain the workspace backlog for a window (loose leaves, plus one epic)",
+    about = "Drain the workspace backlog for a window",
     override_usage = "orbit run auto [OPTIONS]",
-    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n\n\
+    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n\n\
                   The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
                   tasks in flight, starting a replacement as each one finishes rather than\n\
-                  waiting for the batch. An epic root runs alongside the leaves, one at a time.\n\n\
+                  waiting for the batch.\n\n\
                   `--complete` is blanket authorization: it applies to every task the drain\n\
                   admits for the whole window, including work that reaches the backlog after\n\
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\
                   and returns without knowing the eventual outcome.\n\n\
                   Complexity pools select only for tasks without an explicit crew.\n\
+                  The tiers are low, medium, hard and xhard; xhard is the reserved top tier.\n\
                   Each CLI pool replaces its matching workflow pool for this drain.\n\
                   Empty pools and unset complexity use the existing default crew chain.\n\
                   Selections are recorded at admission and retained on retries/resume.\n\
@@ -35,16 +36,24 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   crew is excluded is simply not started, and `orbit run readiness --allow-crew`\n\
                   names it. To actually move that work, reassign its crew yourself. Tasks a\n\
                   different invocation already has in flight keep running.\n\n\
+                  `--pull <SELECTOR>` runs on a replica checkout instead. The owner named by\n\
+                  the host-qualified selector orders the work and admits one claim at a\n\
+                  time; each claim runs here as a leaf that ends at a pull request handed\n\
+                  back to the owner, which keeps landing authority. The selector must name\n\
+                  this replica's own owner and workspace, and the owner's probe must admit\n\
+                  this executor, before anything is submitted. The drain keeps settling its\n\
+                  claims with the owner after the window closes, until none is left. Each\n\
+                  leaf also delivers its own handoff or failure when it ends, so a leaf\n\
+                  still settles if its drain was stopped or cancelled.\n\n\
                   `--stop` ends new admissions for this workspace's active auto coordinator.\n\
                   You do not need a run ID. Already admitted workers keep running under the\n\
                   completion authority they were started with; this is not cancellation.\n\
                   To cancel those workers, `orbit run cancel <RUN_ID> --confirm` each child.\n\
-                  A second `--stop`, or `--stop` with no active coordinator, is a no-op.\n\n\
-                  `--grant <ID>` binds the drain to an operation-mode grant enabled with\n\
-                  `orbit operation enable`: the window is capped at the grant's remaining time,\n\
-                  only the grant's finite task set is admitted, promotion follows fresh pilot\n\
-                  evidence, and completion is the grant's captured authority rather than\n\
-                  `--complete`. Each child admission rechecks the grant.\n\n\
+                  On a replica, `--stop` also delivers every pull settlement still recorded\n\
+                  for any owner, and ends unlaunched claims that no running pull drain will\n\
+                  carry, so it is also how to flush settlements an earlier, cancelled drain\n\
+                  left behind. Otherwise a second `--stop`, or `--stop` with no active\n\
+                  coordinator, is a no-op.\n\n\
                   Inspect submitted runs with `orbit run history -j workspace_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
 )]
@@ -75,23 +84,44 @@ pub struct AutoCommand {
     /// invocation is already running is cancelled.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
-    /// Random crew pool for unassigned low-complexity tasks. Overrides the
-    /// matching workflow pool; pass the flag with no names to disable it.
+    /// Require a systemd user scope for the coordinator and every leaf worker
+    /// it starts. Overrides machine.worker_containment_strict for this drain.
+    #[arg(long)]
+    pub strict_worker_containment: bool,
+    /// Random crew pool for unassigned low-complexity tasks. Entries are
+    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
+    /// bare or all weighted. Overrides the matching workflow pool; pass the
+    /// flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub low_complexity_crews: Option<Vec<String>>,
-    /// Random crew pool for unassigned medium-complexity tasks. Overrides the
-    /// matching workflow pool; pass the flag with no names to disable it.
+    /// Random crew pool for unassigned medium-complexity tasks. Entries are
+    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
+    /// bare or all weighted. Overrides the matching workflow pool; pass the
+    /// flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub medium_complexity_crews: Option<Vec<String>>,
-    /// Random crew pool for unassigned hard-complexity tasks. Overrides the
-    /// matching workflow pool; pass the flag with no names to disable it.
+    /// Random crew pool for unassigned hard-complexity tasks. Entries are
+    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
+    /// bare or all weighted. Overrides the matching workflow pool; pass the
+    /// flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub hard_complexity_crews: Option<Vec<String>>,
-    /// Bind this drain to an operation-mode grant (see `orbit operation`).
-    /// Completion, scope, and limits come from the grant; `--complete` is
-    /// not accepted alongside it.
-    #[arg(long, value_name = "GRANT_ID", conflicts_with = "complete")]
-    pub grant: Option<String>,
+    /// Random crew pool for unassigned xhard-complexity tasks, the reserved
+    /// top tier. Entries are `crew` or `crew:weight` (relative, non-negative
+    /// whole numbers), all bare or all weighted. Overrides the matching
+    /// workflow pool; pass the flag with no names to disable it.
+    #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
+    pub xhard_complexity_crews: Option<Vec<String>>,
+    /// Pull from this owner instead of draining a local backlog. Takes the
+    /// owner's host-qualified selector from federated discovery and runs only
+    /// on that owner's replica checkout. Pulled work always stops at a handoff
+    /// the owner lands; `--complete` and the crew options do not apply.
+    #[arg(
+        long,
+        value_name = "SELECTOR",
+        conflicts_with_all = ["complete", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
+    )]
+    pub pull: Option<String>,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -104,7 +134,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "grant", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
     )]
     pub stop: bool,
 }
@@ -114,33 +144,57 @@ impl Execute for AutoCommand {
         if self.stop {
             return execute_stop(runtime, self.claim_token.as_deref());
         }
+        if let Some(selector) = self.pull.as_deref() {
+            let for_seconds = self
+                .for_duration
+                .as_deref()
+                .map(parse_duration_seconds)
+                .transpose()?;
+            let invoke = runtime.submit_workspace_pull_run(
+                WorkspacePullRequest {
+                    selector,
+                    for_seconds,
+                    max_active_leaf_runs: self.concurrency,
+                    actor: None,
+                },
+                orbit_types::workflow::JobRunTrigger::cli(),
+            )?;
+            return workflow_dispatch_payload_with_notices(
+                AUTO_WORKFLOW,
+                &[WorkflowDispatchResult {
+                    workflow_alias: AUTO_WORKFLOW,
+                    job_id: invoke.job_name,
+                    run_id: invoke.run_id,
+                    state: if invoke.queued {
+                        "queued".to_string()
+                    } else {
+                        "submitted".to_string()
+                    },
+                    attempt: 1,
+                    error_code: None,
+                    error_message: None,
+                }],
+                submission_warnings(runtime),
+                runtime.required_validation_note().into_iter().collect(),
+            );
+        }
         let complexity_crews = orbit_config::ComplexityCrewPools {
             low: self.low_complexity_crews,
             medium: self.medium_complexity_crews,
             hard: self.hard_complexity_crews,
+            xhard: self.xhard_complexity_crews,
         };
         let for_seconds = self
             .for_duration
             .as_deref()
             .map(parse_duration_seconds)
             .transpose()?;
-        if let Some(grant_id) = self.grant.as_deref() {
-            return execute_grant_bound(
-                runtime,
-                grant_id,
-                for_seconds,
-                self.concurrency,
-                &self.allow_crew,
-                &complexity_crews,
-                self.claim_token.as_deref(),
-            );
-        }
         let completion = if self.complete {
             CompletionPolicy::Done
         } else {
             CompletionPolicy::Review
         };
-        let invoke = runtime.submit_workspace_auto_run(
+        let invoke = runtime.submit_workspace_auto_run_with_containment(
             for_seconds,
             self.concurrency,
             completion,
@@ -148,6 +202,8 @@ impl Execute for AutoCommand {
             &complexity_crews,
             None,
             self.claim_token.as_deref(),
+            orbit_types::workflow::JobRunTrigger::cli(),
+            self.strict_worker_containment,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,
@@ -162,53 +218,42 @@ impl Execute for AutoCommand {
             error_code: None,
             error_message: None,
         };
-        workflow_dispatch_payload(AUTO_WORKFLOW, &[run])
+        workflow_dispatch_payload_with_notices(
+            AUTO_WORKFLOW,
+            &[run],
+            owner_drain_warnings(runtime),
+            runtime.required_validation_note().into_iter().collect(),
+        )
     }
 }
 
-/// [ORB-11332] A drain whose every admission is bound to a grant.
-#[allow(clippy::too_many_arguments)]
-fn execute_grant_bound(
-    runtime: &OrbitRuntime,
-    grant_id: &str,
-    for_seconds: Option<u64>,
-    concurrency: Option<u32>,
-    allow_crew: &[String],
-    complexity_crews: &orbit_config::ComplexityCrewPools,
-    claim_token: Option<&str>,
-) -> CommandOut {
-    let result = runtime.submit_operation_drain(OperationDrainRequest {
-        grant_id: Some(grant_id),
-        for_seconds,
-        max_active_leaf_runs: concurrency,
-        allowed_crews: allow_crew,
-        complexity_crews,
-        actor: None,
-        claim_token,
-    })?;
-    Ok(Payload::detail(
-        json!({
-            "workflow": AUTO_WORKFLOW,
-            "job_id": result.invoke.job_name,
-            "run_id": result.invoke.run_id,
-            "state": if result.invoke.queued { "queued" } else { "submitted" },
-            "grant_id": result.admission.grant_id,
-            "grant_revision": result.admission.grant_revision,
-            "completion": result.admission.completion,
-            "window_seconds": result.window_seconds,
-            "leaf_ceiling": result.leaf_ceiling,
-            "expires_at": result.admission.expires_at.to_rfc3339(),
-        }),
-        format!(
-            "Submitted auto run {} under grant {} (completion: {}, window: {}s, leaf ceiling: {}).",
-            result.invoke.run_id,
-            result.admission.grant_id,
-            result.admission.completion,
-            result.window_seconds,
-            result.leaf_ceiling
-        ),
-    )
-    .into())
+/// What a drain submission warns about while still starting: a host resource
+/// throttle, and a validation environment that may not find the user's
+/// toolchain [ORB-13987].
+fn submission_warnings(runtime: &OrbitRuntime) -> Vec<String> {
+    resource_throttle_warning(runtime)
+        .into_iter()
+        .chain(runtime.validation_env_preflight_warning())
+        .collect()
+}
+
+/// A local drain's warnings, plus the backlog tasks this host's OS cannot
+/// start: they stay waiting for a host of theirs, named here so the drain
+/// does not read as idle over an empty backlog.
+fn owner_drain_warnings(runtime: &OrbitRuntime) -> Vec<String> {
+    let mut warnings = submission_warnings(runtime);
+    warnings.extend(runtime.host_os_backlog_warning());
+    warnings
+}
+
+/// [ORB-13901] The drain starts either way and holds its own waves while the
+/// host is throttled; say so at start rather than leaving an idle drain to be
+/// read as an empty backlog.
+pub(super) fn resource_throttle_warning(runtime: &OrbitRuntime) -> Option<String> {
+    runtime
+        .admission_resource_throttle()
+        .throttle
+        .map(|throttle| throttle.hold_reason())
 }
 
 fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut {
@@ -217,9 +262,11 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
         source: "run_auto_stop",
         reason: None,
         claim_token,
+        force: false,
     })?;
     let doc = json!({
         "outcome": result.outcome,
+        "pull_settlements": super::support::pull_settlements_json(&result.pull_settlements),
         "coordinators": result.coordinators.iter().map(|change| json!({
             "run_id": change.run_id,
             "job_id": change.job_id,
@@ -232,8 +279,24 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     });
+    let settlement_lines = super::support::pull_settlement_lines(&result.pull_settlements);
     if result.coordinators.is_empty() {
-        return Ok(Payload::detail(doc, "No active auto coordinator in this workspace.").into());
+        let replica = result.replica_owner_machine_id.is_some();
+        let mut lines = vec![
+            if replica {
+                "No active pull drain in this replica checkout."
+            } else {
+                "No active auto coordinator in this workspace."
+            }
+            .to_string(),
+        ];
+        if replica && settlement_lines.is_empty() {
+            // The settle-only pass still ran; saying it found nothing tells an
+            // operator flushing leftovers that there is nothing left.
+            lines.push("No pull settlements pending.".to_string());
+        }
+        lines.extend(settlement_lines);
+        return Ok(Payload::detail(doc, lines.join("\n")).into());
     }
     let mut lines = Vec::new();
     for change in &result.coordinators {
@@ -267,11 +330,19 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
                     child.run_id, child.job_name, child.phase, status
                 ));
             }
-            lines.push(
+            lines.push(if change.job_id == orbit_core::application::distributed::PULL_DRAIN_JOB {
+                format!(
+                    "Claimed leaves finish and settle on their own. `orbit run cancel {} --confirm` \
+                     waits for them and then ends the drain; add `--force` to stop them and return \
+                     their tasks to the owner's backlog.",
+                    change.run_id
+                )
+            } else {
                 "To cancel already-running workers, use `orbit run cancel <run_id> --confirm` on each child."
-                    .to_string(),
-            );
+                    .to_string()
+            });
         }
     }
+    lines.extend(settlement_lines);
     Ok(Payload::detail(doc, lines.join("\n")).into())
 }

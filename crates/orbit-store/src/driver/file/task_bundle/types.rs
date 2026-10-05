@@ -16,6 +16,18 @@ pub(crate) struct TaskBundleV2 {
     pub(crate) artifact_manifest: Option<ArtifactManifestV2>,
 }
 
+/// The documents task search matches on besides the envelope, read without
+/// the event log. See [`super::bundle_io::read_search_docs_at`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskSearchDocs {
+    pub(crate) description: String,
+    pub(crate) acceptance: String,
+    pub(crate) plan: String,
+    pub(crate) execution_summary: String,
+    pub(crate) comments: Vec<TaskCommentRowV2>,
+    pub(crate) artifact_manifest: Option<ArtifactManifestV2>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskDocumentV2 {
     Description,

@@ -114,8 +114,9 @@ pub(super) fn apply(
             next.unresolved.remove(sha);
         }
 
-        // Proven before-PR coverage is an exclusion only for a review consumer:
-        // QA still owes every landing its own integrated examination.
+        // Proven before-PR coverage is an exclusion only for review. The
+        // retired `integrated_qa_v1` contract still ignores it, so a decoded
+        // historical consumer evaluates the way it did when the batch froze.
         if coverage == CoverageClass::LandedCodeReviewV1
             && let Some(exclusion) = page.exclusions.get(&delivery.key)
         {

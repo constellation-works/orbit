@@ -1,6 +1,3 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use super::*;
 
 pub(super) struct Semaphore {
@@ -17,9 +14,12 @@ impl Semaphore {
     }
 
     pub(super) fn acquire(self: &Arc<Self>) -> Permit {
-        let mut guard = self.state.lock().expect("sem poisoned");
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         while *guard == 0 {
-            guard = self.cond.wait(guard).expect("sem poisoned");
+            guard = self
+                .cond
+                .wait(guard)
+                .unwrap_or_else(PoisonError::into_inner);
         }
         *guard -= 1;
         Permit {
@@ -28,7 +28,7 @@ impl Semaphore {
     }
 
     fn release(&self) {
-        let mut guard = self.state.lock().expect("sem poisoned");
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         *guard += 1;
         self.cond.notify_one();
     }

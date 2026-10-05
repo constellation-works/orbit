@@ -16,21 +16,25 @@ use super::super::operations;
 use super::attribution::ship_done_attribution;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum MergeStrategy {
+pub(in crate::executor::automation::vcs) enum MergeStrategy {
     Squash,
     Rebase,
     Merge,
 }
 
-/// Repository capabilities needed to request a permitted PR merge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct MergeCapabilities {
-    pub(super) strategy: MergeStrategy,
-    pub(super) auto_merge_allowed: bool,
+/// Repository capabilities needed to request a permitted PR merge, with the
+/// provider's own name for the repository they belong to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::executor::automation::vcs) struct MergeCapabilities {
+    pub(in crate::executor::automation::vcs) strategy: MergeStrategy,
+    pub(in crate::executor::automation::vcs) auto_merge_allowed: bool,
+    /// `owner/name` as the provider reports it. The owner landing consumer
+    /// compares this to the repository the handoff claims [ORB-12499].
+    pub(in crate::executor::automation::vcs) repository: String,
 }
 
 impl MergeStrategy {
-    pub(super) const fn as_str(self) -> &'static str {
+    pub(in crate::executor::automation::vcs) const fn as_str(self) -> &'static str {
         match self {
             Self::Squash => "squash",
             Self::Rebase => "rebase",
@@ -47,7 +51,7 @@ pub(super) fn resolve_merge_strategy<H: RuntimeHost + ?Sized>(
     Ok(resolve_merge_capabilities(host, workspace_path, pr_number)?.strategy)
 }
 
-pub(super) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,
@@ -77,30 +81,36 @@ pub(super) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
     let merge = capability("allow_merge_commit")?;
     let linear = capability("requires_linear_history")?;
     let auto_merge_allowed = capability("allow_auto_merge")?;
-
-    if squash {
-        return Ok(MergeCapabilities {
-            strategy: MergeStrategy::Squash,
-            auto_merge_allowed,
-        });
-    }
-    if rebase {
-        return Ok(MergeCapabilities {
-            strategy: MergeStrategy::Rebase,
-            auto_merge_allowed,
-        });
-    }
-    if merge && !linear {
-        return Ok(MergeCapabilities {
-            strategy: MergeStrategy::Merge,
-            auto_merge_allowed,
-        });
-    }
-
-    let repository_name = repository
+    let reported_repository = repository
         .get("name_with_owner")
         .and_then(Value::as_str)
-        .unwrap_or("repository");
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let permitted = |strategy| {
+        let repository = reported_repository.ok_or_else(|| {
+            OrbitError::Execution(
+                "merge strategy resolution: repository capabilities omitted name_with_owner"
+                    .to_string(),
+            )
+        })?;
+        Ok(MergeCapabilities {
+            strategy,
+            auto_merge_allowed,
+            repository: repository.to_string(),
+        })
+    };
+
+    if squash {
+        return permitted(MergeStrategy::Squash);
+    }
+    if rebase {
+        return permitted(MergeStrategy::Rebase);
+    }
+    if merge && !linear {
+        return permitted(MergeStrategy::Merge);
+    }
+
+    let repository_name = reported_repository.unwrap_or("repository");
     let base_branch = repository
         .get("base_branch")
         .and_then(Value::as_str)
@@ -118,10 +128,7 @@ pub(in crate::executor::automation) fn git_merge<H: RuntimeHost + Sync + ?Sized>
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let batch_id = required_job_run_id(input, "git_merge")?;
-    if host
-        .list_tasks_filtered(None, None, None, Some(batch_id), None, None)?
-        .is_empty()
-    {
+    if host.list_run_tasks(batch_id)?.is_empty() {
         return Ok(json!({}));
     }
 
@@ -144,7 +151,7 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let batch_id = required_job_run_id(input, "merge_batch_pr")?;
 
-    let batch_tasks = host.list_tasks_filtered(None, None, None, Some(batch_id), None, None)?;
+    let batch_tasks = host.list_run_tasks(batch_id)?;
     if batch_tasks.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "merge_batch_pr: no tasks found for job_run_id '{batch_id}'"
@@ -240,11 +247,21 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     if host.scoring_enabled()
         && let Some(model) = batch_author
     {
-        let _ = if batch_requires_revision {
+        // The PR is already merged, so a scoreboard failure must not fail the
+        // step; it is reported instead of silently dropping the count.
+        let recorded = if batch_requires_revision {
             pr_scoreboard::record_pr_count_with_revision(host.scoreboard_dir(), &model)
         } else {
             pr_scoreboard::record_pr_count_without_revision(host.scoreboard_dir(), &model)
         };
+        if let Err(error) = recorded {
+            tracing::warn!(
+                target: "orbit.engine.pr_merge",
+                pr = %pr_number,
+                error = %error,
+                "failed to record the merged PR in the scoreboard",
+            );
+        }
     }
 
     Ok(json!({

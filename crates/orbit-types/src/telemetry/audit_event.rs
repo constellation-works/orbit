@@ -1,10 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::plugin::{PluginProvenance, PluginSecretUpdateStatus};
 use crate::telemetry::audit_actor::{CanonicalActor, canonical_actor_for_role_label};
 use crate::tool::{McpCapability, McpTransport};
 
@@ -75,12 +76,16 @@ pub struct AuditEvent {
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub caller_machine_id: Option<String>,
-    #[serde(default)]
-    pub caller_host_id: Option<String>,
+    /// [ORB-12725] `caller_host_id` is read for one release so an audit
+    /// export written by an older build still loads.
+    #[serde(default, alias = "caller_host_id")]
+    pub caller_machine_name: Option<String>,
     #[serde(default)]
     pub process_machine_id: Option<String>,
-    #[serde(default)]
-    pub process_host_id: Option<String>,
+    /// [ORB-12725] `process_host_id` is read for one release; see
+    /// [`Self::caller_machine_name`].
+    #[serde(default, alias = "process_host_id")]
+    pub process_machine_name: Option<String>,
     #[serde(default)]
     pub transport: Option<McpTransport>,
     /// Complete effective MCP capability set, canonically ordered by the
@@ -128,6 +133,35 @@ pub struct AuditEvent {
     /// [`crate::telemetry::normalize_self_reported_actor`].
     #[serde(default)]
     pub self_reported_actor: Option<String>,
+    /// The plugin that backed this tool call, when one did: name, version and
+    /// manifest digest, written together by plugin dispatch [design
+    /// `docs/design/plugins/1_scope.md` §4.4]. Absent for built-in tools and
+    /// for every row written before the plugin standard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginProvenance>,
+    /// The names of the declared secrets this plugin call's request carried
+    /// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names
+    /// only — a value is never written to an audit row. Empty for every
+    /// other call and for rows written before secret delivery.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_secrets: Vec<String>,
+    /// Each secret the plugin's backend asked to rotate through
+    /// `secret_updates`, by name, and whether the update was applied or
+    /// refused (design `docs/design/plugins/1_scope.md` §3, "Plugin
+    /// secrets"). Names and outcomes only — never a value. Empty for every
+    /// call that rotated nothing and for rows written before rotation.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_secret_updates: BTreeMap<String, PluginSecretUpdateStatus>,
+    /// Whether a run's plugin broker executed this call on behalf of a
+    /// sandboxed agent (design `docs/design/plugins/2_agent_call_broker.md`
+    /// §4.4). `false` for every in-process call and for rows written before
+    /// the broker ran calls.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub brokered: bool,
+    /// The PID, in the host's namespace, of the authenticated peer that
+    /// asked the broker for a brokered call. `None` for every other row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_pid: Option<u32>,
 }
 
 impl AuditEvent {

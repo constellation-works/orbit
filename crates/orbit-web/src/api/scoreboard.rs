@@ -173,7 +173,7 @@ fn coverage_note(available: bool, observed_detail: &str, unavailable_detail: &st
 /// is set to `null`, never `0`, so a read failure can never be read as a
 /// measured zero. `Some(map)` — even an empty one — means the source
 /// succeeded, so an agent missing from it is a true, observed zero.
-pub(super) fn apply_side_source_extras(
+fn apply_side_source_extras(
     agents: &mut serde_json::Map<String, Value>,
     metrics_extras: Option<&BTreeMap<String, MetricsExtras>>,
     denial_map: Option<&BTreeMap<String, i64>>,
@@ -258,16 +258,13 @@ fn insert_extras_fields(
 
 /// Per-agent extras derived from `MetricsEntry` JSONL.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(super) struct MetricsExtras {
-    pub(super) avg_duration_ms: i64,
-    pub(super) p95_duration_ms: i64,
-    pub(super) retry_count: i64,
+struct MetricsExtras {
+    avg_duration_ms: i64,
+    p95_duration_ms: i64,
+    retry_count: i64,
 }
 
-// `pub(super)`: exercised directly by the sibling `api/tests/scoreboard.rs`
-// unit tests (window/month-boundary arithmetic), per the crate's sibling
-// test-layout convention — see docs/design-patterns/test_layout.md.
-pub(super) fn compute_metrics_extras(
+fn compute_metrics_extras(
     runtime: &OrbitRuntime,
     since: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
@@ -347,7 +344,7 @@ pub(super) fn compute_metrics_extras(
 /// endpoints' months. Steps by calendar month rather than a fixed day offset
 /// so a window whose start falls on an early-month date (e.g. subtracting 30
 /// days from March 1st) still includes every month it actually touches.
-pub(super) fn months_in_range(since: DateTime<Utc>, now: DateTime<Utc>) -> Vec<String> {
+fn months_in_range(since: DateTime<Utc>, now: DateTime<Utc>) -> Vec<String> {
     let (mut year, mut month) = (since.year(), since.month());
     let (end_year, end_month) = (now.year(), now.month());
 

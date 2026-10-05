@@ -21,6 +21,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
+use orbit_common::fs::io::create_private_dir_all;
 use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
 use orbit_types::workspace::{
     canonicalize_publication_branch, redact_git_remote, validate_git_commit_id,
@@ -278,10 +279,10 @@ fn assert_registered_workspace(
                 request.task_workspace_id
             ))
         })?;
-    if binding.workspace_id != request.task_workspace_id {
+    if binding.partition_id != request.task_workspace_id {
         return Err(publish_error(format!(
             "task workspace selector '{}' resolved to unexpected workspace '{}'",
-            request.task_workspace_id, binding.workspace_id
+            request.task_workspace_id, binding.partition_id
         )));
     }
     match binding.repo_fingerprint.as_deref() {
@@ -311,7 +312,7 @@ impl PublicationCache {
             .cache_dir
             .join(&request.publication_id)
             .join("publish");
-        fs::create_dir_all(&root).map_err(|error| OrbitError::from_write_io(&root, error))?;
+        create_private_dir_all(&root).map_err(|error| OrbitError::from_write_io(&root, error))?;
         let cache = Self {
             git_dir: root.join("origin.git"),
             pending_path: root.join(PENDING_FILE_NAME),
@@ -452,8 +453,14 @@ impl PublicationCache {
         policy: &AttachmentPolicy,
         scanner: Option<&dyn AttachmentSensitivityScanner>,
     ) -> Result<StagedSnapshot, OrbitError> {
-        let temp = tempfile::Builder::new()
-            .prefix(".orbit-publish-")
+        let mut temp_builder = tempfile::Builder::new();
+        temp_builder.prefix(".orbit-publish-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            temp_builder.permissions(fs::Permissions::from_mode(0o700));
+        }
+        let temp = temp_builder
             .tempdir_in(&self.root)
             .map_err(|error| OrbitError::from_write_io(&self.root, error))?;
         let tree = temp.path().join("tree");
@@ -556,9 +563,6 @@ impl PublicationCache {
         commit: &str,
         observed_tip: Option<&str>,
     ) -> Result<(), OrbitError> {
-        #[cfg(test)]
-        run_before_push_hook();
-
         let git_dir = self.git_dir_str()?;
         let lease = compare_and_swap_lease(&request.publication_branch, observed_tip);
         let refspec = format!("{commit}:{}", request.publication_branch);
@@ -708,7 +712,9 @@ fn decide_action(
         .as_ref()
         .is_some_and(|last| last.commit == tip.commit);
     if pending_landed && !recorded {
-        cache.remove_pending()?;
+        // Keep the pending record: the caller records this outcome only after
+        // we return, so a failed save must be able to reconcile again. It is
+        // removed once a later request carries this commit as last success.
         return Ok(PublishAction::Reconcile(Box::new(
             PublicationPublishOutcome {
                 status: PublicationPublishStatus::Reconciled,
@@ -828,7 +834,8 @@ fn assert_outside_source_checkout(
 
 /// Private record of a push that was issued but not yet confirmed as recorded
 /// by the owner. It lets the next run reconcile by commit id instead of
-/// publishing a duplicate or divergent generation.
+/// publishing a duplicate or divergent generation, and it survives
+/// reconciliation until a request's last success names the landed commit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PendingPublication {
@@ -852,32 +859,6 @@ fn compare_and_swap_lease(branch: &str, observed_tip: Option<&str>) -> String {
 
 fn runner() -> GitRunner<'static> {
     GitRunner::new(PUBLISH_LABEL)
-}
-
-#[cfg(test)]
-thread_local! {
-    static BEFORE_PUSH: std::cell::RefCell<Option<Box<dyn FnOnce() + 'static>>> =
-        std::cell::RefCell::new(None);
-}
-
-/// Install a one-shot callback that runs after the pending record is written
-/// and immediately before the compare-and-swap push. Tests use this to mutate
-/// the remote between observation and push.
-#[cfg(test)]
-pub(crate) fn set_before_push_hook(hook: impl FnOnce() + 'static) {
-    BEFORE_PUSH.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
-}
-
-#[cfg(test)]
-pub(crate) fn clear_before_push_hook() {
-    BEFORE_PUSH.with(|cell| cell.borrow_mut().take());
-}
-
-#[cfg(test)]
-fn run_before_push_hook() {
-    if let Some(hook) = BEFORE_PUSH.with(|cell| cell.borrow_mut().take()) {
-        hook();
-    }
 }
 
 fn redact_remote(message: &str, remote: &str) -> String {

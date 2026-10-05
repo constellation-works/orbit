@@ -100,7 +100,7 @@ pub(super) fn build_filters(args: &TailArgs) -> Result<Filters, OrbitError> {
     build_shared_filters(args.target.clone(), args.level, args.since.as_deref())
 }
 
-pub(super) fn run_tail<W: Write + ?Sized>(
+fn run_tail<W: Write + ?Sized>(
     path: &Path,
     args: &TailArgs,
     filters: &Filters,
@@ -114,14 +114,14 @@ pub(super) fn run_tail<W: Write + ?Sized>(
         ));
     }
 
-    let initial_offset = print_initial_window(path, args, filters, use_color, writer)?;
+    let initial = print_initial_window(path, args, filters, use_color, writer)?;
     if !args.follow {
         return Ok(());
     }
 
     follow_file(
         path,
-        initial_offset,
+        initial,
         filters,
         args.json,
         use_color,
@@ -134,12 +134,26 @@ pub(super) fn run_tail<W: Write + ?Sized>(
 pub(super) struct FollowTestControl {
     ready: Sender<()>,
     stop: Receiver<()>,
+    initial_read_pause: Option<(Sender<()>, Receiver<()>)>,
 }
 
 #[cfg(test)]
 impl FollowTestControl {
     pub(super) fn new(ready: Sender<()>, stop: Receiver<()>) -> Self {
-        Self { ready, stop }
+        Self {
+            ready,
+            stop,
+            initial_read_pause: None,
+        }
+    }
+
+    pub(super) fn pause_during_initial_read(
+        mut self,
+        reached: Sender<()>,
+        resume: Receiver<()>,
+    ) -> Self {
+        self.initial_read_pause = Some((reached, resume));
+        self
     }
 }
 
@@ -159,7 +173,15 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
         ));
     }
 
-    let initial_offset = print_initial_window(path, args, filters, use_color, writer)?;
+    let initial = print_initial_window_with_hook(path, args, filters, use_color, writer, || {
+        if let Some((reached, resume)) = control.initial_read_pause.as_ref() {
+            reached.send(()).map_err(|_| io::ErrorKind::BrokenPipe)?;
+            resume
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| io::ErrorKind::TimedOut)?;
+        }
+        Ok(())
+    })?;
     control.ready.send(()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
@@ -172,7 +194,7 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
 
     follow_file(
         path,
-        initial_offset,
+        initial,
         filters,
         args.json,
         use_color,
@@ -187,35 +209,65 @@ fn print_initial_window<W: Write + ?Sized>(
     filters: &Filters,
     use_color: bool,
     writer: &mut W,
-) -> io::Result<u64> {
+) -> io::Result<InitialWindow> {
+    print_initial_window_with_hook(path, args, filters, use_color, writer, || Ok(()))
+}
+
+struct InitialWindow {
+    offset: u64,
+    pending: Vec<u8>,
+}
+
+fn print_initial_window_with_hook<W: Write + ?Sized>(
+    path: &Path,
+    args: &TailArgs,
+    filters: &Filters,
+    use_color: bool,
+    writer: &mut W,
+    after_first_read: impl FnOnce() -> io::Result<()>,
+) -> io::Result<InitialWindow> {
     let file = File::open(path)?;
-    let total_bytes = file.metadata()?.len();
     let mut reader = BufReader::new(file);
-    let mut buf = String::new();
+    let mut buf = Vec::new();
+    let mut pending = Vec::new();
     let mut matching_lines = MatchingLineWindow::new(args.lines);
+    let mut after_first_read = Some(after_first_read);
     loop {
         buf.clear();
-        let n = reader.read_line(&mut buf)?;
+        // Bytes, not `read_line`: one torn or non-UTF-8 line must not end the
+        // whole tail.
+        let n = reader.read_until(b'\n', &mut buf)?;
         if n == 0 {
             break;
         }
+        if let Some(hook) = after_first_read.take() {
+            hook()?;
+        }
+        if args.follow && buf.last() != Some(&b'\n') {
+            // The final record may be completed after follow starts. Its
+            // bytes belong to the follow reader, even with zero history.
+            pending = std::mem::take(&mut buf);
+            break;
+        }
+        let line = String::from_utf8_lossy(&buf);
         if args.lines > 0
-            && let Ok(value) = serde_json::from_str::<Value>(&buf)
+            && let Ok(value) = serde_json::from_str::<Value>(&line)
             && filters.matches(&value)
         {
-            matching_lines.push(buf.trim_end_matches('\n').to_owned());
+            matching_lines.push(line.trim_end_matches('\n').to_owned());
         }
     }
 
+    let offset = reader.stream_position()?;
     for line in matching_lines.into_lines() {
         emit_line(&line, args.json, use_color, writer)?;
     }
-    Ok(total_bytes)
+    Ok(InitialWindow { offset, pending })
 }
 
 /// A chronological tail window whose storage never exceeds its requested
 /// record count. The line currently being parsed is held by the caller.
-pub(super) struct MatchingLineWindow {
+struct MatchingLineWindow {
     limit: usize,
     lines: VecDeque<String>,
 }
@@ -241,16 +293,11 @@ impl MatchingLineWindow {
     fn into_lines(self) -> VecDeque<String> {
         self.lines
     }
-
-    #[cfg(test)]
-    pub(super) fn len(&self) -> usize {
-        self.lines.len()
-    }
 }
 
 fn follow_file<W: Write + ?Sized>(
     path: &Path,
-    initial_offset: u64,
+    initial: InitialWindow,
     filters: &Filters,
     json: bool,
     use_color: bool,
@@ -258,31 +305,28 @@ fn follow_file<W: Write + ?Sized>(
     control: FollowControl,
 ) -> io::Result<()> {
     let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(initial_offset))?;
+    file.seek(SeekFrom::Start(initial.offset))?;
     let mut reader = BufReader::new(file);
-    let mut leftover = String::new();
+    // Bytes of a line still being written. Kept undecoded so a write that
+    // ends inside a multi-byte character is completed, not rejected.
+    let mut pending = initial.pending;
 
     loop {
         if control.should_stop() {
             return Ok(());
         }
-        let mut buf = String::new();
-        let n = reader.read_line(&mut buf)?;
+        let n = reader.read_until(b'\n', &mut pending)?;
         if n == 0 {
             thread::sleep(Duration::from_millis(50));
             continue;
         }
-        if !buf.ends_with('\n') {
-            // Partial line: stash and try again next iteration.
-            leftover.push_str(&buf);
+        if pending.last() != Some(&b'\n') {
+            // Partial line: keep it and try again next iteration.
             continue;
         }
-        let mut full_line = String::new();
-        if !leftover.is_empty() {
-            full_line.push_str(&leftover);
-            leftover.clear();
-        }
-        full_line.push_str(buf.trim_end_matches('\n'));
+        pending.pop();
+        let full_line = String::from_utf8_lossy(&pending).into_owned();
+        pending.clear();
         if let Ok(value) = serde_json::from_str::<Value>(&full_line)
             && filters.matches(&value)
         {

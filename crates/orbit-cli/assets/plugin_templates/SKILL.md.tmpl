@@ -1,0 +1,20 @@
+---
+name: __ORBIT_PLUGIN_NS__
+description: Use the __ORBIT_PLUGIN_NS__ plugin's tools. Replace this description with the one an agent needs to decide when this plugin applies.
+---
+
+# __ORBIT_PLUGIN_NS__
+
+This skill is linked into the agent skill roots when the plugin is enabled and
+unlinked when it is disabled.
+
+## Tools
+
+- `__ORBIT_PLUGIN_NS__.status` — report the plugin's own status. From a shell:
+  `orbit __ORBIT_PLUGIN_NS__ status "<subject>"`, which is the same audited
+  operation as `orbit tool run __ORBIT_PLUGIN_NS__.status --input '{"subject":"<subject>"}'`.
+
+## When to use it
+
+Say what this plugin is for, what it costs to run, and what it must not be
+used for. An agent reads this file instead of the plugin's source.

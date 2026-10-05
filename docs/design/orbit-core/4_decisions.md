@@ -1,7 +1,7 @@
 ---
 title: Orbit Core — Decisions
 owner: claude
-last_updated: 2026-08-11
+last_updated: 2026-09-21
 status: Accepted
 feature: orbit-core
 doc_role: decisions
@@ -10,8 +10,8 @@ summary: Decision log for orbit-core crate-boundary decisions, starting with the
 tags: [orbit-core, orbit-cmd, architecture, north-star]
 paths: ["crates/orbit-core/**", "crates/orbit-cmd/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10026, ORB-10545]
-last_validated: 2026-09-04
+related_artifacts: [ORB-10026, ORB-10545, ORB-12772]
+last_validated: 2026-09-21
 ---
 
 # Orbit Core — Decisions
@@ -40,7 +40,7 @@ Record five bearings as orbit's north star. This is an **incremental bearing, no
 2. **Knowledge/execution split.** Orbit is two products — a knowledge store (tasks, learnings, ADRs, docs) and an execution engine (activities, jobs, agent providers) — glued by one runtime. Bearing: two systems sharing only a kernel (IDs, errors, audit), mirroring the constellation split (polaris = knowledge, worker = execution).
 3. **Events over side-effects.** The task-mutation → semantic-index coupling becomes a transactional SQLite outbox consumed by the indexer, replacing the lossy in-process `EmbedWorker` enqueue (best-effort batches, drops on queue-full, debug-level failure logging).
 4. **One retrieval trait, two backends.** orbit-search (workspace-local) and sextant (constellation-wide) become deployment choices behind one retrieval interface, dissolving the two-stack question.
-5. **Crates follow build boundaries, not taxonomy.** Crate splits are justified by compile-graph and dependency-direction needs, not by conceptual category. Explicitly kept as-is under this bearing: the [Companion binary installed on demand, rather than bundled in `orbit`](../orbit-search/4_decisions.md#companion-binary-installed-on-demand-rather-than-bundled-in-orbit-1) packaging pattern, the YAML+SQLite layered store in orbit-store, and the stability-tier markers (ARCHITECTURE.md §Stability tiers).
+5. **Crates follow build boundaries, not taxonomy.** Crate splits are justified by compile-graph and dependency-direction needs, not by conceptual category. Explicitly kept as-is under this bearing: the YAML+SQLite layered store in orbit-store, and the stability-tier markers (ARCHITECTURE.md §Stability tiers).
 
 **Adoption model.** Incremental and opportunistic: when a new surface is added or an existing command group is touched for other reasons, move that slice to request/response + registry then. Future decisions should cite this bearing when steering by it, or supersede it if the bearing itself changes.
 
@@ -73,7 +73,7 @@ variants collapsed to one `Friction(FrictionVerb)`.
 **Contract stability was proven, not asserted.** `crates/orbit-cli/tests/snapshots/mcp_tools_list.json`
 is byte-unchanged, and `orbit friction [<verb>] --help` was captured from the
 pre-migration binary and frozen as fixtures under
-`crates/orbit-cli/src/command/tests/friction_help/`; the derived CLI reproduces
+`crates/orbit-cli/tests/help_goldens/friction/`; the derived CLI reproduces
 all eight help pages byte-for-byte.
 
 **The layering correction to the bearing.** Bearing 1 as written implies one
@@ -128,7 +128,7 @@ the friction diff as the worked example: `docs/design/operations-as-data/`.
 
 First, the tool was registered with `register_inactive` and a comment stating it stayed "available to `orbit tool run`". It did not: `orbit tool run` dispatches through `execute_tool_command_dispatch_*`, which gates on `ensure_tool_agent_facing`, and that rejects every inactive tool. With no CLI subcommand either, the tool had no reachable caller at all.
 
-Second, `restore_allocated_adr` resolved the allocation through `adr_allocation`, whose SQL excludes `status = 'abandoned'` rows. But [ORB-10501]'s `abandon_orphaned` marks an allocation abandoned precisely when its pinned worktree is reaped — the dominant cause of the body loss in [F2026-07-163]. Four of the 18 ([Rank matched learnings by task-anchored decay-weighted upvotes](../project-learnings/4_decisions.md#rank-matched-learnings-by-task-anchored-decay-weighted-upvotes), [Default Claude to opus/sonnet CLI aliases; centralize model defaults in orbit-common::model_defaults](../agent-families/4_decisions.md#default-claude-to-opussonnet-cli-aliases-centralize-model-defaults-in-orbit-commonmodeldefaults), [PR handoff recovery follows job checkpoints and exact remote leases](../activity-job/4_decisions.md#pr-handoff-recovery-follows-job-checkpoints-and-exact-remote-leases), [Provider launchers resolve at the shared CLI spawn boundary](../activity-job/4_decisions.md#provider-launchers-resolve-at-the-shared-cli-spawn-boundary)) were in that state and were unrepairable by the tool built to repair them.
+Second, `restore_allocated_adr` resolved the allocation through `adr_allocation`, whose SQL excludes `status = 'abandoned'` rows. But [ORB-10501]'s `abandon_orphaned` marks an allocation abandoned precisely when its pinned worktree is reaped — the dominant cause of the body loss in [F2026-07-163]. Four of the 18 ("Rank matched learnings by task-anchored decay-weighted upvotes" (since removed with the learning subsystem), [Default Claude to opus/sonnet CLI aliases; centralize model defaults in orbit-common::model_defaults](../agent-families/4_decisions.md#default-claude-to-opussonnet-cli-aliases-centralize-model-defaults-in-orbit-commonmodel_defaults), [PR handoff recovery follows job checkpoints and exact remote leases](../activity-job/4_decisions.md#pr-handoff-recovery-follows-job-checkpoints-and-exact-remote-leases), [Provider launchers resolve at the shared CLI spawn boundary](../activity-job/4_decisions.md#provider-launchers-resolve-at-the-shared-cli-spawn-boundary)) were in that state and were unrepairable by the tool built to repair them.
 
 The alternatives for the second gap were to leave abandoned rows unrepairable and re-allocate fresh IDs for them (rejected by [ORB-10458]: the retired lookup had no ID-to-legacy fallback at citation sites, so every inline reference would stay broken), or to hand-edit `.orbit/`, which the repo agent guide forbids.
 
@@ -165,6 +165,49 @@ Superseded ADR bundles are published decision history and travel with the reposi
 - Rejected alternative: permit manual file copies or make exact-id restore overwrite a readable federated record. This bypasses validation or fabricates fresh metadata instead of preserving the published bundle.
 - Cost: repository history and checkout size grow with every superseded ADR, and reconciliation adds locking and validation complexity to the operator CLI.
 
+## Remove operation mode rather than keep an unused authorization layer
+
+**Recorded:** 2026-09-21 · [ORB-12769], [ORB-12770], [ORB-12771], [ORB-12772]
+
+### Context
+Operation mode [ORB-11332] shipped presets (`supervised`/`autonomous`),
+durable scoped grants with prepare/promote/complete rights, grant-bound
+drains with atomic child rechecks, evidence-driven promotion, and aggregate
+recovery budgets. None of it was used: the box store held no grant, no drain
+ran grant-bound, and managed completion never ran outside the tests written
+for it. What it did do was sit in the admission path of every child job run,
+the handoff acceptance path, and the task-commit journal, and carry a second
+vocabulary of authority beside the one Orbit actually uses (an operator
+approving a handoff).
+
+### Decision
+Remove it in four layers at Daniel's request on 2026-09-21: the dashboard
+panel and `/api/operation/*` [ORB-12769], the `orbit operation` CLI group and
+MCP tools [ORB-12770], the Core application module and Common governance
+module [ORB-12771], and finally the persisted surface — the preset-managed
+`operation.*` config keys, the `operation_grants` and `operation_recovery`
+tables, and the feature's design folder [ORB-12772]. The `[operation]` table
+name stays for the review keys that were always independent of the preset;
+the removed keys are warned about by name and ignored at config load so an
+existing `config.toml` keeps working. A `done` ship contract, which only a
+grant could authorize, now fails closed at handoff rather than being silently
+downgraded to review.
+
+### Consequences
+- The child-admission transaction has one guard again (the admissions stop
+  flag) instead of two, and handoff acceptance has one authority source.
+- Rejected alternative: keep the feature dormant behind the default
+  `supervised` preset. It costs nothing at runtime but keeps a second
+  authorization model in the two most security-relevant transactions in the
+  store, where a future reader must understand both to change either.
+- Rejected alternative: keep the config keys as no-ops. The keys describe
+  scheduling and completion behaviour that no longer exists; leaving them
+  settable would state authority Orbit cannot honour.
+- Cost: reinstating unattended operation means designing authority again from
+  scratch — the grant shape, the atomic rechecks, and the recovery ledger are
+  gone from the tree, recoverable only from history. The removal migration is
+  breaking: an older binary reads `operation_grants` at handoff commit.
+
 ## Task References
 
 - [ORB-10016] — extracted `orbit-cmd` from orbit-core, converted moved command groups to extension traits, and trimmed root re-exports.
@@ -172,5 +215,9 @@ Superseded ADR bundles are published decision history and travel with the reposi
 - [ORB-10479] — restored the 18 design-doc ADRs whose allocation survived their body, and made the [ORB-10538] repair surface reachable and abandoned-allocation aware ([Exact-id ADR restore is an operator CLI surface that repairs abandoned allocations](#exact-id-adr-restore-is-an-operator-cli-surface-that-repairs-abandoned-allocations)).
 - [ORB-10545] — made superseded ADR bodies repository-published history and
   added allocation-pinned federated reconciliation ([Publish superseded ADR bodies as durable decision history](#publish-superseded-adr-bodies-as-durable-decision-history)).
+- [ORB-12769] — removed the dashboard panel and `/api/operation/*` routes, and decomposed the removal.
+- [ORB-12770] — removed the `orbit operation` CLI group, `run auto --grant`, and the MCP tools.
+- [ORB-12771] — removed the Core `application/operation` module and the Common governance module.
+- [ORB-12772] — removed the config keys, the `operation_grants` table, and the design folder ([Remove operation mode rather than keep an unused authorization layer](#remove-operation-mode-rather-than-keep-an-unused-authorization-layer)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

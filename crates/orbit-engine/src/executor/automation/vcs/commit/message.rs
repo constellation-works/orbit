@@ -1,4 +1,4 @@
-use orbit_types::task::{Task, TaskType};
+use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskType};
 
 use super::super::attribution::orchestration_trailer;
 
@@ -56,7 +56,14 @@ pub(super) fn batch_commit_message(task: &Task) -> String {
     let (subject_title, truncated) = truncate_title_for_subject(commit_type, title);
 
     let mut subject = format!("{commit_type}: {subject_title} [{}]", task.id);
-    for external_ref in &task.external_refs {
+    // Orbit's own `github-pr` refs are delivery bookkeeping, not a ticket: a
+    // failure-handoff PR recorded there may be closed unmerged, so naming it
+    // would point history at a PR that never delivered the commit.
+    for external_ref in task
+        .external_refs
+        .iter()
+        .filter(|external_ref| external_ref.system != GITHUB_PR_EXTERNAL_REF_SYSTEM)
+    {
         subject.push(' ');
         subject.push_str(&format!(
             "[{}-{}]",

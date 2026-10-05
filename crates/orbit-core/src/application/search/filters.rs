@@ -14,29 +14,15 @@ pub(super) fn task_has_all_tags(task: &orbit_types::task::Task, tag_filter: &[St
     })
 }
 
-pub(super) fn doc_has_all_tags(
-    record: &crate::application::docs::DocRecord,
-    tag_filter: &[String],
-) -> bool {
-    tag_filter.iter().all(|needle| {
-        record
-            .frontmatter
-            .tags
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(needle))
-    })
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct SearchStatusFilters {
     pub(super) task: Option<Vec<TaskStatus>>,
-    pub(super) doc_active: Option<bool>,
     pub(super) friction: Option<FrictionStatus>,
 }
 
 impl SearchStatusFilters {
     pub(super) fn parse(raw_statuses: &[String]) -> Result<Self, OrbitError> {
-        // ADR-0179: status tokens are kind-qualified to avoid cross-corpus ambiguity.
+        // Status tokens are kind-qualified to avoid cross-corpus ambiguity.
         let mut filters = Self::default();
         for raw in raw_statuses {
             for token in raw
@@ -45,25 +31,29 @@ impl SearchStatusFilters {
                 .filter(|token| !token.is_empty())
             {
                 let Some((kind, value)) = token.split_once(':') else {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "status token `{token}` must use `kind:value` form"
-                    )));
+                    return Err(status_token_error(
+                        format!("status token `{token}` must use `kind:value` form"),
+                        token,
+                    ));
                 };
                 let kind = kind.trim().to_ascii_lowercase();
                 let value = value.trim().to_ascii_lowercase();
                 if kind.is_empty() || value.is_empty() {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "status token `{token}` must use `kind:value` form"
-                    )));
+                    return Err(status_token_error(
+                        format!("status token `{token}` must use `kind:value` form"),
+                        &value,
+                    ));
                 }
                 match kind.as_str() {
                     "task" => filters.push_task_status(&value)?,
-                    "doc" => filters.set_doc_status(&value)?,
                     "friction" => filters.set_friction_status(&value)?,
                     other => {
-                        return Err(OrbitError::InvalidInput(format!(
-                            "invalid status kind `{other}` in token `{token}`; expected task, doc, or friction"
-                        )));
+                        return Err(status_token_error(
+                            format!(
+                                "invalid status kind `{other}` in token `{token}`; expected task or friction"
+                            ),
+                            &value,
+                        ));
                     }
                 }
             }
@@ -86,16 +76,6 @@ impl SearchStatusFilters {
         Ok(())
     }
 
-    fn set_doc_status(&mut self, value: &str) -> Result<(), OrbitError> {
-        if value != "active" {
-            return Err(OrbitError::InvalidInput(format!(
-                "invalid status `{value}` for kind `doc`; expected active"
-            )));
-        }
-        self.doc_active = Some(true);
-        Ok(())
-    }
-
     fn set_friction_status(&mut self, value: &str) -> Result<(), OrbitError> {
         let status = FrictionStatus::from_str(value).map_err(|_| {
             OrbitError::InvalidInput(format!(
@@ -105,6 +85,30 @@ impl SearchStatusFilters {
         self.friction = Some(status);
         Ok(())
     }
+}
+
+fn status_token_error(message: String, value: &str) -> OrbitError {
+    let value = value.trim().to_ascii_lowercase();
+    let mut suggestions = Vec::new();
+    if value == "open" || TaskStatus::from_str(&value).is_ok() {
+        suggestions.push(format!("task:{value}"));
+    }
+    if FrictionStatus::from_str(&value).is_ok() {
+        suggestions.push(format!("friction:{value}"));
+    }
+    let hint = if suggestions.is_empty() {
+        "use a token such as `task:open` or `friction:open`".to_string()
+    } else {
+        format!(
+            "did you mean {}?",
+            suggestions
+                .iter()
+                .map(|suggestion| format!("`{suggestion}`"))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        )
+    };
+    OrbitError::invalid_input_with_suggestions(format!("{message}; {hint}"), suggestions)
 }
 
 fn push_unique<T: PartialEq>(values: &mut Vec<T>, value: T) {

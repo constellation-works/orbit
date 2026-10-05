@@ -1,31 +1,99 @@
+use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
+
 use super::*;
 use crate::context::StepRecoveryAdmission;
 
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 
+/// Largest `error_message` the recovery input may carry, in bytes.
+///
+/// The CLI envelope serialises the recovery input twice — once as `input` and
+/// once as the `prompt` rendering of it — and a provider such as `codex exec`
+/// rejects the whole turn above 1,048,576 characters before the agent starts.
+/// A `primary_checkout_drift` diagnostic reached 2.5 MB, so the envelope was
+/// 5.1 MB and recovery exited 1 in 416 ms without running [ORB-12467]. Two
+/// 64 KiB fields leave the envelope an order of magnitude below that ceiling
+/// while still showing the agent both ends of the real diagnostic.
+pub(super) const MAX_RECOVERY_ERROR_MESSAGE_BYTES: usize = 64 * 1024;
+
+/// Largest serialised `failed_step_input` the recovery input may carry.
+const MAX_RECOVERY_FAILED_STEP_INPUT_BYTES: usize = 64 * 1024;
+
+/// Largest string leaf kept verbatim inside a bounded `failed_step_input`.
+///
+/// Rendered target inputs are usually one oversized leaf (a prompt, a diff, a
+/// captured log) beside many small ones, so truncating leaves preserves the
+/// object shape the recovery activity's input schema requires.
+const MAX_RECOVERY_INPUT_LEAF_BYTES: usize = 8 * 1024;
+
+/// The failure that sends a step into recovery.
+///
+/// [DANI-10438] A CLI agent that finishes and declares `status: "failed"` in
+/// its envelope reaches the executor as `Ok(StepOutcome { success: false })`,
+/// not as an `Err` — and that is the case a recovery leaf exists for (red
+/// gate, transient tooling, flaky test). Recovery is keyed on this enum so both
+/// shapes take the same path; only the returned-unrecovered value differs.
+pub(super) enum StepFailure {
+    Error(DispatchError),
+    Outcome(StepOutcome),
+}
+
+impl StepFailure {
+    /// The diagnostic handed to the recovery activity and kept on the terminal
+    /// error [ORB-10449].
+    fn diagnostic(&self) -> String {
+        match self {
+            Self::Error(error) => error.to_string(),
+            Self::Outcome(outcome) => outcome
+                .message
+                .clone()
+                .unwrap_or_else(|| "step completed with success=false".to_string()),
+        }
+    }
+
+    /// Hand the original failure back unchanged when recovery is absent,
+    /// refused, or fails.
+    fn into_result(self) -> Result<StepOutcome, DispatchError> {
+        match self {
+            Self::Error(error) => Err(error),
+            Self::Outcome(outcome) => Ok(outcome),
+        }
+    }
+}
+
 pub(super) fn recover_or_return_original(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
-    original_err: DispatchError,
+    failure: StepFailure,
     attempt: u32,
     max_attempts: u32,
 ) -> Result<StepOutcome, DispatchError> {
+    // Signing in requires the operator; a repair agent cannot make this
+    // provider usable. Preserve the marker for claimed-leaf settlement.
+    if orbit_types::workflow::is_provider_unavailable(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
+    // [ORB-13987] Nor can it install a tool required validation could not
+    // find; repairing the candidate would only spend the recovery budget.
+    if orbit_types::workflow::is_validation_environment_failure(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
     let Some(recovery) = recovery_activity_for_step(step, ctx) else {
-        return Err(original_err);
+        return failure.into_result();
     };
 
-    if attempt_recovery_activity(step, ctx, &recovery, &original_err, attempt, max_attempts) {
-        return post_recovery_attempt(step, ctx, &recovery, original_err);
+    if attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts) {
+        return post_recovery_attempt(step, ctx, &recovery, failure);
     }
 
-    Err(original_err)
+    failure.into_result()
 }
 
 fn post_recovery_attempt(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
-    original_err: DispatchError,
+    failure: StepFailure,
 ) -> Result<StepOutcome, DispatchError> {
     let reattempt = run_step_body(step, ctx);
     let (outcome, error_message) = match &reattempt {
@@ -56,8 +124,9 @@ fn post_recovery_attempt(
     match reattempt {
         Ok(outcome) if outcome.success => Ok(outcome),
         Ok(_) | Err(_) => Err(DispatchError::JobExecution(format!(
-            "post-recovery attempt {outcome}: {}; original error before recovery: {original_err}",
+            "post-recovery attempt {outcome}: {}; original error before recovery: {}",
             error_message.unwrap_or_else(|| "no diagnostic".to_string()),
+            failure.diagnostic(),
         ))),
     }
 }
@@ -83,12 +152,17 @@ pub(super) fn attempt_recovery_activity(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
-    original_err: &DispatchError,
+    failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
 ) -> bool {
+    // The conflict leaf resolves a stopped rebase; a declared-failed outcome
+    // or any other error is never a rebase conflict for it to resolve.
     if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
-        && !matches!(original_err, DispatchError::RecoverableVcsConflict { .. })
+        && !matches!(
+            failure,
+            StepFailure::Error(DispatchError::RecoverableVcsConflict { .. })
+        )
     {
         return false;
     }
@@ -96,8 +170,7 @@ pub(super) fn attempt_recovery_activity(
     let recovery_started = std::time::Instant::now();
     let result = match ctx.host.authorize_step_recovery(&ctx.run_id, &step.id) {
         Ok(StepRecoveryAdmission::Allowed | StepRecoveryAdmission::Reserved { .. }) => {
-            let result =
-                dispatch_recovery(step, ctx, recovery, original_err, attempt, max_attempts);
+            let result = dispatch_recovery(step, ctx, recovery, failure, attempt, max_attempts);
             // Preparation failures spend the reserved episode too.
             if let Err(error) = ctx.host.settle_step_recovery(
                 &ctx.run_id,
@@ -144,24 +217,29 @@ fn dispatch_recovery(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
-    original_err: &DispatchError,
+    failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
 ) -> Result<(), (&'static str, String)> {
     let mut input = serde_json::json!({
         "failed_step_id": step.id,
         "activity_name": step_activity_name(step),
-        "error_message": original_err.to_string(),
+        "error_message": bounded_recovery_text(
+            "error_message",
+            &ctx.run_id,
+            &failure.diagnostic(),
+            MAX_RECOVERY_ERROR_MESSAGE_BYTES,
+        ),
         "attempt": attempt,
         "max_attempts": max_attempts,
     });
-    if let DispatchError::RecoverableVcsConflict {
+    if let StepFailure::Error(DispatchError::RecoverableVcsConflict {
         operation,
         original_base_sha,
         target_base_sha,
         conflicting_paths,
         diagnostic,
-    } = original_err
+    }) = failure
         && let Some(object) = input.as_object_mut()
     {
         object.insert(
@@ -193,8 +271,10 @@ fn dispatch_recovery(
         recovery.name.as_str(),
         "step_failure_recovery" | PR_CONFLICT_RECOVERY_ACTIVITY
     ) {
-        if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY {
-            bind_recovery_context(step, ctx, &mut input)
+        bind_recovery_context(step, ctx, &mut input)
+            .map_err(|error| ("input", error.to_string()))?;
+        if recovery.name == "step_failure_recovery" {
+            validate_bound_recovery_context(&input)
                 .map_err(|error| ("input", error.to_string()))?;
         }
         input["system_crew"] = Value::Bool(true);
@@ -269,15 +349,128 @@ fn bind_recovery_context(
         input["repo_root"] = workspace;
     }
     input["run_id"] = Value::String(ctx.run_id.clone());
-    input["failed_step_input"] = failed_input;
+    input["failed_step_input"] = bounded_recovery_input(&ctx.run_id, failed_input);
     Ok(())
 }
 
-fn redacted_recovery_diagnostic(message: &str) -> String {
-    use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
+/// Keep the head and tail of an oversized recovery field and name where the
+/// whole text is, mirroring `elide_note_error`'s contract for run notes.
+///
+/// This is not lossy for the operator: the untruncated error is already durable
+/// in the run's step record, and a worktree-integrity diagnostic additionally
+/// names the audit blob holding its full fingerprints. It is only the copy
+/// handed to the recovery agent that is bounded, so the provider accepts the
+/// turn at all [ORB-12467].
+pub(super) fn bounded_recovery_text(field: &str, run_id: &str, text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let marker = format!(
+        "\n… [truncated: {field} is {} B; the middle is omitted. Full text: \
+         `orbit run show {run_id} --json`, field .run.steps[].error_message] …\n",
+        text.len()
+    );
+    // `limit` is measured in KiB and the marker is a single short line, so the
+    // budget below cannot underflow into an all-marker result in practice.
+    let budget = limit.saturating_sub(marker.len());
+    let head_budget = budget * 3 / 4;
+    let head_end = floor_char_boundary(text, head_budget);
+    let tail_start = ceil_char_boundary(text, text.len() - (budget - head_budget));
+    format!("{}{marker}{}", &text[..head_end], &text[tail_start..])
+}
 
-    let redacted =
-        PatternRedactor::with_argv_secrets().apply_str(&redact_sensitive_env_text(message));
+/// Bound a rendered failed-target input without changing its JSON shape.
+///
+/// `failed_step_input` is declared `type: object` by both recovery activities,
+/// so the bound truncates oversized string leaves in place rather than
+/// replacing the value. An input that is still oversized once every leaf is
+/// bounded — thousands of small keys rather than one big one — degrades to a
+/// preview object, which is the only case that loses the shape.
+pub(super) fn bounded_recovery_input(run_id: &str, input: Value) -> Value {
+    let Ok(serialized) = serde_json::to_string(&input) else {
+        return input;
+    };
+    if serialized.len() <= MAX_RECOVERY_FAILED_STEP_INPUT_BYTES {
+        return input;
+    }
+    let bounded = bound_string_leaves(run_id, input);
+    let bounded_len = serde_json::to_string(&bounded).map_or(usize::MAX, |text| text.len());
+    if bounded_len <= MAX_RECOVERY_FAILED_STEP_INPUT_BYTES {
+        return bounded;
+    }
+    serde_json::json!({
+        "truncated": true,
+        "original_serialized_bytes": serialized.len(),
+        "preview": bounded_recovery_text(
+            "failed_step_input",
+            run_id,
+            &serialized,
+            MAX_RECOVERY_FAILED_STEP_INPUT_BYTES,
+        ),
+    })
+}
+
+fn bound_string_leaves(run_id: &str, value: Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(bounded_recovery_text(
+            "failed_step_input field",
+            run_id,
+            &text,
+            MAX_RECOVERY_INPUT_LEAF_BYTES,
+        )),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| bound_string_leaves(run_id, item))
+                .collect(),
+        ),
+        Value::Object(entries) => Value::Object(
+            entries
+                .into_iter()
+                .map(|(key, item)| (key, bound_string_leaves(run_id, item)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn validate_bound_recovery_context(input: &Value) -> Result<(), DispatchError> {
+    let has_task_identity = input
+        .get("task_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty())
+        || input
+            .get("task_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|ids| {
+                !ids.is_empty()
+                    && ids
+                        .iter()
+                        .all(|id| id.as_str().is_some_and(|id| !id.trim().is_empty()))
+            });
+    let valid_checkout_field = |field: &str| {
+        input
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|path| !path.trim().is_empty())
+    };
+    if has_task_identity
+        && valid_checkout_field("workspace_path")
+        && valid_checkout_field("repo_root")
+    {
+        return Ok(());
+    }
+
+    Err(DispatchError::JobExecution(
+        "managed step recovery requires a task ID and non-empty workspace_path/repo_root from the failed step; the assigned worktree may not have been created or its context did not render, so recovery refuses primary-checkout or unrestricted execution"
+            .to_string(),
+    ))
+}
+
+pub(super) fn redacted_recovery_diagnostic(message: &str) -> String {
+    use orbit_common::security::redaction::{argv_redactor, redact_sensitive_env_text};
+
+    let redacted = argv_redactor().apply_str(&redact_sensitive_env_text(message));
     let mut bounded: String = redacted.chars().take(4096).collect();
     if bounded.len() < redacted.len() {
         bounded.push('…');
@@ -297,17 +490,19 @@ pub(super) fn attempt_failure_activity(
     let Some(failure) = &ctx.failure_activity else {
         return;
     };
-    let pipeline = Value::Object(
-        ctx.pipeline
-            .lock()
-            .expect("pipeline poisoned")
-            .clone()
-            .into_iter()
-            .collect(),
-    );
+    let pipeline = ctx.pipeline_value();
     let error_code = match original_err {
         DispatchError::WorktreeIntegrity { code, .. } => *code,
         DispatchError::RecoverableVcsConflict { .. } => "recoverable_vcs_conflict",
+        DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+        error
+            if orbit_types::workflow::is_validation_environment_failure(
+                None,
+                Some(&error.to_string()),
+            ) =>
+        {
+            orbit_types::workflow::VALIDATION_ENVIRONMENT_ERROR_CODE
+        }
         _ => "pipeline_step_failed",
     };
     let input = serde_json::json!({

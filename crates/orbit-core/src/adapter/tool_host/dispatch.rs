@@ -1,6 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
 use orbit_types::tool::ToolSessionContext;
+use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -18,6 +19,18 @@ pub(super) struct ToolCaller<'a> {
     pub(super) reservation_owner: Option<ReservationOwnerContext>,
 }
 
+/// Provenance for a run this call submits [ORB-13016].
+///
+/// The MCP adapter mints an origin session id for every session it serves;
+/// `orbit tool run` and in-process callers carry none, so they stay `cli`.
+fn submission_trigger(session_context: &ToolSessionContext) -> JobRunTrigger {
+    if session_context.origin_session_id.is_some() {
+        JobRunTrigger::mcp()
+    } else {
+        JobRunTrigger::cli()
+    }
+}
+
 pub(super) fn execute(
     runtime: &OrbitRuntime,
     task_scope: &OrbitTaskScope,
@@ -32,8 +45,23 @@ pub(super) fn execute(
         reservation_owner,
     } = caller;
     let (input, redaction_report) = super::artifact_redaction::sanitize_tool_input(action, input)?;
+    if let Some(mut result) =
+        super::worker_tools::execute(runtime, session_context, action, &input, model.as_deref())?
+    {
+        super::artifact_redaction::finish_tool_response(
+            runtime,
+            action,
+            &mut result,
+            &redaction_report,
+            None,
+            agent.as_deref(),
+            model.as_deref(),
+        )?;
+        return Ok(result);
+    }
     let agent_for_audit = agent.clone();
     let model_for_audit = model.clone();
+    let mut persisted_task_id = None;
     let mut response = match action {
         OrbitBuiltinAction::AdrAdd
         | OrbitBuiltinAction::AdrShow
@@ -51,40 +79,66 @@ pub(super) fn execute(
         OrbitBuiltinAction::AutoTaskMint => super::auto_task_tools::mint(runtime, input),
         OrbitBuiltinAction::AutoTaskShow => super::auto_task_tools::show(runtime, input),
         OrbitBuiltinAction::AutoTaskUpdate => super::auto_task_tools::update(runtime, input),
-        OrbitBuiltinAction::AutoTaskToggle => super::auto_task_tools::toggle(runtime, input),
+        OrbitBuiltinAction::DesktopAutomation => {
+            super::desktop::automation::control(runtime, input, submission_trigger(session_context))
+        }
+        OrbitBuiltinAction::DesktopDrain => super::desktop::drain::control(
+            runtime,
+            input,
+            submission_trigger(session_context),
+            &super::workflow_tools::actor(runtime, agent.as_deref(), model.as_deref()),
+        ),
+        OrbitBuiltinAction::DesktopRead => {
+            super::desktop::task::read(runtime, session_context, input)
+        }
+        OrbitBuiltinAction::DesktopTaskSnapshot => {
+            super::desktop::task::snapshot(runtime, session_context, input)
+        }
+        OrbitBuiltinAction::DesktopTaskWrite => {
+            super::desktop::task::write(runtime, session_context, input, agent, model)
+        }
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
-        OrbitBuiltinAction::DocsList => super::docs_tools::list(runtime, input),
-        OrbitBuiltinAction::DocsShow => super::docs_tools::show(runtime, input),
-        OrbitBuiltinAction::DocsAdd => super::docs_tools::add(runtime, input),
-        OrbitBuiltinAction::DocsIndex => super::docs_tools::index(runtime, input),
-        OrbitBuiltinAction::DocsMigrate => super::docs_tools::migrate(runtime, input),
+        OrbitBuiltinAction::DrainClaims => super::drain_tools::claims(runtime, input),
+        OrbitBuiltinAction::DrainClaimBind => {
+            super::drain_tools::claim_bind(runtime, session_context, input)
+        }
+        OrbitBuiltinAction::DrainClaimSettle => {
+            super::drain_tools::claim_settle(runtime, session_context, input)
+        }
+        OrbitBuiltinAction::TaskPull => super::drain_tools::pull(runtime, session_context, input),
+        OrbitBuiltinAction::DrainProbe => {
+            super::drain_tools::probe(runtime, session_context, input)
+        }
+        OrbitBuiltinAction::DrainReceiptLookup => {
+            super::drain_tools::receipt_lookup(runtime, session_context, input)
+        }
         // ADR-0209 bearing 1 [ORB-10358]: the friction handler table lives with
         // the other friction handlers, keyed by the registry's verb enum.
         OrbitBuiltinAction::Friction(verb) => {
             super::friction_tools::dispatch(runtime, verb, input, model)
         }
-        // [ORB-11332] Operation-mode verbs are registry data joined here by
-        // their verb enum, like friction.
-        OrbitBuiltinAction::OperationMode(verb) => {
-            super::operation_mode_tools::dispatch(runtime, verb, input, agent, model)
-        }
-        OrbitBuiltinAction::PipelineInvoke => {
-            super::pipeline_tools::invoke(runtime, input, agent, model, reservation_owner)
-        }
+        OrbitBuiltinAction::PipelineInvoke => super::pipeline_tools::invoke(
+            runtime,
+            input,
+            agent,
+            model,
+            reservation_owner,
+            submission_trigger(session_context),
+        ),
         OrbitBuiltinAction::PipelineWait => {
             super::pipeline_tools::wait(runtime, input, agent, model)
         }
         OrbitBuiltinAction::Search => super::search_tools::search(runtime, input),
-        OrbitBuiltinAction::SemanticIndex => super::semantic_tools::index(runtime, input),
-        OrbitBuiltinAction::SemanticInstall => super::semantic_tools::install(runtime, input),
-        OrbitBuiltinAction::SemanticStats => super::semantic_tools::stats(runtime),
-        OrbitBuiltinAction::SemanticUninstall => super::semantic_tools::uninstall(runtime, input),
         OrbitBuiltinAction::StateGet => super::state_tools::get(task_scope, input),
         OrbitBuiltinAction::StateSet => super::state_tools::set(task_scope, input),
-        OrbitBuiltinAction::TaskAdd => super::task_tools::add(runtime, input, agent, model),
-        OrbitBuiltinAction::TaskApprove => super::task_tools::approve(runtime, input, agent, model),
+        OrbitBuiltinAction::TaskAdd => {
+            let written = super::task_tools::add(runtime, input, agent, model)?;
+            persisted_task_id = Some(written.persisted_id);
+            Ok(written.response)
+        }
         OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
+        OrbitBuiltinAction::TaskEligible => super::task_tools::eligible(runtime, input),
         OrbitBuiltinAction::TaskLint => super::task_tools::lint(runtime, input),
         OrbitBuiltinAction::TaskList => super::task_tools::list(runtime, input),
         OrbitBuiltinAction::TaskLocks => crate::runtime::task::locks::list(runtime),
@@ -94,36 +148,58 @@ pub(super) fn execute(
         OrbitBuiltinAction::TaskLocksReserve => {
             crate::runtime::task::locks::reserve(runtime, input, agent, model, reservation_owner)
         }
-        OrbitBuiltinAction::TaskReject => super::task_tools::reject(runtime, input, agent, model),
+        OrbitBuiltinAction::TaskReject => {
+            let written = super::task_tools::reject(runtime, input, agent, model)?;
+            persisted_task_id = Some(written.persisted_id);
+            Ok(written.response)
+        }
+        OrbitBuiltinAction::TaskReviewReset => {
+            let result = crate::application::review::reset_review(runtime, &input)?;
+            persisted_task_id = result
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            Ok(result)
+        }
         OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
-        OrbitBuiltinAction::TaskStart => super::task_tools::start(runtime, input, agent, model),
         OrbitBuiltinAction::TaskUpdate => {
-            super::task_tools::update(runtime, input, agent, model, reservation_owner)
+            let written = super::task_tools::update(
+                runtime,
+                input,
+                agent,
+                model,
+                reservation_owner,
+                runtime.artifact_origin(session_context),
+            )?;
+            persisted_task_id = Some(written.persisted_id);
+            Ok(written.response)
         }
-        OrbitBuiltinAction::WorkflowShip => {
-            super::workflow_tools::ship(runtime, input, agent, model)
-        }
+        OrbitBuiltinAction::WorkflowShip => super::workflow_tools::ship(
+            runtime,
+            input,
+            agent,
+            model,
+            submission_trigger(session_context),
+        ),
         OrbitBuiltinAction::WorkflowRunShow => super::workflow_tools::show(runtime, input),
         OrbitBuiltinAction::WorkflowRunList => super::workflow_tools::list(runtime, input),
         OrbitBuiltinAction::WorkflowRunResume => {
             super::workflow_tools::resume(runtime, input, agent, model)
         }
-        OrbitBuiltinAction::WorkflowRunWorkers => {
-            super::workflow_tools::workers(runtime, input, agent, model)
-        }
         OrbitBuiltinAction::WorkspaceClaimAcquire => {
-            crate::runtime::workspace_claim::acquire(runtime, input, agent, model)
+            crate::runtime::workspace::claim::acquire(runtime, input, agent, model)
         }
         OrbitBuiltinAction::WorkspaceClaimRelease => {
-            crate::runtime::workspace_claim::release(runtime, input, agent, model)
+            crate::runtime::workspace::claim::release(runtime, input, agent, model)
         }
-        OrbitBuiltinAction::WorkspaceClaimShow => crate::runtime::workspace_claim::show(runtime),
+        OrbitBuiltinAction::WorkspaceClaimShow => crate::runtime::workspace::claim::show(runtime),
     }?;
     super::artifact_redaction::finish_tool_response(
         runtime,
         action,
         &mut response,
         &redaction_report,
+        persisted_task_id.as_deref(),
         agent_for_audit.as_deref(),
         model_for_audit.as_deref(),
     )?;

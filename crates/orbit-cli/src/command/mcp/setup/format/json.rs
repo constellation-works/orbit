@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
@@ -73,6 +74,23 @@ pub(in crate::command::mcp::setup) fn write_json_object(
     rendered.push('\n');
     fs::write(path, rendered)
         .map_err(|err| OrbitError::Io(format!("failed to write '{}': {err}", path.display())))
+}
+
+pub(in crate::command::mcp::setup) fn write_json_object_atomic(
+    path: &Path,
+    root: &JsonMap<String, JsonValue>,
+) -> Result<(), OrbitError> {
+    let mut rendered =
+        serde_json::to_string_pretty(&JsonValue::Object(root.clone())).map_err(|err| {
+            OrbitError::Execution(format!("serialize JSON '{}': {err}", path.display()))
+        })?;
+    rendered.push('\n');
+    atomic_write_text(path, &rendered).map_err(|err| {
+        OrbitError::Io(format!(
+            "failed to atomically write '{}': {err}",
+            path.display()
+        ))
+    })
 }
 
 pub(in crate::command::mcp::setup) fn write_or_remove_json_object(

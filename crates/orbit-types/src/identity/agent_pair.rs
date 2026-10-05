@@ -114,8 +114,14 @@ impl ReasoningEffort {
     fn validate_grok_model_effort(self, model: Option<&str>) -> Result<(), String> {
         let model = model.map(str::trim).filter(|model| !model.is_empty());
         match (model, self) {
+            // https://docs.x.ai/developers/models/grok-4.7 documents exactly
+            // low, medium, high, and xhigh (default: high).
+            (Some("grok-4.7"), Self::Low | Self::Medium | Self::High | Self::Xhigh) => Ok(()),
             (Some("grok-4.6"), Self::Low | Self::Medium | Self::High | Self::Xhigh) => Ok(()),
             (Some("grok-4.5"), Self::Low | Self::Medium | Self::High) => Ok(()),
+            (Some("grok-4.7"), effort) => Err(format!(
+                "Grok model 'grok-4.7' supports effort values low, medium, high, xhigh; '{effort}' is unsupported"
+            )),
             (Some("grok-4.6"), effort) => Err(format!(
                 "Grok model 'grok-4.6' supports effort values low, medium, high, xhigh; '{effort}' is unsupported"
             )),
@@ -123,10 +129,10 @@ impl ReasoningEffort {
                 "Grok model 'grok-4.5' supports effort values low, medium, high; '{effort}' is unsupported"
             )),
             (Some(model), _) => Err(format!(
-                "Grok effort support is verified only for models 'grok-4.5' and 'grok-4.6'; model '{model}' is unsupported"
+                "Grok effort support is verified only for models 'grok-4.5', 'grok-4.6', and 'grok-4.7'; model '{model}' is unsupported"
             )),
             (None, _) => Err(
-                "Grok effort requires an explicit model; supported models are 'grok-4.5' and 'grok-4.6'"
+                "Grok effort requires an explicit model; supported models are 'grok-4.5', 'grok-4.6', and 'grok-4.7'"
                     .to_string(),
             ),
         }
@@ -211,6 +217,21 @@ pub struct Crew {
     /// a sorted, deduplicated list of non-empty strings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Whether dispatch may run this crew (`[crews.<name>] enabled`). A table
+    /// without the key is enabled, so every config written before the flag
+    /// existed keeps its meaning. A disabled crew stays listed and resolvable
+    /// by name; only selection and dispatch refuse it. Omitted from the
+    /// serialized form while `true`, so existing records keep their shape.
+    #[serde(default = "crew_enabled_default", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
+}
+
+fn crew_enabled_default() -> bool {
+    true
+}
+
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 
 /// Resolve a named crew from the active registry.
@@ -270,6 +291,10 @@ pub fn infer_agent_family_from_model(model: &str) -> Option<String> {
         return None;
     }
 
+    if all_agent_families().iter().any(|family| model == *family) {
+        return Some(model);
+    }
+
     if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
         return Some("codex".to_string());
     }
@@ -322,6 +347,34 @@ pub fn normalize_agent_family_for_model(
     }
 
     Ok(agent.or(inferred))
+}
+
+/// Resolve an optional agent/model pair to a canonical write-attribution family.
+///
+/// A present `model` (or `agent`) must name `codex`, `claude`, `gemini`, or
+/// `grok`, or be a full model string those families can infer. Unrecognized
+/// values such as `llama` are refused rather than stored verbatim.
+pub fn require_canonical_agent_family(
+    agent_cli: Option<&str>,
+    model: Option<&str>,
+) -> Result<Option<String>, IdentityError> {
+    let family = normalize_agent_family_for_model(agent_cli, model)?;
+    let shown = model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| agent_cli.map(str::trim).filter(|value| !value.is_empty()));
+    let Some(shown) = shown else {
+        return Ok(None);
+    };
+
+    match family {
+        Some(family) if all_agent_families().iter().any(|known| family == *known) => {
+            Ok(Some(family))
+        }
+        _ => Err(IdentityError::Invalid(format!(
+            "`model` '{shown}' is not a canonical agent family (codex, claude, gemini, grok) or a recognized full model string"
+        ))),
+    }
 }
 
 fn is_antigravity_cli(name: &str) -> bool {

@@ -18,6 +18,11 @@ pub const DEFAULT_FILE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_FILE_LOCK_WARN_AFTER: Duration = Duration::from_secs(3);
 const FILE_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
+/// How long a single-shot acquisition waits out a refusal that no holder
+/// claims — see [`try_acquire_exclusive_file_lock`]. Sized for a forked child
+/// to reach `execve` on a loaded host, not for a holder to finish its work.
+const UNCLAIMED_LOCK_GRACE: Duration = Duration::from_secs(2);
+
 /// Deadline and warning policy for one advisory file-lock acquisition.
 #[derive(Debug, Clone, Copy)]
 pub struct FileLockOptions {
@@ -120,7 +125,28 @@ pub fn acquire_exclusive_file_lock(
     acquire_file_lock(lock_file, lock_path, label, options, true)
 }
 
-/// Attempt one exclusive acquisition at the exact `lock_path` without waiting.
+/// Attempt one exclusive acquisition at the exact `lock_path` without queueing
+/// behind a live holder. `Ok(None)` means someone else owns the lock and the
+/// caller should give up rather than wait.
+///
+/// Contention is decided from the holder record an owner writes under the
+/// lock, not from the raw `flock` refusal alone, because in a process that
+/// spawns children the two are not the same thing. A `flock` lock belongs to
+/// the *open file description*, and `fork` duplicates the whole descriptor
+/// table: a child forked by any thread while this lock was held goes on
+/// holding it until its `execve` closes the descriptor. `O_CLOEXEC` bounds
+/// that window but cannot remove it, and on a loaded host the forked child can
+/// take milliseconds to be scheduled. A caller that releases the lock and
+/// immediately re-acquires it is then refused by a descriptor that belongs to
+/// no holder at all (ORB-12532).
+///
+/// A refusal carrying no holder record is exactly that case: the previous
+/// owner cleared its record when it dropped its guard, and a new owner writes
+/// one as soon as it acquires. Such a refusal is waited out for
+/// [`UNCLAIMED_LOCK_GRACE`] and reported as contention only if it outlives it.
+/// A refusal a holder does claim returns `Ok(None)` immediately, so a caller
+/// whose correct response to real contention is "exit" never queues behind a
+/// live pass.
 pub fn try_acquire_exclusive_file_lock(
     lock_path: &Path,
     label: &str,
@@ -134,19 +160,49 @@ pub fn try_acquire_exclusive_file_lock(
     create_private_dir_all(parent).map_err(|error| classify_lock_io(parent, error))?;
 
     let lock_file = open_lock_file(lock_path, label)?;
-    match FileExt::try_lock_exclusive(&lock_file) {
-        Ok(()) => {
-            write_file_lock_holder(&lock_file, label);
-            Ok(Some(FileLockGuard {
-                file: lock_file,
-                clear_holder_on_drop: true,
-            }))
+    let started = Instant::now();
+    loop {
+        match FileExt::try_lock_exclusive(&lock_file) {
+            Ok(()) => {
+                write_file_lock_holder(&lock_file, label);
+                return Ok(Some(FileLockGuard {
+                    file: lock_file,
+                    clear_holder_on_drop: true,
+                }));
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if read_file_lock_holder(lock_path).is_some() {
+                    return Ok(None);
+                }
+                let elapsed = started.elapsed();
+                if elapsed >= UNCLAIMED_LOCK_GRACE {
+                    warn_for_unclaimed_refusal(lock_path, label, elapsed);
+                    return Ok(None);
+                }
+                std::thread::sleep(FILE_LOCK_RETRY_INTERVAL.min(UNCLAIMED_LOCK_GRACE - elapsed));
+            }
+            Err(error) => {
+                return Err(classify_or_wrap_lock_io(lock_path, error, |error| {
+                    format!("lock {label} '{}': {error}", lock_path.display())
+                }));
+            }
         }
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
-        Err(error) => Err(classify_or_wrap_lock_io(lock_path, error, |error| {
-            format!("lock {label} '{}': {error}", lock_path.display())
-        })),
     }
+}
+
+/// One line for a refusal that outlived [`UNCLAIMED_LOCK_GRACE`] without any
+/// holder claiming it: either a descriptor inherited by a child that has still
+/// not exec'd, or a holder that took the lock and never recorded itself. The
+/// caller is about to treat it as contention, so the reason it did must be
+/// attributable from a log.
+fn warn_for_unclaimed_refusal(lock_path: &Path, label: &str, elapsed: Duration) {
+    crate::tracing::warn!(
+        target: "orbit.common.fs.file_lock",
+        lock_path = %lock_path.display(),
+        label,
+        waited_ms = duration_millis(elapsed),
+        "advisory file lock refused with no holder recorded; treating as contention",
+    );
 }
 
 pub(crate) fn acquire_shared_file_lock(
@@ -161,9 +217,94 @@ pub(crate) fn acquire_shared_file_lock(
 /// Read advisory holder metadata. Missing, empty, torn, and legacy files are
 /// intentionally reported as no metadata because the OS lock is authoritative.
 pub fn read_file_lock_holder(lock_path: &Path) -> Option<FileLockHolderInfo> {
+    read_file_lock_holder_with_hook(lock_path, |_| {})
+}
+
+/// Test-only seam that runs `before_open` between path resolution and the
+/// no-follow open, so a test can deterministically swap the resolved final
+/// component for a symlink and prove the open still rejects it [ORB-12029].
+#[cfg(test)]
+pub(crate) fn read_file_lock_holder_after_resolve<F>(
+    lock_path: &Path,
+    before_open: F,
+) -> Option<FileLockHolderInfo>
+where
+    F: FnOnce(&Path),
+{
+    read_file_lock_holder_with_hook(lock_path, before_open)
+}
+
+fn read_file_lock_holder_with_hook(
+    lock_path: &Path,
+    before_open: impl FnOnce(&Path),
+) -> Option<FileLockHolderInfo> {
+    let mut file = open_lock_holder_file(lock_path, before_open)?;
     let mut raw = String::new();
-    File::open(lock_path).ok()?.read_to_string(&mut raw).ok()?;
+    file.read_to_string(&mut raw).ok()?;
     serde_json::from_str(&raw).ok()
+}
+
+/// Resolve `lock_path`'s parent directory to its canonical form.
+///
+/// `lock_path` reaches this crate as a caller-selected value (a task lock, a
+/// store lock) with no upstream containment check. Canonicalizing only the
+/// parent — not the final component — keeps the read confined to the
+/// resolved parent directory while still accepting a trusted parent alias
+/// (for example a checkout projection symlink) [ORB-11953]. Deciding whether
+/// the final component itself is safe to read is [`open_lock_holder_file`]'s
+/// job, not this function's: resolving that here and handing back a path
+/// left a window between this check and the caller's open where the final
+/// component could be swapped for a symlink [ORB-12029].
+fn validated_lock_holder_parent(lock_path: &Path) -> Option<PathBuf> {
+    lock_path.parent()?.canonicalize().ok()
+}
+
+/// Open `lock_path`'s final component for a read-only diagnostic read
+/// without following a symlink planted there.
+///
+/// The pathname `symlink_metadata` check below is a fast rejection for the
+/// common case (missing file, directory, or already-a-symlink) so this
+/// avoids blocking on an exotic node such as a FIFO; it is *not* the security
+/// boundary. That boundary is the open immediately after: on Unix,
+/// `O_NOFOLLOW` makes the open itself fail if the final component is a
+/// symlink and `O_NONBLOCK` prevents a swapped FIFO from hanging the caller;
+/// the follow-up `metadata()` call is an `fstat` on the
+/// already-open descriptor, re-checking the file that was actually opened
+/// rather than a path that could have changed again. Folding the check and
+/// the open into one function, with the open re-validating its own
+/// descriptor, closes the window a caller-visible "validated path" handed to
+/// a separate `File::open` left open [ORB-12029]. `None` covers "nothing to
+/// read", matching this function's existing no-metadata-on-missing/malformed
+/// -target semantics.
+///
+/// This secures only the final path component. [`validated_lock_holder_parent`]
+/// resolving the parent supports a trusted parent alias; it does not claim to
+/// stop a party who can write to that parent from renaming or replacing the
+/// lock file's directory entry through some other, ancestor-level race —
+/// only the leaf-symlink swap this closes.
+///
+/// The no-follow open is atomic against the leaf swap on Unix (`O_NOFOLLOW`)
+/// and nonblocking for a swapped FIFO. On Windows,
+/// `FILE_FLAG_OPEN_REPARSE_POINT` opens a reparse point itself instead of its
+/// target. On any other platform the open
+/// follows a symlink normally, so the pathname pre-check above is the only
+/// protection and a swap landing between that check and the open is not
+/// covered there.
+fn open_lock_holder_file(lock_path: &Path, before_open: impl FnOnce(&Path)) -> Option<File> {
+    let file_name = lock_path.file_name()?;
+    let canonical_parent = validated_lock_holder_parent(lock_path)?;
+    let candidate = canonical_parent.join(file_name);
+
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(metadata) if metadata.is_file() => {}
+        _ => return None,
+    }
+
+    before_open(&candidate);
+
+    let file = super::open_read_only_no_follow(&candidate).ok()?;
+    let metadata = file.metadata().ok()?;
+    metadata.is_file().then_some(file)
 }
 
 fn open_lock_file(lock_path: &Path, label: &str) -> io::Result<File> {

@@ -1,6 +1,3 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 //! CLI subprocess supervisor.
 //!
 //! # Output drain / truncation contract
@@ -12,11 +9,14 @@
 //! 1. **Bounded drain.** Readers keep consuming readable bytes and emitting
 //!    tracing line events until EOF or [`OUTPUT_READER_JOIN_TIMEOUT`].
 //! 2. **Cancel.** If a writer still holds the pipe (an escaped session), the
-//!    supervisor wakes each reader through an owned pollable cancel fd. The
-//!    reader then nonblocking-drains whatever is already readable and stops
-//!    capturing and emitting. The supervisor joins the reader thread before
-//!    returning. It does not close another thread's pipe descriptor and does
-//!    not treat a duplicate close as cancellation.
+//!    supervisor sets each reader's cancel flag and wakes it through an owned
+//!    pollable cancel fd. The reader then drains at most the bytes already
+//!    queued in the pipe when it observed the cancel (capped at
+//!    [`POST_CANCEL_DRAIN_LIMIT_BYTES`]), so a writer that keeps producing
+//!    cannot extend the drain, and stops capturing and emitting. The
+//!    supervisor joins the reader thread before returning. It does not close
+//!    another thread's pipe descriptor and does not treat a duplicate close
+//!    as cancellation.
 //! 3. **Capture finish.** Bytes collected before cancel/EOF are frozen by
 //!    [`RollingOutputCapture::finish`]: under the limit they are kept in full;
 //!    over the limit the prefix plus a complete-line tail are kept and
@@ -27,15 +27,23 @@
 //!    type has no output payload.
 //!
 //! Unix implements wakeup with `poll` on the reader fd plus a `UnixStream`
-//! pair. Non-Unix platforms keep a blocking `Read` and cannot interrupt an
-//! escaped holder; that path is not tested here.
+//! pair. When the pair cannot be created (for example `EMFILE`), the reader
+//! still never blocks in `read`: it polls the pipe with a
+//! [`CANCEL_FLAG_POLL_INTERVAL`] timeout and rechecks the cancel flag, so
+//! finalization stays bounded without a wakeup fd. On Unix the supervisor
+//! therefore returns within [`OUTPUT_READER_JOIN_TIMEOUT`] of process-tree
+//! cleanup plus one poll interval and one bounded drain, whatever an escaped
+//! writer does. Non-Unix platforms keep a blocking `Read` and cannot
+//! interrupt an escaped holder; that path is not tested here.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Child, ExitStatus};
+#[cfg(unix)]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -49,18 +57,31 @@ use std::os::unix::net::UnixStream;
 use super::super::dispatcher::ResolvedSandbox;
 use super::spawn::{SpawnError, SpawnedChild, spawn_child_with_optional_sandbox};
 use orbit_common::process::output_capture::capture_limit_from_env;
+use wait_timeout::ChildExt;
 
 /// Default wall-clock timeout when `AgentLoopSpec::wall_clock_timeout_seconds`
 /// is zero. Matches §7.6 guidance: CLI subprocesses must have a mandatory
 /// wall-clock guard.
-pub(super) const DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS: u64 = 300;
+pub(crate) const DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS: u64 = 300;
 
-pub(super) type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
+type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
 
 const OUTPUT_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(500);
+/// How often a reader without a wakeup fd rechecks its cancel flag.
+#[cfg(unix)]
+const CANCEL_FLAG_POLL_INTERVAL: Duration = Duration::from_millis(25);
+/// Upper bound on bytes a cancelled reader drains. Matches Linux's default
+/// `/proc/sys/fs/pipe-max-size`, the largest buffer an unprivileged writer
+/// can request for a pipe.
+#[cfg(unix)]
+const POST_CANCEL_DRAIN_LIMIT_BYTES: usize = 1024 * 1024;
+const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 const CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_ENV: &str = "ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES";
 const DEFAULT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 const OUTPUT_LINE_EVENT_LIMIT_BYTES: usize = 64 * 1024;
+/// Newest stdout bytes a progress sample carries. Large enough for one
+/// provider event holding a long assistant message.
+const PROGRESS_WINDOW_BYTES: usize = 64 * 1024;
 
 type SharedOutputCapture = Arc<Mutex<RollingOutputCapture>>;
 type WaitHook<'a> = &'a dyn Fn(&mut Child) -> std::io::Result<Option<ExitStatus>>;
@@ -138,6 +159,28 @@ impl RollingOutputCapture {
         }
     }
 
+    /// The newest complete lines of the capture, at most `window` bytes.
+    fn recent(&self, window: usize) -> Vec<u8> {
+        let (bytes, from_start) = if self.truncated {
+            let skip = self.tail.len().saturating_sub(window);
+            (
+                self.tail.iter().skip(skip).copied().collect::<Vec<_>>(),
+                false,
+            )
+        } else {
+            let start = self.prefix.len().saturating_sub(window);
+            (self.prefix[start..].to_vec(), start == 0)
+        };
+        if from_start {
+            return bytes;
+        }
+        // The window may open mid-line; that fragment is not a line.
+        bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or_else(Vec::new, |idx| bytes[idx + 1..].to_vec())
+    }
+
     fn finish(&self) -> CapturedOutput {
         if !self.truncated {
             return CapturedOutput {
@@ -177,6 +220,20 @@ impl RollingOutputCapture {
     }
 }
 
+/// [ORB-13899] What a running child has written to stdout so far.
+pub(super) struct OutputProgress {
+    pub(super) observed_bytes: usize,
+    /// The newest complete stdout lines, bounded.
+    pub(super) recent: Vec<u8>,
+}
+
+/// Samples a running child's stdout every `interval` until it exits, so a
+/// long invocation is observable before it finishes.
+pub(super) struct ProgressReporter<'a> {
+    pub(super) interval: Duration,
+    pub(super) report: &'a dyn Fn(&OutputProgress),
+}
+
 pub(super) struct SpawnTraceContext<'a> {
     pub(super) provider: &'a str,
     pub(super) job_run_id: &'a str,
@@ -199,13 +256,20 @@ pub(super) struct SpawnWithTimeoutRequest<'a> {
     /// inside this module (process-group cleanup), so a long-running provider
     /// child has no observable identity while it runs.
     pub(super) on_spawn: Option<&'a dyn Fn(u32)>,
+    /// Called on the supervising thread between waits on the child, so only
+    /// before supervision has seen it exit.
+    pub(super) on_progress: Option<ProgressReporter<'a>>,
     /// Test seam for exercising wait failures without depending on another
-    /// thread reaping the child between `try_wait` calls.
+    /// thread reaping the child between wait calls. Injected hooks are
+    /// try_wait-style (non-blocking); production blocks in `wait_timeout`.
     pub(super) wait: Option<WaitHook<'a>>,
     /// Test seam: each live output reader increments this counter for the
     /// lifetime of its thread so tests can observe finalization without
     /// sampling process-wide thread counts.
     pub(super) live_readers: Option<Arc<AtomicUsize>>,
+    /// Test seam for supervising an already-spawned child with its ownership
+    /// guards intact. Production always spawns from the request fields.
+    pub(super) spawned_child: Option<SpawnedChild>,
     /// Test seam for exercising output capture when the pollable cancellation
     /// channel cannot be constructed.
     #[cfg(unix)]
@@ -225,7 +289,31 @@ struct OutputReaderHandle {
     finished: mpsc::Receiver<()>,
     join: thread::JoinHandle<()>,
     #[cfg(unix)]
-    cancel: Option<UnixStream>,
+    cancel: ReaderCancel,
+}
+
+/// Supervisor-owned half of a reader's cancellation. The flag is always
+/// present; the stream only wakes a reader parked in `poll` sooner.
+#[cfg(unix)]
+struct ReaderCancel {
+    requested: Arc<AtomicBool>,
+    wakeup: Option<UnixStream>,
+}
+
+#[cfg(unix)]
+impl ReaderCancel {
+    fn cancel(self) {
+        self.requested.store(true, Ordering::Release);
+        // Closing our end makes the reader's end readable (EOF).
+        drop(self.wakeup);
+    }
+}
+
+/// Reader-owned half of [`ReaderCancel`].
+#[cfg(unix)]
+struct CancelWatch {
+    requested: Arc<AtomicBool>,
+    wakeup: Option<UnixStream>,
 }
 
 struct LiveReaderGuard {
@@ -249,6 +337,25 @@ impl Drop for LiveReaderGuard {
     }
 }
 
+/// Spawn the child [`spawn_with_timeout`] will supervise. A caller that needs
+/// the child before supervision starts (the orchestrator takes the Linux
+/// post-run guard off it) spawns here and passes it as `spawned_child`.
+pub(super) fn spawn_for_supervision(
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+    cwd: Option<&Path>,
+    sandbox: Option<&ResolvedSandbox>,
+    provider: &str,
+) -> Result<SpawnedChild, SpawnError> {
+    spawn_child_with_optional_sandbox(program, args, env, cwd, sandbox, provider).map_err(|err| {
+        SpawnError {
+            permanent: err.permanent,
+            message: format!("spawn {program}: {}", err.message),
+        }
+    })
+}
+
 pub(super) fn spawn_with_timeout(
     request: SpawnWithTimeoutRequest<'_>,
 ) -> Result<SpawnOutput, SpawnError> {
@@ -263,22 +370,27 @@ pub(super) fn spawn_with_timeout(
         trace,
         output_capture_limit,
         on_spawn,
+        on_progress,
         wait,
         live_readers,
+        spawned_child,
         #[cfg(unix)]
         cancel_pair,
     } = request;
 
     let started = Instant::now();
+    let spawned = match spawned_child {
+        Some(spawned) => spawned,
+        None => spawn_for_supervision(program, args, env, cwd, sandbox, trace.provider)?,
+    };
     let SpawnedChild {
         mut child,
         // The temp profile must outlive the child — drop it after wait.
         _profile_temp,
-    } = spawn_child_with_optional_sandbox(program, args, env, cwd, sandbox, trace.provider)
-        .map_err(|err| SpawnError {
-            permanent: err.permanent,
-            message: format!("spawn {program}: {}", err.message),
-        })?;
+        // Linux mount descriptors also outlive the child. Dropping a cloned
+        // SQLite DB descriptor earlier can release the host's lease locks.
+        _linux_mount_plan,
+    } = spawned;
 
     // Report the PID before any blocking work: the whole point is to be
     // observable during a long invocation, and the child is already running.
@@ -333,35 +445,33 @@ pub(super) fn spawn_with_timeout(
         )
     });
 
-    let mut timed_out = false;
     let deadline = started + timeout;
-    let wait_result = loop {
-        let result = match wait {
-            Some(wait) => wait(&mut child),
-            None => child.try_wait(),
-        };
-        match result {
-            Ok(Some(status)) => {
-                break Ok(Some(status));
-            }
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    timed_out = true;
-                    break Ok(None);
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-            Err(err) => {
-                break Err(err);
-            }
+    let sample_progress = || {
+        if let Some(progress) = on_progress.as_ref()
+            && let Ok(capture) = stdout_buf.lock()
+        {
+            let sample = OutputProgress {
+                observed_bytes: capture.observed_bytes,
+                recent: capture.recent(PROGRESS_WINDOW_BYTES),
+            };
+            drop(capture);
+            (progress.report)(&sample);
         }
     };
-
-    let (exit_status, wait_error) = match wait_result {
-        Ok(exit_status) => (exit_status, None),
-        // `wait` failures are host-side and not clearly deterministic — leave
-        // them retryable after the common cleanup below.
-        Err(err) => (None, Some(err)),
+    let wait_result = wait_until_exit_or_deadline(
+        &mut child,
+        deadline,
+        wait,
+        on_progress
+            .as_ref()
+            .map(|progress| (progress.interval, &sample_progress as &dyn Fn())),
+    );
+    // `wait` failures are host-side and not clearly deterministic — leave
+    // them retryable after the common cleanup below.
+    let (exit_status, wait_error, timed_out) = match wait_result {
+        Ok(None) => (None, None, true),
+        Ok(exit_status) => (exit_status, None, false),
+        Err(err) => (None, Some(err), false),
     };
 
     kill_child_process_tree(&mut child);
@@ -391,6 +501,50 @@ pub(super) fn spawn_with_timeout(
     let exit_code = exit_status.as_ref().and_then(|s| s.code());
     let duration = started.elapsed();
     Ok((stdout, stderr, exit_code, duration, timed_out))
+}
+
+/// Block until the child exits or `deadline` elapses.
+///
+/// Production uses `wait_timeout` for the remaining wall-clock budget so a
+/// long-running agent does not wake 40 times per second. The test `wait` hook
+/// is try_wait-style and may still poll.
+///
+/// With `progress`, production waits in slices of its interval and samples
+/// between them, so sampling stops once a wait reports the exit.
+fn wait_until_exit_or_deadline(
+    child: &mut Child,
+    deadline: Instant,
+    wait: Option<WaitHook<'_>>,
+    progress: Option<(Duration, &dyn Fn())>,
+) -> io::Result<Option<ExitStatus>> {
+    let mut next_sample = progress.map(|(interval, _)| Instant::now() + interval);
+    loop {
+        let slice_end = next_sample.map_or(deadline, |next| next.min(deadline));
+        let remaining = slice_end.saturating_duration_since(Instant::now());
+        let result = match wait {
+            Some(wait) => wait(child),
+            None => child.wait_timeout(remaining),
+        };
+        match result {
+            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(None) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Ok(None);
+                }
+                if let (Some((interval, sample)), Some(next)) = (progress, next_sample)
+                    && now >= next
+                {
+                    sample();
+                    next_sample = Some(now + interval);
+                }
+                if wait.is_some() {
+                    thread::sleep(Duration::from_millis(25));
+                }
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 fn finish_captured_output(buf: &SharedOutputCapture, output_limit: usize) -> CapturedOutput {
@@ -426,31 +580,41 @@ where
     let fd = handle.into_raw_fd();
     // SAFETY: `into_raw_fd` transferred ownership of a valid pipe descriptor.
     let mut reader = unsafe { File::from_raw_fd(fd) };
+    // The reader only calls `read` after `poll` reports the pipe ready, so a
+    // failure here cannot turn it into a blocking reader.
+    let _ = set_nonblocking(reader.as_raw_fd());
     let pair_result = cancel_pair.map_or_else(UnixStream::pair, |make_pair| make_pair());
-    let (wakeup, cancel) = match pair_result {
+    // Without a pair the reader falls back to timed polls of the cancel flag.
+    let (wakeup, cancel_wakeup) = match pair_result {
         Ok((wakeup, cancel)) => {
-            // The fallback below uses a blocking read loop, so only make the
-            // pipe nonblocking when its pollable cancel channel exists.
-            let _ = set_nonblocking(reader.as_raw_fd());
             let _ = wakeup.set_nonblocking(true);
             let _ = cancel.set_nonblocking(true);
             (Some(wakeup), Some(cancel))
         }
         Err(_) => (None, None),
     };
+    let requested = Arc::new(AtomicBool::new(false));
+    let watch = CancelWatch {
+        requested: Arc::clone(&requested),
+        wakeup,
+    };
 
-    let (finished_tx, finished) = mpsc::channel();
+    // One reader sends one completion signal; capacity one cannot block it.
+    let (finished_tx, finished) = mpsc::sync_channel(1);
     let join = thread::spawn(move || {
         let _live = LiveReaderGuard::enter(live_readers);
         tracing::dispatcher::with_default(&context.dispatch, || {
-            read_cancelable_output(&mut reader, wakeup.as_ref(), &buf, &context);
+            read_cancelable_output(&mut reader, &watch, &buf, &context);
         });
         let _ = finished_tx.send(());
     });
     OutputReaderHandle {
         finished,
         join,
-        cancel,
+        cancel: ReaderCancel {
+            requested,
+            wakeup: cancel_wakeup,
+        },
     }
 }
 
@@ -464,7 +628,8 @@ fn spawn_output_reader<R>(
 where
     R: Read + Send + 'static,
 {
-    let (finished_tx, finished) = mpsc::channel();
+    // One reader sends one completion signal; capacity one cannot block it.
+    let (finished_tx, finished) = mpsc::sync_channel(1);
     let join = thread::spawn(move || {
         let _live = LiveReaderGuard::enter(live_readers);
         tracing::dispatcher::with_default(&context.dispatch, || {
@@ -488,9 +653,11 @@ fn join_output_reader(reader: OutputReaderHandle, deadline: Instant) {
             let _ = join.join();
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
+            // A cancelled Unix reader never blocks in `read` and drains a
+            // bounded byte count, so this join is bounded too.
             #[cfg(unix)]
             {
-                drop(cancel);
+                cancel.cancel();
                 let _ = join.join();
             }
             #[cfg(not(unix))]
@@ -499,6 +666,7 @@ fn join_output_reader(reader: OutputReaderHandle, deadline: Instant) {
     }
 }
 
+#[cfg(not(unix))]
 fn read_blocking_output<R: Read>(
     mut reader: R,
     buf: &SharedOutputCapture,
@@ -520,20 +688,15 @@ fn read_blocking_output<R: Read>(
 #[cfg(unix)]
 fn read_cancelable_output(
     reader: &mut File,
-    wakeup: Option<&UnixStream>,
+    watch: &CancelWatch,
     buf: &SharedOutputCapture,
     context: &OutputReaderContext,
 ) {
-    let Some(wakeup) = wakeup else {
-        read_blocking_output(reader, buf, context);
-        return;
-    };
-
     let mut chunk = [0u8; 4096];
     let mut line_buf = Vec::new();
     let mut cancelled = false;
     loop {
-        match poll_reader_or_cancel(reader.as_raw_fd(), wakeup.as_raw_fd()) {
+        match poll_reader_or_cancel(reader.as_raw_fd(), watch) {
             PollOutcome::Failed => break,
             PollOutcome::Cancelled => {
                 cancelled = true;
@@ -560,9 +723,7 @@ fn append_output_chunk(
     raw: &[u8],
     line_buf: &mut Vec<u8>,
 ) {
-    buf.lock()
-        .expect("subprocess output buf poisoned")
-        .push(raw);
+    buf.lock().unwrap_or_else(PoisonError::into_inner).push(raw);
     emit_output_chunk(
         &context.provider,
         context.stream,
@@ -575,7 +736,7 @@ fn append_output_chunk(
 }
 
 fn flush_line_buf(context: &OutputReaderContext, line_buf: &[u8]) {
-    if line_buf.is_empty() {
+    if line_buf.is_empty() || !tracing::enabled!(tracing::Level::INFO) {
         return;
     }
     emit_output_line(
@@ -595,19 +756,41 @@ fn drain_readable_output(
     context: &OutputReaderContext,
     line_buf: &mut Vec<u8>,
 ) {
+    // Snapshot the queued byte count once: bytes written after the cancel
+    // belong to no invocation and must not keep this loop alive.
+    let mut remaining = queued_bytes(reader.as_raw_fd())
+        .map_or(POST_CANCEL_DRAIN_LIMIT_BYTES, |queued| {
+            queued.min(POST_CANCEL_DRAIN_LIMIT_BYTES)
+        });
     let mut chunk = [0u8; 4096];
-    loop {
+    while remaining > 0 {
         if !fd_is_readable(reader.as_raw_fd()) {
             return;
         }
-        match reader.read(&mut chunk) {
+        let want = remaining.min(chunk.len());
+        match reader.read(&mut chunk[..want]) {
             Ok(0) => return,
-            Ok(n) => append_output_chunk(buf, context, &chunk[..n], line_buf),
+            Ok(n) => {
+                remaining = remaining.saturating_sub(n);
+                append_output_chunk(buf, context, &chunk[..n], line_buf);
+            }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return,
             Err(_) => return,
         }
     }
+}
+
+#[cfg(unix)]
+fn queued_bytes(fd: RawFd) -> Option<usize> {
+    let mut available: libc::c_int = 0;
+    // SAFETY: FIONREAD writes one `c_int` through a valid pointer; `fd` is the
+    // reader thread's own pipe.
+    let rc = unsafe { libc::ioctl(fd, libc::FIONREAD, &mut available) };
+    if rc < 0 {
+        return None;
+    }
+    usize::try_from(available).ok()
 }
 
 #[cfg(unix)]
@@ -618,7 +801,7 @@ enum PollOutcome {
 }
 
 #[cfg(unix)]
-fn poll_reader_or_cancel(reader_fd: RawFd, wakeup_fd: RawFd) -> PollOutcome {
+fn poll_reader_or_cancel(reader_fd: RawFd, watch: &CancelWatch) -> PollOutcome {
     let mut fds = [
         libc::pollfd {
             fd: reader_fd,
@@ -626,15 +809,28 @@ fn poll_reader_or_cancel(reader_fd: RawFd, wakeup_fd: RawFd) -> PollOutcome {
             revents: 0,
         },
         libc::pollfd {
-            fd: wakeup_fd,
+            fd: watch.wakeup.as_ref().map_or(-1, AsRawFd::as_raw_fd),
             events: libc::POLLIN,
             revents: 0,
         },
     ];
+    // With a wakeup fd the reader can park indefinitely; without one it must
+    // wake periodically to observe the cancel flag.
+    let (nfds, timeout_ms) = if watch.wakeup.is_some() {
+        (2, -1)
+    } else {
+        (1, CANCEL_FLAG_POLL_INTERVAL.as_millis() as libc::c_int)
+    };
     loop {
-        // SAFETY: `fds` is a valid two-element pollfd array we own for the
-        // duration of the call; both descriptors are owned by this thread.
-        let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        // The flag is checked on every pass so a continuously readable pipe
+        // cannot starve cancellation.
+        if watch.requested.load(Ordering::Acquire) {
+            return PollOutcome::Cancelled;
+        }
+        // SAFETY: `fds` is a valid pollfd array we own for the duration of
+        // the call and `nfds` never exceeds its length; both descriptors are
+        // owned by this thread.
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), nfds, timeout_ms) };
         if rc < 0 {
             let err = io::Error::last_os_error();
             if err.kind() == io::ErrorKind::Interrupted {
@@ -682,10 +878,38 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
 fn kill_child_process_tree(child: &mut Child) {
     #[cfg(unix)]
     {
-        let _ = signal_child_process_group(child.id(), libc::SIGKILL);
+        let child_id = child.id();
+        let _ = signal_child_process_group(child_id, libc::SIGKILL);
+        let _ = child.kill();
+        let _ = child.wait();
+        wait_for_process_group_exit(child_id);
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_process_group_exit(child_id: u32) {
+    let deadline = Instant::now() + PROCESS_GROUP_CLEANUP_TIMEOUT;
+    while process_group_is_alive(child_id) {
+        let _ = signal_child_process_group(child_id, libc::SIGKILL);
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(unix)]
+fn process_group_is_alive(child_id: u32) -> bool {
+    if child_id == 0 || child_id > i32::MAX as u32 {
+        return false;
+    }
+    let rc = unsafe { libc::killpg(child_id as libc::pid_t, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 #[cfg(unix)]
@@ -714,6 +938,10 @@ fn emit_output_chunk(
     raw: &[u8],
     line_buf: &mut Vec<u8>,
 ) {
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return;
+    }
+
     for segment in raw.split_inclusive(|byte| *byte == b'\n') {
         line_buf.extend_from_slice(segment);
         if segment.ends_with(b"\n") || line_buf.len() >= OUTPUT_LINE_EVENT_LIMIT_BYTES {

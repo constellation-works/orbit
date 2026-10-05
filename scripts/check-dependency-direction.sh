@@ -19,16 +19,16 @@ allowed_internal_deps() {
       echo "orbit-common orbit-types"
       ;;
     orbit-registry)
-      # Registry owns local machine/workspace files and needs only shared types.
-      echo "orbit-common orbit-types"
+      # Registry owns local machine/workspace files. Since ORB-12725 this
+      # machine's identity is the `[machine]` table in the global config.toml,
+      # so Registry reads it through orbit-config's admission rather than
+      # keeping a second parser and a second set of validators.
+      echo "orbit-common orbit-config orbit-types"
       ;;
     orbit-policy | orbit-exec | orbit-store)
       echo "orbit-common orbit-types"
       ;;
     orbit-search)
-      # ORB-10357 folded the former orbit-search-companion crate in as an
-      # additional [[bin]] target; fastembed is a workspace dependency, not
-      # an internal crate edge.
       echo "orbit-common orbit-types"
       ;;
     orbit-tools)
@@ -51,7 +51,7 @@ allowed_internal_deps() {
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to
       # machine-local Registry state for CLI and dashboard consumers.
-      echo "orbit-common orbit-config orbit-core orbit-engine orbit-registry orbit-store orbit-types"
+      echo "orbit-common orbit-config orbit-core orbit-engine orbit-mcp orbit-registry orbit-store orbit-tools orbit-types"
       ;;
     orbit-mcp)
       # MCP owns framing, canonical discovery, and direct SSH stdio transport.
@@ -63,7 +63,7 @@ allowed_internal_deps() {
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state
       # and Core's authoritative runtime dispatcher.
-      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types"
+      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types orbit-engine orbit-exec orbit-tools"
       ;;
     *)
       return 1
@@ -73,8 +73,11 @@ allowed_internal_deps() {
 
 allowed_dev_only_deps() {
   case "$1" in
+    orbit-cli)
+      echo "orbit-engine orbit-exec orbit-tools"
+      ;;
     orbit-core)
-      echo "orbit-exec"
+      echo ""
       ;;
     *)
       echo ""
@@ -164,6 +167,49 @@ for index in "${!workspace_crates[@]}"; do
     fail=1
   fi
 done
+
+# Cargo metadata resolves workspace inheritance, so inspect the manifests to
+# catch a member that pins a dependency already defined by the workspace.
+# Include target-specific and dev/build dependencies, not just production ones.
+if ! python3 - "$repo_root/Cargo.toml" "${workspace_manifests[@]}" <<'PY'
+import pathlib
+import sys
+import tomllib
+
+workspace_manifest = pathlib.Path(sys.argv[1])
+workspace_deps = tomllib.loads(workspace_manifest.read_text())["workspace"]["dependencies"]
+failed = False
+
+
+def check_group(manifest, section, dependencies):
+    global failed
+    for name, declaration in dependencies.items():
+        package = declaration.get("package", name) if isinstance(declaration, dict) else name
+        if (name in workspace_deps or package in workspace_deps) and not (
+            isinstance(declaration, dict) and declaration.get("workspace") is True
+        ):
+            print(
+                f"{manifest}: {section}.{name} must inherit its workspace dependency "
+                "with workspace = true"
+            )
+            failed = True
+
+
+for raw_path in sys.argv[2:]:
+    path = pathlib.Path(raw_path)
+    manifest = path.relative_to(workspace_manifest.parent)
+    data = tomllib.loads(path.read_text())
+    for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+        check_group(manifest, section, data.get(section, {}))
+    for target, groups in data.get("target", {}).items():
+        for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+            check_group(manifest, f"target.{target}.{section}", groups.get(section, {}))
+
+sys.exit(1 if failed else 0)
+PY
+then
+  fail=1
+fi
 
 while IFS=$'\t' read -r crate manifest dependency kind; do
   allowed="$(allowed_internal_deps "$crate")"
@@ -265,18 +311,6 @@ if rg -n 'automation_commit\(|Sha256' \
   fail=1
 fi
 
-# Operation mode composes authority over the shared scheduling domain
-# [ORB-11332]. Core's operation module may consume accepted assessments and
-# hand the evaluator constraints, but must not grow its own evaluator,
-# fingerprint, checkpoint, or coverage acceptance; Automation must never read
-# grants, so authority stays in Core/Store.
-if rg -n 'automation_commit\(|Sha256|fn evaluate\b|fn fingerprint\b|definition_epoch' \
-  "$repo_root/crates/orbit-core/src/application/operation" \
-  --glob '*.rs' --glob '!**/tests/**'; then
-  echo "Core operation mode must use the shared automation evaluator and checkpoint contract"
-  fail=1
-fi
-
 # Before-PR review [ORB-11333] composes authority and Git evidence in Core and
 # persists through Store; the coverage acceptance and exclusion rules, task
 # meaning digests, and landing classification stay in Automation's `review`
@@ -293,13 +327,6 @@ if rg -n 'ReviewStoreBackend|review_certificate_record|review_reserve' \
   "$repo_root/crates/orbit-automation/src" \
   --glob '*.rs' --glob '!**/tests/**'; then
   echo "orbit-automation must not persist review evidence; Store owns ledgers and certificates"
-  fail=1
-fi
-
-if rg -n 'OperationGrant|operation_grant|OperationStoreBackend' \
-  "$repo_root/crates/orbit-automation/src" \
-  --glob '*.rs' --glob '!**/tests/**'; then
-  echo "orbit-automation must not read operation-mode grants; authority is composed in Core"
   fail=1
 fi
 

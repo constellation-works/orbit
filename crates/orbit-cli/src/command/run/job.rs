@@ -11,8 +11,7 @@ use clap::Args;
 
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
-/// Terminal wait statuses that mean the submitted run did not succeed.
-const FAILED_WAIT_STATUSES: [&str; 4] = ["failed", "timeout", "cancelled", "interrupted"];
+use super::support::FAILED_WAIT_STATUSES;
 
 #[derive(Args)]
 #[command(
@@ -45,29 +44,33 @@ impl Execute for JobRunArgs {
             return render_submission(&invoke);
         }
 
-        let timeout_seconds = OrbitRuntime::normalize_pipeline_wait_timeout(None)?;
-        let poll_interval_seconds = OrbitRuntime::normalize_pipeline_wait_poll_interval(None);
-        let wait = runtime.wait_pipeline_runs(
-            std::slice::from_ref(&invoke.run_id),
-            timeout_seconds,
-            poll_interval_seconds,
-            None,
-        )?;
-        let entry = wait
-            .results
-            .into_iter()
-            .find(|entry| entry.run_id == invoke.run_id)
-            .ok_or_else(|| {
-                OrbitError::Execution(format!(
-                    "wait returned no result for run '{}'",
-                    invoke.run_id
-                ))
-            })?;
-        render_wait(&invoke, &entry)
+        wait_for_submission(runtime, &invoke)
     }
 }
 
-pub(super) fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
+fn wait_for_submission(runtime: &OrbitRuntime, invoke: &PipelineInvokeResult) -> CommandOut {
+    let timeout_seconds = OrbitRuntime::normalize_pipeline_wait_timeout(None)?;
+    let poll_interval_seconds = OrbitRuntime::normalize_pipeline_wait_poll_interval(None);
+    let wait = runtime.wait_pipeline_runs(
+        std::slice::from_ref(&invoke.run_id),
+        timeout_seconds,
+        poll_interval_seconds,
+        None,
+    )?;
+    let entry = wait
+        .results
+        .into_iter()
+        .find(|entry| entry.run_id == invoke.run_id)
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "wait returned no result for run '{}'",
+                invoke.run_id
+            ))
+        })?;
+    render_wait(invoke, &entry)
+}
+
+fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
     let state = submission_state(invoke);
     let doc = json!({
         "job_id": invoke.job_name,
@@ -82,7 +85,7 @@ pub(super) fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
 
 /// Render a completed `--wait`, then fail the command for a non-success
 /// terminal state so a caller can branch on the exit status alone.
-pub(super) fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> CommandOut {
+fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> CommandOut {
     let doc = json!({
         "job_id": invoke.job_name,
         "run_id": invoke.run_id,
@@ -91,6 +94,7 @@ pub(super) fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEnt
         "submitted_at": invoke.submitted_at,
         "waited": true,
         "finished_at": entry.finished_at,
+        "duration_ms": entry.duration_ms,
         "error": entry.error,
         "pipeline": entry.pipeline,
     });
@@ -101,11 +105,11 @@ pub(super) fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEnt
     Ok(payload.into())
 }
 
-pub(super) fn submission_state(invoke: &PipelineInvokeResult) -> &'static str {
+fn submission_state(invoke: &PipelineInvokeResult) -> &'static str {
     if invoke.queued { "queued" } else { "submitted" }
 }
 
-pub(super) fn submission_lines(invoke: &PipelineInvokeResult, state: &str) -> Vec<String> {
+fn submission_lines(invoke: &PipelineInvokeResult, state: &str) -> Vec<String> {
     vec![
         format!("Job: {}", invoke.job_name),
         format!("Run ID: {}", invoke.run_id),
@@ -114,7 +118,7 @@ pub(super) fn submission_lines(invoke: &PipelineInvokeResult, state: &str) -> Ve
     ]
 }
 
-pub(super) fn wait_lines(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> Vec<String> {
+fn wait_lines(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> Vec<String> {
     let mut lines = vec![
         format!("Job: {}", invoke.job_name),
         format!("Run ID: {}", invoke.run_id),
@@ -181,41 +185,27 @@ impl Execute for JobReplayArgs {
 
 #[derive(Args)]
 #[command(
-    after_help = "Examples:\n  orbit job resume jrun-20260704-0710\n\nResumes an interrupted (or failed / timed-out) run as a new linked run,\nskipping top-level steps whose checkpoints already recorded success."
+    after_help = "Examples:\n  orbit job resume jrun-20260704-0710\n  orbit job resume jrun-20260704-0710 --wait\n\nSubmits a new linked run to a detached worker and returns its run ID.\nCompleted top-level checkpoints are reused. Use `orbit run show <RUN_ID>`\nto inspect it, or `--wait` to block and exit with its terminal outcome."
 )]
 pub struct JobResumeArgs {
     /// Source job run ID to resume from its persisted step checkpoints.
     pub run_id: String,
-    /// Output resume result as JSON.
+    /// Block until the detached run reaches a terminal state; exit nonzero unless it succeeded.
+    #[arg(long)]
+    pub wait: bool,
+    /// Output submission or waited result as JSON.
     #[arg(long)]
     pub json: bool,
 }
 
 impl Execute for JobResumeArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let source_run_id = self.run_id;
-        let result = runtime.resume_job_run(&source_run_id)?;
-        let doc = json!({
-            "run_id": result.run_id,
-            "resumed_from": source_run_id,
-            "job_name": result.job_name,
-            "success": result.success,
-            "message": result.message,
-            "pipeline": result.pipeline,
-            "events_emitted": result.events_emitted,
-        });
-        let mut lines = vec![format!(
-            "run_id={};resumed_from={};job={};success={};events={}",
-            result.run_id, source_run_id, result.job_name, result.success, result.events_emitted,
-        )];
-        if let Some(msg) = &result.message {
-            lines.push(format!("message: {msg}"));
+        let invoke = runtime.submit_resume_run(&self.run_id, None, None)?;
+        if self.wait {
+            wait_for_submission(runtime, &invoke)
+        } else {
+            render_submission(&invoke)
         }
-        lines.push(format!(
-            "pipeline: {}",
-            serde_json::to_string_pretty(&result.pipeline).unwrap_or_default()
-        ));
-        Ok(Payload::detail(doc, lines.join("\n")).into())
     }
 }
 

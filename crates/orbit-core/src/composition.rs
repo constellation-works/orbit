@@ -3,13 +3,21 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::generation::{
+    Access, GenerationGuard, ParticipantRole, process_participation,
+};
 use orbit_config::{ConfigRoots, ResolvedConfig};
+use orbit_store::Store;
+pub use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
+use crate::bootstrap::product_profile::ProductProfile;
 use crate::bootstrap::task_migration::apply_configured_id_start;
+#[cfg(target_os = "macos")]
+use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
     HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
@@ -32,6 +40,14 @@ impl OrbitRuntime {
         roots: OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
     ) -> Result<Self, OrbitError> {
+        ProductProfile::Orbit.validate_roots(&[
+            &roots.global_root,
+            &roots.shared_root,
+            &roots.local_root,
+        ])?;
+        // Library consumers must also refuse before bootstrap can migrate or
+        // reconcile resources under a participating persistent CLI/MCP client.
+        let _generation = pin_executable_generation(&roots.global_root, false)?;
         ensure_orbit_root_initialized(&roots.global_root, &roots.shared_root)?;
         build_runtime(
             &roots.global_root,
@@ -40,6 +56,7 @@ impl OrbitRuntime {
             binding,
             true,
             HostLifetime::ShortLived,
+            false,
         )
     }
 
@@ -56,6 +73,7 @@ impl OrbitRuntime {
             binding,
             false,
             HostLifetime::ShortLived,
+            true,
         )
     }
 
@@ -145,6 +163,7 @@ impl OrbitRuntime {
             None,
             true,
             HostLifetime::ShortLived,
+            false,
         )
     }
 
@@ -163,7 +182,7 @@ impl OrbitRuntime {
         )
     }
 
-    /// Open a runtime whose embed worker matches the constructing host's lifetime.
+    /// Open a runtime for the constructing host's lifetime.
     pub fn from_resolved_roots_with_binding_for(
         global_root: &Path,
         shared_root: &Path,
@@ -178,6 +197,7 @@ impl OrbitRuntime {
             Some(binding),
             true,
             host_lifetime,
+            false,
         )
     }
 
@@ -194,6 +214,7 @@ impl OrbitRuntime {
             Some(binding),
             false,
             HostLifetime::ShortLived,
+            true,
         )
     }
 
@@ -214,6 +235,38 @@ impl OrbitRuntime {
     }
 }
 
+/// Join `root`'s generation before bootstrap, in the role this process
+/// already joined as (a plain command otherwise). See
+/// [`pin_executable_generation_as`].
+pub fn pin_executable_generation(
+    root: &Path,
+    read_only: bool,
+) -> Result<GenerationGuard, OrbitError> {
+    let role = process_participation().map_or(ParticipantRole::Command, |(_, role)| role);
+    pin_executable_generation_as(root, read_only, role)
+}
+
+/// Join `root`'s generation before bootstrap under
+/// `compatibility-generation-v2`: any build whose store schema, workspace
+/// layout and feature schemas are compatible with the live participants is
+/// admitted, whatever its executable digest. A read-only caller that meets a
+/// v1-owned generation still joins it when the compiled store schema equals
+/// the store's current schema.
+pub fn pin_executable_generation_as(
+    root: &Path,
+    read_only: bool,
+    role: ParticipantRole,
+) -> Result<GenerationGuard, OrbitError> {
+    let access = if read_only {
+        Access::ReadOnly
+    } else {
+        Access::Write
+    };
+    GenerationGuard::for_process(root, &compiled_compatibility(), role, access, || {
+        Store::open_read_only(&root.join("orbit.db"))?.schema_version()
+    })
+}
+
 fn build_runtime(
     global_root: &Path,
     shared_root: &Path,
@@ -221,9 +274,63 @@ fn build_runtime(
     binding: Option<WorkspaceRuntimeBinding>,
     reconcile_stale_runs: bool,
     host_lifetime: HostLifetime,
+    read_only: bool,
 ) -> Result<OrbitRuntime, OrbitError> {
-    let layout_report = match orbit_store::workflow::layout::upgrade_workspace_layout(shared_root) {
-        Ok(report) => report,
+    ProductProfile::Orbit.validate_roots(&[global_root, shared_root, local_root])?;
+    let generation = pin_executable_generation(global_root, read_only)?;
+    let write_free = generation.joined_foreign_generation();
+    let layout_report = observe_or_upgrade_layout(shared_root, write_free)?;
+    let runtime_config = if write_free {
+        ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?
+    } else {
+        prepare_resolved_config(global_root, shared_root)?
+    };
+    let runtime = if write_free {
+        OrbitRuntime::build_from_resolved_config_write_free(
+            global_root,
+            shared_root,
+            local_root,
+            binding,
+            &runtime_config,
+            layout_report,
+            host_lifetime,
+        )?
+    } else {
+        OrbitRuntime::build_from_resolved_config(
+            global_root,
+            shared_root,
+            local_root,
+            binding,
+            &runtime_config,
+            layout_report,
+            host_lifetime,
+            read_only,
+        )?
+    };
+    let _generation = generation;
+    if reconcile_stale_runs && !write_free && !managed_run_context_from_env() {
+        runtime.reconcile_stale_job_runs_on_open();
+    }
+    Ok(runtime)
+}
+
+fn observe_or_upgrade_layout(
+    shared_root: &Path,
+    write_free: bool,
+) -> Result<orbit_store::workflow::layout::LayoutUpgradeReport, OrbitError> {
+    if write_free {
+        let current = orbit_store::workflow::layout::current_layout_version(shared_root)?;
+        if current < orbit_store::workflow::layout::SUPPORTED_LAYOUT_VERSION {
+            return Ok(orbit_store::workflow::layout::LayoutUpgradeReport {
+                from_version: current,
+                to_version: current,
+                applied: Vec::new(),
+                forward_compatible: None,
+            });
+        }
+    }
+    match orbit_store::workflow::layout::upgrade_workspace_layout(shared_root) {
+        Ok(report) => Ok(report),
         Err(error) if error.is_readonly_or_access_failure() => {
             tracing::warn!(
                 target: "orbit.core.bootstrap",
@@ -231,24 +338,10 @@ fn build_runtime(
                 error = %error,
                 "skipped incidental workspace layout persistence"
             );
-            orbit_store::workflow::layout::LayoutUpgradeReport::default()
+            Ok(orbit_store::workflow::layout::LayoutUpgradeReport::default())
         }
-        Err(error) => return Err(error),
-    };
-    let runtime_config = prepare_resolved_config(global_root, shared_root)?;
-    let runtime = OrbitRuntime::build_from_resolved_config(
-        global_root,
-        shared_root,
-        local_root,
-        binding,
-        &runtime_config,
-        layout_report,
-        host_lifetime,
-    )?;
-    if reconcile_stale_runs && !managed_run_context_from_env() {
-        runtime.reconcile_stale_job_runs_on_open();
+        Err(error) => Err(error),
     }
-    Ok(runtime)
 }
 
 fn prepare_resolved_config(
@@ -311,6 +404,36 @@ fn roots_from_resolved(
 }
 
 fn has_explicit_root_override(root_override: Option<&Path>) -> bool {
-    root_override.is_some()
-        || std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty())
+    if root_override.is_some() {
+        return true;
+    }
+    let env_override = std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty());
+    #[cfg(target_os = "macos")]
+    if env_override
+        && managed_dispatch_context_from_env()
+        && std::env::var("ORBIT_REGISTRY_ROOT").is_ok_and(|value| !value.trim().is_empty())
+    {
+        // The sandbox may not create a generation record under the selected
+        // workspace `.orbit`. Keep global stores and their generation pin on
+        // the host registry while ORBIT_ROOT selects shared/local state.
+        return false;
+    }
+    env_override
+}
+
+/// Compose a serving-host resource monitor from global configuration only,
+/// without opening or repairing a workspace runtime.
+pub fn host_resource_monitor(
+    global_root: &Path,
+) -> Result<crate::runtime::host_resource::HostResourceMonitor, OrbitError> {
+    let snapshot = orbit_config::ConfigStore::open(
+        orbit_config::ConfigScope::Global,
+        global_root.join("config.toml"),
+    )?
+    .snapshot()?;
+    Ok(crate::runtime::host_resource::HostResourceMonitor::new(
+        crate::runtime::host_resource::default_host_resource_probe(),
+        snapshot.resource_throttle(),
+    )
+    .with_shared_history(global_root))
 }

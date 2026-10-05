@@ -7,12 +7,19 @@
 //! repository hooks, or let content filters rewrite snapshot bytes, and it needs
 //! per-invocation environment (index file, deterministic commit identity). That
 //! is a different contract, so it keeps its own runner here.
+//!
+//! Each invocation runs in its own process group under a finite deadline. A
+//! stalled transport is killed and reaped, and the caller receives
+//! [`OrbitError::ProcessTimeout`] instead of waiting forever.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::create_private_dir_all;
+use orbit_common::process::run_bounded;
 use orbit_types::workspace::git_remotes_equivalent;
 
 /// Highest-precedence attributes for an Orbit-owned cache. Unsets every
@@ -25,6 +32,11 @@ use orbit_types::workspace::git_remotes_equivalent;
 /// layer that actually wins over `artifacts/files/.gitattributes`.
 const LITERAL_ATTRIBUTES: &str =
     "* -text -eol -crlf -ident -filter -diff -merge -working-tree-encoding\n";
+
+/// Wall-clock budget for one publication Git invocation. Local snapshots finish
+/// well under this. A transport that accepts a connection and then stops
+/// responding still has to return.
+const PUBLICATION_GIT_DEADLINE: Duration = Duration::from_secs(180);
 
 /// Result of a Git invocation that is allowed to fail.
 pub(super) struct GitAttempt {
@@ -101,13 +113,23 @@ impl<'a> GitRunner<'a> {
             .env_remove("GIT_CONFIG_COUNT")
             .env_remove("GIT_CONFIG_PARAMETERS")
             .env_remove("GIT_ATTR_SOURCE");
-        let output = command.output().map_err(|error| {
-            OrbitError::Execution(format!(
-                "{} failed to run `git {}`: {error}",
-                self.label,
-                redact_args(args)
-            ))
-        })?;
+        let output = match run_bounded(&mut command, PUBLICATION_GIT_DEADLINE) {
+            Ok(output) => output,
+            Err(OrbitError::ProcessTimeout { timeout_ms, .. }) => {
+                return Err(OrbitError::ProcessTimeout {
+                    timeout_ms,
+                    detail: format!("{} `git {}`", self.label, redact_args(args)),
+                });
+            }
+            Err(OrbitError::Execution(message)) => {
+                return Err(OrbitError::Execution(format!(
+                    "{} failed to run `git {}`: {message}",
+                    self.label,
+                    redact_args(args)
+                )));
+            }
+            Err(other) => return Err(other),
+        };
         Ok(GitAttempt {
             success: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -165,7 +187,7 @@ fn isolate_git_dir(git_dir: &Path) -> Result<(), OrbitError> {
         return Ok(());
     }
     let info = git_dir.join("info");
-    fs::create_dir_all(&info).map_err(|error| OrbitError::from_write_io(&info, error))?;
+    create_private_dir_all(&info).map_err(|error| OrbitError::from_write_io(&info, error))?;
     let path = info.join("attributes");
     fs::write(&path, LITERAL_ATTRIBUTES)
         .map_err(|error| OrbitError::from_write_io(&path, error))?;

@@ -29,24 +29,22 @@ pub(super) fn normalize_v2_artifact_path(raw: &str) -> Result<String, OrbitError
 
 pub(super) fn resolve_v2_artifact_file_path(
     bundle_dir: &Path,
-    path: &str,
+    blob: &str,
 ) -> Result<Option<PathBuf>, OrbitError> {
-    let files_dir = bundle_dir
-        .join(TASK_ARTIFACTS_DIR_NAME)
-        .join(TASK_ARTIFACT_FILES_DIR_NAME);
-    let files_root = match fs::canonicalize(&files_dir) {
+    let artifacts_dir = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
+    let artifacts_root = match fs::canonicalize(&artifacts_dir) {
         Ok(path) => path,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(OrbitError::Io(err.to_string())),
     };
-    let artifact_file = match fs::canonicalize(files_dir.join(path)) {
+    let artifact_file = match fs::canonicalize(artifacts_dir.join(blob)) {
         Ok(path) => path,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(OrbitError::Io(err.to_string())),
     };
-    if !artifact_file.starts_with(&files_root) {
+    if !artifact_file.starts_with(&artifacts_root) {
         return Err(OrbitError::InvalidInput(format!(
-            "artifact path '{path}' resolves outside the task artifact directory"
+            "artifact blob '{blob}' resolves outside the task artifact directory"
         )));
     }
     Ok(Some(artifact_file))

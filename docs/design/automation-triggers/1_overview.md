@@ -2,22 +2,24 @@
 title: Automation Triggers — Overview
 owner: codex
 last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_validated: 2026-09-25
 status: Draft
 feature: automation-triggers
 doc_role: overview
 type: design
 summary: Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage.
 tags: [automation-triggers, routines, auto-tasks, scheduling]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/**", "crates/orbit-core/src/adapter/engine_host/v2_host/triage.rs"]
-related_features: [routines, auto-tasks, operation-mode]
+paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/**"]
+related_features: [routines, auto-tasks, review-gate]
 related_artifacts: [ORB-11315, ORB-11295, ORB-11314, ORB-11316]
 ---
 
 # Automation Triggers — Overview
 
 Delivery triggers are implemented in [ORB-11330]; state preparation and failure
-triage are implemented in [ORB-11331]. The shared `orbit-automation` domain uses
+triage are implemented in [ORB-11331]. Terminal failed-run triage has since been
+retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)):
+the `execution_failed` trigger kind still parses but has no shipped target job. The shared `orbit-automation` domain uses
 the existing sweep clock, Core action adapters and Store checkpoints. See
 [Operations](5_operations.md) for accepted configuration and limits. The broader
 batching and mode design below retains future intent; no live definition is
@@ -57,11 +59,12 @@ Delivery-triggered review is not a replacement for required PR review or QA.
 | Incident | One execution failure cause with explicit child/wrapper/retry lineage and bounded diagnosis. |
 | Fresh assessment | Assessment of the current material task/source contract, including a valid decision to leave work unready. |
 
-[Operation mode](../operation-mode/5_operations.md) supplies optional defaults
-and scoped authorization [ORB-11332]; triggers decide when work is due. Its review-policy
-extension owns review meaning and content-specific exclusions. Neither proposal
-must land first: absent mode support, explicit definition values and existing
-authority suffice. Unknown review coverage remains uncovered.
+Triggers decide when work is due; the [review gate](../review-gate/2_design.md)
+owns review meaning and content-specific exclusions [ORB-11333]. Explicit
+definition values and existing authority decide the rest — operation mode,
+which once supplied optional defaults and scoped authorization, was removed on
+2026-09-21 ([orbit-core decisions](../orbit-core/4_decisions.md)). Unknown
+review coverage remains uncovered.
 
 ## 3. At a Glance
 
@@ -71,7 +74,7 @@ authority suffice. Unknown review coverage remains uncovered.
 | Alternatives, costs, unresolved decisions | [Vision](./3_vision.md) | ORB-11315 |
 | Existing job scheduling | [Routines](../routines/2_design.md) | ORB-11315 inspection |
 | Existing task minting | [Auto-tasks](../auto-tasks/2_design.md) | ORB-11315 inspection |
-| Mode and review-policy relationship | [Operation-mode proposal](../operation-mode/3_vision.md) | ORB-11314, ORB-11316 |
+| Review-policy relationship | [Review gate](../review-gate/2_design.md) | ORB-11333 |
 
 Execution waited until the OpenCode prerequisite [ORB-11295] landed as
 `8da5a925f` (PR 1382), an ancestor of the inspected checkout `c286142bce`.
@@ -82,7 +85,6 @@ publication does not approve the proposed runtime behavior.
 
 - [ORB-11315] — formulates the shared trigger proposal.
 - [ORB-11295] — landed prerequisite before design execution.
-- [ORB-11314] — proposes operation-mode defaults and scoped automation.
-- [ORB-11316] — extends mode with review timing, repair bounds, and coverage.
+- [ORB-11333] — implements review timing, repair bounds, and delivery coverage.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

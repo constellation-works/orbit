@@ -4,6 +4,8 @@
 use std::path::Path;
 
 use orbit_common::{NotFoundKind, OrbitError};
+use orbit_tools::Tool;
+use orbit_tools::external::ExternalTool;
 use orbit_types::record::OrbitEvent;
 use orbit_types::tool::{McpToolDefinition, StoredTool, ToolParam};
 
@@ -89,14 +91,7 @@ impl OrbitRuntime {
         // Add external tools that are in the store but not yet in the registry
         for stored in &stored_tools {
             if !stored.builtin && !tools.iter().any(|t| t.name == stored.name) {
-                tools.push(ToolInfo {
-                    name: stored.name.clone(),
-                    description: stored.description.clone(),
-                    enabled: stored.enabled,
-                    active: true,
-                    builtin: false,
-                    parameters: stored.parameters.clone(),
-                });
+                tools.push(stored_external_tool_info(stored));
             }
         }
 
@@ -105,10 +100,19 @@ impl OrbitRuntime {
     }
 
     pub fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
-        let schema = self
-            .tool_registry()
-            .get_schema(name)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
+        let Some(schema) = self.tool_registry().get_schema(name) else {
+            // Disabled external tools are deliberately absent from the executable
+            // registry. Their persisted catalog entry remains inspectable, using
+            // the same active/enabled distinction as list_all_tools.
+            if let Some(stored) = self.stores().tools().get_tool(name)?
+                && !stored.builtin
+                && !stored.enabled
+                && !stored.path.is_empty()
+            {
+                return Ok(stored_external_tool_info(&stored));
+            }
+            return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
+        };
 
         let stored = self.stores().tools().get_tool(name)?;
         let enabled = stored.is_none_or(|s| s.enabled);
@@ -250,19 +254,67 @@ impl OrbitRuntime {
             return Ok(());
         }
         if self.tool_registry().has(name) {
-            return Err(OrbitError::Execution(format!(
-                "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation — use the equivalent Orbit CLI or dashboard workflow"
+            // A plugin-backed entry is inactive for a reason the loader
+            // recorded — a grant the host has not given, a `requires` this
+            // host does not satisfy. Report that instead of the built-in
+            // surface's answer, which would be wrong for it.
+            if let Some(diagnostic) = self.tool_registry().inactive_diagnostic(name) {
+                return Err(OrbitError::PolicyDenied(diagnostic));
+            }
+            return Err(OrbitError::PolicyDenied(format!(
+                "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation not reachable by agents"
             )));
+        }
+        // A plugin this workspace switched off registers nothing, so its
+        // tools would otherwise read as unknown. Name the toggle instead.
+        if let Some(owner) = self.plugin_load().workspace_disabled_owner(name) {
+            return Err(self.plugin_disabled_in_workspace(&owner.name));
         }
         Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()))
     }
 
+    /// Refuse an `orbit <ns>` verb, before dispatch, when this workspace has
+    /// switched the plugin off.
+    pub fn ensure_plugin_enabled_in_workspace(&self, namespace: &str) -> Result<(), OrbitError> {
+        if self.plugin_load().is_disabled_in_workspace(namespace) {
+            return Err(self.plugin_disabled_in_workspace(namespace));
+        }
+        Ok(())
+    }
+
+    fn plugin_disabled_in_workspace(&self, plugin: &str) -> OrbitError {
+        OrbitError::PluginDisabledInWorkspace {
+            plugin: plugin.to_string(),
+            workspace: self.workspace_label(),
+        }
+    }
+
     fn set_tool_enabled_state(&self, name: &str, enabled: bool) -> Result<(), OrbitError> {
-        if !self.tool_registry().has(name) {
+        let existing = self.stores().tools().get_tool(name)?;
+        let registered = self.tool_registry().has(name);
+        let disabled_external = existing
+            .as_ref()
+            .is_some_and(|stored| !stored.builtin && !stored.enabled && !stored.path.is_empty());
+        if !registered
+            && (!disabled_external || self.plugin_load().workspace_disabled_owner(name).is_some())
+        {
             return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
         }
 
-        let existing = self.stores().tools().get_tool(name)?;
+        if registered && !self.tool_registry().is_active(name) {
+            let changes_stored_state = existing
+                .as_ref()
+                .map_or(!enabled, |stored| stored.enabled != enabled);
+            if !changes_stored_state {
+                let state = if enabled { "enabled" } else { "disabled" };
+                let verb = if enabled { "enable" } else { "disable" };
+                return Err(OrbitError::PolicyDenied(format!(
+                    "tool '{name}' is inactive on the agent tool surface and is already {state}; \
+                     `orbit tool {verb}` would be a no-op"
+                )));
+            }
+        }
+
         if existing.is_none() {
             let schema = self
                 .tool_registry()
@@ -304,5 +356,24 @@ impl OrbitRuntime {
             };
             Ok(((), event))
         })
+    }
+}
+
+/// Project catalog metadata without adding a tool to the executable registry.
+fn stored_external_tool_info(stored: &StoredTool) -> ToolInfo {
+    let schema = ExternalTool {
+        name: stored.name.clone(),
+        path: stored.path.clone(),
+        description: stored.description.clone(),
+        parameters: stored.parameters.clone(),
+    }
+    .schema();
+    ToolInfo {
+        name: schema.name,
+        description: schema.description,
+        enabled: stored.enabled,
+        active: true,
+        builtin: false,
+        parameters: schema.parameters,
     }
 }

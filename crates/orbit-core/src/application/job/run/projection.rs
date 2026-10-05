@@ -1,6 +1,6 @@
 //! Shared JSON projection for persisted job runs.
 
-use orbit_types::workflow::{JobRun, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, PipelineState, run_id_role};
 use serde_json::{Value, json};
 
 /// Durable provider/model evidence for one completed agent invocation.
@@ -15,6 +15,28 @@ pub struct ActivityInvocationEvidence {
     pub model: Option<String>,
 }
 
+/// The step whose error explains a run's outcome [ORB-13016].
+///
+/// A successful run has none. Otherwise the newest step that is not skipped
+/// wins, preferring one that recorded an error: a skipped step's `when:`
+/// reason is why that step did not run, not why the run ended, so it stays on
+/// the step.
+pub fn run_error_step(run: &JobRun) -> Option<&JobRunStep> {
+    if run.state == JobRunState::Success {
+        return None;
+    }
+    let ran = || {
+        run.steps
+            .iter()
+            .rev()
+            .filter(|step| step.state != JobRunState::Skipped)
+    };
+    ran()
+        .find(|step| step.error_code.is_some() || step.error_message.is_some())
+        .or_else(|| ran().next())
+        .or_else(|| run.steps.last())
+}
+
 /// Project a job run and its optional persisted state for operator-facing APIs.
 ///
 /// Child-dispatch lineage is historical and remains visible after a run reaches
@@ -23,8 +45,14 @@ pub struct ActivityInvocationEvidence {
 /// actually admitting under, which a reader needs exactly when explaining a
 /// finished drain. Waiting reasons are momentary, so terminal runs omit them.
 /// Presentation adapters may add intentionally surface-specific fields.
+///
+/// `run_role` is the run id's own claim about how the run was submitted, and is
+/// null for ids minted before role markers existed [ORB-12111]. It never
+/// overrides `child_dispatches`, which remains the record of who dispatched
+/// whom.
 pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let last = run.steps.last();
+    let error_step = run_error_step(run);
     let child_dispatches = serde_json::to_value(
         state
             .map(|state| state.child_dispatches.as_slice())
@@ -38,6 +66,10 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let drain_admissions_stop = state
         .and_then(|state| state.drain_admissions_stop.as_ref())
         .and_then(|stop| serde_json::to_value(stop).ok())
+        .unwrap_or(Value::Null);
+    let drain_cancel = state
+        .and_then(|state| state.drain_cancel.as_ref())
+        .and_then(|cancel| serde_json::to_value(cancel).ok())
         .unwrap_or(Value::Null);
     // Read before the terminal filter below: an invocation's result is most
     // interesting *after* the run finishes.
@@ -61,6 +93,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let agent_invocation = crate::application::job::agent_invoke_result(
         run,
         state_for_agent_result.map(|state| &state.step_outputs),
+        None,
     )
     .and_then(|result| serde_json::to_value(result).ok())
     .unwrap_or(Value::Null);
@@ -70,7 +103,11 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "child_dispatches": child_dispatches,
         "drain_worker_limit": drain_worker_limit,
         "drain_admissions_stop": drain_admissions_stop,
+        "drain_cancel": drain_cancel,
         "run_id": run.run_id,
+        "executed_on": run.executed_on,
+        "run_role": run_id_role(&run.run_id).map(|role| role.to_string()),
+        "trigger": state_for_agent_result.and_then(|state| state.trigger.as_ref()),
         "job_id": run.job_id,
         "attempt": run.attempt,
         "state": run.state.to_string(),
@@ -83,8 +120,8 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "retry_source_run_id": run.retry_source_run_id,
         "exit_code": last.and_then(|step| step.exit_code),
         "agent_response_json": last.and_then(|step| step.agent_response_json.as_ref()),
-        "error_code": last.and_then(|step| step.error_code.as_deref()),
-        "error_message": last.and_then(|step| step.error_message.as_deref()),
+        "error_code": error_step.and_then(|step| step.error_code.as_deref()),
+        "error_message": error_step.and_then(|step| step.error_message.as_deref()),
         "knowledge_metrics": run.knowledge_metrics,
         "requested_crew": requested_crew,
         "resolved_crew": run.resolved_crew,

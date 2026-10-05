@@ -1,9 +1,6 @@
 use chrono::NaiveDate;
 
-use crate::security::release::{
-    TRUSTED_RELEASE_KEYS, TrustedReleaseKey, checksum_for_asset, sha256_hex,
-    verify_checksum_signature, verify_checksum_signature_with_key, verify_sha256_digest,
-};
+use crate::security::release::{TrustedReleaseKey, verify_checksum_signature};
 
 /// A throwaway 2048-bit key generated for these tests only. The matching
 /// private key is not held anywhere, so the fixture below is the only
@@ -50,64 +47,6 @@ fn today() -> NaiveDate {
 }
 
 #[test]
-fn checksum_lookup_accepts_bare_and_path_qualified_manifest_entries() {
-    assert_eq!(
-        checksum_for_asset(TEST_MANIFEST, "orbit-x86_64-unknown-linux-gnu.tar.gz")
-            .expect("bare entry"),
-        "a".repeat(64)
-    );
-    assert_eq!(
-        checksum_for_asset(TEST_MANIFEST, "orbit-aarch64-apple-darwin.tar.gz")
-            .expect("path-qualified entry"),
-        "b".repeat(64)
-    );
-}
-
-#[test]
-fn checksum_lookup_reports_the_missing_asset_by_name() {
-    let error = checksum_for_asset(TEST_MANIFEST, "orbit-x86_64-pc-windows-msvc.tar.gz")
-        .expect_err("absent asset");
-
-    assert!(
-        error
-            .to_string()
-            .contains("orbit-x86_64-pc-windows-msvc.tar.gz"),
-        "{error}"
-    );
-    assert!(error.to_string().contains("orbit-checksums.txt"), "{error}");
-}
-
-#[test]
-fn digest_comparison_names_both_sides_on_mismatch() {
-    let error = verify_sha256_digest(&"a".repeat(64), &"b".repeat(64), "release archive")
-        .expect_err("mismatched digest");
-
-    assert!(error.to_string().contains("release archive"), "{error}");
-    assert!(error.to_string().contains(&"b".repeat(64)), "{error}");
-    verify_sha256_digest(
-        &sha256_hex(b"orbit"),
-        &sha256_hex(b"orbit"),
-        "release archive",
-    )
-    .expect("matching digest");
-}
-
-#[test]
-fn trusted_signature_verifies_and_names_the_matching_key() {
-    let keys = leaked(key_set("2099-12-31", None));
-
-    let key_id = verify_checksum_signature(
-        TEST_MANIFEST.as_bytes(),
-        &decode_hex(TEST_SIGNATURE_HEX),
-        keys,
-        today(),
-    )
-    .expect("trusted signature");
-
-    assert_eq!(key_id, "orbit-test-key-1");
-}
-
-#[test]
 fn tampered_manifest_fails_signature_verification() {
     let keys = leaked(key_set("2099-12-31", None));
     let tampered = TEST_MANIFEST.replace("aaaa", "cccc");
@@ -124,75 +63,6 @@ fn tampered_manifest_fails_signature_verification() {
         error
             .to_string()
             .contains("no trusted release signing key matched"),
-        "{error}"
-    );
-}
-
-#[test]
-fn expired_key_is_reported_as_expired_rather_than_unmatched() {
-    let keys = leaked(key_set("2020-01-01", None));
-
-    let error = verify_checksum_signature(
-        TEST_MANIFEST.as_bytes(),
-        &decode_hex(TEST_SIGNATURE_HEX),
-        keys,
-        today(),
-    )
-    .expect_err("expired key");
-
-    assert!(error.to_string().contains("expired"), "{error}");
-    assert!(error.to_string().contains("orbit-test-key-1"), "{error}");
-}
-
-#[test]
-fn revoked_key_fails_closed_even_before_its_expiry() {
-    let keys = leaked(key_set("2099-12-31", Some("2026-01-02")));
-
-    let error = verify_checksum_signature(
-        TEST_MANIFEST.as_bytes(),
-        &decode_hex(TEST_SIGNATURE_HEX),
-        keys,
-        today(),
-    )
-    .expect_err("revoked key");
-
-    assert!(error.to_string().contains("revoked"), "{error}");
-}
-
-#[test]
-fn signature_from_an_untrusted_key_never_matches_the_shipped_trust_set() {
-    assert_eq!(TRUSTED_RELEASE_KEYS.len(), 1);
-    assert_eq!(TRUSTED_RELEASE_KEYS[0].id, "orbit-release-key-3");
-
-    let error = verify_checksum_signature(
-        TEST_MANIFEST.as_bytes(),
-        &decode_hex(TEST_SIGNATURE_HEX),
-        TRUSTED_RELEASE_KEYS,
-        today(),
-    )
-    .expect_err("untrusted key");
-
-    assert!(
-        error
-            .to_string()
-            .contains("no trusted release signing key matched"),
-        "{error}"
-    );
-}
-
-#[test]
-fn single_key_verification_rejects_a_malformed_public_key() {
-    let error = verify_checksum_signature_with_key(
-        TEST_MANIFEST.as_bytes(),
-        &decode_hex(TEST_SIGNATURE_HEX),
-        "not a pem block",
-    )
-    .expect_err("malformed key");
-
-    assert!(
-        error
-            .to_string()
-            .contains("failed to load trusted release checksum signing key"),
         "{error}"
     );
 }

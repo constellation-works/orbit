@@ -5,9 +5,10 @@
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::auto_tasks::ListedAutoTask;
 use crate::application::auto_tasks::crud::{AutoTaskAddParams, AutoTaskUpdateParams};
 
 pub(super) fn add(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -26,16 +27,45 @@ pub(super) fn add(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitEr
         template,
         dedupe,
     })?;
-    to_json(&definition)
+    let mut response = to_json(&definition)?;
+    let warnings = runtime.validate_required_tools(&definition.template.required_tools)?;
+    if !warnings.is_empty()
+        && let Some(object) = response.as_object_mut()
+    {
+        object.insert("warnings".to_string(), json!(warnings));
+    }
+    Ok(response)
 }
 
-pub(super) fn list(runtime: &OrbitRuntime, _input: Value) -> Result<Value, OrbitError> {
-    let definitions = runtime.auto_task_list()?;
-    let array = definitions
+/// Definitions whose seeding plugin is off in this workspace are omitted
+/// unless `include_inactive_plugins` is true; then each is marked with the
+/// plugin and the reason it never fires.
+pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+    let include_inactive_plugins = input
+        .get("include_inactive_plugins")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let array = runtime
+        .auto_task_listing(include_inactive_plugins)?
         .iter()
-        .map(|definition| serde_json::to_value(definition).unwrap_or(Value::Null))
-        .collect();
+        .map(|listed| listed_json(runtime, listed))
+        .collect::<Result<_, _>>()?;
     Ok(Value::Array(array))
+}
+
+/// The canonical definition record, plus the inactive-plugin marker when its
+/// seeding plugin is off here. A live definition is the bare record.
+fn listed_json(runtime: &OrbitRuntime, listed: &ListedAutoTask) -> Result<Value, OrbitError> {
+    let mut value = to_json(&listed.definition)?;
+    value["enabled_by_review_policy"] =
+        json!(runtime.auto_task_enabled_by_review_policy(&listed.definition));
+    value["effective_enabled"] = json!(runtime.auto_task_enabled(&listed.definition));
+    if let (Some(inactive), Some(object)) = (&listed.inactive_plugin, value.as_object_mut()) {
+        object.insert("plugin_inactive".to_string(), json!(true));
+        object.insert("inactive_plugin".to_string(), json!(inactive));
+        object.insert("skipped_reason".to_string(), json!(listed.skipped_reason));
+    }
+    Ok(value)
 }
 
 /// Mint one task from a definition on demand [ORB-10798]. The adapter only
@@ -52,7 +82,10 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let definition = runtime
         .auto_task_show(&name)?
         .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
-    let mut value = to_json(&definition)?;
+    // A definition listings hide still resolves here, marked inactive.
+    let listed = runtime.listed_auto_task(definition);
+    let mut value = listed_json(runtime, &listed)?;
+    let definition = listed.definition;
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         let diagnostic = if input
             .get("preview")
@@ -86,19 +119,20 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
         schedule: parse_field(&input, "schedule", false)?,
         dedupe: parse_field(&input, "dedupe", false)?,
         template: parse_field(&input, "template", false)?,
+        enabled: parse_field(&input, "enabled", false)?,
     };
     let definition = runtime.auto_task_update(&name, params)?;
-    to_json(&definition)
-}
-
-pub(super) fn toggle(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let name = required_str(&input, "name")?;
-    let enabled = input
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| OrbitError::InvalidInput("missing boolean `enabled`".to_string()))?;
-    let definition = runtime.auto_task_toggle(&name, enabled)?;
-    to_json(&definition)
+    let mut response = to_json(&definition)?;
+    response["enabled_by_review_policy"] =
+        json!(runtime.auto_task_enabled_by_review_policy(&definition));
+    response["effective_enabled"] = json!(runtime.auto_task_enabled(&definition));
+    let warnings = runtime.validate_required_tools(&definition.template.required_tools)?;
+    if !warnings.is_empty()
+        && let Some(object) = response.as_object_mut()
+    {
+        object.insert("warnings".to_string(), json!(warnings));
+    }
+    Ok(response)
 }
 
 fn required_str(input: &Value, field: &str) -> Result<String, OrbitError> {

@@ -1,0 +1,381 @@
+{
+  "source": {
+    "scope": "effective",
+    "global_path": "<HOME>/.orbit/config.toml",
+    "global_exists": true,
+    "workspace_path": "<HOME>/work/.orbit/config.toml",
+    "workspace_exists": true
+  },
+  "provenance": {
+    "automation.stall_window_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "crews.golden.description": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "crews.golden.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "crews.golden.model": {
+      "scope": "workspace",
+      "state": "set",
+      "path": "<HOME>/work/.orbit/config.toml",
+      "value": "workspace-model",
+      "shadowed_by": [
+        {
+          "layer": "global",
+          "value": "global-model",
+          "reason": "overridden"
+        }
+      ]
+    },
+    "crews.golden.provider": {
+      "scope": "global",
+      "state": "set",
+      "path": "<HOME>/.orbit/config.toml",
+      "value": "codex",
+      "shadowed_by": []
+    },
+    "crews.golden.tags": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "crews.system.description": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "crews.system.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "crews.system.model": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "crews.system.provider": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "crews.system.tags": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "execution.codex.approval_policy": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "execution.codex.sandbox": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": [
+        {
+          "layer": "global",
+          "value": "read-only",
+          "reason": "not-inherited"
+        }
+      ]
+    },
+    "execution.env.pass": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.id": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.name": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.task_prefix": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.worker_containment": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.worker_containment_strict": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.worker_memory_high": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.worker_memory_max": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.worker_tasks_max": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "operation.review_crew": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "operation.review_minutes": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "operation.review_policy": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "operation.review_reviewer_starts": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "plugin.legacy_callback_identity": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.close_on_terminal": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.delivery_authors": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.task_url_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "runtime.log_max_file_mb": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "runtime.log_max_total_mb": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "runtime.log_retention_days": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "scoring.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "tasks.id_start": {
+      "scope": "built-in",
+      "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.auto_ship": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.base_branch": {
+      "scope": "workspace",
+      "state": "set",
+      "path": "<HOME>/work/.orbit/config.toml",
+      "value": "agent-main",
+      "shadowed_by": [
+        {
+          "layer": "global",
+          "value": "main",
+          "reason": "overridden"
+        }
+      ]
+    },
+    "workflow.default_crew": {
+      "scope": "global",
+      "state": "set",
+      "path": "<HOME>/.orbit/config.toml",
+      "value": "golden",
+      "shadowed_by": []
+    },
+    "workflow.distributed_completion": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.final_recovery_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.hard_complexity_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.low_complexity_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.medium_complexity_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.required_validation_commands": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.cpu_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.cpu_resume_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.disk_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.disk_resume_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.memory_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.memory_resume_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.system_crew": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.task_pilot_freshness.material_fields": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.task_pilot_freshness.source_sensitivity": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.validation_env.login_shell": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.validation_env.path": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.validation_env.path_mode": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.xhard_complexity_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    }
+  }
+}

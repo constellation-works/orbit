@@ -1,0 +1,15 @@
+# These are checked on production targets by make ci-lint and ci-guardrails.
+# The all-targets pass allows disallowed_methods because existing test-only
+# synchronization channels are outside the production bounded-channel rule.
+disallowed-methods = [
+    { path = "std::sync::mpsc::channel", reason = "production channels must have a bounded capacity" },
+    { path = "tokio::sync::mpsc::unbounded_channel", reason = "production channels must have a bounded capacity" },
+]
+
+# A file-lock guard must be released before suspension. ScopedEnv already
+# contains a MutexGuard covered by await_holding_lock; a few web tests have
+# documented test-scoped exceptions. GenerationGuard is intentionally a
+# long-lived process admission pin.
+await-holding-invalid-types = [
+    { path = "orbit_common::fs::file_lock::FileLockGuard", reason = "release the advisory file lock before awaiting" },
+]

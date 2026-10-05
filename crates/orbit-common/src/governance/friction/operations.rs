@@ -14,8 +14,8 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::McpToolScope;
 
-use super::friction_tags_literal;
 use super::title::FRICTION_TITLE_MAX_CHARS;
+use super::{friction_tag_aliases_literal, friction_tags_literal};
 
 /// Every verb the friction noun supports.
 ///
@@ -38,10 +38,15 @@ pub enum FrictionVerb {
     Update,
     /// Mark a record resolved.
     Resolve,
+    /// Move a record into the workspace that owns it.
+    Rehome,
 }
 
 /// A friction operation specification.
 pub type FrictionOperation = OperationSpec<FrictionVerb>;
+
+/// Opt-in `friction.list` response mode that returns records and guidance.
+pub const FRICTION_LIST_RESPONSE_MODE_WITH_NOTES: &str = "with_notes";
 
 impl FrictionVerb {
     /// This verb's specification.
@@ -54,6 +59,7 @@ impl FrictionVerb {
             FrictionVerb::Tags => &TAGS,
             FrictionVerb::Update => &UPDATE,
             FrictionVerb::Resolve => &RESOLVE,
+            FrictionVerb::Rehome => &REHOME,
         }
     }
 
@@ -75,7 +81,7 @@ impl FrictionVerb {
 /// subcommands. Within a spec, parameter order is the order both `--help` and
 /// the MCP tool schema list parameters.
 pub const FRICTION_OPERATIONS: &[FrictionOperation] =
-    &[ADD, LIST, SHOW, STATS, TAGS, UPDATE, RESOLVE];
+    &[ADD, LIST, SHOW, STATS, TAGS, UPDATE, RESOLVE, REHOME];
 
 const ADD: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Add,
@@ -154,7 +160,7 @@ const LIST: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::List,
     name: "list",
     tool_name: "orbit.friction.list",
-    tool_description: "List friction records",
+    tool_description: "List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.",
     cli_about: "List friction records",
     params: &[
         text_param("model", "Optional model filter"),
@@ -175,9 +181,20 @@ const LIST: FrictionOperation = FrictionOperation {
         text_param("to", "Optional RFC3339 upper bound for created_at"),
         count_param("limit", "Optional maximum number of records to return"),
         count_param("offset", "Optional number of records to skip"),
+        ParamSpec {
+            name: "response_mode",
+            param_type: ParamType::String,
+            required: false,
+            mcp_description: Some(Description::Static(
+                "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array",
+            )),
+            cli: None,
+        },
     ],
     rejects_agent_field: false,
-    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    // Agents list frictions through `orbit.search` with `kind: friction` and
+    // no query; this verb backs the CLI listing and the dashboard.
+    mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::RecordTable,
 };
@@ -230,7 +247,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Update,
     name: "update",
     tool_name: "orbit.friction.update",
-    tool_description: "Update triage metadata for a friction record",
+    tool_description: "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
     cli_about: "Update triage metadata for a friction record",
     params: &[
         ParamSpec {
@@ -260,6 +277,26 @@ const UPDATE: FrictionOperation = FrictionOperation {
             }),
         },
         text_param("body", "Optional replacement markdown body"),
+        ParamSpec {
+            name: "rehome_to",
+            param_type: ParamType::String,
+            required: false,
+            mcp_description: Some(REHOME_TO_HELP),
+            cli: Some(CliBinding {
+                kind: flag("rehome-to"),
+                help: REHOME_TO_HELP,
+            }),
+        },
+        ParamSpec {
+            name: "move",
+            param_type: ParamType::Boolean,
+            required: false,
+            mcp_description: Some(MOVE_HELP),
+            cli: Some(CliBinding {
+                kind: flag("move"),
+                help: MOVE_HELP,
+            }),
+        },
         ParamSpec {
             name: "title",
             param_type: ParamType::String,
@@ -291,10 +328,41 @@ const RESOLVE: FrictionOperation = FrictionOperation {
     cli_render: CliRender::Record,
 };
 
-/// Borrow the whole registry.
-pub fn friction_operations() -> &'static [FrictionOperation] {
-    FRICTION_OPERATIONS
-}
+const REHOME: FrictionOperation = FrictionOperation {
+    verb: FrictionVerb::Rehome,
+    name: "rehome",
+    tool_name: "orbit.friction.rehome",
+    tool_description: "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
+    cli_about: "Move a friction record into the registered workspace that owns it",
+    params: &[
+        ParamSpec {
+            name: "id",
+            param_type: ParamType::String,
+            required: true,
+            mcp_description: Some(FRICTION_ID_HELP),
+            cli: Some(CliBinding {
+                kind: CliArgKind::Positional,
+                help: FRICTION_ID_HELP,
+            }),
+        },
+        ParamSpec {
+            name: "to_workspace",
+            param_type: ParamType::String,
+            required: true,
+            mcp_description: Some(TO_WORKSPACE_HELP),
+            cli: Some(CliBinding {
+                kind: flag("to-workspace"),
+                help: TO_WORKSPACE_HELP,
+            }),
+        },
+    ],
+    rejects_agent_field: false,
+    // Agents move a record with `orbit.friction.update` `rehome_to`; this verb
+    // remains the CLI spelling of the same move.
+    mcp_scope: None,
+    cli_json_flag: true,
+    cli_render: CliRender::Record,
+};
 
 /// Look up a friction operation by its short verb name.
 pub fn friction_operation(name: &str) -> Option<&'static FrictionOperation> {
@@ -310,8 +378,17 @@ const ADD_TITLE_HELP: Description = Description::Computed(add_title_description)
 const ADD_TITLE_CLI_HELP: Description = Description::Computed(add_title_cli_help);
 const UPDATE_TITLE_HELP: Description = Description::Computed(update_title_description);
 const UPDATE_TITLE_CLI_HELP: Description = Description::Computed(update_title_cli_help);
-const DURING_TASK_HELP: Description =
-    Description::Static("Optional task ID being worked on when friction occurred");
+const REHOME_TO_HELP: Description = Description::Static(
+    "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition",
+);
+const MOVE_HELP: Description = Description::Static(
+    "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true",
+);
+const TO_WORKSPACE_HELP: Description =
+    Description::Static("Registered name or ID of the workspace that owns this friction");
+const DURING_TASK_HELP: Description = Description::Static(
+    "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
+);
 
 /// The positional record id used by `show` and `resolve`.
 ///
@@ -392,14 +469,16 @@ fn update_title_cli_help() -> String {
 
 fn add_tags_description() -> String {
     format!(
-        "Friction taxonomy tags as a string or array; valid tags: {}; defaults to other",
-        friction_tags_literal()
+        "Friction taxonomy tags as a string or array; valid tags: {}; aliases: {}; defaults to other",
+        friction_tags_literal(),
+        friction_tag_aliases_literal()
     )
 }
 
 fn update_tags_description() -> String {
     format!(
-        "Optional replacement taxonomy tags as a string or array; valid tags: {}",
-        friction_tags_literal()
+        "Optional replacement taxonomy tags as a string or array; valid tags: {}; aliases: {}",
+        friction_tags_literal(),
+        friction_tag_aliases_literal()
     )
 }

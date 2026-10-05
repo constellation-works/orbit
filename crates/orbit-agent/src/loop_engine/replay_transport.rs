@@ -10,10 +10,7 @@
 //! Not a general-purpose recorder — pairs well with a future `RecordingTransport`
 //! that would capture real provider turns into the same fixture format.
 
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use super::transport::{
     ContentBlock, LoopTransport, StopReason, TransportError, TurnRequest, TurnResponse, TurnUsage,
@@ -46,28 +43,6 @@ impl ReplayTransport {
             cursor: Mutex::new(0),
         }
     }
-
-    /// Convenience: single-turn replay returning a `tool_use` block.
-    pub fn single_tool_use(
-        provider: impl Into<String>,
-        model: impl Into<String>,
-        tool_name: impl Into<String>,
-        tool_use_id: impl Into<String>,
-        tool_input: serde_json::Value,
-    ) -> Self {
-        Self::new(
-            provider,
-            model,
-            vec![ReplayTurn {
-                content: vec![ContentBlock::ToolUse {
-                    id: tool_use_id.into(),
-                    name: tool_name.into(),
-                    input: tool_input,
-                }],
-                stop_reason: StopReason::ToolUse,
-            }],
-        )
-    }
 }
 
 impl LoopTransport for ReplayTransport {
@@ -80,8 +55,8 @@ impl LoopTransport for ReplayTransport {
     }
 
     fn send_turn(&self, _req: &TurnRequest<'_>) -> Result<TurnResponse, TransportError> {
-        let turns = self.turns.lock().expect("replay turns mutex");
-        let mut cursor = self.cursor.lock().expect("replay cursor mutex");
+        let turns = self.turns.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut cursor = self.cursor.lock().unwrap_or_else(PoisonError::into_inner);
         if *cursor >= turns.len() {
             return Err(TransportError::Other(format!(
                 "ReplayTransport exhausted: asked for turn {} but only {} scripted",

@@ -14,7 +14,13 @@ spec:
       older_than_hours:
         type: integer
         minimum: 0
-      run_id:
+      # Named `target_run_id`, not `run_id`: the engine's step dispatcher
+      # auto-injects `run_id` (the *dispatching* run's own id) into every step
+      # input that doesn't already declare one. A field literally named
+      # `run_id` here would always be clobbered with this activity's own run
+      # id on every real job/routine dispatch, scoping collection to a run
+      # that never has a worktree of its own and silently reaping nothing.
+      target_run_id:
         type: string
   output_schema_json:
     type: object

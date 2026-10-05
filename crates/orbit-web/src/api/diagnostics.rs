@@ -2,8 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::state::Ws;
-use axum::extract::Query;
+use std::sync::Arc;
+
+use crate::runtime_memo::DIAGNOSTICS_ERRORS_TTL;
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::DateTime;
 use orbit_cmd::DiagnosticsCommands;
@@ -106,19 +109,17 @@ fn diagnostics_friction_from_v2_audit(
     let events = v2_audit_values(runtime, Some(since), Some(until), 50_000)?;
     let blob_store = audit_blob_store(runtime);
     let by_id = events_by_id(&events);
+    // `events` is oldest-first; walk newest-first and stop at `limit` so only
+    // the rows returned pay for their stderr blob read.
     let mut rows = Vec::new();
-    for event in events {
-        if let Some(row) = diagnostics_friction_row(&blob_store, &by_id, &event, month) {
+    for event in events.iter().rev() {
+        if let Some(row) = diagnostics_friction_row(&blob_store, &by_id, event, month) {
             rows.push(row);
+            if rows.len() == limit {
+                break;
+            }
         }
     }
-
-    rows.sort_by(|a, b| {
-        let left = a.get("ts").and_then(Value::as_str).unwrap_or("");
-        let right = b.get("ts").and_then(Value::as_str).unwrap_or("");
-        right.cmp(left)
-    });
-    rows.truncate(limit);
     Ok(rows)
 }
 
@@ -146,14 +147,14 @@ fn v2_audit_values(
         .collect())
 }
 
-fn events_by_id(events: &[Value]) -> HashMap<String, Value> {
+fn events_by_id(events: &[Value]) -> HashMap<&str, &Value> {
     events
         .iter()
         .filter_map(|event| {
             event
                 .get("event_id")
                 .and_then(Value::as_str)
-                .map(|event_id| (event_id.to_string(), event.clone()))
+                .map(|event_id| (event_id, event))
         })
         .collect()
 }
@@ -169,10 +170,10 @@ fn audit_blob_store(runtime: &OrbitRuntime) -> BlobStore {
 }
 
 // Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).
-pub(super) fn diagnostics_friction_row(
+pub(super) fn diagnostics_friction_row<'a>(
     blob_store: &BlobStore,
-    events_by_id: &HashMap<String, Value>,
-    event: &Value,
+    events_by_id: &HashMap<&'a str, &'a Value>,
+    event: &'a Value,
     month: &str,
 ) -> Option<Value> {
     let ts = event.get("ts").and_then(Value::as_str)?;
@@ -258,42 +259,33 @@ pub(super) fn diagnostics_friction_row(
     }
 }
 
-fn enclosing_step_id_for_event(
-    event: &Value,
-    events_by_id: &HashMap<String, Value>,
+fn enclosing_step_id_for_event<'a>(
+    event: &'a Value,
+    events_by_id: &HashMap<&'a str, &'a Value>,
 ) -> Option<String> {
     if let Some(step_id) = event.get("step_id").and_then(Value::as_str) {
         return Some(step_id.to_string());
     }
 
-    let mut parent_id = event
-        .get("parent_event_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let mut parent_id = event.get("parent_event_id").and_then(Value::as_str);
     let mut seen = HashSet::new();
     while let Some(id) = parent_id {
-        if !seen.insert(id.clone()) {
+        if !seen.insert(id) {
             return None;
         }
-        let parent = events_by_id.get(&id)?;
+        let parent = events_by_id.get(id)?;
         if parent.get("body_kind").and_then(Value::as_str) == Some("step_started") {
             return parent
                 .get("step_id")
                 .and_then(Value::as_str)
                 .map(str::to_string);
         }
-        parent_id = parent
-            .get("parent_event_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        parent_id = parent.get("parent_event_id").and_then(Value::as_str);
     }
     None
 }
 
 fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
-    if blob_ref.len() < 2 || blob_ref.starts_with("error:") {
-        return String::new();
-    }
     blob_store
         .read(blob_ref)
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
@@ -301,19 +293,24 @@ fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String 
 }
 
 pub(super) async fn list_diagnostics_errors(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
-    // Reads up to 50k audit rows and a blob per agent invocation: blocking
-    // pool, not the worker serving the request (see `blocking`).
-    match super::blocking("diagnostics errors", move || {
-        diagnostics_errors(&runtime, limit)
-    })
-    .await
+    // Reads up to 50k audit rows and a blob per agent invocation, and every
+    // Errors tab polls it: memoized so overlapping polls share one scan, and
+    // computed on the blocking pool, not the worker serving the request.
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .diagnostics_errors_memo()
+        .get_or_compute(&runtime, limit, DIAGNOSTICS_ERRORS_TTL, move || {
+            diagnostics_errors(&compute_runtime, limit).map(Value::Array)
+        })
+        .await
     {
-        Ok(rows) => Json(Value::Array(rows)).into_response(),
-        Err(response) => *response,
+        Ok(rows) => Json((*rows).clone()).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 
@@ -394,6 +391,13 @@ fn optional_log_field<'a>(fields: &'a Value, keys: &[&str]) -> Option<&'a str> {
     })
 }
 
+/// Most stderr blobs one `/api/diagnostics/errors` computation reads from
+/// disk. Each `cli_invocation_finished` event costs one blob read, so a long
+/// history of invocations with no structured error lines would otherwise read
+/// thousands of files per poll. Newest invocations are read first, so the cap
+/// only ever drops the oldest.
+pub(super) const MAX_STDERR_BLOBS_PER_REQUEST: usize = 256;
+
 fn agent_stderr_error_rows(
     runtime: &OrbitRuntime,
     limit: usize,
@@ -403,6 +407,7 @@ fn agent_stderr_error_rows(
     let step_index_by_id = step_index_by_id(&events);
     let blob_store = audit_blob_store(runtime);
     let mut rows = Vec::new();
+    let mut blobs_read = 0usize;
     // `events` is oldest-first so the step index above numbers steps in
     // execution order; the row scan walks newest-first because it stops at
     // `2 * limit` rows and the caller keeps only the newest `limit` of them.
@@ -413,6 +418,10 @@ fn agent_stderr_error_rows(
         let Some(blob_ref) = event.get("stderr_blob_ref").and_then(Value::as_str) else {
             continue;
         };
+        if blobs_read >= MAX_STDERR_BLOBS_PER_REQUEST {
+            break;
+        }
+        blobs_read += 1;
         let stderr = read_blob_text_best_effort(&blob_store, blob_ref);
         let fallback_ts = event
             .get("ts")

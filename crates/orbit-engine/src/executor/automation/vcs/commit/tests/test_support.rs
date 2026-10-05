@@ -1,17 +1,15 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
-use orbit_types::record::OrbitEvent;
-use orbit_types::task::{ExternalRef, Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
-use serde_json::Value;
+use orbit_types::task::{
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ExecutionLocation,
+    Task, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+};
+use orbit_types::tool::WorkerInvocation;
+use orbit_types::workflow::JobRun;
 use tempfile::tempdir;
 
 use crate::context::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
@@ -20,106 +18,87 @@ use super::super::super::git::git_success;
 
 pub struct CommitTestHost {
     tasks: Mutex<Vec<Task>>,
-    /// ORB-10603: every `execution_summary` an automation update persisted, in
-    /// call order, so a test can assert what durable state actually received.
-    persisted_summaries: Mutex<Vec<(String, String)>>,
-    crew_model: Option<String>,
     repo_root: PathBuf,
     data_root: PathBuf,
     scoreboard_dir: PathBuf,
-    job_runs: Mutex<Vec<JobRun>>,
-    run_states: Mutex<HashMap<String, PipelineState>>,
-    artifacts: Vec<TaskArtifact>,
+    /// The trusted claim binding a claimed leaf's host carries, if any.
+    worker: Option<WorkerInvocation>,
+    /// Task history, including the selector widenings this host recorded.
+    history: Mutex<Vec<(String, TaskHistoryEntry)>>,
 }
 
 impl CommitTestHost {
-    pub fn with_artifacts(mut self, artifacts: Vec<TaskArtifact>) -> Self {
-        self.artifacts = artifacts;
-        self
-    }
-
     pub fn new(tasks: Vec<Task>, repo_root: PathBuf) -> Self {
         let data_root = repo_root.join(".orbit-test-data");
         let scoreboard_dir = data_root.join("scoreboard");
         Self {
             tasks: Mutex::new(tasks),
-            persisted_summaries: Mutex::new(Vec::new()),
-            crew_model: None,
             repo_root,
             data_root,
             scoreboard_dir,
-            job_runs: Mutex::new(Vec::new()),
-            run_states: Mutex::new(HashMap::new()),
-            artifacts: Vec::new(),
+            worker: None,
+            history: Mutex::new(Vec::new()),
         }
     }
 
-    pub fn with_crew_model(mut self, model: impl Into<String>) -> Self {
-        self.crew_model = Some(model.into());
-        self
-    }
-
-    pub fn persisted_summaries(&self) -> Vec<(String, String)> {
-        self.persisted_summaries.lock().unwrap().clone()
-    }
-
-    pub fn with_run_state(
-        self,
-        run_id: &str,
-        retry_source_run_id: Option<&str>,
-        state: PipelineState,
-    ) -> Self {
-        let now = Utc::now();
-        self.job_runs.lock().unwrap().push(JobRun {
-            run_id: run_id.to_string(),
-            job_id: state.job_id.clone(),
-            attempt: 1,
-            state: JobRunState::Failed,
-            scheduled_at: now,
-            started_at: Some(now),
-            finished_at: Some(now),
-            duration_ms: Some(1),
-            created_at: now,
-            pid: None,
-            pid_start_time: None,
-            input: Some(state.initial_input.clone()),
-            retry_source_run_id: retry_source_run_id.map(ToOwned::to_owned),
-            knowledge_metrics: None,
-            resolved_crew: None,
-            crew_model: None,
-            steps: Vec::new(),
-        });
-        self.run_states
-            .lock()
-            .unwrap()
-            .insert(run_id.to_string(), state);
-        self
-    }
-
-    pub fn task_execution_summary(&self, task_id: &str) -> String {
-        self.tasks
-            .lock()
+    /// Every widening recorded for `task_id`, in order.
+    pub fn widenings(&self, task_id: &str) -> Vec<ContextFilesWidening> {
+        self.get_task_history(task_id)
             .unwrap()
             .iter()
-            .find(|task| task.id == task_id)
-            .map(|task| task.execution_summary.clone())
-            .expect("task exists in the commit test host")
+            .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
+            .filter_map(|entry| {
+                entry
+                    .note
+                    .as_deref()
+                    .and_then(ContextFilesWidening::from_note)
+            })
+            .collect()
+    }
+
+    /// Record that `task_id`'s agent changed `paths`, as the boundary guard
+    /// does when an implementer exits.
+    pub fn with_agent_widening(self, task_id: &str, paths: &[&str]) -> Self {
+        let paths = paths
+            .iter()
+            .map(|path| path.to_string())
+            .collect::<Vec<_>>();
+        self.widen_task_context_files(
+            task_id,
+            "batch-1",
+            ContextWideningStep::Implement,
+            "agent_implement",
+            &paths,
+        )
+        .unwrap();
+        self
+    }
+
+    pub fn task(&self, task_id: &str) -> Task {
+        self.get_task(task_id).unwrap()
+    }
+
+    /// Run as a claimed leaf bound to `task_id`, as a follower's worker is.
+    pub fn with_claim_binding(mut self, task_id: &str) -> Self {
+        self.worker = Some(WorkerInvocation {
+            owner_machine_id: "owner-machine".into(),
+            owner_workspace_id: "owner-workspace".into(),
+            owner_destination: "owner-machine/owner-workspace".into(),
+            task_id: task_id.into(),
+            claim_id: "claim-1".into(),
+            execution: ExecutionLocation {
+                machine_id: "follower-machine".into(),
+                machine_name: None,
+            },
+            bound_run_id: "batch-1".into(),
+        });
+        self
     }
 }
 
 impl RuntimeHost for CommitTestHost {
-    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
-        Ok(self
-            .job_runs
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|run| run.run_id == run_id)
-            .cloned())
-    }
-
-    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
-        Ok(self.run_states.lock().unwrap().get(run_id).cloned())
+    fn get_job_run(&self, _run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        Ok(None)
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
@@ -130,10 +109,6 @@ impl RuntimeHost for CommitTestHost {
             .find(|task| task.id == task_id)
             .cloned()
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
-    }
-
-    fn get_task_artifacts(&self, _task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
-        Ok(self.artifacts.clone())
     }
 
     fn list_tasks_filtered(
@@ -174,23 +149,6 @@ impl RuntimeHost for CommitTestHost {
             .collect())
     }
 
-    fn start_task(
-        &self,
-        _task_id: &str,
-        _note: Option<String>,
-        _comment: Option<String>,
-    ) -> Result<Task, OrbitError> {
-        Err(OrbitError::Execution(
-            "start_task is not needed by commit tests".to_string(),
-        ))
-    }
-
-    fn admit_task_for_workflow(&self, _task_id: &str, _workflow: &str) -> Result<Task, OrbitError> {
-        Err(OrbitError::Execution(
-            "admit_task_for_workflow is not needed by commit tests".to_string(),
-        ))
-    }
-
     fn update_task_from_activity(
         &self,
         task_id: &str,
@@ -217,16 +175,8 @@ impl RuntimeHost for CommitTestHost {
             task.status = status;
         }
         if let Some(execution_summary) = update.execution_summary {
-            task.execution_summary = execution_summary.clone();
-            self.persisted_summaries
-                .lock()
-                .unwrap()
-                .push((task_id.to_string(), execution_summary));
+            task.execution_summary = execution_summary;
         }
-        Ok(())
-    }
-
-    fn record_event(&self, _event: OrbitEvent) -> Result<(), OrbitError> {
         Ok(())
     }
 
@@ -234,44 +184,80 @@ impl RuntimeHost for CommitTestHost {
         Ok(self.repo_root.to_string_lossy().to_string())
     }
 
-    fn resolved_crew_model(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(self.crew_model.clone())
-    }
-
     fn data_root(&self) -> &Path {
         &self.data_root
     }
 
-    fn run_tool_with_context_and_role(
-        &self,
-        _name: &str,
-        _input: Value,
-        _role: Role,
-        _tool_context: ToolContext,
-    ) -> Result<Value, OrbitError> {
-        Err(OrbitError::Execution(
-            "run_tool_with_context_and_role is not needed by commit tests".to_string(),
-        ))
-    }
-
-    fn maybe_create_failure_task(
-        &self,
-        _job_id: &str,
-        _run_id: &str,
-        _error_code: &str,
-        _error_message: &str,
-        _agent: Option<&str>,
-        _model: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
-    fn scoring_enabled(&self) -> bool {
-        false
-    }
-
     fn scoreboard_dir(&self) -> &Path {
         &self.scoreboard_dir
+    }
+
+    fn worker_invocation(&self) -> Option<WorkerInvocation> {
+        self.worker.clone()
+    }
+
+    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        Ok(self
+            .history
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, _)| id == task_id)
+            .map(|(_, entry)| entry.clone())
+            .collect())
+    }
+
+    /// Mirrors the owner host: exact `file:` selectors for uncovered paths
+    /// plus one provenance entry; a claimed leaf widens nothing.
+    fn widen_task_context_files(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        step: ContextWideningStep,
+        activity: &str,
+        paths: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        if self.worker.is_some() {
+            return Ok(Vec::new());
+        }
+        let mut tasks = self.tasks.lock().unwrap();
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+        let added = paths
+            .iter()
+            .map(|path| format!("file:{path}"))
+            .filter(|selector| {
+                !task
+                    .context_files
+                    .iter()
+                    .any(|existing| orbit_common::fs::selector::overlaps(existing, selector))
+            })
+            .collect::<Vec<_>>();
+        if added.is_empty() {
+            return Ok(added);
+        }
+        task.context_files.extend(added.iter().cloned());
+        let note = serde_json::to_string(&ContextFilesWidening {
+            run_id: run_id.to_string(),
+            step,
+            activity: activity.to_string(),
+            selectors: added.clone(),
+        })
+        .unwrap();
+        self.history.lock().unwrap().push((
+            task_id.to_string(),
+            TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".to_string(),
+                event: CONTEXT_FILES_WIDENED_EVENT.to_string(),
+                note: Some(note),
+                from_status: None,
+                to_status: None,
+            },
+        ));
+        Ok(added)
     }
 }
 
@@ -303,75 +289,10 @@ pub fn initialized_git_repo() -> tempfile::TempDir {
     temp
 }
 
-pub fn initialized_git_repo_without_local_user_config() -> tempfile::TempDir {
-    let temp = tempdir().unwrap();
-    let repo = temp.path();
-    git_success(repo, &["init"]).expect("git init");
-    detach_global_git_hooks(repo);
-    fs::write(repo.join("README.md"), "base\n").unwrap();
-    git_success(repo, &["add", "README.md"]).expect("git add");
-    git_success(
-        repo,
-        &[
-            "-c",
-            "user.name=Initial User",
-            "-c",
-            "user.email=initial@example.test",
-            "commit",
-            "-m",
-            "initial commit",
-        ],
-    )
-    .expect("initial commit");
-    assert_eq!(
-        local_user_config_snapshot(repo),
-        CommandSnapshot {
-            code: Some(1),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        }
-    );
-    temp
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct CommandSnapshot {
-    pub code: Option<i32>,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-}
-
-pub fn local_user_config_snapshot(repo: &Path) -> CommandSnapshot {
-    git_command_snapshot(repo, &["config", "--local", "--get-regexp", "^user\\."])
-}
-
-pub fn git_stdout_bytes(repo: &Path, args: &[&str], context: &str) -> Vec<u8> {
-    let snapshot = git_command_snapshot(repo, args);
-    assert_eq!(
-        snapshot.code,
-        Some(0),
-        "{context}: stderr={}",
-        String::from_utf8_lossy(&snapshot.stderr)
-    );
-    snapshot.stdout
-}
-
-fn git_command_snapshot(repo: &Path, args: &[&str]) -> CommandSnapshot {
-    let output = Command::new("git")
-        .current_dir(repo)
-        .args(args)
-        .output()
-        .expect("run git command");
-    CommandSnapshot {
-        code: output.status.code(),
-        stdout: output.stdout,
-        stderr: output.stderr,
-    }
-}
-
 pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -> Task {
     let now = Utc::now();
     Task {
+        job_run_machine: None,
         id: id.to_string(),
         title: title.to_string(),
         description: String::new(),
@@ -380,8 +301,7 @@ pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -
         required_tools: Vec::new(),
         plan: String::new(),
         // ORB-10313: the delivery gate reads the durable outcome before touching
-        // the checkout. Individual tests override this meaningful default to
-        // exercise failed and nonstandard outcomes.
+        // the checkout.
         execution_summary: "Outcome: success".to_string(),
         context_files: vec![format!("file:{path}")],
         created_by: None,
@@ -400,9 +320,4 @@ pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -
         created_at: now,
         updated_at: now,
     }
-}
-
-pub fn external_ref(system: &str, id: &str) -> ExternalRef {
-    ExternalRef::try_new(system.to_string(), id.to_string(), None)
-        .expect("external ref fixture is valid")
 }

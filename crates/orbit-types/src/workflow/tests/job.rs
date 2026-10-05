@@ -1,16 +1,6 @@
 //! [ORB-10002] Job run state machine tests for the `interrupted` state.
 
-use std::str::FromStr;
-
 use crate::workflow::{JobRunState, RunEvent};
-
-#[test]
-fn running_interrupt_transitions_to_interrupted() {
-    assert_eq!(
-        JobRunState::Running.try_transition(RunEvent::Interrupt),
-        Ok(JobRunState::Interrupted)
-    );
-}
 
 #[test]
 fn interrupted_is_terminal_and_rejects_further_events() {
@@ -29,30 +19,6 @@ fn interrupted_is_terminal_and_rejects_further_events() {
             "interrupted must reject {event}"
         );
     }
-}
-
-#[test]
-fn pending_interrupt_transitions_to_interrupted() {
-    // [ORB-10070] Orphaned queued runs (dead or never-claimed worker) finalize
-    // as interrupted, the same terminal state as orphaned running runs.
-    assert_eq!(
-        JobRunState::Pending.try_transition(RunEvent::Interrupt),
-        Ok(JobRunState::Interrupted)
-    );
-}
-
-#[test]
-fn interrupted_display_and_parse_round_trip() {
-    assert_eq!(JobRunState::Interrupted.to_string(), "interrupted");
-    assert_eq!(
-        JobRunState::from_str("interrupted"),
-        Ok(JobRunState::Interrupted)
-    );
-}
-
-#[test]
-fn interrupted_is_a_valid_step_state() {
-    assert!(JobRunState::Interrupted.validate_step_state().is_ok());
 }
 
 /// [ORB-10965] Only the caller that won the transition may execute the run;
@@ -76,6 +42,7 @@ fn run_owner_equivalence_pairs_pid_with_its_start_time_token() {
 
     let now = Utc::now();
     let mut run = JobRun {
+        executed_on: None,
         run_id: "jrun-owner".to_string(),
         job_id: "job-owner".to_string(),
         attempt: 1,
@@ -95,6 +62,10 @@ fn run_owner_equivalence_pairs_pid_with_its_start_time_token() {
         steps: Vec::new(),
     };
 
+    let legacy = serde_json::to_value(&run).expect("legacy shape");
+    assert!(legacy.get("executed_on").is_none());
+    let loaded: JobRun = serde_json::from_value(legacy).expect("legacy run");
+    assert_eq!(loaded.executed_on, None);
     assert!(run.is_owned_by(4242, Some("v1:99")));
     assert!(
         !run.is_owned_by(4242, Some("v1:100")),

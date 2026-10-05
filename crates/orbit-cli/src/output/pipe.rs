@@ -53,44 +53,8 @@ fn panicked_on_a_closed_stdout(info: &std::panic::PanicHookInfo<'_>) -> bool {
 /// and the error's `Display` ends in `(os error 32)` — `EPIPE` on every unix.
 /// Matching the prefix alone would also swallow a full disk, which is a real
 /// failure and must keep panicking, so both halves have to agree.
-fn is_closed_stdout_panic(message: &str) -> bool {
+// pub(super) widened for sibling-layout tests in output/tests/pipe.rs
+pub(super) fn is_closed_stdout_panic(message: &str) -> bool {
     message.starts_with("failed printing to stdout")
         && (message.contains("os error 32") || message.contains("Broken pipe"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_broken_pipe_io_error_is_recognized() {
-        assert!(is_broken_pipe(&io::Error::from(io::ErrorKind::BrokenPipe)));
-        assert!(!is_broken_pipe(&io::Error::from(io::ErrorKind::WriteZero)));
-    }
-
-    #[test]
-    fn the_panic_std_raises_for_a_closed_stdout_is_recognized() {
-        // Exactly what `std::io::_print` formats, with the error `head`
-        // closing the pipe produces.
-        let raised = format!(
-            "failed printing to stdout: {}",
-            io::Error::from_raw_os_error(32)
-        );
-
-        assert!(is_closed_stdout_panic(&raised), "{raised}");
-    }
-
-    #[test]
-    fn an_unwritable_stdout_still_panics() {
-        let disk_full = format!(
-            "failed printing to stdout: {}",
-            io::Error::from_raw_os_error(28)
-        );
-
-        assert!(
-            !is_closed_stdout_panic(&disk_full),
-            "ENOSPC is a real failure and must not exit 0: {disk_full}"
-        );
-        assert!(!is_closed_stdout_panic("index out of bounds"));
-    }
 }

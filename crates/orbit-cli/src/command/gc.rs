@@ -22,7 +22,8 @@ impl Execute for GcCommand {
 /// or execution contract.
 #[derive(Subcommand)]
 pub enum GcTarget {
-    /// Reap job-run worktrees whose associated task has settled to rejected, archived, or done
+    /// Reap job-run worktrees whose associated task has settled to rejected, archived, or done,
+    /// or whose claim this follower has settled with its owner
     Worktrees(WorktreeGcArgs),
 }
 
@@ -52,6 +53,17 @@ pub struct WorktreeGcArgs {
     #[arg(long, value_name = "HOURS")]
     pub older_than_hours: Option<u64>,
 
+    /// Walk eligible worktrees to estimate reclaimable bytes. Dry-run skips
+    /// this walk by default; `--confirm` always measures before removal.
+    #[arg(long)]
+    pub estimate_bytes: bool,
+
+    /// Reclaim only each worktree's `target/` build output and keep the
+    /// checkout. Applies to every terminal run with no live worker, whatever
+    /// its task's status; combine with `--confirm` to delete.
+    #[arg(long)]
+    pub target_only: bool,
+
     /// Emit the complete report as JSON
     #[arg(long)]
     pub json: bool,
@@ -59,7 +71,13 @@ pub struct WorktreeGcArgs {
 
 impl Execute for WorktreeGcArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = runtime.gc_worktrees(self.confirm, self.run, self.older_than_hours)?;
+        let result = runtime.gc_worktrees(
+            self.confirm,
+            self.run,
+            self.older_than_hours,
+            self.estimate_bytes,
+            self.target_only,
+        )?;
         let doc = serde_json::to_value(&result).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize worktree GC report: {error}"))
         })?;
@@ -68,7 +86,7 @@ impl Execute for WorktreeGcArgs {
             lines.push("No worktrees matched.".to_string());
         }
         for report in &result.reports {
-            lines.push(format!(
+            let mut line = format!(
                 "path={} run_id={} run_state={} task_id={} task_status={} pr_status={} action={} bytes_reclaimed={}",
                 report.path.display(),
                 report.run_id.as_deref().unwrap_or("-"),
@@ -86,7 +104,11 @@ impl Execute for WorktreeGcArgs {
                 report.pr_status.as_deref().unwrap_or("-"),
                 report.action,
                 report.bytes_reclaimed
-            ));
+            );
+            if let Some(detail) = &report.detail {
+                line.push_str(&format!(" detail={detail}"));
+            }
+            lines.push(line);
         }
         if !result.reports.is_empty() {
             lines.push(format!("total_bytes_reclaimed={}", result.bytes_reclaimed));

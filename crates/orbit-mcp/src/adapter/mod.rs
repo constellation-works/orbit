@@ -2,6 +2,7 @@
 
 mod dispatch;
 mod name_map;
+mod presentation;
 pub(crate) mod schema;
 mod structured;
 
@@ -11,21 +12,28 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use orbit_common::observability::audit_id::audit_execution_id;
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
+use rmcp::model::ListToolsResult;
 
+use self::schema::SelectorAdvertisement;
 use crate::McpHost;
+
+type CachedNameMap = Result<Arc<HashMap<String, String>>, rmcp::ErrorData>;
+type ListToolsCache = HashMap<(SelectorAdvertisement, Option<String>), Arc<ListToolsResult>>;
 
 /// An rmcp server that delegates the complete tool surface to an [`McpHost`].
 ///
-/// Definitions are read on every list and call so changes become visible
-/// without a restart. Blocking host implementations run on a blocking worker.
-/// Canonical dotted names are advertised with underscores and translated back
-/// before dispatch.
+/// The validated advertised-name map and selector-specific tool lists are
+/// cached for the server session. Blocking host implementations run on a
+/// blocking worker. Canonical dotted names are advertised with underscores
+/// and translated back before dispatch.
 pub struct OrbitToolServer {
     host: Arc<dyn McpHost>,
+    pub(crate) internal_drain: bool,
     /// The workspace this server process was launched for, when the launching
     /// configuration named one.
     ///
@@ -38,6 +46,9 @@ pub struct OrbitToolServer {
     /// rather than inheriting the previous client's claim.
     launch_workspace: Option<String>,
     session_context: RwLock<ToolSessionContext>,
+    definitions: OnceLock<Arc<Vec<McpToolDefinition>>>,
+    name_map: OnceLock<Arc<CachedNameMap>>,
+    list_tools_cache: Mutex<ListToolsCache>,
 }
 
 impl OrbitToolServer {
@@ -56,8 +67,12 @@ impl OrbitToolServer {
         trusted_context.workspace = normalized_selector(trusted_context.workspace.as_deref());
         Self {
             host,
+            internal_drain: false,
             launch_workspace: trusted_context.workspace.clone(),
             session_context: RwLock::new(trusted_context),
+            definitions: OnceLock::new(),
+            name_map: OnceLock::new(),
+            list_tools_cache: Mutex::new(HashMap::new()),
         }
     }
 }

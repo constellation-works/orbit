@@ -12,8 +12,10 @@
 //! the documented baseline below, the operator's configured pass list, the
 //! extras a provider declares it requires, and the named `ORBIT_*` execution
 //! envelope below. The `ORBIT_` prefix is *not* a wildcard: privilege-bearing
-//! names in that namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`,
-//! `ORBIT_MCP_SSH_ACCEPTANCE`) must not reach an untrusted child.
+//! names in that namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`)
+//! must not reach an untrusted child — including when a `pass`/`extras` list
+//! names one explicitly, since that list can originate from an untrusted
+//! source (a plugin manifest's `env_pass`) and not just operator config.
 //! Credential-name and value-shape heuristics are deliberately *not*
 //! consulted — they cannot classify names an operator's environment actually
 //! uses, and treating them as a gate is what let the bypass exist.
@@ -35,6 +37,49 @@ pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
     "HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "TZ", "USER",
 ];
 
+/// Managed envelope names that a nested Codex MCP server needs for workspace
+/// binding, attribution, and activity policy. These are names only;
+/// Codex copies their values from the managed child environment.
+pub const MCP_MANAGED_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
+/// Job-run identity forwarded to a nested MCP server.
+pub const MCP_MANAGED_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
+/// Source-inspection identity forwarded to a nested MCP server.
+pub const MCP_MANAGED_SESSION_ID_ENV: &str = "ORBIT_SESSION_ID";
+/// Logical workspace selector forwarded to a nested MCP server.
+pub const MCP_MANAGED_WORKSPACE_ENV: &str = "ORBIT_WORKSPACE";
+/// Registry locator forwarded to a nested MCP server.
+pub const MCP_MANAGED_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
+
+/// Deny-mode activity tool policy marker (`deny`). Stamped only for an
+/// activity that declares `tool_disallow_list`; absent means the legacy
+/// `ORBIT_ACTIVITY_TOOLS` allowlist mode. [ORB-13315]
+pub const ACTIVITY_TOOL_POLICY_ENV: &str = "ORBIT_ACTIVITY_TOOL_POLICY";
+/// A deny-mode activity's disallow list, comma-separated. Always stamped in
+/// deny mode, even when empty, so its absence can fail back to the allowlist.
+pub const ACTIVITY_TOOLS_DENY_ENV: &str = "ORBIT_ACTIVITY_TOOLS_DENY";
+/// The deny-mode activity's name, used to name it in a denial.
+pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
+
+/// Exact managed binding, identity, and activity policy names Codex must forward.
+pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
+    MCP_MANAGED_CONTEXT_ENV,
+    MCP_MANAGED_RUN_ID_ENV,
+    MCP_MANAGED_SESSION_ID_ENV,
+    MCP_MANAGED_WORKSPACE_ENV,
+    MCP_MANAGED_REGISTRY_ROOT_ENV,
+    "ORBIT_AGENT_NAME",
+    "ORBIT_AGENT_MODEL",
+    "ORBIT_TASK_ACTOR_KIND",
+    "ORBIT_ACTIVITY_TOOLS",
+    ACTIVITY_TOOL_POLICY_ENV,
+    ACTIVITY_TOOLS_DENY_ENV,
+    ACTIVITY_NAME_ENV,
+    "ORBIT_ACTIVITY_FS_PROFILE",
+    "ORBIT_PROC_ALLOWED_PROGRAMS",
+    "ORBIT_PROC_PROGRAM_POLICY",
+    "ORBIT_PROC_DISALLOWED_PROGRAMS",
+];
+
 /// Exact envelope names a managed run exports or forwards into a child.
 ///
 /// The provenance subset (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`,
@@ -44,32 +89,47 @@ pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
 /// (and that a parent process may already hold). Privilege-bearing names in the
 /// same `ORBIT_` namespace are absent from this list on purpose.
 const ORBIT_ENVELOPE_VARS: &[&str] = &[
-    "ORBIT_RUN_ID",
-    "ORBIT_MANAGED_RUN_CONTEXT",
+    MCP_MANAGED_RUN_ID_ENV,
+    MCP_MANAGED_CONTEXT_ENV,
     "ORBIT_AGENT_NAME",
     "ORBIT_AGENT_MODEL",
-    "ORBIT_SESSION_ID",
+    MCP_MANAGED_SESSION_ID_ENV,
     "ORBIT_TASK_ID",
     "ORBIT_ACTIVE_TASK_ID",
     "ORBIT_ROOT",
-    "ORBIT_REGISTRY_ROOT",
-    "ORBIT_WORKSPACE",
+    MCP_MANAGED_REGISTRY_ROOT_ENV,
+    MCP_MANAGED_WORKSPACE_ENV,
     "ORBIT_WORKTREE_ROOT",
+    "ORBIT_SCRATCH_DIR",
     "ORBIT_BIN",
     "ORBIT_STEP_INDEX",
     "ORBIT_TASK_ACTOR_KIND",
+    "ORBIT_PROC_ALLOWED_PROGRAMS",
+    "ORBIT_PROC_PROGRAM_POLICY",
+    "ORBIT_PROC_DISALLOWED_PROGRAMS",
 ];
 
 /// Envelope families admitted by prefix because the engine treats them as
-/// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_FS_PROFILE`, and the search
-/// companion override cluster).
-const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_", "ORBIT_SEARCH_COMPANION"];
+/// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_TOOL_POLICY` / `_TOOLS_DENY` /
+/// `_NAME` / `_FS_PROFILE`).
+const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_"];
 
 fn is_orbit_envelope_name(name: &str) -> bool {
     ORBIT_ENVELOPE_VARS.contains(&name)
         || ORBIT_ENVELOPE_PREFIXES
             .iter()
             .any(|prefix| name.starts_with(prefix))
+}
+
+/// An `ORBIT_` name that is not part of the named envelope above.
+///
+/// `pass` and `extras` are name lists supplied by a caller (an operator's
+/// `[execution.env] pass`, a plugin manifest's `env_pass`) rather than the
+/// engine itself, so a privilege-bearing name such as `ORBIT_OPERATOR` or
+/// `ORBIT_WORKSPACE_CLAIM_TOKEN` must never become admitted just because it
+/// was named explicitly: the exclusion holds regardless of who is asking.
+fn is_privilege_bearing_orbit_name(name: &str) -> bool {
+    name.starts_with("ORBIT_") && !is_orbit_envelope_name(name)
 }
 
 /// The environment an allowlist-governed agent subprocess is launched with:
@@ -96,8 +156,17 @@ pub fn allowlisted_child_env_from(
     let admitted: BTreeSet<&str> = AGENT_SUBPROCESS_BASELINE_VARS
         .iter()
         .copied()
-        .chain(pass.iter().map(String::as_str))
-        .chain(extras.iter().copied())
+        .chain(
+            pass.iter()
+                .map(String::as_str)
+                .filter(|name| !is_privilege_bearing_orbit_name(name)),
+        )
+        .chain(
+            extras
+                .iter()
+                .copied()
+                .filter(|name| !is_privilege_bearing_orbit_name(name)),
+        )
         .collect();
     let mut env: BTreeMap<String, String> = parent
         .iter()

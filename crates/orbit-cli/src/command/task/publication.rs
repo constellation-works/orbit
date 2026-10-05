@@ -10,7 +10,7 @@ use orbit_core::bootstrap::task_publication::{
     PublicationRecoveryCompleteness, PublicationRenderAuthority, PublicationRestoreMode,
     PublicationRestoreRequest, ScannerFailureBehavior,
 };
-use orbit_registry::{load_host_identity, workspace_registry};
+use orbit_registry::{load_machine_identity, workspace_registry};
 use orbit_types::workspace::{
     DEFAULT_PUBLICATION_BRANCH, WorkspaceCheckoutRole, WorkspacePublicationBinding,
     redact_git_remote,
@@ -112,18 +112,18 @@ impl Execute for TaskPublicationPublishArgs {
         let workspace_id = selected_workspace_id(runtime)?;
         let task_workspace_id = selected_task_workspace_id(runtime)?;
         let global_root = runtime.global_root();
-        let host = load_host_identity(&global_root)?;
+        let machine = load_machine_identity(&global_root)?;
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        let binding = workspace_registry::find_publication_binding(&registry, &workspace_id)?
+        let registry = workspace_registry::load_registry_from_read_only(&registry_path)?.registry;
+        let binding = workspace_registry::find_publication_binding_by_id(&registry, &workspace_id)
             .cloned()
             .ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' has no publication binding; run `orbit workspace publication bind` first"
                 ))
             })?;
-        let checkout =
-            workspace_registry::find_checkout(&registry, &workspace_id)?.ok_or_else(|| {
+        let checkout = workspace_registry::find_checkout_by_id(&registry, &workspace_id)
+            .ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' has no local checkout"
                 ))
@@ -136,7 +136,7 @@ impl Execute for TaskPublicationPublishArgs {
         let request = publish_request(
             &binding,
             task_workspace_id,
-            host.machine_id,
+            machine.id,
             caller_role,
             publication_cache(runtime),
         );
@@ -158,14 +158,7 @@ impl Execute for TaskPublicationPublishArgs {
         };
         let outcome = runtime.publish_task_publication(request, &policy)?;
 
-        workspace_registry::record_publication_success(
-            &mut registry,
-            &workspace_id,
-            outcome.generation,
-            &outcome.commit_id,
-            Some(&binding.authority_machine_id),
-        )?;
-        workspace_registry::save_registry_to(&registry, &registry_path)?;
+        record_success_at_registry_path(&registry_path, &binding, &outcome)?;
 
         Ok(Payload::detail(
             publish_json(&binding, &outcome),
@@ -173,6 +166,41 @@ impl Execute for TaskPublicationPublishArgs {
         )
         .into())
     }
+}
+
+// External publication deliberately runs without the catalog lock. Revalidate
+// its destination on a fresh snapshot before recording the completed publish.
+fn record_success_at_registry_path(
+    registry_path: &std::path::Path,
+    expected: &WorkspacePublicationBinding,
+    outcome: &PublicationPublishOutcome,
+) -> Result<(), orbit_core::OrbitError> {
+    workspace_registry::with_registry_lock(registry_path, || {
+        let mut registry = workspace_registry::load_registry_from(registry_path)?;
+        let current =
+            workspace_registry::find_publication_binding_by_id(&registry, &expected.workspace_id);
+        let same_destination = current.is_some_and(|current| {
+            current.workspace_id == expected.workspace_id
+                && current.source_repository_fingerprint == expected.source_repository_fingerprint
+                && current.publication_remote == expected.publication_remote
+                && current.publication_branch == expected.publication_branch
+                && current.publication_id == expected.publication_id
+                && current.authority_machine_id == expected.authority_machine_id
+        });
+        if !same_destination {
+            return Err(orbit_core::OrbitError::WorkspaceError(
+                "publication completed remotely, but its local binding changed; success was not recorded".to_string(),
+            ));
+        }
+        workspace_registry::record_publication_success_by_id(
+            &mut registry,
+            &expected.workspace_id,
+            outcome.generation,
+            &outcome.commit_id,
+            Some(&expected.authority_machine_id),
+        )?;
+        workspace_registry::save_registry_to(&registry, registry_path)
+    })
 }
 
 #[derive(Args)]
@@ -188,7 +216,7 @@ impl Execute for TaskPublicationStatusArgs {
         let registry = workspace_registry::load_registry_from(
             &workspace_registry::registry_path_for(&runtime.global_root()),
         )?;
-        let binding = workspace_registry::find_publication_binding(&registry, &workspace_id)?
+        let binding = workspace_registry::find_publication_binding_by_id(&registry, &workspace_id)
             .ok_or_else(|| {
                 orbit_core::OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' has no publication binding"
@@ -369,11 +397,6 @@ impl Execute for TaskPublicationRestoreArgs {
                 "already_present_task_ids": outcome.already_present_task_ids,
                 "completeness": completeness,
                 "omitted_attachments": omitted,
-                "projection": {
-                    "projected": outcome.projection.projected,
-                    "repaired": outcome.projection.repaired,
-                    "degraded_reason": outcome.projection.degraded_reason,
-                },
             }),
             format!(
                 "restored publication '{}' generation {} into workspace '{}'\nrestored: {}\nalready present: {}\ncompleteness: {}\nomitted attachments: {}",
@@ -400,7 +423,7 @@ fn selected_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_core::O
 fn selected_task_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_core::OrbitError> {
     runtime
         .workspace_runtime_binding()
-        .map(|binding| binding.workspace_id.clone())
+        .map(|binding| binding.task_partition_id.clone())
         .map_or_else(|| runtime.workspace_id(), Ok)
 }
 
@@ -466,7 +489,7 @@ fn assert_restore_authority(
         )));
     }
     let global_root = runtime.global_root();
-    let local_machine_id = load_host_identity(&global_root)?.machine_id;
+    let local_machine_id = load_machine_identity(&global_root)?.id;
     if local_machine_id != expected.authority_machine_id {
         return Err(orbit_core::OrbitError::PolicyDenied(format!(
             "publication restore authority '{}' does not match local machine '{}'",
@@ -476,19 +499,23 @@ fn assert_restore_authority(
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
         &global_root,
     ))?;
-    let workspace = workspace_registry::find_workspace(&registry, &selected)?.ok_or_else(|| {
-        orbit_core::OrbitError::WorkspaceError(format!("workspace '{selected}' is not registered"))
-    })?;
+    let workspace =
+        workspace_registry::find_workspace_by_id(&registry, &selected).ok_or_else(|| {
+            orbit_core::OrbitError::WorkspaceError(format!(
+                "workspace '{selected}' is not registered"
+            ))
+        })?;
     if workspace.owner_machine_id.as_deref() != Some(local_machine_id.as_str()) {
         return Err(orbit_core::OrbitError::PolicyDenied(format!(
             "workspace '{selected}' is not owned by local machine '{local_machine_id}'"
         )));
     }
-    let checkout = workspace_registry::find_checkout(&registry, &selected)?.ok_or_else(|| {
-        orbit_core::OrbitError::WorkspaceError(format!(
-            "workspace '{selected}' has no local checkout"
-        ))
-    })?;
+    let checkout =
+        workspace_registry::find_checkout_by_id(&registry, &selected).ok_or_else(|| {
+            orbit_core::OrbitError::WorkspaceError(format!(
+                "workspace '{selected}' has no local checkout"
+            ))
+        })?;
     if checkout.role != Some(WorkspaceCheckoutRole::Owner) {
         return Err(orbit_core::OrbitError::PolicyDenied(format!(
             "workspace '{selected}' is a replica checkout; restore requires the declared owner destination"

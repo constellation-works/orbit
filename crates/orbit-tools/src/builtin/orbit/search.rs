@@ -15,46 +15,28 @@ impl Tool for OrbitSearchTool {
         let mut parameters = vec![
             ToolParam {
                 name: "query".to_string(),
-                description: "Free-text query. Defaults to lexical matching unless hybrid is true."
+                description: "Free-text lexical query. Multiple words need not be adjacent. Optional with `kind: friction`, where omitting it lists frictions."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
             ToolParam {
-                // ADR-0179: expose the free-text vector ranker as hybrid, not semantic.
-                name: "hybrid".to_string(),
-                description:
-                    "Opt into hybrid lexical + cosine ranking for indexed task and doc vectors; frictions remain lexical."
-                        .to_string(),
-                param_type: "boolean".to_string(),
-                required: false,
-            },
-            ToolParam {
-                // ADR-0179: semantic carries the task ID for cosine-neighbor lookup on MCP.
-                name: "semantic".to_string(),
-                description:
-                    "Task ID for cosine-neighbor lookup. Mutually exclusive with query."
-                        .to_string(),
-                param_type: "string".to_string(),
-                required: false,
-            },
-            ToolParam {
                 name: "kind".to_string(),
-                description: "Corpus kind: task, doc, friction, or all. Default: all."
+                description: "Corpus kind: task, friction, or all. Default: all."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
             ToolParam {
                 name: "limit".to_string(),
-                description: "Maximum number of results. Default: 10.".to_string(),
+                description: "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing.".to_string(),
                 param_type: "integer".to_string(),
                 required: false,
             },
             ToolParam {
                 name: "tag".to_string(),
                 description:
-                    "AND-filter by tag. Repeat or pass an array. Applies to task, doc, and friction."
+                    "AND-filter by tag. Repeat or pass an array. Applies to task and friction."
                         .to_string(),
                 param_type: "string_list".to_string(),
                 required: false,
@@ -62,7 +44,7 @@ impl Tool for OrbitSearchTool {
             ToolParam {
                 name: "all".to_string(),
                 description:
-                    "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved; doc is a no-op."
+                    "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved."
                         .to_string(),
                 param_type: "boolean".to_string(),
                 required: false,
@@ -70,17 +52,9 @@ impl Tool for OrbitSearchTool {
             ToolParam {
                 name: "status".to_string(),
                 description:
-                    "Explicit per-kind status override using kind:value tokens, such as task:open,doc:active,friction:open. Overrides `all` for the named kind."
+                    "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind."
                         .to_string(),
                 param_type: "string_list".to_string(),
-                required: false,
-            },
-            ToolParam {
-                name: "path".to_string(),
-                description:
-                    "Filter to artifacts applicable to this filesystem path. Task uses selector containment; docs and frictions are skipped."
-                        .to_string(),
-                param_type: "string".to_string(),
                 required: false,
             },
             ToolParam {
@@ -106,9 +80,7 @@ impl Tool for OrbitSearchTool {
         parameters.extend(super::model_identity_params());
         ToolSchema {
             name: "orbit.search".to_string(),
-            description:
-                "Search tasks, docs, and frictions. Decision records are indexed as ordinary docs; hybrid vector ranking applies to indexed tasks and docs."
-                    .to_string(),
+            description: "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.".to_string(),
             parameters,
             builtin: true,
         }

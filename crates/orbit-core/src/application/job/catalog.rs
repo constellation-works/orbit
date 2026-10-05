@@ -1,84 +1,24 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::{
-    CatalogDirectory, CatalogDirectoryList, V2JobCatalog, catalog_error_to_orbit,
+    CatalogDirectory, CatalogDirectoryList, CatalogError, V2JobCatalog, catalog_error_to_orbit,
 };
 use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::{
+use crate::application::managed_assets::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
 
-/// Shippable default workflow assets, seeded under
-/// `<orbit_root>/resources/jobs/<name>.yaml` on `orbit init`. The entries
-/// here are the admission-controlled task shipment workflows
-/// (auto / gate / local / pr) and the failed-run triage workflow [ORB-10129].
-/// Example and smoke fixtures live
-/// under `crates/orbit-core/assets/jobs/examples/` and are NOT seeded —
-/// they exist for `crates/orbit-engine/examples/v2_job_runtime_smoke.rs`
-/// only.
-pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
-    (
-        "agent_invoke_pipeline",
-        include_str!("../../../assets/jobs/agent_invoke_pipeline.yaml"),
-    ),
-    (
-        "auto_task_scheduler_pipeline",
-        include_str!("../../../assets/jobs/auto_task_scheduler_pipeline.yaml"),
-    ),
-    (
-        "ci_failure_sweep_pipeline",
-        include_str!("../../../assets/jobs/ci_failure_sweep_pipeline.yaml"),
-    ),
-    (
-        "dependabot_alert_sweep_pipeline",
-        include_str!("../../../assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
-    ),
-    (
-        "epic_pipeline",
-        include_str!("../../../assets/jobs/epic_pipeline.yaml"),
-    ),
-    (
-        "task_auto_pipeline",
-        include_str!("../../../assets/jobs/task_auto_pipeline.yaml"),
-    ),
-    (
-        "task_gate_pipeline",
-        include_str!("../../../assets/jobs/task_gate_pipeline.yaml"),
-    ),
-    (
-        "task_local_pipeline",
-        include_str!("../../../assets/jobs/task_local_pipeline.yaml"),
-    ),
-    (
-        "task_pilot_pipeline",
-        include_str!("../../../assets/jobs/task_pilot_pipeline.yaml"),
-    ),
-    (
-        "task_pr_pipeline",
-        include_str!("../../../assets/jobs/task_pr_pipeline.yaml"),
-    ),
-    (
-        "task_triage_pipeline",
-        include_str!("../../../assets/jobs/task_triage_pipeline.yaml"),
-    ),
-    (
-        "workspace_ship_pipeline",
-        include_str!("../../../assets/jobs/workspace_ship_pipeline.yaml"),
-    ),
-    (
-        "workspace_auto_pipeline",
-        include_str!("../../../assets/jobs/workspace_auto_pipeline.yaml"),
-    ),
-    (
-        "worktree_gc_pipeline",
-        include_str!("../../../assets/jobs/worktree_gc_pipeline.yaml"),
-    ),
-];
+/// Shippable default workflow assets. The list lives beside the shipped
+/// activities in `runtime::assets` so the runtime kernel can answer "is this a
+/// job Orbit ships" — a plugin routine may target one — without reaching up
+/// into the application layer.
+pub(crate) use crate::runtime::assets::DEFAULT_JOB_FILES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobCatalogFilter {
@@ -95,6 +35,18 @@ pub struct JobCatalogEntry {
 }
 
 impl JobCatalogEntry {
+    /// Whether operator UI surfaces may submit this job without task input.
+    /// Delivery coordinators and leaves belong to Ship or a bounded drain.
+    pub fn supports_no_input_submission(&self) -> bool {
+        let name = &self.job_id;
+        self.kind() != JobKind::Subroutine
+            && self.state() != JobScheduleState::Disabled
+            && !self.spec.holds_task_delivery()
+            && !(name.starts_with("workspace_")
+                || name.starts_with("epic_")
+                || (name.starts_with("task_") && name != "task_pilot_pipeline"))
+    }
+
     pub fn kind(&self) -> JobKind {
         self.spec.kind
     }
@@ -109,6 +61,44 @@ impl JobCatalogEntry {
 
     pub fn default_input(&self) -> Option<&Value> {
         self.spec.default_input.as_ref()
+    }
+}
+
+/// Names and diagnostics collected while building the membership index used by
+/// routine discovery. A broken lower-precedence layer must not erase names
+/// from a layer that still resolves for execution, but its error must remain
+/// available to the caller for operator-visible reporting.
+#[derive(Debug)]
+pub(crate) struct V2JobExecutionMembership {
+    pub(crate) names: BTreeSet<String>,
+    pub(crate) errors: Vec<OrbitError>,
+}
+
+#[derive(Debug)]
+struct V2JobCatalogDiagnostic {
+    directory_index: usize,
+    path: PathBuf,
+    error: OrbitError,
+}
+
+impl V2JobCatalogDiagnostic {
+    fn applies_to_job(
+        &self,
+        job_id: &str,
+        selected_path: Option<&Path>,
+        dirs: &[CatalogDirectory<V2JobCatalogDirKind>],
+    ) -> bool {
+        if self.path.file_stem().and_then(|stem| stem.to_str()) != Some(job_id) {
+            return false;
+        }
+        let Some(selected_path) = selected_path else {
+            return true;
+        };
+        let selected_directory_index = dirs
+            .iter()
+            .position(|dir| selected_path.starts_with(dir.path()))
+            .unwrap_or(usize::MAX);
+        self.directory_index <= selected_directory_index
     }
 }
 
@@ -188,8 +178,6 @@ impl OrbitRuntime {
         include_disabled: bool,
         filter: JobCatalogFilter,
     ) -> Result<Vec<(JobCatalogEntry, Option<JobRun>)>, OrbitError> {
-        use orbit_store::contracts::JobRunQuery;
-
         let v2_jobs = self.load_v2_job_assets()?;
         let mut result = Vec::new();
 
@@ -200,27 +188,29 @@ impl OrbitRuntime {
             if !matches_job_filter(spec.kind, filter) {
                 continue;
             }
-            let last_run = self
-                .stores()
-                .jobs()
-                .list_job_runs_filtered(&JobRunQuery {
-                    job_id: Some(job_id.to_string()),
-                    state: None,
-                    terminal_only: false,
-                    created_since: None,
-                    limit: Some(1),
-                    ..Default::default()
-                })
-                .ok()
-                .and_then(|runs| runs.into_iter().next());
             result.push((
                 JobCatalogEntry {
                     job_id: job_id.to_string(),
                     path: path.to_path_buf(),
                     spec: spec.clone(),
                 },
-                last_run,
+                None,
             ));
+        }
+
+        let job_ids = result
+            .iter()
+            .map(|(entry, _)| entry.job_id.clone())
+            .collect::<Vec<_>>();
+        let mut latest = self
+            .stores()
+            .jobs()
+            .latest_job_runs(&job_ids)?
+            .into_iter()
+            .map(|run| (run.job_id.clone(), run))
+            .collect::<std::collections::HashMap<_, _>>();
+        for (entry, last_run) in &mut result {
+            *last_run = latest.remove(&entry.job_id);
         }
 
         result.sort_by(|left, right| left.0.job_id.cmp(&right.0.job_id));
@@ -242,34 +232,173 @@ impl OrbitRuntime {
     }
 
     pub fn show_job_catalog_entry(&self, job_id: &str) -> Result<JobCatalogEntry, OrbitError> {
-        let v2_jobs = self.load_v2_job_assets()?;
-        v2_jobs
-            .get(job_id)
-            .map(|(path, spec)| JobCatalogEntry {
+        let dirs = self.v2_job_asset_dirs();
+        let (mut v2_jobs, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
+        let selected_path = v2_jobs.get(job_id).map(|(path, _)| path.to_path_buf());
+        if let Some(diagnostic) = diagnostics
+            .into_iter()
+            .find(|diagnostic| diagnostic.applies_to_job(job_id, selected_path.as_deref(), &dirs))
+        {
+            return Err(diagnostic.error);
+        }
+        if let Some((path, spec)) = v2_jobs.take(job_id) {
+            return Ok(JobCatalogEntry {
                 job_id: job_id.to_string(),
-                path: path.to_path_buf(),
-                spec: spec.clone(),
-            })
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
+                path,
+                spec,
+            });
+        }
+        Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
     }
 
-    fn load_v2_job_assets(&self) -> Result<V2JobCatalog, OrbitError> {
+    pub(super) fn load_v2_job_assets(&self) -> Result<V2JobCatalog, OrbitError> {
         self.load_v2_job_catalog(self.v2_job_asset_dirs())
+    }
+
+    /// Job names [`Self::load_v2_job_asset_by_name`] would resolve, parsed once
+    /// so routine collection can check membership without re-reading every YAML
+    /// per definition.
+    ///
+    /// Default job names stay bound to env/global layers (L-0060): a workspace
+    /// copy of a shipped default does not make the name resolvable for
+    /// execution, so it must not pass load-time target checks either.
+    ///
+    /// That distinction only means anything when the workspace jobs
+    /// directory is actually separate from the global one. In the common
+    /// single-root layout (`orbit init` and `workspace init` sharing one
+    /// `--root`, as most CLI-driven workspaces do) `jobs_dir` and
+    /// `global_dir/resources/jobs` are the very same path, so every entry's
+    /// on-disk path trivially starts with `jobs_dir` — the path alone can't
+    /// tell "came from the workspace copy" apart from "came from the shared
+    /// global directory". Skip the exclusion entirely when the two paths
+    /// coincide, rather than filtering out every default job name.
+    ///
+    /// Build the execution-name index once while retaining errors from any
+    /// layer that could not be loaded. The named execution path remains strict
+    /// and will re-read its eligible directories before dispatch.
+    pub(crate) fn load_v2_job_execution_membership(&self) -> V2JobExecutionMembership {
+        let (catalog, errors) = self.load_v2_job_catalog_best_effort(self.v2_job_membership_dirs());
+        let jobs_dir = &self.paths().jobs_dir;
+        let global_jobs_dir = self.paths().global_dir.join("resources/jobs");
+        let workspace_dir_is_distinct = *jobs_dir != global_jobs_dir;
+        let names = catalog
+            .iter()
+            .filter_map(|(name, path, _)| {
+                if workspace_dir_is_distinct
+                    && is_default_job_name(name)
+                    && path.starts_with(jobs_dir)
+                {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            })
+            .collect();
+        V2JobExecutionMembership { names, errors }
     }
 
     fn load_v2_job_catalog(
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> Result<V2JobCatalog, OrbitError> {
+        self.load_v2_job_catalog_with_diagnostics(dirs)
+            .map(|(catalog, _)| catalog)
+    }
+
+    fn load_v2_job_catalog_with_diagnostics(
+        &self,
+        dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
+    ) -> Result<(V2JobCatalog, Vec<V2JobCatalogDiagnostic>), OrbitError> {
         let mut catalog = V2JobCatalog::new();
-        for dir in dirs {
+        let mut diagnostics = Vec::new();
+        for (directory_index, dir) in dirs.into_iter().enumerate() {
             if dir.path().is_dir() {
-                catalog
-                    .load_dir_prefer_existing(dir.path())
-                    .map_err(catalog_error_to_orbit)?;
+                match catalog.load_dir_prefer_existing_best_effort(dir.path()) {
+                    Ok(parse_errors) => {
+                        diagnostics.extend(
+                            parse_errors
+                                .into_iter()
+                                .map(|error| {
+                                    let path = match &error {
+                                        CatalogError::Parse { path, .. } => path.clone(),
+                                        _ => return Err(catalog_error_to_orbit(error)),
+                                    };
+                                    Ok(V2JobCatalogDiagnostic {
+                                        directory_index,
+                                        path,
+                                        error: catalog_error_to_orbit(error),
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        );
+                    }
+                    Err(error) => return Err(catalog_error_to_orbit(error)),
+                }
             }
         }
-        Ok(catalog)
+        self.load_plugin_job_files(&mut catalog, &mut |error| {
+            diagnostics.push(V2JobCatalogDiagnostic {
+                directory_index: usize::MAX,
+                path: PathBuf::new(),
+                error,
+            });
+        });
+        for diagnostic in &diagnostics {
+            tracing::warn!(
+                target: "orbit.core.jobs",
+                path = %diagnostic.path.display(),
+                error = %diagnostic.error,
+                "skipping malformed job catalog file"
+            );
+        }
+        Ok((catalog, diagnostics))
+    }
+
+    fn load_v2_job_catalog_best_effort(
+        &self,
+        dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
+    ) -> (V2JobCatalog, Vec<OrbitError>) {
+        let mut catalog = V2JobCatalog::new();
+        let mut errors = Vec::new();
+        for dir in dirs {
+            if dir.path().is_dir() {
+                match catalog.load_dir_prefer_existing_best_effort(dir.path()) {
+                    Ok(parse_errors) => {
+                        errors.extend(parse_errors.into_iter().map(catalog_error_to_orbit));
+                    }
+                    Err(error) => errors.push(catalog_error_to_orbit(error)),
+                }
+            }
+        }
+        self.load_plugin_job_files(&mut catalog, &mut |error| errors.push(error));
+        (catalog, errors)
+    }
+
+    /// Load the `plugin:<ns>` job layer.
+    ///
+    /// It loads after every directory layer, so a workspace job and a shipped
+    /// default both keep their name against a plugin that ships the same one
+    /// (design §3: `workspace > plugin:<ns> > shipped`, with L-0060's rule that
+    /// a shipped default is never displaced). A plugin whose job files no
+    /// longer parse yields a diagnostic, never a failed catalog: every other
+    /// job must remain dispatchable.
+    fn load_plugin_job_files(
+        &self,
+        catalog: &mut V2JobCatalog,
+        report: &mut dyn FnMut(OrbitError),
+    ) {
+        for plugin in self.plugin_load().active() {
+            if plugin.definitions.jobs.is_empty() {
+                continue;
+            }
+            if let Err(error) = catalog.load_files_prefer_existing(&plugin.definitions.jobs) {
+                report(OrbitError::InvalidInput(format!(
+                    "plugin '{}' job catalog layer: {}",
+                    plugin.namespace(),
+                    catalog_error_to_orbit(error)
+                )));
+            }
+        }
     }
 
     fn v2_job_asset_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
@@ -294,15 +423,39 @@ impl OrbitRuntime {
         dirs.into_vec()
     }
 
+    fn v2_job_membership_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
+        let mut dirs = CatalogDirectoryList::default();
+        // Same layering as named execution, with the workspace dir always
+        // present so one parse covers both default and custom job names.
+        push_v2_job_env_dirs(&mut dirs, v2_job_env_dirs().as_deref());
+        dirs.push(
+            self.paths().global_dir.join("resources/jobs"),
+            V2JobCatalogDirKind::Global,
+        );
+        dirs.push(
+            self.paths().jobs_dir.clone(),
+            V2JobCatalogDirKind::Workspace,
+        );
+        dirs.into_vec()
+    }
+
     pub(crate) fn load_v2_job_asset_by_name(
         &self,
         job_id: &str,
     ) -> Result<(PathBuf, JobV2), OrbitError> {
-        let catalog = self.load_v2_job_catalog(self.v2_job_asset_dirs_for_execution(job_id))?;
-        catalog
-            .get(job_id)
-            .map(|(path, spec)| (path.to_path_buf(), spec.clone()))
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
+        let dirs = self.v2_job_asset_dirs_for_execution(job_id);
+        let (mut catalog, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
+        let selected_path = catalog.get(job_id).map(|(path, _)| path.to_path_buf());
+        if let Some(diagnostic) = diagnostics
+            .into_iter()
+            .find(|diagnostic| diagnostic.applies_to_job(job_id, selected_path.as_deref(), &dirs))
+        {
+            return Err(diagnostic.error);
+        }
+        if let Some(resolved) = catalog.take(job_id) {
+            return Ok(resolved);
+        }
+        Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
     }
 
     fn v2_job_asset_dirs_for_execution(
@@ -396,7 +549,7 @@ enum V2JobCatalogDirKind {
     Global,
 }
 
-fn is_default_job_name(job_id: &str) -> bool {
+pub(super) fn is_default_job_name(job_id: &str) -> bool {
     DEFAULT_JOB_FILES
         .iter()
         .any(|(default_job_id, _)| *default_job_id == job_id)
@@ -419,7 +572,7 @@ fn matches_job_filter(kind: JobKind, filter: JobCatalogFilter) -> bool {
 /// When `overwrite` is false, existing files are preserved — users who've
 /// edited a previously-seeded workflow won't lose their changes on re-init.
 /// Parse the job asset compiled into this binary.
-fn shipped_job_spec(job_id: &str) -> Result<JobV2, OrbitError> {
+pub(super) fn shipped_job_spec(job_id: &str) -> Result<JobV2, OrbitError> {
     let (_, yaml) = DEFAULT_JOB_FILES
         .iter()
         .find(|(name, _)| *name == job_id)

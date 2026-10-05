@@ -42,7 +42,6 @@ body:
         - orbit-common
         - orbit-core
         - orbit-search
-        - orbit-search-companion
         - orbit-engine
         - orbit-exec
         - orbit-knowledge

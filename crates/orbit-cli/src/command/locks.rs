@@ -8,9 +8,16 @@
 //!
 //! Task lock reservations auto-release in workflow pipelines; `release` is the
 //! operator escape hatch for a stale reservation that wedges a run. The
-//! underlying `orbit.task.locks` / `orbit.task.locks.release` tools are
-//! inactive on the agent MCP surface, so both reach them through the admin
-//! `runtime.run_tool` bypass (mirrors `orbit adr list`, ORB-00289).
+//! underlying `orbit.task.locks` / `orbit.task.locks.reserve` /
+//! `orbit.task.locks.release` tools are inactive on the agent MCP surface, so
+//! all three reach them through the admin `runtime.run_tool` bypass (mirrors
+//! `orbit adr list`, ORB-00289).
+//!
+//! `reserve` and `release` require the same `operator` or `runner`
+//! capability: a caller that can create a reservation — which blocks every
+//! other caller from that surface until it expires or is released — must be
+//! the same caller trusted to remove one. From a plain shell, claim it with
+//! `ORBIT_OPERATOR=1`.
 
 use std::fmt::Write as _;
 
@@ -90,8 +97,8 @@ const DEFAULT_CONTENTION_LIMIT: usize = 10;
                   two tasks inside one group are often compatible and merely linked through\n\
                   a third.\n\n\
                   Surfaces are the ones conflict admission reserves: declared selectors,\n\
-                  pruned of paths that no longer exist, unioned across descendants for an\n\
-                  epic root. A task declaring nothing locks nothing and is counted apart."
+                  pruned of paths that no longer exist. A task declaring nothing locks\n\
+                  nothing and is counted apart."
 )]
 pub struct LocksContentionArgs {
     /// Maximum hotspot rows to show. Default 10.
@@ -110,8 +117,7 @@ impl Execute for LocksContentionArgs {
             Column::new("SELECTOR").fixed(),
             Column::new("TASKS").number(),
         ])
-        .keep_all_columns()
-        .empty_message("no selector is claimed by more than one pending task");
+        .keep_all_columns();
         for hotspot in report.hotspots.iter().take(self.limit) {
             table.add_row(vec![hotspot.selector.clone(), hotspot.tasks().to_string()]);
         }
@@ -136,14 +142,14 @@ impl Execute for LocksContentionArgs {
             "parallel_floor": report.parallel_floor(),
         });
 
-        Ok(Payload::blocks(
-            doc,
-            vec![
-                Block::table(table),
-                Block::text(contention_summary(&report, self.limit)),
-            ],
-        )
-        .into())
+        // With no hotspots the summary line already says why, so an empty grid
+        // (and its own "nothing found" message) would only contradict it.
+        let mut blocks = Vec::new();
+        if !report.hotspots.is_empty() {
+            blocks.push(Block::table(table));
+        }
+        blocks.push(Block::text(contention_summary(&report, self.limit)));
+        Ok(Payload::blocks(doc, blocks).into())
     }
 }
 
@@ -196,10 +202,13 @@ const RESERVATION_DENIED_EXIT_CODE: i32 = 3;
                   reports who holds the overlap.\n\n\
                   `--task` reserves that task's declared context surface, pruned and expanded\n\
                   exactly as conflict admission expands it. `--file` reserves selectors\n\
-                  directly. Exactly one of the two.\n\n\
+                  directly. Exactly one of the two — they are mutually exclusive forms.\n\n\
                   Reservations expire on their own, so the TTL is the safety net for a session\n\
                   that dies holding one. Release early with `orbit task locks release <id>\n\
-                  --confirm`; a denied reservation exits 3."
+                  --confirm`; a denied reservation exits 3.\n\n\
+                  Reserving requires the `operator` or `runner` capability, same as releasing:\n\
+                  a caller that can lock a surface out from under everyone else must be the same\n\
+                  caller trusted to clear it. From a plain shell, set `ORBIT_OPERATOR=1`."
 )]
 pub struct LocksReserveArgs {
     /// Task whose declared context surface to reserve. Repeat or comma-separate

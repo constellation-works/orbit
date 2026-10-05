@@ -2,22 +2,33 @@
 import { Icon } from '@astrojs/starlight/components';
 ---
 
-{/* Inlined to avoid a light-mode flash before the picker hydrates. */}
+{/* Inlined so the chosen theme applies before first paint: no flash of the wrong theme. */}
 <script is:inline>
 	window.StarlightThemeProvider = (() => {
-		const storageKey = 'starlight-theme';
-		const storedTheme =
-			typeof localStorage !== 'undefined' && localStorage.getItem(storageKey);
-		const theme = storedTheme || 'dark';
-		if (!storedTheme && typeof localStorage !== 'undefined') {
-			localStorage.setItem(storageKey, theme);
-		}
-		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		// The old starlight-theme value was also written on plain page loads, so it
+		// cannot identify an explicit choice. Only the new key is authoritative.
+		// Dark is the default whatever the OS prefers; only a stored light choice
+		// overrides it.
+		const storageKey = 'orbit-theme-choice';
+		// Merely touching localStorage throws when a browser blocks site data, so
+		// the read is guarded or the whole provider (and every picker) would die.
+		let storedTheme = null;
+		try {
+			storedTheme = localStorage.getItem(storageKey);
+		} catch {}
+		const theme = storedTheme === 'light' ? 'light' : 'dark';
+		document.documentElement.dataset.theme = theme;
 		return {
-			updatePickers(theme = storedTheme || 'dark') {
+			updatePickers(theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark') {
+				// The site ignores the OS scheme until a visitor picks one, so the
+				// browser chrome follows the chosen theme, not a media query.
+				const themeColor = document.querySelector('meta[name="theme-color"]');
+				if (themeColor) themeColor.setAttribute('content', theme === 'dark' ? '#0A0A0A' : '#FFFFFF');
 				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
 					const select = picker.querySelector('select');
 					if (select) select.value = theme;
+					const toggle = picker.querySelector('button');
+					if (toggle) toggle.setAttribute('aria-pressed', String(theme === 'dark'));
 					const tmpl = document.querySelector('#theme-icons');
 					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
 					if (newIcon) {

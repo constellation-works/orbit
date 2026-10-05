@@ -1,11 +1,13 @@
 //! `orbit job run <yaml-path>` — schemaVersion 2 job entrypoint.
 //!
-//! Mirrors `activity_v2::run_activity_v2_from_yaml`: reads the YAML, routes
-//! through the two-pass loader, and dispatches via the Phase 3 DAG executor.
+//! Reads the YAML, routes through the two-pass loader, and dispatches via the
+//! Phase 3 DAG executor.
 //! orbit-core never names orbit-agent types — transport/session construction
 //! lives below the boundary in `orbit_engine::job_executor`.
 
 use std::path::Path;
+
+use super::log_best_effort;
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::load_job_asset;
@@ -20,7 +22,7 @@ use orbit_types::workflow::activity_job::{
     validate_job_retired_sessions,
 };
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, JobTargetType, PipelineState,
+    JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
 };
 use serde_json::{Value, json};
 
@@ -79,7 +81,7 @@ impl OrbitRuntime {
     /// catalog definition and the source run's persisted input.
     ///
     /// Explicitly discards checkpoints — replay is the "run everything again"
-    /// surface, including agent steps. Use `resume_job_run` / `submit_resume_run`
+    /// surface, including agent steps. Use `submit_resume_run`
     /// to continue from the failed step instead.
     pub fn replay_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
         let source = self.show_job_run(source_run_id)?;
@@ -115,14 +117,14 @@ impl OrbitRuntime {
     /// re-admitted, and its `job_run_id` is realigned to the batch id the
     /// reused checkpoints carry. Tasks owned by an unrelated run are untouched.
     ///
-    /// This surface runs the job **in-process** and returns only at a terminal
-    /// state — it is the foreground CLI path (`orbit job resume`). Non-blocking
-    /// callers (the HTTP API, bridge) use
-    /// [`OrbitRuntime::submit_resume_run`](crate::OrbitRuntime::submit_resume_run).
+    /// Test-only in-process path for legacy execution and checkpoint fixtures.
+    /// Production resume uses [`OrbitRuntime::submit_resume_run`](crate::OrbitRuntime::submit_resume_run).
+    #[cfg(test)]
     pub fn resume_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
         let plan = self.plan_job_run_resume(source_run_id)?;
+        let (job_path, _) = self.load_v2_job_asset_by_name(&plan.source.job_id)?;
         self.run_job_v2_from_yaml_with_retry_source(
-            &plan.job_path,
+            &job_path,
             plan.input.clone(),
             Some(plan.source.run_id.clone()),
             plan.attempt,
@@ -154,7 +156,7 @@ impl OrbitRuntime {
             Some(input.clone()),
             retry_source_run_id.clone(),
         )?;
-        self.seed_v2_pipeline_run(&run, &input, resume)?;
+        self.seed_v2_pipeline_run(&run, &input, resume, JobRunTrigger::cli())?;
 
         let started_at = chrono::Utc::now();
         // [ORB-10965] This run was inserted moments ago by this very process,
@@ -177,7 +179,7 @@ impl OrbitRuntime {
                 )));
             }
         }
-        self.record_run_crew_from_input(&run.run_id, &input)?;
+        self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
         self.record_event(OrbitEvent::JobRunStarted {
             job_id: run.job_id.clone(),
             run_id: run.run_id.clone(),
@@ -202,15 +204,6 @@ impl OrbitRuntime {
             V2RunFinalizationOptions::DIRECT,
         )?;
         outcome
-    }
-
-    pub fn run_job_v2_from_yaml_with_run_id(
-        &self,
-        yaml_path: &Path,
-        input: Value,
-        run_id_override: Option<String>,
-    ) -> Result<V2JobRunResult, OrbitError> {
-        self.run_job_v2_from_yaml_with_run_context(yaml_path, input, run_id_override, None, None)
     }
 
     /// [ORB-10470] Execute a persisted run against its own checkpoints.
@@ -285,8 +278,15 @@ impl OrbitRuntime {
         self.record_event(OrbitEvent::ActivityRunStarted {
             id: asset.name.clone(),
         })?;
-        let _ = writer.emit(V2AuditEventKind::RunStarted {
-            job_name: format!("cli:{}", asset.name),
+        let audit_job_name = self
+            .read_run_state(&run_id)
+            .ok()
+            .flatten()
+            .and_then(|state| state.trigger)
+            .unwrap_or_else(JobRunTrigger::cli)
+            .audit_job_name(&asset.name);
+        writer.emit_lossy(V2AuditEventKind::RunStarted {
+            job_name: audit_job_name,
             retry_source_run_id,
         });
 
@@ -299,7 +299,7 @@ impl OrbitRuntime {
             Ok(o) => ("failed", o.message.clone()),
             Err(err) => ("error", Some(err.to_string())),
         };
-        let _ = writer.emit(V2AuditEventKind::RunFinished {
+        writer.emit_lossy(V2AuditEventKind::RunFinished {
             outcome: outcome_str.to_string(),
             error_message,
         });
@@ -331,11 +331,13 @@ impl OrbitRuntime {
         run: &JobRun,
         input: &Value,
         resume: Option<&ResumePlan>,
+        trigger: JobRunTrigger,
     ) -> Result<(), OrbitError> {
         let mut initial_state = match resume.and_then(|plan| plan.resume_state.as_ref()) {
             Some(source_state) => seeded_resume_state(source_state, run),
             None => PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone()),
         };
+        initial_state.trigger = Some(trigger);
         // [ORB-11283] A queued drain can carry an operator stop (or worker
         // ceiling) written before the worker seeded this document. Replacing
         // the whole state would silently resume admissions.
@@ -346,8 +348,14 @@ impl OrbitRuntime {
             if initial_state.drain_admissions_stop.is_none() {
                 initial_state.drain_admissions_stop = existing.drain_admissions_stop;
             }
+            if initial_state.drain_cancel.is_none() {
+                initial_state.drain_cancel = existing.drain_cancel;
+            }
             if initial_state.child_dispatches.is_empty() {
                 initial_state.child_dispatches = existing.child_dispatches;
+            }
+            if existing.trigger.is_some() {
+                initial_state.trigger = existing.trigger;
             }
         }
         self.stores()
@@ -370,6 +378,17 @@ impl OrbitRuntime {
         outcome: Result<&V2JobRunResult, &OrbitError>,
         options: V2RunFinalizationOptions,
     ) -> Result<(), OrbitError> {
+        // A gracefully cancelled pull drain ends itself `cancelled` from its
+        // last pass; the engine finishes after that with nothing to record.
+        if self
+            .get_job_run_backend(&run.run_id)?
+            .is_some_and(|current| current.state == JobRunState::Cancelled)
+            && self
+                .read_run_state(&run.run_id)?
+                .is_some_and(|state| state.drain_cancelling())
+        {
+            return Ok(());
+        }
         let duration_ms = Some(
             finished_at
                 .signed_duration_since(started_at)
@@ -381,6 +400,8 @@ impl OrbitRuntime {
                 self.persist_v2_run_state(run, input, result, JobRunState::Success, options)?;
                 if options.record_synthetic_success_step {
                     self.record_synthetic_v2_success_step(run, started_at, finished_at, result)?;
+                } else {
+                    self.persist_detached_worker_steps(run, started_at, finished_at, result)?;
                 }
                 JobRunState::Success
             }
@@ -388,15 +409,23 @@ impl OrbitRuntime {
                 self.persist_v2_run_state(run, input, result, JobRunState::Failed, options)?;
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
-                let _ = self.record_pipeline_failure_step(run, started_at, finished_at, message);
+                log_best_effort(
+                    "record failure step",
+                    &run.run_id,
+                    self.record_pipeline_failure_step(run, started_at, finished_at, message),
+                );
                 JobRunState::Failed
             }
             Err(error) => {
-                let _ = self.record_pipeline_failure_step(
-                    run,
-                    started_at,
-                    finished_at,
-                    &error.to_string(),
+                log_best_effort(
+                    "record failure step",
+                    &run.run_id,
+                    self.record_pipeline_failure_step(
+                        run,
+                        started_at,
+                        finished_at,
+                        &error.to_string(),
+                    ),
                 );
                 JobRunState::Failed
             }
@@ -408,11 +437,56 @@ impl OrbitRuntime {
             duration_ms,
             TaskReservationReleaseReason::RunTerminal,
         )?;
+        if final_state == JobRunState::Success {
+            self.record_delivered_worktree_cleanup(&run.run_id);
+        }
         self.record_event(OrbitEvent::JobRunCompleted {
             job_id: run.job_id.clone(),
             run_id: run.run_id.clone(),
             state: final_state.to_string(),
         })
+    }
+
+    /// Reap a delivered run only after its terminal state is durable. Cleanup
+    /// is best-effort: a retained report makes a failed Git safety check
+    /// visible to `run show`, while the hourly GC routine remains the backstop
+    /// for an infrastructure error here.
+    fn record_delivered_worktree_cleanup(&self, run_id: &str) {
+        let cleanup = match self.cleanup_delivered_worktree(run_id) {
+            Ok(Some(result)) => serde_json::to_value(result).unwrap_or_else(|error| {
+                json!({
+                    "dry_run": false,
+                    "bytes_reclaimed": 0,
+                    "reports": [],
+                    "error": format!("failed to serialize delivery cleanup report: {error}"),
+                })
+            }),
+            Ok(None) => return,
+            Err(error) => json!({
+                "dry_run": false,
+                "bytes_reclaimed": 0,
+                "reports": [],
+                "error": error.to_string(),
+            }),
+        };
+
+        let Ok(Some(mut state)) = self.read_run_state(run_id) else {
+            tracing::warn!(
+                run_id,
+                "delivery cleanup completed but its report could not read the pipeline state",
+            );
+            return;
+        };
+        if let Some(object) = state.pipeline.as_object_mut() {
+            object.insert("worktree_cleanup".to_string(), cleanup);
+            if let Err(error) = self.write_run_state(run_id, &state) {
+                tracing::warn!(
+                    run_id,
+                    %error,
+                    "delivery cleanup completed but its report could not be persisted",
+                );
+            }
+        }
     }
 
     fn persist_v2_run_state(
@@ -467,6 +541,75 @@ impl OrbitRuntime {
             },
         )?;
         Ok(())
+    }
+
+    /// Persist a step summary on the run record for the detached worker path
+    /// [ORB-12255]. Replay already writes a synthetic step 0; workers used to
+    /// leave `JobRun::steps` empty and only reconstruct from audit at `run
+    /// show`. MCP readers never reconstructed, so they saw `steps: []`.
+    ///
+    /// Audit-derived rows are preferred so the stored summary matches the
+    /// reconstructed view. The synthetic job-level step is the fallback when
+    /// the trail is empty, matching replay.
+    fn persist_detached_worker_steps(
+        &self,
+        run: &JobRun,
+        started_at: chrono::DateTime<chrono::Utc>,
+        finished_at: chrono::DateTime<chrono::Utc>,
+        result: &V2JobRunResult,
+    ) -> Result<(), OrbitError> {
+        let current = self.get_job_run_backend(&run.run_id)?;
+        if current.is_some_and(|stored| !stored.steps.is_empty()) {
+            return Ok(());
+        }
+
+        let audit_steps = self
+            .collect_run_audit_steps(&run.run_id)
+            .unwrap_or_default();
+        if audit_steps.is_empty() {
+            return self.record_synthetic_v2_success_step(run, started_at, finished_at, result);
+        }
+
+        for step in audit_steps {
+            let step_started = step.started_at.unwrap_or(started_at);
+            let step_finished = step.finished_at.unwrap_or(finished_at);
+            let duration_ms = Some(
+                step_finished
+                    .signed_duration_since(step_started)
+                    .num_milliseconds()
+                    .max(0) as u64,
+            );
+            let state = job_run_state_from_audit_outcome(step.state.as_deref());
+            self.stores().jobs().complete_job_run_step(
+                &run.run_id,
+                &JobRunStepParams {
+                    step_index: step.step_index as usize,
+                    target_type: JobTargetType::Activity,
+                    target_id: step.step_id,
+                    started_at: step_started,
+                    finished_at: step_finished,
+                    duration_ms,
+                    exit_code: None,
+                    agent_response_json: None,
+                    state,
+                    error_code: None,
+                    error_message: step.error_message,
+                },
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
+    match outcome {
+        Some("success" | "succeeded" | "finished") => JobRunState::Success,
+        Some("failed" | "error" | "denied") => JobRunState::Failed,
+        Some("timeout") => JobRunState::Timeout,
+        Some("skipped") => JobRunState::Skipped,
+        Some("cancelled") => JobRunState::Cancelled,
+        Some("interrupted") => JobRunState::Interrupted,
+        _ => JobRunState::Success,
     }
 }
 

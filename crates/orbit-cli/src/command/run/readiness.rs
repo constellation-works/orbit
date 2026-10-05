@@ -2,6 +2,7 @@
 
 use clap::Args;
 use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_types::workflow::ResourceThrottle;
 use serde_json::Value;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -12,7 +13,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots."
+    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`."
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
@@ -46,6 +47,7 @@ impl Execute for ReadinessCommand {
     }
 }
 
+// pub(super) widened for sibling-layout tests in run/tests/readiness.rs
 fn validate_task_ids(task_ids: &[String]) -> Result<(), OrbitError> {
     let mut seen = std::collections::BTreeSet::new();
     for task_id in task_ids {
@@ -68,12 +70,45 @@ pub(crate) fn readiness_payload(payload: Value) -> CommandOut {
     Ok(Payload::blocks(payload, vec![Block::text(lines.join("\n"))]).into())
 }
 
+// pub(super) widened for sibling-layout tests in run/tests/readiness.rs
 fn readiness_lines(payload: &Value) -> Vec<String> {
     let capacity = &payload["capacity"];
     let mut lines = vec![format!(
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    if let Some(run_id) = capacity["drain_run_id"].as_str() {
+        lines.push(format!("Running drain: {run_id}."));
+    }
+    if let Some(run_id) = capacity["pull_drain_run_id"].as_str() {
+        let stopped = if capacity["pull_drain_admissions_stopped"].as_bool() == Some(true) {
+            " (admissions stopped)"
+        } else {
+            ""
+        };
+        lines.push(format!("Running pull drain: {run_id}{stopped}."));
+    }
+    if let Some(queued) = capacity["queued_drains"].as_array() {
+        for drain in queued {
+            let run_id = drain["run_id"].as_str().unwrap_or("-");
+            let completion = drain["completion"].as_str().unwrap_or("review");
+            lines.push(format!(
+                "Queued drain: {run_id} (completion: {completion})."
+            ));
+        }
+    }
+    if let Some(hold) = host_shutdown_hold(&capacity["host_shutdown"]) {
+        lines.push(hold);
+    }
+    // [ORB-13901] Named up front like a shutdown hold: it holds every task.
+    if let Ok(throttle) =
+        serde_json::from_value::<ResourceThrottle>(capacity["resource_throttle"].clone())
+    {
+        lines.push(throttle.hold_reason());
+    }
+    if let Some(phases) = occupancy_phases(&capacity["occupancy"]["phases"]) {
+        lines.push(format!("Occupied slots: {phases}."));
+    }
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
@@ -83,8 +118,17 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 .as_str()
                 .map(|crew| format!(" crew={crew}"))
                 .unwrap_or_default();
+            let blocked_by = blocking_task_ids(&task["blocking_task_ids"])
+                .map(|ids| format!(" blocked-by={ids}"))
+                .unwrap_or_default();
+            // A host-OS wait is named, so the line says which host it needs.
+            let host = (reason == "host_os_mismatch")
+                .then(|| task["detail"].as_str())
+                .flatten()
+                .map(|detail| format!(": {detail}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "{task_id}: {} ({reason}){crew}",
+                "{task_id}: {} ({reason}){crew}{blocked_by}{host}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }
@@ -92,29 +136,40 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     lines
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
+/// [ORB-12968] A pending host shutdown holds every new admission, so it is
+/// named up front with its mode and time rather than left to per-task reasons.
+fn host_shutdown_hold(shutdown: &Value) -> Option<String> {
+    let mode = shutdown["mode"].as_str()?;
+    let at = shutdown["scheduled_at"]
+        .as_str()
+        .unwrap_or("an unknown time");
+    Some(format!(
+        "Admissions held: host {mode} scheduled for {at}. New runs start again once the \
+         schedule is cancelled or the host has restarted; in-flight runs are not touched."
+    ))
+}
 
-    use super::*;
+/// [ORB-11973] A saturated drain reads the same whether its slots are working
+/// or queued on each other's locks, so name the phases beside the count.
+/// Phases that are zero are omitted; an occupancy block with nothing in it
+/// prints no line at all.
+fn occupancy_phases(phases: &Value) -> Option<String> {
+    let named = phases
+        .as_object()?
+        .iter()
+        .filter_map(|(phase, count)| {
+            let count = count.as_u64().filter(|count| *count > 0)?;
+            Some(format!("{count} {}", phase.replace('_', "-")))
+        })
+        .collect::<Vec<_>>();
+    (!named.is_empty()).then(|| named.join(", "))
+}
 
-    #[test]
-    fn readiness_selection_rejects_blank_and_duplicate_ids() {
-        assert!(validate_task_ids(&[" ".to_string()]).is_err());
-        assert!(validate_task_ids(&["ORB-1".to_string(), "ORB-1".to_string()]).is_err());
-    }
-
-    #[test]
-    fn readiness_payload_names_snapshot_limit_and_reason() {
-        let text = readiness_lines(&json!({
-            "capacity": { "active_leaf_runs": 5, "max_active_leaf_runs": 5, "free_slots": 0 },
-            "tasks": [{ "task_id": "ORB-1", "eligible": false, "reason": "capacity_saturated" }]
-        }))
-        .join("\n");
-        assert!(text.contains("Snapshot only"), "{text}");
-        assert!(
-            text.contains("ORB-1: waiting (capacity_saturated)"),
-            "{text}"
-        );
-    }
+fn blocking_task_ids(blocking: &Value) -> Option<String> {
+    let ids = blocking
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    (!ids.is_empty()).then(|| ids.join(","))
 }

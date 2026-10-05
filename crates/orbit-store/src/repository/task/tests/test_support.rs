@@ -1,9 +1,6 @@
-// Test support helpers extracted from the old nested v2_bundle/tests/test_support.rs
-// and shared by v2_bundle sibling tests + the internal bundle_io tests.
-// Promoted here per docs/design-patterns/test_layout.md guidance for shared test helpers.
+// Bundle fixtures for the bundle_io tests, which need a bound `TaskBundleStoreV2`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use chrono::{TimeZone, Utc};
 use orbit_types::task::{
@@ -21,6 +18,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskBundleV2 {
         envelope: TaskEnvelopeV2 {
+            job_run_machine: None,
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             id: id.to_string(),
             title: "Build v2 bundle store".to_string(),
@@ -75,7 +73,7 @@ pub(crate) fn bundle_store(temp: &TempDir) -> TaskBundleStoreV2 {
     fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     let binding = registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("orbit-test-123456".to_string()),
+            partition_id: Some("orbit-test-123456".to_string()),
             slug: "Orbit Test".to_string(),
             repo_root: temp.path().join("repo"),
             workspace_path: temp.path().join("repo"),
@@ -83,33 +81,5 @@ pub(crate) fn bundle_store(temp: &TempDir) -> TaskBundleStoreV2 {
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    TaskBundleStoreV2::new(registry, binding.workspace_id, orbit_dir)
-}
-
-pub(crate) fn task_lock_path(bundle_dir: &Path) -> PathBuf {
-    let file_name = bundle_dir
-        .file_name()
-        .and_then(|value| value.to_str())
-        .expect("bundle path has file name");
-    bundle_dir.with_file_name(format!(".{file_name}.lock"))
-}
-
-pub(crate) fn legacy_double_dot_lock_path(bundle_dir: &Path, task_id: &str) -> PathBuf {
-    bundle_dir.with_file_name(format!("..{task_id}.create.lock"))
-}
-
-pub(crate) fn lock_entries_for_task(tasks_dir: &Path, task_id: &str) -> Vec<String> {
-    let mut entries = fs::read_dir(tasks_dir)
-        .expect("read task workspace dir")
-        .map(|entry| {
-            entry
-                .expect("read task workspace entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .filter(|name| name.contains(task_id) && name.ends_with(".lock"))
-        .collect::<Vec<_>>();
-    entries.sort();
-    entries
+    TaskBundleStoreV2::new(registry, binding.partition_id)
 }

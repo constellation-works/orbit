@@ -10,7 +10,6 @@ use clap::{Args, Subcommand};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 
-use super::clock::RoutineClockArgs;
 use super::init::RoutineInitArgs;
 use super::list::RoutineListArgs;
 use super::pause::RoutinePauseArgs;
@@ -23,9 +22,11 @@ use crate::command::CommandOut;
     about = "Inspect and control scheduled routines on this host",
     arg_required_else_help = true,
     subcommand_required = true,
-    after_help = "Routine definitions are versioned YAML under `.orbit/routines/` in\n\
-                  workspaces with `[routines] role = \"source\"`. Pauses are host-local\n\
-                  and never synced. The scheduler pass itself is `orbit sweep`."
+    after_help = "Routine definitions are YAML files under `.orbit/routines/` in each\n\
+                  registered owner checkout. `.orbit/` is per-user checkout state that\n\
+                  git ignores, so a definition edit applies to that checkout only.\n\
+                  Pauses are host-local and never synced. The host scheduler is\n\
+                  controlled through `orbit clock`."
 )]
 pub struct RoutineCommand {
     #[command(subcommand)]
@@ -35,9 +36,14 @@ pub struct RoutineCommand {
 impl RoutineCommand {
     /// Resolve the selected global root once for every routine subcommand;
     /// none may bootstrap a workspace from the caller's cwd.
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
         let global_root = selected_global_root(root_override)?;
-        self.command.execute_without_runtime(&global_root)
+        self.command
+            .execute_without_runtime(&global_root, workspace_selector)
     }
 }
 
@@ -53,7 +59,7 @@ fn selected_global_root(root_override: Option<&Path>) -> Result<std::path::PathB
 
 #[derive(Subcommand)]
 pub enum RoutineSubcommand {
-    /// List every routine with toggles, next-due, and last fire
+    /// List routines with toggles, next-due, and last fire, optionally for one workspace
     List(RoutineListArgs),
     /// Show one routine's definition, effective state, and recent fires
     Show(RoutineShowArgs),
@@ -61,20 +67,21 @@ pub enum RoutineSubcommand {
     Pause(RoutinePauseArgs),
     /// Clear a host-local pause
     Resume(RoutineResumeArgs),
-    /// Show, pause, enable, or configure the host OS sweep clock
-    Clock(RoutineClockArgs),
     /// Read this host's identity and optionally install the OS clock unit
     Init(RoutineInitArgs),
 }
 
 impl RoutineSubcommand {
-    fn execute_without_runtime(self, global_root: &Path) -> CommandOut {
+    fn execute_without_runtime(
+        self,
+        global_root: &Path,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
         match self {
-            Self::List(args) => args.execute_without_runtime(global_root),
+            Self::List(args) => args.execute_without_runtime(global_root, workspace_selector),
             Self::Show(args) => args.execute_without_runtime(global_root),
             Self::Pause(args) => args.execute_without_runtime(global_root),
             Self::Resume(args) => args.execute_without_runtime(global_root),
-            Self::Clock(args) => args.execute_without_runtime(global_root),
             Self::Init(args) => args.execute_without_runtime(global_root),
         }
     }

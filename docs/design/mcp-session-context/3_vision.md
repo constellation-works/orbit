@@ -4,7 +4,7 @@ type: design
 title: "MCP Session Context — Vision"
 owner: codex
 last_updated: 2026-09-09
-last_validated: 2026-09-09
+last_validated: 2026-09-30
 status: Accepted
 feature: mcp-session-context
 doc_role: vision

@@ -1,7 +1,9 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::support::global_config_path;
 
@@ -17,9 +19,9 @@ impl Execute for ConfigPathArgs {
         let path = if self.global {
             global_config_path(runtime)
         } else {
-            runtime.config_path()
+            runtime.config_path()?
         };
-        println!("{}", path.to_string_lossy());
-        Ok(CommandOutput::Silent)
+        let path = path.to_string_lossy().into_owned();
+        Ok(Payload::detail(json!({ "path": path }), path.clone()).into())
     }
 }

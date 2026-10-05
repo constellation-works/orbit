@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use orbit_types::workflow::activity_job::V2AuditEventKind;
@@ -6,7 +8,9 @@ use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Determi
 
 use crate::context::RuntimeHost;
 use orbit_common::{OrbitError, RecoverableVcsConflict};
-use orbit_tools::{FsAuditLogger, FsCallEvent, FsCallEventKind};
+use orbit_tools::{
+    DeterministicStepPrograms, FsAuditLogger, FsCallEvent, FsCallEventKind, ToolCaller,
+};
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::tool::McpCapability;
@@ -15,7 +19,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::audit_writer::V2AuditWriter;
-use super::cli_runner::run_cli_backend;
+use super::cli_runner::{run_cli_backend, task_id_from_input};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCliExecutor {
@@ -45,6 +49,28 @@ pub struct ResolvedShellExecutor {
     pub timeout_seconds: Option<u64>,
 }
 
+/// Open host object backing a Linux runtime convenience grant.
+///
+/// The descriptor is acquired while the runtime path is validated and remains
+/// alive until the sandboxed provider exits. The displayed path is only the
+/// namespace destination; it is never reopened as the mount source.
+#[derive(Clone, Debug)]
+pub struct LinuxRuntimeWriteAuthority {
+    pub path: PathBuf,
+    pub handle: Arc<File>,
+    /// Shared connection that prevents SQLite last-close cleanup from
+    /// replacing a descriptor-backed WAL/SHM file set while the provider runs.
+    pub wal_file_set_lease: Option<Arc<orbit_common::storage::sqlite::WalFileSetLease>>,
+}
+
+impl PartialEq for LinuxRuntimeWriteAuthority {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && Arc::ptr_eq(&self.handle, &other.handle)
+    }
+}
+
+impl Eq for LinuxRuntimeWriteAuthority {}
+
 /// Sandbox descriptor for a CLI invocation. The host resolves the executor's
 /// `sandbox` declaration and the activity's `fsProfile` against the active
 /// policy and workspace root; the engine compiles the OS-specific payload
@@ -62,6 +88,25 @@ pub struct ResolvedSandbox {
     /// Whether the subprocess runs in an Orbit-owned disposable worktree.
     /// Linux may snapshot-expand non-subtree deny globs only in this case.
     pub managed_worktree: bool,
+    /// Linux runtime grants whose host objects were opened by the resolving
+    /// host. Empty for other backends and ordinary policy-derived grants.
+    pub runtime_write_authority: Vec<LinuxRuntimeWriteAuthority>,
+    /// Host directories the sandboxed process may neither read nor write,
+    /// applied after every other rule of the profile. `None` for explicit off
+    /// and for a host that masks nothing.
+    pub mask: Option<SandboxMask>,
+}
+
+/// Directories hidden from a sandboxed process, whatever its profile grants.
+///
+/// The host that resolves the sandbox creates every path here before it
+/// returns it. On Linux each target is replaced by the read-only `sentinel`
+/// directory; on macOS the profile denies reads and writes beneath each
+/// target and `sentinel` is unused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxMask {
+    pub sentinel: PathBuf,
+    pub targets: Vec<PathBuf>,
 }
 
 /// Input bundle for a single v2 activity dispatch.
@@ -115,6 +160,19 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
 
+    /// A deterministic action reached a decision rather than a fault — a
+    /// settled non-pass review verdict, an exhausted budget, a refused
+    /// policy. Repeating the action reaches the same decision, so neither
+    /// retry nor a recovery activity runs; the failure handoff owns it.
+    #[error("deterministic action `{action}` refused: {message}")]
+    DeterministicActionRefused { action: String, message: String },
+
+    /// Completion cannot overtake a task's verified-live implementation run.
+    #[error(
+        "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
+    )]
+    TaskCompletionLiveRun { task_id: String, run_id: String },
+
     #[error("agent_loop run failed: {0}")]
     AgentLoopFailed(String),
 
@@ -130,6 +188,16 @@ pub enum DispatchError {
     /// instead of burning attempts on a deterministic failure.
     #[error("cli invocation failed (permanent): {0}")]
     CliInvocationPermanent(String),
+
+    /// A host-owned Git child exceeded its finite budget. The supervisor has
+    /// terminated its process group; recovery state must be inspected as-is.
+    #[error("git {operation} timed out after {timeout_ms}ms in '{}': {diagnostic}", root.display())]
+    GitTimeout {
+        operation: String,
+        root: std::path::PathBuf,
+        timeout_ms: u64,
+        diagnostic: String,
+    },
 
     /// A linked-worktree provider invocation changed the registered primary
     /// checkout. Ordinary retries must not compound or misattribute the delta.
@@ -211,8 +279,11 @@ impl DispatchError {
                 | DispatchError::RetryConfigInvalid { .. }
                 | DispatchError::HostRequired(_)
                 | DispatchError::CliInvocationPermanent(_)
+                | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
                 | DispatchError::RecoverableVcsConflict { .. }
+                | DispatchError::TaskCompletionLiveRun { .. }
+                | DispatchError::DeterministicActionRefused { .. }
         )
     }
 
@@ -236,8 +307,9 @@ impl DispatchError {
 /// Validation failures keep their dedicated [`OrbitError::JobValidation`]
 /// variant — including [`DispatchError::DeterministicActionUnavailable`],
 /// which is raised by the same pre-execution validation pass [ORB-10385].
-/// Everything else collapses into [`OrbitError::InvalidInput`] with the
-/// dispatch error's rendered message. Callers translate with
+/// The live-completion refusal also retains its typed code and run identity.
+/// Other errors collapse into [`OrbitError::InvalidInput`] with the dispatch
+/// error's rendered message. Callers translate with
 /// `.map_err(dispatch_error_to_orbit)?` per
 /// `docs/design-patterns/error_translation.md` [ORB-10013].
 pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
@@ -259,6 +331,9 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
             conflicting_paths,
             diagnostic,
         })),
+        DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
+            OrbitError::TaskCompletionLiveRun { task_id, run_id }
+        }
         other => OrbitError::InvalidInput(format!("{other}")),
     }
 }
@@ -349,9 +424,9 @@ pub(crate) fn inject_run_id(input: &Value, run_id: &str) -> Value {
         return input.clone();
     };
     if map.contains_key("run_id") {
-        // An explicit `run_id` is a worktree identity token (epic pipelines
-        // pin `epic-<task-id>`). The admitted job still owns execution
-        // authority; expose it as `job_run_id` when the caller did not.
+        // An explicit `run_id` is a worktree identity token, not a run
+        // record. The admitted job still owns execution authority; expose it
+        // as `job_run_id` when the caller did not.
         if map.contains_key("job_run_id") {
             return input.clone();
         }
@@ -405,6 +480,19 @@ fn run_deterministic(
         .session_context
         .effective_capabilities
         .insert(McpCapability::Runner);
+    // No agent chose this call: the asset fixed it. A plugin tool it reaches
+    // may spawn what the operator granted that plugin, which the dispatching
+    // action re-reads from the grants witness; `proc.spawn` itself stays on
+    // the empty, fail-closed list above. A deterministic activity declares no
+    // program allowlist of its own, so there is nothing to intersect with
+    // [ORB-13270].
+    tool_context.caller = ToolCaller::DeterministicStep(DeterministicStepPrograms::default());
+    // The dispatcher names the task this step serves from the run's own input, the
+    // same value a CLI agent step exports as `ORBIT_TASK_ID`. A plugin reads
+    // it as host-attested context; the tool's `input`/`args` never feed it.
+    if let Some(binding) = tool_context.activity_binding.as_mut() {
+        binding.task_id = task_id_from_input(input).map(ToOwned::to_owned);
+    }
     let output = match DeterministicAction::parse(&spec.action) {
         Some(DeterministicAction::Engine(action)) => {
             let state_context = crate::executor::automation::StateExecutionContext {
@@ -433,6 +521,9 @@ fn run_deterministic(
                         conflicting_paths: conflict.conflicting_paths,
                         diagnostic: conflict.diagnostic,
                     }
+                }
+                OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
+                    DispatchError::TaskCompletionLiveRun { task_id, run_id }
                 }
                 error => DispatchError::DeterministicActionFailed {
                     action: spec.action.clone(),

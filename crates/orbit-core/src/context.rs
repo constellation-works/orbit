@@ -1,26 +1,36 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use orbit_common::OrbitError;
 use orbit_engine::PrConfig;
 use orbit_policy::PolicyEngine;
-use orbit_search::{EmbedWorker, VectorStore};
+use orbit_search::LexicalIndex;
 use orbit_store::Store;
 use orbit_store::contracts::{
     AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
-    InvocationStoreBackend, JobRunStoreBackend, OperationStoreBackend, PolicyDefStoreBackend,
+    InvocationStoreBackend, JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend,
     ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
     TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
     V2AuditStoreBackend,
 };
 use orbit_tools::ToolRegistry;
-use orbit_types::identity::{Crew, normalize_agent_family_for_model};
+use orbit_types::identity::{Crew, require_canonical_agent_family};
 use orbit_types::workspace::WorkspacePaths;
 
+use crate::runtime::plugin::host::PluginHostLoad;
 use crate::skill_catalog::SkillCatalog;
 use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy, PersistenceConfig};
 
 const ORBIT_AGENT_NAME: &str = "ORBIT_AGENT_NAME";
 const ORBIT_AGENT_MODEL: &str = "ORBIT_AGENT_MODEL";
+const ORBIT_ACTOR: &str = "ORBIT_ACTOR";
+const OS_USER_ENV: &[&str] = &["USER", "USERNAME", "LOGNAME"];
+
+/// Actor label recorded when [`OPERATOR_OVERRIDE_ENV`](orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV)
+/// is the only signal identifying the caller.
+const OPERATOR_ACTOR_LABEL: &str = "operator";
+const UNKNOWN_ACTOR_LABEL: &str = "unknown";
+const HUMAN_AUDIT_ROLE: &str = "human";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorKind {
@@ -39,7 +49,7 @@ impl ActorIdentity {
     pub fn unknown() -> Self {
         Self {
             kind: ActorKind::Unknown,
-            label: "unknown".to_string(),
+            label: UNKNOWN_ACTOR_LABEL.to_string(),
         }
     }
 
@@ -61,9 +71,13 @@ impl ActorIdentity {
     /// entry points.
     ///
     /// The environment is not an authentication boundary. Agent values are
-    /// therefore reduced to the same canonical family used by tool dispatch,
-    /// and an absent or inconsistent envelope is recorded as `unknown` rather
-    /// than claiming that a human was present.
+    /// therefore reduced to the same canonical family used by tool dispatch.
+    /// Absent an agent envelope, an explicit `ORBIT_ACTOR` or operator
+    /// override is recorded as a named human actor rather than `unknown` —
+    /// those overrides are themselves a deliberate, audited act. Bare CLI
+    /// otherwise records the OS user (`human:<username>`). Only a caller with
+    /// no remaining signal is recorded as `unknown`, and then only with a
+    /// warning: write paths must not construct that literal themselves.
     pub fn from_env() -> Self {
         let agent = std::env::var(ORBIT_AGENT_NAME)
             .ok()
@@ -72,12 +86,101 @@ impl ActorIdentity {
             .ok()
             .filter(|value| !value.trim().is_empty());
 
-        normalize_agent_family_for_model(agent.as_deref(), model.as_deref())
+        if let Some(actor) = require_canonical_agent_family(agent.as_deref(), model.as_deref())
             .ok()
             .flatten()
             .map(Self::agent)
-            .unwrap_or_default()
+        {
+            return actor;
+        }
+
+        if let Some(label) = std::env::var(ORBIT_ACTOR)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return Self::human(label);
+        }
+
+        if orbit_common::governance::authorization::operator_override_active() {
+            return Self::human(OPERATOR_ACTOR_LABEL);
+        }
+
+        if let Some(user) = os_user_name() {
+            return Self::human(format!("human:{user}"));
+        }
+
+        tracing::warn!(
+            target: "orbit.core.actor",
+            actor = UNKNOWN_ACTOR_LABEL,
+            "no actor identity resolved; recording last-resort unknown"
+        );
+        Self::unknown()
     }
+
+    /// Audit `role` for this process actor.
+    ///
+    /// Bare CLI records `human` (or `operator` when the operator override is
+    /// the identity). Agent envelopes keep the canonical family. The
+    /// last-resort unattributed label stays `unknown`.
+    pub fn audit_role(&self) -> &str {
+        match self.kind {
+            ActorKind::Agent => self.label.as_str(),
+            ActorKind::Human if self.label == OPERATOR_ACTOR_LABEL => OPERATOR_ACTOR_LABEL,
+            ActorKind::Human => HUMAN_AUDIT_ROLE,
+            ActorKind::Unknown => UNKNOWN_ACTOR_LABEL,
+        }
+    }
+
+    /// Resolve the actor label recorded on a write.
+    ///
+    /// Explicit `model`/`agent` wins and must be a canonical family (or a
+    /// full model string that infers one). Otherwise the process actor from
+    /// [`Self::from_env`] is used.
+    pub fn resolve_write_label(
+        &self,
+        agent: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<String, OrbitError> {
+        resolve_write_actor_label(&self.label, agent, model)
+    }
+}
+
+/// Shared write-path actor resolution: explicit model/agent to a canonical
+/// family, otherwise the process actor already resolved by [`ActorIdentity::from_env`].
+pub(crate) fn resolve_write_actor_label(
+    process_label: &str,
+    agent: Option<&str>,
+    model: Option<&str>,
+) -> Result<String, OrbitError> {
+    match require_canonical_agent_family(agent, model)? {
+        Some(family) => Ok(family),
+        None => Ok(process_label.to_string()),
+    }
+}
+
+/// Preserve attribution supplied by a trusted in-process workflow boundary.
+/// Public agent surfaces must use [`resolve_write_actor_label`] instead.
+pub(crate) fn trusted_write_identity(
+    agent: Option<&str>,
+    model: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let trim = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    (trim(agent), trim(model))
+}
+
+fn os_user_name() -> Option<String> {
+    OS_USER_ENV.iter().find_map(|key| {
+        std::env::var(key).ok().and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+    })
 }
 
 impl Default for ActorIdentity {
@@ -104,7 +207,6 @@ pub(crate) struct OrbitHostStore {
     pub(crate) sqlite: Store,
     pub(crate) automation: Arc<dyn AutomationStoreBackend>,
     pub(crate) review: Arc<dyn ReviewStoreBackend>,
-    pub(crate) operation: Arc<dyn OperationStoreBackend>,
     pub(crate) v2_audit: Arc<dyn V2AuditStoreBackend>,
     pub(crate) invocation: Arc<dyn InvocationStoreBackend>,
 }
@@ -115,11 +217,11 @@ pub(crate) struct OrbitStores {
     pub(crate) task_document: Arc<dyn TaskDocumentStoreBackend>,
     pub(crate) task_history: Arc<dyn TaskHistoryStoreBackend>,
     pub(crate) task_artifact: Arc<dyn TaskArtifactStoreBackend>,
-    pub(crate) semantic_vector: Arc<VectorStore>,
-    pub(crate) semantic_worker: Arc<EmbedWorker>,
+    pub(crate) lexical_index: LexicalIndex,
     pub(crate) task_reservation: Arc<dyn TaskReservationStoreBackend>,
     pub(crate) job_run: Arc<dyn JobRunStoreBackend>,
     pub(crate) tool: Arc<dyn ToolStoreBackend>,
+    pub(crate) plugin: Arc<dyn PluginStoreBackend>,
     pub(crate) audit_event: Arc<dyn AuditEventStoreBackend>,
     pub(crate) executor_def: Arc<dyn ExecutorDefStoreBackend>,
     pub(crate) policy_def: Arc<dyn PolicyDefStoreBackend>,
@@ -133,11 +235,11 @@ impl OrbitStores {
         task_document: Arc<dyn TaskDocumentStoreBackend>,
         task_history: Arc<dyn TaskHistoryStoreBackend>,
         task_artifact: Arc<dyn TaskArtifactStoreBackend>,
-        semantic_vector: Arc<VectorStore>,
-        semantic_worker: Arc<EmbedWorker>,
+        lexical_index: LexicalIndex,
         task_reservation: Arc<dyn TaskReservationStoreBackend>,
         job_run: Arc<dyn JobRunStoreBackend>,
         tool: Arc<dyn ToolStoreBackend>,
+        plugin: Arc<dyn PluginStoreBackend>,
         audit_event: Arc<dyn AuditEventStoreBackend>,
         executor_def: Arc<dyn ExecutorDefStoreBackend>,
         policy_def: Arc<dyn PolicyDefStoreBackend>,
@@ -148,11 +250,11 @@ impl OrbitStores {
             task_document,
             task_history,
             task_artifact,
-            semantic_vector,
-            semantic_worker,
+            lexical_index,
             task_reservation,
             job_run,
             tool,
+            plugin,
             audit_event,
             executor_def,
             policy_def,
@@ -176,12 +278,10 @@ impl OrbitStores {
         self.task_artifact.as_ref()
     }
 
-    pub(crate) fn semantic_vector(&self) -> &VectorStore {
-        self.semantic_vector.as_ref()
-    }
-
-    pub(crate) fn semantic_worker(&self) -> &EmbedWorker {
-        self.semantic_worker.as_ref()
+    /// The optional lexical index. Callers reach its store through
+    /// [`LexicalIndex::store`], which names the absence when there is none.
+    pub(crate) fn lexical_index(&self) -> &LexicalIndex {
+        &self.lexical_index
     }
 
     pub(crate) fn task_reservations(&self) -> &dyn TaskReservationStoreBackend {
@@ -194,6 +294,10 @@ impl OrbitStores {
 
     pub(crate) fn tools(&self) -> &dyn ToolStoreBackend {
         self.tool.as_ref()
+    }
+
+    pub(crate) fn plugins(&self) -> &dyn PluginStoreBackend {
+        self.plugin.as_ref()
     }
 
     pub(crate) fn audit_events(&self) -> &dyn AuditEventStoreBackend {
@@ -213,13 +317,22 @@ impl OrbitStores {
 pub(crate) struct OrbitExecutionAssets {
     registry: Arc<ToolRegistry>,
     skill_catalog: SkillCatalog,
+    /// What the host plugin load pass registered and refused, kept so
+    /// `orbit plugin list`/`show`/`doctor` report the same facts the tool
+    /// surface was built from rather than re-deriving them.
+    plugins: Arc<PluginHostLoad>,
 }
 
 impl OrbitExecutionAssets {
-    pub(crate) fn new(registry: Arc<ToolRegistry>, skill_catalog: SkillCatalog) -> Self {
+    pub(crate) fn new(
+        registry: Arc<ToolRegistry>,
+        skill_catalog: SkillCatalog,
+        plugins: PluginHostLoad,
+    ) -> Self {
         Self {
             registry,
             skill_catalog,
+            plugins: Arc::new(plugins),
         }
     }
 }
@@ -250,23 +363,45 @@ pub(crate) struct OrbitRuntimeSettings {
     persistence: PersistenceConfig,
     actor: ActorIdentity,
     scoring_enabled: bool,
+    /// Minutes a deferred delivery-automation reason may persist before the
+    /// evaluator escalates it (`[automation] stall_window_minutes`).
+    automation_stall_window_minutes: u32,
     pr_config: PrConfig,
-    /// Default base branch for ship workflows
-    /// (`[workflow] base_branch` in `config.toml`, default `"main"`).
+    /// Config-owned `[pr]` settings; the PR closure on a task's terminal
+    /// decision reads `close_on_terminal` and `delivery_authors` from here.
+    pr_settings: orbit_config::PrSettings,
+    /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     workflow_base_branch: String,
     /// Opt-in for unattended ship dispatch
     /// (`[workflow] auto_ship` in `config.toml`, default `false`).
     workflow_auto_ship: bool,
-    /// Whether this workspace is a routine source
-    /// (`[routines] role = "source"` in `config.toml`, default `false`).
-    routines_source: bool,
+    resource_throttle: orbit_config::ResourceThrottleSettings,
+    /// Commands this owner requires a distributed execution claim to pass on
+    /// its exact candidate before the delivery handoff is accepted
+    /// (`[workflow] required_validation_commands`, default empty).
+    workflow_required_validation_commands: Vec<String>,
+    /// `[workflow.validation_env]`: how required validation and `local_shell`
+    /// resolve PATH and toolchain locators [ORB-13987].
+    validation_env: orbit_exec::ValidationEnvPolicy,
+    /// How far this owner takes an accepted distributed handoff: `review` or
+    /// `done` (`[workflow] distributed_completion`, default `review`).
+    workflow_distributed_completion: String,
+    /// `[workflow.task_pilot_freshness]`: the global layer a task-pilot
+    /// routine's `trigger.state.freshness` overrides [ORB-13638].
+    task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
+    /// Admitted `workflow.final_recovery_crews`; empty disables final recovery.
+    final_recovery_crews: Vec<String>,
     system_crew: String,
-    /// Resolved operation-mode preferences with provenance (`[operation]`).
-    /// Preferences only; authority is a separate durable grant [ORB-11332].
+    /// Crew the synthesized `system` entry mirrors, so a disabled-crew
+    /// refusal can name the table that actually disables it.
+    system_crew_alias: Option<String>,
+    /// Resolved `[operation]` review preferences with provenance [ORB-11333].
     operation: orbit_config::OperationPolicy,
+    /// Global `machine.worker_*` limits for detached workers [ORB-12903].
+    worker_containment: orbit_config::WorkerContainmentSettings,
 }
 
 impl OrbitRuntimeSettings {
@@ -275,29 +410,47 @@ impl OrbitRuntimeSettings {
         persistence: PersistenceConfig,
         actor: ActorIdentity,
         scoring_enabled: bool,
+        automation_stall_window_minutes: u32,
         pr_config: PrConfig,
+        pr_settings: orbit_config::PrSettings,
         workflow_base_branch: String,
         workflow_auto_ship: bool,
-        routines_source: bool,
+        resource_throttle: orbit_config::ResourceThrottleSettings,
+        workflow_required_validation_commands: Vec<String>,
+        validation_env: orbit_exec::ValidationEnvPolicy,
+        workflow_distributed_completion: String,
+        task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
+        final_recovery_crews: Vec<String>,
         system_crew: String,
+        system_crew_alias: Option<String>,
         operation: orbit_config::OperationPolicy,
+        worker_containment: orbit_config::WorkerContainmentSettings,
     ) -> Self {
         Self {
             persistence,
             actor,
             scoring_enabled,
+            automation_stall_window_minutes,
             pr_config,
+            pr_settings,
             workflow_base_branch,
             workflow_auto_ship,
-            routines_source,
+            resource_throttle,
+            workflow_required_validation_commands,
+            validation_env,
+            workflow_distributed_completion,
+            task_pilot_freshness,
             crews,
             default_crew,
             complexity_crews,
+            final_recovery_crews,
             system_crew,
+            system_crew_alias,
             operation,
+            worker_containment,
         }
     }
 
@@ -305,20 +458,50 @@ impl OrbitRuntimeSettings {
         &self.operation
     }
 
+    pub(crate) fn worker_containment(&self) -> &orbit_config::WorkerContainmentSettings {
+        &self.worker_containment
+    }
+
+    pub(crate) fn automation_stall_window_minutes(&self) -> u32 {
+        self.automation_stall_window_minutes
+    }
+
     pub(crate) fn pr_config(&self) -> &PrConfig {
         &self.pr_config
+    }
+
+    pub(crate) fn pr_settings(&self) -> &orbit_config::PrSettings {
+        &self.pr_settings
     }
 
     pub(crate) fn workflow_base_branch(&self) -> &str {
         &self.workflow_base_branch
     }
 
+    pub(crate) fn resource_throttle(&self) -> &orbit_config::ResourceThrottleSettings {
+        &self.resource_throttle
+    }
+
     pub(crate) fn workflow_auto_ship(&self) -> bool {
         self.workflow_auto_ship
     }
 
-    pub(crate) fn routines_source(&self) -> bool {
-        self.routines_source
+    pub(crate) fn workflow_required_validation_commands(&self) -> &[String] {
+        &self.workflow_required_validation_commands
+    }
+
+    pub(crate) fn validation_env(&self) -> &orbit_exec::ValidationEnvPolicy {
+        &self.validation_env
+    }
+
+    pub(crate) fn workflow_distributed_completion(&self) -> &str {
+        &self.workflow_distributed_completion
+    }
+
+    pub(crate) fn task_pilot_freshness(
+        &self,
+    ) -> &orbit_types::workflow::automation::members::PreparationFreshness {
+        &self.task_pilot_freshness
     }
 
     pub(crate) fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {
@@ -329,12 +512,20 @@ impl OrbitRuntimeSettings {
         &self.complexity_crews
     }
 
+    pub(crate) fn final_recovery_crews(&self) -> &[String] {
+        &self.final_recovery_crews
+    }
+
     pub(crate) fn default_crew(&self) -> Option<&str> {
         self.default_crew.as_deref()
     }
 
     pub(crate) fn system_crew(&self) -> &str {
         &self.system_crew
+    }
+
+    pub(crate) fn system_crew_alias(&self) -> Option<&str> {
+        self.system_crew_alias.as_deref()
     }
 }
 
@@ -378,6 +569,13 @@ impl OrbitContext {
         &self.paths
     }
 
+    pub(crate) fn set_execution_location(
+        &mut self,
+        location: Option<orbit_types::task::ExecutionLocation>,
+    ) {
+        self.stores.job_run = self.stores.job_run.with_execution_location(location);
+    }
+
     pub(crate) fn stores(&self) -> &OrbitStores {
         &self.stores
     }
@@ -392,6 +590,10 @@ impl OrbitContext {
 
     pub(crate) fn skill_catalog(&self) -> &SkillCatalog {
         &self.execution.skill_catalog
+    }
+
+    pub(crate) fn plugin_load(&self) -> &PluginHostLoad {
+        &self.execution.plugins
     }
 
     pub(crate) fn execution_env_policy(&self) -> &ExecutionEnvPolicy {
@@ -412,16 +614,6 @@ impl OrbitContext {
 
     pub(crate) fn set_actor(&mut self, actor: ActorIdentity) {
         self.runtime.actor = actor;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replace_task_store_for_test(&mut self, task: Arc<dyn TaskStoreBackend>) {
-        self.stores.task = task;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn task_store_for_test(&self) -> Arc<dyn TaskStoreBackend> {
-        Arc::clone(&self.stores.task)
     }
 
     pub(crate) fn scoring_enabled(&self) -> bool {

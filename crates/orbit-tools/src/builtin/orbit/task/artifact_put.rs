@@ -1,13 +1,15 @@
-use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::open_read_only_no_follow;
+use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
 use orbit_common::tracing;
 use orbit_policy::resolve_symlinks;
 use orbit_types::policy::FsOperation;
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact};
 use orbit_types::tool::{ToolParam, ToolSchema};
+use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT, ReviewReport};
 use serde_json::{Map, Value, json};
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext};
@@ -23,7 +25,8 @@ impl Tool for OrbitTaskArtifactPutTool {
                 description: "Source file to store as a task artifact. Resolved against the \
                     caller cwd, then confined to the workspace checkout after symlink \
                     resolution. Absolute paths and symlinks that escape the workspace are \
-                    rejected."
+                    rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); \
+                    sources under `/tmp` are outside the workspace and are refused."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: true,
@@ -41,7 +44,7 @@ impl Tool for OrbitTaskArtifactPutTool {
 
         ToolSchema {
             name: "orbit.task.artifact.put".to_string(),
-            description: "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context; malformed, stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage.".to_string(),
+            description: "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match.".to_string(),
             parameters,
             builtin: true,
         }
@@ -54,7 +57,8 @@ impl Tool for OrbitTaskArtifactPutTool {
         // canonical tool name. The hub accepts that shape only on ssh-mcp;
         // local/model calls must continue to supply a real source_path.
         if input.get("artifacts").is_some() {
-            if ctx.session_context.transport != Some(orbit_types::tool::McpTransport::SshMcp)
+            if (ctx.session_context.transport != Some(orbit_types::tool::McpTransport::SshMcp)
+                && ctx.session_context.worker_invocation.is_none())
                 || input.get("source_path").is_some()
                 || input.get("sourcePath").is_some()
                 || input.get("source-path").is_some()
@@ -64,6 +68,7 @@ impl Tool for OrbitTaskArtifactPutTool {
                         .to_string(),
                 ));
             }
+            reject_unknown_tool_fields(&input, &["id", "artifacts", "model"])?;
             return super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskUpdate);
         }
 
@@ -77,6 +82,21 @@ impl Tool for OrbitTaskArtifactPutTool {
 /// by the spoke connector. The source path is consumed locally and never
 /// appears in the returned coordination frame.
 pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<Value, OrbitError> {
+    // This helper also runs on the worker before the private spoke payload is
+    // sent, so validate here rather than relying on the local execute path.
+    reject_unknown_tool_fields(
+        &input,
+        &[
+            "id",
+            "source_path",
+            "sourcePath",
+            "source-path",
+            "path",
+            "artifact_path",
+            "artifactPath",
+            "model",
+        ],
+    )?;
     let id = super::super::required_string(&input, &["id"], "id")?;
     let source_path = super::super::required_string(
         &input,
@@ -90,15 +110,17 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
         &resolve_source_path(ctx.cwd.as_deref().map(Path::new), &source_path),
     )?;
     let artifact = read_bounded_artifact(&resolved_source_path, artifact_path.as_deref())?;
+    validate_review_report(&artifact)?;
 
-    let mut update_input = input.as_object().cloned().unwrap_or_else(Map::new);
+    // Build the TaskUpdate input from attachment and transport fields only.
+    // Future TaskUpdate fields cannot silently widen artifact.put authority.
+    let mut update_input = Map::new();
     update_input.insert("id".to_string(), Value::String(id));
-    update_input.remove("source_path");
-    update_input.remove("sourcePath");
-    update_input.remove("source-path");
-    update_input.remove("path");
-    update_input.remove("artifact_path");
-    update_input.remove("artifactPath");
+    for key in ["model", "workspace", "_meta"] {
+        if let Some(value) = input.get(key) {
+            update_input.insert(key.to_string(), value.clone());
+        }
+    }
     update_input.insert(
         "artifacts".to_string(),
         json!([{
@@ -110,16 +132,53 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
     Ok(Value::Object(update_input))
 }
 
+/// A before-PR reviewer's report is validated on attach, so the reviewer
+/// learns of a contract mismatch while it can still fix the file rather than
+/// at settlement, where it would make the review incomplete.
+fn validate_review_report(artifact: &TaskArtifact) -> Result<(), OrbitError> {
+    if artifact.path != REVIEW_REPORT_ARTIFACT {
+        return Ok(());
+    }
+    let report = ReviewReport::parse(&artifact.content).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
+        ))
+    })?;
+    if report.schema_version != REVIEW_CONTRACT_VERSION {
+        return Err(OrbitError::InvalidInput(format!(
+            "{REVIEW_REPORT_ARTIFACT} has schema_version {}; the review report contract is \
+             version {REVIEW_CONTRACT_VERSION}",
+            report.schema_version
+        )));
+    }
+    if report.attempt_id.trim().is_empty() {
+        return Err(OrbitError::InvalidInput(format!(
+            "{REVIEW_REPORT_ARTIFACT} must name the admitted attempt_id"
+        )));
+    }
+    Ok(())
+}
+
 fn read_bounded_artifact(
     source_path: &Path,
     artifact_path: Option<&str>,
 ) -> Result<TaskArtifact, OrbitError> {
-    let mut file = File::open(source_path).map_err(|error| {
+    // `confine_source_path` resolved and checked this path a moment ago, but
+    // the workspace belongs to the caller. Refuse a link swapped in since, and
+    // a FIFO or device that would block or never end: only a regular file is
+    // read.
+    let mut file = open_read_only_no_follow(source_path).map_err(|error| {
         OrbitError::Io(format!(
             "read artifact source '{}': {error}",
             source_path.display()
         ))
     })?;
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "artifact source '{}' is not a regular file",
+            source_path.display()
+        )));
+    }
     let mut content = Vec::new();
     file.by_ref()
         .take(MAX_TASK_ARTIFACT_CONTENT_BYTES + 1)
@@ -174,7 +233,7 @@ fn resolve_source_path(cwd: Option<&Path>, source_path: &str) -> PathBuf {
 /// Absolute paths, relative `..` traversal, and in-workspace symlinks that
 /// resolve outside `ctx.workspace_root` are rejected as `invalid_input` so a
 /// remote `agent` session cannot attach host secrets such as
-/// `~/.orbit/mcp-ssh-acceptance/*.toml`. When a filesystem profile is present,
+/// `~/.ssh/id_ed25519`. When a filesystem profile is present,
 /// `check_resolved` additionally applies deny-read rules to the real path.
 fn confine_source_path(ctx: &ToolContext, source_path: &Path) -> Result<PathBuf, OrbitError> {
     let workspace_root = ctx.workspace_root.as_deref().ok_or_else(|| {
@@ -189,7 +248,7 @@ fn confine_source_path(ctx: &ToolContext, source_path: &Path) -> Result<PathBuf,
     let resolved = resolve_symlinks(source_path)?;
     if !resolved.starts_with(&canonical_workspace) {
         return Err(OrbitError::InvalidInput(format!(
-            "source_path '{}' is outside workspace_root '{}'",
+            "source_path '{}' is outside workspace_root '{}'; write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)",
             resolved.display(),
             canonical_workspace.display()
         )));

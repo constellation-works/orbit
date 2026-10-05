@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Artifact Write Redaction"
 tags: ["auditability"]
-last_validated: 2026-08-31
+last_validated: 2026-09-26
 ---
 
 # Spec: Artifact Write Redaction
@@ -18,14 +18,14 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 | `orbit.adr.add` / `orbit.adr.restore` / `orbit.adr.update` | `title`, `body` | - | status, owner, related ids/features/tasks, legacy ids |
 | `orbit.adr.supersede` | - | - | `old_id`, `new_id` |
 | `orbit.task.add` | `title`, `description`, `plan`, `acceptance_criteria[]`, `comment` | `context_files[]`, `context`, `external_refs[].url` | workspace, ids, enums, dependency/relation targets, crew, tags |
-| `orbit.task.update` | `title`, `description`, `plan`, `execution_summary`, `acceptance_criteria[]`, `comment` | `context_files[]`, `context` | provenance/status/identity fields, tags, raw artifacts |
+| `orbit.task.update` | `title`, `description`, `plan`, `execution_summary`, `acceptance_criteria[]`, `note`, `comment` | `context_files[]`, `context` | provenance/status/identity fields, tags, raw artifacts |
 | `orbit.task.reject` | `note`, `comment` | - | `id` |
 | `orbit.friction.add` | `body` / `description` | - | `model`, `during_task`, tags |
-| `orbit.friction.update` | `body` | - | `id`, status, tags |
+| `orbit.friction.update` | `body` | - | `id`, status, tags, `rehome_to`, `move`; a `rehome_to` move (also the CLI `orbit friction rehome`) copies a body that was already redacted when it was written |
 | `orbit.auto_task.add` / `orbit.auto_task.update` | `description`, `template.title`, `template.description`, `template.acceptance_criteria[]` | - | name, schedule, dedupe, template enums/tags |
 | `orbit.docs.add` | - | - | DocsAdd only registers a validated repo-relative path; it does not persist document content. |
 
-Task and friction tags are taxonomy fields and pass through verbatim.
+For `orbit.task.update`, `note` is the optional note attached to a lifecycle status change; it is sanitized before the transition body persists it in task history. Task and friction tags are taxonomy fields and pass through verbatim.
 
 The table establishes the artifact boundary: ADRs, tasks, frictions, and auto-task definitions are covered on their listed write operations. `DocsAdd` makes an explicit no-redaction decision because it only registers a checked path; registered docs remain ordinary repository files rather than a tool mutation primitive. Session-log writes are no longer a public tool mutation, so they are not in this inventory ([ORB-11097]).
 
@@ -52,6 +52,8 @@ The rejection is a typed `OrbitError::SensitiveInput` and never includes the tok
 ## Response and Audit Contract
 
 Covered mutating tools add `redactions_applied: bool` and `redactions: [{field_path, redaction_kinds, redaction_classes}]` to object responses. The boolean is `true` only when at least one persisted field changed from the caller's input. The detail list names every changed field, whether environment, structural-pattern, or home-directory normalization acted, and concrete safe classes such as `credential`, `ssh_fingerprint`, `ssh_key_comment`, or `ssh_host`. Re-running a write with already-redacted text is idempotent: no field changes means `redactions_applied: false`, `redactions: []`, and no redaction audit event.
+
+Task writes retain their existing response projection: a one-field `fields: ["id"]` request returns the id string, while multi-field projections can omit `id`. A scalar response cannot carry the redaction flags. Audit attribution uses the persisted task id supplied by the write handler, independent of the projected response. Friction writes keep their object response and audit against its id.
 
 When a field changes, Orbit emits one command-audit row per field. The payload contains only:
 

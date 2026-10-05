@@ -2,7 +2,7 @@
 title: Executors — Decisions
 owner: claude
 last_updated: 2026-08-11
-last_validated: 2026-08-29
+last_validated: 2026-09-19
 status: Draft
 feature: executors
 doc_role: decisions
@@ -18,7 +18,7 @@ related_artifacts: [ORB-00384, ORB-00400, ORB-10395, ORB-11294]
 
 Layout note: as of [ORB-00400], this folder is intentionally decisions+specs-only.
 [External Executor Protocol for dynamic out-of-process executor registration (retired)](#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired) and [specs/external-executor-protocol.md](./specs/external-executor-protocol.md)
-are the load-bearing docs for the shipped External Executor Protocol; placeholder
+are the load-bearing docs for the retired External Executor Protocol; placeholder
 `1_overview.md`, `2_design.md`, and `3_vision.md` docs would imply a broader
 executor feature narrative that this work has not established. Add numbered docs
 only when a future executor-architecture task owns that narrative, and retire

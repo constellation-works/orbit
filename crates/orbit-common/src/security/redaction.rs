@@ -31,14 +31,16 @@ use std::{
 use regex::Regex;
 use serde_json::Value;
 
+use crate::error::FrictionNotLocal;
 use crate::{
-    ArtifactOrigin, DependencyNotDelivered, FrictionNotLocal, OrbitError, RecoverableVcsConflict,
-    WorkspaceClaimHeld,
+    ArtifactOrigin, DependencyNotDelivered, OrbitError, RecoverableVcsConflict, WorkspaceClaimHeld,
 };
 
 const REDACTED_ENV_VALUE: &str = "[REDACTED_ENV]";
 static DEFAULT_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
+static ARGV_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // Env-var value scrubbing
@@ -49,33 +51,135 @@ static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::n
 ///
 /// "Sensitive" is matched against the var *name* — anything containing
 /// SECRET / TOKEN / PASSWORD / API_KEY / etc. See [`is_sensitive_env_name`].
-/// Only values that pass `is_redactable_value` are substituted, so an
-/// ordinary word held by a sensitive-named variable is left untouched.
+/// Only values that pass `is_redactable_value` are substituted, so the small
+/// compatibility set of ordinary words held by a sensitive-named variable is
+/// left untouched.
 pub fn redact_sensitive_env_text(raw: &str) -> String {
     let mut redacted = raw.to_string();
-    for secret in sensitive_env_values() {
-        redacted = redacted.replace(&secret, REDACTED_ENV_VALUE);
+    // `redact_all` runs this for every string field of every tracing event, so
+    // only a value that actually occurs pays for a `replace` allocation.
+    for secret in sensitive_env_values().iter() {
+        if redacted.contains(secret.as_str()) {
+            redacted = redacted.replace(secret.as_str(), REDACTED_ENV_VALUE);
+        }
     }
     redacted
 }
 
-pub fn redact_sensitive_env_option(raw: Option<String>) -> Option<String> {
-    raw.map(|value| redact_sensitive_env_text(&value))
+/// Replace complete sensitive environment values in `bytes`.
+///
+/// Returns how many trailing bytes the caller must keep. That suffix is the
+/// longest proper prefix of a sensitive value that is also a suffix of the
+/// redacted buffer, so a value split across chunks is still replaced once it
+/// completes. Complete values are removed first, and the held suffix does not
+/// cut through one that was already whole. Invalid UTF-8 is copied through
+/// unchanged; only valid segments are matched as text.
+pub fn redact_sensitive_env_bytes(bytes: &mut Vec<u8>) -> usize {
+    if !bytes.is_empty() {
+        redact_complete_env_values(bytes);
+    }
+    sensitive_value_holdback(bytes)
+}
+
+fn redact_complete_env_values(bytes: &mut Vec<u8>) {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut rest = bytes.as_slice();
+    while !rest.is_empty() {
+        match std::str::from_utf8(rest) {
+            Ok(text) => {
+                out.extend_from_slice(redact_sensitive_env_text(text).as_bytes());
+                break;
+            }
+            Err(err) => {
+                let valid = err.valid_up_to();
+                if let Ok(text) = std::str::from_utf8(&rest[..valid]) {
+                    out.extend_from_slice(redact_sensitive_env_text(text).as_bytes());
+                } else {
+                    out.extend_from_slice(&rest[..valid]);
+                }
+                let Some(invalid) = err.error_len().filter(|len| *len > 0) else {
+                    out.extend_from_slice(&rest[valid..]);
+                    break;
+                };
+                let skip = valid + invalid;
+                out.extend_from_slice(&rest[valid..skip]);
+                rest = &rest[skip..];
+            }
+        }
+    }
+    *bytes = out;
+}
+
+/// Longest suffix of `text` that is a proper prefix of a sensitive value.
+///
+/// `0` when nothing is pending. A full value is not a holdback: callers redact
+/// complete values before asking, so a border of a value that already occurred
+/// is not reported as if the value were still incomplete.
+fn sensitive_value_holdback(text: &[u8]) -> usize {
+    let secrets = sensitive_env_values();
+    let mut best = 0usize;
+    for secret in secrets.iter() {
+        best = best.max(proper_prefix_suffix_len(text, secret.as_bytes()));
+    }
+    best
+}
+
+/// Length of the longest proper prefix of `pat` that is a suffix of `text`.
+fn proper_prefix_suffix_len(text: &[u8], pat: &[u8]) -> usize {
+    if pat.len() < 2 || text.is_empty() {
+        return 0;
+    }
+    let max = pat.len() - 1;
+    let window = if text.len() > max {
+        &text[text.len() - max..]
+    } else {
+        text
+    };
+    let lps = proper_prefix_table(pat);
+    let mut state = 0usize;
+    for &byte in window {
+        while state > 0 && pat[state] != byte {
+            state = lps[state - 1];
+        }
+        if pat[state] == byte {
+            state += 1;
+            if state == pat.len() {
+                state = lps[state - 1];
+            }
+        }
+    }
+    state
+}
+
+fn proper_prefix_table(pat: &[u8]) -> Vec<usize> {
+    let mut table = vec![0usize; pat.len()];
+    let mut len = 0usize;
+    let mut index = 1usize;
+    while index < pat.len() {
+        if pat[index] == pat[len] {
+            len += 1;
+            table[index] = len;
+            index += 1;
+        } else if len > 0 {
+            len = table[len - 1];
+        } else {
+            table[index] = 0;
+            index += 1;
+        }
+    }
+    table
 }
 
 pub fn redact_sensitive_env_json(value: Value) -> Value {
-    match value {
-        Value::String(raw) => Value::String(redact_sensitive_env_text(&raw)),
-        Value::Array(items) => {
-            Value::Array(items.into_iter().map(redact_sensitive_env_json).collect())
-        }
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, value)| (key, redact_sensitive_env_json(value)))
-                .collect(),
-        ),
-        other => other,
-    }
+    redact_json_with(value, redact_sensitive_env_text)
+}
+
+/// Scrub sensitive environment values and known secret patterns from JSON strings.
+///
+/// Object keys and non-string values retain their types, so provider results
+/// remain usable as structured step output after redaction.
+pub fn redact_all_json(value: Value) -> Value {
+    redact_json_with(value, redact_all)
 }
 
 /// Replace `$HOME` / `$USERPROFILE` with `~` in the given string. Prevents
@@ -110,179 +214,9 @@ fn redact_path_prefix(text: &str, prefix: &str) -> String {
     redacted
 }
 
-/// Apply env-value redaction to the message carried by any `OrbitError` variant.
-pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
-    match error {
-        OrbitError::PolicyDenied(m) => OrbitError::PolicyDenied(redact_sensitive_env_text(&m)),
-        OrbitError::NotFound { kind, id } => OrbitError::NotFound {
-            kind,
-            id: redact_sensitive_env_text(&id),
-        },
-        OrbitError::CapabilityDenied(m) => {
-            OrbitError::CapabilityDenied(redact_sensitive_env_text(&m))
-        }
-        OrbitError::UnknownSelector(m) => {
-            OrbitError::UnknownSelector(redact_sensitive_env_text(&m))
-        }
-        OrbitError::AmbiguousCaller(m) => {
-            OrbitError::AmbiguousCaller(redact_sensitive_env_text(&m))
-        }
-        OrbitError::UnauthorizedCaller(m) => {
-            OrbitError::UnauthorizedCaller(redact_sensitive_env_text(&m))
-        }
-        OrbitError::AmbiguousDestination(m) => {
-            OrbitError::AmbiguousDestination(redact_sensitive_env_text(&m))
-        }
-        OrbitError::UnreachableDestination(m) => {
-            OrbitError::UnreachableDestination(redact_sensitive_env_text(&m))
-        }
-        OrbitError::StaleRoute(m) => OrbitError::StaleRoute(redact_sensitive_env_text(&m)),
-        OrbitError::UnhealthyCheckout(m) => {
-            OrbitError::UnhealthyCheckout(redact_sensitive_env_text(&m))
-        }
-        OrbitError::ToolNotOnThisHost(m) => {
-            OrbitError::ToolNotOnThisHost(redact_sensitive_env_text(&m))
-        }
-        OrbitError::CapabilityRefused(m) => {
-            OrbitError::CapabilityRefused(redact_sensitive_env_text(&m))
-        }
-        OrbitError::AdrInvalidTransition(m) => {
-            OrbitError::AdrInvalidTransition(redact_sensitive_env_text(&m))
-        }
-        OrbitError::RemoteArtifactUnavailable {
-            kind,
-            id,
-            artifact_origin,
-        } => OrbitError::RemoteArtifactUnavailable {
-            kind,
-            id: redact_sensitive_env_text(&id),
-            artifact_origin: redact_artifact_origin(artifact_origin, redact_sensitive_env_text),
-        },
-        OrbitError::ArtifactNotLocal {
-            kind,
-            id,
-            artifact_origin,
-        } => OrbitError::ArtifactNotLocal {
-            kind,
-            id: redact_sensitive_env_text(&id),
-            artifact_origin: redact_artifact_origin(artifact_origin, redact_sensitive_env_text),
-        },
-        OrbitError::FrictionNotLocal(details) => OrbitError::FrictionNotLocal(
-            redact_friction_not_local(*details, redact_sensitive_env_text),
-        ),
-        OrbitError::CompanionNotInstalled(m) => {
-            OrbitError::CompanionNotInstalled(redact_sensitive_env_text(&m))
-        }
-        OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact_sensitive_env_text(&m)),
-        OrbitError::SensitiveInput { field, reason } => OrbitError::SensitiveInput {
-            field: redact_sensitive_env_text(&field),
-            reason: redact_sensitive_env_text(&reason),
-        },
-        OrbitError::InvalidInputDiagnostic {
-            message,
-            did_you_mean,
-        } => OrbitError::InvalidInputDiagnostic {
-            message: redact_sensitive_env_text(&message),
-            did_you_mean: did_you_mean
-                .into_iter()
-                .map(|suggestion| redact_sensitive_env_text(&suggestion))
-                .collect(),
-        },
-        OrbitError::SkillValidation(m) => {
-            OrbitError::SkillValidation(redact_sensitive_env_text(&m))
-        }
-        OrbitError::JobValidation(m) => OrbitError::JobValidation(redact_sensitive_env_text(&m)),
-        OrbitError::AgentProtocolViolation(m) => {
-            OrbitError::AgentProtocolViolation(redact_sensitive_env_text(&m))
-        }
-        OrbitError::UnsupportedAgentProvider(m) => {
-            OrbitError::UnsupportedAgentProvider(redact_sensitive_env_text(&m))
-        }
-        OrbitError::OwnerUnavailable(m) => {
-            OrbitError::OwnerUnavailable(redact_sensitive_env_text(&m))
-        }
-        OrbitError::OwnerNegotiation(m) => {
-            OrbitError::OwnerNegotiation(redact_sensitive_env_text(&m))
-        }
-        OrbitError::OutcomeUnknown {
-            mcp_call_id,
-            message,
-        } => OrbitError::OutcomeUnknown {
-            mcp_call_id: redact_sensitive_env_text(&mcp_call_id),
-            message: redact_sensitive_env_text(&message),
-        },
-        OrbitError::RemoteTool {
-            code,
-            message,
-            payload,
-        } => OrbitError::RemoteTool {
-            code: redact_sensitive_env_text(&code),
-            message: redact_sensitive_env_text(&message),
-            payload: redact_sensitive_env_json(payload),
-        },
-        OrbitError::Execution(m) => OrbitError::Execution(redact_sensitive_env_text(&m)),
-        OrbitError::RecoverableVcsConflict(conflict) => OrbitError::RecoverableVcsConflict(
-            redact_recoverable_vcs_conflict(*conflict, redact_sensitive_env_text),
-        ),
-        OrbitError::RunCancellationIncomplete {
-            pid,
-            pgid,
-            term_sent,
-            kill_sent,
-            leader_alive,
-            group_alive,
-        } => OrbitError::RunCancellationIncomplete {
-            pid,
-            pgid,
-            term_sent,
-            kill_sent,
-            leader_alive,
-            group_alive,
-        },
-        OrbitError::TaskBundleCorrupt {
-            task_id,
-            path,
-            reason,
-        } => OrbitError::TaskBundleCorrupt {
-            task_id: redact_sensitive_env_text(&task_id),
-            path: redact_sensitive_env_text(&path),
-            reason: redact_sensitive_env_text(&reason),
-        },
-        OrbitError::FileLockTimeout(timeout) => OrbitError::FileLockTimeout(
-            redact_file_lock_timeout(*timeout, redact_sensitive_env_text),
-        ),
-        OrbitError::Store(m) => OrbitError::Store(redact_sensitive_env_text(&m)),
-        OrbitError::TaskStatusTransition(m) => {
-            OrbitError::TaskStatusTransition(redact_sensitive_env_text(&m))
-        }
-        OrbitError::DependencyNotDelivered(diagnostic) => OrbitError::DependencyNotDelivered(
-            redact_dependency_not_delivered(*diagnostic, redact_sensitive_env_text),
-        ),
-        OrbitError::ShipRunInFlight { task_id, run_id } => OrbitError::ShipRunInFlight {
-            task_id: redact_sensitive_env_text(&task_id),
-            run_id: redact_sensitive_env_text(&run_id),
-        },
-        OrbitError::WorkspaceClaimHeld(claim) => OrbitError::WorkspaceClaimHeld(
-            redact_workspace_claim_held(*claim, redact_sensitive_env_text),
-        ),
-        OrbitError::JobRunStateTransition(m) => {
-            OrbitError::JobRunStateTransition(redact_sensitive_env_text(&m))
-        }
-        OrbitError::JobRunStartConflict(m) => {
-            OrbitError::JobRunStartConflict(redact_sensitive_env_text(&m))
-        }
-        OrbitError::JobRunControlConflict(m) => {
-            OrbitError::JobRunControlConflict(redact_sensitive_env_text(&m))
-        }
-        OrbitError::Io(m) => OrbitError::Io(redact_sensitive_env_text(&m)),
-        OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact_sensitive_env_text(&m)),
-        OrbitError::Migration(m) => OrbitError::Migration(redact_sensitive_env_text(&m)),
-    }
-}
-
 /// Scrub an [`OrbitError`]'s string payloads with the full [`redact_all`]
 /// pipeline (live env values **plus** the HTTP header / bearer / provider-key
-/// patterns), not just env values like [`redact_sensitive_env_error`].
+/// patterns), not just live env values.
 /// [ORB-00417] Apply at the error persistence/log boundary so an error message
 /// embedding a `Bearer <token>` or `sk-*` key in a URL is never written out
 /// un-redacted. Idempotent: `redact_all` placeholders never re-match the secret
@@ -303,7 +237,25 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
         OrbitError::StaleRoute(m) => OrbitError::StaleRoute(redact_all(&m)),
         OrbitError::UnhealthyCheckout(m) => OrbitError::UnhealthyCheckout(redact_all(&m)),
         OrbitError::ToolNotOnThisHost(m) => OrbitError::ToolNotOnThisHost(redact_all(&m)),
+        OrbitError::PluginDisabledInWorkspace { plugin, workspace } => {
+            OrbitError::PluginDisabledInWorkspace {
+                plugin: redact_all(&plugin),
+                workspace: redact_all(&workspace),
+            }
+        }
+        OrbitError::PluginDisabledOnHost { plugin } => OrbitError::PluginDisabledOnHost {
+            plugin: redact_all(&plugin),
+        },
         OrbitError::CapabilityRefused(m) => OrbitError::CapabilityRefused(redact_all(&m)),
+        OrbitError::PluginBuildConsentRequired(m) => {
+            OrbitError::PluginBuildConsentRequired(redact_all(&m))
+        }
+        OrbitError::PluginBuildConsentUnavailable(m) => {
+            OrbitError::PluginBuildConsentUnavailable(redact_all(&m))
+        }
+        OrbitError::PluginBuildFetchUnsupported(m) => {
+            OrbitError::PluginBuildFetchUnsupported(redact_all(&m))
+        }
         OrbitError::AdrInvalidTransition(m) => OrbitError::AdrInvalidTransition(redact_all(&m)),
         OrbitError::RemoteArtifactUnavailable {
             kind,
@@ -326,7 +278,6 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
         OrbitError::FrictionNotLocal(details) => {
             OrbitError::FrictionNotLocal(redact_friction_not_local(*details, redact_all))
         }
-        OrbitError::CompanionNotInstalled(m) => OrbitError::CompanionNotInstalled(redact_all(&m)),
         OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact_all(&m)),
         OrbitError::SensitiveInput { field, reason } => OrbitError::SensitiveInput {
             field: redact_all(&field),
@@ -367,6 +318,15 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             payload: redact_json_with(payload, redact_all),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact_all(&m)),
+        OrbitError::ProcessTimeout { timeout_ms, detail } => OrbitError::ProcessTimeout {
+            timeout_ms,
+            detail: redact_all(&detail),
+        },
+        OrbitError::WorkerContainmentUnavailable { reason } => {
+            OrbitError::WorkerContainmentUnavailable {
+                reason: redact_all(&reason),
+            }
+        }
         OrbitError::RecoverableVcsConflict(conflict) => OrbitError::RecoverableVcsConflict(
             redact_recoverable_vcs_conflict(*conflict, redact_all),
         ),
@@ -398,12 +358,35 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             OrbitError::FileLockTimeout(redact_file_lock_timeout(*timeout, redact_all))
         }
         OrbitError::Store(m) => OrbitError::Store(redact_all(&m)),
+        OrbitError::SqliteContention(contention) => {
+            OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact_all))
+        }
         OrbitError::TaskStatusTransition(m) => OrbitError::TaskStatusTransition(redact_all(&m)),
         OrbitError::DependencyNotDelivered(diagnostic) => OrbitError::DependencyNotDelivered(
             redact_dependency_not_delivered(*diagnostic, redact_all),
         ),
         OrbitError::ShipRunInFlight { task_id, run_id } => OrbitError::ShipRunInFlight {
             task_id: redact_all(&task_id),
+            run_id: redact_all(&run_id),
+        },
+        OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
+            OrbitError::TaskCompletionLiveRun {
+                task_id: redact_all(&task_id),
+                run_id: redact_all(&run_id),
+            }
+        }
+        OrbitError::TaskRevisionConflict { task_id } => OrbitError::TaskRevisionConflict {
+            task_id: redact_all(&task_id),
+        },
+        OrbitError::DesktopWriteAccepted { task_id, reason } => OrbitError::DesktopWriteAccepted {
+            task_id: redact_all(&task_id),
+            reason: redact_all(&reason),
+        },
+        OrbitError::ResumeRunInFlight {
+            source_run_id,
+            run_id,
+        } => OrbitError::ResumeRunInFlight {
+            source_run_id: redact_all(&source_run_id),
             run_id: redact_all(&run_id),
         },
         OrbitError::WorkspaceClaimHeld(claim) => {
@@ -429,6 +412,16 @@ fn redact_file_lock_timeout(
         holder.label = redact(&holder.label);
     }
     Box::new(timeout)
+}
+
+fn redact_sqlite_contention(
+    mut contention: crate::SqliteContention,
+    redact: fn(&str) -> String,
+) -> Box<crate::SqliteContention> {
+    contention.path = redact(&contention.path);
+    contention.phase = redact(&contention.phase);
+    contention.detail = redact(&contention.detail);
+    Box::new(contention)
 }
 
 fn redact_friction_not_local(
@@ -550,7 +543,7 @@ fn home_dir_string() -> Option<String> {
         })
 }
 
-fn sensitive_env_values() -> Vec<String> {
+fn collect_sensitive_env_values() -> Vec<String> {
     let mut values = std::env::vars()
         .filter(|(name, value)| is_sensitive_env_name(name) && is_redactable_value(value))
         .map(|(_, value)| value)
@@ -560,28 +553,51 @@ fn sensitive_env_values() -> Vec<String> {
     values
 }
 
+fn cached_sensitive_env_values() -> &'static [String] {
+    SENSITIVE_ENV_VALUES
+        .get_or_init(collect_sensitive_env_values)
+        .as_slice()
+}
+
+fn sensitive_env_values() -> Cow<'static, [String]> {
+    // Tests mutate process env after startup (`EnvVarGuard`). A process-wide
+    // snapshot would miss those values, so re-collect in this crate's tests
+    // and while the shared scoped environment guard is active. Normal
+    // production calls retain the cached snapshot.
+    if cfg!(test) || crate::test_env::scoped_env_active() {
+        Cow::Owned(collect_sensitive_env_values())
+    } else {
+        Cow::Borrowed(cached_sensitive_env_values())
+    }
+}
+
 /// Decide whether a sensitive-named env value is eligible for substitution
 /// by [`redact_sensitive_env_text`].
 ///
-/// A value is eligible only when, after trim, it is at least 4 characters
-/// **and** it contains at least one non-letter (digit or punctuation).
-/// All-letter values are treated as ordinary words (`user`, `true`, `none`,
-/// `root`, `main`, `test`, `prod`, `local`, `auto`) and are never
-/// substituted, even when a sensitive-looking variable name happens to
-/// hold them. This is a shape gate, not a raised length floor: a short
-/// secret such as `a1b2` remains eligible.
+/// A value is eligible when, after trim, it is at least 4 characters and is
+/// not one of the small compatibility set of ordinary words (`user`, `true`,
+/// `false`, `none`, `null`, `root`, `main`, `test`, `prod`, `local`, `auto`).
+/// This keeps those known prose/sentinel values readable while allowing
+/// all-letter secrets and passphrases from sensitive credential variables to
+/// be scrubbed.
 ///
 /// Eligible values are still matched with a bare substring replace so
 /// embedded tokens in URLs and concatenated log fragments stay scrubbed.
 ///
-/// False-negative accepted: an all-letter secret or passphrase with no
-/// digits or punctuation (a dictionary word, or concatenated words with
-/// no separators) is not env-substituted. Pattern-based redaction still
-/// independently catches provider-shaped tokens (`ghp_…`, `sk-…`).
+/// Pattern-based redaction still independently catches provider-shaped tokens
+/// (`ghp_…`, `sk-…`).
 // pub(crate) for sibling-layout tests in utility/tests/redaction.rs.
 pub(crate) fn is_redactable_value(value: &str) -> bool {
     let trimmed = value.trim();
-    trimmed.len() >= 4 && trimmed.chars().any(|c| !c.is_alphabetic())
+    trimmed.len() >= 4 && !is_compatibility_ordinary_word(trimmed)
+}
+
+fn is_compatibility_ordinary_word(value: &str) -> bool {
+    [
+        "user", "true", "false", "none", "null", "root", "main", "test", "prod", "local", "auto",
+    ]
+    .into_iter()
+    .any(|word| value.eq_ignore_ascii_case(word))
 }
 
 pub fn is_sensitive_env_name(name: &str) -> bool {
@@ -598,7 +614,27 @@ pub fn is_sensitive_env_name(name: &str) -> bool {
         || upper.contains("COOKIE")
         || upper.contains("SESSION")
         || upper.contains("BEARER")
-        || upper.contains("AUTH")
+        || contains_auth_word(&upper)
+}
+
+/// True when `upper` (already uppercased) has an AUTH-family credential
+/// segment, e.g. `AUTH_TOKEN`, `AUTHORIZATION`, `OAUTH`, or `XAUTH`.
+///
+/// A bare substring test also matches `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`
+/// (ordinary git identity vars Orbit itself sets for child processes), which
+/// are not credentials. Requiring an exact `AUTH` segment overshoots that
+/// carve-out and misses `AUTH*` / `*AUTH` words other than `AUTHOR*`.
+fn contains_auth_word(upper: &str) -> bool {
+    upper
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(segment_is_auth_sensitive)
+}
+
+fn segment_is_auth_sensitive(segment: &str) -> bool {
+    if matches!(segment, "AUTHOR" | "AUTHORS" | "AUTHORED") {
+        return false;
+    }
+    segment.starts_with("AUTH") || segment.ends_with("AUTH")
 }
 
 // ---------------------------------------------------------------------------
@@ -610,16 +646,26 @@ pub fn is_sensitive_env_name(name: &str) -> bool {
 /// Builds to `default()` cover Authorization / x-api-key / URL key params /
 /// Bearer / raw header lines, high-confidence provider credentials, and
 /// structurally recognizable SSH fingerprints, public-key comments, and
-/// connection hosts. Use [`PatternRedactor::with_argv_secrets`] to also catch
-/// short bare `sk-…` tokens — needed when scrubbing subprocess argv where a
-/// provider key sometimes ends up mis-configured.
+/// connection hosts. Use [`argv_redactor`] or [`PatternRedactor::with_argv_secrets`]
+/// to also catch short bare `sk-…` tokens — needed when scrubbing subprocess
+/// argv where a provider key sometimes ends up mis-configured.
+///
+/// Pattern compilation is process-cached. [`Regex`] is Arc-backed, so cloning
+/// a redactor does not recompile.
+#[derive(Clone)]
 pub struct PatternRedactor {
     patterns: Vec<(Regex, &'static str)>,
 }
 
 impl PatternRedactor {
     /// Shared default for unknown-shape persisted text.
+    ///
+    /// Clones the process-cached HTTP redactor; patterns are compiled once.
     pub fn http_default() -> Self {
+        default_pattern_redactor().clone()
+    }
+
+    fn compile_http_default() -> Self {
         let patterns = vec![
             (
                 Regex::new(r#"(?i)"authorization"\s*:\s*"[^"]*""#).expect("valid regex"),
@@ -714,8 +760,12 @@ impl PatternRedactor {
                 "[REDACTED_SSH_FINGERPRINT]",
             ),
             (
-                Regex::new(r"sk-[A-Za-z0-9_\-]{20,}").expect("valid regex"),
-                "[REDACTED_SECRET]",
+                // Keep provider-key matching at a token boundary. Without the
+                // prefix capture, `task-checkout-projections` is misread from
+                // its trailing `sk-` as a provider key.
+                Regex::new(r"(^|[^\p{L}\p{N}_-])sk-[A-Za-z0-9_\-]{20,}")
+                    .expect("valid regex"),
+                "${1}[REDACTED_SECRET]",
             ),
             (
                 Regex::new(r"AIza[0-9A-Za-z_\-]{35}").expect("valid regex"),
@@ -770,11 +820,18 @@ impl PatternRedactor {
 
     /// HTTP defaults plus a bare `sk-…` token pattern suitable for scrubbing
     /// CLI argv where a provider key occasionally ends up as a flag value.
+    ///
+    /// Clones the process-cached argv redactor; patterns are compiled once.
+    /// Prefer [`argv_redactor`] when an owned clone is not needed.
     pub fn with_argv_secrets() -> Self {
-        let mut me = Self::http_default();
+        argv_redactor().clone()
+    }
+
+    fn compile_argv_secrets() -> Self {
+        let mut me = default_pattern_redactor().clone();
         me.patterns.push((
-            Regex::new(r"sk-[A-Za-z0-9_\-]+").expect("valid regex"),
-            "[REDACTED_API_KEY]",
+            Regex::new(r"(^|[^\p{L}\p{N}_-])sk-[A-Za-z0-9_\-]+").expect("valid regex"),
+            "${1}[REDACTED_API_KEY]",
         ));
         me
     }
@@ -793,15 +850,6 @@ impl PatternRedactor {
             }
         }
         out.into_owned()
-    }
-
-    /// Byte-level convenience for callers holding raw HTTP bodies. Non-UTF-8
-    /// input is returned unchanged.
-    pub fn apply_bytes(&self, bytes: &[u8]) -> Vec<u8> {
-        match std::str::from_utf8(bytes) {
-            Ok(text) => self.apply_str(text).into_bytes(),
-            Err(_) => bytes.to_vec(),
-        }
     }
 }
 
@@ -837,8 +885,13 @@ pub fn is_high_confidence_single_token_credential(input: &str) -> bool {
         .any(|pattern| pattern.is_match(trimmed))
 }
 
+/// Process-cached argv redactor (HTTP defaults plus the short `sk-…` pattern).
+pub fn argv_redactor() -> &'static PatternRedactor {
+    ARGV_PATTERN_REDACTOR.get_or_init(PatternRedactor::compile_argv_secrets)
+}
+
 pub(crate) fn default_pattern_redactor() -> &'static PatternRedactor {
-    DEFAULT_PATTERN_REDACTOR.get_or_init(PatternRedactor::http_default)
+    DEFAULT_PATTERN_REDACTOR.get_or_init(PatternRedactor::compile_http_default)
 }
 
 fn high_confidence_single_token_patterns() -> &'static [Regex] {

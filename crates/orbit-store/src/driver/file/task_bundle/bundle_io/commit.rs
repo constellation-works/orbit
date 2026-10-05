@@ -23,13 +23,13 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{StagedTextFile, atomic_write_text, with_exclusive_file_lock};
+use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     TASK_ACCEPTANCE_FILE_NAME, TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME,
     TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME,
     TASK_PLAN_FILE_NAME, TaskEnvelopeV2,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::{TaskBundleV2, read_bundle_at, read_required_text, scan_jsonl_records};
 use crate::fs::yaml::{serialize_yaml_with, write_yaml_durable_with};
@@ -43,43 +43,6 @@ const DOCUMENT_FILES: [&str; 4] = [
     TASK_PLAN_FILE_NAME,
     TASK_EXECUTION_SUMMARY_FILE_NAME,
 ];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum BundleWriteFault {
-    AfterJsonlAppend,
-    AfterEnvelopeStage,
-    DuringCompensation,
-    DuringRecovery,
-}
-
-#[cfg(test)]
-thread_local! {
-    static INJECTED_FAULTS: std::cell::RefCell<std::collections::HashSet<BundleWriteFault>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
-}
-
-#[cfg(test)]
-pub(crate) fn inject_bundle_write_faults(faults: &[BundleWriteFault]) {
-    INJECTED_FAULTS.with(|cell| {
-        *cell.borrow_mut() = faults.iter().copied().collect();
-    });
-}
-
-pub(crate) fn fail_if_injected(_fault: BundleWriteFault) -> Result<(), OrbitError> {
-    #[cfg(test)]
-    {
-        let hit = INJECTED_FAULTS.with(|cell| cell.borrow_mut().remove(&_fault));
-        if hit {
-            return Err(OrbitError::Store(format!("injected failure at {_fault:?}")));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn clear_injected_faults() {
-    inject_bundle_write_faults(&[]);
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PendingWrite {
@@ -133,16 +96,6 @@ impl PendingWriteGuard {
 impl Drop for PendingWriteGuard {
     fn drop(&mut self) {
         if self.committed {
-            #[cfg(test)]
-            clear_injected_faults();
-            return;
-        }
-        if fail_if_injected(BundleWriteFault::DuringCompensation).is_err() {
-            orbit_common::tracing::warn!(
-                target: "orbit.store.task_bundle_v2",
-                bundle_dir = %self.bundle_dir.display(),
-                "injected compensation failure; pending-write record retained",
-            );
             return;
         }
         if let Err(error) = abort_pending(&self.bundle_dir, &self.pending) {
@@ -152,9 +105,6 @@ impl Drop for PendingWriteGuard {
                 error = %error,
                 "failed to abort an uncommitted bundle write; pending-write record retained",
             );
-        } else {
-            #[cfg(test)]
-            clear_injected_faults();
         }
     }
 }
@@ -175,7 +125,6 @@ pub(crate) fn recover_pending_write(bundle_dir: &Path) -> Result<(), OrbitError>
     let Some(pending) = read_pending(bundle_dir)? else {
         return Ok(());
     };
-    fail_if_injected(BundleWriteFault::DuringRecovery)?;
     let current = envelope_sha256(bundle_dir)?;
     if current == pending.envelope_sha256 {
         abort_pending(bundle_dir, &pending)?;
@@ -221,7 +170,6 @@ pub(crate) fn publish_envelope(path: &Path, envelope: &TaskEnvelopeV2) -> Result
     let yaml = serialize_yaml_with(envelope, |err| OrbitError::Store(err.to_string()))?;
     let mut staged =
         StagedTextFile::new(path, &yaml).map_err(|err| OrbitError::from_write_io(path, err))?;
-    fail_if_injected(BundleWriteFault::AfterEnvelopeStage)?;
     staged
         .commit()
         .map_err(|err| OrbitError::from_write_io(path, err))
@@ -248,6 +196,13 @@ fn write_pending(bundle_dir: &Path, pending: &PendingWrite) -> Result<(), OrbitE
     write_yaml_durable_with(&pending_path(bundle_dir), pending, |err| {
         OrbitError::Store(err.to_string())
     })
+}
+
+/// Whether an incomplete multi-file write is recorded for this bundle. Its
+/// documents are then not the ones a reader should see; only the full read
+/// applies the recorded view. An unanswerable probe counts as pending.
+pub(crate) fn has_pending_write(bundle_dir: &Path) -> bool {
+    pending_path(bundle_dir).try_exists().unwrap_or(true)
 }
 
 fn read_pending(bundle_dir: &Path) -> Result<Option<PendingWrite>, OrbitError> {
@@ -303,7 +258,7 @@ fn pending_path(bundle_dir: &Path) -> PathBuf {
 fn envelope_sha256(bundle_dir: &Path) -> Result<String, OrbitError> {
     let path = bundle_dir.join(TASK_ENVELOPE_FILE_NAME);
     let bytes = fs::read(&path).map_err(|err| OrbitError::from_write_io(&path, err))?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    Ok(sha256_hex(&bytes))
 }
 
 fn existing_file_len(path: &Path) -> Result<u64, OrbitError> {
@@ -314,7 +269,12 @@ fn existing_file_len(path: &Path) -> Result<u64, OrbitError> {
     }
 }
 
-fn truncate_jsonl_file(path: &Path, len: u64) -> Result<(), OrbitError> {
+/// Cut a JSONL sidecar back to a recorded length.
+///
+/// Both recovery paths use it: the pending-write abort restores a bundle's
+/// pre-call state, and the commit-boundary replay drops any partial tail
+/// before re-appending its intent rows.
+pub(crate) fn truncate_jsonl_file(path: &Path, len: u64) -> Result<(), OrbitError> {
     match OpenOptions::new().write(true).open(path) {
         Ok(file) => {
             file.set_len(len)

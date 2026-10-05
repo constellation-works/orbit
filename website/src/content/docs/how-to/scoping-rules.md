@@ -5,24 +5,25 @@ sidebar:
   order: 4
 ---
 
-## Artifact Scope
+## Where state lives
 
-Orbit uses these scope strategies:
+Keep anything that describes this repository's work in the workspace. Use
+global state for shared defaults and the audit trail.
 
-| Artifact | Strategy |
-|----------|----------|
-| Tasks | WorkspaceOnly |
-| Activities and jobs | MergeByKey |
-| Policies | MergeByKey |
-| Job runs | WorkspaceOnly |
-| Skills | MergeByKey |
-| Audit | GlobalOnly |
+- **Workspace only:** tasks and job runs.
+- **Global only:** the audit trail.
+- **Merged by name:** activities, jobs, policies, and skills combine global
+  defaults with workspace entries. A workspace skill or policy profile
+  overrides the global one with the same name. Activities and jobs work the
+  other way: a shipped default keeps its name, so a workspace file can add a
+  new name but not replace a shipped one.
 
-Use workspace-local state for work tied to a repository. Use global state for shared defaults and the audit trail; skills use global defaults with optional workspace overrides by skill name.
+[Scoping Rules](../../reference/scoping/) has the full table and the
+`.orbit/` layout.
 
-## Filesystem Scope
+## What an activity may touch
 
-Use `fsProfile` to select what an activity may read and modify.
+Set `fsProfile` on an activity to choose what it may read and modify:
 
 ```yaml
 spec:
@@ -30,13 +31,17 @@ spec:
   fsProfile: reviewer
 ```
 
-Then define the profile in policy:
+Then define that profile in a policy:
 
 ```yaml
-fsProfiles:
-  reviewer:
-    read: [./**]
-    modify: []
+spec:
+  fsProfiles:
+    reviewer:
+      read: [./**]
+      modify: []
 ```
 
-Global `denyRead` and `denyModify` rules still apply.
+Global `denyRead` and `denyModify` rules still apply on top of any profile.
+[Policy Format](../../reference/policy-format/) covers both, and
+[Platform Support](../../concepts/agents/#platform-support) covers which
+sandbox enforces the profile on each platform.

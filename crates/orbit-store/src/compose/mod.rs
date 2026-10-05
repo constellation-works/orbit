@@ -4,9 +4,10 @@ use std::sync::Arc;
 use crate::Store;
 use crate::contracts::{
     AuditEventStoreBackend, ExecutorDefStoreBackend, FrictionStoreBackend, InvocationStoreBackend,
-    JobRunStoreBackend, PolicyDefStoreBackend, RoutineStoreBackend, SessionLogStoreBackend,
-    TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
-    TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend, V2AuditStoreBackend,
+    JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend, RoutineStoreBackend,
+    SessionLogStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
+    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
+    V2AuditStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefFileStore;
 use crate::driver::file::policy_def_store::PolicyDefFileStore;
@@ -16,9 +17,10 @@ use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::repository::friction::FrictionStore;
 use crate::repository::layered_policy::LayeredPolicyDefStore;
 use crate::repository::sqlite_backends::{
-    SqliteAuditEventStoreBackend, SqliteTaskReservationStoreBackend, SqliteToolStoreBackend,
+    SqliteAuditEventStoreBackend, SqlitePluginStoreBackend, SqliteTaskReservationStoreBackend,
+    SqliteToolStoreBackend,
 };
-use crate::repository::task::TaskV2Store;
+use crate::repository::task::{TaskCommitBoundary, TaskV2Store};
 use crate::workflow::friction::import_workspace_frictions;
 
 pub struct WorkspaceTaskBackends {
@@ -31,17 +33,8 @@ pub struct WorkspaceTaskBackends {
 pub fn workspace_task_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
-    workspace_orbit_dir: PathBuf,
-    workspace_path: Option<String>,
-    repo_root: Option<String>,
 ) -> WorkspaceTaskBackends {
-    let store = Arc::new(TaskV2Store::new(
-        registry,
-        workspace_id,
-        workspace_orbit_dir,
-        workspace_path,
-        repo_root,
-    ));
+    let store = Arc::new(TaskV2Store::new(registry, workspace_id));
     WorkspaceTaskBackends {
         task: store.clone(),
         document: store.clone(),
@@ -52,12 +45,12 @@ pub fn workspace_task_backends(
 
 /// Constructs coordination-only task backends for a logical workspace that
 /// has no checkout on this machine. Canonical bundles and registry indexes
-/// remain available; checkout-local projections are intentionally omitted.
+/// remain available without a distinct checkout-local store.
 pub fn coordination_task_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
 ) -> WorkspaceTaskBackends {
-    let store = Arc::new(TaskV2Store::new_checkoutless(registry, workspace_id));
+    let store = Arc::new(TaskV2Store::new(registry, workspace_id));
     WorkspaceTaskBackends {
         task: store.clone(),
         document: store.clone(),
@@ -74,7 +67,8 @@ pub fn workspace_job_run_store(
 }
 
 /// Build the live friction repository after the explicit, idempotent legacy
-/// import workflow has committed (or reported an earlier completion).
+/// import workflow has committed (or reported an earlier completion). A
+/// read-only store skips the import; the next writable open performs it.
 pub fn workspace_friction_store(
     store: Store,
     workspace_id: impl Into<String>,
@@ -82,7 +76,12 @@ pub fn workspace_friction_store(
 ) -> Result<Arc<dyn FrictionStoreBackend>, orbit_common::OrbitError> {
     let workspace_id = workspace_id.into();
     let files_root = files_root.into();
-    if let Err(error) = import_workspace_frictions(&store, &workspace_id, &files_root) {
+    // A store that cannot write can never persist the import, so attempting it
+    // would only repeat a doomed write transaction (and its warning) on every
+    // open. The next writable open imports and persists it.
+    if !store.is_read_only()
+        && let Err(error) = import_workspace_frictions(&store, &workspace_id, &files_root)
+    {
         if error.is_readonly_or_access_failure() {
             orbit_common::tracing::warn!(
                 target: "orbit.store.friction",
@@ -102,19 +101,32 @@ pub fn workspace_friction_store(
     )?))
 }
 
-pub fn workspace_friction_store_from_path(
-    database: &std::path::Path,
-    workspace_id: impl Into<String>,
-    files_root: impl Into<PathBuf>,
-) -> Result<Arc<dyn FrictionStoreBackend>, orbit_common::OrbitError> {
-    workspace_friction_store(Store::open(database)?, workspace_id, files_root)
-}
-
+/// Prove the store database is open-able *and writable by this binary*.
+///
+/// Callers use this before work that must write (the pipeline worker's
+/// pre-claim pre-flight). A database newer than this binary opens read-only
+/// under the forward-compatibility contract (ORB-12434), which is not
+/// readiness for those callers — fail here rather than mid-run.
+/// Supported schemas must also pass a write-lock probe with rollback, so
+/// observational read-only opens cannot pass readiness.
 pub fn ensure_sqlite_store_ready(
     database: &std::path::Path,
 ) -> Result<(), orbit_common::OrbitError> {
-    drop(Store::open(database)?);
-    Ok(())
+    let store = Store::open(database)?;
+    if let Some(forward) = store
+        .forward_compatible_open()
+        .filter(|forward| !forward.writable)
+    {
+        return Err(orbit_common::OrbitError::Migration(format!(
+            "store database '{}' records {} version {} and this orbit binary supports {}, \
+             so it opened read-only; work that writes needs a newer orbit",
+            database.display(),
+            forward.component,
+            forward.state_version,
+            forward.supported_version
+        )));
+    }
+    store.check_writable()
 }
 
 pub fn global_executor_def_store(root: PathBuf) -> Arc<dyn ExecutorDefStoreBackend> {
@@ -157,12 +169,113 @@ pub fn tool_store_sqlite(store: Store) -> Arc<dyn ToolStoreBackend> {
     Arc::new(SqliteToolStoreBackend { store })
 }
 
+pub fn plugin_store_sqlite(store: Store) -> Arc<dyn PluginStoreBackend> {
+    Arc::new(SqlitePluginStoreBackend { store })
+}
+
 pub fn audit_event_store_sqlite(store: Store) -> Arc<dyn AuditEventStoreBackend> {
     Arc::new(SqliteAuditEventStoreBackend { store })
 }
 
-pub fn task_reservation_store_sqlite(store: Store) -> Arc<dyn TaskReservationStoreBackend> {
-    Arc::new(SqliteTaskReservationStoreBackend { store })
+/// One workspace's task backends, reservation store, and the commit boundary
+/// they share.
+///
+/// Returned together on purpose: the boundary only serializes what holds the
+/// same instance, so a caller that composed the task backends here must take
+/// its reservation store from here too.
+pub struct CoordinatedWorkspaceBackends {
+    pub task: WorkspaceTaskBackends,
+    pub reservation: Arc<dyn TaskReservationStoreBackend>,
+    /// The durable commit/recovery authority. Admission publishes a task
+    /// transition, its history, a reservation, and dependent coordination rows
+    /// through [`TaskCommitBoundary::commit_task_transition`], optionally
+    /// inside a [`TaskCommitBoundary::with_admission`] section that also
+    /// covers its readiness reads.
+    pub commit_boundary: Arc<TaskCommitBoundary>,
+}
+
+/// Compose one workspace's task and reservation persistence over an
+/// observation-only commit boundary.
+///
+/// Reads the same partition state as [`workspace_coordinated_backends`] and
+/// settles an interrupted commit the same way, but opening it initializes
+/// nothing: no partition directory, lock file, or journal marker. Used by a
+/// read-only join of a foreign generation, a read-only command whose partition
+/// does not exist yet, and any open of an existing partition on storage the
+/// process cannot write.
+pub fn workspace_observational_backends(
+    registry: TaskRegistryStore,
+    workspace_id: String,
+    store: Store,
+) -> Result<CoordinatedWorkspaceBackends, orbit_common::OrbitError> {
+    let commit_boundary = Arc::new(TaskCommitBoundary::for_observation(
+        store.clone(),
+        registry.clone(),
+        workspace_id.clone(),
+    )?);
+    // The task store joins the same observation handle: a partition that has
+    // activated coordination refuses the legacy uncoordinated store, and every
+    // partition written since the boundary shipped has.
+    let task_store = Arc::new(TaskV2Store::with_commit_boundary(
+        registry,
+        workspace_id,
+        Arc::clone(&commit_boundary),
+    ));
+    Ok(CoordinatedWorkspaceBackends {
+        task: WorkspaceTaskBackends {
+            task: task_store.clone(),
+            document: task_store.clone(),
+            history: task_store.clone(),
+            artifact: task_store,
+        },
+        reservation: Arc::new(SqliteTaskReservationStoreBackend {
+            store,
+            coordination: Arc::clone(&commit_boundary),
+        }),
+        commit_boundary,
+    })
+}
+
+/// Compose one workspace's task and reservation persistence over a shared
+/// durable commit boundary (ORB-12528).
+///
+/// The difference from legacy uncoordinated task composition is serialization and recovery, not
+/// storage layout: bundles, registry rows, and reservation rows are unchanged,
+/// and every existing API behaves as before. What is added is that ordinary
+/// task and reservation mutations run inside the boundary, reads settle an
+/// interrupted commit before exposing state, and an admission decision can
+/// read readiness and publish its transition plus reservation as one durable
+/// outcome.
+///
+/// `store` must be the database that holds this host's reservations.
+pub fn workspace_coordinated_backends(
+    registry: TaskRegistryStore,
+    workspace_id: String,
+    store: Store,
+) -> Result<CoordinatedWorkspaceBackends, orbit_common::OrbitError> {
+    let commit_boundary = Arc::new(TaskCommitBoundary::new(
+        store.clone(),
+        registry.clone(),
+        workspace_id.clone(),
+    )?);
+    let task_store = Arc::new(TaskV2Store::with_commit_boundary(
+        registry,
+        workspace_id,
+        Arc::clone(&commit_boundary),
+    ));
+    Ok(CoordinatedWorkspaceBackends {
+        task: WorkspaceTaskBackends {
+            task: task_store.clone(),
+            document: task_store.clone(),
+            history: task_store.clone(),
+            artifact: task_store,
+        },
+        reservation: Arc::new(SqliteTaskReservationStoreBackend {
+            store,
+            coordination: Arc::clone(&commit_boundary),
+        }),
+        commit_boundary,
+    })
 }
 
 pub fn global_policy_def_store(root: PathBuf) -> Arc<dyn PolicyDefStoreBackend> {
@@ -180,9 +293,9 @@ pub fn layered_policy_def_store(
     Arc::new(LayeredPolicyDefStore::new(workspace, global))
 }
 
-#[cfg(test)]
-#[cfg(test)]
-mod tests;
+mod compatibility;
+
+pub use compatibility::compiled_compatibility;
 
 /// Legacy cursor file persistence, retained for rollback compatibility.
 pub mod auto_task {
@@ -205,13 +318,5 @@ pub fn review_store(
     store: Store,
 ) -> Result<Arc<dyn crate::contracts::ReviewStoreBackend>, orbit_common::OrbitError> {
     crate::driver::sqlite::review::initialize(&store)?;
-    Ok(Arc::new(store))
-}
-
-/// Open operation-mode grant/ledger contracts over the configured host store.
-pub fn operation_store(
-    store: Store,
-) -> Result<Arc<dyn crate::contracts::OperationStoreBackend>, orbit_common::OrbitError> {
-    crate::driver::sqlite::operation::initialize(&store)?;
     Ok(Arc::new(store))
 }

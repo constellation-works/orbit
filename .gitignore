@@ -28,6 +28,8 @@ agentspace
 # Claude/Codex manifests and generated-from-canonical skill mirror.
 !plugin/.mcp.json
 !plugin/.claude-plugin/
+# Claude Code writes its API typings beside a mod it loads from a checkout.
+plugin/.claude-plugin/types/
 !plugin/.codex-plugin/
 !plugin/skills/
 # OS / editor
@@ -50,20 +52,8 @@ orbit.db
 orbit.db-shm
 orbit.db-wal
 
-# Orbit runtime state stays workspace-local. Project-authored decisions live in
-# feature `docs/design/**/4_decisions.md` files.
-.orbit/*
-# Project learnings travel with the repo (ADR-003 in docs/design/project-learnings/4_decisions.md).
-!.orbit/learnings/
-# Auto-task definitions are git-versioned records (ORB-10149); the host-local
-# last-fired cursor lives in `.orbit/state/` and stays ignored.
-!.orbit/auto_tasks/
-!.orbit/resources/
-!.orbit/routines/
-!.orbit/config.toml
-# Lock files inside the re-included partitions stay ignored (ORB-10303); they
-# are host-local, not decision history.
-.orbit/**/*.lock
+# Orbit per-user state — not a repository artifact.
+.orbit/
 .monodev/
 
 # Python
@@ -80,12 +70,22 @@ dist/
 build/
 .astro/
 
+# dotenv — local credentials at any depth; share only credential-free examples.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
 # direnv — per-repo env vars (holds secrets like ANTHROPIC_API_KEY)
 .envrc
 .direnv/
 .gstack/
 .locks
 *.lock
+# npm lockfiles are the Dependabot / GitHub security-alert manifest for JS pins.
+!package-lock.json
+# Plugin fixtures commit the uv.lock their `uv run --frozen` backend installs from.
+!crates/orbit-tools/tests/fixtures/plugins/*/uv.lock
 .vscode
 .grok
 .gemini

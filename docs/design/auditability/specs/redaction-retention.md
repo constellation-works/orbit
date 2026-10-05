@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Redaction and Retention Boundaries
-last_validated: 2026-08-31
+last_validated: 2026-10-03
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -16,7 +16,10 @@ Auditability and secrecy pull in opposite directions. Orbit needs faithful recor
 
 - BlobStore redacts bytes before computing the stored hash.
 - Command audit error messages are scrubbed for sensitive live environment values before insertion.
-- Pipeline outputs persisted by runtime helpers are scrubbed for sensitive live environment values.
+- Completed provider result strings, including nested objects and arrays, are
+  scrubbed for sensitive live environment values and known secret patterns before
+  they become downstream step input or persisted pipeline state. JSON keys and
+  non-string values retain their types.
 - HTTP-shaped payload redaction covers authorization headers, x-api-key headers, JSON API-key fields, and bearer tokens.
 - Shared pattern redaction covers high-confidence provider token shapes embedded in prose; exact whole-token artifact fields are rejected instead of persisted.
 - Shared pattern redaction covers structural OpenSSH fingerprints, public-key comments, and connection hosts without applying a general hostname or high-entropy-string heuristic.
@@ -49,9 +52,9 @@ Invocation metrics:
 Global process tracing:
 
 - Uses `~/.orbit/state/logs/orbit.jsonl` as the active file.
-- Is append-only within the active file; oversized files are renamed to dated archives and old archives are pruned at subscriber initialization.
+- Is append-only within the active file; oversized files are renamed to dated archives and old archives are pruned from long-lived processes and when the active file exceeds its size budget.
 - Is an operational log stream, not the canonical workflow envelope.
-- Carries policy-denial path/resource strings and friction summaries after [T20260427-0023], so default tracing redaction is part of its durability boundary.
+- Carries policy-denial path/resource strings, so default tracing redaction is part of its durability boundary.
 
 ## Failure Modes
 

@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use super::{LandlockPathGrant, workspace};
 
 /// System directories a dynamically linked program executes out of.
-const RUNTIME_DIRS: &[&str] = &[
+pub(crate) const RUNTIME_DIRS: &[&str] = &[
     "/usr",
     "/bin",
     "/sbin",
@@ -46,7 +46,7 @@ const RUNTIME_DIRS: &[&str] = &[
 ];
 
 /// Loader configuration and the character devices a process opens on startup.
-const RUNTIME_FILES: &[&str] = &[
+pub(crate) const RUNTIME_FILES: &[&str] = &[
     "/etc/ld.so.cache",
     "/etc/ld.so.conf",
     "/dev/null",
@@ -76,7 +76,7 @@ const RUNTIME_PROC_FILES: &[&str] = &[
 ];
 
 /// Name resolution, service lookup, and time zone data.
-const RESOLVER_FILES: &[&str] = &[
+pub(crate) const RESOLVER_FILES: &[&str] = &[
     "/etc/gai.conf",
     "/etc/gitconfig",
     "/etc/group",
@@ -92,7 +92,7 @@ const RESOLVER_FILES: &[&str] = &[
 ];
 
 /// Certificate authority stores.
-const TRUST_DIRS: &[&str] = &["/etc/ca-certificates", "/etc/pki", "/etc/ssl"];
+pub(crate) const TRUST_DIRS: &[&str] = &["/etc/ca-certificates", "/etc/pki", "/etc/ssl"];
 
 /// A tool's state directory: the environment variable that names it, and the
 /// tool's documented default when that variable is absent. A relative default
@@ -106,6 +106,13 @@ struct ToolState {
 ///
 /// Every entry here is a *specific* directory. Adding one is a security
 /// decision: it grants the child read access to that path on the host.
+///
+/// Read access is all it grants, and all a confined build needs from this
+/// table: this ruleset handles no write access right, so `cargo fetch` can
+/// already populate `$CARGO_HOME/registry` under a scoped spawn. The write
+/// side of that grant is Bubblewrap's
+/// (`crate::linux_sandbox::mounts::append_cargo_download_cache_mounts`), which binds
+/// the same cache paths the macOS profile allows. [ORB-12469]
 const TOOL_STATE: &[ToolState] = &[
     ToolState {
         variable: "CARGO_HOME",
@@ -195,30 +202,6 @@ const XDG_TOOL_STATE: &[&str] = &["git"];
 /// documented locations, and recursing a Cargo registry to look for them would
 /// cost more than compiling the whole ruleset.
 const CREDENTIAL_FILE_NAMES: &[&str] = &["credentials", "credentials.json", "credentials.toml"];
-
-/// Every environment variable that widens the host read set.
-///
-/// Exposed so an operator can see, and a test can pin, exactly which names in a
-/// child environment turn into filesystem grants.
-pub const HOST_READ_ENV_VARS: &[&str] = &[
-    "CARGO_HOME",
-    "GH_CONFIG_DIR",
-    "GIT_CONFIG_GLOBAL",
-    "GIT_CONFIG_SYSTEM",
-    "NODE_PATH",
-    "NPM_CONFIG_PREFIX",
-    "NVM_DIR",
-    "ORBIT_BIN",
-    "ORBIT_REGISTRY_ROOT",
-    "ORBIT_ROOT",
-    "PATH",
-    "RUSTUP_HOME",
-    "SSL_CERT_DIR",
-    "SSL_CERT_FILE",
-    "TMPDIR",
-    "VIRTUAL_ENV",
-    "XDG_CONFIG_HOME",
-];
 
 /// Compile the host half of the ruleset for a child running with
 /// `environment`.

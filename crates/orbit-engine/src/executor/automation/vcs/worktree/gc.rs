@@ -1,21 +1,27 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
-use crate::executor::automation::vcs::git::git_command;
+use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 
-use super::super::git::git_success;
+use super::super::git::{git_command_success, git_output, git_success};
 use super::cleanup::remove_worktree;
-use super::{WorktreeIdentity, is_registered_worktree, resolve_shared_worktree_path};
+use super::{
+    WorktreeIdentity, path_is_registered, registered_worktree_paths, resolve_shared_worktree_path,
+};
+
+/// The Cargo build directory a worktree accumulates — the only path
+/// target-only collection touches.
+const BUILD_OUTPUT_DIR: &str = "target";
 
 /// Task statuses that settle the work as done — the only statuses that
 /// license discarding a run's worktree and branch. Every other status
@@ -33,6 +39,13 @@ pub struct WorktreeGcOptions {
     pub delete: bool,
     pub run_id: Option<String>,
     pub older_than: Option<DateTime<Utc>>,
+    /// Walk eligible worktrees to estimate reclaimable bytes. Dry-run skips
+    /// the walk unless this is set; deletion always measures before removal.
+    pub estimate_bytes: bool,
+    /// Reclaim only each eligible worktree's `target/` build output and keep
+    /// the checkout. Eligibility needs a terminal run with no live worker,
+    /// not a settled task, so failed and blocked runs stay rescuable.
+    pub target_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -45,7 +58,18 @@ pub struct WorktreeGcReport {
     pub pr_status: Option<String>,
     pub action: String,
     pub bytes_reclaimed: u64,
+    /// Why the action was taken, when the action alone does not say: the
+    /// owner transport's error, the missing owner route, the settled claim
+    /// that licensed removal, or the remedy for a worktree GC cannot touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
+
+/// What an operator can do about a directory Git does not list as a
+/// worktree of this checkout. GC never removes one.
+const NOT_REGISTERED_REMEDY: &str = "Git does not list this directory as a worktree of this \
+     checkout, so GC never removes it. If the worktree was moved, `git worktree repair <path>` \
+     re-registers it; otherwise inspect it and delete it by hand once nothing in it is needed.";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WorktreeGcResult {
@@ -66,6 +90,9 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
             known_paths.entry(path).or_default().push(run);
         }
     }
+
+    let registered = registered_worktree_paths(repo_root)?;
+    let lookups = SweepTaskLookups::new(task_host);
 
     let mut reports = Vec::new();
     for (path, matching_runs) in &known_paths {
@@ -95,16 +122,37 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                 pr_status: None,
                 action: "skipped:ambiguous_run_path".to_string(),
                 bytes_reclaimed: 0,
+                detail: None,
             }));
             continue;
         }
-        reports.push(classify_known(
-            repo_root,
-            path,
-            selected_runs[0],
-            task_host,
-            options,
-        )?);
+        let run = selected_runs[0];
+        // A single candidate's failure — a git timeout the recovery path
+        // could not absorb, a filesystem error, anything else unexpected —
+        // must not abort the sweep before it reaches every other worktree.
+        // Report it and move on; the pass as a whole still succeeds with a
+        // partial summary.
+        let report = classify_known(repo_root, path, run, &lookups, options, &registered)
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    path = %path.display(),
+                    run_id = %run.run_id,
+                    %error,
+                    "worktree GC failed to classify or remove a worktree; continuing the sweep"
+                );
+                WorktreeGcReport {
+                    path: path.clone(),
+                    run_id: Some(run.run_id.clone()),
+                    run_state: Some(run.state),
+                    task_id: None,
+                    task_status: None,
+                    pr_status: None,
+                    action: format!("failed:{error}"),
+                    bytes_reclaimed: 0,
+                    detail: None,
+                }
+            });
+        reports.push(report);
     }
 
     if options.run_id.is_none() {
@@ -120,6 +168,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                     pr_status: None,
                     action: "skipped:unrecognized".to_string(),
                     bytes_reclaimed: 0,
+                    detail: None,
                 });
             }
         }
@@ -127,7 +176,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
 
     // This repairs already-stale Git administration entries. It is safe in
     // dry-run mode because it never removes a worktree directory or branch.
-    git(repo_root, &["worktree", "prune"])?;
+    git_success(repo_root, &["worktree", "prune"])?;
 
     reports.sort_by(|left, right| left.path.cmp(&right.path));
     let bytes_reclaimed = reports.iter().map(|report| report.bytes_reclaimed).sum();
@@ -138,19 +187,86 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     })
 }
 
+/// One sweep's task lookups. Results and transport failures are memoized by
+/// owner route and task, so a down owner is contacted once while another
+/// route can still answer. A missing route is not an outage and is not carried
+/// over: another run's claim may name a route.
+struct SweepTaskLookups<'a, H: RuntimeHost + ?Sized> {
+    host: &'a H,
+    answers: RefCell<BTreeMap<(String, String), WorktreeGcTaskLookup>>,
+    owner_unreachable: RefCell<BTreeMap<String, String>>,
+}
+
+impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
+    fn new(host: &'a H) -> Self {
+        Self {
+            host,
+            answers: RefCell::new(BTreeMap::new()),
+            owner_unreachable: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    fn lookup(&self, run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
+        let scope = self.host.worktree_gc_task_lookup_scope(run_id);
+        if let Some(scope) = scope.as_ref() {
+            let key = (scope.clone(), task_id.to_string());
+            if let Some(answer) = self.answers.borrow().get(&key) {
+                return answer.clone();
+            }
+            if let Some(reason) = self.owner_unreachable.borrow().get(scope) {
+                return WorktreeGcTaskLookup::OwnerUnreachable(reason.clone());
+            }
+        }
+        let answer = self.host.lookup_task_for_worktree_gc(run_id, task_id);
+        if let Some(scope) = scope {
+            match &answer {
+                WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
+                    self.owner_unreachable
+                        .borrow_mut()
+                        .insert(scope, reason.clone());
+                }
+                WorktreeGcTaskLookup::NoOwnerRoute(_) => {}
+                _ => {
+                    self.answers
+                        .borrow_mut()
+                        .insert((scope, task_id.to_string()), answer.clone());
+                }
+            }
+        }
+        answer
+    }
+}
+
 fn classify_known<H: RuntimeHost + ?Sized>(
     repo_root: &Path,
     path: &Path,
     run: &JobRun,
-    task_host: &H,
+    lookups: &SweepTaskLookups<'_, H>,
     options: &WorktreeGcOptions,
+    registered: &BTreeSet<PathBuf>,
 ) -> Result<WorktreeGcReport, OrbitError> {
     let task_ids = attributed_task_ids(run);
-    let resolved = task_ids
-        .iter()
-        .map(|task_id| (task_id.clone(), task_host.get_task(task_id).ok()))
-        .collect::<Vec<(String, Option<Task>)>>();
-    let first_task = resolved.first().and_then(|(_, task)| task.as_ref());
+    // A claimed leaf whose claim is settled with its owner needs no task
+    // answer: the owner already holds what the leaf delivered.
+    let settled_claim = if options.target_only {
+        None
+    } else {
+        lookups.host.settled_claim_for_worktree_gc(&run.run_id)
+    };
+    // Target-only collection never consults task state, so it never pays a
+    // store or owner round trip per task; neither does a settled claim.
+    let resolved = if options.target_only || settled_claim.is_some() {
+        Vec::new()
+    } else {
+        task_ids
+            .iter()
+            .map(|task_id| (task_id.clone(), lookups.lookup(&run.run_id, task_id)))
+            .collect::<Vec<(String, WorktreeGcTaskLookup)>>()
+    };
+    let first_task = resolved.first().and_then(|(_, lookup)| match lookup {
+        WorktreeGcTaskLookup::Found { status, pr_status } => Some((*status, pr_status.clone())),
+        _ => None,
+    });
 
     let mut report = WorktreeGcReport {
         path: path.to_path_buf(),
@@ -159,10 +275,11 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         // A bundle worktree serves several tasks; name all of them until a
         // single one is identified as the reason it is retained.
         task_id: (!task_ids.is_empty()).then(|| task_ids.join(",")),
-        task_status: first_task.map(|task| task.status),
-        pr_status: first_task.and_then(|task| task.pr_status.clone()),
+        task_status: first_task.as_ref().map(|(status, _)| *status),
+        pr_status: first_task.and_then(|(_, pr_status)| pr_status),
         action: String::new(),
         bytes_reclaimed: 0,
+        detail: None,
     };
 
     // Secondary gate: never disturb a worktree that may still back a live
@@ -188,9 +305,13 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         report.action = "skipped:not_a_real_directory".to_string();
         return Ok(report);
     }
-    if !is_registered_worktree(repo_root, path)? {
+    if !path_is_registered(registered, path) {
         report.action = "skipped:not_registered_worktree".to_string();
+        report.detail = Some(NOT_REGISTERED_REMEDY.to_string());
         return Ok(report);
+    }
+    if options.target_only {
+        return collect_build_output(path, run, options, report);
     }
 
     // Primary gate: only a task settled to rejected, archived, or done
@@ -203,25 +324,55 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     // eligible only when *every* task it serves is settled, so a bundle is
     // never easier to discard than its least-settled member. The first
     // member that blocks deletion becomes the reported task.
-    if resolved.is_empty() {
+    //
+    // A claimed leaf's settled claim stands in for its task's status: the
+    // follower holds no task records, and the owner already has the leaf's
+    // delivery whatever the task's status says now.
+    if let Some(settlement) = settled_claim {
+        report.detail = Some(settlement);
+    } else if resolved.is_empty() {
         report.action = "skipped:unattributed".to_string();
         return Ok(report);
     }
-    for (task_id, task) in &resolved {
-        let Some(task) = task else {
-            report.task_id = Some(task_id.clone());
-            report.task_status = None;
-            report.pr_status = None;
-            report.action = "skipped:task_unresolved".to_string();
-            return Ok(report);
+    for (task_id, lookup) in resolved {
+        let (task_status, pr_status, action, detail) = match lookup {
+            WorktreeGcTaskLookup::Found { status, pr_status } => {
+                if task_status_permits_deletion(status) {
+                    continue;
+                }
+                (
+                    Some(status),
+                    pr_status,
+                    "skipped:task_status_ineligible",
+                    None,
+                )
+            }
+            WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved", None),
+            WorktreeGcTaskLookup::NoOwnerRoute(reason) => {
+                (None, None, "skipped:no_owner_route", Some(reason))
+            }
+            WorktreeGcTaskLookup::OwnerLookupFailed(reason) => {
+                (None, None, "skipped:owner_lookup_failed", Some(reason))
+            }
+            // A replica's task state lives on its owner. Not reaching the
+            // owner is not evidence the task is unknown, so say which it was.
+            WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    run_id = %run.run_id,
+                    %task_id,
+                    %reason,
+                    "worktree GC could not reach the workspace owner to resolve a task; retaining the worktree"
+                );
+                (None, None, "skipped:owner_unreachable", Some(reason))
+            }
         };
-        if !task_status_permits_deletion(task.status) {
-            report.task_id = Some(task_id.clone());
-            report.task_status = Some(task.status);
-            report.pr_status = task.pr_status.clone();
-            report.action = "skipped:task_status_ineligible".to_string();
-            return Ok(report);
-        }
+        report.task_id = Some(task_id);
+        report.task_status = task_status;
+        report.pr_status = pr_status;
+        report.action = action.to_string();
+        report.detail = detail;
+        return Ok(report);
     }
 
     // Reported safety net, not a deletion gate: a task can be settled with
@@ -242,10 +393,14 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         }
     };
 
-    let estimated_bytes = directory_bytes(path)?;
+    let estimated_bytes = if options.delete || options.estimate_bytes {
+        directory_bytes(path)?
+    } else {
+        0
+    };
     if !options.delete {
         report.action = "would_remove".to_string();
-        // In dry-run mode this is the estimate of what `--yes` would reclaim;
+        // Dry-run skips the recursive walk unless `estimate_bytes` is set;
         // the result's `dry_run` flag says nothing was actually freed.
         report.bytes_reclaimed = estimated_bytes;
         return Ok(report);
@@ -267,6 +422,100 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         "removed".to_string()
     };
     Ok(report)
+}
+
+/// Target-only collection: reclaim `<worktree>/target` and nothing else.
+///
+/// The checkout — committed, uncommitted and untracked work alike — stays, so
+/// a failed or blocked run can still be rescued. That is why the task gate
+/// does not apply here: the caller has already required a terminal run, and
+/// the build output is reproducible from the checkout it sits in.
+fn collect_build_output(
+    worktree: &Path,
+    run: &JobRun,
+    options: &WorktreeGcOptions,
+    mut report: WorktreeGcReport,
+) -> Result<WorktreeGcReport, OrbitError> {
+    // A terminal run record can precede its worker's actual exit (a cancelled
+    // agent still finishing a build). A recorded worker that is alive, or
+    // whose liveness cannot be decided, keeps its build output.
+    if run.pid.is_some_and(|pid| {
+        probe_process_liveness(pid, run.pid_start_time.as_deref()) != ProcessLiveness::Exited
+    }) {
+        report.action = "skipped:worker_alive".to_string();
+        return Ok(report);
+    }
+    let target = worktree.join(BUILD_OUTPUT_DIR);
+    let metadata = match fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            report.action = "skipped:no_target".to_string();
+            return Ok(report);
+        }
+        Err(error) => {
+            return Err(OrbitError::Execution(format!(
+                "failed to inspect build output '{}': {error}",
+                target.display()
+            )));
+        }
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        report.action = "skipped:target_not_a_real_directory".to_string();
+        return Ok(report);
+    }
+    // Only ignored content is build output. A tracked file, or an untracked
+    // one Git does not ignore, under `target/` is somebody's work.
+    if !git_output(
+        worktree,
+        &[
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            BUILD_OUTPUT_DIR,
+        ],
+    )?
+    .trim()
+    .is_empty()
+    {
+        report.action = "skipped:target_not_ignored".to_string();
+        return Ok(report);
+    }
+
+    let estimated_bytes = if options.delete || options.estimate_bytes {
+        directory_bytes(&target)?
+    } else {
+        0
+    };
+    report.bytes_reclaimed = estimated_bytes;
+    if !options.delete {
+        report.action = "would_remove_target".to_string();
+        return Ok(report);
+    }
+    // `remove_dir_all` unlinks symlinks inside the tree rather than following
+    // them, so nothing outside `target/` is reachable from here.
+    fs::remove_dir_all(&target).map_err(|error| {
+        OrbitError::Execution(format!(
+            "failed to remove build output '{}': {error}",
+            target.display()
+        ))
+    })?;
+    report.action = "removed_target".to_string();
+    Ok(report)
+}
+
+/// Whether any worktree this run could have left behind still holds a real
+/// `target/` build output directory. A cheap probe — no Git, no walk — for
+/// callers that sweep many finished runs and collect only those with
+/// something to reclaim.
+pub fn run_worktree_has_build_output(repo_root: &Path, run: &JobRun) -> bool {
+    expected_paths(repo_root, run).is_ok_and(|paths| {
+        paths.iter().any(|path| {
+            fs::symlink_metadata(path.join(BUILD_OUTPUT_DIR))
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        })
+    })
 }
 
 /// Every directory this run could have left behind.
@@ -344,18 +593,8 @@ fn branch_name(worktree: &Path) -> Result<String, OrbitError> {
     Ok(branch.to_string())
 }
 
-/// Match on canonical paths, not raw strings. `git worktree list` reports the
-/// resolved path, while the caller holds whatever path it was handed. Where the
-/// two differ only by a symlink on the way down — on macOS `/var` and `/tmp`
-/// are symlinks into `/private`, so any worktree under them reports one path
-/// and is asked about under another — a literal comparison reads a registered
-/// worktree as unregistered and GC retains it forever.
-///
-/// The literal comparison is kept as the fast path, and a registered entry
-/// whose directory has already been removed simply fails to canonicalize and
-/// does not match, which is the same answer the literal comparison gave.
 fn branch_exists(repo_root: &Path, branch: &str) -> bool {
-    git_command(
+    git_command_success(
         repo_root,
         &[
             "show-ref",
@@ -364,8 +603,7 @@ fn branch_exists(repo_root: &Path, branch: &str) -> bool {
             &format!("refs/heads/{branch}"),
         ],
     )
-    .status()
-    .is_ok_and(|status| status.success())
+    .unwrap_or(false)
 }
 
 fn directory_bytes(path: &Path) -> Result<u64, OrbitError> {
@@ -397,30 +635,4 @@ fn directory_bytes(path: &Path) -> Result<u64, OrbitError> {
         }
     }
     Ok(total)
-}
-
-fn git_output(cwd: &Path, args: &[&str]) -> Result<String, OrbitError> {
-    let output = git_raw(cwd, args)?;
-    String::from_utf8(output.stdout)
-        .map_err(|error| OrbitError::Execution(format!("git output was not UTF-8: {error}")))
-}
-
-fn git(cwd: &Path, args: &[&str]) -> Result<(), OrbitError> {
-    let _ = git_raw(cwd, args)?;
-    Ok(())
-}
-
-fn git_raw(cwd: &Path, args: &[&str]) -> Result<Output, OrbitError> {
-    let output = git_command(cwd, args)
-        .output()
-        .map_err(|error| OrbitError::Execution(format!("failed to run git: {error}")))?;
-    if output.status.success() {
-        return Ok(output);
-    }
-    Err(OrbitError::Execution(format!(
-        "git {} failed in '{}': {}",
-        args.join(" "),
-        cwd.display(),
-        String::from_utf8_lossy(&output.stderr).trim()
-    )))
 }

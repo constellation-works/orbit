@@ -3,63 +3,180 @@
 //! The profile is a last-match-wins list of globs; a Landlock ruleset is a set
 //! of inodes. Translating one into the other means walking the workspace once
 //! and deciding, per path, whether the child may read it.
+//!
+//! The translation is driven by what the exclusion *rules* can name, not by
+//! which denied paths happen to exist when the walk runs. A ruleset compiled
+//! from the second would hand out a whole directory whenever today's tree
+//! contained no match, and a name created in it afterwards — by the child or
+//! by anyone else sharing the workspace — would inherit that grant. See
+//! [`DenyReach`].
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_types::policy::{CompiledFsRules, FsOperation, ResolvedFsProfile};
+use orbit_types::policy::{CompiledFsRules, FsOperation, GlobReach, ResolvedFsProfile};
 
 use super::LandlockPathGrant;
+
+/// The workspace half of a compiled ruleset, and the exclusions it leaves to
+/// another layer.
+#[derive(Debug, Default)]
+pub(super) struct WorkspaceReadGrants {
+    pub(super) grants: Vec<LandlockPathGrant>,
+    /// Exclusions whose reach no inode ruleset can carve out ahead of time.
+    /// See [`DenyReach::compile`] for why they are reported rather than
+    /// enforced.
+    pub(super) unenforced_exclusions: Vec<String>,
+}
 
 /// Compile the workspace half of the ruleset for `profile`.
 pub(super) fn workspace_read_grants(
     workspace_root: &Path,
     profile: &ResolvedFsProfile,
-) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+) -> Result<WorkspaceReadGrants, OrbitError> {
     let rules = profile.compile(FsOperation::Read)?;
     if rules.grants_nothing() {
-        return Ok(Vec::new());
+        return Ok(WorkspaceReadGrants::default());
     }
 
-    if rules.allows(".")? {
-        return grant_read_tree(workspace_root, workspace_root, &rules);
-    }
-    allowed_subtrees(workspace_root, workspace_root, &rules)
+    let reach = DenyReach::compile(workspace_root, &rules)?;
+    let grants = if rules.allows(".")? {
+        grant_read_tree(workspace_root, workspace_root, &rules, &reach)?
+    } else {
+        allowed_subtrees(workspace_root, workspace_root, &rules, &reach)?
+    };
+
+    Ok(WorkspaceReadGrants {
+        grants,
+        unenforced_exclusions: reach.unenforced,
+    })
 }
 
-/// Grant `root` as a readable tree, carving out every denied path beneath it.
+/// Where the profile's exclusions can still name a path that does not exist.
+///
+/// # Why a ruleset needs this
+/// Landlock rules bind to inodes, and the ruleset is fixed before the child
+/// starts. Granting a directory as a readable tree therefore grants every name
+/// that will ever appear in it. Consulting only the denied paths present at
+/// compile time makes the boundary depend on timing: the same profile enforces
+/// a secret that already exists and discloses the identical secret written a
+/// moment later.
+///
+/// Asking the rules instead removes the timing. A directory a bounded
+/// exclusion can name into is granted list-only, so a name appearing there
+/// afterwards has no readable ancestor, exactly as if it had been present all
+/// along.
+///
+/// # What stays unenforced, and why it is reported
+/// An exclusion whose reach is unbounded — a `**` that crosses directories, as
+/// in `**/.env` — can name a path beneath *every* directory in the workspace.
+/// Carving that out ahead of time means granting no directory as a tree at
+/// all, which withdraws read access from every file the run itself produces:
+/// a compiler cannot read back the object it just wrote, and the boundary
+/// stops being one any build can run under (F2026-09-054 measured exactly
+/// this). Such a rule is not silently dropped either. It is carried out on
+/// [`WorkspaceReadGrants::unenforced_exclusions`] so the spawn boundary can
+/// say which part of the profile the kernel is not holding, and it keeps its
+/// full effect in the request-time policy check, which decides a concrete path
+/// and needs no ruleset.
+struct DenyReach<'a> {
+    workspace_root: &'a Path,
+    /// Exclusions whose reach their own segments bound.
+    bounded: Vec<GlobReach>,
+    /// Exclusions reported rather than compiled, as written.
+    unenforced: Vec<String>,
+}
+
+impl<'a> DenyReach<'a> {
+    fn compile(
+        workspace_root: &'a Path,
+        rules: &CompiledFsRules,
+    ) -> Result<DenyReach<'a>, OrbitError> {
+        let mut bounded = Vec::new();
+        let mut unenforced = Vec::new();
+        for exclusion in rules.exclusions() {
+            let reach = GlobReach::compile(exclusion).map_err(|error| {
+                OrbitError::InvalidInput(format!(
+                    "landlock cannot compile read exclusion `{exclusion}`: {error}"
+                ))
+            })?;
+            if reach.is_bounded() {
+                bounded.push(reach);
+            } else {
+                unenforced.push(exclusion.to_string());
+            }
+        }
+        Ok(DenyReach {
+            workspace_root,
+            bounded,
+            unenforced,
+        })
+    }
+
+    /// A reach that names nothing, for a carve-out driven by an explicit file
+    /// list rather than by a rule set.
+    fn none(workspace_root: &'a Path) -> DenyReach<'a> {
+        DenyReach {
+            workspace_root,
+            bounded: Vec::new(),
+            unenforced: Vec::new(),
+        }
+    }
+
+    /// Whether a bounded exclusion can name a path beneath `dir`.
+    ///
+    /// A later positive rule may re-allow part of what an exclusion names.
+    /// This does not model that: re-allowing narrows a grant rather than
+    /// widening it, so treating the directory as reachable costs read access
+    /// to names that do not exist yet and never discloses one.
+    fn names_beneath(&self, dir: &Path) -> Result<bool, OrbitError> {
+        if self.bounded.is_empty() {
+            return Ok(false);
+        }
+        let relative = relative_to(self.workspace_root, dir)?;
+        Ok(self
+            .bounded
+            .iter()
+            .any(|reach| reach.names_beneath(&relative)))
+    }
+}
+
+/// Grant `root` as a readable tree, carving out every path the profile denies
+/// it — the ones present now, and the ones its exclusions can still name.
 ///
 /// A directory holding a denied path cannot be granted as a tree, because a
 /// path-beneath rule reaches every descendant. Such a directory is granted
 /// list-only and each allowed child is granted in its own right, recursively.
-/// The denied path is then left with no readable ancestor at all.
+/// The denied path is then left with no readable ancestor at all. A directory
+/// a bounded exclusion can still name into is treated the same way, so the
+/// grant does not depend on whether that name has been created yet.
 ///
 /// # What this does and does not deny
-/// The carve-out is computed from the paths that exist when the ruleset is
-/// compiled, and Landlock rules bind to inodes. Consequences, all covered by
-/// tests:
+/// Landlock rules bind to inodes, which decides the semantics at the edges.
+/// Consequences, all covered by tests:
 ///
-/// - A denied file that exists at spawn stays unreadable for the child's whole
-///   life, including after the child renames it within its directory: the
-///   inode keeps no readable ancestor.
+/// - A denied path stays unreadable for the child's whole life whether it
+///   existed at spawn or appeared afterwards, including after a rename within
+///   its directory: the inode keeps no readable ancestor.
 /// - The child cannot move a denied file into a readable directory. Landlock
 ///   refuses a rename that would give a file more access at its destination,
 ///   which is why `REFER` is handled.
-/// - A file matching a deny rule that is *created* later under an
-///   already-granted directory is readable by that child. That discloses
-///   nothing the child could not already obtain — either the child wrote those
-///   bytes, or it copied them from somewhere this ruleset already allowed.
-///   A concurrent third party writing a new secret into the workspace during
-///   the child's lifetime is the residual race, and it is why `denyRead` is
-///   also enforced at request time by the policy engine.
-pub(super) fn grant_read_tree(
+/// - The boundary governs acquisition, not naming. A file the ruleset already
+///   grants keeps its grant through a rename or a hard link into a denied
+///   name, because the grant is on the inode and the child could read those
+///   bytes before it renamed anything. Bytes already in the child's memory, an
+///   open descriptor, or a mapping are equally beyond recall.
+/// - An exclusion whose reach is unbounded is reported rather than carved out;
+///   see [`DenyReach`].
+fn grant_read_tree(
     workspace_root: &Path,
     root: &Path,
     rules: &CompiledFsRules,
+    reach: &DenyReach<'_>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     let denied = denied_paths(workspace_root, root, rules)?;
-    carve_out(root, &denied)
+    carve_out_beneath(root, &denied, reach, &mut BTreeSet::new())
 }
 
 /// Walk into a workspace whose root is not itself allowed, granting the
@@ -68,13 +185,34 @@ fn allowed_subtrees(
     workspace_root: &Path,
     dir: &Path,
     rules: &CompiledFsRules,
+    reach: &DenyReach<'_>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    allowed_subtrees_in(workspace_root, dir, rules, reach, &mut BTreeSet::new())
+}
+
+fn allowed_subtrees_in(
+    workspace_root: &Path,
+    dir: &Path,
+    rules: &CompiledFsRules,
+    reach: &DenyReach<'_>,
+    walked: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    // `dir` may be an alias of a directory this walk is already inside.
+    if !enter_dir(walked, dir) {
+        return Ok(Vec::new());
+    }
     let mut grants = Vec::new();
     for child in children_under(workspace_root, dir)? {
         if rules.allows(&relative_to(workspace_root, &child)?)? {
-            grants.extend(grant_read_tree(workspace_root, &child, rules)?);
+            grants.extend(grant_read_tree(workspace_root, &child, rules, reach)?);
         } else if child.is_dir() {
-            grants.extend(allowed_subtrees(workspace_root, &child, rules)?);
+            grants.extend(allowed_subtrees_in(
+                workspace_root,
+                &child,
+                rules,
+                reach,
+                walked,
+            )?);
         }
     }
     Ok(grants)
@@ -89,7 +227,13 @@ fn denied_paths(
 ) -> Result<BTreeSet<PathBuf>, OrbitError> {
     let mut denied = BTreeSet::new();
     if rules.has_exclusion() {
-        collect_denied(workspace_root, root, rules, &mut denied)?;
+        collect_denied(
+            workspace_root,
+            root,
+            rules,
+            &mut denied,
+            &mut BTreeSet::new(),
+        )?;
     }
     Ok(denied)
 }
@@ -99,38 +243,148 @@ fn collect_denied(
     dir: &Path,
     rules: &CompiledFsRules,
     denied: &mut BTreeSet<PathBuf>,
+    walked: &mut BTreeSet<PathBuf>,
 ) -> Result<(), OrbitError> {
+    if !enter_dir(walked, dir) {
+        return Ok(());
+    }
     for child in children_under(workspace_root, dir)? {
         if !rules.allows(&relative_to(workspace_root, &child)?)? {
             denied.insert(child);
         } else if child.is_dir() {
-            collect_denied(workspace_root, &child, rules, denied)?;
+            collect_denied(workspace_root, &child, rules, denied, walked)?;
         }
     }
     Ok(())
 }
 
 /// Grant `root` while leaving every path in `denied` without a readable
-/// ancestor. Shared with the host grants, which carve credential files out of
-/// an otherwise readable tool state directory the same way.
+/// ancestor. Used by the host grants, which carve credential files out of an
+/// otherwise readable tool state directory from a fixed file list rather than
+/// from a rule set.
 pub(super) fn carve_out(
     root: &Path,
     denied: &BTreeSet<PathBuf>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    carve_out_beneath(root, denied, &DenyReach::none(root), &mut BTreeSet::new())
+}
+
+/// Grant `root` while leaving every denied path beneath it with no grant at
+/// all — not even a listable ancestor.
+///
+/// [`carve_out`] leaves the directory holding a denied path granted list-only,
+/// which is right for a credential *file* beside readable siblings: the
+/// directory still has to be listable for the tool that owns it to work. A
+/// denied *directory* needs more, because Landlock rights apply down the whole
+/// hierarchy: a list-only ancestor would let the child enumerate the denied
+/// directory's contents, which for a directory of credentials is most of the
+/// disclosure. Here every allowed child is granted in its own right and no
+/// ancestor of a denied path is granted anything, so listing it is refused
+/// too. The cost is that the ancestors themselves stop being listable; naming
+/// a file inside a denied directory as its own read root is how the one entry
+/// a child is entitled to is granted back [ORB-12798].
+pub(super) fn carve_out_unlistable(
+    root: &Path,
+    denied: &BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    carve_out_unlistable_in(root, denied, &mut BTreeSet::new())
+}
+
+fn carve_out_unlistable_in(
+    root: &Path,
+    denied: &BTreeSet<PathBuf>,
+    walked: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     if denied.contains(root) {
         return Ok(Vec::new());
     }
-    let holds_denied_path = denied.iter().any(|path| path.starts_with(root));
-    if !holds_denied_path {
+    if !denied.iter().any(|path| path.starts_with(root)) {
         return Ok(vec![whole_path_grant(root)]);
     }
     if !root.is_dir() {
         return Ok(Vec::new());
     }
+    if !enter_dir(walked, root) {
+        return Ok(Vec::new());
+    }
+    let mut grants = Vec::new();
+    for child in children_under(root, root)? {
+        grants.extend(carve_out_unlistable_in(&child, denied, walked)?);
+    }
+    Ok(grants)
+}
+
+/// Grant `root` for an explicit boundary: every `unlistable` path keeps no
+/// granted ancestor ([`carve_out_unlistable`]), and every `listable` path
+/// keeps a list-only one ([`carve_out`]).
+///
+/// The two answer different owners. `unlistable` holds host trees — callback
+/// sessions, grant witnesses, other plugins' state — whose names are part of
+/// what is protected. `listable` holds an agent's own read exclusions, which
+/// the activity ruleset carves with list-only ancestors, so a brokered backend
+/// sees the workspace the way the agent would. With no `listable` path this
+/// is exactly [`carve_out_unlistable`].
+pub(super) fn carve_out_boundary(
+    root: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    carve_out_boundary_in(root, unlistable, listable, &mut BTreeSet::new())
+}
+
+fn carve_out_boundary_in(
+    root: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+    walked: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    if listable.is_empty() {
+        return carve_out_unlistable(root, unlistable);
+    }
+    if unlistable.contains(root) || listable.contains(root) {
+        return Ok(Vec::new());
+    }
+    if !unlistable.iter().any(|path| path.starts_with(root)) {
+        return carve_out(root, listable);
+    }
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    if !enter_dir(walked, root) {
+        return Ok(Vec::new());
+    }
+    let mut grants = Vec::new();
+    for child in children_under(root, root)? {
+        grants.extend(carve_out_boundary_in(&child, unlistable, listable, walked)?);
+    }
+    Ok(grants)
+}
+
+/// Grant `root` while leaving both the denied paths beneath it and the paths
+/// `reach` can still name there without a readable ancestor.
+fn carve_out_beneath(
+    root: &Path,
+    denied: &BTreeSet<PathBuf>,
+    reach: &DenyReach<'_>,
+    walked: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    if denied.contains(root) {
+        return Ok(Vec::new());
+    }
+    let holds_denied_path = denied.iter().any(|path| path.starts_with(root));
+    if !holds_denied_path && !reach.names_beneath(root)? {
+        return Ok(vec![whole_path_grant(root)]);
+    }
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    if !enter_dir(walked, root) {
+        return Ok(Vec::new());
+    }
 
     let mut grants = vec![LandlockPathGrant::list_only(root.to_path_buf())];
     for child in children_under(root, root)? {
-        grants.extend(carve_out(&child, denied)?);
+        grants.extend(carve_out_beneath(&child, denied, reach, walked)?);
     }
     Ok(grants)
 }
@@ -147,6 +401,13 @@ fn whole_path_grant(path: &Path) -> LandlockPathGrant {
 /// `boundary`. A symlink pointing out of the workspace must not smuggle an
 /// outside path into the ruleset; the child following that link is denied at
 /// the resolved location, which is where the profile is defined.
+///
+/// A directory symlink is returned as its canonical target. That target may
+/// be `dir` itself (`loop -> .`) or another directory this walk has already
+/// entered, and the canonical path does not grow, so the kernel `ELOOP`
+/// limit never stops the walk. Recursive callers bound that with
+/// [`enter_dir`]: the first visit grants the target, and a later alias of
+/// the same directory is not entered again.
 ///
 /// This runs once per directory before every activity-scoped spawn, so it
 /// avoids per-entry syscalls: `dir` is already canonical, which makes a
@@ -178,6 +439,16 @@ fn children_under(boundary: &Path, dir: &Path) -> Result<Vec<PathBuf>, OrbitErro
         }
     }
     Ok(children)
+}
+
+/// Whether `dir` is new to this walk.
+///
+/// Keys are the canonical paths [`children_under`] already returns. A second
+/// sighting is an alias (or a cycle back to one), not a new tree: its
+/// children were listed on the first visit, which is what keeps an in-bound
+/// alias's grants while a cycle terminates.
+fn enter_dir(walked: &mut BTreeSet<PathBuf>, dir: &Path) -> bool {
+    walked.insert(dir.to_path_buf())
 }
 
 fn relative_to(workspace_root: &Path, path: &Path) -> Result<String, OrbitError> {

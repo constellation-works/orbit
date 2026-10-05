@@ -1,11 +1,14 @@
 use std::fmt::Write as _;
 
-use orbit_core::{JobRun, JobRunState, JobRunStep, OrbitError, OrbitRuntime, find_workflow};
+use orbit_core::application::job::run_error_step;
+use orbit_core::{OrbitError, OrbitRuntime, find_workflow};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
 
-pub(super) const TASK_AUTO_PIPELINE_JOB: &str = "task_auto_pipeline";
+/// Terminal wait statuses that mean the submitted run did not succeed.
+pub(super) const FAILED_WAIT_STATUSES: [&str; 4] =
+    ["failed", "timeout", "cancelled", "interrupted"];
 
 #[derive(Clone)]
 pub(crate) struct WorkflowDispatchResult {
@@ -79,12 +82,12 @@ pub(crate) fn dispatch_workflow(
             attempt: run.attempt,
             error_code: run_details
                 .as_ref()
-                .and_then(summary_step)
+                .and_then(run_error_step)
                 .and_then(|step| step.error_code.clone()),
             error_message: wait_entry.and_then(|entry| entry.error).or_else(|| {
                 run_details
                     .as_ref()
-                    .and_then(summary_step)
+                    .and_then(run_error_step)
                     .and_then(|step| step.error_message.clone())
             }),
         });
@@ -93,11 +96,40 @@ pub(crate) fn dispatch_workflow(
     Ok(results)
 }
 
+/// Render dispatched workflow runs, failing the command when any waited run
+/// ended in a non-success terminal state. Submitted and queued runs report no
+/// outcome yet, so they keep a zero exit.
 pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
 ) -> CommandOut {
-    let doc = if runs.len() == 1 {
+    workflow_dispatch_payload_with_warning(workflow_alias, runs, Vec::new())
+}
+
+/// [`workflow_dispatch_payload`] with the admission warnings the submission
+/// proceeded past, such as a host resource throttle [ORB-13901] or a
+/// validation environment that may not find the user's toolchain
+/// [ORB-13987]. The warnings are `.warning` in JSON (one per line) and one
+/// `Warning:` line each in text; the exit code is unchanged.
+pub(crate) fn workflow_dispatch_payload_with_warning(
+    workflow_alias: &'static str,
+    runs: &[WorkflowDispatchResult],
+    warnings: Vec<String>,
+) -> CommandOut {
+    workflow_dispatch_payload_with_notices(workflow_alias, runs, warnings, Vec::new())
+}
+
+/// [`workflow_dispatch_payload_with_warning`] plus informational notes about
+/// how the submission is configured, such as running no required validation.
+/// Notes are `.note` in JSON (one per line) and one `Note:` line each in
+/// text; they never change the exit code.
+pub(crate) fn workflow_dispatch_payload_with_notices(
+    workflow_alias: &'static str,
+    runs: &[WorkflowDispatchResult],
+    warnings: Vec<String>,
+    notes: Vec<String>,
+) -> CommandOut {
+    let mut doc = if runs.len() == 1 {
         workflow_dispatch_result_to_json(&runs[0])
     } else {
         json!({
@@ -108,37 +140,26 @@ pub(crate) fn workflow_dispatch_payload(
                 .collect::<Vec<_>>(),
         })
     };
-    let text = runs
+    let mut lines = runs
         .iter()
         .flat_map(workflow_dispatch_result_lines)
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(Payload::detail(doc, text).into())
-}
-
-fn summary_step(run: &JobRun) -> Option<&JobRunStep> {
-    run.steps
+        .collect::<Vec<_>>();
+    if !warnings.is_empty() {
+        lines.extend(warnings.iter().map(|warning| format!("Warning: {warning}")));
+        doc["warning"] = json!(warnings.join("\n"));
+    }
+    if !notes.is_empty() {
+        lines.extend(notes.iter().map(|note| format!("Note: {note}")));
+        doc["note"] = json!(notes.join("\n"));
+    }
+    let payload = Payload::detail(doc, lines.join("\n"));
+    if runs
         .iter()
-        .rev()
-        .find(|step| step.error_code.is_some() || step.error_message.is_some())
-        .or_else(|| {
-            run.steps.iter().rev().find(|step| {
-                matches!(
-                    step.state,
-                    JobRunState::Failed
-                        | JobRunState::Timeout
-                        | JobRunState::Cancelled
-                        | JobRunState::Interrupted
-                )
-            })
-        })
-        .or_else(|| {
-            run.steps
-                .iter()
-                .rev()
-                .find(|step| step.state != JobRunState::Skipped)
-        })
-        .or_else(|| run.steps.last())
+        .any(|run| FAILED_WAIT_STATUSES.contains(&run.state.as_str()))
+    {
+        return Ok(payload.with_exit_code(1).into());
+    }
+    Ok(payload.into())
 }
 
 pub(super) fn workflow_dispatch_result_to_json(run: &WorkflowDispatchResult) -> Value {
@@ -154,7 +175,7 @@ pub(super) fn workflow_dispatch_result_to_json(run: &WorkflowDispatchResult) -> 
     value
 }
 
-pub(super) fn workflow_dispatch_result_lines(run: &WorkflowDispatchResult) -> Vec<String> {
+fn workflow_dispatch_result_lines(run: &WorkflowDispatchResult) -> Vec<String> {
     if matches!(run.state.as_str(), "submitted" | "queued")
         && run.error_code.is_none()
         && run.error_message.is_none()
@@ -189,4 +210,40 @@ pub(super) fn workflow_dispatch_result_lines(run: &WorkflowDispatchResult) -> Ve
 
 fn single_line(value: &str) -> String {
     value.replace(['\n', '\r'], " ")
+}
+
+/// Human lines for the pull settlements a cancel or stop carried
+/// [ORB-13663]. Empty when the pass touched nothing.
+pub(super) fn pull_settlement_lines(entries: &[orbit_core::PullSettlementEntry]) -> Vec<String> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!(
+        "Pull settlements ({} admission{}):",
+        entries.len(),
+        if entries.len() == 1 { "" } else { "s" }
+    )];
+    lines.extend(
+        entries
+            .iter()
+            .map(|entry| format!("  {}", entry.describe())),
+    );
+    if entries.iter().any(|entry| {
+        matches!(
+            entry.outcome.as_str(),
+            "pending_delivery" | "owner_unreachable" | "pending"
+        )
+    }) {
+        lines.push(
+            "Undelivered settlements stay recorded; rerun `orbit run auto --stop` once the owner \
+             is reachable."
+                .to_string(),
+        );
+    }
+    lines
+}
+
+/// The JSON form of [`pull_settlement_lines`].
+pub(super) fn pull_settlements_json(entries: &[orbit_core::PullSettlementEntry]) -> Value {
+    serde_json::to_value(entries).unwrap_or_else(|_| Value::Array(Vec::new()))
 }

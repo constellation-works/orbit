@@ -23,13 +23,13 @@ impl Tool for OrbitAutoTaskAddTool {
             },
             ToolParam {
                 name: "schedule".to_string(),
-                description: "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: integrated_qa_v1 or landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine). Required.".to_string(),
+                description: "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine). Required.".to_string(),
                 param_type: "object".to_string(),
                 required: true,
             },
             ToolParam {
                 name: "template".to_string(),
-                description: "Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, crew?, status? }`. `required_tools` is an exact canonical-name list copied to every minted task. Provider-neutral — no turn knobs. Required.".to_string(),
+                description: "Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task. Provider-neutral — no turn knobs. Required.".to_string(),
                 param_type: "object".to_string(),
                 required: true,
             },

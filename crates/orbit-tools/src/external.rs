@@ -2,12 +2,12 @@ use std::env;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
-use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode, run_process};
+use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
-use crate::builtin::proc::spawn::{ActivityFsSandbox, enforce_program_allowlist};
-use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext};
+use crate::builtin::proc::spawn::enforce_program_allowlist;
+use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext, upsert_env};
 
 const EXTERNAL_TOOL_TIMEOUT_OVERRIDE_ENV: &str = "ORBIT_EXTERNAL_TOOL_TIMEOUT_MS";
 const ORBIT_TOOL_NAME_ENV: &str = "ORBIT_TOOL_NAME";
@@ -49,6 +49,9 @@ impl Tool for ExternalTool {
         let environment_mode =
             EnvironmentMode::ClearAndSet(runtime_environment(ctx, &self.name, &cwd));
 
+        // External tools and proc.spawn both inherit an enclosing worker's OS
+        // sandbox. This call adds no second filesystem boundary; its program
+        // policy and cleared child environment are handled above.
         let output = run_process(
             &ExecRequest {
                 program: self.path.clone(),
@@ -59,7 +62,7 @@ impl Tool for ExternalTool {
                 environment_mode,
                 debug: false,
             },
-            &ActivityFsSandbox::new(ctx)?,
+            &NoSandbox,
         )?;
 
         if !output.success {
@@ -151,12 +154,4 @@ fn runtime_environment(ctx: &ToolContext, tool_name: &str, cwd: &str) -> Vec<(St
         );
     }
     env_pairs
-}
-
-fn upsert_env(env_pairs: &mut Vec<(String, String)>, key: &str, value: String) {
-    if let Some(existing) = env_pairs.iter_mut().find(|(name, _)| name == key) {
-        existing.1 = value;
-    } else {
-        env_pairs.push((key.to_string(), value));
-    }
 }

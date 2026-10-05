@@ -9,7 +9,11 @@ spec:
     candidate, restores and pushes the pre-rebase branch, and opens or reuses a
     blocked PR after bounded conflict recovery is exhausted. After publication
     it preserves the existing PR and review state with truthful merge
-    diagnostics for a safe completion retry.
+    diagnostics for a safe completion retry. A `validation_environment`
+    failure (required validation lacked a tool) blocks the task and keeps the
+    unjudged candidate for `orbit job resume`, opening no PR and pushing
+    nothing. Every preserved candidate records the task's spec digest, so the
+    task's next run can resume it (`candidate_resume`).
   input_schema_json:
     type: object
     additionalProperties: false
@@ -80,4 +84,10 @@ spec:
         type: boolean
       task_status:
         type: string
+      task_spec_digest:
+        type: string
+        description: >
+          Digest of the task's description, acceptance criteria and selectors
+          at handoff. `candidate_resume` resumes the preserved candidate on a
+          later run only while the task still matches it.
   action: pr_failure_handoff

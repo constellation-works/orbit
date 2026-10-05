@@ -1,17 +1,17 @@
 ---
 title: Auto-tasks — Decisions
 owner: claude
-last_updated: 2026-08-11
-last_validated: 2026-08-29
+last_updated: 2026-09-25
+last_validated: 2026-09-25
 status: Accepted
 feature: auto-tasks
 doc_role: decisions
 type: design
-summary: Decision log for the auto-task primitive.
+summary: Decision log for the auto-task primitive, including its move from a routine-fired job to a direct clock-tick evaluator.
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
-related_features: [auto-tasks]
-related_artifacts: []
+related_features: [auto-tasks, routines]
+related_artifacts: [ORB-12237, ORB-12698, ORB-12718]
 ---
 
 # Auto-tasks — Decisions
@@ -20,10 +20,38 @@ This document preserves the feature's non-obvious decisions and their reasoning.
 
 ---
 
+## Broker managed auto-task writes to the host definition root
+
+**Recorded:** 2026-09-25 · [ORB-12950]
+
+The host clock loads gitignored auto-task YAML from the registered checkout.
+A managed job's linked worktree has a separate copy, and its child sandbox
+cannot write the registered checkout's `.orbit/auto_tasks/` directly. Managed
+`orbit.auto_task.add`, `update`, and `toggle` tool calls therefore route to the
+owning host process. The host verifies the worker's workspace destination,
+loads and validates definitions, and writes its registered checkout's local
+root. The scheduler sees the result on its next collection pass.
+
+We rejected a child sandbox grant on `.orbit/auto_tasks/` or a wider `.orbit`
+root: raw child writes bypass ownership and loader checks, while adjacent
+`config.toml` and `routines/` control unattended host execution. We also
+rejected re-tracking definitions in Git: schedules are per-user state, and
+merge plus pull would still be needed before the registered host clock sees a
+change. Direct CLI worktree edits remain local candidate edits.
+
+## Auto-task definitions are per-user checkout state, not git-versioned records
+
+**Recorded:** 2026-09-20 · [ORB-12718]
+**Supersedes:** the git-versioned-definitions half of [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](#auto-task-primitive-file-backed-recurring-task-templates--one-generic-scheduler-routine). File-backed YAML, host-local cursors, catch-up collapse, dedupe, provenance, and CRUD stand.
+**See:** [Per-user ownership of `.orbit/` (no git re-includes)](../routines/4_decisions.md#per-user-ownership-of-orbit-no-git-re-includes).
+
+`.orbit/auto_tasks/` is this checkout owner's schedule of recurring work. `orbit workspace init` / `workspace sync` seed the shipped defaults from the binary. Git no longer carries a copy. `.orbit/learnings/` is ignored with the rest of `.orbit/`; shared knowledge is docs and task publication.
+
 ## Auto-task primitive: file-backed recurring task templates + one generic scheduler routine
 
 **Recorded:** 2026-07-12 02:58:04.684957Z · [ORB-10149], [ORB-10148]
 **Paths:** `crates/orbit-core/src/application/auto_tasks/**`
+**Superseded in part by:** [Auto-task definitions are evaluated by the host tick, not fired by a routine](#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine) (the scheduler-routine half) and [Auto-task definitions are per-user checkout state, not git-versioned records](#auto-task-definitions-are-per-user-checkout-state-not-git-versioned-records) (the git-versioned half). The primitive (file-backed definitions, host-local cursors, catch-up collapse, dedupe, provenance, CRUD) stands.
 
 ### Context
 
@@ -40,10 +68,30 @@ Introduce auto-tasks as git-versioned YAML definitions under `.orbit/auto_tasks/
 - Host-local cursor state avoids churn in git-versioned definitions.
 - Cost: a second file-backed record convention exists alongside the SQLite-indexed knowledge records, and auto-task definitions are not full-text indexed.
 
+## A quiet integration branch skips the mint, and an unanswerable precondition does not
+
+**Recorded:** 2026-09-20 · [ORB-12698]
+**Paths:** `crates/orbit-automation/src/auto_tasks/scheduler.rs`, `crates/orbit-core/src/application/auto_tasks/change_probe.rs`, `.orbit/auto_tasks/**`
+
+### Context
+
+`code-review` (every 30 minutes) and `qa-sweep` (hourly) mint regardless of whether anything landed. `dedupe: skip_if_open` only prevents a *concurrent* instance, so on a quiet `agent-main` each tick booted a worktree and an agent to report a zero-commit window — seven consecutive no-op dispatches in one morning.
+
+### Decision
+
+Add the opt-in `skip_if_unchanged` precondition, evaluated after dedupe on `Fire`. It compares the configured ref's tip against the cursor recorded by the newest completed sweep, read from that sweep's `sweep-cursor.json` artifact — a structured record the templates write, never prose scraped from an execution summary. A covered tip skips without claiming or advancing the slot and records `last_skip` (reason plus both SHAs). Every other outcome — no completed sweep, missing or malformed cursor, unresolvable ref or commit, probe error — mints and says why.
+
+### Consequences
+
+- A quiet branch costs one git comparison per tick instead of an agent run.
+- The first commit past the cursor fires the pending occurrence immediately, because the slot was never consumed.
+- Sweep templates now owe a durable cursor artifact; a completed sweep that skips it makes the next tick fail open and mint.
+- Cost: the precondition depends on the sweep writing the artifact correctly, so a template regression degrades to the old always-mint behavior rather than announcing itself.
+
 ## No-diff-expected tasks bypass repository change gates
 
 **Recorded:** 2026-07-12 03:33:35.554901Z · [ORB-10148]
-**Paths:** `crates/orbit-engine/src/executor/automation/vcs/**`, `crates/orbit-types/src/task/model.rs`, `.orbit/auto_tasks/**`
+**Paths:** `crates/orbit-engine/src/executor/automation/vcs/**`, `crates/orbit-types/src/task/model/task.rs`, `.orbit/auto_tasks/**`
 
 ### Context
 
@@ -63,6 +111,7 @@ Some normal workflow tasks produce durable side effects through Orbit rather tha
 ## Route tracked auto-task definitions through the active worktree
 
 **Recorded:** 2026-08-08 19:11:08.591438Z · [ORB-10472]
+**Superseded for managed `orbit.auto_task.*` writes by:** [Broker managed auto-task writes to the host definition root](#broker-managed-auto-task-writes-to-the-host-definition-root). Definitions later became gitignored per-user state; direct CLI worktree edits remain local.
 **Paths:** `crates/orbit-core/src/application/auto_tasks/**`, `crates/orbit-engine/src/activity_job/workspace.rs`
 
 ### Context
@@ -79,7 +128,7 @@ Read and replace tracked auto-task definitions through the runtime local root. K
 ## Run budgets are provider-neutral: wall-clock timeouts, never turn caps
 
 **Recorded:** 2026-07-12 03:33:34.766432Z · [ORB-10146], [ORB-10148]
-**Paths:** `crates/orbit-core/assets/**`, `crates/orbit-types/src/workflow/auto_task.rs`, `.orbit/auto_tasks/**`
+**Paths:** `crates/orbit-core/assets/**`, `crates/orbit-types/src/workflow/auto_task/definition.rs`, `.orbit/auto_tasks/**`
 
 ### Context
 
@@ -96,8 +145,30 @@ All run budgets in Orbit config, auto-task definitions, job/activity assets, wor
 - Existing turn-based policy knobs must be retired or demoted to adapter-internal defaults.
 - Cost: Orbit gives up fine-grained turn limits exposed by individual providers; a looping run is bounded by neutral time/resource limits instead.
 
+## Auto-task definitions are evaluated by the host tick, not fired by a routine
+
+**Recorded:** 2026-09-12 · [ORB-12237]
+**Code anchors:** `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-core/src/application/routines/sweep.rs`
+
+### Context
+
+The scheduler pass was already a stateless, cursor-driven due evaluator — the same shape as the routine sweep, sharing its due-math — but it was reached by a routine firing a job that ran an activity that called it: a detached worker per tick, per workspace, plus a routine (`enabled`, `hosts`, `overlap`) and a job (`max_active_runs`) worth of switches to gate one function call that already holds its own lock. The full reasoning, the tick's shape, and the `orbit clock` surface are recorded once in the routines folder: [One host tick evaluates routines and auto-task definitions in-process](../routines/4_decisions.md#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process). The alternative was to keep auto-tasks as a routine consumer and accept the overhead as the price of "fires show up on the routines surface".
+
+### Decision
+
+`run_auto_task_scheduler_at` is called directly by the host tick for every registered owner checkout, after routine evaluation, under the host sweep lock. The `auto_task_scheduler` routine, `auto_task_scheduler_pipeline` job, `run_auto_task_scheduler` activity, and the deterministic dispatch arm are retired. Definitions carry no host field and are governed by [Definitions carry no host pin](../routines/4_decisions.md#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule): every owner checkout with an enabled clock evaluates every enabled definition against its own store.
+
+### Consequences
+
+- Eligibility is *owner checkout registered + clock enabled + definition enabled*; nothing else to flip.
+- Fire evidence is the minted task, the cursor, and the tick report row — not a `jrun-*`. The Operations auto-task panel is the observability surface; `GET /api/routines` no longer carries auto-task fires.
+- `orbit auto-task mint` and `orbit clock tick --dry-run` cover the manual and inspection cases the retired job did.
+- Cost: a repo-global chore (one whose effect lands on the shared remote rather than the local store) runs once per owner; `skip_if_open` sees only the local store and cannot prevent that. Such a definition must dedupe against the remote itself or not ship as an embedded default.
+
 ## Task References
 
+- [ORB-12718] — auto-task definitions are per-user checkout state, not git-versioned records.
+- [ORB-12237] — moves auto-task evaluation into the host clock tick and retires the scheduler routine/job/activity.
 - [ORB-10149] — Shipped the auto-task primitive (record, scheduler, CRUD, assets).
 - [ORB-10148] — Added the QA definition and no-diff workflow exemption.
 - [ORB-10472] — Isolated auto-task definition refresh from the registered

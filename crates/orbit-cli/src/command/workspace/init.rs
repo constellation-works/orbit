@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -5,10 +6,12 @@ use clap::Args;
 use orbit_cmd::agent_rules::{InjectionAction, InjectionOutcome, inject_agent_rules};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::fs::io::{atomic_write_bytes, atomic_write_text};
-use orbit_core::OrbitError;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
+use orbit_core::{
+    OrbitError, RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
+};
 use orbit_registry::workspace_registry;
-use orbit_registry::{HostIdentityState, inspect_host_identity};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::identity::validate_machine_id;
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
@@ -16,13 +19,13 @@ use orbit_types::workspace::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::command::init::agent_detect::{RealAgentEnvProbe, detect};
+use crate::command::init::agent_detect::detect;
 use crate::command::init::config_seed_from_detection;
 
 use super::role::CliCheckoutRole;
 use super::support::{
     detect_git_remote, dir_name_or_fallback, ensure_orbit_gitignore_entry,
-    manages_checkout_local_orbit_files,
+    manages_checkout_local_orbit_files, orbit_gitignore_path,
 };
 use crate::command::{CommandOut, Payload};
 
@@ -75,13 +78,10 @@ pub struct WorkspaceInitArgs {
     pub force: bool,
 }
 
-pub(crate) const ONBOARDING_FINALIZE_GUIDANCE: &str = "review and commit generated definitions (.gitignore, .orbit/auto_tasks, .orbit/routines) before local workflows (Orbit does not auto-commit or discard operator changes)";
+const ONBOARDING_FINALIZE_GUIDANCE: &str = "review the managed `.gitignore` entry (Orbit ignores `.orbit/` as per-user state and does not auto-commit or discard operator changes)";
 const RELOCATED_ROOT_ONBOARDING_GUIDANCE: &str = "review generated Orbit definitions in the configured Orbit root before local workflows (Orbit does not auto-commit or discard operator changes)";
 
-pub(crate) fn onboarding_finalize_guidance(
-    workspace_root: &Path,
-    orbit_dir: &Path,
-) -> &'static str {
+fn onboarding_finalize_guidance(workspace_root: &Path, orbit_dir: &Path) -> &'static str {
     if manages_checkout_local_orbit_files(workspace_root, orbit_dir) {
         ONBOARDING_FINALIZE_GUIDANCE
     } else {
@@ -95,6 +95,17 @@ impl WorkspaceInitArgs {
         let roots = RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&cwd, root_override)?;
         let orbit_dir = roots.shared_root;
         let global_root = roots.global_root;
+
+        // Registry path validation canonicalizes its parent before reading or
+        // locking the registry. Create a fresh global root here so first-time
+        // workspace initialization can reach that validation step.
+        std::fs::create_dir_all(&global_root).map_err(|error| {
+            OrbitError::Io(format!(
+                "create global Orbit root '{}': {error}",
+                global_root.display()
+            ))
+        })?;
+
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mcp = self.mcp;
         let inject_rules = self.inject_agent_rules;
@@ -119,15 +130,12 @@ impl WorkspaceInitArgs {
         if let Some(mode) = self.ship_mode.as_deref() {
             orbit_core::ShipMode::parse(mode)?;
         }
-        let (local_machine_id, local_host_id, task_prefix) =
-            match inspect_host_identity(global_root)? {
-                HostIdentityState::Present(identity) => (
-                    Some(identity.machine_id),
-                    Some(identity.host_id),
-                    Some(identity.task_prefix),
-                ),
-                HostIdentityState::Legacy { .. } | HostIdentityState::Absent => (None, None, None),
-            };
+        let (local_machine_id, task_prefix) = match inspect_machine_identity(global_root)? {
+            MachineIdentityState::Present(identity) => {
+                (Some(identity.id), Some(identity.task_prefix))
+            }
+            MachineIdentityState::Absent => (None, None),
+        };
         let explicit_role = self.role.map(WorkspaceCheckoutRole::from);
         match (explicit_role, self.owner.as_deref()) {
             (None, Some(_)) => {
@@ -146,10 +154,17 @@ impl WorkspaceInitArgs {
                 ));
             }
             (Some(WorkspaceCheckoutRole::Replica), Some(owner)) => {
-                validate_machine_id(owner)?;
+                validate_machine_id(owner).map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "--owner '{owner}' is not a usable machine_id ({error}); pass the owner \
+                         host's `machine.id` (`orbit config get machine.id` on that host)"
+                    ))
+                })?;
                 if local_machine_id.as_deref() == Some(owner) {
                     return Err(OrbitError::InvalidInput(format!(
-                        "--role replica owner '{owner}' is this local machine; declare owner role instead"
+                        "--role replica owner '{owner}' is this local machine; `--owner` must name \
+                         the other host that owns the workspace (omit --role, or pass `--role \
+                         owner`, to register the owner's own checkout)"
                     )));
                 }
             }
@@ -162,7 +177,7 @@ impl WorkspaceInitArgs {
         let default_base_branch = checked_out_branch(cwd);
         // Every read of the registry below feeds the write at the end; the lock
         // keeps a concurrent sweep or init from saving over this registration.
-        let (reconciling_existing, registered_shared_root) =
+        let (reconciling_existing, registered_shared_root, checkout_role, owner_machine_id) =
             workspace_registry::with_registry_lock(registry_path, || {
                 let mut registry = workspace_registry::load_registry_from(registry_path)?;
                 let existing_workspace = registry
@@ -175,6 +190,28 @@ impl WorkspaceInitArgs {
                     .find(|checkout| checkout.repo_root == cwd);
                 let reconciling_existing =
                     existing_workspace.is_some() || existing_checkout.is_some();
+                // The delivery defaults are rendered against the base branch
+                // this registration will record, so the seeded file and the
+                // registry never disagree about which branch is observed.
+                let seeded_base_branch = self
+                    .base_branch
+                    .clone()
+                    .or_else(|| existing_workspace.map(|workspace| workspace.base_branch.clone()))
+                    .unwrap_or_else(|| default_base_branch.clone());
+                // Seeded routine names are suffixed with the registered workspace
+                // name, not the checkout directory, so two checkouts sharing a
+                // basename stay distinct on one host [ORB-12107]. Validate the
+                // name before any write. Cron definitions are machine-independent
+                // [ORB-12236]; the state-triggered task-pilot default names this
+                // host as its owner and the branch above as what it observes
+                // [ORB-12745]. An uninitialized host seeds none, because
+                // `orbit init` owns the host state the clock evaluates them against.
+                let routine_identity = local_machine_id
+                    .as_deref()
+                    .map(|machine_id| {
+                        RoutineSeedIdentity::new(&name, machine_id, &seeded_base_branch)
+                    })
+                    .transpose()?;
                 let registered_shared_root = global_root == orbit_dir
                     && registry
                         .checkouts
@@ -231,15 +268,20 @@ impl WorkspaceInitArgs {
                     }
                 }
 
+                if let Some(identity) = routine_identity.as_ref() {
+                    reject_colliding_routine_names(&registry, &id, orbit_dir, identity, &name)?;
+                }
+
                 init_workspace_at_root(
                     orbit_dir,
                     InitOptions {
                         refresh_defaults: true,
                         global_root_override: Some(global_root.to_path_buf()),
-                        routine_host_id: local_host_id.clone(),
+                        routine_seed_identity: routine_identity.clone(),
+                        workspace_base_branch: Some(seeded_base_branch),
                         // Host detection is a CLI concern: Core seeds config from the
                         // families this adapter reports, never by probing PATH itself.
-                        config_seed: Some(config_seed_from_detection(&detect(&RealAgentEnvProbe))),
+                        config_seed: Some(config_seed_from_detection(&detect())),
                         ..Default::default()
                     },
                 )?;
@@ -302,31 +344,6 @@ impl WorkspaceInitArgs {
                         self.owner.as_deref(),
                         local_machine_id.as_deref(),
                     )?;
-                    match assigned_role {
-                        WorkspaceCheckoutRole::Owner => {
-                            if let (Some(machine_id), Some(host_id)) =
-                                (local_machine_id.as_deref(), local_host_id.as_deref())
-                            {
-                                workspace_registry::rename_local_owner_host_id(
-                                    &mut registry,
-                                    machine_id,
-                                    host_id,
-                                )?;
-                            }
-                        }
-                        WorkspaceCheckoutRole::Replica => {
-                            // v1 has no fleet lookup from stable machine id to display
-                            // name. Until the local record is enriched with a human
-                            // name, the explicit owner id is itself recognizable to
-                            // routine-pin diagnostics as a known-elsewhere owner.
-                            if let Some(owner) = self.owner.as_deref() {
-                                registry
-                                    .owner_host_ids
-                                    .entry(owner.to_string())
-                                    .or_insert_with(|| owner.to_string());
-                            }
-                        }
-                    }
                 }
                 orbit_core::adapter::HubCoordinationExecutor::register_workspace(
                     global_root,
@@ -347,12 +364,27 @@ impl WorkspaceInitArgs {
                         self.force,
                     )?;
                 }
+                let checkout_role = registry
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.workspace_id == id)
+                    .and_then(|checkout| checkout.role);
+                let owner_machine_id = registry
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == id)
+                    .and_then(|workspace| workspace.owner_machine_id.clone());
                 workspace_registry::save_registry_to(&registry, registry_path)?;
                 if let Some(recovery) = identity_recovery {
                     preserve_corrupt_workspace_identity(orbit_dir, &recovery)?;
                     write_workspace_identity(orbit_dir, &id)?;
                 }
-                Ok((reconciling_existing, registered_shared_root))
+                Ok((
+                    reconciling_existing,
+                    registered_shared_root,
+                    checkout_role,
+                    owner_machine_id,
+                ))
             })?;
         if !reconciling_existing && !registered_shared_root {
             write_workspace_identity(orbit_dir, &id)?;
@@ -364,6 +396,8 @@ impl WorkspaceInitArgs {
             root: cwd.to_path_buf(),
             orbit_dir: orbit_dir.to_path_buf(),
             task_prefix,
+            role: checkout_role,
+            owner_machine_id,
         })
     }
 }
@@ -372,7 +406,7 @@ impl WorkspaceInitArgs {
 ///
 /// An explicit `--base-branch` always wins. Repositories without a checked-out
 /// branch retain the long-standing `main` fallback.
-pub(crate) fn checked_out_branch(cwd: &Path) -> String {
+fn checked_out_branch(cwd: &Path) -> String {
     let output = std::process::Command::new("git")
         .args(["branch", "--show-current"])
         .current_dir(cwd)
@@ -387,14 +421,62 @@ pub(crate) fn checked_out_branch(cwd: &Path) -> String {
         .unwrap_or_else(|| "main".to_string())
 }
 
-pub(super) fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
+fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
     match task_prefix {
         Some(task_prefix) => format!("{task_prefix}-{next:05}"),
         None => format!("{next:05}"),
     }
 }
 
-pub(super) fn canonical_workspace_id(name: &str) -> String {
+/// Refuse to seed routines whose names another registered workspace on this
+/// host already declares.
+///
+/// Routine discovery drops *every* definition sharing a name, so a silent
+/// duplicate would disable the colliding workspace's routines too. Checkouts
+/// of the workspace being initialized are excluded: re-initializing rebinds
+/// them rather than adding a second source [ORB-12107].
+fn reject_colliding_routine_names(
+    registry: &WorkspaceRegistry,
+    workspace_id: &str,
+    orbit_dir: &Path,
+    identity: &RoutineSeedIdentity,
+    name: &str,
+) -> Result<(), OrbitError> {
+    let other_orbit_dirs: Vec<PathBuf> = registry
+        .checkouts
+        .iter()
+        .filter(|checkout| checkout.workspace_id != workspace_id && checkout.orbit_dir != orbit_dir)
+        .map(|checkout| checkout.orbit_dir.clone())
+        .collect();
+
+    let collisions = default_routine_name_collisions(identity, &other_orbit_dirs);
+    if collisions.is_empty() {
+        return Ok(());
+    }
+
+    Err(OrbitError::WorkspaceError(format!(
+        "workspace '{name}' would seed routine names another workspace on this host already \
+         defines ({}); routine names must be unique across every routine source on a host, so \
+         rerun `orbit workspace init --name <other-name>`",
+        describe_routine_collisions(&collisions)
+    )))
+}
+
+fn describe_routine_collisions(collisions: &[RoutineNameCollision]) -> String {
+    collisions
+        .iter()
+        .map(|collision| {
+            format!(
+                "'{}' at {}",
+                collision.name,
+                collision.declared_in.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn canonical_workspace_id(name: &str) -> String {
     let mut canonical = String::new();
     let mut separator = false;
     for character in name.chars().flat_map(char::to_lowercase) {
@@ -593,6 +675,8 @@ struct WorkspaceInitResult {
     root: PathBuf,
     orbit_dir: PathBuf,
     task_prefix: Option<String>,
+    role: Option<WorkspaceCheckoutRole>,
+    owner_machine_id: Option<String>,
 }
 
 struct WorkspaceInitReport {
@@ -600,7 +684,10 @@ struct WorkspaceInitReport {
     name: String,
     root: PathBuf,
     orbit_dir: PathBuf,
+    role: Option<WorkspaceCheckoutRole>,
+    owner_machine_id: Option<String>,
     onboarding: &'static str,
+    checkout_files: Vec<String>,
     allocator: AllocatorOutcome,
     mcp: McpOutcome,
     rules: RulesOutcome,
@@ -635,6 +722,10 @@ fn collect_init_report(
     inject_rules: bool,
 ) -> Result<WorkspaceInitReport, OrbitError> {
     let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
+    let mut checkout_files = BTreeSet::new();
+    if let Some(gitignore) = orbit_gitignore_path(&init_result.root, &init_result.orbit_dir) {
+        checkout_files.insert(checkout_file_label(&init_result.root, &gitignore));
+    }
 
     let allocator = match task_id_start {
         Some(start) => {
@@ -652,11 +743,14 @@ fn collect_init_report(
     };
 
     let mcp_outcome = if mcp {
-        let providers = crate::command::mcp::init_auto_for_workspace(
+        let (providers, files) = crate::command::mcp::init_auto_for_workspace(
             &init_result.root,
             &init_result.orbit_dir,
             &init_result.id,
         )?;
+        for file in files {
+            checkout_files.insert(checkout_file_label(&init_result.root, &file));
+        }
         if providers.is_empty() {
             McpOutcome::NoneDetected
         } else {
@@ -668,6 +762,9 @@ fn collect_init_report(
 
     let rules_outcome = if inject_rules {
         let outcome = inject_agent_rules(&init_result.root)?;
+        for entry in &outcome.outcomes {
+            checkout_files.insert(checkout_file_label(&init_result.root, &entry.path));
+        }
         RulesOutcome::Injected(
             outcome
                 .outcomes
@@ -684,11 +781,21 @@ fn collect_init_report(
         name: init_result.name,
         root: init_result.root,
         orbit_dir: init_result.orbit_dir,
+        role: init_result.role,
+        owner_machine_id: init_result.owner_machine_id,
         onboarding,
+        checkout_files: checkout_files.into_iter().collect(),
         allocator,
         mcp: mcp_outcome,
         rules: rules_outcome,
     })
+}
+
+fn checkout_file_label(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn rule_file_outcome(entry: InjectionOutcome) -> RuleFileOutcome {
@@ -708,7 +815,11 @@ fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
         "name": report.name,
         "root": report.root.to_string_lossy(),
         "orbit_dir": report.orbit_dir.to_string_lossy(),
+        "role": report.role.map(|role| role.to_string()),
+        "owner_machine_id": report.owner_machine_id,
         "onboarding": report.onboarding,
+        "checkout_files": report.checkout_files,
+        "before_ship": if report.checkout_files.is_empty() { None } else { Some("Review and commit the listed checkout files before shipping; the base checkout must be clean for local delivery.") },
         "allocator": allocator_json(&report.allocator),
         "mcp": mcp_json(&report.mcp),
         "rules": rules_json(&report.rules),
@@ -780,8 +891,28 @@ fn format_workspace_init(report: &WorkspaceInitReport) -> String {
         format!("  id:        {}", report.id),
         format!("  root:      {}", report.root.display()),
         format!("  orbit_dir: {}", report.orbit_dir.display()),
-        format!("  onboarding: {}", report.onboarding),
     ];
+    if let Some(role) = report.role {
+        lines.push(format!("  role:      {role}"));
+    }
+    if let Some(owner) = report.owner_machine_id.as_deref() {
+        lines.push(format!("  owner:     {owner}"));
+    }
+    lines.push(format!("  onboarding: {}", report.onboarding));
+    if report.role == Some(WorkspaceCheckoutRole::Replica) {
+        lines.push(
+            "  next:      a replica executes through pull: add the owner to \
+             ~/.orbit/mcp-destinations.toml, then run `orbit run auto --pull <selector>`"
+                .to_string(),
+        );
+    }
+    if !report.checkout_files.is_empty() {
+        lines.push("  checkout files written:".to_string());
+        for file in &report.checkout_files {
+            lines.push(format!("    {file}"));
+        }
+        lines.push("  before ship: review and commit these files; the base checkout must be clean for local delivery".to_string());
+    }
     match &report.allocator {
         AllocatorOutcome::Skipped => {}
         AllocatorOutcome::Ran {

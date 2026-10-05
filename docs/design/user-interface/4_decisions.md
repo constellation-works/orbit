@@ -3,8 +3,8 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-08-11
-last_validated: 2026-08-17
+last_updated: 2026-09-24
+last_validated: 2026-09-12
 status: Draft
 feature: user-interface
 doc_role: decisions
@@ -45,7 +45,7 @@ The Denials 24h tile counted SQLite audit rows and v2 loop denials, but the Poli
 Aggregate v2 denial envelopes and SQLite `status = denied` audit events in the policy-denials endpoint. SQLite filesystem denials without an activity fsProfile use `workspace-boundary`.
 
 ### Consequences
-- Audit > Policy is a faithful drill-down for Denials 24h, including direct `orbit tool run` policy denials.
+- Audit > Policy includes direct `orbit tool run` policy denials and retained coordination/protocol refusal evidence. The policy-denials KPI counts canonical capability/policy decisions only; lock contention and claim-settlement protocol refusals remain visible with distinct diagnostics.
 - Cost: The endpoint carries a translation layer because SQLite audit rows lack typed denial fields like `profile` and `path`.
 
 ## Compact Scoreboard Ratio Columns
@@ -66,6 +66,9 @@ Render companion metrics as compact pairs: `tokens` is `total/output`, `tool fai
 
 **Recorded:** 2026-05-11 02:06:39.449202Z · [T20260430-29]
 
+This layout was superseded by the Tasks side dock: Status and Log now share the
+right column, and `#log-panel` fills the dock when Log is selected.
+
 ### Context
 The Tasks view keeps `orbit.log` visible beside the task list, but the log panel could grow taller than short viewports and push footer controls below the screen.
 
@@ -75,16 +78,6 @@ Keep the Tasks view in a two-column layout and size `#log-panel` to the availabl
 ### Consequences
 - Operators get one clear scroll target for raw log rows while live-tail controls stay visible during short-screen monitoring.
 - Cost: The Tasks view trades narrow-screen stacking for denser columns so the live log remains in the first viewport.
-
-## Task References
-
-- [T20260427-29] introduced the Canon Refined UI direction.
-- [T20260428-13] unified policy-denial sources for the dashboard.
-- [T20260428-15] compacted scoreboard ratio columns.
-- [T20260430-24] tightened this decision log without changing decisions.
-- [T20260430-29] bounded the live `orbit.log` tail panel.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
 
 ## Grouped Scoreboard Sections
 
@@ -102,19 +95,12 @@ Render the dashboard scoreboard as focused sections: Delivery, Review, Knowledge
 - No single Rust code anchor; this is enforced by dashboard rendering and design review, and workspace-local ADR comments should not be embedded in shipped dashboard assets.
 - Cost: Cross-section comparison now requires scanning multiple tables instead of one row, and future metrics must choose an explicit section before being added.
 
-## Task References
-
-- [T20260427-29] introduced the Canon Refined UI direction.
-- [T20260428-13] unified policy-denial sources for the dashboard.
-- [T20260428-15] compacted scoreboard ratio columns.
-- [T20260430-24] tightened this decision log without changing decisions.
-- [T20260430-29] bounded the live `orbit.log` tail panel.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
 ## Extract Dashboard + JSON API to orbit-dashboard Crate
 
 **Recorded:** 2026-05-18 06:55:55.249402Z · [ORB-00146]
+
+The extracted crate is now named `orbit-web`; it still owns the HTTP API and
+embedded dashboard assets while `orbit-cli` remains the thin entry point.
 
 ### Context
 The Orbit web dashboard lived inside orbit-cli even though its HTML, JavaScript, read-only axum API handlers, and embedded assets formed a distinct internal surface. The only local coupling was the CLI Execute trait; keeping the dashboard in orbit-cli forced unrelated CLI edits to rebuild the heavier web tree and mixed dashboard tests into the CLI target.
@@ -150,6 +136,10 @@ Render canonical scoreboard metrics as one metric-major Unified Leaderboard Matr
 ## Global, Multi-Workspace Dashboard
 
 **Recorded:** 2026-07-26 21:51:44.038593Z · [ORB-00030], [ORB-10458]
+
+The single-workspace serving branch described below has since been retired.
+`orbit web serve` now always enumerates the selected registry; `--global` is an
+accepted compatibility no-op, and `--workspace` selects the initial workspace.
 
 ### Context
 
@@ -244,19 +234,33 @@ with a 400 that names them, `priority` becomes a supported update field end to
 end, `model` becomes declared provenance, and `agent` is a trap field pointing at
 `model` — extending the ORB-00042 `workspace` trap shape to the whole body.
 
+## Operator-First Dashboard Chrome
+
+**Recorded:** 2026-09-24
+
+### Context
+An audit of every dashboard view at 1440px found the chrome working against the operator: the workspace picker sat below the fold of an always-expanded rail, proposed tasks waiting on a human were mixed in with running work and approved through a small status select, the drain card summarised capacity as `8/5 slots busy · admits up to 0 now`, 150+ locked file paths filled the dock, the recent-runs table clipped its job names and action buttons, a failed run's detail did not say why it failed, and the Diagnostics summary card repeated beside every subtab.
+
+### Decision
+Keep every route, endpoint and control, and change the presentation around them: rail labels that name destinations (Runs, Health, Automation, Settings) over unchanged hashes; the open section alone expanded; tasks grouped by the decision they wait on with a one-click row action; capacity and completion in words; failures explained where they are viewed; Geist and a lighter status palette shared with the website.
+
+### Consequences
+- The operator's next action is visible on the Tasks screen without opening a row or another tab.
+- Bookmarks and copied links keep working because only labels and grouping moved.
+- Cost: two Ship buttons (row and detail) now share the duplicate-dispatch guard, and the rail's labels no longer match the route names one-to-one.
+
 ## Task References
 
-- [T20260427-29] introduced the Canon Refined UI direction.
-- [T20260428-13] unified policy-denial sources for the dashboard.
-- [T20260428-15] compacted scoreboard ratio columns.
-- [T20260430-24] tightened this decision log without changing decisions.
-- [T20260430-29] bounded the live `orbit.log` tail panel.
-- [ORB-00144] grouped scoreboard metrics and added knowledge counters plus duel matrix data.
-- [ORB-00146] extracted the dashboard and JSON API into the new `orbit-dashboard` internal crate (this document).
-- [ORB-00154] unified the Scoreboard tab into a metric-major leaderboard matrix.
-- [ORB-00030] made the dashboard global/multi-workspace (workspace-keyed state, `Ws` extractor, serve-from-anywhere, aggregate endpoints).
-- [ORB-10444] retired the deprecated tab, folded Scoreboard under Diagnostics, pinned the Knowledge detail pane, and added task ship + comments.
-- [ORB-10588] added the Reliability subtab: job-run failure rate and recovery invocation rate from durable run state.
-- [ORB-10648] made the task create/update bodies reject unsupported fields instead of discarding them silently.
+- [T20260427-29] — introduced the Canon Refined UI direction.
+- [T20260428-13] — unified policy-denial sources for the dashboard.
+- [T20260428-15] — compacted scoreboard ratio columns.
+- [T20260430-29] — bounded the live `orbit.log` tail panel.
+- [ORB-00144] — grouped scoreboard metrics and added knowledge counters plus duel matrix data.
+- [ORB-00146] — extracted the dashboard and JSON API into the new `orbit-dashboard` internal crate (this document).
+- [ORB-00154] — unified the Scoreboard tab into a metric-major leaderboard matrix.
+- [ORB-00030] — made the dashboard global/multi-workspace (workspace-keyed state, `Ws` extractor, serve-from-anywhere, aggregate endpoints).
+- [ORB-10444] — retired the deprecated tab, folded Scoreboard under Diagnostics, pinned the Knowledge detail pane, and added task ship + comments.
+- [ORB-10588] — added the Reliability subtab: job-run failure rate and recovery invocation rate from durable run state.
+- [ORB-10648] — made the task create/update bodies reject unsupported fields instead of discarding them silently.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

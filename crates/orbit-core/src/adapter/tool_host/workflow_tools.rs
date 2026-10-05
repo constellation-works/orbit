@@ -4,11 +4,11 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::normalize_optional_attribution_label;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 
-use crate::application::job::{DrainWorkerLimitRequest, JobRunListParams};
-use crate::runtime::run_audit::{
+use crate::application::job::JobRunListParams;
+use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunProviderProcess,
     RunRecoveryAttempts,
 };
@@ -25,6 +25,7 @@ pub(super) fn ship(
     input: Value,
     agent: Option<String>,
     model: Option<String>,
+    trigger: JobRunTrigger,
 ) -> Result<Value, OrbitError> {
     let task_ids = parse_string_array_field(&input, "task_ids")?;
     let unique = task_ids.iter().collect::<BTreeSet<_>>();
@@ -53,21 +54,74 @@ pub(super) fn ship(
         &allowed_crews,
         Some(&actor),
         claim_token.as_deref(),
+        trigger,
     )?;
-    Ok(json!({
+    let mut shipped = json!({
         "workflow": "ship",
         "job_id": invoke.job_name,
         "run_id": invoke.run_id,
         "state": if invoke.queued { "queued" } else { "submitted" },
         "submitted_at": invoke.submitted_at,
-    }))
+    });
+    // [ORB-13901] Discovery is refused while the host is throttled; an
+    // explicit selection proceeds and says so.
+    let mut warnings = Vec::new();
+    if !task_ids.is_empty()
+        && let Some(throttle) = runtime.admission_resource_throttle().throttle
+    {
+        warnings.push(throttle.hold_reason());
+    }
+    // [ORB-13987] Required validation may not find the user's toolchain.
+    if let Some(warning) = runtime.validation_env_preflight_warning() {
+        shipped["validation_env_warning"] = json!(warning);
+        warnings.push(warning);
+    }
+    if !warnings.is_empty() {
+        shipped["warning"] = json!(warnings.join("\n"));
+    }
+    Ok(shipped)
 }
 
+/// One run: the record, the child Runs it dispatched, and what it is doing
+/// now.
+///
+/// [ORB-10971] The `JobRun` row alone cannot answer "what did this run submit,
+/// and is it still waiting on it" — that lives in the run's `PipelineState`.
+/// Reading it here is what keeps the MCP surface agreeing with the CLI and the
+/// dashboard about lineage instead of each reader seeing a different half of
+/// the truth. An unreadable state degrades to an empty list rather than
+/// failing the read.
 pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = orbit_common::protocol::tool_input::required_string(&input, &["id"], "id")?;
     let run = runtime.show_job_run(&id)?;
-    let mut value = run_json_with_lineage(runtime, &run)?;
-    value["execution_progress"] = execution_progress_json(runtime, &run.run_id);
+    let state = runtime.read_run_state(&run.run_id).ok().flatten();
+    let recovery = runtime.collect_run_recovery_attempts(&run.run_id).ok();
+    let mut value = run_json_enriched(Some(runtime), &run, state.as_ref(), recovery.as_ref())?;
+    let progress = runtime
+        .collect_run_execution_progress(&run.run_id)
+        .unwrap_or_else(|_| RunExecutionProgress::unavailable());
+    // [ORB-13899] One run, so the invocation also gets its child's evidence:
+    // live progress, and the output reference a failed step never checkpoints.
+    value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
+        &run,
+        state.as_ref().map(|state| &state.step_outputs),
+        progress.provider_processes.last(),
+    ))
+    .map_err(serialize_error("serialize agent invocation result"))?;
+    // The parsed answer already contains the useful result fields. Its raw
+    // final message repeats the provider envelope, and preview repeats the
+    // beginning of that same captured stream. Keep the durable blob refs for
+    // callers that need the complete output.
+    if let Some(invocation) = value["agent_invocation"].as_object_mut()
+        && invocation.get("answer").is_some_and(Value::is_object)
+    {
+        invocation.remove("preview");
+        invocation.remove("preview_truncated");
+        if let Some(answer) = invocation.get_mut("answer").and_then(Value::as_object_mut) {
+            answer.remove("final_message");
+        }
+    }
+    value["execution_progress"] = execution_progress_json(&progress);
     Ok(value)
 }
 
@@ -81,17 +135,15 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
 /// a liveness probe per open child, which is the right price for one deliberate
 /// read and the wrong one for a 200-run page.
 ///
-/// The projection is identifiers, timestamps and process facts only — no
-/// provider output — so it stays bounded and carries nothing to redact. An
+/// The projection is identifiers, timestamps and process facts plus each
+/// child's newest assistant message, which the engine bounded and redacted
+/// before persisting it [ORB-13899]. An
 /// unreadable audit trail degrades to `unavailable` rather than failing the
 /// durable run read, as every other evidence field here does.
-fn execution_progress_json(runtime: &OrbitRuntime, run_id: &str) -> Value {
-    let progress = runtime
-        .collect_run_execution_progress(run_id)
-        .unwrap_or_else(|_| RunExecutionProgress::unavailable());
+fn execution_progress_json(progress: &RunExecutionProgress) -> Value {
     json!({
         "state": progress.state,
-        "active_step": progress.active_step.map(|step| json!({
+        "active_step": progress.active_step.as_ref().map(|step| json!({
             "step_id": step.step_id,
             "step_index": step.step_index,
             "started_at": step.started_at.map(|value| value.to_rfc3339()),
@@ -150,7 +202,7 @@ pub(crate) struct RunListProjectionReads {
     pub per_run_recovery_projection_limit: usize,
 }
 
-pub(crate) fn project_workflow_run_list(
+fn project_workflow_run_list(
     runtime: &OrbitRuntime,
     runs: &[JobRun],
 ) -> Result<(Vec<Value>, RunListProjectionReads), OrbitError> {
@@ -178,6 +230,7 @@ pub(crate) fn project_workflow_run_list(
         .iter()
         .map(|run| {
             run_json_enriched(
+                Some(runtime),
                 run,
                 states.get(&run.run_id).and_then(Option::as_ref),
                 recoveries.get(&run.run_id),
@@ -207,62 +260,11 @@ pub(super) fn resume(
     }))
 }
 
-/// [ORB-11253] Move a live drain's worker ceiling without replacing its run.
-pub(super) fn workers(
-    runtime: &OrbitRuntime,
-    input: Value,
-    agent: Option<String>,
-    model: Option<String>,
-) -> Result<Value, OrbitError> {
-    let id = orbit_common::protocol::tool_input::required_string(&input, &["id"], "id")?;
-    let concurrency = required_u32(&input, "concurrency")?;
-    let expected_revision = optional_u32(&input, "if_revision")?;
-    let reason = optional_string(&input, "reason")?;
-    let claim_token = optional_string(&input, "claim_token")?;
-    let actor = actor(runtime, agent.as_deref(), model.as_deref());
-    let change = runtime.set_drain_worker_limit(DrainWorkerLimitRequest {
-        run_id: &id,
-        max_active_leaf_runs: concurrency,
-        expected_revision,
-        reason: reason.as_deref(),
-        actor: &actor,
-        source: "tool",
-        claim_token: claim_token.as_deref(),
-    })?;
-    Ok(json!({
-        "run_id": change.run_id,
-        "job_id": change.job_id,
-        "outcome": change.outcome,
-        "previous_concurrency": change.previous_max_active_leaf_runs,
-        "concurrency": change.max_active_leaf_runs,
-        "revision": change.revision,
-        "hard_limit": change.hard_limit,
-    }))
-}
-
-fn required_u32(input: &Value, field: &str) -> Result<u32, OrbitError> {
-    optional_u32(input, field)?
-        .ok_or_else(|| OrbitError::InvalidInput(format!("`{field}` is required")))
-}
-
-fn optional_u32(input: &Value, field: &str) -> Result<Option<u32>, OrbitError> {
-    match input.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .map(Some)
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!("`{field}` must be a non-negative integer"))
-            }),
-    }
-}
-
 fn optional_string(input: &Value, field: &str) -> Result<Option<String>, OrbitError> {
     orbit_common::protocol::tool_input::optional_string(input, field)
 }
 
-fn actor(runtime: &OrbitRuntime, agent: Option<&str>, model: Option<&str>) -> String {
+pub(super) fn actor(runtime: &OrbitRuntime, agent: Option<&str>, model: Option<&str>) -> String {
     normalize_optional_attribution_label(model.or(agent), model)
         .unwrap_or_else(|| runtime.actor_label().to_string())
 }
@@ -291,28 +293,24 @@ fn run_json(run: &JobRun) -> Result<Value, OrbitError> {
     let mut value = serde_json::to_value(run).map_err(serialize_error("serialize workflow run"))?;
     value["steps"] = serde_json::to_value(&run.steps)
         .map_err(serialize_error("serialize workflow run steps"))?;
+    value["steps_source"] = json!("record");
     Ok(value)
 }
 
-/// [ORB-10971] The run record plus the child Runs it dispatched.
-///
-/// The `JobRun` row alone cannot answer "what did this run submit, and is it
-/// still waiting on it" — that lives in the run's `PipelineState`. Reading it
-/// here is what keeps the MCP surface agreeing with the CLI and the dashboard
-/// about lineage instead of each reader seeing a different half of the truth.
-/// An unreadable state degrades to an empty list rather than failing the read.
-fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, OrbitError> {
-    let state = runtime.read_run_state(&run.run_id).ok().flatten();
-    let recovery = runtime.collect_run_recovery_attempts(&run.run_id).ok();
-    run_json_enriched(run, state.as_ref(), recovery.as_ref())
-}
-
 fn run_json_enriched(
+    runtime: Option<&OrbitRuntime>,
     run: &JobRun,
     state: Option<&PipelineState>,
     recovery: Option<&RunRecoveryAttempts>,
 ) -> Result<Value, OrbitError> {
     let mut value = run_json(run)?;
+    if let Some(trigger) = state.and_then(|state| state.trigger.as_ref()) {
+        value["trigger"] =
+            serde_json::to_value(trigger).map_err(serialize_error("serialize run trigger"))?;
+    }
+    if let Some(runtime) = runtime {
+        attach_displayed_steps(runtime, run, &mut value)?;
+    }
     let dispatches = state
         .map(|state| state.child_dispatches.clone())
         .unwrap_or_default();
@@ -327,6 +325,11 @@ fn run_json_enriched(
     value["drain_admissions_stop"] =
         serde_json::to_value(state.and_then(|state| state.drain_admissions_stop.as_ref()))
             .map_err(serialize_error("serialize drain admissions stop"))?;
+    // [ORB-13901] A drain's last admission pass, including the host resource
+    // throttle that held it; null for every run that is not a drain.
+    value["drain_last_pass"] =
+        serde_json::to_value(state.and_then(|state| state.drain_last_pass.as_ref()))
+            .map_err(serialize_error("serialize drain last pass"))?;
     // [ORB-11354] An operator tracking an agent invocation reads it here, from
     // the same show/list surface as any other run: its distinguishable outcome,
     // a bounded preview of the answer, and the durable reference to the full
@@ -334,6 +337,7 @@ fn run_json_enriched(
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         run,
         state.map(|state| &state.step_outputs),
+        None,
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
     // Recovery evidence remains separate from the run and step errors above:
@@ -366,4 +370,55 @@ fn run_json_enriched(
         }),
     };
     Ok(value)
+}
+
+/// [ORB-12255] Prefer stored `JobRun::steps`; reconstruct from the v2 audit
+/// trail when the worker path left the record empty. `steps_source` names
+/// which one answered, matching CLI `run show --json`.
+fn attach_displayed_steps(
+    runtime: &OrbitRuntime,
+    run: &JobRun,
+    value: &mut Value,
+) -> Result<(), OrbitError> {
+    if !run.steps.is_empty() {
+        value["steps_source"] = json!("record");
+        return Ok(());
+    }
+    let audit = runtime
+        .collect_run_audit_steps(&run.run_id)
+        .unwrap_or_default();
+    if audit.is_empty() {
+        value["steps_source"] = json!("record");
+        return Ok(());
+    }
+    let steps = audit
+        .iter()
+        .map(|step| {
+            let duration_ms = match (step.started_at, step.finished_at) {
+                (Some(started), Some(finished)) => Some(
+                    finished
+                        .signed_duration_since(started)
+                        .num_milliseconds()
+                        .max(0) as u64,
+                ),
+                _ => None,
+            };
+            json!({
+                "step_index": step.step_index,
+                "target_type": "activity",
+                "target_id": step.step_id,
+                "started_at": step.started_at.map(|value| value.to_rfc3339()),
+                "finished_at": step.finished_at.map(|value| value.to_rfc3339()),
+                "duration_ms": duration_ms,
+                "exit_code": Value::Null,
+                "agent_response_json": Value::Null,
+                "state": step.state.as_deref().unwrap_or("running"),
+                "error_code": Value::Null,
+                "error_message": step.error_message,
+            })
+        })
+        .collect::<Vec<_>>();
+    value["steps"] = Value::Array(steps);
+    value["steps_source"] = json!("audit");
+    Ok(())
 }

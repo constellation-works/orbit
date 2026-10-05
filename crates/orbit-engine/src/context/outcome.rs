@@ -1,18 +1,19 @@
-//! Invocation-result types, error-code constants, and workflow-failure
-//! helpers.
+//! Workflow-failure / interruption status events and history-note helpers.
 
+use orbit_common::text::floor_char_boundary;
 use orbit_types::task::TaskStatus;
-use orbit_types::telemetry::InvocationTrace;
-use serde_json::Value;
 
 use super::hosts::TaskAutomationUpdate;
 
-pub const AGENT_INVOCATION_FAILED: &str = "AGENT_INVOCATION_FAILED";
-pub const AGENT_TIMEOUT: &str = "AGENT_TIMEOUT";
 pub const WORKFLOW_RUN_FAILED_EVENT: &str = "workflow_run_failed";
+/// Status event for a task blocked because its run was reconciled
+/// `interrupted` (the worker died under it). Distinct from
+/// [`WORKFLOW_RUN_FAILED_EVENT`] so an operator can tell "resume it" apart
+/// from "diagnose it".
+pub const WORKFLOW_RUN_INTERRUPTED_EVENT: &str = "workflow_run_interrupted";
 
 /// Maximum bytes of a run's `error_message` inlined verbatim into the
-/// `workflow_run_failed` history note. Beyond this the note keeps the leading
+/// `workflow_run_failed` / `workflow_run_interrupted` history note. Beyond this the note keeps the leading
 /// bytes and points at the run record for the rest.
 ///
 /// This is the only size threshold on the history-note surface and it is
@@ -32,6 +33,29 @@ pub fn workflow_failure_note(
     error_code: Option<&str>,
     error_message: Option<&str>,
 ) -> String {
+    workflow_run_note("failed", job_id, run_id, error_code, error_message)
+}
+
+/// Note for a task blocked by an interrupted run. Same shape as
+/// [`workflow_failure_note`], so readers parsing `run_id=` keep working, but
+/// it names the interruption and the command that recovers it.
+pub fn workflow_interruption_note(
+    job_id: &str,
+    run_id: &str,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+) -> String {
+    let note = workflow_run_note("interrupted", job_id, run_id, error_code, error_message);
+    format!("{note}; resume with `orbit job resume {run_id}`")
+}
+
+fn workflow_run_note(
+    outcome: &str,
+    job_id: &str,
+    run_id: &str,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+) -> String {
     let error_code = error_code
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -43,7 +67,7 @@ pub fn workflow_failure_note(
     let error_message = elide_note_error(run_id, error_message);
 
     format!(
-        "workflow run failed: job={job_id}, run_id={run_id}, error_code={error_code}, error={error_message}"
+        "workflow run {outcome}: job={job_id}, run_id={run_id}, error_code={error_code}, error={error_message}"
     )
 }
 
@@ -71,22 +95,6 @@ fn elide_note_error(run_id: &str, error_message: &str) -> String {
     )
 }
 
-/// Largest index at or below `index` that splits `text` between characters.
-///
-/// Stands in for the unstable `str::floor_char_boundary`. Slicing an error
-/// message mid-codepoint would panic, and error text is arbitrary bytes from a
-/// failing subprocess.
-fn floor_char_boundary(text: &str, index: usize) -> usize {
-    if index >= text.len() {
-        return text.len();
-    }
-    let mut end = index;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
-}
-
 pub fn blocked_workflow_failure_update(
     job_id: &str,
     run_id: &str,
@@ -106,10 +114,21 @@ pub fn blocked_workflow_failure_update(
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ActivityInvocationResult {
-    pub response_json: Option<Value>,
-    pub invocation_trace: InvocationTrace,
-    pub exit_code: Option<i32>,
-    pub duration_ms: u64,
+pub fn blocked_workflow_interruption_update(
+    job_id: &str,
+    run_id: &str,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+) -> TaskAutomationUpdate {
+    TaskAutomationUpdate {
+        status: Some(TaskStatus::Blocked),
+        status_event: Some(WORKFLOW_RUN_INTERRUPTED_EVENT.to_string()),
+        status_note: Some(workflow_interruption_note(
+            job_id,
+            run_id,
+            error_code,
+            error_message,
+        )),
+        ..TaskAutomationUpdate::default()
+    }
 }

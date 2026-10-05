@@ -1,13 +1,14 @@
 #![allow(missing_docs)]
 
-mod argv;
-mod envelope;
-mod inspection;
-mod orchestrator;
-#[cfg(target_os = "macos")]
-mod orchestrator_macos;
-mod rebase_recovery;
-mod spawn;
+// Everything but `stdout_preview` drives `#!/bin/sh` fake agents.
+#[cfg(unix)]
+mod launcher;
+#[cfg(unix)]
+mod orchestrator_env;
+mod stdout_preview;
+#[cfg(unix)]
 mod supervisor;
+#[cfg(unix)]
 pub(in crate::activity_job::cli_runner) mod test_support;
+#[cfg(unix)]
 mod trusted_host;

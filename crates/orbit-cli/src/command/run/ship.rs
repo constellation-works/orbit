@@ -1,17 +1,13 @@
 //! `orbit run ship` CLI entrypoint.
 
 use clap::{Args, ValueEnum};
-#[cfg(test)]
-use orbit_core::build_ship_input;
 use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
-#[cfg(test)]
-use serde_json::Value;
 
 use crate::command::{CommandOut, Execute};
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_warning};
 
-pub(super) const SHIP_WORKFLOW: &str = "ship";
+const SHIP_WORKFLOW: &str = "ship";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ShipMode {
@@ -50,8 +46,9 @@ pub struct ShipCommand {
     /// (explicit `ship_mode`, else defaults to `pr`).
     #[arg(short = 'm', long, value_enum)]
     pub mode: Option<ShipMode>,
-    /// Base branch for shipment. Defaults to
-    /// `[workflow] base_branch` from `config.toml` (or `main` if unset).
+    /// Base branch for shipment. Defaults to the registered workspace
+    /// base branch, else `[workflow] base_branch` from `config.toml`
+    /// (or `main` if unset).
     #[arg(short = 'b', long)]
     pub base: Option<String>,
     /// Authorize this run to finish delivery and move the tasks it ships to
@@ -67,6 +64,10 @@ pub struct ShipCommand {
     /// fails before a run is created. Omitted, shipment remains unrestricted.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
+    /// Require a systemd user scope for this run and every worker it starts.
+    /// Overrides machine.worker_containment_strict for this invocation.
+    #[arg(long)]
+    pub strict_worker_containment: bool,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -93,7 +94,7 @@ impl Execute for ShipCommand {
         ensure_workflow_exists(SHIP_WORKFLOW)?;
         // Ship is the one workflow whose submission carries task-level
         // admission checks, so it must not use the generic CLI dispatcher.
-        let invoke = runtime.submit_ship_run(
+        let invoke = runtime.submit_ship_run_with_containment(
             mode,
             self.base.as_deref(),
             &self.task_ids,
@@ -101,6 +102,8 @@ impl Execute for ShipCommand {
             &self.allow_crew,
             None,
             self.claim_token.as_deref(),
+            orbit_types::workflow::JobRunTrigger::cli(),
+            self.strict_worker_containment,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,
@@ -115,31 +118,46 @@ impl Execute for ShipCommand {
             error_code: None,
             error_message: None,
         };
-        workflow_dispatch_payload(SHIP_WORKFLOW, &[run])
+        // [ORB-13901] Discovery is refused while throttled; an explicit
+        // selection proceeds and is warned.
+        let mut warnings: Vec<String> = if self.task_ids.is_empty() {
+            Vec::new()
+        } else {
+            super::auto::resource_throttle_warning(runtime)
+                .into_iter()
+                .collect()
+        };
+        warnings.extend(runtime.validation_env_preflight_warning());
+        workflow_dispatch_payload_with_warning(SHIP_WORKFLOW, &[run], warnings)
     }
 }
 
 /// Resolve the effective ship mode for a `ship` invocation.
 ///
 /// An explicit `--mode` wins. Otherwise the mode is resolved from the current
-/// workspace's registry entry (matched by `orbit_dir`): explicit `ship_mode`,
-/// else the `pr` default. If the current workspace isn't found in the registry,
-/// fall back to `pr` so omitted configuration still uses reviewable delivery.
-pub(crate) fn resolve_ship_mode(
+/// workspace binding. Standalone runtimes without a binding may use a single
+/// unambiguous registry checkout for their data root. If no workspace can be
+/// identified, fall back to `pr` so omitted configuration uses reviewable delivery.
+fn resolve_ship_mode(
     args: &ShipCommand,
     runtime: &OrbitRuntime,
 ) -> Result<orbit_core::ShipMode, OrbitError> {
     if let Some(mode) = args.mode {
         return Ok(mode.to_core());
     }
+    if let Some(binding) = runtime.workspace_runtime_binding() {
+        return Ok(binding.ship_mode);
+    }
     let registry_path =
         orbit_registry::workspace_registry::registry_path_for(&runtime.global_root());
     let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
     let orbit_dir = runtime.shared_root();
-    let mode = registry
+    let mut checkouts = registry
         .checkouts
         .iter()
-        .find(|checkout| checkout.orbit_dir == orbit_dir)
+        .filter(|checkout| checkout.orbit_dir == orbit_dir);
+    let checkout = checkouts.next().filter(|_| checkouts.next().is_none());
+    let mode = checkout
         .and_then(|checkout| {
             registry
                 .workspaces
@@ -184,35 +202,6 @@ impl Execute for LegacyShipLocalCommand {
             "`orbit run ship-local` was replaced by `orbit run ship --mode local`".to_string(),
         ))
     }
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-pub(crate) struct WorkflowRunPlan {
-    pub workflow_alias: &'static str,
-    pub input: Value,
-}
-
-#[cfg(test)]
-pub(crate) fn build_ship_run_plan(
-    args: &ShipCommand,
-    config_base_branch: &str,
-    mode: orbit_core::ShipMode,
-) -> Result<WorkflowRunPlan, OrbitError> {
-    validate_task_selection(&args.task_ids)?;
-    let workflow_alias = SHIP_WORKFLOW;
-    ensure_workflow_exists(workflow_alias)?;
-    let base = args.base.as_deref().unwrap_or(config_base_branch);
-    Ok(WorkflowRunPlan {
-        workflow_alias,
-        input: build_ship_input(
-            mode,
-            base,
-            &args.task_ids,
-            args.completion(),
-            &args.allow_crew,
-        )?,
-    })
 }
 
 fn validate_task_selection(task_ids: &[String]) -> Result<(), OrbitError> {

@@ -3,12 +3,14 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_exec::{
-    bwrap_program_for_audit, claude_state_dir_from_env, compile_linux_bwrap_argv,
+    bwrap_program_for_audit, claude_state_dir_from_env, compile_linux_bwrap_argv_with_authority,
     sandbox_exec_program_for_audit,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
+use serde_json::Value;
 
 use super::super::dispatcher::ResolvedSandbox;
+use super::spawn::linux_bwrap_mask;
 
 /// Build the argv we audit-log. When wrapped, the parent process the kernel
 /// sees is the trusted `sandbox-exec`, so we prepend
@@ -16,7 +18,7 @@ use super::super::dispatcher::ResolvedSandbox;
 /// the child program. The profile path is the literal `<profile.sb>` because
 /// the real path is a tempfile created at spawn time and only meaningful to
 /// the kernel — the placeholder keeps the audit record stable across runs.
-pub(super) fn audit_argv_for_dispatch(
+fn audit_argv_for_dispatch(
     program: &str,
     args: &[String],
     sandbox: Option<&ResolvedSandbox>,
@@ -51,6 +53,20 @@ pub(super) fn audit_argv_for_dispatch(
     }
 }
 
+/// Pin the complete Codex transport MCP entry to the same selected ORBIT_BIN
+/// dispatched to the managed child.
+pub(super) fn codex_mcp_server_launch_args(
+    orbit_bin: &str,
+) -> Result<Vec<String>, serde_json::Error> {
+    Ok(vec![
+        "--config".to_string(),
+        format!(
+            "mcp_servers.orbit.command={}",
+            serde_json::to_string(orbit_bin)?
+        ),
+    ])
+}
+
 pub(super) fn try_audit_argv_for_dispatch(
     program: &str,
     args: &[String],
@@ -59,14 +75,43 @@ pub(super) fn try_audit_argv_for_dispatch(
 ) -> Result<Vec<String>, orbit_common::OrbitError> {
     match sandbox {
         Some(sb) if sb.kind == ExecutorSandboxKind::LinuxBwrap => {
-            let plan =
-                compile_linux_bwrap_argv(&sb.fs_profile, program, args, cwd, sb.managed_worktree)?;
+            // The audited plan carries the same mask the launcher mounts.
+            let plan = compile_linux_bwrap_argv_with_authority(
+                &sb.fs_profile,
+                program,
+                args,
+                cwd,
+                sb.managed_worktree,
+                Vec::new(),
+                linux_bwrap_mask(sb).as_ref(),
+            )?;
             let mut out = Vec::with_capacity(plan.args.len() + 1);
             out.push(plan.wrapper);
             out.extend(plan.args);
             Ok(out)
         }
         _ => Ok(audit_argv_for_dispatch(program, args, sandbox)),
+    }
+}
+
+/// Apply a trusted-host `provider_sandbox` label to the provider CLI config.
+///
+/// Codex is the only provider whose inner sandbox is a dynamic `--sandbox`
+/// flag. Other providers ignore the label here because they have no
+/// configurable inner sandbox to honour.
+pub(super) fn apply_trusted_host_provider_sandbox(
+    provider: &str,
+    input: &Value,
+    provider_config: &mut HashMap<String, String>,
+) {
+    let Some(label) = input.get("provider_sandbox").and_then(Value::as_str) else {
+        return;
+    };
+    let Some((_, mode)) = orbit_types::workflow::parse_provider_sandbox_label(label) else {
+        return;
+    };
+    if provider == "codex" {
+        provider_config.insert("sandbox".to_string(), mode.to_string());
     }
 }
 
@@ -128,7 +173,7 @@ fn rewrite_claude_debug_file_path(static_args: &mut [String]) {
 }
 
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn rewrite_debug_file_value(static_args: &mut [String], state_dir: &std::path::Path) {
+fn rewrite_debug_file_value(static_args: &mut [String], state_dir: &std::path::Path) {
     let mut idx = 0;
     while idx + 1 < static_args.len() {
         if static_args[idx] == "--debug-file" {

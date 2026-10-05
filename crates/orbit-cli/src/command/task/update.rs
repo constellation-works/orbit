@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args};
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::task::TaskArtifact;
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -24,6 +24,8 @@ pub struct TaskUpdateArgs {
     #[arg(long, alias = "dependency", action = ArgAction::Append, value_delimiter = ',')]
     pub dependencies: Vec<String>,
     /// Replacement task tags. Repeat or comma-separate for multiple tags.
+    /// `os:linux`, `os:macos` or `os:windows` limits which host OS may run the
+    /// task from its next admission; any other `os:` value is rejected.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',')]
     pub tags: Vec<String>,
     /// New task plan (empty string clears)
@@ -41,6 +43,9 @@ pub struct TaskUpdateArgs {
     /// New task type
     #[arg(long = "type", value_enum)]
     pub task_type: Option<TaskType>,
+    /// New dispatch priority
+    #[arg(long, value_enum)]
+    pub priority: Option<TaskPriority>,
     /// Task complexity
     #[arg(long, value_enum)]
     pub complexity: Option<TaskComplexity>,
@@ -50,22 +55,27 @@ pub struct TaskUpdateArgs {
     /// Explicit implementation attribution label (empty string clears)
     #[arg(long)]
     pub implemented_by: Option<String>,
-    /// PR review status (approve, request-changes)
-    #[arg(long)]
+    /// PR review status: `approve` or `request-changes` (empty string clears)
+    #[arg(long, value_parser = parse_pr_status)]
     pub pr_status: Option<String>,
     /// Job run ID to associate with the task (empty string clears)
     #[arg(long)]
     pub job_run_id: Option<String>,
-    /// Named crew to use when running this task (empty string clears)
+    /// Named crew to use when running this task (empty string draws a fresh one)
     #[arg(long)]
     pub crew: Option<String>,
     /// Named crew responsible for orchestration attribution (empty string clears)
     #[arg(long)]
     pub orchestrator: Option<String>,
-    /// Replacement task context selectors. Repeat or comma-separate for multiple selectors (empty string clears).
+    /// Replace the whole task context list. Omit to preserve it; an empty string clears it.
+    /// To extend scope, include all existing selectors plus the new ones. Repeat or comma-separate for multiple selectors.
     /// Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
+    /// Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.
     #[arg(long = "context", alias = "context-files", action = ArgAction::Append, value_delimiter = ',')]
     pub context_files: Vec<String>,
+    /// Accept context selectors whose target does not exist yet (for work that creates the file)
+    #[arg(long)]
+    pub allow_missing_context: bool,
     /// Task artifact write in `path=content` form. Repeat for multiple artifacts.
     #[arg(long = "artifact")]
     pub artifacts: Vec<String>,
@@ -80,6 +90,16 @@ pub struct TaskUpdateArgs {
     /// Note recorded on the approval's status history entry (with `--approve`)
     #[arg(long, requires = "approve")]
     pub note: Option<String>,
+    /// Discard the candidate the task's last failed run preserved, so its next
+    /// run implements fresh instead of resuming it. Combine with `--status
+    /// backlog` to requeue.
+    #[arg(long)]
+    pub discard_candidate: bool,
+    /// Apply `--status` even when the task lifecycle refuses the transition
+    /// (for example reopening a done task). Human-operator override: the
+    /// change is recorded in task history as `forced`.
+    #[arg(long, requires = "status")]
+    pub force: bool,
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -91,7 +111,8 @@ pub struct TaskUpdateArgs {
 /// same invocation, and `--status` would be a direct contradiction of the
 /// transition being requested. Rejecting the combination in the parser keeps
 /// approval one write with one history entry.
-const APPROVE_CONFLICTS: [&str; 18] = [
+const APPROVE_CONFLICTS: [&str; 21] = [
+    "force",
     "title",
     "description",
     "acceptance_criteria",
@@ -101,6 +122,7 @@ const APPROVE_CONFLICTS: [&str; 18] = [
     "execution_summary",
     "status",
     "task_type",
+    "priority",
     "complexity",
     "planned_by",
     "implemented_by",
@@ -110,6 +132,7 @@ const APPROVE_CONFLICTS: [&str; 18] = [
     "orchestrator",
     "context_files",
     "artifacts",
+    "discard_candidate",
 ];
 
 impl Execute for TaskUpdateArgs {
@@ -126,6 +149,7 @@ impl Execute for TaskUpdateArgs {
             comment,
             status,
             task_type,
+            priority,
             complexity,
             planned_by,
             implemented_by,
@@ -134,10 +158,13 @@ impl Execute for TaskUpdateArgs {
             crew,
             orchestrator,
             context_files,
+            allow_missing_context,
             artifacts,
             model,
             approve,
             note,
+            force,
+            discard_candidate,
             json: _,
         } = self;
 
@@ -197,41 +224,91 @@ impl Execute for TaskUpdateArgs {
         let dependencies = parse_replacement_list(dependencies);
         let tags = (!tags.is_empty()).then_some(tags);
         let upsert_artifacts = parse_artifact_args(&artifacts)?;
+        let context_files = parse_replacement_list(context_files);
+        if !allow_missing_context && let Some(candidates) = context_files.as_deref() {
+            runtime.ensure_context_selectors_exist(candidates)?;
+        }
+        let changes_nothing = title.is_none()
+            && description.is_none()
+            && acceptance_criteria.is_none()
+            && dependencies.is_none()
+            && tags.is_none()
+            && plan.is_none()
+            && execution_summary.is_none()
+            && comment.is_none()
+            && status.is_none()
+            && task_type.is_none()
+            && priority.is_none()
+            && complexity.is_none()
+            && planned_by.is_none()
+            && implemented_by.is_none()
+            && pr_status.is_none()
+            && job_run_id.is_none()
+            && crew.is_none()
+            && orchestrator.is_none()
+            && context_files.is_none()
+            && upsert_artifacts.is_empty()
+            && !discard_candidate;
+        if changes_nothing {
+            return Err(OrbitError::InvalidInput(
+                "nothing to update: pass at least one field flag, e.g. `--status` or `--title` (see `orbit task update --help`)"
+                    .to_string(),
+            ));
+        }
+        if let Some(dependencies) = dependencies.as_deref() {
+            super::warn_unreadable_dependencies(runtime, dependencies);
+        }
         let (agent, model) = super::mutation_identity(model);
 
-        let task = runtime.update_task_with_identity(
-            &id,
-            TaskUpdateParams {
-                title,
-                description,
-                acceptance_criteria,
-                dependencies,
-                tags,
-                plan,
-                execution_summary,
-                comment,
-                status: status.map(Into::into),
-                task_type,
-                complexity,
-                planned_by,
-                implemented_by,
-                pr_status,
-                job_run_id,
-                crew,
-                orchestrator,
-                context_files: parse_replacement_list(context_files),
-                upsert_artifacts,
-                ..Default::default()
-            },
-            agent,
-            model,
-        )?;
+        let params = TaskUpdateParams {
+            title,
+            description,
+            acceptance_criteria,
+            dependencies,
+            tags,
+            plan,
+            execution_summary,
+            comment,
+            status: status.map(Into::into),
+            task_type,
+            priority,
+            complexity,
+            planned_by,
+            implemented_by,
+            pr_status,
+            job_run_id,
+            crew,
+            orchestrator,
+            context_files,
+            upsert_artifacts,
+            discard_candidate,
+            ..Default::default()
+        };
+        let task = if force {
+            runtime.force_update_task_with_identity(&id, params, agent, model)?
+        } else {
+            runtime.update_task_with_identity(&id, params, agent, model)?
+        };
 
         Ok(Payload::detail(
             task_to_json_for_runtime(runtime, &task)?,
             format!("Updated task '{}'", task.id),
         )
         .into())
+    }
+}
+
+/// Validate `--pr-status` at the parser: the value is stored verbatim and read
+/// back as a merge gate, so a typo must be refused here rather than persisted
+/// as a status no reader recognizes. An empty value is kept: it clears the field.
+pub(super) fn parse_pr_status(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" | "approve" | "approved" | "request-changes" | "request_changes"
+        | "changes-requested" | "changes_requested" => Ok(value.to_string()),
+        _ => Err(format!(
+            "unknown PR status '{value}': expected `approve` or `request-changes` (empty string clears)"
+        )),
     }
 }
 

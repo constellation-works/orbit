@@ -1,0 +1,48 @@
+schemaVersion: 1
+name: orbit.graph.maintain
+description: Deliberately import, incrementally sync Git history, or ingest a bounded explicit set of verified Orbit run outputs. Orbit coverage is always reported as partial unless a future cursor feed attests completeness.
+parameters:
+- name: schema_version
+  description: Request contract version; currently 1.
+  param_type: integer
+  required: true
+- name: operation
+  description: history_sync, import, or orbit_sync.
+  param_type: string
+  required: true
+- name: repository
+  description: Explicit absolute path to the Git repository to update.
+  param_type: string
+  required: true
+- name: branch
+  description: Landing branch history scope; defaults to main.
+  param_type: string
+  required: false
+- name: limit
+  description: Operation bound; maximum 1000 for Git and 100 for Orbit records.
+  param_type: integer
+  required: false
+- name: delivery
+  description: Public DeliveryImport v2 envelope for operation=import.
+  param_type: object
+  required: false
+- name: workspace
+  description: Explicit Orbit workspace for operation=orbit_sync.
+  param_type: string
+  required: false
+- name: orbit_root
+  description: Explicit Orbit authority root required for operation=orbit_sync.
+  param_type: string
+  required: false
+- name: task_ids
+  description: Bounded tasks whose current public job_run_id should be examined.
+  param_type: string_list
+  required: false
+- name: run_ids
+  description: Explicit public Orbit workflow run IDs to examine incrementally.
+  param_type: string_list
+  required: false
+- name: task_snapshots
+  description: Optional attested pre-execution TaskAssociation objects keyed by task_id.
+  param_type: array
+  required: false

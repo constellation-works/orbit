@@ -1,11 +1,11 @@
 ---
 type: runbook
-summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees.
+summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, and validate before/after builds with it off.
 tags: [operations, rust, cache, worktrees, sandbox, linux]
-paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", ".cargo/config.toml"]
+paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
-related_artifacts: [ORB-11259, ORB-11755]
-last_validated: 2026-09-08
+related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
+last_validated: 2026-10-04
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -43,7 +43,7 @@ a host that can create Linux mount namespaces.
 | Host cache seam | Orbit global registry (`~/.orbit`), language-neutral | `$HOME/.orbit/cache/` |
 | Rust compiler cache | Operator opt-in via sccache | `$HOME/.orbit/cache/compiler/` |
 | rustc wrapper | Repository | `scripts/rustc-compiler-cache.sh` |
-| Cargo hook | Repository | `.cargo/config.toml` (`build.rustc-wrapper`) |
+| Cargo hook | Repository | `.cargo/config.toml` (`build.rustc-wrapper`); native Windows [overrides it off](#windows) |
 | Per-worktree build output | Each managed worktree | `$CARGO_TARGET_DIR` or `<worktree>/target/` |
 
 Linux implementer sandboxes grant `$HOME/.orbit/cache` as a narrow extra write
@@ -52,8 +52,11 @@ root. Managed worktrees also bind the checkout at `/tmp/orbit-workspace` and
 sccache keys do not include the `jrun-*` path. Workspace `.orbit/**`
 protected-path denies are unchanged. Reviewer and other read-only profiles do
 not receive the cache grant. macOS already allows `$HOME/Library/Caches` and
-also grants `$HOME/.orbit/cache/**` so the same default directory works. The
-stable `/tmp` mounts are Linux Bubblewrap-only.
+also grants `$HOME/.orbit/cache/**` to write-capable profiles so the same
+default directory works; macOS read-only profiles do not receive it either. The
+stable `/tmp` mounts are Linux Bubblewrap-only. Both OS sandboxes skip the
+host-cache grant when a symlink redirects the cache outside the global Orbit
+root; an alias within that root remains supported.
 
 The provider **agent cwd stays on the real worktree**. Bubblewrap `--chdir` is
 not mapped onto `/tmp/orbit-workspace`. The rustc wrapper, and only the rustc
@@ -68,6 +71,24 @@ not expanded back to the unique worktree prefix.
 Unavailable cache (missing binary, unwritable directory, `ORBIT_COMPILER_CACHE=0`)
 execs `rustc` with the original argv. Compilation stays correct; it is just
 uncached.
+
+## Windows
+
+`.cargo/config.toml` sets `build.rustc-wrapper` to `scripts/rustc-compiler-cache.sh`,
+a bash script that cargo cannot execute on `x86_64-pc-windows-msvc`. Cargo
+config has no per-OS wrapper setting, so native Windows builds, including the
+compile-only Windows CI job, disable the wrapper with an empty override:
+
+```powershell
+$env:CARGO_BUILD_RUSTC_WRAPPER = ""
+cargo check --target x86_64-pc-windows-msvc
+```
+
+An empty `CARGO_BUILD_RUSTC_WRAPPER` (or `RUSTC_WRAPPER`) overrides the config
+value and runs plain `rustc`. The default is unchanged on macOS and Linux
+hosts and Orbit workers: the wrapper stays configured and keeps its opt-in
+fallback behaviour. Windows itself is supported through WSL2, where the
+Linux workflow applies and no override is needed.
 
 ## Inspect
 
@@ -191,6 +212,84 @@ CPU when using server-side mode.
 
 Practical opt-out, no uninstall: `ORBIT_COMPILER_CACHE=0`.
 
+## Cross-revision before/after validation
+
+Comparing two revisions is the one workflow where the cache must be **off**, and
+where reused build state is the main source of false evidence. Recorded
+observations, all of them ordinary consequences of reusing state across source
+trees rather than defects in Cargo or sccache:
+
+- An archived baseline compiled under the configured rustc wrapper produced a
+  test binary listing the *current* worktree's newly added tests.
+- Two extracts sharing one `CARGO_TARGET_DIR` ran the first extract's embedded
+  fixture paths, so the second arm never exercised the revision it named.
+- `git archive` and `tar` write the commit's timestamps, so an extract placed
+  beside an existing build can look up to date and skip the rebuild.
+- A build piped into `tail` reported `tail`'s exit status, turning a compile
+  error into a green result.
+
+Use the maintained helper instead of hand-rolling `git archive | tar -x`:
+
+```bash
+scripts/cross-revision-check.sh \
+  --baseline <pre-fix-sha> --candidate <post-fix-sha> \
+  --expect-baseline fail --expect-candidate pass \
+  --baseline-marker 'test result: FAILED' \
+  --candidate-marker 'test result: ok' \
+  -- cargo test -p orbit-core --lib
+```
+
+| Guarantee | False result it prevents |
+| --- | --- |
+| A scratch extract and a private `CARGO_TARGET_DIR` per arm | An arm reusing the sibling revision's build output or embedded fixture paths |
+| Reused `--workdir` arm trees and targets are reset at the start of each invocation | Files or build artifacts from an earlier revision surviving into a rerun |
+| Every extracted mtime reset to now | A build skipped because archive timestamps predate an existing target dir |
+| `ORBIT_COMPILER_CACHE=0`, empty `RUSTC_WRAPPER` / `CARGO_BUILD_RUSTC_WRAPPER`, `CARGO_INCREMENTAL=0` | A baseline compiled through the host cache picking up the other tree's artifacts |
+| Producer status captured from a redirect, then `--tail` reads the log file | A filter's success replacing the build's failure |
+| `--expect-baseline` / `--expect-candidate` | An unexpected failure reported as an ordinary arm result |
+| Per-arm marker required, sibling marker rejected | A stale or foreign test set passing as this revision's |
+| Read-only Git access (`rev-parse`, `archive`, `GIT_OPTIONAL_LOCKS=0`) | Writes to a managed read-only `.git`, or a mutated source checkout |
+| Explicit and automatic workdirs refused inside the source checkout or Orbit state; only descendants of the declared `ORBIT_SCRATCH_DIR` are allowed beneath `.orbit/` | Scratch trees landing in the state being validated |
+
+In managed executors, use the injected `ORBIT_SCRATCH_DIR` and set `TMPDIR` to
+an existing run directory beneath it. The scratch root must resolve to an
+existing Git checkout's `.orbit/tmp`. The helper allows descendants of that
+root even when its checkout lives beneath `.orbit/state/worktrees`; it refuses
+the root itself, nested `.orbit` directories, sibling state paths and symlink
+or traversal escapes. `TMPDIR` alone does not authorize writing Orbit state.
+Both `--workdir` and automatic workdirs use these checks before creating output.
+
+The source selected by `--repo` is resolved to its entire Git checkout. That
+checkout remains immutable, including its own `.orbit/tmp`, even when declared
+as scratch. Use a separate source repository
+when the executor's only writable scratch lies inside its checkout, as the
+throwaway fixture does. The scratch contract does not grant sandbox access.
+
+Limits worth stating in a validation summary:
+
+- Marker verification is a literal substring match on each arm's log. A marker
+  both revisions can print proves nothing; pick text only one arm can emit.
+- The helper compares whatever the two revisions contain. It does not establish
+  that they differ only in the change under test.
+- Uncached arms are slower than a warm worktree build. That is the cost of an
+  independent baseline, not a regression; do not re-enable the cache for the
+  baseline arm to speed it up. `--keep-compiler-cache` exists for deliberate
+  cache experiments, not for before/after evidence.
+- Arm wall time is not a cache measurement. Use
+  [`scripts/bench-compiler-cache.sh`](#measure) for that.
+- The helper cannot recover a status you discard inside your own pipeline. Pass
+  the producer directly and let `--tail` do the bounding.
+
+Regression fixtures for the helper — arm isolation, mtime normalization, cache
+opt-out, producer exit code through bounded output, read-only `.git`, and
+workdir containment (including managed scratch authority and protected TMPDIR)
+— run in CI and locally:
+
+```bash
+make cross-revision-check-test
+# equivalent: scripts/test-cross-revision-check.sh
+```
+
 ## Measure
 
 Same toolchain, unchanged `HEAD`, private target directories, equivalent
@@ -246,14 +345,17 @@ The cache grant is the host global `cache/` directory, not a workspace
 `.orbit/state` path and not a shared target dir.
 
 Verify a Linux implementer profile can write the cache without widening
-reviewer:
+reviewer. The workspace-relative fsProfile rules are unchanged, which
+`orbit doctor fs-access` shows (both report `modify: denied`):
 
 ```bash
-orbit policy check implementer "$HOME/.orbit/cache/compiler"
+orbit doctor fs-access implementer .orbit/state/x
+orbit doctor fs-access reviewer src/lib.rs
 ```
 
-`orbit policy check` is workspace-relative and will not name the host global
-path; the grant is applied by the Linux runtime write-root appender at spawn.
+It cannot show the cache grant itself: it rejects
+`"$HOME/.orbit/cache/compiler"` as outside the workspace root, because the
+grant is applied by the Linux runtime write-root appender at spawn.
 Confirm empirically with `make compiler-cache-status` inside a managed
 implementer run, or with a Bubblewrap smoke that bind-mounts the cache
 directory writable and leaves `/tmp` private.

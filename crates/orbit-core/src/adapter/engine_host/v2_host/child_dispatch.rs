@@ -27,9 +27,9 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 
 /// Audit command for a child submission attempt, successful or not.
-pub(super) const CHILD_DISPATCH_AUDIT: &str = "pipeline.child_dispatch";
+const CHILD_DISPATCH_AUDIT: &str = "pipeline.child_dispatch";
 /// Audit command for the parent's observation of a child's terminal state.
-pub(super) const CHILD_WAIT_AUDIT: &str = "pipeline.child_wait";
+const CHILD_WAIT_AUDIT: &str = "pipeline.child_wait";
 
 /// The parent step that is dispatching, as the engine named it.
 pub(super) fn parent_step_id(input: &Value) -> Option<String> {
@@ -55,8 +55,11 @@ pub(super) fn parent_run_id(input: &Value) -> Option<String> {
 ///
 /// The auto-admission path already wrote the first link atomically with the
 /// child row [ORB-11310]. Re-recording is an idempotent refresh and preserves
-/// the original submission timestamp. Direct callers without trusted parent
-/// context retain this checkpoint as their first parent-state link.
+/// the original submission timestamp. A parent cancelled between admission and
+/// this refresh has already closed the dispatch; the refresh then leaves that
+/// terminal record and its cancellation evidence untouched. Direct callers
+/// without trusted parent context retain this checkpoint as their first
+/// parent-state link.
 ///
 /// A run state that cannot be written is a hard failure of the dispatch step,
 /// not a warning. The alternative — blocking for an hour on a child nobody can
@@ -126,6 +129,12 @@ pub(super) fn checkpoint_submitted_child(
 /// runs the child is already durably linked, so a failed projection update
 /// must not discard a child result the parent did observe. Failures are
 /// traced and the caller continues.
+///
+/// A dispatch that cancellation already closed stays closed: a late `Waiting`
+/// write is dropped, and a late terminal observation only fills in the child
+/// status or error. The persisted parent status is deliberately not consulted,
+/// because cancellation marks the parent terminal before it settles open
+/// dispatches, and closing one here first would skip its cascade.
 pub(super) fn advance_child_phase(
     runtime: &OrbitRuntime,
     parent_run_id: Option<&str>,
@@ -167,7 +176,7 @@ pub(super) fn record_child_wait_outcome(
     status: &str,
     error_message: Option<&str>,
 ) -> Result<(), DispatchError> {
-    let succeeded = status == "succeeded";
+    let succeeded = crate::application::job::pipeline::pipeline_wait_status_is_success(status);
     record_child_audit(
         runtime,
         action,
@@ -256,9 +265,9 @@ fn record_child_audit(
             session_id: None,
             workspace_id: None,
             caller_machine_id: None,
-            caller_host_id: None,
+            caller_machine_name: None,
             process_machine_id: None,
-            process_host_id: None,
+            process_machine_name: None,
             transport: None,
             effective_capabilities: Default::default(),
             origin_session_id: None,

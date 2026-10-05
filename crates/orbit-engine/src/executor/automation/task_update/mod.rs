@@ -54,6 +54,7 @@ pub(super) fn update_task<H: RuntimeHost + ?Sized>(
             note,
             agent,
             model,
+            calling_run_id: None,
         },
     )?;
     Ok(json!({}))

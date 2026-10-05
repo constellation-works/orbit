@@ -25,9 +25,14 @@ pub struct AuditListArgs {
     /// Filter by role
     #[arg(long)]
     pub role: Option<String>,
-    /// Filter by trusted logical workspace ID
-    #[arg(long)]
-    pub workspace: Option<String>,
+    /// Filter by trusted stored workspace ID
+    ///
+    /// This is deliberately distinct from the global `--workspace` selector:
+    /// the latter accepts a registered name or checkout path and is resolved
+    /// during runtime bootstrap. The audit log is host-global, so listing is
+    /// unscoped unless this filter is passed.
+    #[arg(long = "workspace-id")]
+    pub workspace_id: Option<String>,
     /// Filter by trusted caller machine ID
     #[arg(long)]
     pub caller_machine: Option<String>,
@@ -53,7 +58,7 @@ pub struct AuditListArgs {
     #[arg(long)]
     pub lease: Option<String>,
     /// Maximum number of events to return
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 100, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
     /// Output as JSON
     #[arg(long)]
@@ -76,7 +81,14 @@ impl Execute for AuditListArgs {
             target_type: self.kind,
             status: self.status,
             role: self.role,
-            workspace_id: self.workspace,
+            // Only the explicit flag scopes this. The audit log is one
+            // host-global table, and a row written before (or without)
+            // workspace resolution stores a NULL `workspace_id` — the
+            // global-seam denial for an unknown or unadvertised MCP tool name,
+            // and workspace setup failures. `workspace_id = ?` cannot match
+            // NULL, so defaulting the filter to the bound workspace silently
+            // drops exactly the rows an operator audits for.
+            workspace_id: self.workspace_id,
             caller_machine_id: self.caller_machine,
             process_machine_id: self.process_machine,
             transport: self.transport,

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
 use chrono::Utc;
-use orbit_agent::loop_engine::audit::{AuditSink, LoopAuditEvent};
+use orbit_agent::loop_engine::audit::AuditSink;
 use orbit_common::OrbitError;
 use orbit_types::workflow::activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
@@ -23,11 +23,22 @@ pub trait EnvelopeSink: Send + Sync {
     /// Persist one envelope event. An `Err` is recorded by the writer as a
     /// non-fatal audit failure rather than crashing the run.
     fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError>;
+
+    /// Read persisted events when the sink supports inspection. Backs
+    /// [`V2AuditWriter::events_snapshot`]; sinks that cannot be inspected
+    /// return `Ok(None)`.
+    fn events_snapshot(&self) -> Result<Option<Vec<V2AuditEvent>>, OrbitError> {
+        Ok(None)
+    }
 }
 
 impl EnvelopeSink for V2SqliteSink {
     fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError> {
         V2SqliteSink::write_envelope(self, event)
+    }
+
+    fn events_snapshot(&self) -> Result<Option<Vec<V2AuditEvent>>, OrbitError> {
+        self.snapshot_events().map(Some)
     }
 }
 
@@ -45,8 +56,6 @@ pub struct V2AuditWriter {
     workspace_path: Option<String>,
     inner: Arc<dyn AuditSink>,
     envelope_sink: Option<Arc<dyn EnvelopeSink>>,
-    #[cfg(any(test, feature = "test-support"))]
-    events: Mutex<Vec<V2AuditEvent>>,
     emitted_event_count: AtomicU64,
     event_counter: Mutex<u64>,
     parent_stacks: Mutex<HashMap<ThreadId, Vec<String>>>,
@@ -70,6 +79,10 @@ pub(crate) struct ParentStackGuard<'a> {
 pub enum WriteError {
     #[error("audit writer mutex poisoned")]
     Poisoned,
+    #[error("audit event snapshot is unavailable for this sink")]
+    SnapshotUnavailable,
+    #[error("read persisted audit events: {0}")]
+    Snapshot(#[source] OrbitError),
 }
 
 impl V2AuditWriter {
@@ -84,8 +97,6 @@ impl V2AuditWriter {
             workspace_path: None,
             inner,
             envelope_sink: None,
-            #[cfg(any(test, feature = "test-support"))]
-            events: Mutex::new(Vec::new()),
             emitted_event_count: AtomicU64::new(0),
             event_counter: Mutex::new(0),
             parent_stacks: Mutex::new(HashMap::new()),
@@ -95,7 +106,7 @@ impl V2AuditWriter {
     }
 
     /// Attach a SQLite sink for §7 envelope events. When set, every emitted
-    /// envelope event is persisted alongside the in-memory snapshot.
+    /// envelope event is persisted there and read back by `events_snapshot`.
     pub fn with_envelope_sink(mut self, sink: Arc<dyn EnvelopeSink>) -> Self {
         self.envelope_sink = Some(sink);
         self
@@ -184,12 +195,6 @@ impl V2AuditWriter {
             // the complete set of attempted envelope writes.
             self.note_audit_failure(event.envelope.event_type.as_str(), &error);
         }
-        #[cfg(any(test, feature = "test-support"))]
-        self.events
-            .lock()
-            .map_err(|_| WriteError::Poisoned)?
-            .push(event);
-
         self.emitted_event_count.fetch_add(1, Ordering::Relaxed);
         Ok(event_id)
     }
@@ -262,7 +267,7 @@ impl V2AuditWriter {
     /// failure. Non-fatal: returns the event_id on success, `None` on failure.
     /// Used at emission sites whose event id is not load-bearing for parent
     /// nesting.
-    pub(crate) fn emit_lossy(&self, kind: V2AuditEventKind) -> Option<String> {
+    pub fn emit_lossy(&self, kind: V2AuditEventKind) -> Option<String> {
         let event_kind = kind.event_type();
         match self.emit(kind) {
             Ok(event_id) => Some(event_id),
@@ -355,33 +360,25 @@ impl V2AuditWriter {
         self.emitted_event_count.load(Ordering::Relaxed)
     }
 
-    /// Snapshot of emitted events, retained only for tests that inspect
-    /// envelope contents.
-    #[cfg(any(test, feature = "test-support"))]
+    /// Read envelope events back from the configured persistence sink.
+    ///
+    /// `orbit-core`'s engine-host tests and integration tests reach persisted
+    /// events through the sink. Test helpers stay always-compiled rather than
+    /// feature-gated so build and test dependency graphs remain identical.
+    /// Fails with [`WriteError::SnapshotUnavailable`] when no sink is attached
+    /// or the sink cannot be inspected.
     pub fn events_snapshot(&self) -> Result<Vec<V2AuditEvent>, WriteError> {
-        Ok(self
-            .events
-            .lock()
-            .map_err(|_| WriteError::Poisoned)?
-            .clone())
-    }
-
-    /// Access to the inner loop-level sink for the loop engine to emit
-    /// http.*/tool.call.* events through. Returns a cloned `Arc` so callers
-    /// (e.g. `EnforcedAuditSink`) can share ownership without lifetime
-    /// gymnastics.
-    pub fn inner_sink(&self) -> Arc<dyn AuditSink> {
-        Arc::clone(&self.inner)
+        self.envelope_sink
+            .as_ref()
+            .ok_or(WriteError::SnapshotUnavailable)?
+            .events_snapshot()
+            .map_err(WriteError::Snapshot)?
+            .ok_or(WriteError::SnapshotUnavailable)
     }
 
     /// Proxy: write a blob via the inner sink (sha256-based, per §7.4 / §12 Q11).
     pub fn write_blob(&self, content: &[u8]) -> String {
         self.inner.write_blob(content)
-    }
-
-    /// Proxy: emit a loop-level event through the inner sink.
-    pub fn emit_loop_event(&self, event: &LoopAuditEvent) {
-        self.inner.emit(event);
     }
 
     fn next_event_id(&self) -> Result<String, WriteError> {

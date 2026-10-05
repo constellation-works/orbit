@@ -2,17 +2,14 @@ use std::str::FromStr;
 
 use serde::Serialize;
 
-use orbit_search::ScoreBreakdown;
+use crate::runtime::workspace::catalog::WorkspaceScope;
 
-use crate::runtime::workspace_catalog::WorkspaceScope;
-
-use super::DEFAULT_LIMIT;
+use super::{DEFAULT_LIMIT, MAX_LIMIT};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GlobalSearchKind {
     Task,
-    Doc,
     Friction,
     #[default]
     All,
@@ -22,7 +19,6 @@ impl GlobalSearchKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Task => "task",
-            Self::Doc => "doc",
             Self::Friction => "friction",
             Self::All => "all",
         }
@@ -30,10 +26,6 @@ impl GlobalSearchKind {
 
     pub(super) fn includes_tasks(self) -> bool {
         matches!(self, Self::Task | Self::All)
-    }
-
-    pub(super) fn includes_docs(self) -> bool {
-        matches!(self, Self::Doc | Self::All)
     }
 
     pub(super) fn includes_frictions(self) -> bool {
@@ -47,11 +39,10 @@ impl FromStr for GlobalSearchKind {
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "task" => Ok(Self::Task),
-            "doc" => Ok(Self::Doc),
             "friction" => Ok(Self::Friction),
             "all" => Ok(Self::All),
             other => Err(format!(
-                "invalid search kind `{other}`; expected one of: task, doc, friction, all"
+                "invalid search kind `{other}`; expected one of: task, friction, all"
             )),
         }
     }
@@ -61,20 +52,15 @@ impl FromStr for GlobalSearchKind {
 #[serde(rename_all = "lowercase")]
 pub enum GlobalSearchMode {
     Lexical,
-    Hybrid,
-    Neighbor,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct GlobalSearchParams {
     pub query: Option<String>,
-    // ADR-0179: hybrid free-text ranking and task-neighbor lookup are distinct modes.
-    pub hybrid: bool,
-    pub semantic: Option<String>,
     pub kind: GlobalSearchKind,
     pub limit: usize,
     /// AND-filter by tag. Repeat for multi-tag AND semantics. Applies to
-    /// task, doc, and friction (and `all`).
+    /// task and friction (and `all`).
     pub tags: Vec<String>,
     /// Include normally-hidden statuses for the queried kind(s). Mutually
     /// overridden by `status`.
@@ -82,8 +68,7 @@ pub struct GlobalSearchParams {
     /// Explicit per-kind status override (set semantics). When non-empty,
     /// takes precedence over the `all` widener.
     pub status: Vec<String>,
-    /// Cross-kind applicability filter. Task: selector-mapping against
-    /// `context_files`. Doc: out of scope (returns empty).
+    /// Task applicability filter using selector-mapping against `context_files`.
     pub path: Option<String>,
     /// Which workspaces this query covers. Defaults to
     /// [`WorkspaceScope::Current`], the untouched single-workspace path
@@ -92,12 +77,27 @@ pub struct GlobalSearchParams {
 }
 
 impl GlobalSearchParams {
+    /// The requested limit, capped at [`MAX_LIMIT`]. Zero means unset: a
+    /// friction listing then returns up to the cap, any other search
+    /// [`DEFAULT_LIMIT`].
     pub fn normalized_limit(&self) -> usize {
-        if self.limit == 0 {
-            DEFAULT_LIMIT
-        } else {
-            self.limit
+        match self.limit {
+            0 if self.is_friction_listing() => MAX_LIMIT,
+            0 => DEFAULT_LIMIT,
+            limit => limit.min(MAX_LIMIT),
         }
+    }
+
+    /// A `kind: friction` call with no query and no path lists the friction
+    /// records the status and tag filters admit, in `created_at` then ID
+    /// order, across every status unless a `friction:` status narrows it.
+    pub fn is_friction_listing(&self) -> bool {
+        self.kind == GlobalSearchKind::Friction
+            && self.path.is_none()
+            && self
+                .query
+                .as_deref()
+                .is_none_or(|query| query.trim().is_empty())
     }
 }
 
@@ -127,6 +127,13 @@ pub struct GlobalSearchResponse {
     pub kind: GlobalSearchKind,
     pub results: Vec<GlobalSearchHit>,
     pub notes: Vec<String>,
+    /// Kinds a `--path` query could not apply to (frictions are not
+    /// path-filtered). Mirrors the "branch skipped" note in `notes`, but as a
+    /// structured field an agent can check without parsing prose, so an empty
+    /// `results` from a path query is not misread as "nothing relevant"
+    /// [ORB-12259].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped_kinds: Vec<String>,
     /// Per-workspace outcome of a federated query. Empty — and omitted from
     /// JSON — for the default single-workspace scope, so an existing caller
     /// sees the same response shape it always did.
@@ -182,11 +189,16 @@ pub struct GlobalSearchHit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub score_breakdown: Option<ScoreBreakdown>,
+    pub score_breakdown: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_by: Option<Vec<String>>,
     /// Set only on a federated query. `None` on the single-workspace path
     /// keeps that response byte-identical to before [ORB-11027].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<HitWorkspace>,
+    /// The full friction record, set only on a friction listing so a caller
+    /// triaging the set reads tags, reporter, task and disposition without a
+    /// second lookup per hit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<serde_json::Value>,
 }

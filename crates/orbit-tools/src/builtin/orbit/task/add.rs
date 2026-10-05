@@ -1,7 +1,8 @@
 use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::{required_string, strip_retired_task_add_input_fields};
+use orbit_common::protocol::tool_input::{reject_retired_task_add_input_fields, required_string};
+use orbit_types::task::TASK_SHOW_PROJECTION_FIELDS_CSV;
 use orbit_types::tool::{ToolParam, ToolSchema};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext};
 
@@ -45,7 +46,7 @@ impl Tool for OrbitTaskAddTool {
             },
             ToolParam {
                 name: "tags".to_string(),
-                description: "Optional tags as a string or array of strings".to_string(),
+                description: "Optional tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task (several: any one of them); any other `os:` value is rejected".to_string(),
                 param_type: "string_list".to_string(),
                 required: false,
             },
@@ -58,9 +59,16 @@ impl Tool for OrbitTaskAddTool {
             ToolParam {
                 name: "context_files".to_string(),
                 description:
-                    "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically."
+                    "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up."
                         .to_string(),
                 param_type: "string_list".to_string(),
+                required: false,
+            },
+            ToolParam {
+                name: "allow_missing_context".to_string(),
+                description: "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default."
+                    .to_string(),
+                param_type: "boolean".to_string(),
                 required: false,
             },
             ToolParam {
@@ -71,9 +79,10 @@ impl Tool for OrbitTaskAddTool {
             },
             ToolParam {
                 name: "complexity".to_string(),
-                description: "Task complexity level (low, medium, or hard)".to_string(),
+                description: "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard"
+                    .to_string(),
                 param_type: "string".to_string(),
-                required: true,
+                required: false,
             },
             ToolParam {
                 name: "type".to_string(),
@@ -91,7 +100,7 @@ impl Tool for OrbitTaskAddTool {
             },
             ToolParam {
                 name: "crew".to_string(),
-                description: "Optional named crew to use when running this task".to_string(),
+                description: "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
@@ -101,7 +110,22 @@ impl Tool for OrbitTaskAddTool {
                 param_type: "string".to_string(),
                 required: false,
             },
+            ToolParam {
+                name: "fields".to_string(),
+                description: format!(
+                    "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}."
+                ),
+                param_type: "string_list".to_string(),
+                required: false,
+            },
+            ToolParam {
+                name: "field".to_string(),
+                description: "Compatibility alias for a single response field projection, such as `field: \"history\"`.".to_string(),
+                param_type: "string".to_string(),
+                required: false,
+            },
         ];
+        parameters.push(super::guarded::param("request_id", "string", "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot."));
         parameters.extend(super::super::model_identity_params());
 
         ToolSchema {
@@ -112,34 +136,23 @@ impl Tool for OrbitTaskAddTool {
         }
     }
 
+    fn input_schema(&self) -> Option<Value> {
+        Some(super::guarded::input_schema(&self.schema(), true))
+    }
+
     fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
+        if super::guarded::is_guarded(&input) {
+            return super::guarded::write(ctx, input, true);
+        }
         super::super::reject_agent_field(&input, "orbit.task.add")?;
+        reject_retired_task_add_input_fields(&input)?;
+        super::super::reject_unknown_tool_arguments(&input, &self.schema())?;
         required_string(&input, &["title"], "title")?;
         required_string(&input, &["description"], "description")?;
         required_string(&input, &["complexity"], "complexity")?;
         super::super::resolve_workspace_argument(ctx, &mut input, "orbit.task.add")?;
         super::super::apply_session_orchestrator_default(ctx, &mut input);
 
-        let ignored_fields = strip_retired_task_add_input_fields(&mut input);
-        if !ignored_fields.is_empty() {
-            tracing::warn!(
-                target: "orbit.tools.task.add",
-                ignored_fields = ?ignored_fields,
-                "ignored retired orbit.task.add fields"
-            );
-        }
-
-        let mut response =
-            super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskAdd)?;
-        if !ignored_fields.is_empty() {
-            let response_object = response.as_object_mut().ok_or_else(|| {
-                OrbitError::Execution(
-                    "orbit.task.add host returned a non-object response".to_string(),
-                )
-            })?;
-            response_object.insert("ignored_fields".to_string(), json!(ignored_fields));
-        }
-
-        Ok(response)
+        super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskAdd)
     }
 }

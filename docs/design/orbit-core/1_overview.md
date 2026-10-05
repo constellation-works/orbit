@@ -1,8 +1,8 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-08-16
-last_validated: 2026-08-16
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Accepted
 feature: orbit-core
 doc_role: overview
@@ -45,7 +45,7 @@ owners without externalizing it as new crates.
   reservations, process/tool execution mechanisms, and construction from an
   already-resolved config value.
 - **Application operations** — use-case DTOs and coordinated task, job,
-  workflow, docs, search, semantic, and health behavior. Store-coordinated
+  workflow, search, and health behavior. Store-coordinated
   lifecycle transitions live here; pure invariants live in `orbit-types`.
 - **Adapters** — command audit/dispatch, `orbit.*` tool-host translation, and
   `orbit-engine::RuntimeHost` callback translation. Adapters may use both
@@ -54,6 +54,11 @@ owners without externalizing it as new crates.
   forward-only startup migrations.
 - **Composition** — root resolution and the sole join of `orbit-config`,
   bootstrap, runtime construction, and adapters.
+- **Runtime roots** — `OrbitRuntimeRoots` carries `global_root`,
+  `shared_root`, and `local_root`. On the primary checkout `shared_root` and
+  `local_root` are equal; in a linked worktree `shared_root` is the primary
+  checkout's `.orbit/` and `local_root` is the worktree's own. An explicit
+  `--root` or `ORBIT_ROOT` pins both.
 - **Registry-aware composition** — opening a selected registered checkout and
   composing routine discovery from local `host.toml` plus `workspaces.json`
   lives in `orbit-cmd::registry_runtime` and `orbit-cmd::registry_routines`,
@@ -74,9 +79,9 @@ owners without externalizing it as new crates.
 | Context assembly | `crates/orbit-core/src/context.rs` | — |
 | Resolved-config consumption | `crates/orbit-core/src/runtime/builder.rs` | [ORB-10885], [ORB-10886] |
 | Config layering (owning crate) | `crates/orbit-config/src/` | [ORB-10885] |
-| Registered runtime + routine composition | `crates/orbit-cmd/src/registry_runtime.rs`, `crates/orbit-cmd/src/registry_routines.rs` | — |
+| Registered runtime + routine composition | `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-cmd/src/registry/routines.rs` | — |
 | Host identity + local workspace catalog | `crates/orbit-registry/src/` | — |
-| Tool dispatch and command-audit boundary | `crates/orbit-core/src/adapter/command/dispatch.rs` | [ORB-10886] |
+| Tool dispatch and command-audit boundary | `crates/orbit-core/src/adapter/command/dispatch/` | [ORB-10886] |
 | Root re-export policy | `crates/orbit-core/src/lib.rs` | [ORB-10016] |
 | Extracted command layer | `crates/orbit-cmd/src/` | [ORB-10016] |
 

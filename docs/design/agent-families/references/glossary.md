@@ -2,7 +2,7 @@
 type: design
 summary: "Agent Families — Glossary"
 tags: ["agent-families"]
-last_validated: 2026-09-05
+last_validated: 2026-09-25
 ---
 
 # Agent Families — Glossary
@@ -13,4 +13,4 @@ last_validated: 2026-09-05
 
 **all_agent_families()** — The single source of truth function in `orbit-common` that returns the fixed-size array of supported families. Changing its size is intentionally high-friction.
 
-**executor** — The YAML definition (`crates/orbit-core/assets/executors/<name>.yaml`) that describes how `backend: cli` invokes an agent's CLI. The name is the execution lane (`antigravity` for `agy`), which is not always the model family (`gemini`).
+**executor** — The v2 YAML definition (`crates/orbit-core/assets/executors/<name>.yaml`) that configures an execution lane and its command, arguments, environment, output format, and sandbox. Its `name` identifies the execution lane (`antigravity` for `agy`), which is not always the model family (`gemini`).

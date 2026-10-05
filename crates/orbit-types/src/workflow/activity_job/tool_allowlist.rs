@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::activity_v2::{ActivityV2, ActivityV2Spec, AgentLoopSpec};
@@ -37,9 +38,111 @@ pub enum ToolAllowlistError {
     #[error("wildcard allowlist entry `{entry}` did not match any registered tools")]
     WildcardRootMatchesNoTools { entry: String },
     #[error(
-        "allowlist entry `{entry}` grants `proc.spawn` but the activity omits `proc_allowed_programs`; declare the permitted programs (write `proc_allowed_programs: []` to deny every program)"
+        "allowlist entry `{entry}` grants `proc.spawn` but the activity omits a program policy; declare `proc_allowed_programs` (write `proc_allowed_programs: []` to deny every program) or `proc_disallowed_programs`"
     )]
     ProcSpawnWithoutProgramAllowlist { entry: String },
+    #[error(
+        "`tools` and `tool_disallow_list` are mutually exclusive; declare an explicit `tools` allowlist or a `tool_disallow_list`, not both"
+    )]
+    ToolsAndDisallowListBothSet,
+    #[error("`tool_disallow_list` invalid: {source}")]
+    DisallowList { source: Box<ToolAllowlistError> },
+    #[error(
+        "`tool_disallow_list` leaves `proc.spawn` callable but the activity omits a program policy; declare `proc_allowed_programs` (write `proc_allowed_programs: []` to deny every program), `proc_disallowed_programs`, or disallow `proc.spawn`"
+    )]
+    ProcSpawnNotDisallowedWithoutProgramAllowlist,
+    #[error("`proc_allowed_programs` and `proc_disallowed_programs` are mutually exclusive")]
+    BothProgramListsSet,
+}
+
+/// How an `agent_loop` activity bounds the Orbit tools its agent may call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityToolPolicyMode {
+    /// `tools` is the exact allowlist (the legacy and custom-activity mode).
+    Allow,
+    /// Every registered agent-facing tool except `tool_disallow_list`.
+    Deny,
+}
+
+impl ActivityToolPolicyMode {
+    /// The stable token a managed run and its audit record carry.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+impl AgentLoopSpec {
+    /// The tool policy this activity declares. Declaring
+    /// `tool_disallow_list` at all selects deny mode.
+    pub fn tool_policy_mode(&self) -> ActivityToolPolicyMode {
+        if self.tool_disallow_list.is_some() {
+            ActivityToolPolicyMode::Deny
+        } else {
+            ActivityToolPolicyMode::Allow
+        }
+    }
+}
+
+/// A deny-mode activity's disallow list, carried to the enforcement point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityToolDenyPolicy {
+    /// Activity whose `tool_disallow_list` this is.
+    pub activity: String,
+    /// Disallowed concrete names and permitted wildcard roots.
+    pub disallow_list: Vec<String>,
+}
+
+impl ActivityToolDenyPolicy {
+    /// Does the disallow list cover `tool_name`?
+    pub fn denies(&self, tool_name: &str) -> bool {
+        tool_allowed(tool_name, &self.disallow_list)
+    }
+
+    /// The refusal a denied call surfaces.
+    pub fn denial_message(&self, tool_name: &str) -> String {
+        format!(
+            "tool '{tool_name}' is in the activity disallow list ({})",
+            self.activity
+        )
+    }
+}
+
+/// Deny mode's concrete callable set: `registered_tools` minus every tool the
+/// disallow list covers, in registry order and deduplicated.
+///
+/// A deny-mode run also stamps this set as its legacy `ORBIT_ACTIVITY_TOOLS`
+/// allowlist, so an MCP server that predates deny mode enforces an equivalent
+/// exact list instead of reading an empty one as unrestricted.
+pub fn tools_allowed_by_disallow_list<'a, I>(
+    disallow_list: &[String],
+    registered_tools: I,
+) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut seen = BTreeSet::new();
+    registered_tools
+        .into_iter()
+        .filter(|tool| !tool_allowed(tool, disallow_list))
+        .filter(|tool| seen.insert(*tool))
+        .map(str::to_string)
+        .collect()
+}
+
+/// An `agent_loop` activity that declares neither tools nor a disallow list.
+///
+/// Its enforcement is ambiguous today — the schema reads the empty allowlist
+/// as "no tools" while managed dispatch has always read it as unrestricted —
+/// so asset load warns instead of silently choosing. [ORB-13315]
+pub fn activity_tool_policy_deprecation(activity: &ActivityV2) -> Option<&'static str> {
+    let spec = agent_loop_spec(activity)?;
+    (spec.tools.is_empty() && spec.tool_disallow_list.is_none()).then_some(
+        "declares an empty `tools:` list, whose enforcement is deprecated; declare explicit `tools` or a `tool_disallow_list`",
+    )
 }
 
 /// Tool whose activity-layer program allowlist must be declared explicitly.
@@ -105,7 +208,11 @@ pub fn validate_activity_tool_allowlist(activity: &ActivityV2) -> Result<(), Too
     let Some(spec) = agent_loop_spec(activity) else {
         return Ok(());
     };
+    reject_both_tool_lists(spec)?;
     validate_tool_allowlist(&spec.tools)?;
+    if let Some(disallow_list) = &spec.tool_disallow_list {
+        validate_tool_allowlist(disallow_list).map_err(disallow_list_error)?;
+    }
     validate_proc_spawn_program_allowlist(spec)
 }
 
@@ -119,20 +226,53 @@ where
     let Some(spec) = agent_loop_spec(activity) else {
         return Ok(());
     };
-    validate_tool_allowlist_against_registered_tools(&spec.tools, registered_tools)?;
+    reject_both_tool_lists(spec)?;
+    let registered_tools: Vec<&str> = registered_tools.into_iter().collect();
+    validate_tool_allowlist_against_registered_tools(
+        &spec.tools,
+        registered_tools.iter().copied(),
+    )?;
+    if let Some(disallow_list) = &spec.tool_disallow_list {
+        validate_tool_allowlist_against_registered_tools(disallow_list, registered_tools)
+            .map_err(disallow_list_error)?;
+    }
     validate_proc_spawn_program_allowlist(spec)
 }
 
-/// An activity that grants `proc.spawn` must also declare
-/// `proc_allowed_programs`. Omitting the key once meant "unconstrained", which
+fn reject_both_tool_lists(spec: &AgentLoopSpec) -> Result<(), ToolAllowlistError> {
+    if spec.tool_disallow_list.is_some() && !spec.tools.is_empty() {
+        return Err(ToolAllowlistError::ToolsAndDisallowListBothSet);
+    }
+    Ok(())
+}
+
+fn disallow_list_error(source: ToolAllowlistError) -> ToolAllowlistError {
+    ToolAllowlistError::DisallowList {
+        source: Box::new(source),
+    }
+}
+
+/// An activity that grants `proc.spawn` must declare one program policy.
+/// Omitting the key once meant "unconstrained", which
 /// made the safer-looking asset the more permissive one: an explicit `[]`
 /// denied every program while the absent key allowed all of them. Requiring
 /// the pairing at load time keeps the control fail-closed — deny-all is
 /// something an author opts into by writing `[]`, not something they lose by
 /// forgetting a key. [ORB-10959]
 fn validate_proc_spawn_program_allowlist(spec: &AgentLoopSpec) -> Result<(), ToolAllowlistError> {
-    if spec.proc_allowed_programs.is_some() {
+    if spec.proc_allowed_programs.is_some() && spec.proc_disallowed_programs.is_some() {
+        return Err(ToolAllowlistError::BothProgramListsSet);
+    }
+    if spec.proc_allowed_programs.is_some() || spec.proc_disallowed_programs.is_some() {
         return Ok(());
+    }
+    if let Some(disallow_list) = &spec.tool_disallow_list {
+        // Deny mode grants `proc.spawn` unless the disallow list covers it.
+        return if tool_allowed(PROC_SPAWN_TOOL, disallow_list) {
+            Ok(())
+        } else {
+            Err(ToolAllowlistError::ProcSpawnNotDisallowedWithoutProgramAllowlist)
+        };
     }
     match proc_spawn_grant(&spec.tools) {
         Some(entry) => Err(ToolAllowlistError::ProcSpawnWithoutProgramAllowlist {

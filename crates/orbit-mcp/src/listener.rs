@@ -3,17 +3,23 @@
 //! The protocol handler performs no IO of its own, so serving it over a socket
 //! is only a question of where the byte stream comes from, who owns the session
 //! behind it, and which addresses may be bound. Framing, dispatch, and the
-//! trusted session envelope are shared verbatim with stdio: this module adds no
-//! capability, placement, routing, or authorization step of its own.
+//! trusted session envelope are shared with stdio. Before handing a socket to
+//! rmcp, this module rejects streams that do not start with a JSON object.
+//! Without that guard, rmcp skips HTTP request lines and headers, then dispatches
+//! JSON-RPC lines in a browser's HTTP POST body. Loopback alone does not stop a
+//! page visited on the same machine from reaching the socket.
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_types::tool::ToolSessionContext;
 use rmcp::ServiceExt;
+use tokio::io::{AsyncRead, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -34,12 +40,27 @@ pub const DEFAULT_MAX_MCP_SESSIONS: usize = 64;
 /// trying again, instead of spinning or giving up.
 const ACCEPT_EXHAUSTION_BACKOFF: Duration = Duration::from_millis(250);
 
+/// How long an accepted connection may stay silent before the listener drops
+/// it. The peer must send the first byte of a JSON object promptly: a real
+/// client writes `initialize` immediately, while a peer that connects and sends
+/// nothing would otherwise hold one of the session permits indefinitely, and
+/// enough of them starve every legitimate client.
+const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Longest single JSON-RPC message, in bytes, a listener session accepts.
+///
+/// The peer is unauthenticated and rmcp reads a message into memory until its
+/// newline with no ceiling of its own, so one connection that never sends a
+/// newline would otherwise grow the process without bound. A session that
+/// exceeds this is closed. Far larger than any tool call an agent sends.
+pub(crate) const DEFAULT_MAX_MCP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+
 /// How far a listener is allowed to be reachable.
 ///
-/// The listener authenticates no one: whoever reaches the socket gets the
-/// accepting machine's full tool surface. Restricting who can reach it is
-/// therefore a deployment decision, and the safe default is the one that cannot
-/// be reached off-box at all.
+/// The listener authenticates no one: a local process that reaches the socket
+/// gets the accepting machine's agent tool surface. Loopback blocks remote TCP
+/// peers, but a browser page can send HTTP requests to loopback. The framing
+/// guard below closes those requests before rmcp can dispatch their bodies.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ListenerExposure {
     /// Refuse any bind address that is not a loopback address.
@@ -57,6 +78,8 @@ pub struct McpListener {
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,
     sessions: Arc<Semaphore>,
+    first_byte_timeout: Duration,
+    max_message_bytes: usize,
 }
 
 impl McpListener {
@@ -80,7 +103,22 @@ impl McpListener {
             host,
             trusted_context,
             sessions: Arc::new(Semaphore::new(DEFAULT_MAX_MCP_SESSIONS)),
+            first_byte_timeout: FIRST_BYTE_TIMEOUT,
+            max_message_bytes: DEFAULT_MAX_MCP_MESSAGE_BYTES,
         })
+    }
+
+    /// Replace how long an accepted connection may stay silent before it is
+    /// closed and its session slot released.
+    pub fn with_first_byte_timeout(mut self, timeout: Duration) -> Self {
+        self.first_byte_timeout = timeout;
+        self
+    }
+
+    /// Replace the longest message a session may send before it is closed.
+    pub fn with_max_message_bytes(mut self, limit: usize) -> Self {
+        self.max_message_bytes = limit;
+        self
     }
 
     /// The address actually bound, including any kernel-assigned port.
@@ -133,7 +171,14 @@ impl McpListener {
                 Arc::clone(&self.host),
                 self.session_context_for(peer),
             );
-            tokio::spawn(serve_connection(server, stream, peer, permit));
+            tokio::spawn(serve_connection(
+                server,
+                stream,
+                peer,
+                permit,
+                self.first_byte_timeout,
+                self.max_message_bytes,
+            ));
         }
     }
 
@@ -170,8 +215,37 @@ async fn serve_connection(
     stream: TcpStream,
     peer: SocketAddr,
     _permit: OwnedSemaphorePermit,
+    first_byte_timeout: Duration,
+    max_message_bytes: usize,
 ) {
-    let running = match server.serve(stream).await {
+    // rmcp ignores unparsable lines. An HTTP request line and its headers are
+    // unparsable, but JSON-RPC lines in a POST body are not. Check the first
+    // byte without consuming it so only a JSON object can start a session.
+    // The wait is bounded because this task holds a session permit: a silent
+    // peer must not keep it.
+    let mut first = [0];
+    match tokio::time::timeout(first_byte_timeout, stream.peek(&mut first)).await {
+        Ok(Ok(1)) if first[0] == b'{' => {}
+        Ok(Ok(_)) => {
+            tracing::debug!(peer = %peer, "mcp listener rejected non-JSON framing");
+            return;
+        }
+        Ok(Err(error)) => {
+            tracing::debug!(peer = %peer, error = %error, "mcp listener could not read first byte");
+            return;
+        }
+        Err(_) => {
+            tracing::warn!(
+                peer = %peer,
+                timeout_ms = first_byte_timeout.as_millis() as u64,
+                "mcp listener closed a connection that sent nothing"
+            );
+            return;
+        }
+    }
+    let (reader, writer) = tokio::io::split(stream);
+    let transport = (MessageLimited::new(reader, max_message_bytes), writer);
+    let running = match server.serve(transport).await {
         Ok(running) => running,
         Err(error) => {
             tracing::warn!(peer = %peer, error = %error, "mcp listener session did not start");
@@ -180,6 +254,53 @@ async fn serve_connection(
     };
     if let Err(error) = running.waiting().await {
         tracing::warn!(peer = %peer, error = %error, "mcp listener session ended with an error");
+    }
+}
+
+/// Fails a read once a message (the bytes since the last newline) outgrows
+/// `limit`, which ends the rmcp session before the message is buffered whole.
+struct MessageLimited<R> {
+    inner: R,
+    limit: usize,
+    line_bytes: usize,
+}
+
+impl<R> MessageLimited<R> {
+    fn new(inner: R, limit: usize) -> Self {
+        Self {
+            inner,
+            limit,
+            line_bytes: 0,
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for MessageLimited<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = &mut *self;
+        let before = buf.filled().len();
+        match Pin::new(&mut this.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {}
+            other => return other,
+        }
+        for byte in &buf.filled()[before..] {
+            if *byte == b'\n' {
+                this.line_bytes = 0;
+            } else {
+                this.line_bytes += 1;
+                if this.line_bytes > this.limit {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("mcp message exceeds {} bytes", this.limit),
+                    )));
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
     }
 }
 

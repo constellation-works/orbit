@@ -1,5 +1,6 @@
 {
   "name": "orbit",
+  "description": "Orbit plugin for Claude Code: durable tasks, sandboxed parallel runs, and PR-gated delivery.",
   "owner": {
     "name": "constellation-works",
     "url": "https://github.com/constellation-works"
@@ -8,9 +9,9 @@
     {
       "name": "orbit",
       "source": "./plugin",
-      "description": "Task, documentation search, and workflow orchestration for AI coding agents.",
+      "description": "Durable tasks, sandboxed parallel runs, and PR-gated delivery for AI coding agents.",
       "category": "developer-tools",
-      "tags": ["task-management", "documentation", "orchestration", "mcp"]
+      "tags": ["task-management", "orchestration", "audit", "mcp"]
     }
   ]
 }

@@ -1,6 +1,7 @@
 //! Atomic scheduler checkpoints and immutable accepted coverage.
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::automation::recovery::RecoveryRecord;
 use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState, BatchWaiver, Delivery};
 
 pub trait AutomationStoreBackend: Send + Sync {
@@ -20,6 +21,55 @@ pub trait AutomationStoreBackend: Send + Sync {
         _consumer: &str,
         _limit: usize,
     ) -> Result<Vec<BatchWaiver>, OrbitError> {
+        Ok(vec![])
+    }
+
+    /// Adopt a new configuration identity and/or an authorized reissue under
+    /// the same generation fence, writing the audit record in one transaction.
+    /// The checkpoint may move nothing else: every cursor, obligation and
+    /// accepted fact is carried over unchanged.
+    fn automation_recover(
+        &self,
+        _previous: &AutomationState,
+        _next: &AutomationState,
+        _record: &RecoveryRecord,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "consumer recovery persistence unavailable".into(),
+        ))
+    }
+
+    /// Forget one consumer's state entirely and write the audit record that
+    /// says what was forgotten, in one transaction under the same generation
+    /// fence. The next evaluation seeds a fresh baseline at the branch head.
+    fn automation_reset(
+        &self,
+        _previous: &AutomationState,
+        _record: &RecoveryRecord,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "consumer reset persistence unavailable".into(),
+        ))
+    }
+
+    /// Record or clear the consumer's stall marker under the generation
+    /// fence. Nothing but the marker may move.
+    fn automation_stall(
+        &self,
+        _previous: &AutomationState,
+        _next: &AutomationState,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "consumer stall persistence unavailable".into(),
+        ))
+    }
+
+    /// Audited recoveries for a consumer, newest first.
+    fn automation_recoveries(
+        &self,
+        _consumer: &str,
+        _limit: usize,
+    ) -> Result<Vec<RecoveryRecord>, OrbitError> {
         Ok(vec![])
     }
 
@@ -60,6 +110,25 @@ pub trait AutomationStoreBackend: Send + Sync {
     ) -> Result<Vec<AutomationState>, OrbitError> {
         Ok(vec![])
     }
+
+    /// A bounded page of states whose consumer keys start with the literal
+    /// `prefix`, ordered by consumer key, strictly after `after` when given.
+    /// `limit` must be nonzero; implementations may cap the page size further.
+    /// Continue from the last returned key until an empty page proves exhaustion,
+    /// even when a page contains fewer than `limit` states. An implementation
+    /// that cannot provide this complete traversal must return an error.
+    /// Pages observe current persisted state, not a snapshot across calls.
+    fn automation_states_page(
+        &self,
+        _prefix: &str,
+        _after: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<AutomationState>, OrbitError> {
+        Err(OrbitError::Store(
+            "paginated automation state inspection unavailable".into(),
+        ))
+    }
+
     /// Inserts once; a missing state is never silently substituted for corrupt data.
     fn automation_initialize(&self, state: &AutomationState) -> Result<bool, OrbitError>;
     /// Generation-fenced checkpoint and optional receipt commit in one transaction.

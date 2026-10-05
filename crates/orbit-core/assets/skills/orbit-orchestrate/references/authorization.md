@@ -42,7 +42,7 @@ review-only run, or use a local shadow store. See
 Use the configured base branch and ship mode unless the user requests an
 explicit override. Inspect effective inputs; `--base` and `--mode` are deliberate
 overrides. Never replace a user's branch choice with a hardcoded convention.
-Full delivery semantics: [orchestration.md](../../orbit/references/orchestration.md).
+Full delivery semantics: [orchestration.md](orchestration.md).
 
 ## Keep authorized work moving
 
@@ -55,6 +55,13 @@ resource pressure before changing capacity; count system activities as well
 when assessing provider cost and host load. Do not start a second drain merely
 to raise capacity. Discover whether the installed version supports a live
 update, and follow its advertised command and authority requirements.
+
+Sustained host pressure throttles admissions on its own: readiness tasks read
+`resource_throttled`, and `orbit run readiness`, `orbit run show <drain>` and
+start/ship responses name the resource, value, threshold and since-when.
+Running workers continue. Report the throttle and wait for it to clear; do not
+raise `--concurrency`, start another drain, or disable
+`workflow.resource_throttle` to push work through unless the user asks.
 
 `--allow-crew` is an **allowlist**: it permits the named configured crews and
 excludes others. On an explicit `ship`, an excluded task is refused before its
@@ -122,15 +129,3 @@ Squash merges make raw commit counts incomparable to histories with merge
 commits; report merged PRs or first-parent landings alongside raw counts.
 Do not claim equal task difficulty, quality, or human-only authorship from
 commit counts. Never infer spend from token usage or invent missing costs.
-
-## Scoped operation-mode grants
-
-`orbit operation enable --task <ids> --for <window> --right prepare,promote[,complete]`
-records one bounded, attributable authorization for a finite task set;
-`orbit run auto --grant <ID>` starts a drain whose every admission rechecks
-it. `--complete` and `--grant` are separate mechanisms and cannot be
-combined. A grant never authorizes merge, and the `complete` right is
-refused unless the workspace sets `operation.delivery_cap = "done"`. Use
-`orbit operation explain` to see each effective setting with its source and
-the limiting reasons before enabling anything; `stop` ends new admissions
-and `revoke` also withdraws completion from admitted work.

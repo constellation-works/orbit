@@ -3,19 +3,247 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { dashboardFile } from './dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
-const assets = fileURLToPath(new URL('../../assets/dashboard/', import.meta.url));
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
+
+async function assertVisibleTaskRow(page, viewport, pageName) {
+  const visible = await page.evaluate(() => {
+    const row = document.querySelector('#tasks-body .row[data-key^="task-"]:not(.header)');
+    const body = document.getElementById('tasks-body');
+    if (!row || !body) return { visible: false, reason: 'task row or body missing' };
+
+    const rowRect = row.getBoundingClientRect();
+    const bodyRect = body.getBoundingClientRect();
+    const viewportRect = { top: 0, right: window.innerWidth, bottom: window.innerHeight, left: 0 };
+    const intersection = (rect, bounds) => ({
+      left: Math.max(rect.left, bounds.left),
+      top: Math.max(rect.top, bounds.top),
+      right: Math.min(rect.right, bounds.right),
+      bottom: Math.min(rect.bottom, bounds.bottom),
+    });
+    const area = (rect) => Math.max(0, rect.right - rect.left) * Math.max(0, rect.bottom - rect.top);
+    const bodyIntersection = intersection(rowRect, bodyRect);
+    const viewportIntersection = intersection(rowRect, viewportRect);
+    const visibleIntersection = intersection(bodyIntersection, viewportIntersection);
+    const paintPoint = {
+      x: (visibleIntersection.left + visibleIntersection.right) / 2,
+      y: (visibleIntersection.top + visibleIntersection.bottom) / 2,
+    };
+    const topmost = area(visibleIntersection) > 0 ? document.elementFromPoint(paintPoint.x, paintPoint.y) : null;
+
+    return {
+      visible: area(bodyIntersection) > 0 && area(viewportIntersection) > 0 && row.contains(topmost),
+      row: rowRect.toJSON(),
+      body: bodyRect.toJSON(),
+      viewport: viewportRect,
+      paintTarget: topmost?.className || topmost?.id || null,
+    };
+  });
+  if (!visible.visible) throw new Error(`First task row is clipped on ${pageName} at ${viewport.width}px: ${JSON.stringify(visible)}`);
+}
+
+// Every cell of a failed run step must lie inside the run-detail panel and the
+// viewport, have width, paint on top, and show its whole text: the panel
+// clips overflow, so anything outside it is unreadable.
+async function assertReadableFailedStep(page, width) {
+  const cells = await page.evaluate(() => {
+    const panel = document.getElementById('run-detail-panel').getBoundingClientRect();
+    const row = document.querySelector('#run-steps-body .step-row');
+    const named = {
+      index: row.querySelector('.idx'),
+      target: row.querySelector('.target'),
+      state: row.querySelector('.state-label'),
+      duration: row.querySelector('.duration'),
+      exit: row.querySelector('.exit'),
+    };
+    return Object.entries(named).map(([name, cell]) => {
+      const rect = cell.getBoundingClientRect();
+      const topmost = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+      return {
+        name,
+        text: cell.textContent,
+        className: cell.className,
+        rect: rect.toJSON(),
+        panel: { left: panel.left, right: panel.right },
+        inside: rect.width > 0 && rect.height > 0 && rect.left >= panel.left - 0.5 && rect.right <= panel.right + 0.5
+          && rect.left >= 0 && rect.right <= window.innerWidth,
+        complete: cell.scrollWidth <= cell.clientWidth + 1,
+        painted: cell.contains(topmost),
+      };
+    });
+  });
+  for (const cell of cells) {
+    if (!cell.inside || !cell.complete || !cell.painted) throw new Error(`Failed step ${cell.name} unreadable at ${width}px: ${JSON.stringify(cell)}`);
+  }
+  const text = Object.fromEntries(cells.map(cell => [cell.name, cell.text]));
+  if (text.target !== 'activity:agent_implement' || text.state !== 'failed' || text.duration === '' || text.exit !== '1') {
+    throw new Error(`Failed step values missing at ${width}px: ${JSON.stringify(text)}`);
+  }
+  if (!cells.find(cell => cell.name === 'exit').className.includes('fail')) throw new Error('Nonzero exit code must be marked failed');
+}
+
+async function assertRunStepLayout(page) {
+  await page.evaluate(async () => {
+    const detail = await import('/js/run-detail.js');
+    detail.clearExpandedStepIndices();
+    detail.setActiveRunDetail({
+      run: { run_id: 'jrun-layout', state: 'failed' },
+      steps: [{ step_index: 3, target_type: 'activity', target_id: 'agent_implement', state: 'failed', duration_ms: 125000, exit_code: 1, error_code: 'agent_failed', error_message: 'exit status 1' }],
+    });
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'run-detail');
+    document.getElementById('run-steps-body').style.display = '';
+    detail.renderRunSteps();
+  });
+  for (const width of [1280, 480, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.locator('#run-steps-body .step-row').scrollIntoViewIfNeeded();
+    await assertReadableFailedStep(page, width);
+    const row = page.locator('#run-steps-body .step-row');
+    await row.click();
+    const stepDetail = page.locator('#run-steps-body .step-detail');
+    await stepDetail.waitFor({ state: 'visible' });
+    if (await row.getAttribute('aria-expanded') !== 'true') throw new Error(`Step row must report expansion at ${width}px`);
+    if (!(await stepDetail.textContent()).includes('exit status 1')) throw new Error('Expanded step must show its error');
+    await assertReadableFailedStep(page, width);
+    if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error(`Expanded step overflows the page at ${width}px`);
+    await page.screenshot({ path: path.join(evidence, `run-step-${width}.png`) });
+    await row.focus();
+    await page.keyboard.press('Enter');
+    await stepDetail.waitFor({ state: 'detached' });
+    if (await row.getAttribute('aria-expanded') !== 'false') throw new Error(`Step row must collapse from the keyboard at ${width}px`);
+  }
+}
+
+// A pull drain's run detail names the crews its window runs and each crew it
+// excluded, with the source and reason, readable inside the panel at desktop
+// and narrow widths.
+async function assertCrewWindow(page) {
+  await page.evaluate(async () => {
+    const detail = await import('/js/run-detail.js');
+    detail.setActiveRunDetail({
+      run: { run_id: 'jrun-pull', job_id: 'workspace_pull_pipeline', state: 'running' },
+      steps: [],
+      crew_window: {
+        checked_at: '2026-10-04T13:06:00Z',
+        runnable: ['luna'],
+        default_crew: 'luna',
+        excluded: [
+          { crew: 'gemini-flash', source: 'provider_unavailable', reason: 'ORB-1 failed: Antigravity terminal error: authentication failed or timed out' },
+          { crew: 'opus', source: 'preflight', reason: 'provider `claude` CLI `claude` was not found on this host' },
+        ],
+      },
+    });
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'run-detail');
+    detail.renderRunDetailMeta();
+  });
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const panel = page.locator('#run-detail-meta .crew-window');
+    await panel.scrollIntoViewIfNeeded();
+    if (!(await panel.isVisible())) throw new Error(`Crew window invisible at ${width}px`);
+    const text = await panel.textContent();
+    for (const expected of ['crews runnable: luna', 'excluded gemini-flash (provider unavailable): ORB-1 failed', 'excluded opus (preflight)']) {
+      if (!text.includes(expected)) throw new Error(`Crew window missing "${expected}" at ${width}px: ${text}`);
+    }
+    if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error(`Crew window overflows the page at ${width}px`);
+    await page.screenshot({ path: path.join(evidence, `run-crew-window-${width}.png`) });
+  }
+}
+
+// Every scoreboard metric cell must paint its bar and value inside its own
+// agent column, and each value must be reachable by scrolling the matrix's
+// own wrapper: a fixed-layout table squeezed below its content width paints
+// values into the neighbouring agent's column instead.
+async function assertScoreboardLayout(page) {
+  await page.evaluate(async () => {
+    const { getWindow } = await import('/js/common.js');
+    const { renderScoreboard } = await import('/js/scoreboard.js');
+    const agent = (base, incidents) => ({
+      tasks_created: base, tasks_planned: base + 1, tasks_completed: base + 2,
+      pr: { review_comments: base + 3 },
+      tool_calls_by_surface: { graph: base * 10, task: base * 11 },
+      failed_tool_calls: base, tool_calls: base * 100,
+      failure_incidents: incidents, failure_incident_events: incidents === null ? null : base * 7,
+      friction: { reported: base + 4 },
+    });
+    // Two agents report grouped failures and two have an unavailable source,
+    // so one row mixes populated pairs with "unavailable" markers.
+    renderScoreboard({
+      window: getWindow(),
+      agents: { codex: agent(123, 45), claude: agent(9876, 888888), gemini: agent(123, null), grok: agent(888888, null) },
+      coverage: { failure_incidents: { availability: 'partial' } },
+    });
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'diagnostics');
+    document.getElementById('diagnostics-main').style.display = 'none';
+    document.getElementById('diagnostics-scoreboard-main').style.display = 'grid';
+  });
+  for (const width of [1280, 720, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await page.evaluate(() => {
+      const wrap = document.getElementById('scoreboard-body');
+      const table = wrap.querySelector('table.sb2-matrix');
+      const heads = [...table.querySelectorAll('thead th.col-agent')];
+      const agents = heads.map(th => th.firstChild.textContent);
+      const within = (inner, outer) => inner.width > 0 && inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5;
+      const problems = [];
+      heads.forEach((th, index) => {
+        const column = th.getBoundingClientRect();
+        for (const child of th.querySelectorAll('.totals')) {
+          if (!within(child.getBoundingClientRect(), column)) problems.push({ header: agents[index], rect: child.getBoundingClientRect().toJSON(), column: column.toJSON() });
+        }
+      });
+      let unavailable = 0;
+      let populated = 0;
+      for (const row of table.querySelectorAll('tbody tr.metric')) {
+        const cells = [...row.querySelectorAll('td.cell')];
+        if (cells.map(td => td.dataset.agent).join() !== agents.join()) problems.push({ row: row.dataset.key, order: cells.map(td => td.dataset.agent) });
+        cells.forEach((td, index) => {
+          const value = td.querySelector('.sb2-cell .v');
+          if (value.querySelector('.unavailable')) unavailable++; else if (!value.classList.contains('dim')) populated++;
+          value.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          // Measure only after scrolling so every rect shares one scroll offset.
+          const column = heads[index].getBoundingClientRect();
+          const cell = td.getBoundingClientRect();
+          const bar = td.querySelector('.sb2-cell').getBoundingClientRect();
+          const rect = value.getBoundingClientRect();
+          const bounds = wrap.getBoundingClientRect();
+          const topmost = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+          const attributed = Math.abs(cell.left - column.left) < 1 && Math.abs(cell.right - column.right) < 1;
+          const contained = within(bar, cell) && within(rect, cell);
+          const reachable = within(rect, bounds) && rect.left >= 0 && rect.right <= window.innerWidth && td.contains(topmost);
+          if (!attributed || !contained || !reachable) {
+            problems.push({ row: row.dataset.key, agent: td.dataset.agent, text: value.textContent, attributed, contained, reachable, value: rect.toJSON(), bar: bar.toJSON(), cell: cell.toJSON(), column: column.toJSON() });
+          }
+        });
+      }
+      wrap.scrollLeft = 0;
+      return {
+        problems,
+        unavailable,
+        populated,
+        scrolls: wrap.scrollWidth > wrap.clientWidth,
+        pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      };
+    });
+    if (layout.problems.length) throw new Error(`Scoreboard values leave their agent columns at ${width}px: ${JSON.stringify(layout.problems.slice(0, 4))}`);
+    if (layout.unavailable !== 2 || layout.populated < 20) throw new Error(`Scoreboard fixture did not render populated and unavailable metrics at ${width}px: ${JSON.stringify(layout)}`);
+    if (layout.pageOverflow) throw new Error(`Scoreboard widens the page instead of scrolling its matrix at ${width}px`);
+    if (width === 1280 && layout.scrolls) throw new Error('Desktop scoreboard matrix must fit without horizontal scrolling');
+    await page.screenshot({ path: path.join(evidence, `scoreboard-${width}.png`), fullPage: true });
+  }
+}
+
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const file = name === '/test.mjs' ? scenarios : path.join(assets, name === '/' ? 'index.html' : path.basename(name));
-  if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
-  let data = fs.readFileSync(file);
+  const served = name === '/test.mjs' ? { data: fs.readFileSync(scenarios), type: 'text/javascript' } : dashboardFile(name);
+  if (!served) { res.writeHead(404); res.end(); return; }
+  let data = served.data;
   if (name === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
-  res.setHeader('content-type', file.endsWith('.html') ? 'text/html' : file.endsWith('.css') ? 'text/css' : 'text/javascript');
+  res.setHeader('content-type', served.type);
   res.end(data);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -36,6 +264,47 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  await page.evaluate(() => globalThis.showTaskPaginationEvidence());
+  await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
+  for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
+    await page.setViewportSize({ width: viewport.width, height: 900 });
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      document.getElementById('tasks-body').scrollTop = 0;
+    });
+    const pager = page.locator('.task-pagination');
+    if (!(await pager.isVisible())) throw new Error(`Task pagination invisible at ${viewport.width}px`);
+    if (!(await page.locator('#tasks-next').isEnabled())) throw new Error('First task page must enable Next');
+    if (await page.locator('#tasks-previous').isEnabled()) throw new Error('First task page must disable Previous');
+    await assertVisibleTaskRow(page, viewport, 'page 1');
+    await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}.png`), fullPage: true });
+  }
+  await page.evaluate(() => { document.getElementById('tasks-body').scrollTop = 120; });
+  await page.locator('#tasks-next').click();
+  await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '21–40 of 55');
+  if (await page.locator('#tasks-body').evaluate((body) => body.scrollTop !== 0)) throw new Error('Task page navigation must reset the task-body scroll position');
+  if (!(await page.locator('#tasks-previous').isEnabled())) throw new Error('Second task page must enable Previous');
+  for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
+    await page.setViewportSize({ width: viewport.width, height: 900 });
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      document.getElementById('tasks-body').scrollTop = 0;
+    });
+    await assertVisibleTaskRow(page, viewport, 'page 2');
+    await page.screenshot({ path: path.join(evidence, `task-pagination-${viewport.name}-page-2.png`), fullPage: true });
+  }
+  await page.locator('#task-filter .chip[data-status="done"]').click();
+  await page.waitForFunction(() => document.getElementById('task-filter-summary').textContent.includes('done'));
+  await page.locator('#task-filter .chip[data-role="all"]').click();
+  const firstTask = page.locator('#tasks-body .row[data-key^="task-"]:not(.header)').first();
+  // Open it the way a person does, by its title: on a narrow row the centre
+  // of the box is the crew select, which takes the click for itself.
+  await firstTask.locator('.title').click();
+  const detail = page.locator('#tasks-body .row-detail').first();
+  await detail.waitFor({ state: 'visible' });
+  const pageOverflowsHorizontally = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  if (pageOverflowsHorizontally) throw new Error('Task filters or expanded details introduced horizontal page clipping');
+  await page.evaluate(() => globalThis.showDiagnosticsEvidence());
   // Hold a real visible panel in refresh, then inspect its rendered accessible
   // feedback and retry affordance at desktop and narrow widths.
   await page.evaluate(() => {
@@ -53,6 +322,9 @@ try {
     if (!(await page.locator('#refresh-btn').isEnabled())) throw new Error('Retry disabled');
     await page.screenshot({ path: path.join(evidence, `refresh-${width}.png`) });
   }
+  await assertScoreboardLayout(page);
+  await assertRunStepLayout(page);
+  await assertCrewWindow(page);
   await new Promise(resolve => server.close(resolve));
   await page.evaluate(() => {
     globalThis.fetch = globalThis.nativeFetch;
@@ -60,7 +332,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery; visible live feedback at 1280px and 390px' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();

@@ -3,8 +3,7 @@
 //! continued presence has to be diagnosed rather than ignored.
 //!
 //! Fixed settings are admitted by [`crate::registry`] instead. Nothing here is
-//! public except [`CrewSeed`], which is the narrow DTO the CLI init adapter
-//! fills in from its prompts.
+//! public.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -12,11 +11,9 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RawRuntimeConfig {
     // Deliberately no `deny_unknown_fields`: config.toml is also home to
-    // independently parsed surfaces such as `[docs]`. Runtime admission reads
-    // only its owned keys, while explicit migration guards below reject retired
+    // forward-compatible extension tables. Runtime admission reads only its
+    // owned keys, while explicit migration guards below reject retired
     // runtime keys whose continued acceptance would be unsafe or misleading.
-    #[allow(dead_code)]
-    pub(crate) identity: Option<toml::Value>,
     pub(crate) task: Option<RawTaskSection>,
     pub(crate) knowledge: Option<RawKnowledgeConfig>,
     pub(crate) watch: Option<toml::Value>,
@@ -26,30 +23,30 @@ pub(crate) struct RawRuntimeConfig {
     /// `[crews.<name>]` registry. Each table supplies one assignment Orbit
     /// resolves for activity dispatch at run start.
     pub(crate) crews: Option<BTreeMap<String, RawCrewEntry>>,
+    /// `[plugins.<ns>]` registry. Each table is owned by one installed plugin
+    /// and validated against that plugin's JSON Schema by the layer that knows
+    /// which plugins exist (`orbit-core`). A section for a plugin this host has
+    /// not installed is deliberately tolerated here: a workspace that pins a
+    /// plugin must still load on a machine that has not installed it yet.
+    pub(crate) plugins: Option<BTreeMap<String, toml::Value>>,
     /// Retired in ORB-10627. Existing workspaces may still carry the section
     /// written by older `orbit init`; loaders warn and ignore it.
     pub(crate) duel: Option<toml::Value>,
-}
-
-/// One provider-model crew assignment supplied by a caller seeding a fresh
-/// `config.toml`.
-///
-/// This is the crate's only public raw DTO. It exists because the CLI init
-/// adapter — which owns host detection and the interactive prompts — has to
-/// hand its collected answers back across the crate boundary; see
-/// [`crate::ConfigSeed`].
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct CrewSeed {
-    /// Provider family (`claude`, `codex`, `gemini`, `grok`, ...).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    /// Model name dispatched for this crew.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    /// Retired in ORB-12236. Existing workspaces may still carry
+    /// `[routines] role = "source"`; loaders warn and ignore it.
+    pub(crate) routines: Option<toml::Value>,
+    /// Retired docs-corpus configuration. Kept for one release so existing
+    /// workspaces warn and continue loading while the table is ignored.
+    pub(crate) docs: Option<toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct RawCrewEntry {
+    /// Whether dispatch may run the crew. Absent means enabled, so a table
+    /// written before the key existed keeps working unchanged. Serde admits
+    /// only a TOML boolean here, so a mistyped value fails the load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

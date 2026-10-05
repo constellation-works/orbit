@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "candidate_head": null,
+  "candidate_diff_sha256": null,
+  "client": {"product": null, "build": null, "os": null},
+  "backend": {"binary": null, "version": null},
+  "plugin": {"source": null, "installed_path": null},
+  "registration": {
+    "selected": null,
+    "command": null,
+    "args": [],
+    "manual_mcp_servers_orbit_present": null,
+    "orbit_at_orbit_present": null,
+    "precedence_observed": null
+  },
+  "fixture": {"workspace": null, "task_key": null},
+  "automated": {"protocol": "NOT RUN", "ui_behavior": "NOT RUN", "transcript": null},
+  "native": {
+    "overall": "NOT RUN",
+    "reason": "Requires the actual desktop client; protocol and DOM fixtures do not establish native support.",
+    "resource_discovery": "NOT RUN",
+    "resource_render": "NOT RUN",
+    "sidebar_open": "NOT RUN",
+    "thread_open": "NOT RUN",
+    "task_read": "NOT RUN",
+    "context_bridge": "NOT RUN",
+    "context_copy_fallback": "NOT RUN",
+    "unsafe_text_render": "NOT RUN",
+    "stale_context_refusal": "NOT RUN",
+    "human_authority_proven": false,
+    "recording": null
+  },
+  "connection_modes": {
+    "local": {"native": "NOT RUN", "evidence": null},
+    "direct_ssh": {"native": "NOT RUN", "evidence": null, "destination_backend": null},
+    "federated_local": {"native": "NOT RUN", "evidence": null},
+    "federated_remote": {"native": "NOT RUN", "evidence": null, "destination_backend": null}
+  },
+  "main_build_gate": "PENDING_ACTUAL_HOST_PROOF",
+  "notes": []
+}

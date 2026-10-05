@@ -17,23 +17,27 @@
 //!   delivery observation feeds proven exclusions to the shared evaluator.
 //!
 //! Store persists ledgers, certificates and landings; Engine owns the Git
-//! mechanics. Nothing here approves a task, merges, or reads a verdict from
-//! a tag or a timestamp.
+//! mechanics. The internal handoff seam records explicit operator completion
+//! approval; it never merges or reads a verdict from a tag or timestamp.
 
 use orbit_common::OrbitError;
 
 mod admission;
 mod coverage;
 mod gate;
+mod handoff;
 mod landing;
 mod projection;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use admission::install_review_admission;
 pub(crate) use coverage::exclusions;
-pub(crate) use gate::{review_gate_admit, review_gate_settle};
+pub(crate) use gate::{
+    record_reviewer_invocation, release_review_attempt, review_gate_admit, review_gate_settle,
+};
+/// The owner handoff console [ORB-12516]: what an authorized owner surface
+/// reads and the typed refusals it renders. Adapters above Core cannot reach
+/// `orbit-store`, so these are the only shapes they need.
+pub use handoff::{ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal};
 pub(crate) use landing::record_review_landing;
 pub use projection::task_review_projection;
 
@@ -48,29 +52,69 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "task_gate_pipeline",
     "task_pr_pipeline",
     "task_local_pipeline",
-    "epic_pipeline",
 ];
 
 /// The job that delivers locally and therefore cannot honour `before-pr`
-/// as a final route. A parent-authorized [`EPIC_JOB`] child may still use
-/// it to assemble onto the epic branch; the epic's own gate remains the
-/// before-pr checkpoint.
+/// as a final route.
 pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
 
-/// The job that assembles descendants locally and then reviews the combined
-/// PR-bound candidate. Its child `task_local_pipeline` submissions are
-/// intermediate landing, not local-only final delivery.
-pub(crate) const EPIC_JOB: &str = "epic_pipeline";
-
-/// One candidate lineage: the task set delivered together against a base.
-pub(crate) fn lineage_key(workspace_id: &str, task_ids: &[String], base: &str) -> String {
+/// One candidate lineage: the task set one delivery run lineage delivers
+/// together against a base. `root_run_id` is the first run of the
+/// lineage — a resumed run shares its source's budget, while a fresh
+/// delivery run of the same tasks starts a new lineage with a full budget.
+pub(crate) fn lineage_key(
+    workspace_id: &str,
+    task_ids: &[String],
+    base: &str,
+    root_run_id: &str,
+) -> String {
     let mut ids = task_ids.to_vec();
     ids.sort();
     ids.dedup();
-    format!("{workspace_id}/{}/{base}", ids.join("+"))
+    format!("{workspace_id}/{}/{base}/{root_run_id}", ids.join("+"))
 }
 
 /// Translate a shared-rule failure into the Core error vocabulary.
 pub(crate) fn automation_error(error: orbit_automation::AutomationError) -> OrbitError {
     orbit_automation::automation_error_to_orbit(error)
+}
+
+/// Record an operator decision resetting one explicitly selected review lineage.
+/// The tool chokepoint supplies operator authorization; managed leaves are
+/// refused here as well, including an accidentally elevated run.
+pub(crate) fn reset_review(
+    runtime: &crate::OrbitRuntime,
+    input: &serde_json::Value,
+) -> Result<serde_json::Value, OrbitError> {
+    use orbit_common::protocol::tool_input::required_string;
+    use orbit_store::contracts::ReviewResetRequest;
+    if orbit_common::governance::authorization::agent_context_declared() {
+        return Err(OrbitError::CapabilityDenied(
+            "managed agents cannot reset review budgets".into(),
+        ));
+    }
+    let id = required_string(input, &["id"], "id")?;
+    let lineage = required_string(input, &["lineage_key"], "lineage_key")?;
+    let reason = required_string(input, &["reason"], "reason")?;
+    runtime.get_task(&id)?;
+    runtime.ensure_coordination_task_write_permitted()?;
+    let actor = runtime.actor().resolve_write_label(None, None)?;
+    let adopt = input
+        .get("adopt_configured_budget")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let ledger = runtime.review_store()?.review_reset(
+        &runtime.workspace_id()?,
+        &ReviewResetRequest {
+            lineage_key: &lineage,
+            task_id: &id,
+            reason: &reason,
+            actor: &actor,
+            budget: adopt.then(|| runtime.operation_policy().review_budget()),
+            now: chrono::Utc::now(),
+        },
+    )?;
+    // The decision and its prior consumption are atomic in the ledger. The
+    // normal tool-dispatch audit additionally records caller/session provenance.
+    Ok(serde_json::json!({"id": id, "ledger": ledger, "reset": true}))
 }

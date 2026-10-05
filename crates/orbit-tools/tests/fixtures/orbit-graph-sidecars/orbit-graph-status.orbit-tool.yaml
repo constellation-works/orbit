@@ -1,0 +1,16 @@
+schemaVersion: 1
+name: orbit.graph.status
+description: Report the repository-scoped recommendation history cursor, versions, evidence counts, and freshness inputs without changing the index.
+parameters:
+- name: schema_version
+  description: Request contract version; currently 1.
+  param_type: integer
+  required: true
+- name: repository
+  description: Explicit absolute path to the Git repository to inspect.
+  param_type: string
+  required: true
+- name: branch
+  description: Landing branch history scope; defaults to main.
+  param_type: string
+  required: false

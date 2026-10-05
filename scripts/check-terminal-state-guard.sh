@@ -8,9 +8,9 @@ set -euo pipefail
 # resolved the invocation, which is the drift the sink exists to remove.
 #
 # There is no longer a grandfathered exception: command/log/tail.rs used to
-# colorize a streamed tail from a local `is_terminal()` check, and [ORB-10570]
-# replaced it with `sink::active().color_allowed()`. Nothing may be added to
-# the allowlist without that being a decision.
+# colorize a streamed tail from a local `is_terminal()` check. It now receives
+# the resolved sink through `Execute::execute` and uses `sink.color_allowed()`.
+# Nothing may be added to the allowlist without that being a decision.
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
@@ -25,8 +25,6 @@ cli_src="crates/orbit-cli/src"
 allowed=(
   "$cli_src/output/sink.rs"
   "$cli_src/output/tests/sink.rs"
-  # Asserts the gate the sink resolves, so it names the variables on purpose.
-  "$cli_src/output/tests/gating.rs"
 )
 
 # `IsTerminal` covers `x.is_terminal()` too: the trait must be imported by name

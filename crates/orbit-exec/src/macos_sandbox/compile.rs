@@ -1,8 +1,13 @@
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::Provider;
+
+use crate::credential_paths::{
+    USER_KEYCHAINS_SUBPATH, cargo_home_dir, credential_read_denies, non_empty_env_path,
+};
 
 /// Compile a [`ResolvedFsProfile`] into SBPL text suitable for
 /// `sandbox-exec -f`.
@@ -24,18 +29,28 @@ use orbit_types::workflow::Provider;
 /// - allows the syscall classes agent CLIs rely on (process, signal, mach,
 ///   ipc, sysctl, iokit) and unrestricted network — agents call out to
 ///   provider APIs;
+/// - allows pseudo-tty allocation (`(allow pseudo-tty)`), needed by
+///   `openpty`/`posix_openpt`, with the narrowly scoped `/dev/ptmx` and
+///   `/dev/ttys*` read/write/ioctl rules Seatbelt requires for the allocated
+///   devices;
 /// - allows writes inside the resolved `modify` scope plus a small set of
 ///   well-known scratch areas (`/tmp`, `/private/tmp`,
 ///   `/private/var/folders`, `~/Library/Caches`, and the HOME-derived Orbit
 ///   JSONL log directory) that tools and the filesystem layer expect to write to;
+/// - allows writes inside Cargo's shared download caches
+///   (`$CARGO_HOME/registry`, `$CARGO_HOME/git`, and the two
+///   `.package-cache*` locks) so a build can populate the host registry, for a
+///   profile that already grants some write — see
+///   [`emit_cargo_download_cache_write_allows`];
 /// - emits resolved `read` / `modify` rules in order, including explicit
 ///   `(deny ...)` clauses for negated entries and narrow host-policy or
 ///   runtime re-allows after their enclosing deny, preserving SBPL's
 ///   last-match-wins evaluation.
 ///
-/// Paths in `rules.modify` are emitted as-is. Callers must resolve
-/// workspace-relative globs to absolute paths before invoking this
-/// function — a relative `subpath` is meaningless to the kernel.
+/// Callers must resolve workspace-relative globs to absolute paths before
+/// invoking this function — a relative `subpath` is meaningless to the kernel.
+/// Each filter resolves the literal prefix of its absolute rule to the path
+/// Seatbelt sees; wildcard suffixes stay dynamic for future files.
 pub fn compile_macos_sandbox_profile(
     rules: &ResolvedFsProfile,
     provider: &str,
@@ -51,6 +66,7 @@ pub fn compile_macos_sandbox_profile(
     let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
     let xdg_state_home = std::env::var_os("XDG_STATE_HOME");
     let opencode_config_dir = std::env::var_os("OPENCODE_CONFIG_DIR");
+    let cargo_home = std::env::var_os("CARGO_HOME");
     compile_macos_sandbox_profile_with_env(
         rules,
         provider,
@@ -66,6 +82,7 @@ pub fn compile_macos_sandbox_profile(
             xdg_config_home: xdg_config_home.as_deref(),
             xdg_state_home: xdg_state_home.as_deref(),
             opencode_config_dir: opencode_config_dir.as_deref(),
+            cargo_home: cargo_home.as_deref(),
         },
     )
 }
@@ -86,6 +103,7 @@ pub(super) struct SandboxCompileEnv<'a> {
     pub(super) xdg_config_home: Option<&'a OsStr>,
     pub(super) xdg_state_home: Option<&'a OsStr>,
     pub(super) opencode_config_dir: Option<&'a OsStr>,
+    pub(super) cargo_home: Option<&'a OsStr>,
 }
 
 pub(super) fn compile_macos_sandbox_profile_with_env(
@@ -105,6 +123,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
         xdg_config_home,
         xdg_state_home,
         opencode_config_dir,
+        cargo_home,
     } = env;
     let mut out = String::new();
     out.push_str("(version 1)\n");
@@ -128,12 +147,24 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     out.push_str("(allow network*)\n");
     out.push_str("(allow sysctl*)\n");
     out.push_str("(allow iokit*)\n");
+    // `openpty`/`posix_openpt` need the `pseudo-tty` operation plus explicit
+    // device-node ioctl permissions. The slave read/write rule checks the
+    // Seatbelt PTY extension, but the broad file-read* and /dev file-write*
+    // grants also allow access without that extension. It is not an ownership
+    // boundary. The separate ioctl rule also covers slave ttys that existed
+    // before sandbox entry, subject to normal OS access checks.
+    out.push_str("(allow pseudo-tty)\n");
+    out.push_str("(allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))\n");
+    out.push_str(
+        "(allow file-read* file-write* (require-all (regex #\"^/dev/ttys[0-9]+\") (extension \"com.apple.sandbox.pty\")))\n",
+    );
+    out.push_str("(allow file-ioctl (regex #\"^/dev/ttys[0-9]+\"))\n");
 
     out.push_str("(allow file-write* (subpath \"/tmp\"))\n");
     out.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
     out.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
     out.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    if let Some(home) = super::provider_dirs::non_empty_env_path(home) {
+    if let Some(home) = non_empty_env_path(home) {
         let home = home.display().to_string();
         out.push_str(&format!(
             "(allow file-write* (subpath \"{}/Library/Caches\"))\n",
@@ -149,6 +180,11 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             "(allow file-write* (subpath \"{}/.orbit/state/logs\"))\n",
             super::sbpl_filter::sbpl_escape(&home)
         ));
+    }
+    if profile_grants_write(rules)
+        && let Some(cargo_home) = cargo_home_dir(home, cargo_home)
+    {
+        emit_cargo_download_cache_write_allows(&cargo_home, &mut out);
     }
     // Per-provider state directories. Each `backend: cli` agent CLI writes
     // setup state (sessions, settings, history, etc.) before it reads
@@ -181,9 +217,11 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             ));
         }
     }
-    // Cursor's logged-in CLI state and permissions live in `$HOME/.cursor`.
-    // Grant the directory only to the active Cursor executor; API-key auth is
-    // an explicit environment opt-in and needs no additional path. [ORB-10945]
+    // Cursor's CLI configuration, permissions, and sessions live in
+    // `$HOME/.cursor`. On macOS the default login is the login keychain, not
+    // that directory; the write grant here is still required for the rest of
+    // the CLI state. API-key auth is an explicit environment opt-in and needs
+    // no additional path. [ORB-10945] [ORB-12261]
     if Provider::parse(provider).ok() == Some(Provider::Cursor)
         && let Some(state_dir) = super::provider_dirs::cursor_state_dir(home)
     {
@@ -248,7 +286,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     // and the activity's negated `read` rules come last — an operator who
     // writes `denyRead` for a credential path gets that denial even when the
     // provider would otherwise be granted it. [ORB-10931]
-    emit_default_credential_read_denies(home, &mut out);
+    emit_default_credential_read_denies(home, cargo_home, &mut out);
     emit_provider_credential_read_reallow(provider, home, &mut out);
     for rule in &rules.read {
         if let Some(deny_path) = rule.strip_prefix('!') {
@@ -265,18 +303,22 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 /// Whether `provider`'s CLI reads its own credentials from the macOS login
 /// Keychain, and therefore cannot run under the default Keychain read deny.
 ///
-/// Only Claude Code does today: it keeps its OAuth session in the login
-/// keychain item `Claude Code-credentials` and leaves
-/// `~/.claude/.credentials.json` as an empty stub. Codex, Gemini, and Grok keep
-/// credentials in plain files under their own state directories, which are
-/// already granted, so they keep the deny. Names that do not resolve to a
-/// canonical [`Provider`] keep the deny too — the carve-out fails closed.
-/// [ORB-10929]
+/// Claude Code, Copilot CLI, and Cursor Agent CLI do: each keeps its login
+/// session in a login-keychain item (`Claude Code-credentials`,
+/// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`) and
+/// does not persist a readable token under its state directory by default.
+/// Codex, Gemini, and Grok keep credentials in plain files under their own
+/// state directories, which are already granted, so they keep the deny. Names
+/// that do not resolve to a canonical [`Provider`] keep the deny too — the
+/// carve-out fails closed. [ORB-10929] [ORB-12261]
 ///
 /// Internal: callers outside this crate want [`macos_login_keychain_access`],
 /// which answers the question the compiled profile actually settles.
 fn provider_reads_macos_login_keychain(provider: &str) -> bool {
-    Provider::parse(provider).ok() == Some(Provider::Claude)
+    matches!(
+        Provider::parse(provider).ok(),
+        Some(Provider::Claude | Provider::Copilot | Provider::Cursor)
+    )
 }
 
 /// What the compiled profile decides about `provider` reading the *user* login
@@ -321,7 +363,7 @@ pub fn macos_login_keychain_access(
     if !provider_reads_macos_login_keychain(provider) {
         return MacosLoginKeychainAccess::DeniedByDefaultPolicy;
     }
-    let Some(home) = super::provider_dirs::non_empty_env_path(home) else {
+    let Some(home) = non_empty_env_path(home) else {
         return MacosLoginKeychainAccess::HomeUnresolved;
     };
     let keychains = home.join(USER_KEYCHAINS_SUBPATH);
@@ -339,12 +381,13 @@ pub fn macos_login_keychain_access(
 /// Re-allow the confined provider's own credential store after
 /// [`emit_default_credential_read_denies`], so last-match-wins grants it.
 ///
-/// Without this, a sandboxed `claude` cannot see its Keychain item and reports
-/// `OAuth session expired and could not be refreshed` — an authentication
-/// failure no re-login can clear, because the credential is present and simply
-/// unreadable. The carve-out is deliberately narrow:
-/// - it applies to one provider, so a Codex or Grok agent still cannot read any
-///   keychain;
+/// Without this, a sandboxed Claude, Copilot, or Cursor CLI cannot see its
+/// Keychain item and reports a fake login failure (Claude: OAuth expiry;
+/// Copilot: no authentication information; Cursor: authentication required) —
+/// an authentication failure no re-login can clear, because the credential is
+/// present and simply unreadable. The carve-out is deliberately narrow:
+/// - it applies only to those providers, so a Codex or Grok agent still cannot
+///   read any keychain;
 /// - it covers only the *user* keychain directory; `/Library/Keychains` and
 ///   `/System/Library/Keychains` stay denied for every provider;
 /// - it grants reads only. Nothing here makes the login keychain writable, so a
@@ -366,39 +409,89 @@ fn emit_provider_credential_read_reallow(provider: &str, home: Option<&OsStr>, o
     if !provider_reads_macos_login_keychain(provider) {
         return;
     }
-    let Some(home) = super::provider_dirs::non_empty_env_path(home) else {
+    let Some(home) = non_empty_env_path(home) else {
         return;
     };
-    let keychains = format!("{}/{USER_KEYCHAINS_SUBPATH}", home.display());
+    let keychains = crate::physical_with_missing_tail(&home.join(USER_KEYCHAINS_SUBPATH));
     out.push_str(&format!(
         "(allow file-read* (subpath \"{}\"))\n",
-        super::sbpl_filter::sbpl_escape(&keychains)
+        super::sbpl_filter::sbpl_escape(&keychains.display().to_string())
     ));
 }
 
-/// HOME-relative path of the per-user keychain directory. Shared by the default
-/// deny and the provider re-allow so the two clauses cannot drift.
-const USER_KEYCHAINS_SUBPATH: &str = "Library/Keychains";
-
-fn emit_default_credential_read_denies(home: Option<&OsStr>, out: &mut String) {
-    if let Some(home) = super::provider_dirs::non_empty_env_path(home) {
-        let home = home.display().to_string();
-        for suffix in [
-            ".ssh",
-            ".aws",
-            ".config/gh",
-            USER_KEYCHAINS_SUBPATH,
-            "Library/Application Support/Google/Chrome",
-            "Library/Application Support/Chromium",
-            "Library/Application Support/BraveSoftware/Brave-Browser",
-            "Library/Application Support/Firefox",
-        ] {
-            emit_read_deny_subpath(&format!("{home}/{suffix}"), out);
+/// Emit the shared credential read denies as SBPL clauses. The list itself
+/// lives in [`crate::credential_paths`] so Linux Bubblewrap masks the same
+/// locations.
+fn emit_default_credential_read_denies(
+    home: Option<&OsStr>,
+    cargo_home: Option<&OsStr>,
+    out: &mut String,
+) {
+    for deny in credential_read_denies(home, cargo_home) {
+        let path = crate::physical_with_missing_tail(&deny.path)
+            .display()
+            .to_string();
+        if deny.file {
+            emit_read_deny_literal(&path, out);
+        } else {
+            emit_read_deny_subpath(&path, out);
         }
     }
+}
 
-    for path in ["/Library/Keychains", "/System/Library/Keychains"] {
-        emit_read_deny_subpath(path, out);
+/// Whether the resolved profile grants any write at all. A profile whose
+/// `modify` rules are all negated confines the CLI to a read-only filesystem,
+/// and no convenience grant may quietly turn it into a writer.
+fn profile_grants_write(rules: &ResolvedFsProfile) -> bool {
+    rules.modify.iter().any(|rule| !rule.starts_with('!'))
+}
+
+/// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
+const CARGO_WRITABLE_CACHE_SUBDIRS: &[&str] = &["registry", "git"];
+
+/// `$CARGO_HOME` lock files a sandboxed build must be able to create and take.
+const CARGO_PACKAGE_CACHE_LOCK_FILES: &[&str] = &[".package-cache", ".package-cache-mutate"];
+
+/// Allow writes inside Cargo's shared download caches.
+///
+/// This is the one host-owned tree a sandboxed build must *write* outside its
+/// own worktree. `cargo fetch` stores the downloaded `.crate` under
+/// `$CARGO_HOME/registry/cache`, unpacks it under `registry/src`, refreshes the
+/// index sidecar under `registry/index/<registry>/.cache`, and clones a git
+/// dependency under `$CARGO_HOME/git`. With those denied, a worker whose
+/// lockfile names a single crate the host has not cached yet dies with
+/// `failed to open .../registry/cache/<crate>.crate: Operation not permitted`
+/// — and stays silent until then, because a fully warm cache needs no write at
+/// all. [ORB-12469]
+///
+/// The two `.package-cache*` locks are granted as `literal` clauses: they are
+/// files at the `$CARGO_HOME` root, and cargo treats a lock it cannot open as
+/// a read-only registry and proceeds *unlocked*, so withholding them while the
+/// registry is writable would let concurrent workers mutate one shared
+/// registry with no serialization.
+///
+/// Deliberately not granted: `$CARGO_HOME` itself, `$CARGO_HOME/bin` (the
+/// host's installed binaries, which stay readable and executable but not
+/// replaceable), and the credential files, which
+/// [`emit_default_credential_read_denies`] additionally makes unreadable. The
+/// caller emits these clauses only for a profile that already grants some
+/// write, so a reviewer or other read-only profile keeps an immutable host —
+/// the same rule Linux Bubblewrap follows for the identical paths.
+/// `$CARGO_HOME/.global-cache` — cargo's cache-GC bookkeeping database — also
+/// stays read-only; cargo skips that bookkeeping rather than failing the build.
+fn emit_cargo_download_cache_write_allows(cargo_home: &Path, out: &mut String) {
+    let cargo_home = cargo_home.display().to_string();
+    for subdir in CARGO_WRITABLE_CACHE_SUBDIRS {
+        out.push_str(&format!(
+            "(allow file-write* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&format!("{cargo_home}/{subdir}"))
+        ));
+    }
+    for lock in CARGO_PACKAGE_CACHE_LOCK_FILES {
+        out.push_str(&format!(
+            "(allow file-write* (literal \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&format!("{cargo_home}/{lock}"))
+        ));
     }
 }
 
@@ -407,4 +500,137 @@ fn emit_read_deny_subpath(path: &str, out: &mut String) {
         "(deny file-read* (subpath \"{}\"))\n",
         super::sbpl_filter::sbpl_escape(path)
     ));
+}
+
+/// Deny reads of exactly one path. Used for a credential *file* that sits
+/// beside granted siblings, where `subpath` would be the wrong shape.
+fn emit_read_deny_literal(path: &str, out: &mut String) {
+    out.push_str(&format!(
+        "(deny file-read* (literal \"{}\"))\n",
+        super::sbpl_filter::sbpl_escape(path)
+    ));
+}
+
+/// What a plugin backend may reach over the network on macOS (design
+/// `docs/design/plugins/1_scope.md` §4.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacosNetworkAccess {
+    /// Every socket operation is refused.
+    None,
+    /// Only endpoints on the loopback interface.
+    Loopback,
+    /// Whatever the compiled profile already allows.
+    Any,
+}
+
+/// Append the plugin network clause to a compiled profile.
+///
+/// [`compile_macos_sandbox_profile`] allows the network unconditionally, which
+/// is right for an agent CLI that must reach its provider. A plugin backend
+/// gets what its manifest declared and the operator granted, so the narrower
+/// modes are appended *after* the broad allow: SBPL is last-match-wins, so
+/// the deny takes effect and the loopback re-allows sit on top of it.
+pub fn append_macos_network_access(profile: &mut String, access: MacosNetworkAccess) {
+    match access {
+        MacosNetworkAccess::Any => {}
+        MacosNetworkAccess::None => profile.push_str("(deny network*)\n"),
+        MacosNetworkAccess::Loopback => {
+            profile.push_str("(deny network*)\n");
+            profile.push_str("(allow network* (local ip \"localhost:*\"))\n");
+            profile.push_str("(allow network* (remote ip \"localhost:*\"))\n");
+            profile.push_str("(allow network* (local unix-socket))\n");
+            profile.push_str("(allow network* (remote unix-socket))\n");
+        }
+    }
+}
+
+/// Deny every read and write beneath `subpaths` in a compiled profile.
+///
+/// Appended after everything else the profile allows, so under SBPL's
+/// last-match-wins the denial is final: no earlier `modify` grant, runtime
+/// re-allow or provider carve-out reaches back into these trees. Each path is
+/// resolved physically first, because Seatbelt matches the kernel's
+/// `/private/var` path even when a caller supplied `/var`.
+pub fn append_macos_subpath_mask(profile: &mut String, subpaths: &[PathBuf]) {
+    for path in subpaths {
+        let physical = crate::physical_with_missing_tail(path);
+        profile.push_str(&format!(
+            "(deny file-read* file-write* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&physical.display().to_string())
+        ));
+    }
+}
+
+/// Append a plugin's read carve-outs to a compiled profile.
+///
+/// [`compile_macos_sandbox_profile`] allows reads broadly, which is right for
+/// an agent CLI. A plugin backend must not read the host's callback sessions,
+/// its grant witnesses or another plugin's state, so those subpaths are
+/// denied here — after the broad allow, where SBPL's last-match-wins makes
+/// the denial stick.
+///
+/// `readable_subpaths` and `readable_files` are re-allowed after the denies:
+/// a confined backend keeps its *own* state tree whole, and a read grant on
+/// its own callback session record and grant witness — the single files
+/// inside a denied directory it is entitled to — and nothing else there.
+/// Their ancestors inside a denied tree receive only literal metadata reads,
+/// so path resolution can traverse them without listing the tree or reading
+/// sibling content.
+/// Resolve each path physically before emitting it: Seatbelt matches the
+/// kernel's `/private/var` path even when a caller supplied `/var`.
+pub fn append_macos_read_boundary(
+    profile: &mut String,
+    denied_subpaths: &[PathBuf],
+    readable_subpaths: &[PathBuf],
+    readable_files: &[PathBuf],
+) {
+    let denied: Vec<PathBuf> = denied_subpaths
+        .iter()
+        .map(|path| crate::physical_with_missing_tail(path))
+        .collect();
+    for path in &denied {
+        profile.push_str(&format!(
+            "(deny file-read* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+        ));
+    }
+    let readable_trees: Vec<PathBuf> = readable_subpaths
+        .iter()
+        .map(|path| crate::physical_with_missing_tail(path))
+        .collect();
+    let readable_leaves: Vec<PathBuf> = readable_files
+        .iter()
+        .map(|path| crate::physical_with_missing_tail(path))
+        .collect();
+    let mut metadata_ancestors = std::collections::BTreeSet::new();
+    for path in readable_trees.iter().chain(&readable_leaves) {
+        for denied_root in &denied {
+            if path.starts_with(denied_root) {
+                for ancestor in path.ancestors().skip(1) {
+                    if !ancestor.starts_with(denied_root) {
+                        break;
+                    }
+                    metadata_ancestors.insert(ancestor.to_path_buf());
+                }
+            }
+        }
+    }
+    for path in metadata_ancestors {
+        profile.push_str(&format!(
+            "(allow file-read-metadata (literal \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+        ));
+    }
+    for path in &readable_trees {
+        profile.push_str(&format!(
+            "(allow file-read* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+        ));
+    }
+    for path in &readable_leaves {
+        profile.push_str(&format!(
+            "(allow file-read* (literal \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+        ));
+    }
 }

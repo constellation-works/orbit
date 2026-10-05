@@ -8,6 +8,14 @@ TMP="$(mktemp -d)"
 BACKGROUND_PIDS=()
 TEST_COMPLETE=0
 
+# Clear any build-budget environment inherited from an outer wrapper (e.g. `make ci`).
+# Fixtures manage their own slots, lock directory, and admission hermetically [ORB-12350].
+unset ORBIT_BUILD_BUDGET ORBIT_BUILD_BUDGET_DIR ORBIT_BUILD_BUDGET_HELD \
+  ORBIT_BUILD_BUDGET_SLOT ORBIT_BUILD_SLOTS ORBIT_CARGO_JOBS CARGO_BUILD_JOBS
+for var in $(compgen -v ORBIT_BUILD_ 2>/dev/null || true); do
+  unset "$var"
+done
+
 cleanup() {
   local status=$?
   local pid

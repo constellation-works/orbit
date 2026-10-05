@@ -1,23 +1,28 @@
 //! Read-only inspection of a task-publication Git repository.
 //!
 //! The consumer fetches a configured ordinary branch into an Orbit-owned cache,
+//! checks the requested commit out into a tree private to that request,
 //! validates pairing and snapshot integrity, and returns labelled task
 //! projections. It never writes canonical tasks, allocators, checkout
 //! projections, claims, audit rows, or execution records.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::fs::io::create_private_dir_all;
 use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
 use orbit_types::task::{TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACTS_DIR_NAME, TaskEnvelopeV2};
 use orbit_types::workspace::{
     canonicalize_publication_branch, redact_git_remote, validate_git_commit_id,
     validate_source_repository_fingerprint,
 };
+use tempfile::TempDir;
 
 use crate::driver::file::task_bundle::{TaskBundleV2, read_bundle_at};
+use crate::fs::lock::{LockOptions, acquire_exclusive_with};
 
 use super::git::{GitRunner, field_mismatch, remote_has_password, remotes_match, short_branch};
 use super::publication::{
@@ -27,6 +32,16 @@ use super::publication::{
 
 /// Error prefix and command label for every consumer-side failure.
 const INSPECT_LABEL: &str = "publication inspect";
+
+/// Serializes every mutation of one publication's shared Git cache.
+const CACHE_LOCK_FILE_NAME: &str = "cache.lock";
+
+/// Parent of the per-request checkouts, each removed when its snapshot drops.
+const SNAPSHOT_TREES_DIR_NAME: &str = "trees";
+
+/// A waiter queues behind another request's fetch and checkout, which run
+/// several Git steps that each carry their own deadline.
+const CACHE_LOCK_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Caller-supplied pairing and fetch inputs. Identity is never inferred from
 /// repository contents.
@@ -107,6 +122,9 @@ pub fn inspect_publication(
 pub(super) struct ValidatedPublicationSnapshot {
     pub inspection: PublicationInspection,
     pub bundles: Vec<ValidatedPublicationBundle>,
+    /// Private checkout holding every `source_dir`. No other request writes
+    /// it, and it is removed only when this snapshot drops.
+    _tree: TempDir,
 }
 
 pub(super) struct ValidatedPublicationBundle {
@@ -119,10 +137,11 @@ pub(super) fn load_validated_publication(
 ) -> Result<ValidatedPublicationSnapshot, OrbitError> {
     let request = validate_request(request)?;
     let fetched = fetch_publication(&request)?;
-    let envelope = read_envelope(&fetched.tree_dir)?;
+    let tree_dir = fetched.tree.path();
+    let envelope = read_envelope(tree_dir)?;
     assert_pairing(&request, &envelope, &fetched.branch)?;
     assert_envelope_parent_lineage(&envelope, fetched.git_parent.as_deref(), INSPECT_LABEL)?;
-    let tasks = read_validated_tasks(&fetched.tree_dir, &envelope)?;
+    let tasks = read_validated_tasks(tree_dir, &envelope)?;
     let label = PublicationInspectLabel {
         published_at: envelope.published_at,
         generation: envelope.generation,
@@ -154,6 +173,7 @@ pub(super) fn load_validated_publication(
     Ok(ValidatedPublicationSnapshot {
         inspection,
         bundles: tasks,
+        _tree: fetched.tree,
     })
 }
 
@@ -169,7 +189,7 @@ struct ValidatedRequest {
 }
 
 struct FetchedSnapshot {
-    tree_dir: PathBuf,
+    tree: TempDir,
     branch: String,
     commit_id: String,
     git_parent: Option<String>,
@@ -222,10 +242,24 @@ fn validate_request(request: PublicationInspectRequest) -> Result<ValidatedReque
 fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, OrbitError> {
     let cache = request.cache_dir.join(&request.publication_id);
     let git_dir = cache.join("origin.git");
-    let tree_dir = cache.join("tree");
-    fs::create_dir_all(&cache).map_err(|error| OrbitError::from_write_io(&cache, error))?;
+    let trees_dir = cache.join(SNAPSHOT_TREES_DIR_NAME);
+    create_private_dir_all(&trees_dir)
+        .map_err(|error| OrbitError::from_write_io(&trees_dir, error))?;
+    let tree = private_tree(&trees_dir)?;
     let git_dir_s = path_str(&git_dir)?;
-    let tree_dir_s = path_str(&tree_dir)?;
+    let tree_dir_s = path_str(tree.path())?;
+    // The bare repository, its HEAD and index, and the attributes file the
+    // runner rewrites are shared by every request for this publication. Hold
+    // the lock until the checkout is done; afterwards the request reads only
+    // its own tree, so another request's fetch cannot reach those bytes.
+    let _cache_lock = acquire_exclusive_with(
+        &cache.join(CACHE_LOCK_FILE_NAME),
+        INSPECT_LABEL,
+        LockOptions {
+            timeout: CACHE_LOCK_TIMEOUT,
+            ..LockOptions::default()
+        },
+    )?;
     if git_dir.join("HEAD").is_file() {
         assert_cache_origin(&git_dir, &request.publication_remote)?;
         let refspec = format!(
@@ -282,11 +316,6 @@ fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, Orbi
         )));
     }
 
-    if tree_dir.exists() {
-        fs::remove_dir_all(&tree_dir)
-            .map_err(|error| OrbitError::from_write_io(&tree_dir, error))?;
-    }
-    fs::create_dir_all(&tree_dir).map_err(|error| OrbitError::from_write_io(&tree_dir, error))?;
     git(&[
         "--git-dir",
         git_dir_s,
@@ -306,12 +335,25 @@ fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, Orbi
         PublicationFreshness::Stale
     };
     Ok(FetchedSnapshot {
-        tree_dir,
+        tree,
         branch: request.publication_branch.clone(),
         commit_id,
         git_parent,
         freshness,
     })
+}
+
+fn private_tree(trees_dir: &Path) -> Result<TempDir, OrbitError> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("snapshot-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    builder
+        .tempdir_in(trees_dir)
+        .map_err(|error| OrbitError::from_write_io(trees_dir, error))
 }
 
 fn read_envelope(tree_dir: &Path) -> Result<PublicationEnvelope, OrbitError> {
@@ -407,11 +449,11 @@ fn read_validated_tasks(
 
 fn restore_empty_artifact_dir(bundle_dir: &Path) -> Result<(), OrbitError> {
     // Git does not store empty directories; recreate the canonical artifacts
-    // layout in the disposable inspect tree when the snapshot had no blobs.
+    // layout in the request's private inspect tree when the snapshot had no blobs.
     let artifacts = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
     if !artifacts.exists() {
         let files = artifacts.join(TASK_ARTIFACT_FILES_DIR_NAME);
-        fs::create_dir_all(&files).map_err(|error| OrbitError::from_write_io(&files, error))?;
+        create_private_dir_all(&files).map_err(|error| OrbitError::from_write_io(&files, error))?;
     }
     Ok(())
 }

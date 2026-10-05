@@ -1,18 +1,22 @@
 //! Stale-run reconciliation, terminal timing repair, and audit helpers.
 
-use std::collections::HashSet;
-
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::process::identity::{ProcessLiveness, is_stable_token, probe_process_liveness};
 use orbit_store::contracts::TaskReservationReleaseReason;
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{JobRun, JobRunState};
 
 use crate::OrbitRuntime;
+use crate::application::job::log_best_effort;
 
+use super::WORKER_TERMINATED_ERROR_CODE;
+#[cfg(unix)]
+use super::owner::OwnerIdentity;
 use super::owner::{
-    owner_identity_error_code, pending_run_stale_reason, running_run_owner_is_stale,
-    running_run_owner_stale_reason, stale_job_run_message, stale_pending_run_message,
+    PendingStaleReason, owner_identity_error_code, pending_run_stale_reason,
+    running_run_owner_is_stale, running_run_owner_stale_reason, stale_job_run_message,
+    stale_pending_run_message,
 };
 
 /// Call-scoped reuse of healthy owner classifications.
@@ -23,22 +27,29 @@ use super::owner::{
 /// list/history call.
 #[derive(Default)]
 pub(super) struct ReconcilePass {
-    healthy: HashSet<OwnerSnapshotKey>,
+    healthy: Vec<OwnerSnapshotKey>,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct OwnerSnapshotKey {
     run_id: String,
-    state: String,
+    state: JobRunState,
     pid: Option<u32>,
     pid_start_time: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderFinalizationGuard {
+    Clear,
+    Alive,
+    Unknown,
 }
 
 impl ReconcilePass {
     fn key(run: &JobRun) -> OwnerSnapshotKey {
         OwnerSnapshotKey {
             run_id: run.run_id.clone(),
-            state: run.state.to_string(),
+            state: run.state,
             pid: run.pid,
             pid_start_time: run.pid_start_time.clone(),
         }
@@ -49,7 +60,7 @@ impl ReconcilePass {
     }
 
     fn remember_healthy(&mut self, run: &JobRun) {
-        self.healthy.insert(Self::key(run));
+        self.healthy.push(Self::key(run));
     }
 }
 
@@ -159,6 +170,31 @@ impl OrbitRuntime {
     where
         F: FnOnce(),
     {
+        self.reconcile_stale_job_run_before_revalidation_with_provider_probe(
+            run,
+            pass,
+            probe_process_liveness,
+            before_revalidation,
+        )
+    }
+
+    fn reconcile_stale_job_run_before_revalidation_with_provider_probe<F, P>(
+        &self,
+        run: &JobRun,
+        pass: &mut ReconcilePass,
+        provider_probe: P,
+        before_revalidation: F,
+    ) -> Result<bool, OrbitError>
+    where
+        F: FnOnce(),
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
+        // Reconciliation finalizes orphans and repairs timing: it writes. A
+        // write-free process can only read what the run record already says,
+        // and attempting the write would fail the whole read command.
+        if self.is_write_free() {
+            return Ok(false);
+        }
         if terminal_run_timing_is_incomplete(run) {
             return self.repair_terminal_job_run_timing(run);
         }
@@ -171,34 +207,28 @@ impl OrbitRuntime {
             }
             return Ok(false);
         }
+        if !self.provider_evidence_allows_orphan_finalization(&run.run_id, &provider_probe) {
+            return Ok(false);
+        }
 
         before_revalidation();
-        self.finalize_orphaned_job_run(&run.run_id)
-    }
-
-    /// Deterministic seam for reproducing a terminal writer winning after the
-    /// stale snapshot was classified but before reconciliation revalidates it.
-    #[cfg(test)]
-    pub(super) fn reconcile_stale_job_run_after_classification<F>(
-        &self,
-        run: &JobRun,
-        concurrent_completion: F,
-    ) -> Result<bool, OrbitError>
-    where
-        F: FnOnce(),
-    {
-        self.reconcile_stale_job_run_before_revalidation(
-            run,
-            &mut ReconcilePass::default(),
-            concurrent_completion,
-        )
+        self.finalize_orphaned_job_run_with_provider_probe(&run.run_id, &provider_probe)
     }
 
     /// [ORB-10002] Orphaned runs (owner process conclusively gone) become
     /// `interrupted`, not `failed`: the job did not fail, its worker died.
     /// Interrupted runs are resumable from their step checkpoints via
-    /// `orbit job resume <run_id>`.
-    fn finalize_orphaned_job_run(&self, run_id: &str) -> Result<bool, OrbitError> {
+    /// `orbit job resume <run_id>`. [ORB-12969] Their coupled `in-progress`
+    /// tasks are blocked with a `workflow_run_interrupted` note naming the run
+    /// and error code; the resume re-admits them.
+    fn finalize_orphaned_job_run_with_provider_probe<P>(
+        &self,
+        run_id: &str,
+        provider_probe: &P,
+    ) -> Result<bool, OrbitError>
+    where
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
         // [ORB-11116] The scan's candidate snapshot can go stale while a real
         // worker is terminalizing. Re-read at the interruption boundary and
         // re-run both state and owner classification so a completed run never
@@ -209,6 +239,9 @@ impl OrbitRuntime {
         let Some((error_code, message)) = stale_job_run_diagnostic(&current) else {
             return Ok(false);
         };
+        if !self.provider_evidence_allows_orphan_finalization(&current.run_id, provider_probe) {
+            return Ok(false);
+        }
 
         let finished_at = self.orphaned_run_finished_at(&current);
         let duration_ms = current.started_at.map(|started_at| {
@@ -217,12 +250,16 @@ impl OrbitRuntime {
                 .num_milliseconds()
                 .max(0) as u64
         });
-        let changed = self.finalize_job_run_with_reservation_cleanup(
+        // [ORB-12969] The diagnostic is handed to finalization so the coupled
+        // tasks' interruption block names the error code; the step itself is
+        // recorded below, only once the interrupted write has won.
+        let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             &current.run_id,
             JobRunState::Interrupted,
             finished_at,
             duration_ms,
             TaskReservationReleaseReason::StaleRunReconciled,
+            Some((&error_code, &message)),
         )?;
         if !changed {
             return Ok(false);
@@ -236,13 +273,17 @@ impl OrbitRuntime {
         }
 
         let step_started_at = current.started_at.unwrap_or(current.scheduled_at);
-        let _ = self.record_pipeline_diagnostic_step(
-            &current,
-            step_started_at,
-            finished_at,
-            Some(&error_code),
-            &message,
-            JobRunState::Interrupted,
+        log_best_effort(
+            "record reconciliation diagnostic",
+            &current.run_id,
+            self.record_pipeline_diagnostic_step(
+                &current,
+                step_started_at,
+                finished_at,
+                Some(&error_code),
+                &message,
+                JobRunState::Interrupted,
+            ),
         );
         self.record_event(OrbitEvent::JobRunCompleted {
             job_id: current.job_id.clone(),
@@ -250,6 +291,84 @@ impl OrbitRuntime {
             state: JobRunState::Interrupted.to_string(),
         })?;
         Ok(true)
+    }
+
+    /// A stale owner is not sufficient to condemn a run while any durable,
+    /// still-open provider child is alive or cannot be verified. The audit
+    /// collector reads the complete trail and process probing verifies the
+    /// recorded start token and PID namespace before returning `Alive`.
+    pub(crate) fn provider_evidence_allows_orphan_finalization<P>(
+        &self,
+        run_id: &str,
+        provider_probe: &P,
+    ) -> bool
+    where
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
+        let processes = match self.collect_run_provider_processes_with(run_id, provider_probe) {
+            Ok(processes) => processes,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.core.job_run",
+                    run_id,
+                    owner = "stale",
+                    error = %error,
+                    decision = "defer",
+                    reason = "provider_evidence_unreadable",
+                    "orphan finalization provider guard deferred",
+                );
+                return false;
+            }
+        };
+
+        let mut open = 0usize;
+        let mut alive = 0usize;
+        let mut unknown = 0usize;
+        for process in &processes {
+            if process.finished {
+                continue;
+            }
+            open += 1;
+            match process.liveness {
+                ProcessLiveness::Alive
+                    if process
+                        .pid_start_time
+                        .as_deref()
+                        .is_some_and(is_stable_token) =>
+                {
+                    alive += 1;
+                }
+                ProcessLiveness::Alive => unknown += 1,
+                ProcessLiveness::Unknown => unknown += 1,
+                ProcessLiveness::Exited => {}
+            }
+        }
+        let guard = if alive > 0 {
+            ProviderFinalizationGuard::Alive
+        } else if unknown > 0 {
+            ProviderFinalizationGuard::Unknown
+        } else {
+            ProviderFinalizationGuard::Clear
+        };
+        let (decision, reason) = match guard {
+            ProviderFinalizationGuard::Clear => ("finalize", "providers_closed_or_absent"),
+            ProviderFinalizationGuard::Alive => ("defer", "provider_alive"),
+            ProviderFinalizationGuard::Unknown => ("defer", "provider_liveness_unknown"),
+        };
+        tracing::debug!(
+            target: "orbit.core.job_run",
+            run_id,
+            owner = "stale",
+            providers = processes.len(),
+            open,
+            alive,
+            unknown,
+            decision,
+            reason,
+            "orphan finalization provider guard classified durable evidence",
+        );
+
+        guard == ProviderFinalizationGuard::Clear
     }
 
     /// When an orphaned run actually stopped doing work.
@@ -354,14 +473,29 @@ fn stale_job_run_diagnostic(run: &JobRun) -> Option<(String, String)> {
     // never claimed past the grace window) finalize exactly like orphaned
     // running runs. Each diagnostic is built from one classification result.
     if let Some(reason) = pending_run_stale_reason(run) {
-        return Some((
-            reason.error_code().to_string(),
-            stale_pending_run_message(run, reason),
-        ));
+        let code = match reason {
+            #[cfg(unix)]
+            PendingStaleReason::Owner(OwnerIdentity::Missing | OwnerIdentity::Mismatch) => {
+                WORKER_TERMINATED_ERROR_CODE
+            }
+            _ => reason.error_code(),
+        };
+        return Some((code.to_string(), stale_pending_run_message(run, reason)));
     }
     let stale_reason = running_run_owner_stale_reason(run)?;
+    #[cfg(unix)]
+    let code = if matches!(
+        stale_reason,
+        OwnerIdentity::Missing | OwnerIdentity::Mismatch
+    ) {
+        WORKER_TERMINATED_ERROR_CODE
+    } else {
+        owner_identity_error_code(Some(stale_reason))
+    };
+    #[cfg(not(unix))]
+    let code = owner_identity_error_code(Some(stale_reason));
     Some((
-        owner_identity_error_code(Some(stale_reason)).to_string(),
+        code.to_string(),
         stale_job_run_message(run, Some(stale_reason)),
     ))
 }

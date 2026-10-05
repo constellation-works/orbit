@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::{
@@ -6,8 +7,10 @@ use orbit_types::identity::{
 };
 use orbit_types::record::{CREW_DISCOVERY_SCHEMA_VERSION, CrewDiscoveryEntryV1, CrewDiscoveryV1};
 use orbit_types::task::{Task, is_valid_orb_task_id};
-use orbit_types::workflow::activity_job::ProviderSource;
-use serde::Serialize;
+use orbit_types::workflow::activity_job::{
+    ActivityV2, ActivityV2Spec, JobV2, JobV2Step, JobV2StepBody, ProviderSource,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -20,7 +23,7 @@ use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 /// name and the tier it came from; `None` only when no tier supplies a value.
 /// Pure and table-tested so the precedence cannot drift from the shared
 /// contract or from the `Provider::resolve` surface it mirrors.
-pub(crate) fn select_crew_name<'a>(
+fn select_crew_name<'a>(
     explicit: Option<&'a str>,
     task_config: Option<&'a str>,
     workspace_default: Option<&'a str>,
@@ -177,6 +180,8 @@ pub struct ConfiguredCrewProjection {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub is_default: bool,
+    /// Whether dispatch may run the crew (`[crews.<name>] enabled`).
+    pub enabled: bool,
 }
 
 impl ConfiguredCrewProjection {
@@ -188,6 +193,7 @@ impl ConfiguredCrewProjection {
             description: crew.description.clone(),
             tags: crew.tags.clone(),
             is_default,
+            enabled: crew.enabled,
         }
     }
 }
@@ -343,11 +349,58 @@ impl OrbitRuntime {
             .map_err(Into::into)
     }
 
+    /// Resolve the crew a dispatch will run, refusing a disabled one.
+    ///
+    /// Every path that launches a provider — task start, run and activity
+    /// dispatch, the system lane, pool candidates — resolves through here, so
+    /// a crew with `enabled = false` is refused with the table and command
+    /// that enable it. There is no fallback to another crew: an operator who
+    /// disabled a provider did not ask Orbit to spend a different one.
     pub fn resolve_crew_for_task(
         &self,
         cli_override: Option<&str>,
         task_crew: Option<&str>,
     ) -> Result<Crew, OrbitError> {
+        let (crew, source) = self.select_configured_crew(cli_override, task_crew)?;
+        if crew.enabled {
+            return Ok(crew);
+        }
+        // Only the synthesized `system` entry carries an alias, so any other
+        // crew name is its own table.
+        let mirrors = self
+            .context
+            .settings()
+            .system_crew_alias()
+            .filter(|_| crew.name == "system");
+        let origin = match source {
+            ProviderSource::TaskConfig => "task.crew selects ",
+            ProviderSource::WorkspaceDefault => "workflow.default_crew selects ",
+            _ => "",
+        };
+        Err(OrbitError::InvalidInput(format!(
+            "{origin}{}",
+            orbit_config::disabled_crew_message(&crew.name, mirrors)
+        )))
+    }
+
+    /// Look up the crew a task names, or the configured default, without the
+    /// enabled check. For read surfaces and material fingerprints only: they
+    /// describe the configured crew, disabled or not, and must never launch
+    /// it.
+    pub fn lookup_crew_for_task(
+        &self,
+        cli_override: Option<&str>,
+        task_crew: Option<&str>,
+    ) -> Result<Crew, OrbitError> {
+        self.select_configured_crew(cli_override, task_crew)
+            .map(|(crew, _)| crew)
+    }
+
+    fn select_configured_crew(
+        &self,
+        cli_override: Option<&str>,
+        task_crew: Option<&str>,
+    ) -> Result<(Crew, ProviderSource), OrbitError> {
         // Runtime precedence is explicit > task_config > the default projected
         // by RuntimeConfig. That projection has already resolved workspace >
         // environment > system-default precedence, so lower tiers are not
@@ -360,13 +413,14 @@ impl OrbitRuntime {
             None,
         );
 
-        let Some((selected, _source)) = selection else {
+        let Some((selected, source)) = selection else {
             return Err(OrbitError::InvalidInput(
                 "no crew selected; set [workflow].default_crew, task.crew, or pass crew"
                     .to_string(),
             ));
         };
-        resolve_crew(selected, self.context.settings().crews()).map_err(Into::into)
+        let crew = resolve_crew(selected, self.context.settings().crews())?;
+        Ok((crew, source))
     }
 
     pub(crate) fn resolve_crew_for_run_input(&self, input: &Value) -> Result<Crew, OrbitError> {
@@ -375,8 +429,28 @@ impl OrbitRuntime {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let task_crew = self.task_crew_from_run_input(input)?;
+        let claimed = claimed_task_from_input(input)?;
+        let task_crew = self.task_crew_from_run_input(input, claimed.as_ref())?;
         self.resolve_crew_for_task(cli_override, task_crew.as_deref())
+            .map_err(|error| {
+                // A crew the owner chose but this host cannot run fails the
+                // leaf by name. Falling back to `default_crew` would ship the
+                // owner's task on a provider nobody selected for it.
+                match claimed.as_ref().zip(task_crew.as_deref()) {
+                    Some((snapshot, crew))
+                        if cli_override.is_none() && snapshot.crew() == Some(crew) =>
+                    {
+                        OrbitError::InvalidInput(format!(
+                            "claimed task {} has crew `{crew}` on its owner, which this host \
+                             cannot run: {error}; configure and enable `{crew}` here or reassign \
+                             the task on the owner (a claimed leaf never falls back to \
+                             workflow.default_crew)",
+                            snapshot.id,
+                        ))
+                    }
+                    _ => error,
+                }
+            })
     }
 
     /// Resolve a crew/role-model projection for `orbit.task.show` consumers.
@@ -410,7 +484,7 @@ impl OrbitRuntime {
             return Ok(None);
         }
 
-        self.resolve_crew_for_task(None, task.crew.as_deref())
+        self.lookup_crew_for_task(None, task.crew.as_deref())
             .map(ResolvedCrewProjection::from_crew)
             .map(Some)
     }
@@ -439,11 +513,64 @@ impl OrbitRuntime {
         }
     }
 
-    pub(crate) fn record_run_crew_from_input(
+    /// Project one crew enrichment key for a `task show` field selector.
+    ///
+    /// The unprojected readout carries `resolved_crew` / `crew_model` /
+    /// `crew_unresolved` only in the case each describes; a projection asked
+    /// for by name always answers, with `null` where that case does not apply.
+    /// Selecting a key the full readout shows is therefore never an error
+    /// [ORB-12113]. Any other name yields `None`, so a caller keeps its own
+    /// unknown-field handling.
+    pub fn task_crew_field_json(&self, task: &Task, field: &str) -> Option<Value> {
+        if !matches!(field, "resolved_crew" | "crew_model" | "crew_unresolved") {
+            return None;
+        }
+
+        let value = match (self.task_crew_read(task), field) {
+            (TaskCrewRead::Resolved(projection), "resolved_crew") => Value::String(projection.name),
+            (TaskCrewRead::Resolved(projection), "crew_model") => Value::String(projection.model),
+            (TaskCrewRead::Unresolved { reason }, "crew_unresolved") => Value::String(reason),
+            _ => Value::Null,
+        };
+        Some(value)
+    }
+
+    /// Resolve a run's crew at start, persisting it only when the job at
+    /// `yaml_path` can dispatch an agent [ORB-13016].
+    ///
+    /// Every job still resolves, so a crew misconfiguration fails the run at
+    /// start as it always has. A job made only of deterministic activities
+    /// records no crew: no model does its work, and a crew drawn for it would
+    /// read as an LLM that never ran.
+    pub(crate) fn record_run_crew_for_job(
         &self,
         run_id: &str,
         input: &Value,
-    ) -> Result<Crew, OrbitError> {
+        yaml_path: &Path,
+    ) -> Result<(), OrbitError> {
+        if self.job_definition_dispatches_agent(yaml_path) {
+            self.record_run_crew_from_input(run_id, input)?;
+        } else {
+            self.resolve_crew_for_run_input(input)?;
+        }
+        Ok(())
+    }
+
+    /// Whether the job at `yaml_path` can dispatch an agent. A definition that
+    /// does not load or resolve counts as agent-bearing: the run's own load
+    /// reports that failure, and the crew is recorded as before.
+    fn job_definition_dispatches_agent(&self, yaml_path: &Path) -> bool {
+        let resolved = (|| {
+            let yaml = std::fs::read_to_string(yaml_path).ok()?;
+            let mut job = orbit_engine::activity_job::load_job_asset(&yaml).ok()?.spec;
+            let catalog = self.v2_activity_catalog().ok()?;
+            orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, &catalog).ok()?;
+            Some(job)
+        })();
+        resolved.is_none_or(|job| job_dispatches_agent(&job))
+    }
+
+    fn record_run_crew_from_input(&self, run_id: &str, input: &Value) -> Result<Crew, OrbitError> {
         let crew = self.resolve_crew_for_run_input(input)?;
         tracing::info!(
             run_id,
@@ -511,20 +638,30 @@ impl OrbitRuntime {
         Ok(crew)
     }
 
-    /// Unanimous `task.crew` across every stored task named by the run/activity
-    /// input. Missing fixture ids are skipped so fake implementer ids do not
-    /// fail resolution. Distinct crews — including a mix of set and unset —
-    /// fail closed instead of inheriting `workflow.default_crew`.
-    fn task_crew_from_run_input(&self, input: &Value) -> Result<Option<String>, OrbitError> {
+    /// Unanimous `task.crew` across every task named by the run/activity
+    /// input. A task the input carries a `claimed_task` snapshot for reads its
+    /// crew from that snapshot: a pulled task lives in the owner's store, and a
+    /// same-id local record, if any, is not it. Other ids read the local store;
+    /// missing fixture ids are skipped so fake implementer ids do not fail
+    /// resolution. Distinct crews — including a mix of set and unset — fail
+    /// closed instead of inheriting `workflow.default_crew`.
+    fn task_crew_from_run_input(
+        &self,
+        input: &Value,
+        claimed: Option<&ClaimedTaskSnapshot>,
+    ) -> Result<Option<String>, OrbitError> {
         let mut agreed: Option<Option<String>> = None;
         for task_id in task_ids_for_crew_resolution(input) {
             if !is_valid_orb_task_id(&task_id) {
                 continue;
             }
-            let Some(task) = self.stores().tasks().get_task(&task_id)? else {
-                continue;
+            let crew = match claimed.filter(|snapshot| snapshot.id == task_id) {
+                Some(snapshot) => snapshot.crew().map(ToOwned::to_owned),
+                None => match self.stores().tasks().get_task(&task_id)? {
+                    Some(task) => normalized_task_crew(task.crew.as_deref()),
+                    None => continue,
+                },
             };
-            let crew = normalized_task_crew(task.crew.as_deref());
             match &agreed {
                 None => agreed = Some(crew),
                 Some(existing) if existing == &crew => {}
@@ -588,6 +725,42 @@ fn task_ids_for_crew_resolution(input: &Value) -> Vec<String> {
     ids
 }
 
+/// Run-input key under which a pulled claimed leaf carries the owner's
+/// snapshot of its task. Written when the follower creates the leaf
+/// (`orbit-store` `LocalPullMutation::CreateLeaf`) from the claim receipt.
+const CLAIMED_TASK_INPUT_KEY: &str = "claimed_task";
+
+/// The owner's view of a claimed task, as far as crew resolution needs it.
+#[derive(Debug, Deserialize)]
+struct ClaimedTaskSnapshot {
+    id: String,
+    #[serde(default)]
+    crew: Option<String>,
+}
+
+impl ClaimedTaskSnapshot {
+    fn crew(&self) -> Option<&str> {
+        self.crew.as_deref().and_then(non_empty)
+    }
+}
+
+/// Read the claimed-task snapshot off a run input. Absent or `null` means the
+/// run is not a pulled leaf; a malformed one fails closed rather than quietly
+/// resolving the follower's default crew.
+fn claimed_task_from_input(input: &Value) -> Result<Option<ClaimedTaskSnapshot>, OrbitError> {
+    match input.get(CLAIMED_TASK_INPUT_KEY) {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => serde_json::from_value(raw.clone())
+            .map(Some)
+            .map_err(|error| {
+                OrbitError::InvalidInput(format!(
+                    "`{CLAIMED_TASK_INPUT_KEY}` must be an object with a task `id` and optional \
+                     `crew`: {error}"
+                ))
+            }),
+    }
+}
+
 fn normalized_task_crew(crew: Option<&str>) -> Option<String> {
     crew.map(str::trim)
         .filter(|value| !value.is_empty())
@@ -619,4 +792,44 @@ fn family_from_assignment(assignment: &CrewAssignment) -> Option<String> {
     }
 
     infer_agent_family_from_model(&assignment.model)
+}
+
+/// Whether a resolved job can dispatch an agent-loop activity, as a step at any
+/// nesting depth or as a recovery, failure or final-recovery hook [ORB-13016]. A reference the
+/// catalog has not resolved counts as one, so only a definition proven
+/// agent-free skips the run's crew record.
+pub(crate) fn job_dispatches_agent(job: &JobV2) -> bool {
+    hook_dispatches_agent(
+        job.recovery_activity.as_deref(),
+        job.resolved_recovery_activity.as_ref(),
+    ) || hook_dispatches_agent(
+        job.failure_activity.as_deref(),
+        job.resolved_failure_activity.as_ref(),
+    ) || hook_dispatches_agent(
+        job.final_recovery_activity.as_deref(),
+        job.resolved_final_recovery_activity.as_ref(),
+    ) || job.steps.iter().any(step_dispatches_agent)
+}
+
+fn step_dispatches_agent(step: &JobV2Step) -> bool {
+    if hook_dispatches_agent(
+        step.recovery_activity.as_deref(),
+        step.resolved_recovery_activity.as_ref(),
+    ) {
+        return true;
+    }
+    match &step.body {
+        JobV2StepBody::Target(target) => matches!(target.spec, ActivityV2Spec::AgentLoop(_)),
+        JobV2StepBody::TargetRef(_) => true,
+        JobV2StepBody::Parallel { parallel } => parallel.branches.iter().any(step_dispatches_agent),
+        JobV2StepBody::FanOut { fan_out, .. } => step_dispatches_agent(&fan_out.worker),
+        JobV2StepBody::Loop { loop_ } => loop_.steps.iter().any(step_dispatches_agent),
+    }
+}
+
+fn hook_dispatches_agent(name: Option<&str>, resolved: Option<&ActivityV2>) -> bool {
+    match resolved {
+        Some(activity) => matches!(activity.spec, ActivityV2Spec::AgentLoop(_)),
+        None => name.is_some(),
+    }
 }

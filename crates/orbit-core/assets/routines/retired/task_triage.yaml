@@ -1,0 +1,20 @@
+# Retired `task_triage` default (last shipped 2026-09-19). Terminal failed-run
+# triage is gone: a failed run parks its task in `blocked` with the failure
+# attached and re-backlogging is a deliberate human transition, so this routine
+# has no job to fire. Kept as a provenance shape only, so `orbit workspace sync`
+# can tell an Orbit-seeded copy from an operator-authored one — see
+# `RETIRED_ROUTINE_FILES` in `application/routine.rs`.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Hourly triage of tasks blocked by failed job runs: diagnose the failure,
+  re-backlog environmental casualties, and leave everything else blocked
+  with a diagnosis attached.
+enabled: false
+trigger:
+  cron: "15 * * * *"
+  missed_run: skip
+target: job:task_triage_pipeline
+policy:
+  timeout_minutes: 45
+  overlap: forbid

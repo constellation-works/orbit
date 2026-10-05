@@ -3,42 +3,26 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::FrictionStoreBackend;
 use orbit_types::identity::is_valid_friction_id;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{
-    Task, TaskHistoryEntry, TaskRelationType, TaskStatus, unmet_task_dependencies,
-};
+use orbit_types::task::{Task, TaskRelationType, TaskStatus, unmet_task_dependencies};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use crate::OrbitRuntime;
+use crate::runtime::InfraBlockedTask;
 
 use super::helpers::{
-    SYSTEM_ACTOR_LABEL, build_task_comments, effective_actor_label, implementation_label,
+    SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
+    crew_assigned_history, effective_actor_label, implementation_label,
 };
+use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
 use super::params::TaskUpdateParams;
 
-#[cfg(test)]
-use std::sync::Mutex;
-
-const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agent at start time.";
 const RELATION_RESOLVES: &str = "resolves";
-/// [ORB-10470] Status event recorded when a resumed run restores its own
-/// lineage's coupling to a task (re-admission and/or batch re-claim).
-const RESUME_READMITTED_EVENT: &str = "resume_readmitted";
+/// Status event recorded when `orbit task recheck-blocked --confirm` returns a
+/// task blocked by a missing provider launcher to backlog because the launcher
+/// now resolves.
+pub(crate) const INFRA_BLOCK_CLEARED_EVENT: &str = "infra_block_cleared";
 
-#[cfg(test)]
-static TRANSITION_READ_HOOK_STATUS: Mutex<Option<(String, TaskStatus)>> = Mutex::new(None);
-
-#[cfg(test)]
-pub(super) static TRANSITION_READ_HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-#[cfg(test)]
-pub(super) fn set_transition_read_hook_status(id: Option<&str>, status: Option<TaskStatus>) {
-    *TRANSITION_READ_HOOK_STATUS
-        .lock()
-        .expect("transition read hook mutex") =
-        id.zip(status).map(|(id, status)| (id.to_string(), status));
-}
-
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct StartTaskOptions {
     note: Option<String>,
     comment: Option<String>,
@@ -46,9 +30,74 @@ struct StartTaskOptions {
     model: Option<String>,
     actor_label_override: Option<String>,
     crew_override: Option<String>,
+    plan: Option<String>,
+    field_edits: TaskUpdateParams,
+    artifact_owner: Option<String>,
+}
+
+fn start_body_field_edits(
+    mut field_edits: TaskUpdateParams,
+    plan: Option<String>,
+) -> TaskUpdateParams {
+    field_edits.status = Some(TaskStatus::InProgress);
+    if plan.is_some() {
+        field_edits.plan = plan;
+    }
+    field_edits.comment = None;
+    field_edits
 }
 
 impl OrbitRuntime {
+    /// Move a task to backlog through the approval body when its current
+    /// state is proposed, otherwise through the ordinary governed update.
+    /// The outer lock keeps the dispatch decision and the selected transition
+    /// body on one task snapshot.
+    pub(crate) fn transition_task_to_backlog_with_identity(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        let mut result = None;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            result = Some(if task.status == TaskStatus::Proposed {
+                self.approve_task_with_identity(
+                    id,
+                    note.clone(),
+                    comment.clone(),
+                    agent.clone(),
+                    model.clone(),
+                )?
+            } else {
+                if note.is_some() {
+                    return Err(OrbitError::InvalidInput(
+                        "`note` on a backlog transition is only valid when approving a proposed task"
+                            .to_string(),
+                    ));
+                }
+                self.update_task_with_identity(
+                    id,
+                    TaskUpdateParams {
+                        comment: comment.clone(),
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                    agent.clone(),
+                    model.clone(),
+                )?
+            });
+            Ok(())
+        })?;
+        result.ok_or_else(|| {
+            OrbitError::Execution(
+                "task backlog transition body did not run under the task lock".to_string(),
+            )
+        })
+    }
+
     pub fn approve_task(
         &self,
         id: &str,
@@ -74,7 +123,7 @@ impl OrbitRuntime {
             &actor.label,
             canonical_agent.as_deref(),
             canonical_model.as_deref(),
-        );
+        )?;
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
         let mut result = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
@@ -84,6 +133,7 @@ impl OrbitRuntime {
             let implemented_by =
                 implementation_label(&task, effective_label.as_str(), canonical_model.as_deref());
             if task.status == TaskStatus::Review {
+                super::lifecycle::ensure_completion_run_stopped(self, &task, None, None)?;
                 self.ensure_resolves_are_workspace_local(&task)?;
             }
 
@@ -147,6 +197,8 @@ impl OrbitRuntime {
 
         if result.status == TaskStatus::Done {
             self.record_resolves_side_effects(&result)?;
+            // Approval to done only ever leaves `review`.
+            self.close_task_prs_after_transition(TaskStatus::Review, &result, note.as_deref());
         }
 
         Ok(result)
@@ -241,6 +293,7 @@ impl OrbitRuntime {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start_task_with_identity_and_crew(
         &self,
         id: &str,
@@ -249,6 +302,9 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
         crew_override: Option<String>,
+        plan: Option<String>,
+        field_edits: TaskUpdateParams,
+        artifact_owner: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.start_task_with_actor_label_override(
             id,
@@ -258,6 +314,9 @@ impl OrbitRuntime {
                 agent,
                 model,
                 crew_override,
+                plan,
+                field_edits,
+                artifact_owner,
                 ..Default::default()
             },
         )
@@ -293,17 +352,21 @@ impl OrbitRuntime {
             model,
             actor_label_override,
             crew_override,
+            plan,
+            field_edits,
+            artifact_owner,
         } = options;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let actor = self.actor().clone();
-        let effective_label = actor_label_override.unwrap_or_else(|| {
-            effective_actor_label(
+        let effective_label = match actor_label_override.clone() {
+            Some(label) => label,
+            None => effective_actor_label(
                 &actor.label,
                 canonical_agent.as_deref(),
                 canonical_model.as_deref(),
-            )
-        });
+            )?,
+        };
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
         let mut started = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
@@ -329,15 +392,28 @@ impl OrbitRuntime {
                     )));
                 }
             }
+            let validated = self.validate_and_normalize_task_field_edits(
+                id,
+                &task,
+                start_body_field_edits(field_edits.clone(), plan.clone()),
+            )?;
+            let crew_assignment = validated.crew_assignment;
+            let start_edits = validated.params;
+            let resolved_crew_override = if field_edits.crew.is_some() {
+                start_edits.crew.clone().flatten()
+            } else {
+                self.canonical_crew_name(crew_override.as_deref())?
+            };
             self.resolve_and_log_crew_for_task_start(
                 id,
-                crew_override.as_deref(),
+                resolved_crew_override.as_deref(),
                 task.crew.as_deref(),
             )?;
-            let dependency_status_index = self.task_status_index()?;
+            let dependency_status_index = self.dependency_status_index([&task])?;
             let unmet_dependencies = unmet_task_dependencies(&task, &dependency_status_index);
+            let effective_plan = start_edits.plan.as_deref().unwrap_or(task.plan.as_str());
             if in_progress_transition_requires_plan(task.status) {
-                ensure_task_has_execution_plan(id, task.plan.as_str())?;
+                ensure_task_has_execution_plan(id, effective_plan)?;
             }
             let unmet_dependency_labels: Vec<String> = unmet_dependencies
                 .iter()
@@ -353,79 +429,89 @@ impl OrbitRuntime {
                     );
                 }
             };
-
-            started = Some(match task.status {
-                TaskStatus::Proposed => {
-                warn_unmet_dependencies();
-                let result = self.with_mutation(|| {
-                    let at = chrono::Utc::now();
-                    let task = self.stores().task_records().update(
+            // Attribute a plan written on this start to the agent family that
+            // wrote it, the way the worker path does, unless the task already
+            // names a planner or the caller sets one explicitly.
+            let attribution = assemble_task_attribution(
+                &task,
+                TaskAttributionInput {
+                    default_actor_label: &actor.label,
+                    actor_override: actor_label_override.as_deref(),
+                    agent: canonical_agent.as_deref(),
+                    model: canonical_model.as_deref(),
+                    runtime_model_identity: None,
+                    plan_changed: start_edits.plan.is_some() && task.planned_by.is_none(),
+                    // A start is never implementation evidence, and
+                    // `start_edits` already carries any explicit
+                    // `implemented_by` straight through to the store.
+                    target_status: None,
+                    explicit_planned_by: start_edits.planned_by.as_ref(),
+                    explicit_implemented_by: None,
+                },
+            )?;
+            let approved_from_proposed = task.status == TaskStatus::Proposed;
+            warn_unmet_dependencies();
+            started = Some(self.with_mutation(|| {
+                // A start from `proposed` is two transitions, and history must
+                // read that way: approve into backlog first, then start from
+                // backlog. Writing them as two record updates under the task
+                // lock lets the store derive each event's `from_status` from
+                // the status it actually left, instead of stamping `started`
+                // with `proposed` after a hand-built approval entry.
+                //
+                // Every gate has already run by here, so the approval only
+                // lands for a start that was going to be allowed. If the start
+                // write then fails, the task rests in `backlog` with its
+                // approval recorded — a state history can explain, and one a
+                // retry starts cleanly from.
+                if approved_from_proposed {
+                    self.stores().task_records().update(
                         id,
                         StoreTaskUpdateParams {
                             actor: effective_label.clone(),
-                            status_event: Some("started".to_string()),
-                            append_history: vec![TaskHistoryEntry {
-                                at,
-                                by: effective_label.clone(),
-                                event: "proposal_approved".to_string(),
-                                note: note.clone(),
-                                from_status: Some(task.status),
-                                to_status: Some(TaskStatus::Backlog),
-                            }],
-                            append_comments: append_comments.clone(),
-                            expected_status: Some(vec![task.status]),
-                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                                status: Some(TaskStatus::InProgress),
-                                ..Default::default()
-                            })
-                        },
-                    )?;
-                    Ok((
-                        task.clone(),
-                        OrbitEvent::TaskStarted {
-                            id: id.to_string(),
-                            started_by: effective_label.clone(),
-                            approved_from_proposed: true,
-                        },
-                    ))
-                })?;
-                    Ok(result)
-                }
-                TaskStatus::Backlog | TaskStatus::Someday | TaskStatus::Blocked => {
-                warn_unmet_dependencies();
-                let task = self.with_mutation(|| {
-                    let task = self.stores().task_records().update(
-                        id,
-                        StoreTaskUpdateParams {
-                            actor: effective_label.clone(),
-                            status_event: Some("started".to_string()),
+                            status_event: Some("proposal_approved".to_string()),
                             status_note: note.clone(),
-                            append_comments: append_comments.clone(),
-                            expected_status: Some(vec![task.status]),
+                            expected_status: Some(vec![TaskStatus::Proposed]),
                             ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                                status: Some(TaskStatus::InProgress),
+                                status: Some(TaskStatus::Backlog),
                                 ..Default::default()
                             })
                         },
                     )?;
-                    Ok((
-                        task.clone(),
-                        OrbitEvent::TaskStarted {
-                            id: id.to_string(),
-                            started_by: effective_label.clone(),
-                            approved_from_proposed: false,
-                        },
-                    ))
-                })?;
-                    Ok(task)
                 }
-                TaskStatus::InProgress => Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' is already in-progress"
-                ))),
-                other => Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' is in status '{other}'; start requires 'proposed', 'backlog', 'someday', or 'blocked'"
-                ))),
-            }?);
+                let started = self.stores().task_records().update(
+                    id,
+                    StoreTaskUpdateParams {
+                        actor: effective_label.clone(),
+                        planned_by: attribution.planned_by.clone(),
+                        status_event: Some("started".to_string()),
+                        status_note: (!approved_from_proposed)
+                            .then(|| note.clone())
+                            .flatten(),
+                        append_comments: append_comments.clone(),
+                        append_history: crew_assignment
+                            .as_ref()
+                            .map(crew_assigned_history)
+                            .into_iter()
+                            .collect(),
+                        artifact_owner_run_id: artifact_owner.clone(),
+                        expected_status: Some(vec![if approved_from_proposed {
+                            TaskStatus::Backlog
+                        } else {
+                            task.status
+                        }]),
+                        ..StoreTaskUpdateParams::from(start_edits.clone())
+                    },
+                )?;
+                Ok((
+                    started,
+                    OrbitEvent::TaskStarted {
+                        id: id.to_string(),
+                        started_by: effective_label.clone(),
+                        approved_from_proposed,
+                    },
+                ))
+            })?);
             Ok(())
         })?;
         started.ok_or_else(|| {
@@ -445,7 +531,7 @@ impl OrbitRuntime {
     ///
     /// [ORB-11305] The set is exactly `backlog` (fresh authorized work) and
     /// `in-progress` (this run's own idempotent retry, or work a human
-    /// explicitly restarted through `orbit.task.start`). Every other status is
+    /// explicitly restarted through `orbit.task.update`). Every other status is
     /// somebody's decision that this task should not be running right now, and
     /// automation must not overturn it:
     ///
@@ -469,9 +555,18 @@ impl OrbitRuntime {
             return Ok(task);
         }
 
+        let next_step = match task.status {
+            // Delivery already ran for these; re-shipping opens a second PR
+            // or repeats landed work, so it must be a deliberate choice.
+            TaskStatus::Review | TaskStatus::Done => {
+                "Its delivery already ran; move it back to the backlog only if you mean to ship it again."
+            }
+            _ => {
+                "Move it back to the backlog (or start it explicitly) before automation may run it."
+            }
+        };
         Err(OrbitError::InvalidInput(format!(
-            "task '{id}' is in status '{}'; workflow admission for '{workflow}' requires 'backlog' or 'in-progress'. \
-             Move it back to the backlog (or start it explicitly) before automation may run it.",
+            "task '{id}' is in status '{}'; workflow admission for '{workflow}' requires 'backlog' or 'in-progress'. {next_step}",
             task.status
         )))
     }
@@ -482,6 +577,9 @@ impl OrbitRuntime {
         [TaskStatus::Backlog, TaskStatus::InProgress]
     }
 
+    /// Workflow admission: the status transition only. [ORB-12717] A crew is
+    /// decided when the task is created (or when an operator clears the field),
+    /// so admission reads `task.crew` and never writes it.
     pub(crate) fn admit_task_for_workflow_as_system(
         &self,
         id: &str,
@@ -532,73 +630,72 @@ impl OrbitRuntime {
         Ok(updated)
     }
 
-    /// [ORB-10470] Restore a task's coupling to a resumed run's lineage.
+    /// Return every task blocked by a missing provider launcher that now
+    /// resolves to `backlog`, recording which launcher cleared which block.
+    /// Tasks whose launcher is still missing, and every task blocked for any
+    /// other reason, are left alone.
     ///
-    /// Two repairs, applied as one write so the task's history records a single
-    /// reconciliation:
-    ///
-    /// - `blocked` → `in-progress`, undoing the block that the source run's own
-    ///   failure applied. This is a *restoration*, not a fresh admission: the
-    ///   lineage already admitted this task (it was `in-progress` under the
-    ///   source run), so the plan guard that gates a cold `blocked` → started
-    ///   transition does not apply here.
-    /// - `job_run_id` → the batch id the resumed checkpoints keep using, so the
-    ///   delivery tail's ownership check (`load_handoff_context`) sees the same
-    ///   identity the reused `worktree_setup` output carries.
-    ///
-    /// Callers must have already proven lineage ownership
-    /// (`reconcile_resume_task_ownership`); this function does not re-derive
-    /// it. Returns `None` when nothing needed changing, which makes a repeated
-    /// resume of the same source a no-op.
-    pub(crate) fn reclaim_task_for_resumed_run(
-        &self,
-        id: &str,
-        batch_run_id: Option<&str>,
-        source_run_id: &str,
-        resumed_run_id: &str,
-    ) -> Result<Option<Task>, OrbitError> {
+    /// Each task is re-classified under its write lock and written with a
+    /// `blocked` compare-and-set, so an operator decision or a newer block
+    /// that lands after the scan wins over this requeue.
+    pub fn requeue_cleared_infra_blocked_tasks(&self) -> Result<Vec<InfraBlockedTask>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let task = self.get_task(id)?;
-        let readmit = task.status == TaskStatus::Blocked;
-        let restamp = batch_run_id
-            .is_some_and(|batch_run_id| task.job_run_id.as_deref() != Some(batch_run_id));
-        if !readmit && !restamp {
-            return Ok(None);
-        }
-
-        let note = Some(format!(
-            "resume lineage reconciliation: run '{resumed_run_id}' resumes '{source_run_id}'"
-        ));
-        let event = if readmit {
-            OrbitEvent::TaskStarted {
-                id: id.to_string(),
-                started_by: SYSTEM_ACTOR_LABEL.to_string(),
-                approved_from_proposed: false,
+        let mut requeued = Vec::new();
+        for scanned in self.infra_blocked_tasks()? {
+            if scanned.launcher.is_none() {
+                continue;
             }
-        } else {
-            OrbitEvent::TaskUpdated { id: id.to_string() }
-        };
-        let updated = self.with_mutation(|| {
-            let task = self.stores().task_records().update(
-                id,
-                StoreTaskUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    status_event: Some(RESUME_READMITTED_EVENT.to_string()),
-                    status_note: note.clone(),
-                    ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                        status: readmit.then_some(TaskStatus::InProgress),
-                        job_run_id: restamp
-                            .then(|| batch_run_id.map(ToOwned::to_owned))
-                            .flatten()
-                            .map(Some),
-                        ..Default::default()
-                    })
-                },
-            )?;
-            Ok((task.clone(), event))
-        })?;
-
-        Ok(Some(updated))
+            let mut cleared = None;
+            self.stores()
+                .tasks()
+                .with_task_write_lock(&scanned.task_id, &mut || {
+                    let task = self.get_task(&scanned.task_id)?;
+                    let Some(current) = self.infra_block_of(&task)? else {
+                        return Ok(());
+                    };
+                    let Some(launcher) = current.launcher.as_ref() else {
+                        return Ok(());
+                    };
+                    if current.blocked_at != scanned.blocked_at {
+                        return Ok(());
+                    }
+                    let note = format!(
+                        "infra block cleared by `orbit task recheck-blocked`: provider launcher \
+                         `{}` for provider `{}` now resolves at {}; the block recorded at {} \
+                         (run_id={}) no longer reproduces",
+                        current.program,
+                        current.provider,
+                        launcher.display(),
+                        current.blocked_at.to_rfc3339(),
+                        current.run_id.as_deref().unwrap_or("-"),
+                    );
+                    self.with_mutation(|| {
+                        let task = self.stores().task_records().update(
+                            &current.task_id,
+                            StoreTaskUpdateParams {
+                                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                                status_event: Some(INFRA_BLOCK_CLEARED_EVENT.to_string()),
+                                status_note: Some(note.clone()),
+                                expected_status: Some(vec![TaskStatus::Blocked]),
+                                ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                                    status: Some(TaskStatus::Backlog),
+                                    ..Default::default()
+                                })
+                            },
+                        )?;
+                        Ok((
+                            task,
+                            OrbitEvent::TaskUpdated {
+                                id: current.task_id.clone(),
+                            },
+                        ))
+                    })?;
+                    cleared = Some(current);
+                    Ok(())
+                })?;
+            requeued.extend(cleared);
+        }
+        Ok(requeued)
     }
 
     pub fn reject_task(
@@ -626,7 +723,7 @@ impl OrbitRuntime {
             &actor.label,
             canonical_agent.as_deref(),
             canonical_model.as_deref(),
-        );
+        )?;
         let reason = note.trim();
         if reason.is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -637,10 +734,12 @@ impl OrbitRuntime {
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
 
         let mut result = None;
+        let mut previous_status = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
+            previous_status = Some(task.status);
             result = Some(match task.status {
                 TaskStatus::Proposed => self.with_mutation(|| {
                 let task = self.stores().task_records().update(
@@ -735,6 +834,9 @@ impl OrbitRuntime {
         let result = result.ok_or_else(|| {
             OrbitError::Execution("task reject body did not run under the task lock".to_string())
         })?;
+        if let Some(previous_status) = previous_status {
+            self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
+        }
 
         Ok(result)
     }
@@ -763,10 +865,7 @@ impl OrbitRuntime {
 
     #[cfg(test)]
     fn apply_transition_read_hook(&self, id: &str) -> Result<(), OrbitError> {
-        if let Some((hook_id, status)) = TRANSITION_READ_HOOK_STATUS
-            .lock()
-            .expect("transition read hook mutex")
-            .clone()
+        if let Some((hook_id, status)) = self.transition_read_hook_status()
             && hook_id == id
         {
             self.update_task(
@@ -827,18 +926,4 @@ fn ensure_task_delete_allowed(id: &str, status: TaskStatus, force: bool) -> Resu
     Err(OrbitError::InvalidInput(format!(
         "task '{id}' is in status '{status}'; use --force to delete tasks not in proposed or rejected status"
     )))
-}
-
-pub(crate) fn ensure_task_has_execution_plan(id: &str, plan: &str) -> Result<(), OrbitError> {
-    let normalized = plan.trim();
-    if normalized.is_empty() || normalized == UNAUTHORED_TASK_PLAN_PLACEHOLDER {
-        return Err(OrbitError::InvalidInput(format!(
-            "task '{id}' requires a non-empty execution plan before transitioning to in-progress"
-        )));
-    }
-    Ok(())
-}
-
-pub(crate) fn in_progress_transition_requires_plan(from_status: TaskStatus) -> bool {
-    !matches!(from_status, TaskStatus::Backlog | TaskStatus::InProgress)
 }

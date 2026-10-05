@@ -30,8 +30,13 @@ metadata:
   name: task_auto_pipeline
 spec:
   state: enabled
+  # Holds each carried task's delivery slot while live. No mode: it only
+  # dispatches gates, so no task selects it.
+  task_delivery: {}
   kind: workflow
-  max_active_runs: 10
+  # No job-level ceiling: the drain's own worker limit (`--concurrency`, retuned
+  # live by `orbit run concurrency`) bounds how many of these run at once.
+  max_active_runs: 0
   default_input:
     task_ids: []
     mode: pr
@@ -45,7 +50,7 @@ spec:
     completion: review
     # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
     # which is the behavior of every caller that does not pass it. Forwarded
-    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    # unchanged so the leaf jobs this run admits inherit the same window.
     allowed_crews: []
     max_bundles: 10
     concurrency: 5
@@ -59,6 +64,7 @@ spec:
         max_tasks: "{{ input.max_tasks }}"
         task_ids: "{{ input.task_ids }}"
         allowed_crews: "{{ input.allowed_crews }}"
+        mode: "{{ input.mode }}"
 
     - id: validate_bundles
       target: activity:validate_bundles
@@ -76,6 +82,8 @@ spec:
           target: activity:invoke_and_wait
           default_input:
             job_name: task_gate_pipeline
+            # Gate admission (1h) + child delivery (4h) + a bounded 1h tail.
+            timeout_seconds: 21600
             run_input:
               task_ids: "{{ item }}"
               mode: "{{ input.mode }}"

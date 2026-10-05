@@ -2,14 +2,14 @@
 title: "Remote Access — Decisions"
 owner: codex
 last_updated: 2026-08-15
-last_validated: 2026-09-07
+last_validated: 2026-09-27
 status: Accepted
 feature: remote-access
 doc_role: decisions
 type: design
 summary: "Current choices for Orbit Web workspace state, loopback security, and SSH local-forward lifecycle."
 tags: [remote-access, orbit-web, ssh]
-paths: ["crates/orbit-web/**", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs"]
+paths: ["crates/orbit-web/**", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
 related_features: [remote-access, user-interface, host-registry]
 related_artifacts: []
 ---
@@ -28,11 +28,11 @@ These choices describe the current implementation.
 
 ## Registry snapshots are authoritative; runtimes are cached
 
-**Context.** Workspace add, remove, status, and binding changes must become visible without returning a runtime for an old checkout.
+**Context.** Workspace add, remove, status, and binding changes must become visible without returning a runtime for an old checkout. A checkout can also disappear or be repaired without rewriting `workspaces.json`.
 
-**Decision.** Refresh the registry at request boundaries, atomically publish a generation, pin each request to one snapshot, and validate cached runtimes by exact binding. Construct runtimes through orbit-cmd RegisteredRuntimeFactory outside state locks.
+**Decision.** At each request boundary, retain the `workspaces.json` mtime/length fast path but also fingerprint each registered checkout's `repo_root`, `.orbit`, and `.orbit/config.yaml`. A changed registry or checkout fingerprint reloads and validates the registry, atomically publishes a generation, pins the request to one snapshot, and validates cached runtimes by exact binding. Construct runtimes through orbit-cmd RegisteredRuntimeFactory outside state locks.
 
-**Consequences.** Requests observe a coherent old or new registry view, and binding changes evict stale runtimes. Cost: registry parsing occurs frequently and in-flight requests finish against their pinned generation.
+**Consequences.** Requests observe a coherent old or new registry view, binding changes evict stale runtimes, vanished checkouts are routed as inactive client errors, and repaired checkouts recover on the next request. Cost: each request stats the registry and registered checkout paths; registry parsing occurs only after a fingerprint change, and in-flight requests finish against their pinned generation.
 
 ## Web remains loopback-only
 

@@ -13,7 +13,7 @@
 #   - It grants the child no Orbit capability. The subprocess still carries
 #     managed-run provenance, so it resolves as an agent at every capability
 #     chokepoint and cannot perform a governed operation.
-#   - `proc_allowed_programs` below is Orbit's own `proc.spawn` allowlist. The
+#   - `proc_disallowed_programs` below is Orbit's own `proc.spawn` disallow list. The
 #     provider harness owns its native shell tool and Orbit does not enforce
 #     the list against it, so treat the list as documentation of intent rather
 #     than as a control.
@@ -28,12 +28,15 @@ metadata:
 spec:
   type: agent_loop
   trustedHostExecution: true
-  # Completion is enforced, content is advisory: an investigation that exits 0
-  # without terminating its envelope stopped mid-turn and must not checkpoint
-  # as success. What it *concluded* stays advisory — an operator reads the
-  # answer, Orbit does not act on it.
+  # The envelope is enforced, its conclusions are advisory. An investigation
+  # that exits 0 without terminating its envelope stopped mid-turn, and one
+  # whose envelope carries no `result` object returned no answer; neither may
+  # checkpoint as success, and each fails with a reason naming why. The raw
+  # output stays readable through the run's stdout blob either way. What the
+  # agent *concluded* is advisory — an operator reads the answer, Orbit does
+  # not act on it.
   require_completion_envelope: true
-  require_response_envelope: false
+  require_response_envelope: true
   description: >
     Operator-admitted exploration and debugging invocation. Runs one provider
     subprocess on the host, outside the executor sandbox, in an explicit
@@ -57,7 +60,12 @@ spec:
       # Shortens the declared `wall_clock_timeout_seconds` below; it can never
       # raise it, so the asset remains the ceiling.
       timeout_seconds:
-        type: number
+        type: integer
+        minimum: 1
+        maximum: 7200
+        default: 1800
+      provider_sandbox:
+        type: string
       trusted_host_admission:
         type: object
   output_schema_json:
@@ -101,30 +109,52 @@ spec:
       "next_steps":["what the operator could do next"]
     },"error":null}
 
+    `result` may carry further fields when the prompt asks for them (for
+    example a `report_markdown` string); the operator receives every field.
+
     If the investigation could not be completed, return the same envelope with
     `status":"failed"` and a non-empty `error.message` saying what blocked it.
     Exiting without an envelope is not a valid outcome and is recorded as a
     failed invocation.
-  tools:
-    - orbit.task.show
-    - orbit.task.list
-    - orbit.search
-    - proc.spawn
-  proc_allowed_programs:
-    - awk
-    - bash
-    - cargo
-    - cat
-    - find
-    - git
-    - grep
-    - jq
-    - ls
-    - make
-    - ps
-    - python3
-    - rg
-    - sed
-    - sh
+  tool_disallow_list:
+    - orbit.agent.invoke
+    - orbit.auto_task.add
+    - orbit.auto_task.mint
+    - orbit.auto_task.update
+    - orbit.command.exec
+    - orbit.pipeline.invoke
+    - orbit.workflow.run.resume
+    - orbit.workflow.ship
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.put
+    - orbit.friction.add
+    - orbit.friction.update
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
   on_denial: terminate
-  wall_clock_timeout_seconds: 1800
+  # The API defaults to 1800 seconds and refuses requests above this ceiling.
+  # The engine may shorten it for an admitted request, never extend it.
+  wall_clock_timeout_seconds: 7200

@@ -1,4 +1,4 @@
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::{Value, json};
 
 /// Keep MCP `structuredContent` object-shaped for clients that enforce record
@@ -38,7 +38,7 @@ pub(super) fn mcp_tool_call_result(value: Value) -> CallToolResult {
     // mirror with a one-line summary and keep the bytes in exactly two places:
     // the image block, and `structuredContent` for a text-only client.
     let mut result = CallToolResult::structured(structured);
-    result.content = vec![Content::text(summary), image];
+    result.content = vec![ContentBlock::text(summary), image];
     result
 }
 
@@ -66,7 +66,7 @@ fn artifact_summary_text(value: &Value) -> String {
 }
 
 /// Extract the image block from an artifact read payload, if it is one.
-fn artifact_image_content(value: &Value) -> Option<Content> {
+fn artifact_image_content(value: &Value) -> Option<ContentBlock> {
     let object = value.as_object()?;
     if object.get("presentation")?.as_str()? != "image" {
         return None;
@@ -76,5 +76,5 @@ fn artifact_image_content(value: &Value) -> Option<Content> {
     }
     let data = object.get("content_base64")?.as_str()?;
     let media_type = object.get("media_type")?.as_str()?;
-    Some(Content::image(data, media_type))
+    Some(ContentBlock::image(data, media_type))
 }

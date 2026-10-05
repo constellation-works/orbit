@@ -1,0 +1,11 @@
+schemaVersion: 1
+kind: PluginTest
+tests:
+  - name: status_imports_the_locked_dependency_from_plugin_state
+    tool: status
+    input: {}
+    expect:
+      output:
+        dependency_version: "1.0.0"
+        environment_in_plugin_state: true
+        cache_in_plugin_state: true

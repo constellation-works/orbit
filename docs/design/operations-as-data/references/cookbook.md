@@ -2,7 +2,7 @@
 title: Operations as Data — Migration Cookbook
 owner: claude
 last_updated: 2026-07-26
-last_validated: 2026-08-31
+last_validated: 2026-09-24
 status: Accepted
 feature: operations-as-data
 doc_role: reference
@@ -50,12 +50,12 @@ For a noun with verbs `v₁…vₙ`, find:
 | What | Where (friction example) |
 |------|--------------------------|
 | MCP `Tool` impls | `crates/orbit-tools/src/builtin/orbit/<noun>/*.rs` |
-| MCP registration + workspace scope | `crates/orbit-tools/src/builtin/orbit/mod.rs` |
+| MCP registration + workspace scope | `crates/orbit-tools/src/builtin/orbit/register.rs` |
 | Action enum variants | `crates/orbit-tools/src/lib.rs` (`OrbitBuiltinAction`) |
 | Handler dispatch | `crates/orbit-core/src/adapter/tool_host/dispatch.rs` |
 | Handlers | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |
 | CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>.rs` |
-| CLI audit metadata | `crates/orbit-cli/src/command/operation.rs` |
+| CLI audit metadata | `crates/orbit-cli/src/command/operation_registry.rs` |
 | Web handlers | `crates/orbit-web/src/api/<noun>s.rs` |
 
 Note where the *same* field is described differently in two places. Do **not**
@@ -134,14 +134,14 @@ Delete the per-verb `Args` structs and `Execute` impls. Keep the parent
 impls that are three lines each, delegating to `operation_args`. Keep the
 response renderers — those are presentation and stay per-noun.
 
-Update `command/operation.rs`'s arm for the noun to read
+Update `command/operation_registry.rs`'s arm for the noun to read
 `invocation.spec.name`, `invocation.target_id()`, and `invocation.json` instead
 of matching verb by verb.
 
 Now cash in Step 0: commit the captured help files as
-`crates/orbit-cli/src/command/tests/<noun>_help/*.txt` and assert against them
-with `include_str!`. Rebuild the binary and `diff` its live `--help` against the
-captures too — the test and the binary should both be silent.
+`crates/orbit-cli/tests/help_goldens/<noun>/*.txt` and add each argv to `CASES`
+in `crates/orbit-cli/tests/output/help_goldens.rs`, which compares the binary's live
+`--help` against them.
 
 ### Step 7. Derive the handler table
 
@@ -189,10 +189,7 @@ migration surfaced a cost the ADR does not already name, name it.
 
 Steps 1–4 are the whole cost for CLI and MCP. No surface file is edited: the
 subcommand, its flags, its `--help`, its tool schema, its MCP exposure, its audit
-metadata, and its JSON input projection all fall out of the spec. That claim is
-executable — `crates/orbit-cli/src/command/tests/operation_args.rs` declares a
-synthetic noun and asserts a complete working command line falls out of nothing
-but a registry entry.
+metadata, and its JSON input projection all fall out of the spec.
 
 ---
 

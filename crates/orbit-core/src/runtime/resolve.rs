@@ -5,7 +5,7 @@ use orbit_common::OrbitError;
 use serde::Deserialize;
 
 use crate::paths;
-use crate::runtime::run_input::managed_run_context_from_env;
+use crate::runtime::run_input::managed_dispatch_context_from_env;
 
 /// Registry locator emitted to children of an Orbit-managed run.
 ///
@@ -18,7 +18,7 @@ const ORBIT_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
 /// Direct commands use `~/.orbit/`. A trusted managed child may instead carry
 /// the dispatching host's registry locator; this never selects its workspace.
 pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
-    if managed_run_context_from_env()
+    if managed_dispatch_context_from_env()
         && let Ok(value) = std::env::var(ORBIT_REGISTRY_ROOT_ENV)
         && !value.trim().is_empty()
     {
@@ -31,6 +31,43 @@ pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
         return Ok(root);
     }
     orbit_common::fs::path::global_orbit_dir()
+}
+
+/// Authority used for executable-generation admission.
+///
+/// An explicit `--root` or `ORBIT_ROOT` isolates first-create and participation
+/// to that data directory so a read-only unpinned `~/.orbit` cannot block
+/// scratch init. Without those overrides the host-global root is used
+/// (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a managed run). Update admission,
+/// plugin root selection, and runtime-less commands use this same precedence.
+pub fn resolve_generation_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
+    if let Some(root) = root_override {
+        return Ok(root.to_path_buf());
+    }
+    if let Ok(explicit) = std::env::var("ORBIT_ROOT") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    resolve_global_root()
+}
+
+/// Resolve only the CLI process pin. A macOS managed child uses its parent's
+/// host registry authority even when `ORBIT_ROOT` selects workspace data: the
+/// workspace generation record may not exist and the sandbox cannot create it.
+/// Update admission still checks the explicit override and the host root.
+pub fn resolve_process_generation_root(
+    root_override: Option<&Path>,
+) -> Result<PathBuf, OrbitError> {
+    #[cfg(target_os = "macos")]
+    if root_override.is_none()
+        && managed_dispatch_context_from_env()
+        && std::env::var(ORBIT_REGISTRY_ROOT_ENV).is_ok_and(|value| !value.trim().is_empty())
+    {
+        return resolve_global_root();
+    }
+    resolve_generation_root(root_override)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,12 +324,10 @@ fn home_dir_boundary() -> Option<PathBuf> {
     paths::home_dir()
 }
 
-/// Whether `candidate` resolves to the global Orbit root (`$HOME/.orbit`,
-/// or `%USERPROFILE%\.orbit`). This is the single source of truth for
-/// "is this root the global one" — anything that needs to make a decision
-/// contingent on that (whether to touch home-scoped skill link
-/// directories, what path to report to the user) should call this rather
-/// than re-deriving the comparison.
+/// Whether `candidate` resolves to the default global Orbit root
+/// (`$HOME/.orbit`, or `%USERPROFILE%\.orbit`). Root resolution and path
+/// reporting use this distinction; skill discovery paths derive from the
+/// selected global root's parent.
 pub fn is_global_orbit_root(candidate: &Path) -> bool {
     let Some(global) = paths::home_dir().map(|home| home.join(".orbit")) else {
         return false;
@@ -408,11 +443,15 @@ fn is_initialized_orbit_root(path: &Path) -> bool {
     if !path.is_dir() {
         return false;
     }
-    if path.join("config.toml").is_file() {
+    if path.join("config.yaml").is_file() || path.join("config.toml").is_file() {
         return true;
     }
 
-    path.join("resources").is_dir() && path.join("tasks").is_dir() && path.join("state").is_dir()
+    // Retain the legacy layout marker for workspaces without an identity file.
+    // Task bundles are canonical in the global registry. The checkout-local
+    // `.orbit/tasks` projection was removed in layout version 3, so it cannot
+    // be part of the initialized-root probe anymore.
+    path.join("resources").is_dir() && path.join("state").is_dir()
 }
 
 fn resolve_root_path_value(raw: &str, base_dir: &Path) -> Result<PathBuf, OrbitError> {

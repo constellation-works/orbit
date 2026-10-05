@@ -213,7 +213,7 @@ impl DependabotQueries for HostDependabotQueries {
     }
 }
 
-pub(super) fn classify_alert_failure(family: &str, stderr: &str) -> String {
+fn classify_alert_failure(family: &str, stderr: &str) -> String {
     let detail = redact_all(stderr.trim());
     let lower = detail.to_ascii_lowercase();
     if lower.contains("403") {

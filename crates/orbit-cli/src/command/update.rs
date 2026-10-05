@@ -1,10 +1,11 @@
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Args;
 use orbit_cmd::update::{
     UpdateEnvironment, UpdateOutcome, UpdateReport, UpdateRequest, run_update,
 };
+use orbit_common::fs::generation;
 use orbit_core::OrbitError;
 
 use crate::command::{CommandOut, Payload};
@@ -23,8 +24,9 @@ use crate::command::{CommandOut, Payload};
         --version to install one exact release instead. The download is checked against the\n\
         signed release checksum manifest before anything is replaced.\n\n\
         After the executable is replaced, the new binary applies pending .orbit layout and store\n\
-        migrations and then reconciles managed workspace assets, in that order. Re-running\n\
-        `orbit update` is idempotent and is the supported way to finish a run that did not.\n\n\
+        migrations, reconciles managed workspace assets, then repoints the host scheduler clock\n\
+        unit at the installed binary, in that order. Re-running `orbit update` is idempotent and\n\
+        is the supported way to finish a run that did not.\n\n\
         Only installations made by Orbit's own installer can be replaced in place. Where a\n\
         package manager owns the binary, orbit reports the command that upgrades it instead."
 )]
@@ -39,6 +41,12 @@ pub struct UpdateCommand {
     /// open this workspace's state
     #[arg(long)]
     pub allow_downgrade: bool,
+    /// Describe the executable admission protocol without opening state
+    #[arg(long, conflicts_with_all = ["check", "version", "allow_downgrade", "preflight"])]
+    pub contract: bool,
+    /// Check whether running Orbit processes prevent an upgrade, without opening stores
+    #[arg(long, conflicts_with_all = ["check", "version", "allow_downgrade"])]
+    pub preflight: bool,
     /// Emit machine-readable JSON instead of the report.
     #[arg(long)]
     pub json: bool,
@@ -47,6 +55,59 @@ pub struct UpdateCommand {
 impl UpdateCommand {
     /// Run the update and render its report.
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+        if self.contract {
+            let identity = orbit_core::composition::compiled_compatibility();
+            return Ok(Payload::detail(
+                serde_json::json!({
+                    "schema_version": 1,
+                    // Updaters that only speak executable-generation-v1 read
+                    // this field; every v2 binary still honours that protocol.
+                    "contract": generation::LEGACY_GENERATION_CONTRACT,
+                    "contracts": [
+                        generation::LEGACY_GENERATION_CONTRACT,
+                        generation::GENERATION_CONTRACT
+                    ],
+                    "admission_contract": generation::GENERATION_CONTRACT,
+                    "compatibility": identity,
+                    "resume": generation::RESUME_CAPABILITIES,
+                }),
+                format!(
+                    "{} (also honours {})\n  compatibility: {identity}\n  resume: {}",
+                    generation::GENERATION_CONTRACT,
+                    generation::LEGACY_GENERATION_CONTRACT,
+                    generation::RESUME_CAPABILITIES.join(", ")
+                ),
+            )
+            .into());
+        }
+        if self.preflight {
+            // Same `admission_authorities` `UpdateEnvironment::from_process`
+            // uses for exclusive admission, so a green preflight names every
+            // file the following `orbit update` will lock — including the
+            // host-global root a `--root`/`ORBIT_ROOT` override does not move
+            // the replaced executable out of.
+            let roots = orbit_cmd::update::admission_authorities(root_override)?;
+            let _admissions = orbit_cmd::update::acquire_admissions(&roots)?;
+            let quiesce = generation::quiesce_bound().as_secs();
+            return Ok(Payload::detail(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "admitted": true,
+                    "reservation": false,
+                    "global_root": roots.first(),
+                    "admission_roots": roots,
+                    "contract": generation::LEGACY_GENERATION_CONTRACT,
+                    "admission_contract": generation::GENERATION_CONTRACT,
+                    "compatibility": orbit_core::composition::compiled_compatibility(),
+                    "quiesce_timeout_secs": quiesce,
+                }),
+                format!(
+                    "Upgrade admission available on {}. This observation does not reserve admission; use orbit update for guarded replacement. Admission follows {}: builds with compatible state versions run side by side, and a breaking migration waits up to {quiesce}s for live Orbit processes to yield.",
+                    describe_authorities(&roots),
+                    generation::GENERATION_CONTRACT,
+                ),
+            ).into());
+        }
         let environment = UpdateEnvironment::from_process(root_override)?;
         let report = run_update(
             &environment,
@@ -63,6 +124,15 @@ impl UpdateCommand {
             .with_exit_code(exit_code)
             .into())
     }
+}
+
+/// Name every authority the probe locked, in the order `orbit update` takes them.
+fn describe_authorities(roots: &[PathBuf]) -> String {
+    roots
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 fn format_report(report: &UpdateReport) -> String {

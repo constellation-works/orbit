@@ -14,8 +14,8 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/agent_implement.yaml"),
     ),
     (
-        "apply_triage_dispositions",
-        include_str!("../../assets/activities/apply_triage_dispositions.yaml"),
+        "apply_blocked_task_recovery",
+        include_str!("../../assets/activities/apply_blocked_task_recovery.yaml"),
     ),
     (
         "apply_task_pilot_results",
@@ -26,6 +26,22 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/classify_workspace_auto_tasks.yaml"),
     ),
     (
+        "candidate_resume",
+        include_str!("../../assets/activities/candidate_resume.yaml"),
+    ),
+    (
+        "candidate_validate",
+        include_str!("../../assets/activities/candidate_validate.yaml"),
+    ),
+    (
+        "claim_handoff",
+        include_str!("../../assets/activities/claim_handoff.yaml"),
+    ),
+    (
+        "claim_validate",
+        include_str!("../../assets/activities/claim_validate.yaml"),
+    ),
+    (
         "collect_ci_evidence",
         include_str!("../../assets/activities/collect_ci_evidence.yaml"),
     ),
@@ -34,8 +50,20 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/collect_dependabot_alerts.yaml"),
     ),
     (
+        "consolidate_code_scanning_tasks",
+        include_str!("../../assets/activities/consolidate_code_scanning_tasks.yaml"),
+    ),
+    (
         "drain_window",
         include_str!("../../assets/activities/drain_window.yaml"),
+    ),
+    (
+        "pull_refill",
+        include_str!("../../assets/activities/pull_refill.yaml"),
+    ),
+    (
+        "final_recovery",
+        include_str!("../../assets/activities/final_recovery.yaml"),
     ),
     (
         "file_ci_failure_tasks",
@@ -46,16 +74,16 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/file_dependabot_alert_tasks.yaml"),
     ),
     (
-        "epic_orchestrator",
-        include_str!("../../assets/activities/epic_orchestrator.yaml"),
-    ),
-    (
         "agent_invoke",
         include_str!("../../assets/activities/agent_invoke.yaml"),
     ),
     (
         "gate_starvation_fail",
         include_str!("../../assets/activities/gate_starvation_fail.yaml"),
+    ),
+    (
+        "resolve_delivery_job",
+        include_str!("../../assets/activities/resolve_delivery_job.yaml"),
     ),
     (
         "git_merge",
@@ -90,10 +118,6 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/list_backlog_tasks.yaml"),
     ),
     (
-        "list_triage_candidates",
-        include_str!("../../assets/activities/list_triage_candidates.yaml"),
-    ),
-    (
         "scan_unresolved_work",
         include_str!("../../assets/activities/scan_unresolved_work.yaml"),
     ),
@@ -104,6 +128,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "pr_failure_handoff",
         include_str!("../../assets/activities/pr_failure_handoff.yaml"),
+    ),
+    (
+        "handoff_land",
+        include_str!("../../assets/activities/handoff_land.yaml"),
     ),
     (
         "pr_conflict_recovery",
@@ -134,6 +162,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/review_gate_settle.yaml"),
     ),
     (
+        "prepare_blocked_task_recovery",
+        include_str!("../../assets/activities/prepare_blocked_task_recovery.yaml"),
+    ),
+    (
         "prepare_task_pilot",
         include_str!("../../assets/activities/prepare_task_pilot.yaml"),
     ),
@@ -149,10 +181,6 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         "resolve_workspace_ship_input",
         include_str!("../../assets/activities/resolve_workspace_ship_input.yaml"),
     ),
-    (
-        "run_auto_task_scheduler",
-        include_str!("../../assets/activities/run_auto_task_scheduler.yaml"),
-    ),
     ("sleep", include_str!("../../assets/activities/sleep.yaml")),
     (
         "step_failure_recovery",
@@ -165,10 +193,6 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "task_pilot",
         include_str!("../../assets/activities/task_pilot.yaml"),
-    ),
-    (
-        "triage_failed_runs",
-        include_str!("../../assets/activities/triage_failed_runs.yaml"),
     ),
     (
         "update_task",
@@ -185,5 +209,84 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "worktree_gc",
         include_str!("../../assets/activities/worktree_gc.yaml"),
+    ),
+];
+
+/// Shippable default workflow assets, seeded under
+/// `<orbit_root>/resources/jobs/<name>.yaml` on `orbit init`. The entries
+/// here are the admission-controlled task shipment workflows
+/// (auto / gate / local / pr) plus the two claimed distributed leaves
+/// (`task_claimed_local_pipeline`, `task_claimed_pr_pipeline`). The claimed
+/// pair is seeded because a pulled leaf run has to resolve its definition,
+/// not because it is dispatchable: every step in it reads the trusted worker
+/// binding, and a run with no matching claim refuses before it touches the
+/// repository. Example and smoke fixtures live
+/// under `crates/orbit-core/assets/jobs/examples/` and are NOT seeded —
+/// they exist for `crates/orbit-engine/examples/v2_job_runtime_smoke.rs`
+/// only.
+pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
+    (
+        "agent_invoke_pipeline",
+        include_str!("../../assets/jobs/agent_invoke_pipeline.yaml"),
+    ),
+    (
+        "blocked_task_recovery_pipeline",
+        include_str!("../../assets/jobs/blocked_task_recovery_pipeline.yaml"),
+    ),
+    (
+        "ci_failure_sweep_pipeline",
+        include_str!("../../assets/jobs/ci_failure_sweep_pipeline.yaml"),
+    ),
+    (
+        "dependabot_alert_sweep_pipeline",
+        include_str!("../../assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
+    ),
+    (
+        "task_auto_pipeline",
+        include_str!("../../assets/jobs/task_auto_pipeline.yaml"),
+    ),
+    (
+        "task_claimed_local_pipeline",
+        include_str!("../../assets/jobs/task_claimed_local_pipeline.yaml"),
+    ),
+    (
+        "task_claimed_pr_pipeline",
+        include_str!("../../assets/jobs/task_claimed_pr_pipeline.yaml"),
+    ),
+    (
+        "task_gate_pipeline",
+        include_str!("../../assets/jobs/task_gate_pipeline.yaml"),
+    ),
+    (
+        "task_landing_pipeline",
+        include_str!("../../assets/jobs/task_landing_pipeline.yaml"),
+    ),
+    (
+        "task_local_pipeline",
+        include_str!("../../assets/jobs/task_local_pipeline.yaml"),
+    ),
+    (
+        "task_pilot_pipeline",
+        include_str!("../../assets/jobs/task_pilot_pipeline.yaml"),
+    ),
+    (
+        "task_pr_pipeline",
+        include_str!("../../assets/jobs/task_pr_pipeline.yaml"),
+    ),
+    (
+        "workspace_ship_pipeline",
+        include_str!("../../assets/jobs/workspace_ship_pipeline.yaml"),
+    ),
+    (
+        "workspace_auto_pipeline",
+        include_str!("../../assets/jobs/workspace_auto_pipeline.yaml"),
+    ),
+    (
+        "workspace_pull_pipeline",
+        include_str!("../../assets/jobs/workspace_pull_pipeline.yaml"),
+    ),
+    (
+        "worktree_gc_pipeline",
+        include_str!("../../assets/jobs/worktree_gc_pipeline.yaml"),
     ),
 ];

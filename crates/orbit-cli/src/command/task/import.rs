@@ -15,9 +15,10 @@ pub struct TaskImportArgs {
     pub archive: PathBuf,
     /// Target task-registry workspace id (default: the archive's source
     /// workspace, registering it locally if unknown).
-    #[arg(long)]
-    pub workspace: Option<String>,
-    /// How to resolve an incoming task id that already exists locally.
+    #[arg(long = "task-workspace", value_name = "TASK_WORKSPACE")]
+    pub task_workspace: Option<String>,
+    /// How to resolve an incoming task id that already exists locally. Use
+    /// owner-wins for a repeatable cross-host sync of task mirrors.
     #[arg(long = "on-conflict", value_enum, default_value_t = ConflictArg::Renumber)]
     pub on_conflict: ConflictArg,
     /// Emit machine-readable JSON instead of a human summary.
@@ -34,6 +35,10 @@ pub enum ConflictArg {
     Skip,
     /// Abort the whole import on the first collision.
     Fail,
+    /// Trust the host that minted the id: replace a colliding task whose id
+    /// prefix is foreign, keep a colliding task under this host's prefix, and
+    /// never renumber. Safe to re-run.
+    OwnerWins,
 }
 
 impl From<ConflictArg> for ImportConflictPolicy {
@@ -42,6 +47,7 @@ impl From<ConflictArg> for ImportConflictPolicy {
             ConflictArg::Renumber => ImportConflictPolicy::Renumber,
             ConflictArg::Skip => ImportConflictPolicy::Skip,
             ConflictArg::Fail => ImportConflictPolicy::Fail,
+            ConflictArg::OwnerWins => ImportConflictPolicy::OwnerWins,
         }
     }
 }
@@ -52,6 +58,8 @@ fn action_label(action: ImportAction) -> &'static str {
         ImportAction::Renumbered => "renumbered",
         ImportAction::AlreadyPresent => "already-present",
         ImportAction::SkippedConflict => "skipped",
+        ImportAction::Updated => "updated",
+        ImportAction::SkippedLocalOwned => "skipped-local-owned",
     }
 }
 
@@ -59,7 +67,7 @@ impl Execute for TaskImportArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let outcome = runtime.import_tasks(
             &self.archive,
-            self.workspace.as_deref(),
+            self.task_workspace.as_deref(),
             self.on_conflict.into(),
         )?;
 
@@ -79,7 +87,6 @@ impl Execute for TaskImportArgs {
             "registered_workspace": outcome.registered_workspace,
             "id_remap": outcome.id_remap,
             "id_map_path": outcome.id_map_path.as_ref().map(|p| p.display().to_string()),
-            "projection_degraded": outcome.projection.degraded_reason,
             "tasks": tasks,
         });
         let mut lines = vec![format!(
@@ -107,9 +114,6 @@ impl Execute for TaskImportArgs {
         }
         if let Some(path) = &outcome.id_map_path {
             lines.push(format!("  id mapping written to {}", path.display()));
-        }
-        if let Some(reason) = &outcome.projection.degraded_reason {
-            lines.push(format!("  warning: projection degraded: {reason}"));
         }
         Ok(Payload::detail(doc, lines.join("\n")).into())
     }

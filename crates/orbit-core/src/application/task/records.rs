@@ -1,7 +1,7 @@
 //! Coordinated task document, history, artifact, and search-index writes.
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_search::{EmbedWorker, VectorStore};
+use orbit_search::LexicalIndex;
 use orbit_store::contracts::{
     TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend,
     TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
@@ -18,8 +18,7 @@ impl OrbitStores {
             document: self.task_documents(),
             history: self.task_history(),
             artifact: self.task_artifacts(),
-            semantic_vector: self.semantic_vector(),
-            semantic_worker: self.semantic_worker(),
+            lexical_index: self.lexical_index(),
         }
     }
 }
@@ -32,14 +31,24 @@ pub(crate) struct TaskRecordService<'a> {
     document: &'a dyn TaskDocumentStoreBackend,
     history: &'a dyn TaskHistoryStoreBackend,
     artifact: &'a dyn TaskArtifactStoreBackend,
-    semantic_vector: &'a VectorStore,
-    semantic_worker: &'a EmbedWorker,
+    lexical_index: &'a LexicalIndex,
 }
 
 impl TaskRecordService<'_> {
+    pub(crate) fn index_task(&self, task: &Task) {
+        if let Err(error) = self
+            .lexical_index
+            .store()
+            .and_then(|index| index.index_task(task))
+        {
+            orbit_common::tracing::warn!(task_id = %task.id, %error,
+                "task saved but search indexing failed; run orbit search reindex to repair");
+        }
+    }
+
     pub(crate) fn create(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
         let task = self.store.create_task(params)?;
-        self.semantic_worker.enqueue(task.clone());
+        self.index_task(&task);
         Ok(task)
     }
 
@@ -52,8 +61,23 @@ impl TaskRecordService<'_> {
             Some(key) => self.store.create_task_idempotent(params, key)?,
             None => return self.create(params),
         };
-        self.semantic_worker.enqueue(task.clone());
+        self.index_task(&task);
         Ok(task)
+    }
+
+    pub(crate) fn create_guarded(
+        &self,
+        params: TaskCreateParams,
+        key: Option<&str>,
+        digest: Option<&str>,
+    ) -> Result<(Task, bool), OrbitError> {
+        if let (Some(key), Some(digest)) = (key, digest) {
+            let result = self.store.create_desktop_task(params, key, digest)?;
+            self.index_task(&result.0);
+            Ok(result)
+        } else {
+            self.create_with_key(params, key).map(|task| (task, false))
+        }
     }
 
     pub(crate) fn update(
@@ -85,6 +109,7 @@ impl TaskRecordService<'_> {
                     pr_status: params.pr_status.clone(),
                     source_task_id: params.source_task_id.clone(),
                     job_run_id: params.job_run_id.clone(),
+                    job_run_machine: params.job_run_machine.clone(),
                     crew: params.crew.clone(),
                     orchestrator: params.orchestrator.clone(),
                 },
@@ -110,6 +135,7 @@ impl TaskRecordService<'_> {
             self.artifact.upsert_task_artifacts(
                 id,
                 TaskArtifactUpdateParams {
+                    origin: params.artifact_origin.clone(),
                     owner_run_id: params.artifact_owner_run_id.clone(),
                     actor: params.actor.clone(),
                     upsert_artifacts: params.upsert_artifacts.clone(),
@@ -125,21 +151,59 @@ impl TaskRecordService<'_> {
             || params.has_history_changes()
             || params.has_artifact_changes()
         {
-            self.semantic_worker.enqueue(task.clone());
+            self.index_task(&task);
         }
         Ok(task)
     }
 
     pub(crate) fn delete(&self, id: &str) -> Result<bool, OrbitError> {
         let deleted = self.store.delete_task(id)?;
-        if deleted && let Err(error) = self.semantic_vector.delete_source("task", id) {
+        // A workspace with no index has nothing to retract, so an unavailable
+        // index reports here exactly like a failed cascade: the task is gone
+        // either way, and the index reconciles on its next reindex.
+        if deleted
+            && let Err(error) = self
+                .lexical_index
+                .store()
+                .and_then(|index| index.delete_source("task", id))
+        {
             orbit_common::tracing::debug!(
                 target: "orbit.search.indexer",
                 task_id = id,
                 error = %error,
-                "semantic delete cascade failed after task deletion",
+                "search delete cascade failed after task deletion",
             );
         }
         Ok(deleted)
+    }
+}
+
+impl crate::OrbitRuntime {
+    /// Internal trusted invocation seam. Transport adapters must supply managed context,
+    /// never construct it from tool arguments or advisory environment labels.
+    pub fn mutate_execution_claim(
+        &self,
+        context: Option<&orbit_store::contracts::ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &orbit_store::contracts::ClaimMutation,
+    ) -> Result<orbit_store::contracts::ClaimMutationResult, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.stores()
+            .tasks()
+            .mutate_execution_claim(context, mutation_id, mutation)
+    }
+
+    pub fn inspect_execution_claims(
+        &self,
+    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+        self.stores().tasks().inspect_execution_claims()
+    }
+
+    /// Repairing counterpart of [`Self::inspect_execution_claims`] for live
+    /// commands: an interrupted coordination commit is recovered first.
+    pub fn resolve_execution_claims(
+        &self,
+    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+        self.stores().tasks().resolve_execution_claims()
     }
 }

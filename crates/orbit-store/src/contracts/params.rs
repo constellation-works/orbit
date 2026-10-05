@@ -26,14 +26,8 @@ pub struct TaskCreateParams {
     pub plan: String,
     pub execution_summary: String,
     pub context_files: Vec<String>,
-    /// The working directory the agent should use when executing this task.
-    /// Typically the root of the repository being modified. Used to set `cwd`
-    /// for tool calls and to resolve relative `context_files` paths.
-    pub workspace_path: Option<String>,
-    /// The git repository root for this task, when it differs from
-    /// `workspace_path`. Most tasks leave this `None` (the repo root is the
-    /// same as the workspace). Set explicitly when the task targets a
-    /// sub-directory of a monorepo and git operations must run from the root.
+    /// Deprecated compatibility metadata retained for callers that still
+    /// construct the v2 create contract.
     pub repo_root: Option<String>,
     pub created_by: Option<String>,
     pub planned_by: Option<String>,
@@ -78,6 +72,8 @@ pub struct TaskDocumentUpdateParams {
     pub pr_status: Option<Option<String>>,
     pub source_task_id: Option<Option<String>>,
     pub job_run_id: Option<Option<String>>,
+    /// Trusted link location supplied with the run binding, never tool input.
+    pub job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub crew: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
 }
@@ -100,8 +96,37 @@ pub struct TaskHistoryUpdateParams {
     pub expected_status: Option<Vec<TaskStatus>>,
 }
 
+/// One task-bundle mutation whose freshness guard, durable receipt, history
+/// event, and envelope changes share the envelope publish commit point.
+#[derive(Debug, Clone)]
+pub struct AtomicTaskMutationParams {
+    pub actor: String,
+    pub operation_id: String,
+    pub expected_context_files: Vec<String>,
+    pub expected_status: TaskStatus,
+    pub expected_complexity: Option<TaskComplexity>,
+    pub context_files: Vec<String>,
+    pub status: TaskStatus,
+    pub complexity: TaskComplexity,
+    pub event_type: String,
+    pub event_note: String,
+    /// Bounded, single-line description stored with the operation receipt in history.
+    pub history_summary: String,
+    /// Full decision evidence stored as a task comment in the same bundle commit.
+    pub audit_note: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicTaskMutationOutcome {
+    Applied,
+    AlreadyApplied,
+    Stale,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TaskArtifactUpdateParams {
+    /// Owner-supplied authenticated put identity. Legacy/unknown remains None.
+    pub origin: Option<orbit_types::task::ExecutionLocation>,
     pub actor: String,
     /// Trusted executor context supplied by Core, never parsed from tool input.
     pub owner_run_id: Option<String>,
@@ -386,7 +411,7 @@ pub struct WorkspaceClaimCheckResult {
     pub expired_claims: Vec<ExpiredTaskReservation>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct JobRunQuery {
     pub job_id: Option<String>,
     pub state: Option<JobRunState>,
@@ -403,6 +428,25 @@ pub struct JobRunQuery {
     /// Which timestamp `limit` truncates against. Defaults to `CreatedAt` so
     /// existing CLI/history callers keep their current ordering.
     pub order_by: JobRunOrder,
+    /// When false, listing returns run rows with empty `steps` and never
+    /// selects `job_run_steps` (including `agent_response_json`). Defaults
+    /// to true so CLI/history callers keep hydrated pages.
+    pub include_steps: bool,
+}
+
+impl Default for JobRunQuery {
+    fn default() -> Self {
+        Self {
+            job_id: None,
+            state: None,
+            terminal_only: false,
+            active_only: false,
+            created_since: None,
+            limit: None,
+            order_by: JobRunOrder::default(),
+            include_steps: true,
+        }
+    }
 }
 
 /// Which timestamp a bounded [`JobRunQuery`] orders and truncates by.
@@ -415,4 +459,151 @@ pub enum JobRunOrder {
     /// by: `finished_at`, else `started_at`, else `created_at`, each DESC
     /// with `run_id ASC` as the deterministic tiebreak.
     Recency,
+}
+
+/// Caller-side durable identity. Constructed by the internal drain from its
+/// runtime destination; it is not an authorization-bearing tool payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullDestination {
+    pub owner_machine_id: String,
+    pub owner_workspace_id: String,
+    pub selector: String,
+    pub execution_machine_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalPullPhase {
+    Requested,
+    Claimed,
+    Created,
+    Bound,
+    Launching,
+    Launched,
+    Settling,
+    Settled,
+    Idle,
+    /// The owner answered this request with a pre-admission refusal and holds
+    /// no receipt for it, so no claim exists to settle [ORB-13625]. Terminal,
+    /// like `Idle`: the slot returns and the next pass allocates a new ID.
+    Refused,
+}
+
+/// How much of a drain's leaf capacity is spoken for, across both admission
+/// paths [ORB-12617].
+///
+/// Legacy `task_auto_pipeline` wrappers, the leaf definitions they dispatch,
+/// the claimed leaf definitions a pulled claim binds, and pending pull
+/// admissions that have no live run yet all compete for the same configured
+/// ceiling. Counting them in one place is what keeps a wrapper and the leaf it
+/// dispatched from consuming two slots, and what stops a pending admission
+/// from consuming none.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DrainLeafOccupancy {
+    /// Distinct occupied slots. A wrapper is replaced by its live leaf
+    /// descendants rather than counted beside them, and a terminal leaf keeps
+    /// its slot until its claim settles.
+    pub occupied: usize,
+    /// Occupancy per leaf job definition, reported beside the total so an
+    /// operator can see which definitions hold the slots. Includes pending
+    /// admissions no live run represents yet.
+    pub per_pipeline: std::collections::BTreeMap<String, usize>,
+}
+
+/// Immutable request and binding with a monotone local execution checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalPullAdmission {
+    pub destination: PullDestination,
+    pub request: super::AdmissionRequest,
+    pub receipt: Option<super::AdmissionReceipt>,
+    pub leaf_run_id: Option<String>,
+    pub phase: LocalPullPhase,
+    pub settlement: Option<super::ClaimMutation>,
+    /// The owner's refusal: with [`LocalPullPhase::Refused`], of the request;
+    /// with [`LocalPullPhase::Settled`], of a settlement the owner could no
+    /// longer accept because it had already ended the claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    /// The owner's latest refusal of this `Settling` admission's settlement
+    /// while it still holds the claim [ORB-13979]. Such a refusal is an
+    /// answer, not a lost delivery — the owner declares no required
+    /// validation commands, say — so it repeats until an operator changes the
+    /// owner. Delivery backs off until `retry_after` rather than asking again
+    /// on every pass; the settlement itself stays recorded and is delivered
+    /// once the owner accepts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement_refusal: Option<SettlementRefusal>,
+}
+
+/// A pending settlement the owner refused while still holding its claim, and
+/// when delivery is next attempted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettlementRefusal {
+    /// The owner's refusal, as it answered.
+    pub reason: String,
+    /// Consecutive refused deliveries.
+    pub refusals: u32,
+    pub first_refused_at: DateTime<Utc>,
+    pub last_refused_at: DateTime<Utc>,
+    /// No automatic pass delivers before this.
+    pub retry_after: DateTime<Utc>,
+}
+
+impl LocalPullAdmission {
+    /// Whether this admission still holds a drain slot: it is neither an
+    /// idle poll, a refused request, nor a settled claim.
+    #[must_use]
+    pub fn holds_capacity(&self) -> bool {
+        !matches!(
+            self.phase,
+            LocalPullPhase::Idle | LocalPullPhase::Settled | LocalPullPhase::Refused
+        )
+    }
+}
+
+/// Each transition commits before the next network or process side effect.
+#[derive(Debug, Clone)]
+pub enum LocalPullMutation {
+    Receive(Box<super::AdmissionReceipt>),
+    CreateLeaf,
+    Bound,
+    LaunchIntent,
+    Launched,
+    Settle(Box<super::ClaimMutation>),
+    Settled,
+    /// Close a still-`Requested` admission the owner refused, after the owner
+    /// confirmed it holds no live receipt for this request ID.
+    Refuse(String),
+    /// Close a `Settling` admission whose settlement the owner refused, after
+    /// the owner confirmed it had already ended the claim (revoked, failed or
+    /// landed it). The settlement can never be delivered, so the record
+    /// settles locally with the refusal, and its slot is released.
+    SettleObsolete(String),
+    /// Record the owner's refusal of a `Settling` admission's settlement while
+    /// it still holds the claim, and when delivery is next attempted. The
+    /// admission stays `Settling` with its settlement unchanged.
+    DeferSettlement(SettlementRefusal),
+}
+
+/// Desktop-only allowlisted mutation, committed with a payload-bound request receipt.
+#[derive(Debug, Clone)]
+pub struct DesktopTaskMutationParams {
+    pub actor: String,
+    pub request_id: String,
+    pub payload_digest: String,
+    pub expected_revision: String,
+    pub fields: orbit_types::desktop::DesktopTaskFields,
+    pub comment: Option<String>,
+    pub status: Option<TaskStatus>,
+}
+
+/// One coherent desktop task read under the ordinary shared bundle read lock.
+#[derive(Debug, Clone)]
+pub struct DesktopTaskRead {
+    pub write_disabled_reason: Option<String>,
+    pub task: orbit_types::task::Task,
+    pub revision: String,
+    pub comments: Vec<TaskComment>,
+    pub history: Vec<TaskHistoryEntry>,
+    pub artifacts: Vec<orbit_types::task::ArtifactManifestFileV2>,
 }

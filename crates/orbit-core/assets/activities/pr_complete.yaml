@@ -9,7 +9,10 @@ spec:
     PR to merge through GitHub's own gates, verify it is actually merged, then
     apply the guarded review -> done transition. Branch protections and required
     checks are respected; no administrative bypass is available. A no-diff
-    bundle completes without a PR.
+    bundle completes without a PR. A reviewed head that conflicts with its
+    base is never merged as rebased content: with re_review_on_conflict the
+    branch is rebased locally, nothing is published, and the output asks for
+    a re-review; otherwise completion refuses as review_gate_stale.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids]
@@ -31,6 +34,16 @@ spec:
         type: string
       published_head_sha:
         type: string
+      reviewed_head_sha:
+        type: string
+        description: >
+          The head a before-PR review certified. Completion merges only this
+          exact head; empty when the run carried no review.
+      re_review_on_conflict:
+        type: boolean
+        description: >
+          On a conflicting reviewed head, rebase locally and return
+          re_review_required with the rebase checkpoint instead of refusing.
       base:
         type: string
       base_sync:
@@ -54,8 +67,44 @@ spec:
         type: string
       no_diff_expected:
         type: boolean
+      re_review_required:
+        type: boolean
+        description: >
+          True when the reviewed head was rebased for a conflict and must be
+          reviewed and republished before completion; no task was completed.
+      rebased:
+        type: object
+        description: >
+          The git_rebase checkpoint of the local rebase when
+          re_review_required; a lease-checked push of the rewritten branch
+          reads it.
       merge:
         type: object
+        description: >
+          What completion established about this bundle's delivery. A PR
+          delivery carries delivery_evidence read at completion time: the
+          merged pull request, the branches and head it merged, and the commit
+          that landed. Absent evidence never authorizes the done transition.
+        properties:
+          delivery_evidence:
+            type: object
+            required: [pr_number, merge_commit]
+            properties:
+              pr_number:
+                type: string
+              merged_at:
+                type: string
+              # Null when the provider's answer omitted the field; a pinned
+              # identity that cannot be read refuses completion rather than
+              # reaching this output.
+              head_ref:
+                type: [string, "null"]
+              base_ref:
+                type: [string, "null"]
+              head_sha:
+                type: [string, "null"]
+              merge_commit:
+                type: string
       completed_task_ids:
         type: array
         items:

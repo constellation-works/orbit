@@ -147,6 +147,8 @@ pub(crate) fn probe_forward_args(ssh_host: &str, local_port: u16, remote_port: u
         "ExitOnForwardFailure=yes".to_string(),
         "-L".to_string(),
         forward_spec(local_port, remote_port),
+        // `--` so a host beginning with `-` can never parse as an ssh option.
+        "--".to_string(),
         ssh_host.to_string(),
     ]
 }
@@ -169,6 +171,8 @@ pub(crate) fn command_forward_args(
         "ExitOnForwardFailure=yes".to_string(),
         "-L".to_string(),
         forward_spec(local_port, remote_port),
+        // `--` so a host beginning with `-` can never parse as an ssh option.
+        "--".to_string(),
         ssh_host.to_string(),
         remote_command.to_string(),
     ]

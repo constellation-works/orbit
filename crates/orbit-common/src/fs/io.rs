@@ -42,7 +42,7 @@ const PRIVATE_DIR_MODE: u32 = 0o700;
 /// current user (`0o700`) instead of relying on the process umask. Existing
 /// directories are left unchanged so callers do not unexpectedly chmod a
 /// workspace root or home directory.
-pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
+pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         create_private_dir_all_unix(path)
@@ -50,6 +50,26 @@ pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     {
         fs::create_dir_all(path)
+    }
+}
+
+/// Creates one secret-bearing Orbit state directory without relying on umask.
+///
+/// Unlike [`create_private_dir_all`], this preserves [`fs::create_dir`]'s
+/// exclusive-create behavior and returns `AlreadyExists` for an existing path.
+pub fn create_private_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(PRIVATE_DIR_MODE);
+        builder.create(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
     }
 }
 
@@ -92,6 +112,23 @@ pub(crate) fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> io::Res
     staged.commit()
 }
 
+/// Create `path` with private permissions and write `content` to it, failing
+/// with [`io::ErrorKind::AlreadyExists`] when it is already there.
+///
+/// The exclusive create is the point: a caller that must not overwrite an
+/// existing file gets that guarantee from the kernel rather than from a
+/// `path.exists()` check something can win a race against. On Unix the file is
+/// `0o600` whatever the ambient umask is, and parent directories this call
+/// creates are `0o700`.
+pub fn write_new_private_text(path: &Path, content: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        create_private_dir_all(parent)?;
+    }
+    let mut file = create_new_private_file(path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()
+}
+
 /// Atomically write `content` to `path` without fsyncing the parent.
 /// Cheaper than [`atomic_write_text`] but post-crash the rename may be lost.
 pub fn atomic_write_text_volatile(path: &Path, content: &str) -> io::Result<()> {
@@ -115,11 +152,6 @@ impl StagedTextFile {
     /// Stage a durable write. `commit()` renames and fsyncs the parent dir.
     pub fn new(target_path: &Path, content: &str) -> io::Result<Self> {
         Self::new_internal(target_path, content.as_bytes(), true)
-    }
-
-    /// Stage a volatile write. `commit()` renames without fsyncing.
-    pub fn new_volatile(target_path: &Path, content: &str) -> io::Result<Self> {
-        Self::new_internal(target_path, content.as_bytes(), false)
     }
 
     fn new_internal(target_path: &Path, content: &[u8], durable: bool) -> io::Result<Self> {
@@ -156,12 +188,16 @@ impl StagedTextFile {
             )
         })?;
         create_private_dir_all(parent)?;
+        let canonical_target = validated_atomic_target(target_path)?;
+        let canonical_parent = canonical_target.parent().ok_or_else(|| {
+            io::Error::other("validated atomic target is missing its parent directory")
+        })?;
 
-        let temp_path = temp_path_for(target_path);
+        let temp_path = temp_path_for(&canonical_target);
         let mut file = create_new_private_file(&temp_path)?;
         let mut cleanup = TempFileCleanup::new(temp_path.clone());
 
-        if preserve_existing_permissions && let Ok(metadata) = fs::metadata(target_path) {
+        if preserve_existing_permissions && let Ok(metadata) = fs::metadata(&canonical_target) {
             fs::set_permissions(&temp_path, metadata.permissions())?;
         }
 
@@ -171,25 +207,17 @@ impl StagedTextFile {
         }
         drop(file);
 
-        let parent_dir = durable.then(|| File::open(parent)).transpose()?;
+        let parent_dir = durable.then(|| File::open(canonical_parent)).transpose()?;
 
         cleanup.disarm();
 
         Ok(Self {
-            target_path: target_path.to_path_buf(),
+            target_path: canonical_target,
             temp_path,
             parent_dir,
             sync_parent: durable,
             committed: false,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn stage_with_for_test<F>(target_path: &Path, write: F) -> io::Result<Self>
-    where
-        F: FnOnce(&mut File) -> io::Result<()>,
-    {
-        Self::stage_with(target_path, true, true, write)
     }
 
     pub fn commit(&mut self) -> io::Result<()> {
@@ -205,6 +233,49 @@ impl StagedTextFile {
         }
         Ok(())
     }
+}
+
+/// Resolve an atomic write target to a canonical parent and a single file
+/// component.
+///
+/// The resolved parent becomes the containment root for the final rename.
+/// Rejecting the dot components before creating a staging file also prevents a
+/// path such as `parent/..` from being interpreted as the parent directory
+/// itself.
+fn validated_atomic_target(path: &Path) -> io::Result<PathBuf> {
+    let Some(file_name) = path.file_name() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("atomic write path has no file name: {}", path.display()),
+        ));
+    };
+    if file_name == "." || file_name == ".." {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("atomic write path must name a file: {}", path.display()),
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("no parent dir for {}", path.display()),
+        )
+    })?;
+    let parent_for_resolution = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let canonical_parent = fs::canonicalize(parent_for_resolution)?;
+    let canonical_target = canonical_parent.join(file_name);
+    if !canonical_target.starts_with(&canonical_parent) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("atomic write target escapes its parent: {}", path.display()),
+        ));
+    }
+
+    Ok(canonical_target)
 }
 
 /// Removes a newly-created staging file if setup or writing fails before the
@@ -381,6 +452,81 @@ where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
 {
+    with_exclusive_file_lock_named_options(
+        target_path,
+        LockFileNaming::DotPrefixedSibling,
+        label,
+        options,
+        op,
+    )
+}
+
+/// Naming convention for the sibling lock file [`with_exclusive_file_lock`]
+/// and [`with_exclusive_file_lock_named`] acquire relative to a target path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockFileNaming {
+    /// `.{file_name}.lock` — Orbit's own private sibling, invisible to the
+    /// target's other consumers. Correct whenever Orbit owns both ends of the
+    /// lock protocol.
+    DotPrefixedSibling,
+    /// `{file_name}.lock` — the target's exact file name with `.lock`
+    /// appended, no extra leading dot. Required when another process already
+    /// defines the lock file it expects beside a target Orbit does not
+    /// exclusively own (for example Claude Code locking `~/.claude.json.lock`
+    /// beside its own `~/.claude.json`); acquiring anything else lets the two
+    /// writers race past each other.
+    AppendedSuffix,
+}
+
+impl LockFileNaming {
+    fn lock_path_for(self, path: &Path) -> io::Result<PathBuf> {
+        let file_name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("path '{}' has no file name", path.display()),
+            )
+        })?;
+        let lock_name = match self {
+            LockFileNaming::DotPrefixedSibling => format!(".{file_name}.lock"),
+            LockFileNaming::AppendedSuffix => format!("{file_name}.lock"),
+        };
+        Ok(path.with_file_name(lock_name))
+    }
+}
+
+/// [`with_exclusive_file_lock`] with an explicit [`LockFileNaming`] instead of
+/// Orbit's default dot-prefixed sibling.
+pub fn with_exclusive_file_lock_named<T, E, F>(
+    target_path: &Path,
+    naming: LockFileNaming,
+    label: &str,
+    op: F,
+) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    with_exclusive_file_lock_named_options(
+        target_path,
+        naming,
+        label,
+        FileLockOptions::default(),
+        op,
+    )
+}
+
+/// [`with_exclusive_file_lock_named`] with an explicit, testable acquisition policy.
+pub fn with_exclusive_file_lock_named_options<T, E, F>(
+    target_path: &Path,
+    naming: LockFileNaming,
+    label: &str,
+    options: FileLockOptions,
+    op: F,
+) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
     let parent = target_path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -400,7 +546,7 @@ where
     // indistinguishable, which is why this only ever deadlocked where a symlink
     // sat above the target.
     create_private_dir_all(parent).map_err(|e| classify_lock_io(parent, e))?;
-    let lock_path = resolved_lock_path(target_path)?;
+    let lock_path = resolved_lock_path(target_path, naming)?;
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
@@ -460,7 +606,7 @@ where
     if !parent.is_dir() {
         return op();
     }
-    let lock_path = resolved_lock_path(target_path)?;
+    let lock_path = resolved_lock_path(target_path, LockFileNaming::DotPrefixedSibling)?;
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
@@ -491,8 +637,8 @@ where
 /// deadlock on a second descriptor to the same file. Resolving the parent
 /// collapses those routes to one key. An unresolvable parent means the
 /// directory does not exist yet, so nothing can be holding a lock inside it.
-fn resolved_lock_path(target_path: &Path) -> io::Result<PathBuf> {
-    let lock_path = lock_path_for(target_path)?;
+fn resolved_lock_path(target_path: &Path, naming: LockFileNaming) -> io::Result<PathBuf> {
+    let lock_path = naming.lock_path_for(target_path)?;
     let Some(file_name) = lock_path.file_name() else {
         return Ok(lock_path);
     };
@@ -502,16 +648,6 @@ fn resolved_lock_path(target_path: &Path) -> io::Result<PathBuf> {
     }
 }
 
-fn lock_path_for(path: &Path) -> io::Result<PathBuf> {
-    let file_name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("path '{}' has no file name", path.display()),
-        )
-    })?;
-    Ok(path.with_file_name(format!(".{file_name}.lock")))
-}
-
 pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     let path = validated_private_file_path(path)?;
     apply_private_file_mode(options);
@@ -519,6 +655,20 @@ pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::R
     let file = options.open(&path)?;
     set_private_file_permissions_for_open_file(&file)?;
     Ok(file)
+}
+
+/// Open `path` for a read-only inspection without following its final component.
+///
+/// On Unix the open is nonblocking as well as no-follow, so a FIFO swapped in
+/// after a caller's pathname check cannot indefinitely block the reader. The
+/// caller remains responsible for checking the opened descriptor's type and
+/// mapping errors into its domain-specific behavior.
+pub fn open_read_only_no_follow(path: &Path) -> io::Result<File> {
+    let path = validated_private_file_path(path)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_read_only_no_follow(&mut options);
+    options.open(&path)
 }
 
 /// Resolve a private file's parent before opening it and reject a final
@@ -579,14 +729,42 @@ fn apply_no_follow_final_component(options: &mut OpenOptions) {
     options.custom_flags(libc::O_NOFOLLOW);
 }
 
+#[cfg(unix)]
+fn apply_read_only_no_follow(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+}
+
+#[cfg(windows)]
+fn apply_read_only_no_follow(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_read_only_no_follow(_options: &mut OpenOptions) {}
+
 #[cfg(not(unix))]
 fn apply_no_follow_final_component(_options: &mut OpenOptions) {}
 
-fn set_private_file_permissions_for_open_file(file: &File) -> io::Result<()> {
+/// Restrict an already-open file to owner-only access.
+///
+/// A descriptor whose file is already at the private mode is left alone: the
+/// `fchmod` would be a no-op for permissions, but it still counts as a metadata
+/// change, and on macOS the next `close` of a descriptor that issued one costs
+/// milliseconds. Lock files are opened once per task bundle on every listing
+/// and search, so re-asserting the mode on each open dominated those commands.
+pub(crate) fn set_private_file_permissions_for_open_file(file: &File) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
+        if has_private_file_mode(&file.metadata()?) {
+            return Ok(());
+        }
         file.set_permissions(fs::Permissions::from_mode(PRIVATE_FILE_MODE))
     }
     #[cfg(not(unix))]
@@ -598,8 +776,6 @@ fn set_private_file_permissions_for_open_file(file: &File) -> io::Result<()> {
 
 #[cfg(unix)]
 fn create_private_dir_all_unix(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
@@ -616,15 +792,8 @@ fn create_private_dir_all_unix(path: &Path) -> io::Result<()> {
                 ));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let mut builder = fs::DirBuilder::new();
-                builder.mode(PRIVATE_DIR_MODE);
-                match builder.create(&current) {
-                    Ok(()) => {
-                        fs::set_permissions(
-                            &current,
-                            fs::Permissions::from_mode(PRIVATE_DIR_MODE),
-                        )?;
-                    }
+                match create_private_dir(&current) {
+                    Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                         if !current.is_dir() {
                             return Err(io::Error::new(
@@ -653,16 +822,77 @@ fn apply_private_file_mode(options: &mut OpenOptions) {
 #[cfg(not(unix))]
 fn apply_private_file_mode(_options: &mut OpenOptions) {}
 
-#[cfg(all(unix, feature = "sqlite"))]
+/// Restrict an existing regular file to owner-only access without following
+/// a symlink at its final component.
+///
+/// A symlink or other irregular file is refused and its target left untouched.
+/// The permission change goes through a descriptor opened with `O_NOFOLLOW`
+/// and type-checked after the open, so a final component swapped after the
+/// check cannot redirect it to another file. A file already at the private
+/// mode is not opened at all: closing any descriptor to a file releases this
+/// process's POSIX record locks on it, which SQLite connections already open
+/// on the same database hold.
+#[cfg(feature = "sqlite")]
 pub(crate) fn set_private_file_permissions(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    ensure_regular_private_file(path, &metadata)?;
+    if has_private_file_mode(&metadata) {
+        return Ok(());
+    }
+    let file = open_regular_file_no_follow(path)?;
+    set_private_file_permissions_for_open_file(&file)
+}
+
+/// Open an existing file for reading without following its final component,
+/// and refuse the descriptor unless it is a regular file.
+///
+/// Unlike [`open_read_only_no_follow`] this performs no pathname check first:
+/// the open itself refuses a final-component symlink, and the type check runs
+/// on the opened descriptor, so the result is safe against a swap between any
+/// earlier check and this open.
+#[cfg(feature = "sqlite")]
+pub(crate) fn open_regular_file_no_follow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_read_only_no_follow(&mut options);
+    let file = options.open(path)?;
+    ensure_regular_private_file(path, &file.metadata()?)?;
+    Ok(file)
+}
+
+#[cfg(feature = "sqlite")]
+fn ensure_regular_private_file(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "private file path must not be a symlink: {}",
+                path.display()
+            ),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "private file path must be a regular file: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn has_private_file_mode(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
-    fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
+    metadata.permissions().mode() & 0o7777 == PRIVATE_FILE_MODE
 }
 
 #[cfg(all(not(unix), feature = "sqlite"))]
-pub(crate) fn set_private_file_permissions(_path: &Path) -> io::Result<()> {
-    Ok(())
+fn has_private_file_mode(_metadata: &fs::Metadata) -> bool {
+    true
 }
 
 /// Attributable write-access failure, or `None` when `err` is some other I/O.

@@ -14,7 +14,10 @@ spec:
     reports every bound it hit in `truncation` rather than silently returning
     less. Schema version 2 emits one current-failure row per failed job, with
     job_id and log_job_id binding the diagnostic and checkout provenance to
-    that job. Both failed-step and checkout reads explicitly select the job;
+    that job. Each failed job also carries the runner_labels the jobs API
+    reports for it (the runner's `runs-on`), the evidence filing routes the
+    repair's `os:` tag from; a failed labels read is recorded as
+    runner_labels_error and never defers the failure. Both failed-step and checkout reads explicitly select the job;
     a fallback may only supply that same job. The global max_job_log_reads
     budget defaults to 6 (maximum 25), with stable job ordering and a rotating
     overflow slot. Each read retains the existing timeout, excerpt/scan bounds
@@ -37,6 +40,10 @@ spec:
     unrelated pull-request run cannot erase a landing-branch failure, and a
     genuinely newer completed non-unsuccessful check of the same identity
     (or a landing-branch success, for non-landing noise) does suppress it.
+    Only landing-ref pushes of the observed event commit, or job checkouts
+    matching an observed integration/release tip, remain in current_failures.
+    Other live branch failures are retained in branch_failures, including
+    unmerged task PRs, so filing cannot mistake their source for landing code.
     Already-failed jobs inside an in-flight workflow remain visible as current;
     only complete job evidence may be filed. A pending check alone is never a
     repair task. Incomplete mixed-state logs stay in `retryable_errors` until a
@@ -53,7 +60,12 @@ spec:
     When candidates outnumber `max_investigated_runs` the
     ranked prefix keeps all but one slot and the last slot rotates through
     the overflow by `investigation_cursor`, so a candidate below the cap is
-    investigated within one rotation instead of never. Discovery or investigation failures are
+    investigated within one rotation instead of never. A cancelled run is
+    screened from its run view before that budget is spent: with no failed
+    step it is `inconclusive`, or listed in `stale_or_superseded` when a newer
+    run of the same workflow on the same branch exists; neither takes a slot.
+    A cancelled run with a failed step stays a candidate and never hides an
+    older actionable failure. Discovery or investigation failures are
     bounded, redacted, and emitted in `retryable_errors`; the filing step
     defers affected jobs (or rejects discovery-wide gaps) so missing evidence
     cannot be mistaken for a clean result.
@@ -133,6 +145,8 @@ spec:
           latest_runs:
             type: array
           current_failures:
+            type: array
+          branch_failures:
             type: array
           stale_or_superseded:
             type: array

@@ -1,3 +1,6 @@
+use std::io::PipeWriter;
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
 use std::process::{Child, ChildStdout};
 use std::thread;
 use std::time::Instant;
@@ -126,9 +129,20 @@ pub fn supervise_child(
     timeout_ms: Option<u64>,
     stdin_payload: Option<Vec<u8>>,
 ) -> Result<SupervisedOutcome, OrbitError> {
+    supervise_child_cancellable(child, timeout_ms, stdin_payload, None)
+}
+
+/// Supervise a child with host-requested cancellation. Cancellation kills the
+/// whole process group from the owning wait loop, before reaping the child.
+pub fn supervise_child_cancellable(
+    child: Child,
+    timeout_ms: Option<u64>,
+    stdin_payload: Option<Vec<u8>>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<SupervisedOutcome, OrbitError> {
     let started = Instant::now();
     let result =
-        crate::supervision::wait_with_optional_timeout(child, timeout_ms, false, stdin_payload)?;
+        crate::supervision::wait_with_cancellation(child, timeout_ms, stdin_payload, cancelled)?;
     Ok(SupervisedOutcome {
         result: ExecutionResult {
             success: result.exit_success,
@@ -149,6 +163,12 @@ pub fn supervise_child(
 /// own accumulator bounded in `consume`. Stderr remains subject to Orbit's
 /// normal output-capture limit, and the returned `stdout` is intentionally
 /// empty because the stream was handed to the consumer.
+///
+/// On Unix `consume` reads a relay of the child's stdout rather than the pipe
+/// itself, so the stream it sees ends under the same drain bound as captured
+/// output: at the child's EOF, or once the drain budget has elapsed after the
+/// child is gone while a descendant outside its process group still holds
+/// stdout. `consume` should read to EOF or drop the stream.
 pub fn run_process_streaming_stdout<T, F>(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
@@ -162,22 +182,21 @@ where
 
     let started = Instant::now();
     let mut child = sandbox.spawn(req)?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| OrbitError::Execution("process stdout was not piped".to_string()))?;
+    let (stdout, relay) = stdout_relay(&mut child)?;
     let stdout_thread = thread::spawn(move || consume(stdout));
     let stdin_payload = match &req.stdin_mode {
         StdinMode::Bytes(bytes) => Some(bytes.clone()),
         StdinMode::Inherit | StdinMode::Null => None,
     };
-    // `stdout` was deliberately removed above. The standard supervisor still
-    // drains stderr, enforces timeouts, and cleans up the child process group.
-    let result = crate::supervision::wait_with_optional_timeout(
+    // The supervisor forwards stdout into the relay and closes it within its
+    // drain bound, besides draining stderr, enforcing timeouts, and cleaning
+    // up the child process group.
+    let result = crate::supervision::wait_with_stdout_relay(
         child,
         req.timeout_ms,
         req.debug,
         stdin_payload,
+        relay,
     )?;
     let consumed = stdout_thread
         .join()
@@ -195,4 +214,28 @@ where
         },
         consumed,
     ))
+}
+
+/// The stream a streaming consumer reads, and the relay the supervisor
+/// forwards the child's stdout into.
+#[cfg(unix)]
+fn stdout_relay(child: &mut Child) -> Result<(ChildStdout, Option<PipeWriter>), OrbitError> {
+    if child.stdout.is_none() {
+        return Err(OrbitError::Execution(
+            "process stdout was not piped".to_string(),
+        ));
+    }
+    let (reader, writer) = std::io::pipe()
+        .map_err(|err| OrbitError::Execution(format!("failed to create stdout relay: {err}")))?;
+    Ok((ChildStdout::from(OwnedFd::from(reader)), Some(writer)))
+}
+
+/// Without descriptor-level control the consumer reads the pipe directly.
+#[cfg(not(unix))]
+fn stdout_relay(child: &mut Child) -> Result<(ChildStdout, Option<PipeWriter>), OrbitError> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| OrbitError::Execution("process stdout was not piped".to_string()))?;
+    Ok((stdout, None))
 }

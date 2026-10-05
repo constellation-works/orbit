@@ -6,12 +6,14 @@ use crate::identity::Crew;
 use crate::record::RecordError;
 use crate::workflow::activity_job::Provider;
 
-/// Schema version of the [`CrewDiscoveryV1`] projection returned by
-/// `orbit.crew.list`.
+/// Schema version of the [`CrewDiscoveryV1`] projection returned as
+/// `crews` by `orbit.workspace.list` with `include: ["crews"]`.
 ///
 /// Bumped to 2 in ORB-10801, when the entry lost its `backend` field along
-/// with the agent execution backend selector it projected.
-pub const CREW_DISCOVERY_SCHEMA_VERSION: u32 = 2;
+/// with the agent execution backend selector it projected, and to 3 when each
+/// entry gained `enabled` (`[crews.<name>] enabled`). Disabled crews are
+/// listed rather than hidden so a client can offer to enable them.
+pub const CREW_DISCOVERY_SCHEMA_VERSION: u32 = 3;
 
 /// One effective crew entry exposed by [`CrewDiscoveryV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +24,9 @@ pub struct CrewDiscoveryEntryV1 {
     pub model: String,
     pub description: Option<String>,
     pub tags: Vec<String>,
+    /// Whether dispatch may run this crew. A disabled crew is refused by
+    /// selection and dispatch until its table sets `enabled = true`.
+    pub enabled: bool,
 }
 
 impl CrewDiscoveryEntryV1 {
@@ -62,11 +67,12 @@ impl CrewDiscoveryEntryV1 {
             model,
             description,
             tags,
+            enabled: crew.enabled,
         })
     }
 }
 
-/// Sanitized `orbit.crew.list` projection for one selected workspace.
+/// Sanitized crew projection for one selected workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrewDiscoveryV1 {
     pub schema_version: u32,

@@ -6,8 +6,6 @@ description: >
   Hourly reclamation of worktrees whose associated task has settled to
   rejected, archived, or done.
 enabled: false
-hosts:
-  - __ORBIT_HOST_ID__
 trigger:
   cron: "35 * * * *"
   missed_run: skip

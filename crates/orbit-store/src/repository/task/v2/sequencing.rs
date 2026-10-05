@@ -1,10 +1,10 @@
 use super::*;
 
-pub(super) fn next_event_id(events: &[TaskEventRowV2]) -> String {
+pub(crate) fn next_event_id(events: &[TaskEventRowV2]) -> String {
     format!("EV-{:04}", next_sequence(events, "EV-"))
 }
 
-pub(super) trait SequencedRow {
+pub(crate) trait SequencedRow {
     fn row_id(&self) -> &str;
 }
 
@@ -20,7 +20,7 @@ impl SequencedRow for TaskCommentRowV2 {
     }
 }
 
-pub(super) fn next_sequence<T: SequencedRow>(rows: &[T], prefix: &str) -> usize {
+pub(crate) fn next_sequence<T: SequencedRow>(rows: &[T], prefix: &str) -> usize {
     rows.iter()
         .filter_map(|row| row.row_id().strip_prefix(prefix))
         .filter_map(|suffix| suffix.parse::<usize>().ok())

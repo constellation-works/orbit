@@ -5,71 +5,85 @@ sidebar:
   order: 3
 ---
 
-## Start with the Header
+An activity is one step a job runs: an agent loop or a registered
+deterministic action. You write it as YAML, save it in your checkout, and
+reference it from a job. [Activity and Job YAML](../../reference/activity-job-yaml/)
+lists every field.
 
-Every activity uses this envelope:
+## 1. Write the file
+
+Every activity uses this envelope. Input and output are JSON Schema.
 
 ```yaml
 schemaVersion: 2
 kind: Activity
 metadata:
-  name: deterministic_reference
+  name: my_check
 spec:
   type: deterministic
   description: Run a registered deterministic action.
+  action: example_action
+  config: {}
+  input_schema_json:
+    type: object
+    properties: {}
+  output_schema_json:
+    type: object
+    properties:
+      status:
+        type: string
 ```
 
-## Add Schemas
-
-Use JSON Schema-shaped input and output declarations.
+A `deterministic` activity names a registered `action` and passes it optional
+`config`. An `agent_loop` activity gives the agent an instruction, its tools,
+and a provider instead:
 
 ```yaml
-input_schema_json:
-  type: object
-  properties: {}
-output_schema_json:
-  type: object
-  properties:
-    status:
-      type: string
+spec:
+  type: agent_loop
+  description: Review the current diff.
+  instruction: Review the current diff and report risks.
+  tools:
+    - orbit.task.show
+    - orbit.search
+  provider: claude
 ```
 
-## Choose a Type
+Orbit runs every agent loop through the provider's CLI agent. The retired
+`backend:` key is covered in
+[Retired backend selection](../../reference/config/#retired-backend-selection).
 
-For a deterministic activity, name a registered action and pass optional config:
+## 2. Choose an agent's tools
 
-```yaml
-type: deterministic
-action: example_action
-config: {}
-```
+`tools` is the baseline for every task that uses the activity. Don't widen it
+for one specialized task. List the extra exact canonical tool names in that
+task's `required_tools` when you create it; they can't be added later. Orbit
+merges the two lists at dispatch.
 
-For an agent loop, declare instruction, tools, and provider:
-
-```yaml
-type: agent_loop
-instruction: Review the current diff and report risks.
-tools:
-  - orbit.task.show
-  - orbit.search
-provider: claude
-```
-
-Orbit dispatches every agent loop through the provider's CLI agent. There is no
-backend to choose: the retired `backend:` key still parses as `cli` and is
-ignored, while `backend: http` and `backend: auto` are refused at load.
-
-Treat `tools` as the baseline every task using the activity needs. A task may
-add exact canonical names through `required_tools`; Orbit deduplicates that
-union at dispatch. Declare requirements when creating the task because existing
-tasks cannot acquire or replace them. Do not broaden an activity just for one specialized task.
-Task requirements affect allowlist inclusion only and do not bypass runtime
+Adding a tool only puts it on the allowlist. It does not bypass runtime
 capability, policy, sandbox, subprocess, or authentication checks.
 
-## Use It
+## 3. Save it and run it
+
+Save the activity under `.orbit/resources/activities/` in your checkout, with
+a name Orbit doesn't ship: a shipped activity keeps its name, and a workspace
+file with the same name is ignored. Reference it from a step in a
+[job](../../reference/activity-job-yaml/#job-envelope), and save the job under
+`.orbit/resources/jobs/`, also with a name of its own:
+
+```yaml
+- id: check
+  target: activity:my_check
+```
+
+Then run the job by name, or by the path to its YAML:
 
 ```bash
-orbit activity list
-orbit job run path/to/job.yaml --input key=value   # submits and returns a run ID
-orbit job run path/to/job.yaml --wait              # block until the run is terminal
+orbit job show <job_id>                    # the activity each step runs
+orbit run job <job> --input key=value      # submits and prints a run ID
+orbit run job <job> --wait                 # waits; exits nonzero unless the run succeeds
 ```
+
+`orbit run show <run-id>` names the catalog layer that supplied each activity
+(`workspace`, `shipped`, or `plugin:<ns>`), so you can confirm your file was
+used.

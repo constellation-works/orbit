@@ -1,18 +1,19 @@
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
 use orbit_core::OrbitError;
 
-use super::dispatch::{print_action_summary, run_action};
+use super::dispatch::{ConfigTarget, action_payload, auto_detected_providers, run_action};
 use super::providers::ServerLaunch;
-use super::workspace::{env_home_dir, registered_workspace_id, resolve_workspace_layout};
-use crate::command::{CommandOut, CommandOutput};
+use super::workspace::{env_home_dir, resolve_workspace_layout};
+use crate::command::CommandOut;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum ScopeArg {
-    /// Write to user-level config (~/.claude, ~/.codex, ~/.gemini, ~/.grok, Antigravity mcp_config).
+    /// Write to user-level MCP config (including shared ~/.claude.json for Grok).
     Home,
-    /// Write to repo-local config (.claude.json, .codex/, .gemini/, .grok/). Default.
+    /// Write to repo-local MCP config (including shared .mcp.json for Grok). Default.
     #[default]
     Workspace,
 }
@@ -201,24 +202,28 @@ impl InitArgs {
         // Bare `orbit mcp init` keeps its pre-existing agent-only authority;
         // only the `orbit workspace init --mcp` bootstrap path (below, via
         // `init_auto_for_workspace`) selects operator authority.
-        let workspace_id = (!self.federated)
-            .then(|| registered_workspace_id(&layout.repo_root))
-            .flatten();
         let launch = if self.federated {
             ServerLaunch::Federated
         } else {
-            ServerLaunch::local(false, workspace_id.as_deref())
+            ServerLaunch::local(false, layout.workspace_id.as_deref())
         };
+        let home_dir = env_home_dir();
         let providers = run_action(
             McpAction::Init(launch),
             &layout.repo_root,
             &layout.orbit_root,
             self.providers.resolve_mode()?,
-            env_home_dir(),
+            home_dir.clone(),
             self.scope,
         )?;
-        print_action_summary(McpAction::Init(launch), &providers);
-        Ok(CommandOutput::Silent)
+        action_payload(
+            McpAction::Init(launch),
+            &providers,
+            &layout.repo_root,
+            home_dir.as_deref(),
+            self.scope,
+            layout.workspace_id.as_deref(),
+        )
     }
 }
 
@@ -244,16 +249,23 @@ impl RemoveArgs {
         } else {
             McpAction::Remove
         };
+        let home_dir = env_home_dir();
         let providers = run_action(
             action,
             &layout.repo_root,
             &layout.orbit_root,
             self.providers.resolve_mode()?,
-            env_home_dir(),
+            home_dir.clone(),
             self.scope,
         )?;
-        print_action_summary(action, &providers);
-        Ok(CommandOutput::Silent)
+        action_payload(
+            action,
+            &providers,
+            &layout.repo_root,
+            home_dir.as_deref(),
+            self.scope,
+            layout.workspace_id.as_deref(),
+        )
     }
 }
 
@@ -261,7 +273,7 @@ pub(crate) fn init_auto_for_workspace(
     repo_root: &Path,
     orbit_root: &Path,
     workspace_id: &str,
-) -> Result<Vec<String>, OrbitError> {
+) -> Result<(Vec<String>, Vec<PathBuf>), OrbitError> {
     // `orbit workspace init` is a per-workspace setup, so its auto-MCP path
     // writes repo-local files. `orbit mcp init` defaults to workspace scope
     // as well; pass `--scope home` for a user-level registration.
@@ -273,18 +285,56 @@ pub(crate) fn init_auto_for_workspace(
     //
     // The workspace being registered is known here, so the generated server is
     // bound to it directly rather than re-derived from the checkout.
-    run_action(
+    let home_dir = env_home_dir();
+    let providers = auto_detected_providers(repo_root, home_dir.as_deref());
+    let mut files = BTreeSet::new();
+    let mut legacy_before = Vec::new();
+    for provider in &providers {
+        let target = ConfigTarget::resolve(
+            ScopeArg::Workspace,
+            provider,
+            repo_root,
+            home_dir.as_deref(),
+        )?;
+        files.insert(target.mcp_path);
+        if let Some(settings_path) = target.settings_path {
+            files.insert(settings_path);
+        }
+        if let Some(legacy_path) = target.legacy_mcp_path.filter(|path| path.exists()) {
+            let before = std::fs::read(&legacy_path).map_err(|error| {
+                OrbitError::Io(format!(
+                    "failed to read '{}': {error}",
+                    legacy_path.display()
+                ))
+            })?;
+            legacy_before.push((legacy_path, before));
+        }
+    }
+    let configured = run_action(
         McpAction::Init(ServerLaunch::local(true, Some(workspace_id))),
         repo_root,
         orbit_root,
-        ProviderSelectionMode::Auto,
-        env_home_dir(),
+        ProviderSelectionMode::Explicit(providers),
+        home_dir,
         ScopeArg::Workspace,
-    )
-    .map(|providers| {
-        providers
+    )?;
+    // Legacy paths are reported only when reconciliation actually changed a
+    // surviving file. A deleted Orbit-only file is no longer a checkout file.
+    for (path, before) in legacy_before {
+        if path.exists() {
+            let after = std::fs::read(&path).map_err(|error| {
+                OrbitError::Io(format!("failed to read '{}': {error}", path.display()))
+            })?;
+            if after != before {
+                files.insert(path);
+            }
+        }
+    }
+    Ok((
+        configured
             .into_iter()
             .map(|provider| provider.label().to_string())
-            .collect()
-    })
+            .collect(),
+        files.into_iter().collect(),
+    ))
 }

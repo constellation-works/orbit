@@ -64,17 +64,30 @@ impl Tool for OrbitTaskListTool {
             ToolParam {
                 name: "limit".to_string(),
                 description:
-                    "Maximum number of tasks to return, newest first (default 50). Must be at least 1."
+                    "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1."
                         .to_string(),
                 param_type: "integer".to_string(),
                 required: false,
             },
+            ToolParam {
+                name: "fields".to_string(),
+                description:
+                    "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit.task.show`."
+                        .to_string(),
+                param_type: "string_list".to_string(),
+                required: false,
+            },
         ];
+        parameters.extend(super::super::domain_control::bounded_params(&[
+            ("offset", "integer", "Bounded view list offset"),
+            ("search", "string", "Bounded view key/title substring"),
+            ("priority", "string", "Bounded view priority filter"),
+        ]));
         parameters.extend(super::super::identity_params());
         ToolSchema {
             name: "orbit.task.list".to_string(),
             description:
-                "List Orbit tasks newest-first (default limit 50), across every lifecycle status unless a filter is supplied. Optional filters: status, parent, type, tag, dependency readiness, path."
+                "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path."
                 .to_string(),
             parameters,
             builtin: true,
@@ -82,6 +95,23 @@ impl Tool for OrbitTaskListTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        if super::super::domain_control::bounded(&input)? {
+            return super::super::domain_control::bounded_read(
+                ctx,
+                input,
+                "tasks",
+                &[
+                    "workspace",
+                    "view",
+                    "offset",
+                    "limit",
+                    "search",
+                    "status",
+                    "priority",
+                    "model",
+                ],
+            );
+        }
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskList)
     }
 }

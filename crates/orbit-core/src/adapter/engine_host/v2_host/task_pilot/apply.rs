@@ -1,38 +1,85 @@
-//! Partition-isolated validation and compare-and-set application for task pilots.
+//! Task-isolated validation, idempotent recovery, and atomic application for task pilots.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::ci_failure_admission;
-use crate::application::task::TaskUpdateParams;
+use crate::adapter::engine_host::v2_host::ci_failure::admission as ci_failure_admission;
 
+use super::attachment_budget::{
+    CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
+};
+use super::persist::{
+    ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, stale_task,
+    task_operation_id, task_outcome,
+};
 use super::source::SourceSnapshot;
 use super::{
-    action_failed, member_ready, requested_workspace_root, required_string, required_string_array,
-    string_array_value, validate_after_selectors, validate_recommendations,
+    VALIDATION_TOOL_WARNINGS, action_failed, member_ready, requested_workspace_root,
+    required_string, required_string_array, string_array, string_array_value,
+    validate_after_selectors, validate_recommendations,
 };
 
 #[derive(Clone)]
-struct PreparedTaskSnapshot {
-    context_files: Vec<String>,
-    status: TaskStatus,
-    title: String,
-    tags: Vec<String>,
-    material: Option<(String, String)>,
+pub(super) struct PreparedTaskSnapshot {
+    pub(super) context_files: Vec<String>,
+    pub(super) status: TaskStatus,
+    pub(super) complexity: Option<TaskComplexity>,
+    pub(super) title: String,
+    pub(super) tags: Vec<String>,
+    pub(super) material: Option<(String, String)>,
+    pub(super) status_neutral_fingerprint: Option<String>,
+    /// Freshness-component digests captured with the fingerprint. Absent on a
+    /// payload prepared before components were recorded; malformed input fails
+    /// the apply instead of dropping the names.
+    pub(super) material_components: Option<BTreeMap<String, String>>,
+    /// Deterministic feasibility findings for the tools this task's acceptance
+    /// criteria require, computed at preparation [ORB-11980].
+    validation_tool_warnings: Vec<String>,
 }
 
-struct ValidatedTask {
-    task_id: String,
-    after: Vec<String>,
-    assessment: Value,
-    admission: Option<Value>,
-    promote: bool,
+pub(super) struct ValidatedTask {
+    pub(super) task_id: String,
+    pub(super) after: Vec<String>,
+    pub(super) assessment: Value,
+    pub(super) admission: Option<Value>,
+    pub(super) promote: bool,
+    pub(super) complexity: TaskComplexity,
+    pub(super) operation_id: String,
+}
+
+fn material_components(
+    entry: &Value,
+    action: &str,
+) -> Result<Option<BTreeMap<String, String>>, DispatchError> {
+    let Some(value) = entry.get("material_components") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(object) = value.as_object() else {
+        return Err(action_failed(
+            action,
+            "prepared task material_components must be an object of component digests",
+        ));
+    };
+    let mut components = BTreeMap::new();
+    for (key, digest) in object {
+        let Some(digest) = digest.as_str() else {
+            return Err(action_failed(
+                action,
+                format!("prepared task material_components.{key} must be a string digest"),
+            ));
+        };
+        components.insert(key.clone(), digest.to_string());
+    }
+    Ok(Some(components))
 }
 
 pub(in super::super) fn apply(
@@ -76,7 +123,26 @@ pub(in super::super) fn apply(
         .get("results")
         .and_then(Value::as_array)
         .ok_or_else(|| action_failed(action, "`results` must be an array"))?;
-    let claim = crate::application::automation::members::claim(runtime, prepared_value)
+    let prior_applied_count = input
+        .get("prior_applied_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let carried_task_outcomes = input
+        .get("carried_task_outcomes")
+        .map(|value| {
+            value
+                .as_array()
+                .cloned()
+                .ok_or_else(|| action_failed(action, "carried_task_outcomes must be an array"))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let claim = crate::application::automation::members::claim(runtime, prepared_value, &[])
+        .map_err(|error| action_failed(action, error.to_string()))?;
+    // The same consumer policy prepare fingerprinted under; a run without a
+    // claim evaluates the default eligibility and configured freshness
+    // [ORB-12745, ORB-13638].
+    let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
         .map_err(|error| action_failed(action, error.to_string()))?;
     let source = SourceSnapshot::from_prepared(prepared_value, action)?;
     if let Some(source) = &source {
@@ -104,8 +170,22 @@ pub(in super::super) fn apply(
                 PreparedTaskSnapshot {
                     context_files,
                     status,
+                    complexity: serde_json::from_value::<Option<TaskComplexity>>(
+                        entry.get("complexity").cloned().unwrap_or(Value::Null),
+                    )
+                    .map_err(|error| {
+                        action_failed(
+                            action,
+                            format!("prepared task complexity is invalid: {error}"),
+                        )
+                    })?,
                     title,
                     tags,
+                    validation_tool_warnings: string_array(
+                        entry,
+                        VALIDATION_TOOL_WARNINGS,
+                        action,
+                    )?,
                     material: entry
                         .get("material_fingerprint")
                         .and_then(Value::as_str)
@@ -113,6 +193,11 @@ pub(in super::super) fn apply(
                         .map(|(fingerprint, revision)| {
                             (fingerprint.to_string(), revision.to_string())
                         }),
+                    status_neutral_fingerprint: entry
+                        .get("status_neutral_fingerprint")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    material_components: material_components(entry, action)?,
                 },
             ))
         })
@@ -284,27 +369,41 @@ pub(in super::super) fn apply(
             ));
             continue;
         }
+        let assessment_ids = assessments_by_id.keys().cloned().collect::<BTreeSet<_>>();
+        let expected_id_set = expected_ids.iter().cloned().collect::<BTreeSet<_>>();
+        if assessment_ids != expected_id_set {
+            partition_decisions.push(failed_partition(
+                expected_index,
+                &expected_ids,
+                format!(
+                    "partition {expected_index} task assessment identities do not match the prepared partition"
+                ),
+            ));
+            continue;
+        }
 
-        let mut validated = Vec::with_capacity(expected_ids.len());
-        let mut stale = Vec::new();
-        let mut validation_error = None;
+        let mut outcomes = Vec::with_capacity(expected_ids.len());
+        let mut applied_task_ids = Vec::new();
         for task_id in &expected_ids {
             let Some(assessment) = assessments_by_id.get(task_id) else {
-                validation_error =
-                    Some(format!("partition {expected_index} omitted task {task_id}"));
-                break;
+                outcomes.push(task_outcome(
+                    task_id,
+                    "invalid",
+                    Some(format!("partition {expected_index} omitted task {task_id}")),
+                ));
+                continue;
             };
             let snapshot = &prepared_before[task_id];
             let reported_before =
                 match required_string_array(assessment, "context_files_before", action) {
                     Ok(before) => before,
                     Err(error) => {
-                        validation_error = Some(error.to_string());
-                        break;
+                        outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                        continue;
                     }
                 };
             if reported_before != snapshot.context_files {
-                stale.push(stale_task(
+                outcomes.push(stale_task(
                     task_id,
                     "reported_context_snapshot_mismatch",
                     "agent context_files_before does not match this run's prepared snapshot",
@@ -314,37 +413,46 @@ pub(in super::super) fn apply(
             let disposition = match required_string(assessment, "disposition", action) {
                 Ok(value) => value,
                 Err(error) => {
-                    validation_error = Some(error.to_string());
-                    break;
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
                 }
             };
-            let after = match required_string_array(assessment, "context_files_after", action) {
-                Ok(value) => value,
-                Err(error) => {
-                    validation_error = Some(error.to_string());
-                    break;
-                }
-            };
-            if let Err(error) = validate_after_selectors(
+            let proposed_after =
+                match required_string_array(assessment, "context_files_after", action) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                        continue;
+                    }
+                };
+            let selectors = match validate_after_selectors(
                 action,
                 task_id,
                 disposition,
                 assessment,
-                &after,
+                &proposed_after,
                 &workspace_root,
                 source.as_ref(),
             ) {
-                validation_error = Some(error.to_string());
-                break;
-            }
-            if let Err(error) = validate_recommendations(action, task_id, assessment) {
-                validation_error = Some(error.to_string());
-                break;
-            }
+                Ok(selectors) => selectors,
+                Err(error) => {
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
+                }
+            };
+            let after = selectors.values;
+            let complexity = match validate_recommendations(action, task_id, assessment) {
+                Ok(complexity) => complexity,
+                Err(error) => {
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
+                }
+            };
+            let complexity = resolve_applied_complexity(complexity, snapshot.complexity);
             let current = match runtime.get_task(task_id) {
                 Ok(task) => task,
                 Err(OrbitError::NotFound { .. }) => {
-                    stale.push(stale_task(
+                    outcomes.push(stale_task(
                         task_id,
                         "task_deleted",
                         "task no longer exists after preparation",
@@ -352,21 +460,44 @@ pub(in super::super) fn apply(
                     continue;
                 }
                 Err(error) => {
-                    validation_error = Some(format!("reload task {task_id}: {error}"));
-                    break;
+                    outcomes.push(task_outcome(
+                        task_id,
+                        "apply_failed",
+                        Some(format!("reload task {task_id}: {error}")),
+                    ));
+                    continue;
                 }
             };
-            if let Some(reason) = task_snapshot_drift(runtime, &current, snapshot) {
-                stale.push(stale_task(task_id, reason.0, reason.1));
-                continue;
+            // The pilot never sees the deterministic findings — the lane's
+            // validation-tool feasibility [ORB-11980] and this boundary's
+            // over-attachment budget [ORB-12228] — so apply attaches them
+            // here: every downstream readiness and admission rule then reads
+            // one assessment carrying both the agent's findings and the
+            // host's.
+            let mut assessment = (*assessment).clone();
+            if let Value::Object(fields) = &mut assessment {
+                fields.insert(
+                    VALIDATION_TOOL_WARNINGS.to_string(),
+                    json!(snapshot.validation_tool_warnings),
+                );
+                fields.insert("context_files_after".to_string(), json!(after));
+                fields.insert(
+                    "selector_normalizations".to_string(),
+                    json!(selectors.normalizations),
+                );
+                fields.insert(
+                    CONTEXT_ATTACHMENT_WARNINGS.to_string(),
+                    json!(over_attachment_findings(complexity, &after)),
+                );
             }
+
             let admission = match ci_sweep_filing
                 .map(|filing| {
                     ci_failure_admission::assess(
                         action,
                         task_id,
                         &current,
-                        assessment,
+                        &assessment,
                         &after,
                         filing,
                         promotion_authorized,
@@ -376,66 +507,112 @@ pub(in super::super) fn apply(
             {
                 Ok(admission) => admission,
                 Err(error) => {
-                    validation_error = Some(error.to_string());
-                    break;
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
                 }
             };
             let promote = admission
                 .as_ref()
                 .is_some_and(|decision| decision["decision"] == "promote");
-            validated.push(ValidatedTask {
+            let operation_id = task_operation_id(prepared_value, task_id, &assessment);
+            let validated = ValidatedTask {
                 task_id: task_id.clone(),
                 after,
-                assessment: (*assessment).clone(),
+                assessment,
                 admission,
                 promote,
-            });
-        }
-        if let Some(error) = validation_error {
-            partition_decisions.push(failed_partition(expected_index, &expected_ids, error));
-            continue;
-        }
-        if !stale.is_empty() {
-            partition_decisions.push(stale_partition(expected_index, &expected_ids, stale));
-            continue;
+                complexity,
+                operation_id,
+            };
+
+            match apply_task(runtime, snapshot, &validated, prepared_value, &policy) {
+                Ok(ApplyTaskOutcome::Applied(fingerprint)) => {
+                    if let Some(fingerprint) = fingerprint {
+                        resulting_fingerprints.insert(task_id.clone(), fingerprint);
+                    }
+                    applied_task_ids.push(task_id.clone());
+                    outcomes.push(task_outcome(task_id, "applied", None));
+                    record_applied_assessment(
+                        validated,
+                        snapshot,
+                        "applied",
+                        &mut task_results,
+                        &mut ci_sweep_admission,
+                    );
+                }
+                Ok(ApplyTaskOutcome::AlreadyApplied(fingerprint)) => {
+                    if let Some(fingerprint) = fingerprint {
+                        resulting_fingerprints.insert(task_id.clone(), fingerprint);
+                    }
+                    applied_task_ids.push(task_id.clone());
+                    outcomes.push(task_outcome(task_id, "already_applied", None));
+                    record_applied_assessment(
+                        validated,
+                        snapshot,
+                        "already_applied",
+                        &mut task_results,
+                        &mut ci_sweep_admission,
+                    );
+                }
+                Ok(ApplyTaskOutcome::Stale(reason, detail)) => {
+                    outcomes.push(stale_task(task_id, reason, &detail));
+                }
+                Err(error) => outcomes.push(task_outcome(
+                    task_id,
+                    "apply_failed",
+                    Some(error.to_string()),
+                )),
+            }
         }
 
-        match apply_partition(runtime, &prepared_before, &validated, prepared_value) {
-            Ok(ApplyPartitionOutcome::Applied(fingerprints)) => {
-                resulting_fingerprints.extend(fingerprints);
-                let mut applied_task_ids = Vec::with_capacity(validated.len());
-                for mut task in validated {
-                    let changed = prepared_before[&task.task_id].context_files != task.after;
-                    if let Value::Object(fields) = &mut task.assessment {
-                        fields.insert("applied".to_string(), Value::Bool(changed || task.promote));
-                        if let Some(admission) = task.admission.clone() {
-                            fields.insert("ci_sweep_admission".to_string(), admission);
-                        }
-                    }
-                    if let Some(admission) = task.admission {
-                        ci_sweep_admission.push(admission);
-                    }
-                    applied_task_ids.push(task.task_id);
-                    task_results.push(task.assessment);
-                }
-                partition_decisions.push(json!({
-                    "partition_index": expected_index,
-                    "task_ids": expected_ids,
-                    "outcome": "applied",
-                    "applied_task_ids": applied_task_ids,
-                }));
-            }
-            Ok(ApplyPartitionOutcome::Stale(stale)) => {
-                partition_decisions.push(stale_partition(expected_index, &expected_ids, stale));
-            }
-            Err(error) => {
-                partition_decisions.push(failed_partition(
-                    expected_index,
-                    &expected_ids,
-                    error.to_string(),
-                ));
-            }
-        }
+        let unresolved = outcomes
+            .iter()
+            .filter(|outcome| {
+                !matches!(
+                    outcome["outcome"].as_str(),
+                    Some("applied" | "already_applied")
+                )
+            })
+            .count();
+        let outcome = if unresolved == 0 {
+            "applied"
+        } else if applied_task_ids.is_empty()
+            && outcomes.iter().all(|outcome| outcome["outcome"] == "stale")
+        {
+            "skipped_stale"
+        } else if applied_task_ids.is_empty() {
+            "failed"
+        } else {
+            "partial"
+        };
+        let error = outcomes.iter().find_map(|task| {
+            (!matches!(
+                task["outcome"].as_str(),
+                Some("applied" | "already_applied")
+            ))
+            .then(|| {
+                task.get("error")
+                    .and_then(Value::as_str)
+                    .or_else(|| task.get("detail").and_then(Value::as_str))
+                    .map(ToOwned::to_owned)
+            })
+            .flatten()
+        });
+        let stale_tasks = outcomes
+            .iter()
+            .filter(|task| task["outcome"] == "stale")
+            .cloned()
+            .collect::<Vec<_>>();
+        partition_decisions.push(json!({
+            "partition_index": expected_index,
+            "task_ids": expected_ids,
+            "outcome": outcome,
+            "applied_task_ids": applied_task_ids,
+            "task_outcomes": outcomes,
+            "unresolved_count": unresolved,
+            "error": error,
+            "stale_tasks": stale_tasks,
+        }));
     }
 
     if seen_task_ids.len() != prepared_before.len() {
@@ -450,73 +627,168 @@ pub(in super::super) fn apply(
             "task_ids": [],
             "outcome": "failed",
             "error": format!("unexpected extra partition result at position {position}"),
+            "unresolved_count": 1,
+            "applied_task_ids": [],
+            "task_outcomes": [],
         }));
     }
 
     let failed_partitions = partition_decisions
         .iter()
-        .filter(|decision| decision["outcome"] == "failed")
+        .filter(|decision| matches!(decision["outcome"].as_str(), Some("failed" | "partial")))
         .cloned()
         .collect::<Vec<_>>();
+    let own_task_outcomes = partition_decisions
+        .iter()
+        .filter_map(|decision| decision["task_outcomes"].as_array())
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut task_outcomes = carried_task_outcomes.clone();
+    task_outcomes.extend(own_task_outcomes.iter().cloned());
     let skipped_stale_partitions = partition_decisions
         .iter()
         .filter(|decision| decision["outcome"] == "skipped_stale")
         .cloned()
         .collect::<Vec<_>>();
-    let applied_partitions = partition_decisions
-        .iter()
-        .filter(|decision| decision["outcome"] == "applied")
-        .count();
-    let succeeded = failed_partitions.is_empty() && skipped_stale_partitions.is_empty();
+    let applied_tasks = prior_applied_count as usize
+        + partition_decisions
+            .iter()
+            .filter_map(|decision| decision["applied_task_ids"].as_array())
+            .map(Vec::len)
+            .sum::<usize>();
+    let unresolved_tasks = carried_task_outcomes.len() as u64
+        + partition_decisions
+            .iter()
+            .filter_map(|decision| decision.get("unresolved_count").and_then(Value::as_u64))
+            .sum::<u64>();
+    let succeeded = failed_partitions.is_empty()
+        && skipped_stale_partitions.is_empty()
+        && carried_task_outcomes.is_empty();
     let status = if succeeded { "succeeded" } else { "failed" };
     let error = (!succeeded).then(|| {
-        let stale_tasks = skipped_stale_partitions
+        let first_unresolved = partition_decisions
             .iter()
-            .flat_map(|partition| partition["stale_tasks"].as_array())
-            .flatten()
-            .filter_map(|task| {
+            .find_map(|partition| {
+                let partition_index = partition["partition_index"].as_u64()?;
+                let task = partition["task_outcomes"]
+                    .as_array()?
+                    .iter()
+                    .find(|task| {
+                        !matches!(task["outcome"].as_str(), Some("applied" | "already_applied"))
+                    })?;
+                let classification = task
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| task["outcome"].as_str().unwrap_or("unresolved"));
+                let detail = task
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .or_else(|| task.get("detail").and_then(Value::as_str))
+                    .unwrap_or("unresolved task");
                 Some(format!(
-                    "{}: {}",
-                    task["task_id"].as_str()?,
-                    task["reason"].as_str()?
+                    "partition {partition_index}, task {}: {classification}: {detail}",
+                    task["task_id"].as_str().unwrap_or("<unknown>"),
                 ))
             })
-            .collect::<Vec<_>>();
-        let stale_details = if stale_tasks.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", stale_tasks.join(", "))
-        };
-        let applied_details = if applied_partitions == 0 {
-            String::new()
-        } else {
-            "; valid partitions were applied".to_string()
-        };
+            .or_else(|| {
+                carried_task_outcomes.first().map(|task| {
+                    format!(
+                        "carried task {}: {}",
+                        task["task_id"].as_str().unwrap_or("<unknown>"),
+                        task.get("error")
+                            .and_then(Value::as_str)
+                            .or_else(|| task.get("detail").and_then(Value::as_str))
+                            .unwrap_or("unresolved task")
+                    )
+                })
+            })
+            .unwrap_or_else(|| "partition envelope validation failed".to_string());
         format!(
-            "{} partition(s) failed, {} partition(s) were skipped as stale{}, and {} partition(s) applied{}",
-            failed_partitions.len(),
-            skipped_stale_partitions.len(),
-            stale_details,
-            applied_partitions,
-            applied_details
+            "task-pilot apply unresolved: {first_unresolved}; {applied_tasks} applied, {unresolved_tasks} unresolved"
         )
     });
-
-    let member_evidence = claim.filter(|_| succeeded).and_then(|claim| {
-        let id = claim.member.task_ids.first()?;
-        let resulting = resulting_fingerprints.get(id)?;
-        let assessment = task_results
-            .iter()
-            .find(|v| v["task_id"].as_str() == Some(id))?;
-        Some(orbit_types::workflow::automation::members::MemberEvidence {
-            action_id: claim.action_id.unwrap_or_default(),
-            attempt_id: claim.id,
-            member_key: claim.member.key,
-            input_fingerprint: claim.member.fingerprint,
-            resulting_fingerprint: resulting.clone(),
-            ready: member_ready(assessment),
-            result: assessment.clone(),
+    let repair_task_ids = own_task_outcomes
+        .iter()
+        .filter(|outcome| outcome["outcome"] == "invalid")
+        .filter_map(|outcome| outcome["task_id"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    let repair_partitions = repair_task_ids
+        .iter()
+        .enumerate()
+        .map(|(partition_index, task_id)| {
+            let errors = own_task_outcomes
+                .iter()
+                .filter(|outcome| outcome["task_id"].as_str() == Some(task_id))
+                .filter_map(|outcome| outcome["error"].as_str())
+                .collect::<Vec<_>>();
+            json!({
+                "partition_index": partition_index,
+                "task_ids": [task_id],
+                "validation_errors": errors,
+                "source_revision": source.as_ref().map(|source| source.source_revision.as_str()),
+            })
         })
+        .collect::<Vec<_>>();
+    let repair_tasks = prepared_tasks
+        .iter()
+        .filter(|task| {
+            task["task_id"]
+                .as_str()
+                .is_some_and(|id| repair_task_ids.iter().any(|repair_id| repair_id == id))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    // The repair apply keeps the claim so a repaired member still certifies
+    // its own evidence under the consumer's predicate [ORB-12746].
+    let repair_prepared = json!({
+        "state_automation": prepared.get("state_automation").cloned().unwrap_or(Value::Null),
+        "mode": mode,
+        "workspace_path": workspace_root,
+        "source": prepared.get("source").cloned().unwrap_or(Value::Null),
+        "task_count": repair_task_ids.len(),
+        "task_ids": repair_task_ids,
+        "tasks": repair_tasks,
+        "partition_size": 1,
+        "partition_count": repair_partitions.len(),
+        "partitions": repair_partitions,
+        "excluded": [],
+    });
+    let non_repairable_outcomes = task_outcomes
+        .iter()
+        .filter(|outcome| {
+            !matches!(
+                outcome["outcome"].as_str(),
+                Some("invalid" | "applied" | "already_applied")
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // One evidence record per claim member this apply settled, independent
+    // of its siblings: a failed partition never withholds an applied member's
+    // receipt [ORB-12746].
+    let member_evidence = claim.as_ref().map(|claim| {
+        claim
+            .members()
+            .iter()
+            .filter_map(|member| {
+                let id = member.task_ids.first()?;
+                let resulting = resulting_fingerprints.get(id)?;
+                let assessment = task_results
+                    .iter()
+                    .find(|v| v["task_id"].as_str() == Some(id))?;
+                Some(orbit_types::workflow::automation::members::MemberEvidence {
+                    action_id: claim.action_id.clone().unwrap_or_default(),
+                    attempt_id: claim.id.clone(),
+                    member_key: member.key.clone(),
+                    input_fingerprint: member.fingerprint.clone(),
+                    resulting_fingerprint: resulting.clone(),
+                    ready: member_ready(assessment),
+                    result: assessment.clone(),
+                })
+            })
+            .collect::<Vec<_>>()
     });
     Ok(json!({
         "member_evidence": member_evidence,
@@ -534,166 +806,14 @@ pub(in super::super) fn apply(
         "received_partition_count": results.len(),
         "failed_partitions": failed_partitions,
         "skipped_stale_partitions": skipped_stale_partitions,
+        "task_outcomes": task_outcomes,
+        "applied_count": applied_tasks,
+        "unresolved_count": unresolved_tasks,
+        "repair_count": repair_task_ids.len(),
+        "repair_partitions": repair_partitions,
+        "repair_prepared": repair_prepared,
+        "non_repairable_outcomes": non_repairable_outcomes,
         "tasks": task_results,
         "ci_sweep_admission": ci_sweep_admission,
     }))
-}
-
-enum ApplyPartitionOutcome {
-    Applied(BTreeMap<String, String>),
-    Stale(Vec<Value>),
-}
-
-fn apply_partition(
-    runtime: &OrbitRuntime,
-    snapshots: &BTreeMap<String, PreparedTaskSnapshot>,
-    tasks: &[ValidatedTask],
-    prepared: &Value,
-) -> Result<ApplyPartitionOutcome, OrbitError> {
-    let mut task_ids = tasks
-        .iter()
-        .map(|task| task.task_id.clone())
-        .collect::<Vec<_>>();
-    task_ids.sort();
-    let mut lock_ids = task_ids.clone();
-    for id in &task_ids {
-        lock_ids.extend(runtime.get_task(id)?.dependencies());
-    }
-    lock_ids.sort();
-    lock_ids.dedup();
-    let mut outcome = None;
-    let mut operation = || {
-        crate::application::automation::members::claim(runtime, prepared)?;
-        let mut fingerprints = BTreeMap::new();
-        let mut stale = Vec::new();
-        for task_id in &task_ids {
-            match runtime.get_task(task_id) {
-                Ok(current) => {
-                    if let Some(reason) =
-                        task_snapshot_drift(runtime, &current, &snapshots[task_id])
-                    {
-                        stale.push(stale_task(task_id, reason.0, reason.1));
-                    }
-                }
-                Err(OrbitError::NotFound { .. }) => stale.push(stale_task(
-                    task_id,
-                    "task_deleted",
-                    "task no longer exists at the write boundary",
-                )),
-                Err(error) => return Err(error),
-            }
-        }
-        if !stale.is_empty() {
-            outcome = Some(ApplyPartitionOutcome::Stale(stale));
-            return Ok(());
-        }
-
-        for task in tasks.iter() {
-            let changed = snapshots[&task.task_id].context_files != task.after;
-            if changed || task.promote {
-                runtime.update_task(
-                    &task.task_id,
-                    TaskUpdateParams {
-                        context_files: changed.then_some(task.after.clone()),
-                        status: task.promote.then_some(TaskStatus::Backlog),
-                        comment: task.promote.then(|| {
-                            "CI-sweep admission: task-pilot validated current relevance and selectors; promoted proposed repair to backlog."
-                                .to_string()
-                        }),
-                        ..TaskUpdateParams::default()
-                    },
-                )?;
-            }
-        }
-        for task in tasks {
-            if let Some((_, revision)) = &snapshots[&task.task_id].material {
-                let current = runtime.get_task(&task.task_id)?;
-                fingerprints.insert(
-                    task.task_id.clone(),
-                    crate::application::automation::preparation::fingerprint(
-                        runtime, &current, revision,
-                    )
-                    .map_err(orbit_automation::automation_error_to_orbit)?,
-                );
-            }
-        }
-        outcome = Some(ApplyPartitionOutcome::Applied(fingerprints));
-        Ok(())
-    };
-    with_task_locks(runtime, &lock_ids, 0, &mut operation)?;
-    outcome.ok_or_else(|| {
-        OrbitError::Execution("task-pilot partition operation did not run".to_string())
-    })
-}
-
-fn with_task_locks(
-    runtime: &OrbitRuntime,
-    task_ids: &[String],
-    index: usize,
-    operation: &mut dyn FnMut() -> Result<(), OrbitError>,
-) -> Result<(), OrbitError> {
-    let Some(task_id) = task_ids.get(index) else {
-        return operation();
-    };
-    let mut nested = || with_task_locks(runtime, task_ids, index + 1, operation);
-    runtime
-        .stores()
-        .tasks()
-        .with_task_write_lock(task_id, &mut nested)
-}
-
-fn task_snapshot_drift(
-    runtime: &OrbitRuntime,
-    current: &Task,
-    snapshot: &PreparedTaskSnapshot,
-) -> Option<(&'static str, &'static str)> {
-    if snapshot
-        .material
-        .as_ref()
-        .is_some_and(|(expected, revision)| {
-            crate::application::automation::preparation::fingerprint(runtime, current, revision)
-                .map_or(true, |fingerprint| &fingerprint != expected)
-        })
-    {
-        Some((
-            "material_changed",
-            "task meaning or dependency evidence changed after preparation",
-        ))
-    } else if current.context_files != snapshot.context_files {
-        Some((
-            "context_files_changed",
-            "task context_files changed after preparation",
-        ))
-    } else if current.status != snapshot.status {
-        Some(("status_changed", "task status changed after preparation"))
-    } else if current.title != snapshot.title {
-        Some(("title_changed", "task title changed after preparation"))
-    } else if current.tags != snapshot.tags {
-        Some(("tags_changed", "task tags changed after preparation"))
-    } else {
-        None
-    }
-}
-
-fn stale_task(task_id: &str, reason: &str, detail: &str) -> Value {
-    json!({ "task_id": task_id, "reason": reason, "detail": detail })
-}
-
-fn failed_partition(partition_index: u64, task_ids: &[String], error: String) -> Value {
-    json!({
-        "partition_index": partition_index,
-        "task_ids": task_ids,
-        "outcome": "failed",
-        "error": error,
-    })
-}
-
-fn stale_partition(partition_index: u64, task_ids: &[String], stale: Vec<Value>) -> Value {
-    json!({
-        "partition_index": partition_index,
-        "task_ids": task_ids,
-        "outcome": "skipped_stale",
-        "stale_tasks": stale,
-        "applied_task_ids": [],
-    })
 }

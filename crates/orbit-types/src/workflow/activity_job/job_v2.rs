@@ -1,10 +1,7 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::workflow::JobScheduleState;
+use crate::workflow::{JobScheduleState, ShipMode};
 
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 
@@ -30,6 +27,16 @@ impl std::fmt::Display for JobKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobV2 {
     pub state: JobScheduleState,
+    /// This job creates a task-scoped worktree and may collect it after a
+    /// successful delivery. The collector still checks task and Git safety.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub owns_task_worktree: bool,
+    /// This job carries the tasks in its `input.task_ids` through delivery.
+    /// A live run holds those tasks' delivery slot, so `orbit run ship`
+    /// refuses to dispatch them again; `modes` says which ship modes a task
+    /// may select the job for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_delivery: Option<JobTaskDelivery>,
     #[serde(default)]
     pub default_input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,11 +49,51 @@ pub struct JobV2 {
     pub failure_activity: Option<String>,
     #[serde(skip)]
     pub resolved_failure_activity: Option<ActivityV2>,
+    /// Last automated look at a failed run [ORB-13907]: invoked at most once
+    /// per run, after step recovery is exhausted and before
+    /// `failure_activity`. Its typed decision either resumes the run from an
+    /// earlier step or settles the task without the failure hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_recovery_activity: Option<String>,
+    #[serde(skip)]
+    pub resolved_final_recovery_activity: Option<ActivityV2>,
+    /// Runs of this job allowed to execute at once; later submissions wait
+    /// `pending` in submission order. `0` imposes no job-level ceiling, for a
+    /// job whose callers already bound how many runs they start.
     #[serde(default = "default_max_active_runs")]
     pub max_active_runs: u32,
     #[serde(default)]
     pub kind: JobKind,
     pub steps: Vec<JobV2Step>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+/// A job's `spec.task_delivery` declaration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JobTaskDelivery {
+    /// Ship modes a task may select this job for with a `delivery:<job>` tag.
+    /// Empty for a job that holds the slot without being selectable: the ship
+    /// coordinators, and the claimed leaves a claim binding selects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<ShipMode>,
+}
+
+impl JobV2 {
+    /// Whether a live run of this job holds its tasks' delivery slot.
+    pub fn holds_task_delivery(&self) -> bool {
+        self.task_delivery.is_some()
+    }
+
+    /// Whether a task may select this job to deliver it in `mode`.
+    pub fn delivers_mode(&self, mode: ShipMode) -> bool {
+        self.task_delivery
+            .as_ref()
+            .is_some_and(|delivery| delivery.modes.contains(&mode))
+    }
 }
 
 /// A step in a v2 job. Carries `id`, optional `when` / `retry` modifiers,
@@ -74,6 +121,10 @@ pub struct JobV2Step {
 /// load time. A `TargetRef` that survives into dispatch is a caller bug —
 /// the job executor should never have to look up an activity by name.
 #[derive(Debug, Clone, Serialize, PartialEq)]
+// The resolved Target carries the activity snapshot inline in persisted job
+// steps. Boxing it would churn every executor reader for a size heuristic;
+// the additive optional program policy makes this enum cross that threshold.
+#[allow(clippy::large_enum_variant)]
 #[serde(untagged)]
 pub enum JobV2StepBody {
     Parallel {
@@ -103,9 +154,7 @@ impl<'de> Deserialize<'de> for JobV2Step {
             .remove("id")
             .and_then(|x| x.as_str().map(String::from))
             .ok_or_else(|| D::Error::custom("step missing `id`"))?;
-        let when = obj
-            .remove("when")
-            .and_then(|x| x.as_str().map(String::from));
+        let when = deserialize_optional_string::<D::Error>("when", obj.remove("when"))?;
         let retry = match obj.remove("retry") {
             Some(rv) => Some(
                 serde_json::from_value::<RetrySpec>(rv)
@@ -113,9 +162,10 @@ impl<'de> Deserialize<'de> for JobV2Step {
             ),
             None => None,
         };
-        let recovery_activity = obj
-            .remove("recovery_activity")
-            .and_then(|x| x.as_str().map(String::from));
+        let recovery_activity = deserialize_optional_string::<D::Error>(
+            "recovery_activity",
+            obj.remove("recovery_activity"),
+        )?;
 
         if obj.contains_key("role") {
             return Err(D::Error::custom(
@@ -141,18 +191,18 @@ impl<'de> Deserialize<'de> for JobV2Step {
 
         let body = match (has_parallel, has_fan_out, has_loop, has_target, has_spec) {
             (true, false, false, false, false) => {
-                let block = obj
-                    .remove("parallel")
-                    .expect("parallel key was checked before step body dispatch");
+                let block = obj.remove("parallel").ok_or_else(|| {
+                    D::Error::custom("step body key `parallel` disappeared during dispatch")
+                })?;
                 JobV2StepBody::Parallel {
                     parallel: serde_json::from_value(block)
                         .map_err(|e| D::Error::custom(format!("parallel: {e}")))?,
                 }
             }
             (false, true, false, false, false) => {
-                let fan_out_block = obj
-                    .remove("fan_out")
-                    .expect("fan_out key was checked before step body dispatch");
+                let fan_out_block = obj.remove("fan_out").ok_or_else(|| {
+                    D::Error::custom("step body key `fan_out` disappeared during dispatch")
+                })?;
                 let fan_in_block = obj
                     .remove("fan_in")
                     .ok_or_else(|| D::Error::custom("fan_out step missing matching `fan_in`"))?;
@@ -164,9 +214,9 @@ impl<'de> Deserialize<'de> for JobV2Step {
                 }
             }
             (false, false, true, false, false) => {
-                let block = obj
-                    .remove("loop")
-                    .expect("loop key was checked before step body dispatch");
+                let block = obj.remove("loop").ok_or_else(|| {
+                    D::Error::custom("step body key `loop` disappeared during dispatch")
+                })?;
                 JobV2StepBody::Loop {
                     loop_: serde_json::from_value(block)
                         .map_err(|e| D::Error::custom(format!("loop: {e}")))?,
@@ -180,7 +230,11 @@ impl<'de> Deserialize<'de> for JobV2Step {
                 serde_json::from_value(Value::Object(std::mem::take(obj)))
                     .map_err(|e| D::Error::custom(format!("target step: {e}")))?,
             ),
-            _ => unreachable!("body shape count already validated"),
+            _ => {
+                return Err(D::Error::custom(
+                    "step must set exactly one body shape: `target`, `spec`, `parallel`, `fan_out`, or `loop`",
+                ));
+            }
         };
 
         Ok(JobV2Step {
@@ -191,6 +245,17 @@ impl<'de> Deserialize<'de> for JobV2Step {
             resolved_recovery_activity: None,
             body,
         })
+    }
+}
+
+fn deserialize_optional_string<E: serde::de::Error>(
+    field: &str,
+    value: Option<Value>,
+) -> Result<Option<String>, E> {
+    match value {
+        None => Ok(None),
+        Some(value) => serde_json::from_value::<Option<String>>(value)
+            .map_err(|error| E::custom(format!("`{field}`: {error}"))),
     }
 }
 

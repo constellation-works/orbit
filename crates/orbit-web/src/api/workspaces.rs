@@ -6,20 +6,21 @@
 //! degrade gracefully: `/api/workspaces` reports the one synthetic entry and
 //! `/api/tasks/all` returns that workspace's tasks.
 
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
+use std::path::Path;
 
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
-use orbit_core::{DEFAULT_TASK_LIST_LIMIT, JobRun, JobRunState, OrbitRuntime};
+use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::pagination::TaskPageQuery;
 use super::{HISTORY_DEFAULT_LIMIT, bad_request, blocking, bounded_limit, server_error};
-use crate::projections::task_row_to_json;
-use crate::state::DashboardState;
-use orbit_core::application::task::TaskListFilter;
+use crate::projections::TaskListProjection;
+use crate::state::{DashboardState, Pinned};
 
 /// `GET /api/workspaces` — list every workspace the dashboard can serve, with
 /// the currently-selected default flagged.
@@ -28,12 +29,19 @@ use orbit_core::application::task::TaskListFilter;
 /// frontend can render the selected workspace's location directly, without
 /// needing to know the server's home directory (ORB-00037).
 pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Response {
+    match blocking("list workspaces", move || Ok(list_workspaces_json(&state))).await {
+        Ok(values) => Json(Value::Array(values)).into_response(),
+        Err(response) => *response,
+    }
+}
+
+fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
     // Refresh and pin one snapshot so the listing and its `is_default` flags all
     // reflect the same generation (add/remove/rebind observed atomically).
     let pinned = state.pin();
     let default = pinned.default_workspace();
-    let home = home_dir();
-    let values: Vec<Value> = pinned
+    let home = orbit_common::fs::path::home_dir().ok();
+    pinned
         .entries()
         .iter()
         .map(|entry| {
@@ -46,8 +54,7 @@ pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Resp
                 "is_default": default == Some(entry.id.as_str()),
             })
         })
-        .collect();
-    Json(Value::Array(values)).into_response()
+        .collect()
 }
 
 /// `GET /api/tasks/all` — dashboard tasks aggregated across active workspaces.
@@ -57,13 +64,43 @@ pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Resp
 /// ORB-00037) so the frontend can badge the row and show the full location in
 /// the task's Details box. Inactive (stale-path) workspaces are skipped, as are
 /// any that fail to open — the aggregate view stays available even when one
-/// workspace is broken.
-pub(super) async fn list_all_tasks(State(state): State<DashboardState>) -> Response {
-    match blocking("aggregate task list", move || Ok(all_tasks_json(&state))).await {
+/// workspace is broken. Status/tag/type/search filters, limit, and cursor have
+/// the same semantics as `/api/tasks`; selection happens independently in each
+/// workspace before one global `created_at DESC, id ASC` merge.
+pub(super) async fn list_all_tasks(
+    State(state): State<DashboardState>,
+    RawQuery(raw_query): RawQuery,
+) -> Response {
+    let query = match TaskPageQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(message) => return bad_request(message),
+    };
+    match blocking("aggregate task list", move || {
+        let pinned = state.pin();
+        let scope = aggregate_task_scope(&pinned);
+        let mut query = query;
+        query
+            .bind_cursor(&scope)
+            .map_err(orbit_core::OrbitError::InvalidInput)?;
+        Ok(all_tasks_json(&pinned, &query, &scope))
+    })
+    .await
+    {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => server_error(error),
         Err(response) => *response,
     }
+}
+
+fn aggregate_task_scope(pinned: &Pinned) -> String {
+    let mut workspace_ids = pinned
+        .entries()
+        .iter()
+        .filter(|entry| entry.active)
+        .map(|entry| entry.id.as_str())
+        .collect::<Vec<_>>();
+    workspace_ids.sort_unstable();
+    format!("aggregate:{}", workspace_ids.join(","))
 }
 
 #[derive(Deserialize, Default)]
@@ -230,17 +267,29 @@ fn run_timestamp(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
-fn all_tasks_json(state: &DashboardState) -> Result<Value, orbit_core::OrbitError> {
-    let pinned = state.pin();
-    let home = home_dir();
+fn all_tasks_json(
+    pinned: &Pinned,
+    query: &TaskPageQuery,
+    scope: &str,
+) -> Result<Value, orbit_core::OrbitError> {
+    let home = orbit_common::fs::path::home_dir().ok();
     let mut candidates = Vec::new();
     let mut total = 0;
+    let mut remaining = 0;
     for entry in pinned.entries().iter().filter(|entry| entry.active) {
         let Ok(runtime) = pinned.runtime_for(&entry.id) else {
             continue;
         };
-        let page = runtime.task_candidates(&TaskListFilter::default(), DEFAULT_TASK_LIST_LIMIT)?;
-        total += page.total;
+        // One broken workspace must not take down the fleet-wide list.
+        let page = match runtime.task_candidates(&query.filter(), query.limit()) {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
+                continue;
+            }
+        };
+        total += page.total_without_cursor;
+        remaining += page.total;
         for task in page.items {
             candidates.push((task, runtime.clone(), entry));
         }
@@ -250,20 +299,57 @@ fn all_tasks_json(state: &DashboardState) -> Result<Value, orbit_core::OrbitErro
             .cmp(&a.created_at)
             .then_with(|| a.id.cmp(&b.id))
     });
-    candidates.truncate(DEFAULT_TASK_LIST_LIMIT);
+    candidates.truncate(query.limit());
+    let offset = query.offset();
+    let next_offset = offset.saturating_add(candidates.len());
+    let next_cursor = if remaining > candidates.len() {
+        candidates
+            .last()
+            .map(|(task, _, _)| {
+                query.next_cursor(scope, task.created_at, task.id.clone(), next_offset)
+            })
+            .transpose()
+            .map_err(|error| {
+                orbit_core::OrbitError::Execution(format!("encode task cursor: {error}"))
+            })?
+    } else {
+        None
+    };
+    let mut rows = Vec::with_capacity(candidates.len());
+    for (task, runtime, entry) in candidates {
+        // Same contract as the per-workspace scan above: one unreadable row
+        // is logged and skipped rather than failing the whole fleet list.
+        match runtime.get_listed_task_row(&task.id) {
+            Ok(Some(row)) => rows.push((row, runtime, entry)),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    workspace = %entry.id,
+                    task = %task.id,
+                    %error,
+                    "fleet task list skipped an unreadable task row"
+                );
+            }
+        }
+    }
     // All runtimes in a dashboard share one coordination registry. Read its
-    // global dependency projection once, after the metadata selection.
-    let statuses = candidates
+    // global dependency projection once, after hydrating the page.
+    let statuses = rows
         .first()
-        .map(|(_, runtime, _)| runtime.task_status_index())
+        .map(|(_, runtime, _)| {
+            runtime.dependency_status_index(rows.iter().map(|(row, _, _)| &row.task))
+        })
         .transpose()?
         .unwrap_or_default();
-    let mut values = Vec::with_capacity(candidates.len());
-    for (task, runtime, entry) in candidates {
-        let Some(row) = runtime.get_listed_task_row(&task.id)? else {
-            continue;
-        };
-        let mut value = task_row_to_json(&runtime, &row, &statuses)?;
+    // Each workspace's runtime carries its own crew registry; build each one
+    // once for the page rather than once per row.
+    let mut projections: BTreeMap<&str, TaskListProjection> = BTreeMap::new();
+    let mut values = Vec::with_capacity(rows.len());
+    for (row, runtime, entry) in rows {
+        let projection = projections
+            .entry(entry.id.as_str())
+            .or_insert_with(|| TaskListProjection::new(&runtime));
+        let mut value = projection.row_to_json(&row, &statuses)?;
         if let Value::Object(map) = &mut value {
             map.insert("workspace_id".to_string(), json!(entry.id));
             map.insert("workspace_name".to_string(), json!(entry.name));
@@ -277,8 +363,10 @@ fn all_tasks_json(state: &DashboardState) -> Result<Value, orbit_core::OrbitErro
     Ok(json!({
         "items": values,
         "total": total,
-        "limit": DEFAULT_TASK_LIST_LIMIT,
+        "limit": query.limit(),
         "truncated": total > values.len(),
+        "offset": offset,
+        "next_cursor": next_cursor,
     }))
 }
 
@@ -296,13 +384,4 @@ pub(super) fn abbreviate_home(path: &Path, home: Option<&Path>) -> String {
         }
     }
     path.display().to_string()
-}
-
-/// The current user's home directory from `$HOME`, ignoring an empty value.
-/// Used only to abbreviate paths for display; absence just disables the `~`
-/// collapse (paths render verbatim).
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
 }

@@ -1,0 +1,87 @@
+use clap::Args;
+use orbit_core::OrbitRuntime;
+use orbit_core::adapter::command::PluginAddOptions;
+
+use crate::command::{CommandOut, Execute, Payload};
+
+use super::support::{
+    append_enable_report_text, enable_report_json, plugin_record, show_build_plan,
+};
+
+#[derive(Args)]
+pub struct PluginAddArgs {
+    /// Plugin source holding `.orbit-plugin/`: a directory, a
+    /// `git+<url>#<ref>` reference, a local archive, or an `https://` archive
+    /// URL
+    pub source: String,
+    /// Replace an existing install of the same version
+    #[arg(long)]
+    pub force: bool,
+    /// `sha256:<hex>` the archive at an `https://` source must hash to.
+    /// Required for such a source; Orbit never installs a downloaded archive
+    /// it has not been told the hash of.
+    #[arg(long)]
+    pub digest: Option<String>,
+    /// Enable the plugin as part of the install
+    #[arg(long)]
+    pub enable: bool,
+    /// Complete permission grant set to record when enabling (repeatable,
+    /// comma-separated): fs, network, env_pass, orbit_tools, unsandboxed.
+    /// Replaces any recorded set.
+    /// Scope fs to particular roots with `fs=<root>[,<root>]`, as
+    /// `orbit plugin enable --grant` documents.
+    #[arg(long = "grant", value_delimiter = ',', requires = "enable")]
+    pub grants: Vec<String>,
+    /// Consent to build this source on this host. A `git+<url>#<full
+    /// commit id>` source whose manifest declares `spec.build` is refused
+    /// without it; the refusal prints the build plan to review. Consent
+    /// covers this one command and never comes from a pin or config.
+    #[arg(long)]
+    pub allow_build: bool,
+}
+
+impl Execute for PluginAddArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let result = runtime.add_plugin(
+            &self.source,
+            &PluginAddOptions {
+                force: self.force,
+                digest: self.digest,
+                enable: self.enable,
+                grants: self.grants,
+                allow_build: self.allow_build,
+                show_build_plan: Some(show_build_plan),
+            },
+        )?;
+        let summary = &result.summary;
+        let mut text = format!(
+            "Installed plugin '{}' v{} to {}",
+            summary.name, summary.version, summary.install_path
+        );
+        if summary.tools.is_empty() {
+            text.push_str("\nNo tools were registered; run `orbit plugin show` for details.");
+        } else {
+            text.push_str("\nTools:");
+            for tool in &summary.tools {
+                text.push_str(&format!("\n  {}", tool.name));
+            }
+        }
+        if let Some(diagnostic) = &summary.diagnostic {
+            text.push_str(&format!("\n\n{diagnostic}"));
+        } else if summary.status == orbit_types::plugin::PluginStatus::Disabled {
+            text.push_str(&format!(
+                "\n\nNext step:\n  orbit plugin enable {}",
+                summary.name
+            ));
+        }
+        // Same report `orbit plugin enable` renders, carried out of the
+        // install rather than collapsed into the summary, so the seeded
+        // schedules, skill links and warnings `--enable` produced here are
+        // not only visible on the two-step `add` then `enable` path.
+        append_enable_report_text(&mut text, &result.seeded, &result.skills, &result.warnings);
+
+        let mut doc = plugin_record(summary);
+        enable_report_json(&mut doc, &result.seeded, &result.skills, &result.warnings);
+        Ok(Payload::detail(doc, text).into())
+    }
+}

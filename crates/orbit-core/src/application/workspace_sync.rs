@@ -8,13 +8,16 @@ use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use serde::Serialize;
 
 use super::job::DEFAULT_JOB_FILES;
-use super::routine::reconcile_default_routines;
-use super::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
-use super::{
+use super::managed_assets::{
     ManagedAssetAction, ManagedAssetLayout, ManagedAssetOutcome, ManagedAssetReconcileMode,
     ManagedAssetReconciliation, reconcile_managed_assets_in_mode,
 };
-use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, auto_tasks_dir};
+use super::routines::materialize::reconcile_default_routines;
+use super::routines::seed::RoutineSeedIdentity;
+use super::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
+use crate::application::auto_tasks::{
+    DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, render_default_auto_task,
+};
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -72,6 +75,10 @@ pub struct ManagedArtifactSyncAction {
 pub struct WorkspaceManagedArtifactSyncReport {
     pub check: bool,
     pub actions: Vec<ManagedArtifactSyncAction>,
+    /// Operator warnings no action's `detail` already carries: a manifest
+    /// write skipped on a read-only or permission-denied catalog, or
+    /// untracked legacy YAML preserved in place.
+    pub warnings: Vec<String>,
 }
 
 impl WorkspaceManagedArtifactSyncReport {
@@ -92,14 +99,18 @@ impl WorkspaceManagedArtifactSyncReport {
 /// Reconcile the host-global and workspace-local managed definitions used by
 /// one already-initialized workspace. This use case deliberately knows
 /// nothing about workspace registration, identity, role, config, or runtime
-/// state, so callers cannot accidentally turn convergence into bootstrap.
+/// state, so callers cannot accidentally turn convergence into bootstrap:
+/// the caller supplies the registered `base_branch` the delivery defaults are
+/// rendered against, exactly as it supplies the routine identity.
 pub fn reconcile_workspace_managed_artifacts(
     global_root: &Path,
     workspace_orbit_root: &Path,
-    routine_host_id: Option<&str>,
-    workspace_slug: Option<&str>,
+    routine_identity: Option<&RoutineSeedIdentity>,
+    base_branch: &str,
     check: bool,
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    crate::bootstrap::product_profile::ProductProfile::Orbit
+        .validate_roots(&[global_root, workspace_orbit_root])?;
     let mode = if check {
         ManagedAssetReconcileMode::Check
     } else {
@@ -108,6 +119,7 @@ pub fn reconcile_workspace_managed_artifacts(
     let mut report = WorkspaceManagedArtifactSyncReport {
         check,
         actions: Vec::new(),
+        warnings: Vec::new(),
     };
 
     let skills = reconcile_managed_assets_in_mode(
@@ -166,7 +178,10 @@ pub fn reconcile_workspace_managed_artifacts(
         false,
         mode,
         |name, content| {
-            let definition = parse_auto_task_yaml(content).map_err(|error| {
+            // Validate what lands on disk: the delivery defaults only become a
+            // loadable definition once their branch placeholder is rendered.
+            let rendered = render_default_auto_task(content, base_branch);
+            let definition = parse_auto_task_yaml(&rendered).map_err(|error| {
                 OrbitError::InvalidInput(format!(
                     "default auto-task `{name}` failed validation: {error}"
                 ))
@@ -176,7 +191,7 @@ pub fn reconcile_workspace_managed_artifacts(
                     "default auto-task `{name}` must have the matching name and ship disabled"
                 )));
             }
-            Ok(Cow::Borrowed(content))
+            Ok(rendered)
         },
     )?;
     append_actions(
@@ -186,11 +201,10 @@ pub fn reconcile_workspace_managed_artifacts(
         auto_tasks,
     );
 
-    if let Some(routine_host_id) = routine_host_id {
+    if let Some(routine_identity) = routine_identity {
         let routines = reconcile_default_routines(
             &workspace_orbit_root.join("routines"),
-            routine_host_id,
-            workspace_slug,
+            routine_identity,
             false,
             mode,
         )?;
@@ -225,6 +239,16 @@ fn append_actions(
     kind: &str,
     reconciliation: ManagedAssetReconciliation,
 ) {
+    // Most warnings also describe a preserved action and already reach the
+    // report as its detail; keep the rest, which have no action to ride on.
+    report
+        .warnings
+        .extend(reconciliation.warnings.into_iter().filter(|warning| {
+            !reconciliation
+                .actions
+                .iter()
+                .any(|action| action.detail.as_ref() == Some(warning))
+        }));
     report.actions.extend(
         reconciliation
             .actions

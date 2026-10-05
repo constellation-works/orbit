@@ -1,7 +1,82 @@
 use super::*;
-use crate::driver::file::task_bundle::{BundleWriteFault, PendingWriteGuard, fail_if_injected};
+use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
+use crate::driver::file::task_bundle::PendingWriteGuard;
 
 impl TaskV2Store {
+    pub(crate) fn apply_atomic_task_mutation(
+        &self,
+        id: &str,
+        fields: &AtomicTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        if fields.actor.trim().is_empty()
+            || fields.operation_id.trim().is_empty()
+            || fields.event_type.trim().is_empty()
+            || fields.history_summary.trim().is_empty()
+            || fields.history_summary.chars().any(char::is_control)
+            || fields.audit_note.trim().is_empty()
+        {
+            return Err(OrbitError::InvalidInput(
+                "atomic task mutation requires actor, operation id, event type, a single-line history summary, and audit note"
+                    .to_string(),
+            ));
+        }
+
+        self.with_task_lock(id, || {
+            let mut bundle = self.read_existing_bundle(id)?;
+            let receipt = format!("operation_id={}", fields.operation_id);
+            if bundle.events.iter().any(|event| {
+                event.event_type == fields.event_type
+                    && event.note.as_deref().is_some_and(|note| {
+                        note.ends_with(&format!(" ({receipt})"))
+                            || note.lines().next() == Some(receipt.as_str())
+                    })
+            }) {
+                return Ok(AtomicTaskMutationOutcome::AlreadyApplied);
+            }
+            if bundle.envelope.context_files != fields.expected_context_files
+                || bundle.envelope.status != fields.expected_status
+                || bundle.envelope.complexity != fields.expected_complexity
+            {
+                return Ok(AtomicTaskMutationOutcome::Stale);
+            }
+
+            if let Some(boundary) = &self.coordination {
+                boundary.guard_ordinary_footprint(fields.status, &fields.context_files)?;
+            }
+            let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let now = Utc::now();
+            let status_changed = fields.status != bundle.envelope.status;
+            let event = TaskEventRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id: next_event_id(&bundle.events),
+                at: now,
+                by: fields.actor.clone(),
+                event_type: fields.event_type.clone(),
+                note: Some(format!("{} ({receipt})", fields.history_summary)),
+                from_status: status_changed.then_some(bundle.envelope.status),
+                to_status: status_changed.then_some(fields.status),
+            };
+            self.bundle_store.append_event(id, &event)?;
+            let comment = TaskCommentRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                comment_id: format!("C-{:04}", next_sequence(&bundle.comments, "C-")),
+                at: now,
+                by: fields.actor.clone(),
+                body: format!("{receipt}\n{}", fields.audit_note),
+            };
+            self.bundle_store.append_comment(id, &comment)?;
+            bundle.envelope.context_files = fields.context_files.clone();
+            bundle.envelope.status = fields.status;
+            bundle.envelope.complexity = Some(fields.complexity);
+            bundle.envelope.updated_at = now;
+            self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
+            pending.finish();
+            self.replace_index_best_effort(&bundle.envelope, &fields.event_note);
+            Ok(AtomicTaskMutationOutcome::Applied)
+        })
+    }
+
     pub(crate) fn update_task_document(
         &self,
         id: &str,
@@ -37,7 +112,9 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.tags {
-                bundle.envelope.tags = normalize_task_tags(value.clone());
+                let tags = normalize_task_tags(value.clone());
+                validate_os_tags(&tags)?;
+                bundle.envelope.tags = tags;
                 envelope_changed = true;
             }
             if let Some(value) = &fields.context_files {
@@ -99,6 +176,18 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.job_run_id {
+                if value != &bundle.envelope.job_run_id {
+                    bundle.envelope.job_run_machine = fields.job_run_machine.clone().flatten();
+                } else if let Some(location) = &fields.job_run_machine
+                    && location != &bundle.envelope.job_run_machine
+                {
+                    return Err(OrbitError::InvalidInput(
+                        "execution location is immutable for a run binding".into(),
+                    ));
+                }
+                if value.is_none() {
+                    bundle.envelope.job_run_machine = None;
+                }
                 bundle.envelope.job_run_id = value.clone();
                 envelope_changed = true;
             }
@@ -115,6 +204,12 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
 
+            if let Some(boundary) = &self.coordination {
+                boundary.guard_ordinary_footprint(
+                    bundle.envelope.status,
+                    &bundle.envelope.context_files,
+                )?;
+            }
             if relations_changed {
                 self.registry.validate_task_relations(
                     &self.workspace_id,
@@ -164,7 +259,6 @@ impl TaskV2Store {
                 bundle.events.push(event);
             }
 
-            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
             if envelope_changed
                 || fields.description.is_some()
                 || fields.acceptance_criteria.is_some()
@@ -218,6 +312,9 @@ impl TaskV2Store {
                 )));
             }
             let target_status = fields.status.unwrap_or(current_status);
+            if let Some(boundary) = &self.coordination {
+                boundary.guard_ordinary_footprint(target_status, &bundle.envelope.context_files)?;
+            }
             let status_transition =
                 (target_status != current_status).then_some((current_status, target_status));
             let mut next_event = next_sequence(&bundle.events, "EV-");
@@ -271,7 +368,6 @@ impl TaskV2Store {
                 bundle.events.push(event);
             }
 
-            fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
             if !fields.append_history.is_empty()
                 || !fields.append_comments.is_empty()
                 || fields.status.is_some()

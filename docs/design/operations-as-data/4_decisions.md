@@ -1,17 +1,17 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-08-16
-last_validated: 2026-08-16
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stayed hand-written, and the touch-it-move-it ratchet.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/operation.rs", "crates/orbit-common/src/authorization.rs", "crates/orbit-common/src/friction/**", "crates/orbit-tools/src/builtin/orbit/tests/authorization.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/tests/authorization.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 ---
 
 # Operations as Data — Decisions
@@ -29,11 +29,12 @@ the ratchet.
 - **[Freeze the pre-migration surface as fixtures before migrating](#freeze-the-pre-migration-surface-as-fixtures-before-migrating) — Freeze the pre-migration surface as fixtures before migrating** — Accepted.
 - **[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp) — Capability chokepoint for destructive operations outside MCP** — Accepted.
 - **[MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission) — MCP advertisement is placement; the capability chokepoint is permission** — Accepted.
+- **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default) — Dashboard `web connect` grants operator by default** — Accepted.
 
 ## Split spec/handler table joined by a typed verb enum
 
 **Recorded:** 2026-07-26 00:55:47.755882Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/operation.rs`, `crates/orbit-common/src/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1 describes one operation table holding both the
@@ -72,7 +73,7 @@ verb that is declared but not implemented fails to compile.
 ## Renderers and HTTP routes stay hand-written
 
 **Recorded:** 2026-07-26 00:55:47.967899Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/operation.rs`, `crates/orbit-common/src/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  Once verbs are data, the obvious next step is to make the rest of
@@ -107,7 +108,7 @@ tool names and parameter names from the registry.
 ## Freeze the pre-migration surface as fixtures before migrating
 
 **Recorded:** 2026-07-26 00:55:48.187121Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/operation.rs`, `crates/orbit-common/src/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  The pilot's hard requirement was that CLI argv/output and MCP tool
@@ -122,8 +123,8 @@ migrated code, proves nothing.
  Capture the pre-migration surface before writing any migration
 code, and commit it as test fixtures. For friction: `orbit friction [<verb>]
 --help` for all eight pages, captured from the binary built at the prior commit
-and frozen under `crates/orbit-cli/src/command/tests/friction_help/`, asserted
-via `include_str!`. The already-in-tree `mcp_tools_list.json` snapshot serves the
+and frozen under `crates/orbit-cli/tests/help_goldens/friction/`, asserted
+against the binary's `--help`. The already-in-tree `mcp_tools_list.json` snapshot serves the
 same role for MCP, where an empty `git diff` is the proof.
 
 
@@ -144,7 +145,7 @@ same role for MCP, where an empty `git diff` is the proof.
 ## Capability chokepoint for destructive operations outside MCP
 
 **Recorded:** 2026-07-26 21:49:30.348935Z · [ORB-10453]
-**Paths:** `crates/orbit-common/src/authorization.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-core/src/runtime/tool_exec.rs`, `crates/orbit-cli/src/main.rs`, `crates/orbit-cli/src/command/operation.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-core/src/adapter/tool_execution.rs`, `crates/orbit-cli/src/main.rs`, `crates/orbit-cli/src/command/operation_registry.rs`
 
 ### Context
 
@@ -160,7 +161,7 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 
 1. **Extend the existing capability model; do not add a second one.** `McpCapability` is the vocabulary for every surface. MCP becomes one consumer of the model rather than its owner.
 
-2. **Declare governed operations once, as data.** `orbit_common::authorization::GOVERNED_OPERATIONS` is a const registry of `{ id, surface, allowed: &[McpCapability], rationale }`. Call sites name an operation, never a capability; the requirement is resolved from the registry. It lives in the leaf crate for the same reason the operations-as-data registry does ([North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1): every consumer surface must read it without a new dependency edge.
+2. **Declare governed operations once, as data.** `orbit_common::governance::authorization::GOVERNED_OPERATIONS` is a const registry of `{ id, surface, allowed: &[McpCapability], rationale }`. Call sites name an operation, never a capability; the requirement is resolved from the registry. It lives in the leaf crate for the same reason the operations-as-data registry does ([North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1): every consumer surface must read it without a new dependency edge.
 
 3. **One decision function, one chokepoint per surface.** `authorization::authorize` is the only place the rule is evaluated. It is reached from exactly two enforcement points, each of which its whole surface must traverse: `OrbitRuntime::run_tool_with_context_and_role` for every tool call (CLI `tool run`, the CLI admin bypass, MCP `tools/call`, the dashboard, the v2 deterministic dispatcher, agent loops), and the `Commands::operation` dispatch in `orbit-cli`'s `main` for CLI commands that destroy without a tool. Neither reimplements any part of the rule.
 
@@ -186,13 +187,13 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 - Cost: a non-interactive caller with no session grant and no agent envelope — a shell script, a cron entry, a test binary — is now refused governed operations and must set `ORBIT_OPERATOR=1`. This is a real behavior change for automation that previously worked silently, and it landed as churn in three CLI integration tests. It is the intended trade: an unidentified caller performing destruction is precisely the accident being guarded against.
 - Cost: the escape hatch is an environment variable an agent can set, so a *determined* agent is not stopped. That is by construction, not oversight — see the framing. The value delivered is the loud failure and the record, not prevention.
 - Cost: the `governed_when` predicate for flag-gated commands (`--confirm`) lives in the `Commands::operation` arm, so a new destructive CLI command must say that it is one. The requirement itself still lives only in the registry, but the invocation-to-operation mapping is a second thing to remember. The compiler cannot catch a missing mapping.
-- Residual gap, formerly tracked as **ORB-10478**, now closed: tools declared `McpExposure::OperatorOnly` (`orbit.friction.list` / `show` / `update`) were refused by the hub MCP *call* path (`admitted()`) but were absent from the registry, so `orbit tool run` still performed them for any caller. They were left ungoverned deliberately, because `OperatorOnly` encoded audience/placement rather than destructiveness and governing a read would have refused agents ordinary `orbit friction list`. See [MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission) for the resolution: `McpExposure` and `admitted()` no longer exist, the friction reads stay ungoverned on purpose, and the surviving pairing is pinned by a test.
+- Residual gap, formerly tracked as **ORB-10478**, now closed: tools declared `McpExposure::OperatorOnly` (the friction `list` / `show` / `update` operations) were refused by the hub MCP *call* path (`admitted()`) but were absent from the registry, so `orbit tool run` still performed them for any caller. They were left ungoverned deliberately, because `OperatorOnly` encoded audience/placement rather than destructiveness and governing a read would have refused agents ordinary `orbit friction list`. See [MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission) for the resolution: `McpExposure` and `admitted()` no longer exist, the friction reads stay ungoverned on purpose, and the surviving pairing is pinned by a test.
 - The registry is intentionally small and opt-in. It names the operations whose accidental invocation destroys something, not every mutating tool; broadening it is a judgment call to be made deliberately, per operation.
 
 ## MCP advertisement is placement; the capability chokepoint is permission
 
 **Recorded:** 2026-08 · [ORB-10478] · **Implemented** in [ORB-10478]
-**Paths:** `crates/orbit-common/src/authorization.rs`, `crates/orbit-common/src/operation.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
 
 ### Context
 
@@ -203,7 +204,7 @@ Between the filing and this decision, most of that shape was deleted rather than
 - **Placement** — `OperationSpec::mcp_scope`, and `ToolRegistry::register_mcp` versus `register_inactive`. Decides which surfaces *list* a tool. `tools/list` performs no capability filtering, and `ToolRegistry::execute` never consults availability, so an unadvertised tool remains reachable through `orbit tool run`.
 - **Permission** — `GOVERNED_OPERATIONS`, evaluated by `authorize` at `OrbitRuntime::authorize_tool_operation`, which every tool caller traverses.
 
-The gap the earlier entry named has therefore closed by deletion, not by a fix: `orbit.friction.list` / `show` / `update` are ungoverned, no MCP path denies them, and an agent reads them from the CLI as before. What replaced it is the inverse pairing. `orbit.workflow.ship`, `orbit.workflow.run.{show,list,resume}` ([ORB-10534]) and `orbit.command.exec` ([ORB-10711]) are advertised to every MCP session and governed `operator` at the chokepoint, so an agent session is listed five tools it cannot perform.
+The gap the earlier entry named has therefore closed by deletion, not by a fix: the friction `list` / `show` / `update` operations are ungoverned, no MCP path denies them, and an agent reads them from the CLI as before. What replaced it is the inverse pairing. `orbit.workflow.ship`, `orbit.workflow.run.{show,list,resume}` ([ORB-10534]) and `orbit.command.exec` ([ORB-10711]) are advertised to every MCP session and governed `operator` at the chokepoint, so an agent session is listed five tools it cannot perform.
 
 ### Decision
 
@@ -211,7 +212,7 @@ The gap the earlier entry named has therefore closed by deletion, not by a fix: 
 
 2. **A disagreeing pairing is legitimate, but never accidental.** Advertised-and-governed is how the operator MCP surface is expressed; unadvertised-and-ungoverned is how `orbit friction show` is kept off the agent surface without being taken away from anyone. Both are fine. Silent drift into either is not, so `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs` declares the placement of every governed tool operation as a table and asserts it against the live registry in both directions. Advertising a governed tool, governing an advertised one, or dropping either half fails the test until the table is updated. `orbit-tools` is the lowest crate that can see both axes, so the check needs no new dependency edge.
 
-3. **The agent-reachable friction reads stay ungoverned, and that is now a test.** Because the chokepoint is surface-independent, governing `orbit.friction.list` / `show` would refuse an agent the CLI read as well as the MCP one. A pin asserts they stay off the registry.
+3. **The agent-reachable friction reads stay ungoverned, and that is now a test.** Because the chokepoint is surface-independent, governing the friction `list` / `show` operations would refuse an agent the CLI read as well as an MCP one. A pin asserts they stay off the registry.
 
 4. **An advertised governed tool must not list `agent` among its allowed capabilities.** Governing an operation the ordinary MCP caller already holds the capability for buys nothing and dilutes the entries that do refuse. A second assertion enforces it.
 
@@ -229,6 +230,68 @@ The gap the earlier entry named has therefore closed by deletion, not by a fix: 
 - Cost: adding a governed tool now requires one more line — its placement — in the guardrail table. That is the intended friction: the line is where the advertise-or-not decision gets made explicitly.
 - An MCP session's capabilities are decided once, when its server process starts, and the process environment is never consulted per call: `orbit mcp serve` grants `agent`, `orbit mcp serve --operator` grants `agent` and `operator`, and `ORBIT_OPERATOR` in the server's environment grants nothing on this surface ([ORB-10927]). The flag is the only operator path over MCP — the deliberate act has to be in the argv the operator wrote, because an environment variable is inherited by whatever server an agent happens to launch. `orbit mcp listen` is agent-only for the stronger version of the same reason: the socket authenticates no client, so a listener started with operator authority would serve it to every accepted connection.
 - Because the MCP chokepoint discards the process envelope by design, its denial names the remedy that surface actually has (`orbit mcp serve --operator`, or the CLI) rather than the `ORBIT_OPERATOR` override that is inert there. That is `CapabilityResolution` in `orbit_common::governance::authorization`: one enum on the envelope, carried into the denial, changing the remedy sentence and nothing about the decision.
+
+## Dashboard `web connect` grants operator by default
+
+**Recorded:** 2026-09-19 · [ORB-12563] · **Implemented** in [ORB-12563]
+**Paths:** `crates/orbit-web/src/connect.rs`, `crates/orbit-web/src/lib.rs`, `crates/orbit-web/src/api/routines.rs`
+
+### Context
+
+[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp) resolved caller capabilities in strict precedence, with an interactive TTY as the positive human signal and `ORBIT_OPERATOR=1` as the explicit escape hatch. `orbit web connect` spawns the remote dashboard as `ssh <host> "orbit web serve --no-open --port N [...]"`: that process has no TTY and no `ORBIT_OPERATOR`, so Operations controls (routine toggle, mint, clock, auto-drain, grants) rendered disabled. The session banner told the user to restart with `ORBIT_OPERATOR=1 orbit web serve`, which the connecting machine cannot do — `connect` owns the remote process. The same dashboard already exposes task ship / approve / reject / archive and run cancel / resume / replay, so withholding Operations bought no protection.
+
+The MCP surface is a different case and is not reopened here: `orbit mcp serve --operator` remains the only operator path over MCP, because an environment variable is inherited by whatever server an agent happens to launch, and `orbit mcp listen` authenticates no client.
+
+### Decision
+
+1. **Orbit is a single-user tool; the dashboard is not shared across users.** The person running `orbit web connect` over their own authenticated SSH session *is* the operator — the SSH login is the deliberate act.
+
+2. **`orbit web serve --operator` stamps operator onto the dashboard session envelope** regardless of TTY or `ORBIT_OPERATOR`. Session grants win, matching the existing capability-precedence entry. `ORBIT_OPERATOR=1` remains the escape hatch when the flag is absent.
+
+3. **`orbit web connect` passes `--operator` by default.** `remote_serve_command` emits `orbit web serve --no-open --operator --port N [...]`. `--no-operator` restores the previous read-only Operations surface. Attaching to a pre-existing non-operator remote prints a notice; that process cannot be upgraded in place.
+
+4. **MCP is unchanged.** `orbit mcp serve --operator` / `orbit mcp listen` keep the reasoning in the capability-precedence entry. The workspace-scope gate (aggregate view / inactive workspaces stay read-only) is unchanged. Operator grants still emit the existing `authorization` audit rows.
+
+### Consequences
+
+- A remote dashboard opened with `orbit web connect` has Operations controls enabled without an on-box detour.
+- A caller that wants a read-only remote must say so (`--no-operator`).
+- A pre-existing `orbit web serve` without `--operator` stays read-only until it is restarted; connect says so instead of leaving the user to discover disabled buttons.
+- Local `orbit web serve` without a TTY still needs `--operator` or `ORBIT_OPERATOR=1`; the new default applies to `connect`, not to a headless local serve.
+
+## A governed row may be an identification floor, not only an operator gate
+
+**Recorded:** 2026-09-20 · [ORB-12582] · **Implemented** in [ORB-12582]
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/application/distributed/probe.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, `crates/orbit-cli/tests/tool/tool_list.rs`
+
+### Context
+
+The distributed drain's read-only surface — `orbit.drain.probe` and `orbit.drain.receipt.lookup` [ORB-12495] — required the workspace's `agent` capability and checked it by reading `session.effective_capabilities` inside the application function, because the requirement admits an agent and therefore could not be expressed as an operator row under [MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission) decision 4.
+
+That read is only correct on one surface. An MCP session's capabilities are stamped onto the session at `initialize`; a CLI caller's are not, and never were: `orbit tool run` builds its envelope in `local_tool_session_context` with machine identity, transport, and a trace ID, and expresses authority as `CapabilityEnforcement::Enforce` over the process envelope, which only the chokepoint resolves. The session's capability set is empty by construction, so both tools refused every `orbit tool run` call — including the owner's own, on the owner's own checkout — while `orbit tool list` advertised them as active and the MCP server answered the same calls normally. The unit test that should have caught it synthesized `effective_capabilities: {Agent}` for its "owner-local session", a session no production CLI caller sends.
+
+### Decision
+
+1. **The requirement is a governed row like every other.** Both tools list `allowed: [Agent, Operator]` in `GOVERNED_OPERATIONS`, and the application functions perform no capability check of their own. The chokepoint already knows how to resolve a caller on every surface — session grants, then `ORBIT_OPERATOR`, then agent envelope, then interactive terminal, then nothing — so routing the decision through it is what makes the CLI and MCP answers identical, which is the property the surface was documented to have.
+
+2. **A row that lists `agent` is a floor, and is declared as one.** It says every caller this process can identify may perform the operation and a caller it cannot may not. That is a third reason to appear in the registry, beside out-of-scope destruction and the `Runner` carve-out, and it is written into the registry's own documentation. The pairing rule from decision 4 of the previous entry stands for every other advertised governed tool; the exception is enumerated in `AGENT_FLOOR_GOVERNED_TOOLS` in the guardrail test, which now asserts both directions — an undeclared advertised tool may not list `agent`, and a declared one must.
+
+3. **A handler that needs one more distinction asks for the resolved set.** The receipt lookup's cross-attempt rule (naming another machine's receipt namespace requires `operator`) is input-dependent and cannot be a tool-name-keyed row, so it calls `runtime::authorization::resolved_caller_capabilities`, which applies the shared resolution rather than reading the session. The probe's reported `session.capabilities` come from the same place, so its diagnostics name what the chokepoint actually resolved instead of an empty set.
+
+4. **The owner-local CLI route is covered by the binary, not by a synthesized session.** `crates/orbit-cli/tests/tool/tool_list.rs` spawns `orbit tool run` for both tools against a temp workspace, beside the equivalent coverage [ORB-12581] added for `orbit.drain.claims`.
+
+### Rejected alternatives
+
+- **Have `local_tool_session_context` state the capabilities the CLI caller holds.** Attractive — it is the other half of the same observation — but session grants outrank the override in `CallerCapabilities::resolve`, so pre-resolving `ORBIT_OPERATOR=1` into the session would erase `CallerProvenance::OperatorOverride` and with it the `warn!` and the audit row that make the escape hatch loud. The chokepoint must see the raw envelope.
+- **Leave the check in the application function and widen it to accept a CLI caller.** Rejected: it would be a second capability resolver, disagreeing with the chokepoint the moment either changed — the precise failure mode the chokepoint exists to prevent.
+- **Stamp the resolved capability set back onto the session context for every tool call.** Tempting, and it would let any handler read the session safely, but the tool host captures the session before the chokepoint runs, so the stamp would have to move the resolution ahead of the decision or be applied in two places. A named helper for the one handler that needs it is smaller and keeps a single resolution point.
+
+### Consequences
+
+- The owner's own machine can call its own read-only drain surface. Both tools answer `orbit tool run` for an operator (TTY or `ORBIT_OPERATOR=1`) and for an agent envelope, matching what `orbit tool list` advertises, and continue to answer an `agent` MCP session.
+- A capability-less MCP session is still refused, and now with a denial that names the operation, the required capability, and the remedy for its surface, rather than a bare `capability_refused`.
+- Cost: a CLI caller with no session grant, no agent envelope, and no TTY — a bare shell script or a cron entry — is refused both tools and must identify itself, the same trade the original chokepoint entry recorded for governed operations generally.
+- Cost: the guardrail table now has an exception list, asserted in both directions, so adding a name requires the same deliberate line as adding a governed tool does. [ORB-13625] added the distributed drain's executor lifecycle — `orbit.task.pull`, `orbit.drain.claim.bind`, `orbit.drain.claim.settle` — on the same floor: a follower's drain holds `agent` and nothing more, and attempt ownership is fenced by the claim journal against the session's own machine, not by a stronger capability.
 
 ## Task References
 

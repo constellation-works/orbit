@@ -1,7 +1,7 @@
 //! Integrity verification for published Orbit release artifacts.
 //!
 //! Every consumer that installs a released binary — `install.sh`, the npm
-//! installer, `orbit semantic install`, and `orbit update` — answers the same
+//! installer and `orbit update` — answers the same
 //! two questions: *was this checksum manifest signed by a trusted release
 //! key*, and *does this asset hash to the digest that manifest publishes*.
 //!
@@ -79,7 +79,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// anything that is not exactly 64 hex characters.
 ///
 /// `label` names the source in the rejection so the caller's own wording
-/// ("`ORBIT_SEARCH_COMPANION_SHA256`", "release checksum manifest entry")
+/// ("explicit SHA256", "release checksum manifest entry")
 /// reaches the operator.
 pub fn normalize_sha256(value: &str, label: &str) -> Result<String, OrbitError> {
     let normalized = value.trim().to_ascii_lowercase();

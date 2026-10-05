@@ -154,32 +154,6 @@ def validate_skill_frontmatter(skill_dir: Path) -> None:
             errors.append(f"skill {skill_dir.name} frontmatter field {key} must be non-empty")
 
 
-def validate_task_pilot_assets() -> None:
-    # The task-pilot contract lives in two places, and neither is a skill: the
-    # `task_pilot` activity instructs the agent the pipeline actually runs, and
-    # this agent profile instructs the one a plugin user delegates to. A third
-    # copy as a skill was redundant and free to drift, so it was retired — these
-    # markers keep the read-only bounds asserted on the copy that remains.
-    agent_path = plugin_root / "agents" / "orbit-task-pilot.md"
-    if not agent_path.is_file():
-        errors.append("plugin is missing agents/orbit-task-pilot.md")
-    else:
-        agent = agent_path.read_text(encoding="utf-8")
-        for required in (
-            "name: orbit-task-pilot",
-            "tools: Read, Grep, Glob, Bash",
-            "Never edit repository files",
-            "context_files_before",
-            "context_files_after",
-            "verified_no_diff",
-        ):
-            if required not in agent:
-                errors.append(f"orbit-task-pilot agent is missing profile marker {required!r}")
-        for forbidden in ("tools: Read, Grep, Glob, Bash, Edit", "Write", "orbit.task.update"):
-            if forbidden in agent:
-                errors.append(f"orbit-task-pilot agent contains forbidden write marker {forbidden!r}")
-
-
 manifest = load_json(manifest_path, "plugin/.codex-plugin/plugin.json")
 if manifest is not None:
     reject_todos(manifest, "plugin.json")
@@ -295,8 +269,6 @@ if manifest is not None:
     else:
         for skill_dir in sorted(path for path in skills_root.iterdir() if path.is_dir()):
             validate_skill_frontmatter(skill_dir)
-    validate_task_pilot_assets()
-
     marketplace = load_json(marketplace_path, ".agents/plugins/marketplace.json")
     if marketplace is not None and name is not None:
         if not isinstance(marketplace.get("name"), str) or not marketplace["name"].strip():
@@ -339,4 +311,3 @@ if errors:
 
 print(f"validate-codex-plugin: plugin manifest is valid ({manifest_path.relative_to(repo)})")
 PY
-

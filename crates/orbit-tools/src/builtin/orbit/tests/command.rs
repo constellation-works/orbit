@@ -1,73 +1,55 @@
-//! [ORB-10711, ADR-0351] The self-dispatch guard on `orbit.command.exec`.
+//! Working-directory confinement for `orbit.command.exec`.
 //!
-//! Mirrors `orbit.workflow.ship`'s guard test: a managed run's leaf agent must
-//! not reach this tool, because it could otherwise invoke the CLI to bypass
-//! every other tool-specific policy. The guard reads `task_scope().run_id`
-//! before the host is ever resolved, so a mock host is enough to prove it —
-//! no runtime, claim, or process spawn required.
+//! `confine_workspace_cwd` refuses a symlink whose target leaves the checkout.
+//! The managed-run dispatch denial for this tool is covered at the tool-host
+//! boundary in `orbit-core`.
+
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use serde_json::json;
-use std::sync::Arc;
+use orbit_common::fs::cwd::confine_workspace_cwd;
+use tempfile::TempDir;
 
-use crate::builtin::orbit::command::OrbitCommandExecTool;
-use crate::{
-    OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext, Tool, ToolContext,
-};
+fn checkout_fixture() -> (TempDir, PathBuf) {
+    let root = TempDir::new().expect("tempdir");
+    let checkout = root.path().join("repo");
+    std::fs::create_dir_all(&checkout).expect("checkout");
+    let checkout = checkout.canonicalize().expect("canonicalize checkout");
+    (root, checkout)
+}
 
-struct ManagedHost;
+fn confine(
+    requested: &str,
+    checkout: &Path,
+    extra_roots: &[PathBuf],
+) -> Result<PathBuf, OrbitError> {
+    confine_workspace_cwd(
+        "working_directory",
+        requested,
+        "ws_fixture",
+        checkout,
+        extra_roots,
+    )
+}
 
-impl OrbitToolHost for ManagedHost {
-    fn execute(
-        &self,
-        _action: OrbitBuiltinAction,
-        _input: serde_json::Value,
-        _agent: Option<String>,
-        _model: Option<String>,
-        _reservation_owner: Option<ReservationOwnerContext>,
-    ) -> Result<serde_json::Value, OrbitError> {
-        panic!("the guard must refuse before the host is ever reached");
-    }
-
-    fn task_scope(&self) -> OrbitTaskScope {
-        OrbitTaskScope {
-            run_id: Some("jrun-managed".to_string()),
-            ..OrbitTaskScope::default()
-        }
+fn invalid_input(error: OrbitError) -> String {
+    match error {
+        OrbitError::InvalidInput(message) => message,
+        other => panic!("expected invalid input, got {other:?}"),
     }
 }
 
+#[cfg(unix)]
 #[test]
-fn managed_run_rejects_command_exec_before_host_resolution() {
-    let context = ToolContext {
-        orbit_host: Some(Arc::new(ManagedHost)),
-        ..ToolContext::default()
-    };
+fn working_directory_symlink_that_escapes_is_refused() {
+    let (root, checkout) = checkout_fixture();
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("outside dir");
+    let link = checkout.join("escape");
+    std::os::unix::fs::symlink(&outside, &link).expect("escaping symlink");
 
-    let error = OrbitCommandExecTool
-        .execute(
-            &context,
-            json!({"argv": ["git", "status"], "working_directory": "/tmp"}),
-        )
-        .expect_err("managed run must not execute remote commands");
-
-    assert!(
-        matches!(error, OrbitError::CapabilityDenied(_)),
-        "{error:?}"
+    let message = invalid_input(
+        confine(&link.display().to_string(), &checkout, &[]).expect_err("escaping symlink"),
     );
-    assert!(error.to_string().contains("managed runs cannot execute"));
-}
-
-#[test]
-fn schema_requires_argv_and_working_directory() {
-    let schema = OrbitCommandExecTool.schema();
-    let required: Vec<&str> = schema
-        .parameters
-        .iter()
-        .filter(|parameter| parameter.required)
-        .map(|parameter| parameter.name.as_str())
-        .collect();
-
-    assert!(required.contains(&"argv"));
-    assert!(required.contains(&"working_directory"));
+    assert!(message.contains("outside workspace"), "{message}");
 }

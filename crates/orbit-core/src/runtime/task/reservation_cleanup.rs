@@ -1,16 +1,17 @@
 //! Detection and cleanup of stale task reservations.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    ActiveTaskReservation, ReleasedTaskReservation, TaskReservationOwnedConflictsParams,
-    TaskReservationReleaseByOwnerParams, TaskReservationReleaseParams,
-    TaskReservationReleaseReason,
+    ActiveTaskReservation, JobRunFinalization, ReleasedTaskReservation,
+    TaskReservationOwnedConflictsParams, TaskReservationReleaseByOwnerParams,
+    TaskReservationReleaseParams, TaskReservationReleaseReason,
 };
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::json;
 
 use crate::OrbitRuntime;
@@ -25,6 +26,11 @@ struct StaleReservationContext {
     /// Run ids the orphan classifiers already consider conclusively orphaned.
     orphaned_run_ids: BTreeSet<String>,
     task_statuses: BTreeMap<String, TaskStatus>,
+    /// Owner-run lookups made during this pass, keyed by run id, so several
+    /// reservations sharing an owner cost one store read. Stale answers only
+    /// err toward keeping a reservation: a terminal state is final, and a run
+    /// cached as live is at worst released by the next repair pass.
+    run_cache: RefCell<HashMap<String, Option<JobRun>>>,
 }
 
 /// A task reservation that Orbit can prove is no longer protecting live work.
@@ -80,9 +86,13 @@ impl OrbitRuntime {
         let mut released = 0;
         for reservation_id in candidate_ids {
             let current = self
-                .inspect_active_reservations()?
-                .into_iter()
-                .find(|reservation| reservation.reservation_id == reservation_id);
+                .stores()
+                .task_reservations()
+                .inspect_active_task_reservation(
+                    &workspace_orbit_dir(self),
+                    workspace_task_reservation_id(self)?.as_deref(),
+                    &reservation_id,
+                )?;
             let Some(current) = current else {
                 continue;
             };
@@ -131,7 +141,7 @@ impl OrbitRuntime {
 
     /// The workspace-wide facts stale classification consults, read once per
     /// pass instead of once per reservation: the orphan classifier scans
-    /// every job run and the task sweep reads every task.
+    /// every job run and the task sweep uses the status projection.
     fn stale_reservation_context(&self) -> Result<StaleReservationContext, OrbitError> {
         let mut orphaned_run_ids = self
             .list_orphaned_running_job_runs()?
@@ -143,15 +153,28 @@ impl OrbitRuntime {
                 .into_iter()
                 .map(|orphan| orphan.run_id),
         );
-        let task_statuses = self
-            .list_tasks()?
-            .into_iter()
-            .map(|task| (task.id, task.status))
-            .collect::<BTreeMap<_, _>>();
+        let task_statuses = self.task_status_index()?;
         Ok(StaleReservationContext {
             orphaned_run_ids,
             task_statuses,
+            run_cache: RefCell::new(HashMap::new()),
         })
+    }
+
+    fn cached_owner_run(
+        &self,
+        run_id: &str,
+        context: &StaleReservationContext,
+    ) -> Result<Option<JobRun>, OrbitError> {
+        if let Some(cached) = context.run_cache.borrow().get(run_id) {
+            return Ok(cached.clone());
+        }
+        let run = self.get_job_run_backend(run_id)?;
+        context
+            .run_cache
+            .borrow_mut()
+            .insert(run_id.to_string(), run.clone());
+        Ok(run)
     }
 
     fn classify_stale_task_reservation(
@@ -160,7 +183,7 @@ impl OrbitRuntime {
         context: &StaleReservationContext,
     ) -> Result<Option<String>, OrbitError> {
         if let Some(owner_run_id) = reservation.owner_run_id.as_deref() {
-            let Some(run) = self.get_job_run_backend(owner_run_id)? else {
+            let Some(run) = self.cached_owner_run(owner_run_id, context)? else {
                 return Ok(Some(format!("owner run {owner_run_id} is absent")));
             };
             if run.state.is_terminal() {
@@ -203,17 +226,63 @@ impl OrbitRuntime {
         duration_ms: Option<u64>,
         release_reason: TaskReservationReleaseReason,
     ) -> Result<bool, OrbitError> {
-        // Capture the state the run was in *before* finalizing:
-        // `finalize_run` reports `changed == true` even when re-finalizing an
-        // already-terminal run, so it can't distinguish the terminalizing write
-        // from a replay. The coupling-out block must fire only on the actual
-        // transition into a terminal failure state.
-        let prior_state = self.get_job_run_backend(run_id)?.map(|run| run.state);
-        let was_terminal_before = prior_state.is_some_and(JobRunState::is_terminal);
-        let changed =
-            self.stores()
-                .jobs()
-                .finalize_job_run(run_id, state, finished_at, duration_ms)?;
+        self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
+            run_id,
+            state,
+            finished_at,
+            duration_ms,
+            release_reason,
+            None,
+        )
+    }
+
+    /// [`Self::finalize_job_run_with_reservation_cleanup`] for a caller that
+    /// records its `(error_code, message)` diagnostic step only after the
+    /// terminal write — orphan reconciliation, which must not leave a step on
+    /// a run a live worker completed first. The diagnostic goes straight into
+    /// the coupled tasks' block note instead of being read back from steps.
+    pub(crate) fn finalize_job_run_with_reservation_cleanup_and_diagnostic(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<u64>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic: Option<(&str, &str)>,
+    ) -> Result<bool, OrbitError> {
+        self.finalize_job_run_with_cleanup_after_prior_read(
+            run_id,
+            state,
+            finished_at,
+            duration_ms,
+            release_reason,
+            (diagnostic, || {}),
+        )
+    }
+
+    // The callback lets a synchronized test put a competing finalization
+    // between this caller's old snapshot and the atomic store decision.
+    fn finalize_job_run_with_cleanup_after_prior_read(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<u64>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic_and_after_read: (Option<(&str, &str)>, impl FnOnce()),
+    ) -> Result<bool, OrbitError> {
+        let (diagnostic, after_prior_read) = diagnostic_and_after_read;
+        // This snapshot is observational only. A competing caller can write a
+        // terminal state before our own write, so it grants no side-effect
+        // authority. The store returns that decision from its transaction.
+        let _prior_state = self.get_job_run_backend(run_id)?.map(|run| run.state);
+        after_prior_read();
+        let outcome = self.stores().jobs().finalize_job_run_with_outcome(
+            run_id,
+            state,
+            finished_at,
+            duration_ms,
+        )?;
         // [ORB-10597] The store keeps the first terminal state and drops this
         // one. An identical re-finalization is an ordinary idempotent replay; a
         // *different* terminal outcome is a real contradiction — most sharply,
@@ -225,26 +294,37 @@ impl OrbitRuntime {
         // reported to the caller as `already_terminal`; it did not produce a
         // second durable outcome. The inverse remains a real contradiction: a
         // worker reporting success/failure after `cancelled` is still recorded.
-        if let Some(prior) = prior_state.filter(|prior| {
-            prior.is_terminal() && *prior != state && state != JobRunState::Cancelled
-        }) {
+        if let JobRunFinalization::AlreadyTerminal(prior) = outcome
+            && prior != state
+            && state != JobRunState::Cancelled
+        {
             self.record_terminal_outcome_conflict(run_id, prior, state, finished_at);
         }
         if state.is_terminal() {
             self.best_effort_release_task_reservations_for_owner_run_id(run_id, release_reason);
             // Coupling-out: block the run's coupled tasks only on the first
-            // terminalization into a failure state. Gating on
-            // `!was_terminal_before` keeps this idempotent — a replayed
+            // terminalization into a failure or interrupted state. Gating on
+            // the atomic `Finalized` outcome keeps this idempotent — a replayed
             // terminalization is a no-op and never clobbers a task a human
             // already moved on. Blocking is best-effort so a status-write
             // failure never blocks the run from terminalizing or its
             // reservations/file locks from being released.
-            if !was_terminal_before && super::block_on_run_failure::is_workflow_failure_state(state)
+            if outcome == JobRunFinalization::Finalized
+                && super::block_on_run_failure::run_state_blocks_coupled_tasks(state)
             {
-                self.best_effort_block_tasks_for_failed_run(run_id, state);
+                self.best_effort_block_tasks_for_terminal_run(run_id, state, diagnostic);
             }
+            // [ORB-13663] A claimed leaf's settlement is recorded as it
+            // terminalizes, whichever process terminalizes it, and its own
+            // worker delivers it — no longer only the drain that admitted it.
+            // Not gated on `Finalized`: recording and delivery are idempotent,
+            // and a replay retries a delivery an earlier attempt lost.
+            self.best_effort_settle_terminal_claimed_leaf(run_id, diagnostic);
+            // [ORB-13890] A run never ends holding a review attempt open.
+            // Idempotent, so not gated on `Finalized` either.
+            self.best_effort_release_run_review_attempts(run_id, finished_at);
         }
-        Ok(changed)
+        Ok(outcome != JobRunFinalization::Missing)
     }
 
     pub(crate) fn release_task_reservations_for_owner_run_id(

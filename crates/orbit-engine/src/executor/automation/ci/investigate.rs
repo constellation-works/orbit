@@ -2,17 +2,46 @@
 
 use serde_json::{Value, json};
 
-use super::collect::{
-    Bounds, investigation_slots, job_is_cancelled_without_failed_steps, push_retryable_error,
-    run_is_completed,
-};
+use super::collect::{Bounds, investigation_slots, push_retryable_error};
+use super::partition::{job_is_cancelled_without_failed_steps, run_is_completed};
 use super::query::{CiQueries, LogScope};
+
+/// The findings for a cancelled run whose expansion has no failed step to
+/// repair, or `None` when at least one job has one. Lets collection classify
+/// such a run from its view alone, before any investigation budget is spent.
+pub(super) fn cancelled_without_failed_steps(failure: &Value, view: &Value) -> Option<Vec<Value>> {
+    let jobs = sorted_failed_jobs(view);
+    if jobs.is_empty() {
+        return Some(vec![inconclusive_cancellation_finding(failure, None)]);
+    }
+    jobs.iter()
+        .all(job_is_cancelled_without_failed_steps)
+        .then(|| {
+            jobs.iter()
+                .map(|job| inconclusive_cancellation_finding(failure, Some(job)))
+                .collect()
+        })
+}
+
+/// Stable numeric identity makes a provider's job ordering irrelevant to
+/// which findings receive the bounded reads on repeated sweeps.
+fn sorted_failed_jobs(view: &Value) -> Vec<Value> {
+    let mut jobs = view
+        .get("failed_jobs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    jobs.sort_by_key(|job| job.get("job_id").and_then(Value::as_u64));
+    jobs
+}
 
 /// Inspect each failed job independently. The row keeps run freshness metadata,
 /// but all diagnostic and checkout fields belong only to its named job.
+/// `cached_view` is this run's view when collection already fetched it.
 pub(super) fn investigate<Q: CiQueries + ?Sized>(
     queries: &Q,
     failure: &Value,
+    cached_view: Option<Value>,
     bounds: &Bounds,
     checkout_log_reads: &mut usize,
     job_log_reads: &mut usize,
@@ -28,7 +57,7 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
         );
         return vec![failure.clone()];
     };
-    let view = match queries.run_view(&run_id.to_string()) {
+    let view = match cached_view.map_or_else(|| queries.run_view(&run_id.to_string()), Ok) {
         Ok(view) => view,
         Err(error) => {
             push_retryable_error(
@@ -41,11 +70,7 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
             return vec![failure.clone()];
         }
     };
-    let jobs = view
-        .get("failed_jobs")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let jobs = sorted_failed_jobs(&view);
     if jobs.is_empty() {
         if run_is_completed(failure)
             && failure.get("conclusion").and_then(Value::as_str) == Some("cancelled")
@@ -64,10 +89,6 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
         return vec![failure.clone()];
     }
 
-    // Stable numeric identity makes a provider's job ordering irrelevant to
-    // which findings receive the bounded reads on repeated sweeps.
-    let mut jobs = jobs;
-    jobs.sort_by_key(|job| job.get("job_id").and_then(Value::as_u64));
     let mut findings = Vec::new();
     let mut actionable = Vec::new();
     for job in jobs {
@@ -115,6 +136,7 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
                 &mut finding,
                 job_id,
                 bounds,
+                &view,
                 checkout_log_reads,
                 &mut errors,
             );
@@ -159,11 +181,19 @@ fn investigate_job<Q: CiQueries + ?Sized>(
     failure: &mut Value,
     job_id: u64,
     bounds: &Bounds,
+    view: &Value,
     checkout_log_reads: &mut usize,
     retryable_errors: &mut Vec<Value>,
 ) {
     let run_id = failure["run_id"].to_string();
-    match queries.run_logs(&run_id, job_id, LogScope::Failed, bounds.log_max_bytes) {
+    let mut job_api_log_recovered = false;
+    match queries.run_logs(
+        &run_id,
+        job_id,
+        LogScope::Failed,
+        bounds.log_max_bytes,
+        Some(view),
+    ) {
         Ok(log) => {
             if !log_belongs_to_job(&log, job_id) {
                 push_retryable_error(
@@ -175,6 +205,7 @@ fn investigate_job<Q: CiQueries + ?Sized>(
                 );
                 return;
             }
+            job_api_log_recovered = log.source == orbit_tools::github_cli::SOURCE_JOB_API_LOG;
             failure["log_job_id"] = json!(job_id);
             let diagnostic = bound_diagnostic(&log, failure, job_id);
             if !log.source_complete || (log.truncated && diagnostic.is_none()) {
@@ -192,17 +223,13 @@ fn investigate_job<Q: CiQueries + ?Sized>(
             failure["log_truncated"] = json!(log.truncated);
             failure["log_total_bytes"] = json!(log.total_bytes);
             failure["log_returned_bytes"] = json!(log.returned_bytes);
-            failure["log_scope"] = json!("failed");
+            failure["log_scope"] = json!(LogScope::Failed.as_str());
             failure["log_source"] = json!(log.source);
             failure["log_source_jobs"] = json!(log.source_jobs);
             failure["actual_checkout_shas"] = json!(log.checkout_commits);
             failure["checkout_evidence"] = json!(log.checkout_evidence);
             failure["checkout_evidence_scope"] = json!("failed");
             set_checkout_identity(failure, "failed", &log);
-            // A read that ends with no text at all is not a captured excerpt,
-            // and the per-job fallback has already had its turn. Record why,
-            // so the filed task can say what is missing and the sweep never
-            // reads silence as a clean run.
             if log.text.trim().is_empty() {
                 push_retryable_error(
                     retryable_errors,
@@ -224,10 +251,9 @@ fn investigate_job<Q: CiQueries + ?Sized>(
         }
     }
 
-    // The checkout step normally succeeds, so it is absent from the
-    // failed-step log. One full-log read per job, within a global hard budget,
-    // recovers the commit under test; past the budget we say so rather than
-    // leaving the field silently empty.
+    // Failed-scope evidence remains the source of diagnostic fields. The
+    // checkout step normally succeeds and is absent from that log, so fetch
+    // all-scope evidence separately only when checkout identity is missing.
     let needs_checkout = failure
         .get("actual_checkout_shas")
         .and_then(Value::as_array)
@@ -237,6 +263,19 @@ fn investigate_job<Q: CiQueries + ?Sized>(
             .and_then(Value::as_bool)
             != Some(true);
     if !needs_checkout {
+        return;
+    }
+    if job_api_log_recovered {
+        failure["checkout_evidence_scope"] = json!("job_api_log");
+        if retryable_errors.is_empty() {
+            push_retryable_error(
+                retryable_errors,
+                "registration",
+                "checkout_evidence",
+                failure.get("run_id"),
+                "the complete recovered job log contained no actual checkout SHA; the same job remains eligible for a later sweep",
+            );
+        }
         return;
     }
     if *checkout_log_reads >= bounds.max_checkout_log_reads {
@@ -250,9 +289,18 @@ fn investigate_job<Q: CiQueries + ?Sized>(
         );
         return;
     }
-    *checkout_log_reads += 1;
-    match queries.run_logs(&run_id, job_id, LogScope::All, bounds.log_max_bytes) {
+    let run_id = failure["run_id"].to_string();
+    // Charge only reads that returned a log. A transient failed request must
+    // not consume the sweep's chance to collect checkout evidence elsewhere.
+    match queries.run_logs(
+        &run_id,
+        job_id,
+        LogScope::All,
+        bounds.log_max_bytes,
+        Some(view),
+    ) {
         Ok(log) => {
+            *checkout_log_reads += 1;
             if !log_belongs_to_job(&log, job_id) {
                 push_retryable_error(
                     retryable_errors,
@@ -267,13 +315,6 @@ fn investigate_job<Q: CiQueries + ?Sized>(
             failure["checkout_evidence"] = json!(log.checkout_evidence);
             failure["checkout_evidence_scope"] = json!("all");
             set_checkout_identity(failure, "all", &log);
-            // A genuinely incomplete scan (the source-byte cap, or a dropped
-            // overlong line that could have carried checkout identity) stays
-            // fail-closed even when one SHA was already found: it cannot rule
-            // out a later, conflicting identity past whatever it didn't
-            // manage to read. Only a *display* cap (evidence line/commit
-            // count, or an overlong line unrelated to checkout) is exempt —
-            // that never touches `checkout_evidence_complete`.
             if !log.checkout_evidence_complete {
                 push_retryable_error(
                     retryable_errors,

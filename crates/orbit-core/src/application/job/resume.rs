@@ -2,12 +2,13 @@
 //!
 //! A resumed run is not a fresh submission. It re-enters a workflow that a
 //! previous attempt already admitted, in a worktree that attempt created,
-//! against tasks that attempt stamped with its own `job_run_id`. Two durable
+//! against tasks that attempt stamped with its own `job_run_id`. Three durable
 //! facts therefore have to be reconciled *before* the resumed run reaches its
 //! delivery tail (F2026-07-121 / F2026-07-122):
 //!
-//! 1. **Blocked tasks.** A terminal run failure blocks every coupled task
-//!    (`runtime::task::block_on_run_failure`), and `blocked` is not in the
+//! 1. **Blocked tasks.** A terminal run failure or interruption blocks every
+//!    coupled task (`runtime::task::block_on_run_failure`; `workflow_run_failed`
+//!    or `workflow_run_interrupted`), and `blocked` is not in the
 //!    workflow-admission allowlist. If the resumed run replays
 //!    `worktree_setup`, admission rejects the very task the resume exists to
 //!    recover — a catch-22.
@@ -18,23 +19,35 @@
 //!    intervening failed attempt. `load_handoff_context` then fails closed with
 //!    "task ... no longer belongs to job run ...".
 //!
-//! Both are repaired by reconciling against the run's **explicit retry
+//! 3. **Delivery stage.** A final-recovery escalation can block a task after
+//!    promotion to review. Reusing that promotion checkpoint must restore
+//!    review, rather than readmitting implementation that completion skips.
+//!
+//! These are repaired by reconciling against the run's **explicit retry
 //! lineage** — the source run, its `retry_source_run_id` ancestors, and the
 //! runs descended from them — and never against an unrelated run. A task
 //! stamped by a run outside that lineage is left exactly as it is, so the
 //! ownership check in `load_handoff_context` keeps its full strength.
 
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
+use orbit_types::record::OrbitEvent;
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    ActivityV2Spec, JobRun, JobRunState, JobV2, JobV2StepBody, PipelineState,
+};
+
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::{
+    PipelineInvokeResult, PipelineSubmission, SubmittedDefinition,
+};
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
 /// A lineage this deep is pathological; the bound keeps a corrupted cycle from
@@ -51,7 +64,6 @@ const OWNERSHIP_ID_FIELDS: [&str; 2] = ["job_run_id", "batch_id"];
 /// Everything `resume` resolves from the source run before a new run exists.
 pub(crate) struct ResumePlan {
     pub(crate) source: JobRun,
-    pub(crate) job_path: PathBuf,
     pub(crate) input: Value,
     pub(crate) attempt: u32,
     /// Source checkpoints to seed the resumed run with, when the source has at
@@ -59,22 +71,73 @@ pub(crate) struct ResumePlan {
     pub(crate) resume_state: Option<PipelineState>,
     /// The source run, its retry ancestors, and their descendants.
     pub(crate) lineage: BTreeSet<String>,
+    /// Ancestors only: a superseding descendant cannot donate review authority.
+    ancestors: BTreeSet<String>,
+    /// Successful host promotion checkpoints reused before pending completion.
+    review_checkpoints: BTreeMap<String, Value>,
     /// The batch id the reused checkpoints will keep handing to delivery steps.
     /// `None` when nothing is reused (`worktree_setup` re-runs and re-claims).
     pub(crate) checkpoint_batch_id: Option<String>,
+    /// Definition pinned beside the source run. `None` for a catalog-backed
+    /// source, which keeps resolving `source.job_id` at admission.
+    pub(crate) pinned_definition: Option<PinnedRunDefinition>,
+}
+
+/// Exact job definition a snapshot-backed run must keep across resumes.
+#[derive(Clone)]
+pub(crate) struct PinnedRunDefinition {
+    pub(crate) spec: JobV2,
+    pub(crate) yaml: String,
 }
 
 impl OrbitRuntime {
     /// Resolve the source run, its checkpoints, and its retry lineage.
     ///
-    /// Shared by both resume surfaces: the blocking CLI path
-    /// (`resume_job_run`) and the asynchronous submission path
-    /// (`submit_resume_run`), so they cannot drift on which runs are resumable
-    /// or which checkpoints are reused.
+    /// Shared by production detached submission and the in-process test
+    /// fixtures, so admission and checkpoint rules stay aligned.
     pub(crate) fn plan_job_run_resume(
         &self,
         source_run_id: &str,
     ) -> Result<ResumePlan, OrbitError> {
+        // Refuse before show_job_run can reconcile local liveness. Settled claims
+        // retain immutable bindings, so even a revoked attempt cannot resume.
+        let recorded = self.get_job_run_backend(source_run_id)?;
+        if self
+            .stores()
+            .jobs()
+            .local_pull_for_run(source_run_id)?
+            .is_some()
+        {
+            return Err(OrbitError::JobValidation("claimed execution cannot use generic resume; deliberately recover and admit a new attempt".into()));
+        }
+        // [ORB-12575] Read the claims as an ordinary participant, not through
+        // the doctor's non-repairing inspection. A worker killed mid-commit
+        // leaves the partition's pending marker behind, and resume is the
+        // command the operator reaches for next; it must replay that journal
+        // like every other runtime read does, not refuse until something
+        // unrelated happens to.
+        let claims = self.resolve_execution_claims().map_err(|error| {
+            let partition = self
+                .workspace_id()
+                .unwrap_or_else(|_| "<unresolved>".to_string());
+            OrbitError::Store(format!(
+                "task partition '{partition}' could not settle its execution claims before \
+                 resuming '{source_run_id}': {error}. An interrupted coordination commit stays \
+                 pending until its journal replays; inspect the partition with `orbit doctor`, \
+                 repair it, then retry `orbit job resume {source_run_id}`"
+            ))
+        })?;
+        if claims.iter().any(|claim| {
+            claim.bound_run.as_ref().is_some_and(|run| {
+                run.run_id == source_run_id
+                    && recorded
+                        .as_ref()
+                        .and_then(|r| r.executed_on.as_ref())
+                        .is_none_or(|origin| origin.machine_id == run.machine_id)
+            })
+        }) {
+            return Err(OrbitError::JobValidation("claimed execution cannot use generic resume; deliberately recover and admit a new attempt".into()));
+        }
         // `show_job_run` reconciles a stale Running owner first, so a run
         // orphaned by SIGKILL flips to Interrupted before the state guard.
         let source = self.show_job_run(source_run_id)?;
@@ -119,9 +182,8 @@ impl OrbitRuntime {
         // which stays alive by design). Treating those as concurrent execution
         // would refuse the most common resume there is.
         //
-        // Both resume surfaces funnel through this planner (`orbit job resume`
-        // and the CLI/dashboard/`workflow_tools` paths reaching
-        // `submit_resume_run`), so re-verifying here covers all of them.
+        // CLI, dashboard, and workflow tools all reach this planner through
+        // `submit_resume_run`, so re-verifying here covers all of them.
         // Fail-safe direction is the opposite of the sweep's: refuse only on a
         // *confirmed*-alive owner, so an unprobeable one (foreign PID
         // namespace, non-Unix) does not make a legitimately dead run
@@ -151,19 +213,47 @@ impl OrbitRuntime {
                 .values()
                 .any(|step_state| *step_state == JobRunState::Success)
         });
-        let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
-        let lineage = self.resume_lineage_run_ids(&source)?;
+        // [ORB-13559] A direct-YAML run already pinned its definition. Requiring
+        // a catalog asset here would refuse a resume after the source file is
+        // gone, and a later catalog submission would let a different same-name
+        // asset replace that snapshot. Catalog-backed runs still resolve by name.
+        let pinned_definition = self
+            .read_run_definition_snapshot(&source.run_id)?
+            .map(|(spec, yaml)| PinnedRunDefinition { spec, yaml });
+        let mut definition = match &pinned_definition {
+            Some(pinned) => pinned.spec.clone(),
+            None => self.load_v2_job_asset_by_name(&source.job_id)?.1,
+        };
+        orbit_engine::resolve_job_catalog_refs_for_execution(
+            &mut definition,
+            &self
+                .v2_activity_catalog()
+                .map_err(|error| OrbitError::JobValidation(error.to_string()))?,
+        )
+        .map_err(orbit_engine::dispatch_error_to_orbit)?;
+        let review_checkpoints = resume_state
+            .as_ref()
+            .filter(|state| {
+                state.run_id == source.run_id
+                    && state.job_id == source.job_id
+                    && input.get("completion").and_then(Value::as_str) == Some("done")
+            })
+            .map(|state| review_checkpoints(&definition, state))
+            .unwrap_or_default();
+        let (ancestors, lineage) = self.resume_lineage_run_ids(&source)?;
         let checkpoint_batch_id = resume_state.as_ref().and_then(checkpoint_ownership_id);
         let attempt = source.attempt.saturating_add(1);
 
         Ok(ResumePlan {
             source,
-            job_path,
             input,
             attempt,
             resume_state,
             lineage,
+            ancestors,
+            review_checkpoints,
             checkpoint_batch_id,
+            pinned_definition,
         })
     }
 
@@ -172,7 +262,10 @@ impl OrbitRuntime {
     /// them. Descendants matter because a task is commonly re-stamped by a
     /// *later* short-lived attempt (F2026-07-121: the task ended up owned by
     /// `jrun-…-2343`, a grandchild of the run being resumed).
-    fn resume_lineage_run_ids(&self, source: &JobRun) -> Result<BTreeSet<String>, OrbitError> {
+    fn resume_lineage_run_ids(
+        &self,
+        source: &JobRun,
+    ) -> Result<(BTreeSet<String>, BTreeSet<String>), OrbitError> {
         let mut lineage = BTreeSet::from([source.run_id.clone()]);
 
         let mut cursor = source.retry_source_run_id.clone();
@@ -186,6 +279,7 @@ impl OrbitRuntime {
                 .and_then(|run| run.retry_source_run_id);
         }
 
+        let ancestors = lineage.clone();
         let candidates = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             job_id: Some(source.job_id.clone()),
             state: None,
@@ -213,7 +307,7 @@ impl OrbitRuntime {
             }
         }
 
-        Ok(lineage)
+        Ok((ancestors, lineage))
     }
 
     /// Re-admit and re-claim the tasks this resume owns, so the resumed run
@@ -253,14 +347,7 @@ impl OrbitRuntime {
                 );
                 continue;
             }
-            let owned = self.list_tasks_filtered(
-                None,
-                None,
-                None,
-                Some(lineage_run_id.as_str()),
-                None,
-                None,
-            )?;
+            let owned = self.list_run_tasks(lineage_run_id)?;
             for task in owned {
                 if !visited.insert(task.id.clone()) {
                     continue;
@@ -273,12 +360,12 @@ impl OrbitRuntime {
                 }
                 match self.reclaim_task_for_resumed_run(
                     &task.id,
-                    plan.checkpoint_batch_id.as_deref(),
-                    &plan.source.run_id,
+                    lineage_run_id,
+                    plan,
                     resumed_run_id,
                 ) {
-                    Ok(Some(reclaimed)) => reconciled.push(reclaimed.id),
-                    Ok(None) => {}
+                    Ok(true) => reconciled.push(task.id),
+                    Ok(false) => {}
                     Err(error) => tracing::warn!(
                         target: "orbit.core.job_run",
                         run_id = resumed_run_id,
@@ -294,6 +381,149 @@ impl OrbitRuntime {
 
         Ok(reconciled)
     }
+
+    /// Recheck ownership, withdrawal and stage evidence under the task lock.
+    /// History is append-only; restoration grants no completion authority.
+    fn reclaim_task_for_resumed_run(
+        &self,
+        id: &str,
+        expected_owner: &str,
+        plan: &ResumePlan,
+        resumed_run_id: &str,
+    ) -> Result<bool, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let mut changed = false;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            if task.job_run_id.as_deref() != Some(expected_owner)
+                || !matches!(task.status, TaskStatus::Blocked | TaskStatus::InProgress | TaskStatus::Review)
+            {
+                return Ok(());
+            }
+            let history = self.get_task_history(id)?;
+            let block = history.iter().rev().find(|entry| entry.to_status.is_some());
+            let blocking_run = block.and_then(blocking_run_id);
+            // A manual block is a decision, not a failed-run admission to undo.
+            if task.status == TaskStatus::Blocked
+                && !blocking_run.is_some_and(|run| plan.lineage.contains(run))
+            {
+                return Ok(());
+            }
+            let checkpoint = plan.review_checkpoints.get(id).filter(|output| {
+                plan.ancestors.contains(expected_owner)
+                    && plan.checkpoint_batch_id.as_ref().is_some_and(|batch| plan.ancestors.contains(batch))
+                    && blocking_run.is_some_and(|run| plan.ancestors.contains(run))
+                    && block.is_some_and(|entry| entry.from_status == Some(TaskStatus::Review))
+                    && (output.get("no_diff_expected").and_then(Value::as_bool) == Some(true)
+                        || output.get("pr_number").and_then(Value::as_str)
+                            .is_some_and(|number| task.github_pr_number() == Some(number)))
+            });
+            let restored = (task.status == TaskStatus::Blocked).then_some(
+                if checkpoint.is_some() { TaskStatus::Review } else { TaskStatus::InProgress }
+            );
+            let restamp = plan.checkpoint_batch_id.as_ref()
+                .filter(|batch| task.job_run_id.as_ref() != Some(batch));
+            if restored.is_none() && restamp.is_none() {
+                return Ok(());
+            }
+            let stage = restored.unwrap_or(task.status);
+            let note = format!(
+                "resume lineage reconciliation: run '{resumed_run_id}' resumes '{}'; stage={stage}; blocking_run={}; reused_promotion={}",
+                plan.source.run_id, blocking_run.unwrap_or("-"), checkpoint.is_some(),
+            );
+            self.with_mutation(|| {
+                let updated = self.stores().task_records().update(id, TaskRecordUpdateParams {
+                    actor: SYSTEM_ACTOR_LABEL.to_string(),
+                    status: restored,
+                    expected_status: Some(vec![task.status]),
+                    job_run_id: restamp.cloned().map(Some),
+                    status_event: Some(if restored == Some(TaskStatus::Review) {
+                        "resume_review_restored"
+                    } else { "resume_readmitted" }.to_string()),
+                    status_note: Some(note.clone()),
+                    ..Default::default()
+                })?;
+                let event = if restored == Some(TaskStatus::InProgress) {
+                    OrbitEvent::TaskStarted { id: id.to_string(), started_by: SYSTEM_ACTOR_LABEL.to_string(), approved_from_proposed: false }
+                } else { OrbitEvent::TaskUpdated { id: id.to_string() } };
+                Ok((updated, event))
+            })?;
+            changed = true;
+            Ok(())
+        })?;
+        Ok(changed)
+    }
+}
+
+/// Only system-written workflow blocks carry stage-restoration provenance.
+fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
+    if entry.by != SYSTEM_ACTOR_LABEL || entry.to_status != Some(TaskStatus::Blocked) {
+        return None;
+    }
+    let note = entry.note.as_deref()?;
+    match entry.event.as_str() {
+        orbit_engine::WORKFLOW_RUN_FAILED_EVENT | orbit_engine::WORKFLOW_RUN_INTERRUPTED_EVENT => {
+            note.split_once(", run_id=")?.1.split(',').next()
+        }
+        "final_recovery_escalated" => note
+            .strip_prefix("final recovery (run_id=")?
+            .split_once(") escalated:")
+            .map(|(id, _)| id),
+        _ => None,
+    }
+}
+
+/// Resolve host actions, never agent claims or a step name alone. A promotion
+/// must be in the reused prefix, name the task, and precede unfinished completion.
+fn review_checkpoints(job: &JobV2, state: &PipelineState) -> BTreeMap<String, Value> {
+    let mut promoted = BTreeMap::new();
+    for (index, step) in job.steps.iter().enumerate() {
+        let Ok(index) = u32::try_from(index) else {
+            break;
+        };
+        let action = match &step.body {
+            JobV2StepBody::Target(target) => match &target.spec {
+                ActivityV2Spec::Deterministic(spec) => Some(spec.action.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let status = state.step_states.get(&index);
+        if action == Some("pr_complete") && status != Some(&JobRunState::Success) {
+            return promoted;
+        }
+        if !matches!(status, Some(JobRunState::Success | JobRunState::Skipped)) {
+            break;
+        }
+        if action != Some("pr_promote") || status != Some(&JobRunState::Success) {
+            continue;
+        }
+        let Some(output) = state.step_outputs.get(&index) else {
+            break;
+        };
+        // A false `when` is checkpointed as success with null output (for
+        // example the alternate no-diff promotion in the shipped pipeline).
+        if output.is_null() {
+            continue;
+        }
+        if state.pipeline.get(&step.id) != Some(output)
+            || output.get("phase").and_then(Value::as_str) != Some("promote")
+        {
+            break;
+        }
+        for field in ["performed_task_ids", "reused_task_ids"] {
+            for id in output
+                .get(field)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                promoted.insert(id.to_string(), output.clone());
+            }
+        }
+    }
+    BTreeMap::new()
 }
 
 /// The batch/ownership id embedded in the earliest successful checkpoint that
@@ -334,4 +564,64 @@ pub(super) fn task_ids_from_input(input: &Value) -> Option<BTreeSet<String>> {
         .map(ToOwned::to_owned)
         .collect();
     (!ids.is_empty()).then_some(ids)
+}
+
+impl OrbitRuntime {
+    /// [ORB-10470] Submit a resume of a terminal run as a detached run.
+    ///
+    /// It persists the resumed run (seeded with the source's checkpoints),
+    /// reconciles the retry lineage's task ownership, spawns the detached
+    /// pipeline worker, and returns the new run id as soon as the run is
+    /// durable. Nothing about the resumed execution happens on the caller's
+    /// thread, so run list / status / cancel stay answerable for its whole
+    /// duration (F2026-07-122 defect 3) and the run is cancellable by pid like
+    /// any other submitted run.
+    ///
+    /// [ORB-10709] Resuming creates another managed run, so it is a governed
+    /// workflow operation and takes the same workspace-claim gate as
+    /// [`Self::submit_ship_run`] — checked here, on the shared path, rather than
+    /// in the adapters.
+    ///
+    /// At most one run per retry lineage is live. Every run in a lineage reuses
+    /// the same checkpointed worktree and task claims, so while one is pending
+    /// or running, a further resume of any member is refused with
+    /// [`OrbitError::ResumeRunInFlight`] naming it. The check is part of the
+    /// store insert, so concurrent requests from the dashboard, MCP, and CLI
+    /// admit exactly one. Once that run is terminal, resuming is allowed again
+    /// and chains from the run the caller names — its checkpoints and attempt
+    /// number — not from the lineage's latest attempt.
+    ///
+    /// [ORB-13559] A snapshot-backed source copies its pinned definition onto
+    /// the new run, so a later retry of that run keeps the same YAML. A
+    /// catalog-backed source still resolves its job name from the catalog.
+    pub fn submit_resume_run(
+        &self,
+        source_run_id: &str,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.require_workspace_claim("orbit.workflow.run.resume", claim_token)?;
+        let plan = self.plan_job_run_resume(source_run_id)?;
+        let job_id = plan.source.job_id.clone();
+        // Settle orphans first: a lineage run whose worker died (a host reboot)
+        // still reads as running and would otherwise refuse the resume that
+        // exists to recover it.
+        self.reconcile_stale_job_runs(Some(&job_id))?;
+        let pinned = plan.pinned_definition.clone();
+        let input = plan.input.clone();
+        match &pinned {
+            Some(pinned) => self.submit_persisted_pipeline_run(PipelineSubmission {
+                definition: SubmittedDefinition::Snapshot {
+                    spec: &pinned.spec,
+                    yaml: &pinned.yaml,
+                },
+                resume: Some(&plan),
+                ..PipelineSubmission::catalog(&job_id, input, actor)
+            }),
+            None => self.submit_persisted_pipeline_run(PipelineSubmission {
+                resume: Some(&plan),
+                ..PipelineSubmission::catalog(&job_id, input, actor)
+            }),
+        }
+    }
 }

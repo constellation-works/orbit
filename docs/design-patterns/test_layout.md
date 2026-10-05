@@ -1,9 +1,11 @@
 ---
 type: pattern
 summary: "Per-Module Sibling tests/ Directory"
-last_validated: 2026-08-23
+last_validated: 2026-10-03
 ---
 # Per-Module Sibling tests/ Directory
+
+This pattern governs *where* unit tests live; whether a unit test should exist at all is decided by [Boundary-First Testing](test_strategy.md) — integration, golden and e2e tests are the default, and a unit test must meet its admission criteria.
 
 Unit tests for the source files in a module live in a *sibling* `tests/` directory under that same module. Each test file mirrors its source file by name. Because the test file is a sibling of the source it covers (not a child of it), it can only reach `pub`, `pub(crate)`, and `pub(super)` items — never raw private ones. That *structurally* enforces "test through the module's exposed surface" without relying on author discipline.
 
@@ -51,14 +53,14 @@ The principle: keep production directory listings free of `#[cfg(test)]` artefac
 
 ## When to reach for it
 
-- **You're adding a new module that needs tests.** Use this layout from the first file. If the module is a single source file with no nested directory yet, still put tests in a sibling `tests/<name>.rs`.
+- **You're adding a new module whose logic meets the unit-test admission criteria in [test_strategy.md](test_strategy.md).** Use this layout from the first file. If the module is a single source file with no nested directory yet, still put tests in a sibling `tests/<name>.rs`.
 - **A module's inline test block has grown beyond a smoke test.** Move it to `<module>/tests/<source_filename>.rs` and let untestability surface as design pressure for cleaner public seams.
 - **A test wants to verify behaviour at a `pub`/`pub(crate)` boundary.** That's exactly what this layout targets.
 
 ## When NOT to
 
 - **You're tempted to "fix" a test failure by widening a private to `pub(crate)` purely for test access.** That's the smell the structural enforcement is meant to catch. Either restructure so the seam is at a deliberate public boundary, or accept that the helper is covered transitively through its caller. Visibility widening that exists *only* for tests is debt.
-- **You're writing an integration test that exercises the crate's public API end-to-end.** Use crate-root `tests/<name>.rs` — Cargo compiles each as a separate binary against the crate's public surface, which is exactly what integration tests want.
+- **You're writing an integration test that exercises the crate's public API end-to-end.** Add a module to the crate's integration binary for that area, `tests/<area>/main.rs` ([Integration-test cost](test_strategy.md#integration-test-cost)). It compiles against the crate's public surface, which is exactly what integration tests want.
 - **The module has zero non-trivial logic worth a unit test.** Don't scaffold an empty `tests/` for the sake of uniformity.
 
 ## Edge case: standalone top-level files
@@ -117,3 +119,7 @@ For modules already migrated to the *nested* anti-pattern (`<file>/tests/<topic>
 3. Ensure `<parent>/mod.rs` declares `#[cfg(test)] mod tests;` once for the whole parent module.
 4. Update imports through the sibling path (`use super::super::<file>::<item>;`).
 5. `cargo test -p <crate>` must pass.
+
+## What tests assert (invariants vs. policy)
+
+Tests assert what the code guarantees (parses, required fields present, ships disabled, structural safeguards, tool reachability). Crew, model, schedule, complexity and prompt wording are policy owned by config and prompts; a test may not pin them unless it cites the incident it guards.

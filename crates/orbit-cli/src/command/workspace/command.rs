@@ -38,7 +38,7 @@ pub enum WorkspaceSubcommand {
     Publication(WorkspacePublicationCommand),
     /// Remove a workspace from the registry (does not delete .orbit)
     Remove(WorkspaceRemoveArgs),
-    /// Remove all Orbit artifacts from this workspace
+    /// Remove all Orbit artifacts from a named workspace
     Teardown(WorkspaceTeardownArgs),
 }
 

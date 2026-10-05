@@ -22,7 +22,9 @@
 
 mod collect;
 mod investigate;
+mod partition;
 mod query;
+mod refs;
 
 pub(in crate::executor::automation) use query::AuthStatus;
 

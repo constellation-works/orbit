@@ -3,10 +3,9 @@ use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 
 use crate::application::auto_tasks::crud::AutoTaskAddParams;
 
+mod change_probe;
 mod crud;
-mod mint;
 mod scheduler;
-mod shipped;
 
 /// A minimal, valid template for tests.
 pub(super) fn template(title: &str) -> AutoTaskTemplate {
@@ -18,6 +17,7 @@ pub(super) fn template(title: &str) -> AutoTaskTemplate {
         tags: vec![],
         required_tools: Vec::new(),
         priority: TaskPriority::Medium,
+        complexity: None,
         crew: None,
         status: orbit_types::task::TaskStatus::Backlog,
     }

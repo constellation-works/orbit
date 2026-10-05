@@ -72,6 +72,10 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::TaskComplete => task_update::task_complete(host, input),
 
         // ---- generic built-in actions ----
+        EngineDeterministicAction::ClaimHandoff => vcs::claim_handoff(host, input),
+        EngineDeterministicAction::ClaimValidate => vcs::claim_validate(host, input),
+        EngineDeterministicAction::CandidateResume => vcs::candidate_resume(host, input),
+        EngineDeterministicAction::CandidateValidate => vcs::candidate_validate(host, input),
         EngineDeterministicAction::CollectCiEvidence => ci::collect_ci_evidence(host, input),
         EngineDeterministicAction::CollectDependabotAlerts => {
             dependabot::collect_dependabot_alerts(host, input)
@@ -86,33 +90,57 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::GitMerge => vcs::git_merge(host, input),
         EngineDeterministicAction::WorktreeSetup => vcs::setup_worktree(host, input),
         EngineDeterministicAction::WorktreeGc => {
-            let runs = host.list_job_runs_for_gc()?;
-            let repo_root = host.repo_root()?;
-            let older_than = input
-                .get("older_than_hours")
-                .and_then(Value::as_u64)
-                .map(|hours| {
+            let older_than = match input.get("older_than_hours") {
+                None => None,
+                Some(Value::Null) => None,
+                Some(val) => {
+                    if val.as_i64().is_some_and(|n| n < 0) {
+                        return Err(OrbitError::InvalidInput(
+                            "older_than_hours must be non-negative".to_string(),
+                        ));
+                    }
+                    let hours = val.as_u64().ok_or_else(|| {
+                        OrbitError::InvalidInput("older_than_hours is too large".to_string())
+                    })?;
                     let hours = i64::try_from(hours).map_err(|_| {
                         OrbitError::InvalidInput("older_than_hours is too large".to_string())
                     })?;
-                    chrono::Utc::now()
-                        .checked_sub_signed(chrono::Duration::hours(hours))
-                        .ok_or_else(|| {
-                            OrbitError::InvalidInput("older_than_hours is too large".to_string())
-                        })
-                })
-                .transpose()?;
+                    let duration = chrono::Duration::try_hours(hours).ok_or_else(|| {
+                        OrbitError::InvalidInput("older_than_hours is too large".to_string())
+                    })?;
+                    Some(
+                        chrono::Utc::now()
+                            .checked_sub_signed(duration)
+                            .ok_or_else(|| {
+                                OrbitError::InvalidInput(
+                                    "older_than_hours is too large".to_string(),
+                                )
+                            })?,
+                    )
+                }
+            };
+            let runs = host.list_job_runs_for_gc()?;
+            let repo_root = host.repo_root()?;
             let result = vcs::collect_worktrees(
                 std::path::Path::new(&repo_root),
                 &runs,
                 host,
                 &vcs::WorktreeGcOptions {
                     delete: true,
+                    // [ORB-11998] Read the activity's own `target_run_id`
+                    // field, not the engine-injected `run_id` (every step's
+                    // own dispatching run id — see `inject_run_id` in
+                    // `activity_job::dispatcher`). Reading `run_id` here
+                    // would scope every real job/routine dispatch to itself,
+                    // a run with no worktree of its own, and silently reap
+                    // nothing on every invocation.
                     run_id: input
-                        .get("run_id")
+                        .get("target_run_id")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
                     older_than,
+                    estimate_bytes: false,
+                    target_only: false,
                 },
             )?;
             serde_json::to_value(result).map_err(|error| {
@@ -122,6 +150,7 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::PrOpen => vcs::pr_open(host, input),
         EngineDeterministicAction::PrPrepare => vcs::prepare_pr_handoff(host, input),
         EngineDeterministicAction::PrPromote => vcs::pr_promote(host, input),
+        EngineDeterministicAction::HandoffLand => vcs::handoff_land(host, input),
         EngineDeterministicAction::PrComplete => vcs::pr_complete(host, input),
     }
 }

@@ -7,27 +7,42 @@ sidebar:
 
 ## Scope
 
-Keep changes intentional. Avoid unrelated refactors. Update tests when behavior changes.
+Keep each change focused, with no unrelated refactors. Update tests when
+behavior changes.
 
-When a change touches an owned feature's implementation, update that feature's design docs in the same pull request. Flip affected ADR statuses, update the last-updated date, and add an ADR for non-obvious decisions.
+When a change touches a feature's implementation, update that feature's design
+docs under `docs/design/<feature>/` in the same pull request. Refresh
+`last_updated`. Add a titled entry to the feature's `4_decisions.md` only for a
+decision that explains surprising code or governs future choices, and point a
+replaced entry at its successor with a `Superseded by:` link.
 
 ## Checks
 
-Run:
+Run these before you ask for review:
 
 ```bash
-make ci-fast
+make ci-fast    # formatting and repository guardrails
+make ci-lint    # dependency direction, then clippy with warnings as errors
+make goldens    # CLI help, MCP, CI log, and sandbox profile goldens
 ```
 
-Use targeted checks while iterating. The full `make ci` workflow runs as the
-canonical PR merge gate.
+After an intentional change to CLI help, the MCP surface, or a sandbox policy,
+regenerate the goldens with `make goldens UPDATE=1` and review the diff. Use
+targeted checks while you iterate. The full `make ci` runs on every pull
+request as the merge gate, so you don't need to run it per change.
+
+Pull requests target `agent-main`, the development integration branch. `main`
+is for releases.
 
 ## Commits
 
-Use clear commit messages. Agent-authored commits should use the agent commit identity (e.g. `claude`, `codex`) for that commit and should not leave the repository configured with that identity afterward.
+Write clear commit messages with a type prefix: `feat:`, `fix:`, `docs:`,
+`refactor:`, or `chore:`. When a commit belongs to an Orbit task, include the
+task's allocated ID in square brackets.
 
-When a commit is associated with an Orbit task, include its allocated task ID in
-square brackets in the commit message.
+An agent-authored commit uses the agent's commit identity (for example `claude`
+or `codex`) for that commit only. Don't leave the repository configured with
+that identity afterward.
 
-When authoring tasks or design docs, identify yourself by agent family (`codex`,
-`claude`, `gemini`, or `grok`), not by a full model string.
+When you author tasks or design docs, identify yourself by agent family
+(`codex`, `claude`, `gemini`, or `grok`), not by a full model string.

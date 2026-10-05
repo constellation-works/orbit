@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Fixture stdio MCP server for the plugin `mcp` backend tests.
+
+Speaks just enough of MCP (JSON-RPC 2.0, one message per line) for Orbit to
+handshake, list tools, and call them. Tools:
+
+- `echo`   — returns its arguments plus this process's pid, its working
+             directory, `ORBIT_ALLOWED_TOOLS`, `ORBIT_WORKSPACE_ROOT` and the
+             call's `params._meta`, so a test can prove one server serves many
+             calls, that a narrower caller did not inherit a wider session, and
+             that a second workspace got its own child rather than the first
+             one's. Each delivered secret in `_meta.orbit.secrets` is echoed as
+             the SHA-256 of its value, never the value, with whether the value
+             also appears in this process's environment or argv. An argument
+             `rotate: {<name>: <expected_version>}` is not echoed: for each
+             name the server returns `<delivered value>-rotated` from that
+             version as the result's `_meta.orbit.secret_updates`, the way a
+             backend rotates a secret, so no value travels in the arguments.
+             `secret_response` instead selects deliberately leaking response
+             modes for testing the host's response boundary.
+- `slow`   — sleeps `seconds` before answering, for timeout and concurrency
+             tests.
+- `crash`  — exits without answering, for dead-child tests.
+
+`MCP_FIXTURE_EXTRA_TOOL=<name>` advertises one extra tool, and
+`MCP_FIXTURE_ECHO_SCHEMA=<json>` replaces `echo`'s input schema, so a test can
+make the server disagree with the manifest. `MCP_FIXTURE_SERVER_REQUEST=<method>`
+makes `echo` send that server-initiated request and *wait* for the host's
+answer before replying, which is how a client that drops server requests shows
+up as a deadlock rather than as a quiet omission.
+
+`MCP_FIXTURE_COLLIDE=<method>` makes the server, before answering that request,
+ping the host with the *same* id the host's request carries and wait for the
+answer; anything but a ping result for that id is answered with an error rather
+than the real reply. `MCP_FIXTURE_SHAPELESS=<method>` answers that request with
+a message naming its id but carrying neither `result` nor `error`.
+"""
+import hashlib
+import json
+import os
+import sys
+import time
+
+ECHO_SCHEMA = {
+    "type": "object",
+    "properties": {"message": {"type": "string"}},
+}
+
+
+def tools():
+    echo_schema = ECHO_SCHEMA
+    if os.environ.get("MCP_FIXTURE_ECHO_SCHEMA"):
+        echo_schema = json.loads(os.environ["MCP_FIXTURE_ECHO_SCHEMA"])
+    listed = [
+        {"name": "echo", "description": "Echo the arguments.", "inputSchema": echo_schema},
+        {
+            "name": "slow",
+            "description": "Answer after a delay.",
+            "inputSchema": {"type": "object", "properties": {"seconds": {"type": "number"}}},
+        },
+        {"name": "crash", "description": "Exit mid-call.", "inputSchema": {"type": "object"}},
+    ]
+    extra = os.environ.get("MCP_FIXTURE_EXTRA_TOOL")
+    if extra:
+        listed.append({"name": extra, "inputSchema": {"type": "object"}})
+    return listed
+
+
+def send(message):
+    sys.stdout.write(json.dumps(message) + "\n")
+    sys.stdout.flush()
+
+
+def reply(request_id, result):
+    send({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+
+def ask_host(method, request_id="fixture-server-1"):
+    """Send a server->client request and block until the host answers.
+
+    The host is awaiting this server's reply, so the next line it writes is
+    the answer to this request — or nothing at all, if it drops server
+    requests, in which case this read is where the call dies.
+    """
+    send({"jsonrpc": "2.0", "id": request_id, "method": method})
+    line = sys.stdin.readline()
+    return json.loads(line) if line.strip() else None
+
+
+def redact_secrets(meta):
+    """Echo `_meta` with each secret value replaced by its SHA-256.
+
+    The response is a surface the value must never reach, so the fixture
+    proves delivery by digest and reports where else the value was visible.
+    """
+    secrets = ((meta or {}).get("orbit") or {}).get("secrets")
+    if not isinstance(secrets, dict):
+        return meta
+    visible = list(os.environ.values()) + sys.argv
+    redacted = {}
+    for name, secret in secrets.items():
+        value = secret.get("value", "")
+        redacted[name] = {
+            "sha256": hashlib.sha256(value.encode()).hexdigest(),
+            "version": secret.get("version"),
+            "in_env_or_argv": any(value in text for text in visible),
+        }
+    meta = json.loads(json.dumps(meta))
+    meta["orbit"]["secrets"] = redacted
+    return meta
+
+
+def rotations(meta, rotate):
+    """`secret_updates` replacing each named secret with its delivered value
+    plus `-rotated`, expecting the version the caller named."""
+    delivered = ((meta or {}).get("orbit") or {}).get("secrets") or {}
+    return {
+        name: {
+            "value": (delivered.get(name) or {}).get("value", "") + "-rotated",
+            "expected_version": expected,
+        }
+        for name, expected in rotate.items()
+    }
+
+
+def call(request_id, params):
+    name = params.get("name")
+    arguments = params.get("arguments") or {}
+    if name == "echo":
+        # Deliberately uncooperative response modes: echo the delivered value
+        # itself, without knowing the test's canary or redacting at the server.
+        if arguments.get("secret_response"):
+            secret_response(request_id, params, arguments["secret_response"])
+            return
+        arguments = dict(arguments)
+        rotate = arguments.pop("rotate", None)
+        server_request = os.environ.get("MCP_FIXTURE_SERVER_REQUEST")
+        payload = {
+            "echo": arguments,
+            "pid": os.getpid(),
+            "plugin": os.environ.get("ORBIT_PLUGIN"),
+            "allowed": os.environ.get("ORBIT_ALLOWED_TOOLS", ""),
+            "cwd": os.getcwd(),
+            "workspace": os.environ.get("ORBIT_WORKSPACE_ROOT"),
+            "meta": redact_secrets(params.get("_meta")),
+            "answer": ask_host(server_request) if server_request else None,
+        }
+        result = {"content": [{"type": "text", "text": json.dumps(payload)}],
+                  "structuredContent": payload}
+        if isinstance(rotate, dict):
+            result["_meta"] = {"orbit": {"secret_updates": rotations(params.get("_meta"), rotate)}}
+        reply(request_id, result)
+    elif name == "slow":
+        time.sleep(float(arguments.get("seconds", 5)))
+        reply(request_id, {"content": [{"type": "text", "text": "done"}]})
+    elif name == "crash":
+        os._exit(3)
+    else:
+        reply(request_id, {"isError": True,
+                           "content": [{"type": "text", "text": f"unknown tool {name}"}]})
+
+
+def secret_response(request_id, params, mode):
+    value = params["_meta"]["orbit"]["secrets"]["api_token"]["value"]
+    payload = {"message": "echo " + value, "nested": [{value: value}],
+               "count": 7, "retryable": False, "empty": None}
+    error = {"code": "auth_" + value, "message": "rejected " + value,
+             "retryable": True, "detail": {value: [value, 7, False, None], "reason": "expired"}}
+    if mode == "rpc_error":
+        send({"jsonrpc": "2.0", "id": request_id,
+              "error": {"code": -32603, "message": "rejected " + value}})
+        return
+    if mode == "rpc_detail":
+        send({"jsonrpc": "2.0", "id": request_id,
+              "error": {"code": -32603, "data": {value: value}}})
+        return
+    result = {}
+    if mode.endswith("error") or mode.endswith("fallback"):
+        result["isError"] = True
+        payload = error
+    if mode.startswith("structured"):
+        if mode == "structured_fallback":
+            payload["retryable"] = "invalid"
+        result["structuredContent"] = payload
+    elif mode == "raw_text" or mode == "fallback":
+        result["content"] = [{"type": "text", "text": "echo " + value}]
+    elif mode == "content_array":
+        result["content"] = [{"type": "text", "text": value},
+                             {"type": "text", "text": "ordinary"}]
+    else:
+        result["content"] = [{"type": "text", "text": json.dumps(payload)}]
+    reply(request_id, result)
+
+
+while True:
+    # `readline` rather than iterating stdin: `ask_host` reads one line of its
+    # own mid-call, and the iterator's read-ahead buffer would swallow it.
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    message = json.loads(line)
+    method = message.get("method")
+    request_id = message.get("id")
+    if request_id is not None and method == os.environ.get("MCP_FIXTURE_SHAPELESS"):
+        send({"jsonrpc": "2.0", "id": request_id})
+        continue
+    if request_id is not None and method == os.environ.get("MCP_FIXTURE_COLLIDE"):
+        answer = ask_host("ping", request_id)
+        if answer != {"jsonrpc": "2.0", "id": request_id, "result": {}}:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32603,
+                            "message": f"host did not answer the colliding ping: {answer}"}})
+            continue
+    if method == "initialize":
+        reply(request_id, {"protocolVersion": message["params"].get("protocolVersion", "2025-06-18"),
+                           "capabilities": {"tools": {}},
+                           "serverInfo": {"name": "mcp-example", "version": "0.1.0"}})
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        reply(request_id, {"tools": tools()})
+    elif method == "tools/call":
+        call(request_id, message.get("params") or {})
+    elif request_id is not None:
+        send({"jsonrpc": "2.0", "id": request_id,
+              "error": {"code": -32601, "message": f"unknown method {method}"}})

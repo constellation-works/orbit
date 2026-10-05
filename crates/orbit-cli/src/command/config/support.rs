@@ -41,10 +41,7 @@ pub(super) fn workspace_config_path(runtime: &OrbitRuntime) -> PathBuf {
 /// Resolve `--scope` into a concrete file path. For `Effective`, this returns
 /// the highest-precedence file path for display and compatibility only; show
 /// and get load both layers through `orbit_config::load_effective_config`.
-pub(super) fn resolve_scope(
-    runtime: &OrbitRuntime,
-    scope: ConfigScopeArg,
-) -> (ConfigScope, PathBuf) {
+fn resolve_scope(runtime: &OrbitRuntime, scope: ConfigScopeArg) -> (ConfigScope, PathBuf) {
     match scope {
         ConfigScopeArg::Global => (ConfigScope::Global, global_config_path(runtime)),
         ConfigScopeArg::Workspace => (ConfigScope::Workspace, workspace_config_path(runtime)),

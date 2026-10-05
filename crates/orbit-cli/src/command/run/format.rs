@@ -1,4 +1,61 @@
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_types::workflow::{
+    JobRunState, JobRunTrigger, JobRunTriggerKind, PipelineState, run_id_role,
+};
+use serde::Serialize;
+
+/// A failed run with no failed descendant, in child-dispatch traversal order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct RunRootCause {
+    pub(crate) run_id: String,
+    pub(crate) step: Option<String>,
+    pub(crate) message: Option<String>,
+}
+
+pub(crate) fn format_root_cause_lines(causes: &[RunRootCause]) -> Vec<String> {
+    causes
+        .iter()
+        .enumerate()
+        .map(|(index, cause)| {
+            let label = if index == 0 {
+                "Root cause:"
+            } else {
+                "Additional root cause:"
+            };
+            format!(
+                "{label} run={} step={} error={}",
+                cause.run_id,
+                cause.step.as_deref().unwrap_or("-"),
+                cause.message.as_deref().unwrap_or("-"),
+            )
+        })
+        .collect()
+}
+
+/// Which side of a parent/child relationship a run id declares.
+///
+/// Sibling top-level runs and a run's own children share a minute stem, so the
+/// marked sequence in the id is what tells them apart [ORB-12111]. An id minted
+/// before the markers existed reads as unmarked rather than being assigned a
+/// role its suffix never encoded.
+pub(crate) fn format_run_role(run_id: &str) -> String {
+    run_id_role(run_id).map_or_else(|| "unmarked".to_string(), |role| role.to_string())
+}
+
+/// ROLE column for `run history`: a routine-fired run names the routine
+/// instead of the id marker (`top-level` / `unmarked`) [ORB-12255].
+pub(crate) fn format_history_role(run_id: &str, trigger: Option<&JobRunTrigger>) -> String {
+    if let Some(trigger) = trigger
+        && trigger.kind == JobRunTriggerKind::Routine
+    {
+        return trigger
+            .routine
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("routine")
+            .to_string();
+    }
+    format_run_role(run_id)
+}
 
 pub(crate) fn summarize_error_message(raw: Option<&str>) -> String {
     let value = raw.unwrap_or("-").replace('\n', " ");
@@ -21,9 +78,21 @@ pub(crate) fn format_duration(value: Option<u64>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+/// The tasks holding each selector a run is waiting on, keyed by selector.
+pub(crate) type LockHolders = std::collections::BTreeMap<String, Vec<String>>;
+
 pub(crate) fn format_waiting_line(
     run_state: JobRunState,
     state: Option<&PipelineState>,
+) -> Option<String> {
+    format_waiting_line_with_holders(run_state, state, &LockHolders::new())
+}
+
+/// [`format_waiting_line`], naming the task that holds each lock when known.
+pub(crate) fn format_waiting_line_with_holders(
+    run_state: JobRunState,
+    state: Option<&PipelineState>,
+    holders: &LockHolders,
 ) -> Option<String> {
     if run_state.is_terminal() {
         return None;
@@ -44,6 +113,12 @@ pub(crate) fn format_waiting_line(
         .iter()
         .map(String::as_str)
         .filter(|value| !value.trim().is_empty())
+        .map(|selector| match holders.get(selector) {
+            Some(tasks) if !tasks.is_empty() => {
+                format!("{selector} (held by {})", tasks.join(","))
+            }
+            _ => selector.to_string(),
+        })
         .collect::<Vec<_>>();
 
     let mut parts = Vec::new();
@@ -133,4 +208,108 @@ pub(crate) fn format_child_dispatch_lines(state: Option<&PipelineState>) -> Vec<
             line
         })
         .collect()
+}
+
+/// Explain how an auto drain chose this run's crew, including the odds it drew
+/// against [ORB-12604].
+///
+/// Absent for manually dispatched runs, which record no selection. A pool
+/// admitted before weights existed lists plain names, and is rendered as the
+/// bare names it was stored as.
+pub(crate) fn format_crew_selection_line(input: Option<&serde_json::Value>) -> Option<String> {
+    let selection = input?.get("crew_selection")?.as_object()?;
+    let text = |key: &str| {
+        selection
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("-")
+    };
+    let pool = selection
+        .get("eligible_pool")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|entry| match entry {
+            serde_json::Value::String(name) => name.clone(),
+            entry => {
+                let name = entry
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("-");
+                match entry.get("weight").and_then(serde_json::Value::as_u64) {
+                    Some(weight) => format!("{name}:{weight}"),
+                    None => name.to_string(),
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut line = format!(
+        "Crew Selection: {} source={} complexity={}",
+        text("crew"),
+        text("source"),
+        text("complexity"),
+    );
+    if !pool.is_empty() {
+        line.push_str(&format!(" eligible={}", pool.join(", ")));
+    }
+    Some(line)
+}
+
+/// Show backlog admission exclusions retained in the pipeline checkpoint.
+///
+/// The structured state remains the source of truth; this projection is only
+/// for the human-readable `orbit run show` view. Older or partially written
+/// checkpoints are ignored so inspection remains available when the optional
+/// diagnostic data is absent.
+pub(crate) fn format_backlog_exclusion_lines(state: Option<&PipelineState>) -> Vec<String> {
+    let Some(excluded) = state
+        .and_then(|state| state.pipeline.get("list_backlog"))
+        .and_then(|step| step.get("excluded"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let lines = excluded
+        .iter()
+        .filter_map(|entry| {
+            let task_id = entry.get("id").and_then(serde_json::Value::as_str)?;
+            let reason = entry
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let crew = entry
+                .get("crew")
+                .and_then(serde_json::Value::as_str)
+                .map(|crew| format!(" crew={crew}"))
+                .unwrap_or_default();
+            let conflicts = entry
+                .get("conflicts")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|conflict| {
+                    conflict
+                        .get("locking_task_id")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .collect::<Vec<_>>();
+            let blocked_by = if conflicts.is_empty() {
+                String::new()
+            } else {
+                format!(" blocked-by={}", conflicts.join(","))
+            };
+            Some(format!(
+                "Excluded task {task_id}: {reason}{crew}{blocked_by}"
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut output = vec![format!("Excluded backlog tasks ({}):", lines.len())];
+    output.extend(lines);
+    output
 }

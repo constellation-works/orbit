@@ -8,8 +8,8 @@ use crate::command::{CommandOut, Execute, Payload};
 #[derive(Args)]
 pub struct TaskReindexArgs {
     /// Task-registry workspace id to reindex (default: current workspace).
-    #[arg(long)]
-    pub workspace: Option<String>,
+    #[arg(long = "task-workspace", value_name = "TASK_WORKSPACE")]
+    pub task_workspace: Option<String>,
     /// Emit machine-readable JSON instead of a human summary.
     #[arg(long)]
     pub json: bool,
@@ -17,21 +17,17 @@ pub struct TaskReindexArgs {
 
 impl Execute for TaskReindexArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let outcome = runtime.reindex_tasks(self.workspace.as_deref())?;
+        let outcome = runtime.reindex_tasks(self.task_workspace.as_deref())?;
 
         let doc = json!({
             "workspace_id": outcome.workspace_id,
             "indexed": outcome.indexed,
             "removed_stale": outcome.removed_stale,
-            "projection_degraded": outcome.projection.degraded_reason,
         });
-        let mut text = format!(
+        let text = format!(
             "reindexed workspace '{}': {} bundle(s), {} stale binding(s) dropped",
             outcome.workspace_id, outcome.indexed, outcome.removed_stale
         );
-        if let Some(reason) = &outcome.projection.degraded_reason {
-            text.push_str(&format!("\n  warning: projection degraded: {reason}"));
-        }
         Ok(Payload::detail(doc, text).into())
     }
 }

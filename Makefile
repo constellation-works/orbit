@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test
 
 # ------------------------------------------------------------
 # Config
@@ -11,7 +11,9 @@ BIN_CRATE := orbit-cli
 BIN_CRATE_PATH := crates/$(BIN_CRATE)
 WORKSPACE := --workspace
 INSTALL_PROFILE ?= release
-INSTALL_BIN_DIR ?= $(HOME)/.cargo/bin
+# Same location as install.sh (ORBIT_INSTALL_DIR) so a source build and a
+# release install never shadow each other on PATH.
+INSTALL_BIN_DIR ?= $(HOME)/.orbit/bin
 
 # Detect profile
 PROFILE ?= debug
@@ -29,6 +31,11 @@ ifeq ($(INSTALL_PROFILE),release)
 else
 	INSTALL_CARGO_PROFILE :=
 	INSTALL_TARGET_DIR := target/debug
+endif
+
+GOLDENS_FLAGS :=
+ifeq ($(UPDATE),1)
+	GOLDENS_FLAGS := --update
 endif
 
 # ------------------------------------------------------------
@@ -51,6 +58,7 @@ help:
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
 	@echo "  make ci-fast      Pre-handoff gate for agents (fast guardrail mode; skips full workspace compile/test/doc steps)"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
+	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"
 	@echo "  make stability    Verify per-crate stability tier markers"
 	@echo "  make release-check  Verify Cargo/npm/release version lockstep (see docs/runbooks/release.md)"
@@ -63,6 +71,7 @@ help:
 	@echo "  make compiler-cache-status  Show whether the opt-in rustc cache would enable"
 	@echo "  make compiler-cache-setup   Create ~/.orbit/cache/compiler (SETUP_FLAGS=--install to fetch sccache)"
 	@echo "  make compiler-cache-bench   Two-worktree cold/warm/concurrent compiler-cache timings"
+	@echo "  make cross-revision-check-test  Test the provenance-safe before/after validation helper"
 	@echo "  make watch        Continuous check + test"
 
 # ------------------------------------------------------------
@@ -129,14 +138,12 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all -- --check
 
-clippy:
-	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
+clippy: ci-lint
 
 # Supply-chain audit: advisories + license allow-list via cargo-deny (deny.toml).
-# Canonical command; CI runs the same check via scripts/ci-guardrails.sh.
+# Canonical command; CI runs the same check via scripts/ci-guardrails.sh. [ORB-11983]
 audit:
-	@command -v cargo-deny >/dev/null 2>&1 || { echo "Install cargo-deny via: cargo install cargo-deny --locked"; exit 1; }
-	$(CARGO) deny check
+	./scripts/cargo-deny.sh check
 
 # Dependency tree inspection
 tree:
@@ -150,10 +157,19 @@ ci:
 ci-fast:
 	./scripts/ci-guardrails.sh --fast
 
-# Compile-time pre-handoff gate for agents. Keep this invocation aligned with
-# the default workspace clippy pass in scripts/ci-guardrails.sh.
+# Compile-time pre-handoff gate for agents. Keep both passes aligned with
+# scripts/ci-guardrails.sh: production enforces bounded channels, then all
+# targets retain the other workspace lints without flagging test-only channels.
 ci-lint:
-	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
+	./scripts/check-dependency-direction.sh
+	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -D clippy::disallowed_methods
+	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
+
+# Focused pre-review golden gate: CLI long-help text, output_goldens, the
+# MCP tools/list snapshot, CI/GitHub log fixtures, and sandbox profile goldens. Compiles orbit-cli
+# tests plus the tools, exec, and core golden binaries. UPDATE=1 regenerates.
+goldens:
+	$(BUILD_BUDGET) -- ./scripts/check-goldens.sh $(GOLDENS_FLAGS)
 
 # Verify every workspace crate declares its stability tier
 stability:
@@ -207,6 +223,11 @@ compiler-cache-setup:
 
 compiler-cache-bench:
 	./scripts/bench-compiler-cache.sh
+
+# Provenance-safe before/after validation across two revisions. See
+# docs/runbooks/compiler-cache.md. [ORB-11981]
+cross-revision-check-test:
+	./scripts/test-cross-revision-check.sh
 
 # ------------------------------------------------------------
 # Dev Loop

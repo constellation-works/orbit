@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Overview"
 owner: codex
 last_updated: 2026-07-20
-last_validated: 2026-08-23
+last_validated: 2026-09-13
 status: Draft
 feature: activity-job
 doc_role: overview
@@ -67,7 +67,7 @@ Name resolution arrived in [T20260418-2019]; `run-v2` entrypoints in [T20260418-
 
 ### 2.4 Provider is the only agent runtime choice
 
-For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, or `cursor`. Orbit's CLI entry point executes the canonical four (`claude`, `codex`, `gemini`, and `grok`); other provider identities fail structurally instead of falling back.
+For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `cursor`, `pi`, `antigravity`, or `opencode`. Orbit's CLI entry point uses the registered direct-agent executors for the supported provider lanes; `openai_compat` and providers without a supported executor fail structurally instead of falling back.
 
 ### 2.5 Audit, policy, and seeded assets make the runtime inspectable
 
@@ -98,7 +98,7 @@ failures still terminate the parent.
 | v2 job step grammar | `crates/orbit-types/src/workflow/activity_job/job_v2.rs` | [T20260418-2018] |
 | Job kinds (`workflow`, `subroutine`) | `crates/orbit-types/src/workflow/activity_job/job_v2.rs` | [T20260419-0339] |
 | Target-ref resolution | `crates/orbit-engine/src/activity_job/catalog.rs` | [T20260418-2019] |
-| `run-v2` core entrypoints and host boundary | `crates/orbit-cmd/src/activity_v2.rs`, `crates/orbit-core/src/application/job/exec.rs`, `crates/orbit-engine/src/context/hosts.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host.rs` | [T20260418-2143], [T20260418-2210] |
+| `run-v2` core entrypoints and host boundary | `crates/orbit-core/src/application/job/exec.rs`, `crates/orbit-engine/src/context/hosts.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs` | [T20260418-2143], [T20260418-2210] |
 | Retired-declaration rejection | `crates/orbit-types/src/workflow/activity_job/retired.rs` | [ORB-10801] |
 | v2 DAG executor | `crates/orbit-engine/src/activity_job/job_executor/` | [T20260418-2018], [T20260509-2] |
 | V2 audit envelope and disk sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs` | [T20260419-0002] |

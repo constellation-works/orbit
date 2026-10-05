@@ -1,7 +1,7 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use super::*;
+
+/// Upper bound on rendered `fan_out.items`; see [`run_fan_out`].
+const MAX_FAN_OUT_ITEMS: usize = 256;
 
 pub(super) fn run_fan_out(
     step: &JobV2Step,
@@ -9,8 +9,16 @@ pub(super) fn run_fan_out(
     fan_in: &FanInSpec,
     ctx: &ExecCtx<'_>,
 ) -> Result<StepOutcome, DispatchError> {
-    let tctx = ctx.template_ctx();
-    let items = render_items_expression(&block.items, &tctx, "fan_out.items")?;
+    let items = render_items_expression(&block.items, &ctx.template_ctx(), "fan_out.items")?;
+    // Each item gets its own scoped thread (`max_workers` only gates the work
+    // inside them), and a refused thread spawn panics the executor, so a
+    // rendered list is bounded like `loop.items` is by `max_iterations`.
+    if items.len() > MAX_FAN_OUT_ITEMS {
+        return Err(DispatchError::JobExecution(format!(
+            "fan_out.items produced {} entries, exceeding the limit of {MAX_FAN_OUT_ITEMS}",
+            items.len()
+        )));
+    }
     let worker_count = items.len() as u32;
 
     emit_job_event_lossy(
@@ -63,7 +71,9 @@ pub(super) fn run_fan_out(
             let audit = ctx.audit.clone();
             let host = ctx.host;
             let base_input = ctx.input.clone();
-            let pipeline_snapshot = ctx.pipeline.lock().expect("pipeline poisoned").clone();
+            // Workers share the parent's map as taken at dispatch; a worker's
+            // own writes copy on write and never reach the parent.
+            let pipeline_snapshot = ctx.pipeline_snapshot();
             let results_ref = &results;
             let inherited_parent_stack = inherited_parent_stack.clone();
 
@@ -73,7 +83,7 @@ pub(super) fn run_fan_out(
                     Err(err) => {
                         results_ref
                             .lock()
-                            .expect("results poisoned")
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .push((idx, Err(DispatchError::AuditFailed(format!("{err:?}")))));
                         return;
                     }
@@ -101,6 +111,7 @@ pub(super) fn run_fan_out(
                     pipeline: Arc::new(Mutex::new(pipeline_snapshot)),
                     recovery_activity: ctx.recovery_activity.clone(),
                     failure_activity: ctx.failure_activity.clone(),
+                    final_recovery_activity: None,
                     item: Some(item),
                     iteration: Some(idx),
                 };
@@ -121,7 +132,7 @@ pub(super) fn run_fan_out(
                 );
                 results_ref
                     .lock()
-                    .expect("results poisoned")
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push((idx, res));
             }));
         }
@@ -140,12 +151,15 @@ pub(super) fn run_fan_out(
                         state: "failed".to_string(),
                     },
                 );
-                results.lock().expect("results poisoned").push((
-                    idx,
-                    Err(DispatchError::JobExecution(format!(
-                        "worker {idx} panicked: {message}"
-                    ))),
-                ));
+                results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((
+                        idx,
+                        Err(DispatchError::JobExecution(format!(
+                            "worker {idx} panicked: {message}"
+                        ))),
+                    ));
             }
         }
 
@@ -156,7 +170,9 @@ pub(super) fn run_fan_out(
     let mut collected_count = 0u32;
     let mut failed_count = 0u32;
     let mut first_error: Option<DispatchError> = None;
-    let mut sorted = results.into_inner().expect("results poisoned");
+    let mut sorted = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if sorted.len() != items.len() {
         return Err(DispatchError::JobExecution(format!(
             "fan-out collected {} results for {} items",

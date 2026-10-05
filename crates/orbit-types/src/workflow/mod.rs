@@ -5,11 +5,20 @@ mod auto_task;
 mod child_dispatch;
 mod error;
 mod executor_def;
+mod final_recovery;
+pub mod handoff;
 mod job;
-pub mod operation;
 mod review;
 mod routine;
-mod run_state;
+mod run {
+    // Retain the run subtree while exposing its validation failure classifier.
+    include!("run/mod.rs");
+
+    pub use state::{
+        VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
+        is_validation_environment_failure,
+    };
+}
 mod ship;
 mod skill;
 pub use error::WorkflowError;
@@ -18,25 +27,32 @@ pub use error::WorkflowError;
 mod tests;
 
 pub use activity_job::{
-    AUDIT_ENVELOPE_SCHEMA_VERSION, ActivityV2, ActivityV2Spec, AgentLoopSpec, BackoffStrategy,
-    BranchOutcome, CoreDeterministicAction, DeterministicAction, DeterministicSpec,
-    EngineDeterministicAction, FanInSpec, FanOutBlock, JobActivityRoles, JobKind, JobV2, JobV2Step,
-    JobV2StepBody, JoinMode, LoopBlock, OnDenial, ParallelBlock, PipelineRef, Provider,
-    ProviderAlias, ProviderDeprecation, ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity,
-    ProviderParseError, ProviderResolution, ProviderResolveRequest, ProviderSource,
-    RETIRED_BACKEND_MIGRATION, RetiredAgentBackend, RetiredFeatureError, RetrySpec, SchemaHeader,
-    TargetRef, TargetStep, ToolAllowlistError, V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED,
+    AUDIT_ENVELOPE_SCHEMA_VERSION, ActivityToolDenyPolicy, ActivityToolPolicyMode, ActivityV2,
+    ActivityV2Spec, AgentLoopSpec, BackoffStrategy, BranchOutcome, CODEX_LEAST_RESTRICTIVE_SANDBOX,
+    CODEX_PROVIDER_SANDBOX_MODES, CoreDeterministicAction, DEFAULT_PROVIDER_SANDBOX,
+    DeterministicAction, DeterministicSpec, EngineDeterministicAction, FanInSpec, FanOutBlock,
+    JobActivityRoles, JobKind, JobTaskDelivery, JobV2, JobV2Step, JobV2StepBody, JoinMode,
+    LoopBlock, OnDenial, ParallelBlock, PipelineRef, Provider, ProviderAlias, ProviderDeprecation,
+    ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity, ProviderParseError,
+    ProviderResolution, ProviderResolveRequest, ProviderSource, RETIRED_BACKEND_MIGRATION,
+    RetiredAgentBackend, RetiredFeatureError, RetrySpec, SchemaHeader, TargetRef, TargetStep,
+    ToolAllowlistError, V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED,
     V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED,
     V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS, V2AuditEnvelope,
-    V2AuditEvent, V2AuditEventKind, check_retired_backend_value, tool_allowed,
-    validate_activity_tool_allowlist, validate_activity_tool_allowlist_against_registered_tools,
-    validate_job_retired_sessions, validate_tool_allowlist,
-    validate_tool_allowlist_against_registered_tools,
+    V2AuditEvent, V2AuditEventKind, activity_tool_policy_deprecation, admit_provider_sandbox_mode,
+    check_retired_backend_value, format_provider_sandbox, is_least_restrictive_provider_sandbox,
+    least_restrictive_provider_sandbox, least_restrictive_provider_sandbox_warning,
+    parse_provider_sandbox_label, provider_sandbox_modes, tool_allowed,
+    tools_allowed_by_disallow_list, validate_activity_tool_allowlist,
+    validate_activity_tool_allowlist_against_registered_tools, validate_job_retired_sessions,
+    validate_tool_allowlist, validate_tool_allowlist_against_registered_tools,
 };
 pub use auto_task::{
-    AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskSchedule,
-    AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, auto_task_tag,
-    is_valid_auto_task_name,
+    AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskCursor, AutoTaskCursorState,
+    AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSchedule, AutoTaskSkipRecord,
+    AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, SWEEP_CURSOR_ARTIFACT,
+    SWEEP_CURSOR_SCHEMA_VERSION, SkipIfUnchanged, SweepCursorRecord, SweepCursorSelector,
+    auto_task_tag, is_valid_auto_task_name,
 };
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
@@ -44,37 +60,43 @@ pub use child_dispatch::{
 pub use executor_def::{
     ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride, StdoutFormat,
 };
-pub use job::{
-    AgentCommitRequest, AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome,
-    JobRunState, JobRunStep, JobScheduleState, JobStep, JobTargetType, KnowledgeRunMetrics,
-    RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs, default_max_iterations,
-    default_retry_backoff_seconds,
+pub use final_recovery::{
+    FINAL_RECOVERY_ACTIVITY, FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision,
+    MAX_DECISION_TEXT_CHARS,
 };
-pub use operation::{
-    GrantAdmission, GrantLimits, GrantRights, GrantStatus, GrantTransition, MAX_GRANT_SCOPE_TASKS,
-    MAX_GRANT_WINDOW_SECONDS, OPERATION_ADMISSION_KEY, OperationAdmission, OperationGrant,
-    RecoveryEpisode, RecoveryEpisodeKind, RecoveryLedger, RecoveryReservation,
+pub use job::{
+    AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,
+    JobRunTrigger, JobRunTriggerKind, JobScheduleState, JobStep, JobTargetType,
+    KnowledgeRunMetrics, RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs,
+    default_max_iterations, default_retry_backoff_seconds,
 };
 pub use review::{
-    CommitIdentity, DEFAULT_REVIEW_MINUTES, DEFAULT_REVIEW_REPAIR_CYCLES,
-    DEFAULT_REVIEW_REVIEWER_STARTS, FindingDisposition, LandingTransformation,
-    REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewAssurance, ReviewAttempt, ReviewAttemptState,
-    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewFinding, ReviewInvalidation,
-    ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport, ReviewReservation, ReviewTiming,
-    ReviewValidation, ReviewVerdict, ReviewerIdentity, ValidationOutcome, ValidationRole,
+    CommitIdentity, DEFAULT_REVIEW_MINUTES, DEFAULT_REVIEW_REVIEWER_STARTS, FindingDisposition,
+    LandingTransformation, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewAssurance,
+    ReviewAttempt, ReviewAttemptState, ReviewBudget, ReviewCertificate, ReviewConsumption,
+    ReviewFinding, ReviewInvalidation, ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport,
+    ReviewReservation, ReviewResetDecision, ReviewTiming, ReviewValidation, ReviewVerdict,
+    ReviewerIdentity, ReviewerInvocation, ReviewerInvocationEvent, ValidationOutcome,
+    ValidationRole, seconds_between,
 };
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,
     RoutineRetries, RoutineTarget, RoutineTrigger,
 };
-pub use run_state::{
-    DrainAdmissionsStop, DrainWorkerLimit, FailureActivityCheckpoint, PipelineState,
+pub use run::{
+    ActivityCrewDraw, ActivityCrewPoolMember, CommitObservation, CommitObservationStatus,
+    CrewExclusion, CrewExclusionSource, DeliveryEvidenceGap, DeliveryEvidenceProvenance,
+    DrainAdmissionPass, DrainAdmissionsStop, DrainCancelRequest, DrainWaitingTask,
+    DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
+    FinalRecoveryObservedTask, LandingMethod, LandingObservation, LandingObservationStatus,
+    PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight,
+    RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure, ResourceThrottle,
+    RunDeliveryObservation, RunDeliveryStatus, RunIdRole, VALIDATION_ENVIRONMENT_ERROR_CODE,
+    VALIDATION_ENVIRONMENT_MARKER, is_provider_unavailable, is_validation_environment_failure,
+    run_id_candidate, run_id_minute_stem, run_id_role,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
-
-mod auto_task_cursor;
-pub use auto_task_cursor::{AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim};
 
 pub mod automation;

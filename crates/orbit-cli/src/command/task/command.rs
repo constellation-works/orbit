@@ -7,20 +7,22 @@ use crate::command::{CommandOut, Execute};
 use super::add::TaskAddArgs;
 use super::archive::TaskArchiveArgs;
 use super::artifact::TaskArtifactCommand;
+use super::eligible::TaskEligibleArgs;
 use super::export::TaskExportArgs;
 use super::flow::TaskFlowArgs;
 use super::import::TaskImportArgs;
 use super::lint::TaskLintArgs;
 use super::list::TaskListArgs;
 use super::publication::TaskPublicationCommand;
+use super::recheck_blocked::TaskRecheckBlockedArgs;
 use super::reindex::TaskReindexArgs;
+use super::review_reset::TaskReviewResetArgs;
 use super::show::TaskShowArgs;
-use super::start::TaskStartArgs;
 use super::update::TaskUpdateArgs;
 
 /// Grouped `orbit task` help, rendered the same way `orbit run` and the root
 /// command render theirs: a hand-rolled template, because clap's derive has no
-/// per-variant `help_heading`. Fourteen ungrouped rows read as a wall; the
+/// per-variant `help_heading`. Fifteen ungrouped rows read as a wall; the
 /// sections say which of them you are looking for. Keep the variant order in
 /// `TaskSubcommand` matching the section order below — the order decides where
 /// a command would land if it were ever missing from the template.
@@ -34,13 +36,17 @@ Tasks:
   update       Update task fields; `--approve` takes the next approval step
   archive      Archive a task
   list         List tasks with optional filters
+  eligible     List backlog/proposed tasks that collide with no in-flight work
   show         Show one task in detail, by ID, across registered workspaces
   artifact     Manage task artifact files
 
 Health:
-  lint         Lint tasks for stale paths and vague acceptance criteria
+  lint         Lint tasks for context-file and acceptance-criteria problems
   flow         Show filed-vs-closed rates over time — is the backlog draining?
   locks        Inspect, reserve, and release the file locks that gate dispatch
+  review-reset Reset one review lineage budget with an audited reason
+  recheck-blocked
+               Requeue tasks blocked by a provider launcher that now resolves
 
 Bundles:
   export       Export task bundles to a portable tar.zst archive
@@ -85,25 +91,35 @@ pub enum TaskSubcommand {
     /// Update task fields, or take the next approval step with `--approve`
     /// (proposed -> backlog, review -> done)
     Update(TaskUpdateArgs),
-    /// Deprecated alias kept for callers that predate `orbit task update`
-    /// owning approval; hidden from help and removed after a couple releases
-    #[command(hide = true)]
-    Start(TaskStartArgs),
     /// Archive a task
     Archive(TaskArchiveArgs),
     /// List tasks with optional filters
     List(TaskListArgs),
+    /// List backlog/proposed tasks you can pick up without colliding with work
+    /// in flight
+    ///
+    /// A task is eligible when its context-file lock surface overlaps no
+    /// in-progress or review task's surface — the same lock test automatic
+    /// dispatch applies. Nothing else is checked: not dependencies, complexity,
+    /// groups or crew, and candidates are not checked against each other.
+    /// Read-only: nothing is reserved, reconciled or changed.
+    Eligible(TaskEligibleArgs),
     /// Show detailed information about a task, found by ID with an optional
     /// workspace filter
     Show(TaskShowArgs),
     /// Manage task artifact files
     Artifact(TaskArtifactCommand),
-    /// Lint tasks for stale paths and vague acceptance criteria; `--fix` prunes stale context files
+    /// Lint tasks for context-file and acceptance-criteria problems; `--restore-pruned` re-declares recorded selectors
     Lint(TaskLintArgs),
     /// Show filed-vs-closed rates over time — whether the backlog is draining
     Flow(TaskFlowArgs),
     /// Inspect, reserve, and release task file locks
     Locks(LocksCommand),
+    /// Reset a review lineage budget with an audited operator reason
+    ReviewReset(TaskReviewResetArgs),
+    /// Re-check tasks blocked by a missing provider launcher; `--confirm` returns
+    /// the ones whose launcher now resolves to backlog
+    RecheckBlocked(TaskRecheckBlockedArgs),
     /// Export task bundles to a portable tar.zst archive
     Export(TaskExportArgs),
     /// Import task bundles from a tar.zst archive
@@ -119,14 +135,16 @@ impl Execute for TaskSubcommand {
         match self {
             TaskSubcommand::Add(args) => args.execute(runtime),
             TaskSubcommand::Update(args) => args.execute(runtime),
-            TaskSubcommand::Start(args) => args.execute(runtime),
             TaskSubcommand::Archive(args) => args.execute(runtime),
             TaskSubcommand::List(args) => args.execute(runtime),
+            TaskSubcommand::Eligible(args) => args.execute(runtime),
             TaskSubcommand::Show(args) => args.execute(runtime),
             TaskSubcommand::Artifact(cmd) => cmd.execute(runtime),
             TaskSubcommand::Lint(args) => args.execute(runtime),
             TaskSubcommand::Flow(args) => args.execute(runtime),
             TaskSubcommand::Locks(cmd) => cmd.execute(runtime),
+            TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
+            TaskSubcommand::ReviewReset(args) => args.execute(runtime),
             TaskSubcommand::Export(args) => args.execute(runtime),
             TaskSubcommand::Import(args) => args.execute(runtime),
             TaskSubcommand::Publication(command) => command.execute(runtime),
