@@ -482,9 +482,11 @@ pub struct PipelineState {
     /// candidate the failure activity preserved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_activity_checkpoint: Option<FailureActivityCheckpoint>,
-    /// Rebase completions keyed by failed step ID. These are provenance, not
-    /// successful step outputs; retries must still run the step. Absent in
-    /// older runs, whose rewritten heads remain unverified.
+    /// Rebase completions keyed by failed step ID: the latest recovery attempt
+    /// of each step, whose payload names its host-assigned
+    /// `recovery_attempt`. These are provenance, not successful step outputs;
+    /// retries must still run the step. Absent in older runs, whose rewritten
+    /// heads remain unverified.
     ///
     /// This map is untrusted progress data. Managed leaves hold modify grants
     /// on the store it is persisted in, so a matching entry is a candidate

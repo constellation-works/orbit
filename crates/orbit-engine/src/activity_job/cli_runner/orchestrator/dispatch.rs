@@ -262,7 +262,7 @@ pub fn run_cli_backend(
                 "conflict recovery requires a validated assigned worktree; refusing primary-checkout execution".to_string(),
             )
         })?;
-        boundary.authorize_rebase_completion(input)?;
+        boundary.authorize_rebase_completion(host, input)?;
     }
 
     if let Some(admission) = &trusted_host {

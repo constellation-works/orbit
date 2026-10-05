@@ -17,9 +17,9 @@ pub use hosts::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingStep,
     HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest, ReviewerInvocationRequest,
-    RuntimeHost, StepRecoveryAdmission, TaskActivityUpdate, TaskAutomationUpdate,
-    WorktreeGcTaskLookup,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ReviewerInvocationRequest, RuntimeHost, StepRecoveryAdmission, TaskActivityUpdate,
+    TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 pub use outcome::{
     WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, blocked_workflow_failure_update,

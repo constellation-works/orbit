@@ -49,10 +49,10 @@ pub use context::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingStep,
     HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest, ReviewerInvocationRequest,
-    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT,
-    WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup, blocked_workflow_failure_update,
-    blocked_workflow_interruption_update,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ReviewerInvocationRequest, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
+    WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup,
+    blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
 pub use executor::automation::execute_action as execute_deterministic_action;
 pub use executor::automation::vcs::claim::{observe_candidate, observe_published_candidate};

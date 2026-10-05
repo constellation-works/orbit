@@ -31,8 +31,9 @@ use chrono::Utc;
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
-    DispatchError, ResolvedCliExecutor, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
-    V2DispatchInput, WorktreeGcTaskLookup, dispatch_v2_activity, execute_deterministic_action,
+    DispatchError, RebaseRecoveryAttemptScope, ResolvedCliExecutor, RuntimeHost,
+    TaskAutomationUpdate, V2AuditWriter, V2DispatchInput, WorktreeGcTaskLookup,
+    dispatch_v2_activity, execute_deterministic_action,
 };
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskHistoryEntry,
@@ -1400,6 +1401,144 @@ fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
     );
 }
 
+/// [F2026-10-041] One run recovers the same step twice. Recovery A lands the
+/// candidate on the pinned base and keeps that result when the advanced base
+/// conflicts again, so the retry refuses the moved base. The run resumes from
+/// preparation, re-pins to the advanced base, conflicts again, and recovery B
+/// completes as a new host-reserved attempt instead of colliding with A. The
+/// retry then delivers B's exact evidence and nothing older.
+#[cfg(unix)]
+#[test]
+fn a_resumed_run_recovers_the_same_step_again_as_a_new_attempt() {
+    isolated(
+        "a_resumed_run_recovers_the_same_step_again_as_a_new_attempt",
+        || {
+            let prepared = PreparedRebase::new("jrun-reattempt", "README.md", "README.md");
+            let provider = prepared.fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                &provider_script("printf 'resolved\\n' > README.md"),
+            );
+            let host = prepared.host.with_provider(&provider);
+            let checkout = &prepared.checkout.path;
+
+            // The base advances with another README edit while A is pending.
+            let conflict = stopped_conflict(&prepared);
+            let advanced = commit_file(&prepared.fixture.repo, "README.md", "advanced\n");
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                recovery_input_for(&prepared, &prepared.prepared, &conflict),
+            )
+            .expect("recovery A completes");
+            assert!(outcome.success, "{:?}", outcome.message);
+            let head_a = prepared.head();
+            let [(_, _, recovery_a)] = host.checkpoints().try_into().unwrap();
+            assert_eq!(recovery_a["recovery_attempt"], 1);
+            assert_eq!(
+                recovery_a["base_sha"], prepared.target,
+                "A kept the pinned result"
+            );
+
+            // The pinned-base freshness refusal stands, and touches nothing.
+            let error = prepared
+                .rebase_on(&host, &prepared.prepared)
+                .expect_err("the retry refuses the moved base");
+            assert!(
+                error.to_string().contains("moved from checkpoint"),
+                "{error}"
+            );
+            assert_eq!(prepared.head(), head_a);
+            assert_eq!(git(checkout, &["status", "--porcelain"]), "");
+
+            // Same-run resume: prepare again, now against the advanced base.
+            let resumed = action(&host, "pr_prepare", &prepared.common).expect("re-prepare");
+            assert_eq!(resumed["head_sha"], head_a);
+            assert_eq!(resumed["base_sha"], advanced);
+            let OrbitError::RecoverableVcsConflict(again) = prepared
+                .rebase_on(&host, &resumed)
+                .expect_err("the advanced base conflicts again")
+            else {
+                panic!("expected a recoverable conflict");
+            };
+            let conflict = json!({
+                "operation": again.operation,
+                "original_base_sha": again.original_base_sha,
+                "target_base_sha": again.target_base_sha,
+                "conflicting_paths": again.conflicting_paths,
+            });
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                recovery_input_for(&prepared, &resumed, &conflict),
+            )
+            .expect("recovery B completes as a new attempt");
+            assert!(outcome.success, "{:?}", outcome.message);
+            let head_b = prepared.head();
+            assert_ne!(head_b, head_a);
+
+            let checkpoints = host.checkpoints();
+            let [(_, step_a, kept_a), (_, step_b, recovery_b)] = checkpoints.as_slice() else {
+                panic!("expected two recovery checkpoints, got {checkpoints:#?}");
+            };
+            assert_eq!(
+                (step_a.as_str(), step_b.as_str()),
+                ("sync_base", "sync_base")
+            );
+            assert_eq!(kept_a, &recovery_a, "A's evidence is not rewritten");
+            assert_eq!(recovery_b["recovery_attempt"], 2);
+            assert_eq!(recovery_b["head_sha_before"], head_a);
+            assert_eq!(recovery_b["base_sha"], advanced);
+            assert_eq!(recovery_b["head_sha"], head_b);
+            let scopes = host
+                .recovery_attempts()
+                .into_iter()
+                .map(|(_, _, scope)| (scope.head_sha_before, scope.target_base_sha))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                scopes,
+                vec![
+                    (prepared.candidate.clone(), prepared.target.clone()),
+                    (head_a.clone(), advanced.clone()),
+                ],
+                "each recovery reserved its own attempt for its own stopped rebase"
+            );
+
+            // A leaf replaying A's evidence cannot vouch for B's HEAD.
+            host.leaf_writes_recovery(&prepared.run_id, "sync_base", recovery_a.clone());
+            let error = prepared
+                .rebase_on(&host, &resumed)
+                .expect_err("stale evidence does not describe the recovered HEAD");
+            assert!(
+                error
+                    .to_string()
+                    .contains("no exact host-validated recovery checkpoint"),
+                "{error}"
+            );
+            assert_eq!(prepared.head(), head_b);
+            assert_eq!(git(checkout, &["status", "--porcelain"]), "");
+
+            // B's exact evidence delivers B.
+            host.leaf_writes_recovery(&prepared.run_id, "sync_base", recovery_b.clone());
+            let retried = prepared
+                .rebase_on(&host, &resumed)
+                .expect("the retry reuses recovery B");
+            assert_eq!(retried["decision"], "reused_recovery");
+            assert_eq!(retried["head_sha"], head_b);
+            assert_eq!(retried["base_sha"], advanced);
+        },
+    );
+}
+
+/// The recovery input for the stopped rebase of the handoff `preparation`
+/// describes, carrying the failed step's prepared fields.
+fn recovery_input_for(prepared: &PreparedRebase, preparation: &Value, conflict: &Value) -> Value {
+    let mut input = conflict_recovery_input(prepared, conflict);
+    input["failed_step_input"]["head_sha"] = preparation["head_sha"].clone();
+    input["failed_step_input"]["remote_sha"] = preparation["remote_sha"].clone();
+    input
+}
+
 /// A provider shell that runs `body` in the checkout and reports success.
 fn provider_script(body: &str) -> String {
     format!(
@@ -2550,6 +2689,11 @@ impl PreparedRebase {
     }
 
     fn rebase(&self) -> Result<Value, OrbitError> {
+        self.rebase_on(&self.host, &self.prepared)
+    }
+
+    /// Run `git_rebase` through `host` for the handoff `preparation` describes.
+    fn rebase_on(&self, host: &LifecycleHost, preparation: &Value) -> Result<Value, OrbitError> {
         let mut input = self.common.clone();
         for field in [
             "head",
@@ -2561,9 +2705,9 @@ impl PreparedRebase {
             "commits_behind",
             "sync_required",
         ] {
-            input[field] = self.prepared[field].clone();
+            input[field] = preparation[field].clone();
         }
-        action(&self.host, "git_rebase", &input)
+        action(host, "git_rebase", &input)
     }
 
     fn head(&self) -> String {
@@ -2650,6 +2794,9 @@ struct LifecycleHost {
     runs: Mutex<Vec<JobRun>>,
     admitted: Mutex<Vec<String>>,
     checkpoints: Mutex<Vec<(String, String, Value)>>,
+    /// Admitted conflict recoveries, as (run, step, scope), in reservation
+    /// order. The attempt is a recovery's 1-based position for its run/step.
+    recovery_attempts: Mutex<Vec<(String, String, RebaseRecoveryAttemptScope)>>,
     /// A replica owner's answer per task, overriding the local task store.
     owner_answers: Mutex<BTreeMap<String, WorktreeGcTaskLookup>>,
     /// Claimed runs whose claim is settled, with the settlement's account.
@@ -2733,6 +2880,22 @@ impl LifecycleHost {
 
     fn checkpoints(&self) -> Vec<(String, String, Value)> {
         self.checkpoints.lock().unwrap().clone()
+    }
+
+    fn recovery_attempts(&self) -> Vec<(String, String, RebaseRecoveryAttemptScope)> {
+        self.recovery_attempts.lock().unwrap().clone()
+    }
+
+    /// Overwrite the run store's copy of `step_id`'s recovery, as a leaf
+    /// holding the store's modify grant can.
+    fn leaf_writes_recovery(&self, run_id: &str, step_id: &str, checkpoint: Value) {
+        self.run_states
+            .lock()
+            .unwrap()
+            .get_mut(run_id)
+            .unwrap()
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), checkpoint);
     }
 
     fn widenings(&self) -> Vec<Widening> {
@@ -2924,6 +3087,22 @@ impl RuntimeHost for LifecycleHost {
         Ok(paths.iter().map(|path| format!("file:{path}")).collect())
     }
 
+    fn begin_rebase_recovery_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError> {
+        let mut attempts = self.recovery_attempts.lock().unwrap();
+        attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
+        Ok(attempts
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .count() as u64)
+    }
+
+    /// Records the certified completion, and copies it into the run store the
+    /// `git_rebase` retry reads, as the runtime does.
     fn checkpoint_rebase_recovery(
         &self,
         run_id: &str,
@@ -2935,7 +3114,38 @@ impl RuntimeHost for LifecycleHost {
             step_id.to_string(),
             output.clone(),
         ));
+        self.run_states
+            .lock()
+            .unwrap()
+            .entry(run_id.to_string())
+            .or_insert_with(|| {
+                PipelineState::new(
+                    run_id.to_string(),
+                    "task_pr_pipeline".to_string(),
+                    json!({}),
+                )
+            })
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
         Ok(())
+    }
+
+    /// Only the newest completion recorded for a run's step vouches for it,
+    /// matching the runtime's recovery authority.
+    fn verify_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        Ok(self
+            .checkpoints
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(run, step, _)| run == run_id && step == step_id)
+            .is_some_and(|(_, _, certified)| certified == checkpoint))
     }
 
     fn validate_step_recovery_mutation(
