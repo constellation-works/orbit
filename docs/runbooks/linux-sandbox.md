@@ -188,15 +188,24 @@ After changing managed-worktree policy or the Linux spawn path, run the live
 Bubblewrap suite from the candidate checkout on the owning Linux host:
 
 ```sh
-cargo test -p orbit-exec --test linux_sandbox -- --include-ignored --nocapture
+cargo test -p orbit-exec --test sandbox linux_sandbox:: -- --include-ignored --nocapture
 ```
 
-These tests spawn real children through `spawn_under_linux_bwrap` and check
+On Linux, the `linux_sandbox::` module in the `sandbox` integration-test target
+includes live children through `spawn_under_linux_bwrap` and checks
 credential masking, worktree writes, protected `.env` paths, Orbit store
 exceptions and Git metadata integrity. Tests that cannot create the namespace
 print `skipping real Bubblewrap test` and return early; the ignored ones fail
-instead. Record either outcome as **not run**, fix the namespace prerequisite,
-and rerun on the owning host. A capability denial is never a passing skip.
+instead. Confirm nonempty selection without spawning children first:
+
+```sh
+cargo test -p orbit-exec --test sandbox linux_sandbox:: -- --list
+```
+
+The module is Linux-only: an empty list on another platform proves no Linux
+boundary behavior. Record the command's actual exit status and mark native
+enforcement **not run** when capability is unavailable. Fix the namespace
+prerequisite and rerun on the owning host; a capability denial is never a passing skip.
 
 The hosted `ci` workflow runs this suite in its Linux enforcement gate on an
 ephemeral `ubuntu-latest` runner, which ships neither Bubblewrap nor the

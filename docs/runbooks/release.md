@@ -31,13 +31,13 @@ workflow signs `orbit-checksums.txt` as `orbit-checksums.txt.sig`;
 `install.sh`, the npm postinstall, and `orbit update` authenticate
 that signature before trusting release-hosted SHA-256 values.
 
-The installers carry a small release-signing trust set:
-
-- `orbit-release-key-3` is the current signing path, valid through
-  `2029-12-31` and not revoked.
-- `orbit-release-key-4` is the pre-staged successor, valid through
-  `2030-12-31` and not revoked. Its PEM is a placeholder; replace it with a
-  real independently held keypair before rotation.
+All three shipped release-signing trust sets contain only `orbit-release-key-3`,
+valid through `2029-12-31` and not revoked: [`install.sh`](../../install.sh),
+[`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js), and
+[`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
+(used by `orbit update` and bundled Bubblewrap verification). No successor is
+pre-staged. Ship successor trust in all three surfaces before signing releases
+with that key.
 
 Key IDs are generation labels, not dates. During verification the installers
 try each known public key, then reject a matching key when its `not_after`
@@ -301,17 +301,19 @@ script again.
 
 Normal rotation uses an overlap window:
 
-1. Generate the successor keypair offline. Add the public half to the trust
-   sets in `install.sh` and
+1. Generate the successor keypair offline, with independent private-key
+   custody. Add the public half to **every** trust set in `install.sh`,
    [`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js)
-   with a new key ID and `not_after` date.
-2. Publish a release and npm package that still sign with the old key while
-   both installers trust old and new keys.
+   and [`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
+   with the same new key ID and expiry (`not_after` / npm `notAfter`).
+2. Publish a release and npm package still signed by the old key that ship
+   both old and successor trust in the shell installer, npm installer, and
+   native binary. Verify all three trust sets before switching the signer.
 3. Update `ORBIT_RELEASE_SIGNING_KEY_PEM` and
    [`npm/release-signing.pub`](../../npm/release-signing.pub), then cut the
    first release signed by the successor.
-4. After the overlap window, remove the old key or mark its `revoked_at`
-   date.
+4. After the overlap window, remove the old key or mark its revocation date
+   (`revoked_at` / npm `revokedAt`) in all three trust sets.
 
 Emergency revocation only protects users who upgrade: already-published npm
 packages retain their embedded trust sets. Publish a patch signed by a

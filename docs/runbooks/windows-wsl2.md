@@ -43,7 +43,7 @@ for `x86_64-pc-windows-msvc`; no test runs on Windows).
   agent dispatch stays blocked. Do not set an executor's `spec.sandbox: off`,
   enable `allow_fallback`, install a setuid `bwrap`, or loosen the
   distribution's user-namespace policy to get past it; report the probe detail
-  instead (see [section 5](#5-prepare-and-check-the-sandbox)).
+  instead (see [section 5](#5-initialize-the-machine-and-prepare-the-sandbox)).
 - Installing WSL needs Windows administrator rights and usually a reboot.
   Changing `/etc/wsl.conf` or `%UserProfile%\.wslconfig` needs a distribution
   restart, which stops every Orbit process inside it.
