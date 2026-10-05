@@ -149,6 +149,7 @@ run_shell_install() {
 expect_shell_failure() {
   local release_dir="$1"
   local label="$2"
+  local expected_error="${3:-}"
   local install_dir="$TMP_ROOT/install-$label"
   local marker="$TMP_ROOT/marker-$label"
   local log_file="$TMP_ROOT/$label.log"
@@ -160,6 +161,15 @@ expect_shell_failure() {
   fi
   if [ -e "$marker" ]; then
     echo "FAIL: shell installer executed binary for $label" >&2
+    exit 1
+  fi
+  if [ -e "$install_dir/orbit" ] || [ -L "$install_dir/orbit" ]; then
+    echo "FAIL: shell installer installed binary for $label" >&2
+    exit 1
+  fi
+  if [ -n "$expected_error" ] && ! grep -q "$expected_error" "$log_file"; then
+    echo "FAIL: shell installer rejected $label for an unexpected reason" >&2
+    cat "$log_file" >&2
     exit 1
   fi
 }
@@ -207,6 +217,41 @@ expect_shell_failure "$untrusted_key_release" "untrusted-key"
 expect_shell_failure "$symlink_release" "symlink-member"
 expect_shell_failure "$traversal_release" "traversal-member"
 
+# Use the same malformed dates for both installers and both optional fields.
+malformed_dates=('next-month' '2026-1-01' '2026-01-1' '26-01-01'
+  '20260101' ' 2026-01-01' '2026-01-01 ' '2026-01-01extra')
+MALFORMED_DATES_FILE="$TMP_ROOT/malformed-release-dates.json"
+node -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' \
+  "${malformed_dates[@]}" > "$MALFORMED_DATES_FILE"
+VALID_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE"
+TRUSTED_KEYS_FILE="$TMP_ROOT/malformed-trusted-release-keys.txt"
+date_case=0
+for malformed_date in "${malformed_dates[@]}"; do
+  date_case=$((date_case + 1))
+  printf 'current|%s||%s\n' "$malformed_date" "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+  expect_shell_failure "$good_release" "malformed-not-after-$date_case" 'invalid release signing key date'
+  printf 'current|2099-12-31|%s|%s\n' "$malformed_date" "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+  expect_shell_failure "$good_release" "malformed-revoked-at-$date_case" 'invalid release signing key date'
+done
+printf 'current|next-month||%s' "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+expect_shell_failure "$good_release" 'malformed-not-after-no-final-newline' 'invalid release signing key date'
+# A matching valid key must not hide malformed metadata later in the trust set.
+for field in not_after revoked_at; do
+  printf 'current|2099-12-31||%s\n' "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+  if [ "$field" = not_after ]; then
+    printf 'unused|next-month||%s' "$EXPIRED_PUBLIC_KEY" >> "$TRUSTED_KEYS_FILE"
+  else
+    printf 'unused|2099-12-31|next-month|%s' "$EXPIRED_PUBLIC_KEY" >> "$TRUSTED_KEYS_FILE"
+  fi
+  expect_shell_failure "$good_release" "malformed-unused-$field" 'invalid release signing key date'
+done
+printf 'current|||%s' "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+run_shell_install "$good_release" "$TMP_ROOT/install-empty-dates" "$TMP_ROOT/marker-empty-dates" \
+  > "$TMP_ROOT/empty-dates.log" 2>&1
+test -x "$TMP_ROOT/install-empty-dates/orbit"
+test -f "$TMP_ROOT/marker-empty-dates"
+TRUSTED_KEYS_FILE="$VALID_TRUSTED_KEYS_FILE"
+
 good_install_dir="$TMP_ROOT/install-good"
 good_marker="$TMP_ROOT/marker-good"
 run_shell_install "$good_release" "$good_install_dir" "$good_marker" > "$TMP_ROOT/good.log" 2>&1
@@ -249,6 +294,7 @@ ROOT="$ROOT" \
   GOOD_ARCHIVE="$good_archive" \
   SYMLINK_ARCHIVE="$symlink_release/orbit-${TARGET}.tar.gz" \
   TRAVERSAL_ARCHIVE="$traversal_release/orbit-${TARGET}.tar.gz" \
+  MALFORMED_DATES_FILE="$MALFORMED_DATES_FILE" \
   TARGET="$TARGET" \
   node <<'NODE'
 const fs = require('node:fs');
@@ -337,6 +383,27 @@ expectThrow(
   'npm untrusted key rejection'
 );
 installer.verifyChecksumSignature(checksumText, signature, publicKey);
+const malformedDates = JSON.parse(fs.readFileSync(process.env.MALFORMED_DATES_FILE, 'utf8'));
+// Object inputs can preserve newlines that a line-based manifest cannot.
+malformedDates.push('2099-12-31\n', '2099-12-31\r', '2099-12-31\nnext-month');
+for (const malformedDate of malformedDates) {
+  for (const field of ['notAfter', 'revokedAt']) {
+    expectThrow(
+      () => installer.verifyChecksumSignature(checksumText, signature, [
+        { ...trustedKeys[0], [field]: malformedDate },
+      ]),
+      new RegExp(`invalid ${field}`),
+      `npm malformed ${field}: ${JSON.stringify(malformedDate)}`
+    );
+    expectThrow(
+      () => installer.verifyChecksumSignature(checksumText, signature, [
+        trustedKeys[0], { ...trustedKeys[1], [field]: malformedDate },
+      ]),
+      new RegExp(`invalid ${field}`),
+      `npm malformed unused ${field}: ${JSON.stringify(malformedDate)}`
+    );
+  }
+}
 if (
   !Array.isArray(installer.TRUSTED_RELEASE_KEYS) ||
   installer.TRUSTED_RELEASE_KEYS.length !== 1 ||

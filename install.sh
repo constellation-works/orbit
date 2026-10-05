@@ -67,14 +67,17 @@ EOF
 release_date_number() {
   value="$1"
 
-  printf '%s' "$value" | awk '
-    /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ {
-      gsub("-", "")
-      print
-      exit 0
-    }
-    { exit 1 }
-  ' || fail "invalid release signing key date: $value"
+  case "$value" in
+    "")
+      return
+      ;;
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+      printf '%s\n' "$value" | awk '{ gsub("-", ""); print }'
+      ;;
+    *)
+      fail "invalid release signing key date: $value"
+      ;;
+  esac
 }
 
 write_builtin_trusted_key_records() {
@@ -122,7 +125,18 @@ verify_checksum_signature() {
 
   trusted_key_records > "$records_path"
 
-  while IFS='|' read -r key_id not_after revoked_at public_key_path; do
+  # Validate every record before accepting a signature, including unused keys.
+  # Keep validation out of conditional predicates: a subshell failure there
+  # would not abort the installer under set -e.
+  while IFS='|' read -r key_id not_after revoked_at public_key_path || [ -n "$key_id" ]; do
+    case "$key_id" in
+      "" | \#*) continue ;;
+    esac
+    release_date_number "$not_after" >/dev/null
+    release_date_number "$revoked_at" >/dev/null
+  done < "$records_path"
+
+  while IFS='|' read -r key_id not_after revoked_at public_key_path || [ -n "$key_id" ]; do
     case "$key_id" in
       "" | \#*)
         continue
@@ -132,11 +146,12 @@ verify_checksum_signature() {
     [ -n "$public_key_path" ] || fail "trusted release signing key ${key_id} has no public key path"
     [ -f "$public_key_path" ] || fail "trusted release signing key ${key_id} public key does not exist: $public_key_path"
 
+    not_after_number="$(release_date_number "$not_after")" || exit 1
     if openssl dgst -sha256 -verify "$public_key_path" -signature "$signature_path" "$checksum_path" >/dev/null 2>&1; then
       if [ -n "$revoked_at" ]; then
         fail "release checksum signature was made by revoked release signing key ${key_id} (revoked ${revoked_at})"
       fi
-      if [ -n "$not_after" ] && [ "$today_number" -gt "$(release_date_number "$not_after")" ]; then
+      if [ -n "$not_after_number" ] && [ "$today_number" -gt "$not_after_number" ]; then
         fail "release checksum signature was made by expired release signing key ${key_id} (not_after ${not_after})"
       fi
       log "Authenticated ${CHECKSUM_FILE} with release signing key ${key_id}"

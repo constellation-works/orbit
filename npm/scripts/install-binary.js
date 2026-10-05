@@ -190,13 +190,14 @@ function normalizeTrustedReleaseKeys(trustedKeys) {
     }
     const notAfter = key.notAfter || null;
     const revokedAt = key.revokedAt || null;
-    // Mirror the shell-side awk regex (release_date_number) so a malformed
+    // Mirror the shell-side date format check (release_date_number) so a malformed
     // override like notAfter: "next month" fails closed instead of silently
     // becoming "never expires" under lexicographic comparison.
-    if (notAfter !== null && !/^\d{4}-\d{2}-\d{2}$/.test(notAfter)) {
+    // The length check also rejects trailing newlines, which JS's $ permits.
+    if (notAfter !== null && (notAfter.length !== 10 || !/^\d{4}-\d{2}-\d{2}$/.test(notAfter))) {
       throw new Error(`trusted release signing key ${key.id} has invalid notAfter: ${notAfter} (expected YYYY-MM-DD)`);
     }
-    if (revokedAt !== null && !/^\d{4}-\d{2}-\d{2}$/.test(revokedAt)) {
+    if (revokedAt !== null && (revokedAt.length !== 10 || !/^\d{4}-\d{2}-\d{2}$/.test(revokedAt))) {
       throw new Error(`trusted release signing key ${key.id} has invalid revokedAt: ${revokedAt} (expected YYYY-MM-DD)`);
     }
     return {
