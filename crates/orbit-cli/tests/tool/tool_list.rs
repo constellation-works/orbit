@@ -383,19 +383,52 @@ fn tool_run_rejects_inactive_tools() {
     git_repo::init(&work);
 
     orbit_at_home(&work, &home)
-        .args([
+        .args(["workspace", "init", "--name", "inactive-audit"])
+        .assert()
+        .success();
+    // Exercise both registry refusal sites through their real CLI callers.
+    for args in [
+        vec![
             "tool",
             "run",
-            "orbit.auto_task.show",
+            "orbit.friction.list",
             "--input",
             "{\"model\":\"codex\"}",
-        ])
+        ],
+        vec!["tool", "enable", "orbit.friction.list"],
+    ] {
+        orbit_at_home(&work, &home)
+            .args(args)
+            .assert()
+            .failure()
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains("policy denied"));
+    }
+    let output = orbit_at_home(&work, &home)
+        .args(["audit", "list", "--json"])
         .assert()
-        .failure()
-        // The JSON error payload moved to stderr [ORB-10570]; stdout carries
-        // the payload and nothing else.
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("inactive"));
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&output).unwrap();
+    for subcommand in ["run", "enable"] {
+        let attempts: Vec<_> = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["command"] == "tool" && event["subcommand"] == subcommand)
+            .collect();
+        assert_eq!(
+            attempts.len(),
+            1,
+            "one row per inactive {subcommand} refusal"
+        );
+        assert_eq!(
+            attempts[0]["status"], "denied",
+            "inactive {subcommand} is a policy denial"
+        );
+    }
 }
 
 /// [ORB-12581] `orbit.drain.claims` is off the MCP surface and has no

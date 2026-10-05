@@ -42,6 +42,7 @@ mod grouping;
 mod signature;
 mod types;
 
+pub(crate) use classify::classify_failure;
 pub use classify::{
     classify, has_tool_identity, is_failure_only_diagnostic_surface, is_lifecycle_diagnostic,
 };

@@ -383,9 +383,11 @@ impl Store {
     /// Per-tool aggregate of audit events with `timestamp >= since`. Folds
     /// NULL `tool_name` into a synthetic `"unknown"` bucket so callers don't
     /// have to guard against missing values. The `mcp_*` / `cli_*` columns
-    /// only count rows where `subcommand` is `'run-mcp'` or `'run'` respectively;
-    /// other subcommands contribute to `total` and `failures` but not to the
-    /// split.
+    /// only count tool invocations (`command = 'tool'`) where `subcommand`
+    /// is `'run-mcp'` or `'run'` respectively; other events contribute to
+    /// `total` and `failures` but not to the split. Callable denials are
+    /// counted separately; unexpected callable failures use the same
+    /// classifier as the incident report, over the entire window.
     pub fn get_audit_event_aggregates_by_tool(
         &self,
         since: &DateTime<Utc>,
@@ -397,11 +399,14 @@ impl Store {
                    COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0), \
                    COALESCE(SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END), 0), \
                    COALESCE(SUM(CASE WHEN status = 'denied' THEN 1 ELSE 0 END), 0), \
-                   COALESCE(SUM(CASE WHEN subcommand = 'run-mcp' THEN 1 ELSE 0 END), 0), \
-                   COALESCE(SUM(CASE WHEN subcommand = 'run' THEN 1 ELSE 0 END), 0), \
-                   COALESCE(SUM(CASE WHEN status = 'failure' AND subcommand = 'run-mcp' THEN 1 ELSE 0 END), 0), \
-                   COALESCE(SUM(CASE WHEN status = 'failure' AND subcommand = 'run' THEN 1 ELSE 0 END), 0), \
-                   COALESCE(AVG(duration_ms), 0.0) \
+                   COALESCE(SUM(CASE WHEN command = 'tool' AND subcommand = 'run-mcp' THEN 1 ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN command = 'tool' AND subcommand = 'run' THEN 1 ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN command = 'tool' AND status = 'failure' AND subcommand = 'run-mcp' THEN 1 ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN command = 'tool' AND status = 'failure' AND subcommand = 'run' THEN 1 ELSE 0 END), 0), \
+                   COALESCE(AVG(duration_ms), 0.0), \
+                   COALESCE(SUM(CASE WHEN command = 'tool' AND status = 'denied' AND subcommand IN ('run', 'run-mcp') THEN 1 ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN command = 'tool' AND status = 'failure' AND subcommand IN ('run', 'run-mcp') \
+                     AND orbit_failure_class(COALESCE(tool_name, 'unknown'), status, error_message) = 'unexpected' THEN 1 ELSE 0 END), 0) \
                    FROM audit_events WHERE timestamp >= ?1 GROUP BY tool";
 
         let mut stmt = conn
@@ -421,6 +426,8 @@ impl Store {
                     mcp_failures: row.get(7)?,
                     cli_failures: row.get(8)?,
                     avg_duration_ms: row.get(9)?,
+                    callable_denials: row.get(10)?,
+                    callable_unexpected_failures: row.get(11)?,
                 })
             })
             .map_err(|e| OrbitError::Store(e.to_string()))?;

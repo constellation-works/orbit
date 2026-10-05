@@ -1,6 +1,8 @@
 //! HTTP contracts through the public server entry point, in disposable child processes.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "http_api/audit.rs"]
+mod audit;
 #[path = "http_api/guards.rs"]
 mod guards;
 #[path = "http_api/host.rs"]

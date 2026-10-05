@@ -261,7 +261,7 @@ impl OrbitRuntime {
             if let Some(diagnostic) = self.tool_registry().inactive_diagnostic(name) {
                 return Err(OrbitError::PolicyDenied(diagnostic));
             }
-            return Err(OrbitError::Execution(format!(
+            return Err(OrbitError::PolicyDenied(format!(
                 "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation not reachable by agents"
             )));
         }
@@ -308,7 +308,7 @@ impl OrbitRuntime {
             if !changes_stored_state {
                 let state = if enabled { "enabled" } else { "disabled" };
                 let verb = if enabled { "enable" } else { "disable" };
-                return Err(OrbitError::InvalidInput(format!(
+                return Err(OrbitError::PolicyDenied(format!(
                     "tool '{name}' is inactive on the agent tool surface and is already {state}; \
                      `orbit tool {verb}` would be a no-op"
                 )));

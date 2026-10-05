@@ -97,6 +97,12 @@ pub struct AuditToolAggregate {
     pub cli_total: i64,
     pub mcp_failures: i64,
     pub cli_failures: i64,
+    /// Denied tool invocations (`command = tool`, `run` or `run-mcp`).
+    /// These are excluded from the raw call-rate denominator.
+    pub callable_denials: i64,
+    /// Raw failed tool invocations classified as unexpected by the shared
+    /// incident classifier. Includes every matching row, without a scan cap.
+    pub callable_unexpected_failures: i64,
     pub avg_duration_ms: f64,
 }
 

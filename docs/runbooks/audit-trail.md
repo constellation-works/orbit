@@ -67,6 +67,26 @@ capability. Trusted managed-envelope identity may replace `unverified`; client J
 
 ## Find recent failures and causes
 
+The dashboard's **Tool call failures by tool** table retains the raw failed,
+total and rate columns. Failed means `status=failure`, including documented
+negative paths such as invalid input and missing records. Total counts only
+successful and failed invocations (`command=tool`, `run` or `run-mcp`); denied
+rows appear in their own column and are excluded from the rate. Unexpected
+counts use the incident classifier, so schema rejections do not look like
+unexpected execution errors. Tools with only denials still appear, with zero
+comparable calls and a zero rate. Inactive agent-surface calls are policy
+denials, including attempts to enable or disable an already-set inactive tool.
+
+To reconcile with **Audit Events**, use the same workspace routing and cutoff
+(`since` in the summary response), select the tool, and count only its `tool`
+`run`/`run-mcp` rows. Count successes plus failures for total, failures for
+failed, denied rows separately, and classify failed rows for unexpected. Fetch
+all pages; the visible Events page may be smaller than the window. Both views
+read host-global audit history: workspace routing selects the runtime, while
+the Events API's explicit `workspace_id` equality filter further narrows rows
+and is not a filter supported by the summary. Diagnostic lifecycle surfaces
+and unnamed tools are excluded from callable-tool rates.
+
 ```sh
 orbit audit export --output /tmp/audit.json
 jq -r '.[] | select(.status=="failure")

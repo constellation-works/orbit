@@ -9,6 +9,7 @@ use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, DatabaseName, OpenFlags, Transaction, TransactionBehavior};
 
 use crate::contracts::ForwardCompatibleOpen;
+use crate::contracts::incident::classify_failure;
 use crate::driver::sqlite::migration;
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 
@@ -56,7 +57,30 @@ pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError
             })
         },
     )
-    .map_err(|error| OrbitError::Store(format!("register {UNICODE_LOWER_SQL}: {error}")))
+    .map_err(|error| OrbitError::Store(format!("register {UNICODE_LOWER_SQL}: {error}")))?;
+
+    conn.create_scalar_function(
+        "orbit_failure_class",
+        3,
+        FunctionFlags::SQLITE_UTF8
+            | FunctionFlags::SQLITE_DETERMINISTIC
+            | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| {
+            let surface: String = ctx.get(0)?;
+            let status: String = ctx.get(1)?;
+            let status = status.parse().map_err(|error| {
+                rusqlite::Error::UserFunctionError(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    error,
+                )))
+            })?;
+            let message: Option<String> = ctx.get(2)?;
+            Ok(classify_failure(&surface, status, message.as_deref())
+                .as_str()
+                .to_string())
+        },
+    )
+    .map_err(|error| OrbitError::Store(format!("register orbit_failure_class: {error}")))
 }
 
 /// SQLite store handle: one writer connection behind a mutex (WAL permits a
