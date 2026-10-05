@@ -233,6 +233,82 @@ fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review() {
 // Reviewed-candidate binding at publication
 // ---------------------------------------------------------------------------
 
+/// A freshly created stacked base shares the landing tip but has not landed
+/// any work yet. Its first candidate can open a PR and enter review.
+#[test]
+fn pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip() {
+    isolated(
+        "pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            git(&fx.repo, &["branch", "main", &fx.base_sha]);
+            git(&fx.repo, &["push", "origin", "main"]);
+            assert_eq!(fx.remote_tip(BASE), fx.remote_tip("main"));
+
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            input["landing_branch"] = json!("main");
+            let opened = action(&host, "pr_open", &input)
+                .expect("the first delivery into a fresh stacked base can publish");
+
+            assert_eq!(opened["pr_created"], true);
+            assert_eq!(fx.forge_state("pr-base").as_deref(), Some(BASE));
+            assert_eq!(fx.forge_state("pr-head").as_deref(), Some(BRANCH));
+
+            input["pr_number"] = json!(PR_NUMBER);
+            action(&host, "pr_promote", &input).expect("the live base can enter review");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            assert!(host.comments(TASK_ID).is_empty());
+        },
+    );
+}
+
+/// A base with its own work merged into the landing branch remains obsolete
+/// at publication and on a resumed promotion, before any forge call or status
+/// transition.
+#[test]
+fn pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch() {
+    isolated(
+        "pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch",
+        |sandbox| {
+            let mut fx = Fixture::new(sandbox);
+            git(&fx.repo, &["branch", "main", &fx.base_sha]);
+            fx.advance_base_and_rebase();
+            fx.base_sha = fx.local_tip(BASE);
+            fx.candidate = fx.head();
+            git(&fx.repo, &["checkout", "main"]);
+            git(
+                &fx.repo,
+                &["merge", "--no-ff", BASE, "-m", "Merge stacked base"],
+            );
+            git(&fx.repo, &["push", "origin", "main"]);
+            git(&fx.repo, &["checkout", BRANCH]);
+            assert_ne!(fx.base_sha, fx.remote_tip("main"));
+
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            input["landing_branch"] = json!("main");
+            input["pr_number"] = json!(PR_NUMBER);
+            for phase in ["pr_open", "pr_promote"] {
+                let error = action(&host, phase, &input)
+                    .expect_err("a genuinely merged base must refuse delivery");
+                assert!(error.to_string().contains("already landed"), "{error}");
+                assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
+            }
+            assert!(fx.forge_calls().is_empty());
+            let comments = host.comments(TASK_ID);
+            assert_eq!(comments.len(), 1, "the same handoff phase is recorded once");
+            for comment in comments {
+                assert!(
+                    comment.message.contains("[phase=obsolete-base]"),
+                    "{}",
+                    comment.message
+                );
+            }
+        },
+    );
+}
+
 /// `pr_open` publishes only the candidate the review gate settled. A
 /// checkout that gained an unreviewed commit or a candidate rebased onto a
 /// base other than the reviewed one is refused before the forge is asked
