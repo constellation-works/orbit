@@ -259,7 +259,11 @@ impl AgentLoop {
                 last_text_reply = text_part;
             }
 
-            session.append_message(Message::assistant(assistant_blocks));
+            // Providers can end a turn without content (e.g. a safety stop).
+            // Replaying an empty assistant message would invalidate later requests.
+            if !assistant_blocks.is_empty() {
+                session.append_message(Message::assistant(assistant_blocks));
+            }
 
             let mut iter_tool_names = Vec::new();
             let mut iter_denials = Vec::new();
