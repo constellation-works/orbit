@@ -1,6 +1,58 @@
 use super::super::wait::wait_with_timeout_and_output_limit;
 use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
 
+/// Use the per-call limit seam to exercise pipe closure and capture reporting
+/// without changing the process-wide capture-limit environment. Finite children
+/// exit before supervision starts, leaving both pipes buffered for the workers.
+#[cfg(unix)]
+#[test]
+fn capture_limits_are_reported_after_child_exit() {
+    let cases: [(&str, bool, &[&str]); 5] = [
+        ("exec yes", false, &["stdout"]),
+        ("printf '%065d' 0", true, &["stdout"]),
+        ("printf '%065d' 0 >&2", true, &["stderr"]),
+        (
+            "printf '%065d' 0; printf '%065d' 0 >&2",
+            true,
+            &["stdout", "stderr"],
+        ),
+        ("printf '%064d' 0; printf '%064d' 0 >&2", true, &[]),
+    ];
+    for (script, exited, limited_streams) in cases {
+        let req = ExecRequest {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            current_dir: None,
+            timeout_ms: Some(5_000),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::Inherit,
+            debug: false,
+        };
+        let mut child = crate::process::spawn(&req).expect("spawn child");
+        if exited {
+            assert!(child.wait().expect("finite child exit").success());
+        }
+
+        let result = wait_with_timeout_and_output_limit(child, req.timeout_ms, false, None, 64)
+            .expect("supervised wait");
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        for stream in ["stdout", "stderr"] {
+            let note = format!("process output capture limit exceeded on {stream}");
+            assert_eq!(
+                stderr.contains(&note),
+                limited_streams.contains(&stream),
+                "capture-limit reporting for {script:?}: stderr was {stderr:?}"
+            );
+        }
+        assert_eq!(
+            result.exit_success,
+            limited_streams.is_empty(),
+            "truncated output must fail even when the child exited successfully: {script:?}"
+        );
+        assert!(!result.timed_out, "capture must finish before the deadline");
+    }
+}
+
 /// A backend that exits before reading its stdin (missing interpreter, empty
 /// shim, launcher error) closes the pipe out from under the writer thread,
 /// which observes EPIPE. That must be reported like any other non-zero exit

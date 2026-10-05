@@ -27,7 +27,7 @@ pub(crate) struct WaitResult {
     pub(crate) exit_success: bool,
     pub(crate) exit_code: Option<i32>,
     pub(crate) stdout: Vec<u8>,
-    /// Stderr text; includes "process timed out" appended when timed out.
+    /// Stderr text, with supervision diagnostics appended.
     pub(crate) stderr: Vec<u8>,
     /// Whether the wall-clock deadline elapsed and the supervisor terminated
     /// the child's process group. Callers that must distinguish a timeout from
@@ -180,7 +180,7 @@ fn wait_cancellable(
     let mut stdin_write_error = None;
     let mut capture_limited: Option<&'static str> = None;
     // Annotated because the only `Some(signal)` arms are Unix-only.
-    let (timed_out, interrupted_signal, exit_success, exit_code): (
+    let (timed_out, interrupted_signal, mut exit_success, exit_code): (
         bool,
         Option<i32>,
         bool,
@@ -314,7 +314,14 @@ fn wait_cancellable(
     // A capture-limit stop looks like a bare failure otherwise (exit code
     // `None`, often an empty stderr), and a tool such as `github.run.logs`
     // then reports "failed: " with no reason for a log that was merely long.
-    if let Some(stream) = capture_limited {
+    // The workers have joined, so also drain notifications sent while the
+    // child was exiting or the pipes were settling. Truncated output must
+    // fail even if the child itself exited successfully.
+    for stream in capture_limited
+        .into_iter()
+        .chain(output_limit_rx.try_iter())
+    {
+        exit_success = false;
         if !stderr.is_empty() {
             stderr.push(b'\n');
         }
