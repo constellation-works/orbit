@@ -52,23 +52,21 @@ pub(super) fn marker_reachable(
 /// order and including their brackets so they can be grepped verbatim.
 ///
 /// Deliberately conservative: a token that is not shaped like an id (no digit,
-/// no letter, embedded whitespace, over-long) is dropped. A dropped token can
-/// only make a caller treat work as *not* delivered, which is the safe
-/// direction for every caller here.
+/// no letter, embedded whitespace, over-long) is dropped. Each opening bracket
+/// starts a new candidate, so an unmatched bracket in prose or a truncated
+/// title cannot hide a later delivery marker.
 pub(super) fn delivery_markers(message: &str) -> Vec<String> {
     let mut markers: Vec<String> = Vec::new();
-    let mut rest = message;
-    while let Some(open) = rest.find('[') {
-        rest = &rest[open + 1..];
-        let Some(close) = rest.find(']') else { break };
-        let token = &rest[..close];
+    for candidate in message.split('[').skip(1) {
+        let Some((token, _)) = candidate.split_once(']') else {
+            continue;
+        };
         if is_marker(token) {
             let marker = format!("[{token}]");
             if !markers.contains(&marker) {
                 markers.push(marker);
             }
         }
-        rest = &rest[close + 1..];
     }
     markers
 }
