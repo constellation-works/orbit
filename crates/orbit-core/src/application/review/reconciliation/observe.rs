@@ -40,7 +40,9 @@ pub(super) fn binding_digest(binding: &ReconciliationBinding) -> Result<String, 
 }
 
 /// Whether `record` reconciles exactly this execution, pull request, merged
-/// head and task meaning, with an intact binding.
+/// head, landed commit and task meaning, with an intact binding. A record
+/// that predates binding the landed commit is matched without it; it can
+/// still never authorize a baseline disposition.
 pub(super) fn binds(
     record: &ReviewReconciliation,
     task_digest: &str,
@@ -63,6 +65,9 @@ pub(super) fn binds(
         && binding.pull_request.url == pull_request.url
         && binding.pull_request.landing_branch == handoff.candidate.landing_branch
         && binding.pull_request.merged_head.commit == pull_request.head
+        && binding.pull_request.landed.as_ref().is_none_or(|landed| {
+            pull_request.merge_commit.as_deref() == Some(landed.commit.as_str())
+        })
 }
 
 /// Observe `task_id`'s merged foreign delivery, refusing with the next step
@@ -124,7 +129,8 @@ pub(super) fn observe(runtime: &OrbitRuntime, task_id: &str) -> Result<Observati
         ))
     })?;
     readable(merge_commit)?;
-    let landed_on = format!("{merge_commit}^1");
+    let landed = review_gate::revision(repo, merge_commit)?;
+    let landed_on = format!("{}^1", landed.commit);
     let base_commit = merge_base(repo, &merged_head.commit, &landed_on)?;
     let base = review_gate::revision(repo, &base_commit)?;
     let binding = ReconciliationBinding {
@@ -145,6 +151,7 @@ pub(super) fn observe(runtime: &OrbitRuntime, task_id: &str) -> Result<Observati
             landing_branch: handoff.candidate.landing_branch.clone(),
             merged_head,
             base,
+            landed: Some(landed),
         },
     };
     let binding_digest = binding_digest(&binding)?;

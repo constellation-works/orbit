@@ -4,6 +4,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::required_string;
+use orbit_common::security::redaction::redact_all_and_home_error;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::review_gate::{self, RequiredValidationRun};
 use orbit_types::task::TaskArtifact;
@@ -332,6 +333,22 @@ fn accept_baseline(
                 "task {task_id} has no reconciliation {reconciliation_id}"
             ))
         })?;
+    // A record that predates binding the landed delivery cannot say what a
+    // remediation must contain, so none of its failures can be disposed.
+    let Some(landed) = record
+        .binding
+        .pull_request
+        .landed
+        .as_ref()
+        .map(|landed| landed.commit.clone())
+    else {
+        return Err(refused(format!(
+            "reconciliation {reconciliation_id} predates binding the pull request's landed \
+             commit, so no remediation can be checked against the delivery; inspect the task and \
+             submit a new request key (`orbit task reconcile-review submit {task_id} --request \
+             <new-key>`), then dispose the new reconciliation's baseline failures"
+        )));
+    };
     let repo = &runtime.paths().repo_root;
     let remediation_commit = review_gate::fetch_landed_commit(repo, &remediation)
         .and_then(|()| review_gate::revision(repo, &remediation))
@@ -388,21 +405,17 @@ fn accept_baseline(
         .ok_or_else(|| refused(format!("`{command_display}` has no baseline run")))?;
     let binding_digest = record.binding_digest.clone();
     let head = record.binding.pull_request.merged_head.commit.clone();
-    let landing = record.binding.pull_request.landing_branch.clone();
-    let landed = [format!("origin/{landing}"), landing.clone()]
-        .iter()
-        .any(|tip| review_gate::contains_commit(repo, &remediation_commit, tip).unwrap_or(false));
-    if !landed {
-        return Err(refused(format!(
-            "remediation {remediation_commit} has not landed on {landing}; land the fix first"
-        )));
-    }
-    if review_gate::contains_commit(repo, &remediation_commit, &head)? {
-        return Err(refused(format!(
-            "remediation {remediation_commit} is already part of the merged head {head}, so it \
-             cannot explain a failure of that head"
-        )));
-    }
+    let delivery = Delivery {
+        repo,
+        landing: record.binding.pull_request.landing_branch.clone(),
+        number: record.binding.pull_request.number,
+        head: head.clone(),
+        landed: landed.clone(),
+    };
+    delivery.admit(&remediation_commit)?;
+    // The provider must still report the delivery this record bound before a
+    // command runs on its behalf.
+    ensure_binding_current(runtime, task_id, &reconciliation_id, &binding_digest)?;
     let existing_check = record
         .remediation_checks
         .iter()
@@ -410,6 +423,7 @@ fn accept_baseline(
             check.command == command
                 && check.head_commit == head
                 && check.remediation_commit == remediation_commit
+                && check.landed_commit.as_deref() == Some(landed.as_str())
         })
         .cloned();
     let check = match existing_check {
@@ -430,11 +444,12 @@ fn accept_baseline(
                 &remediation_commit,
                 operator,
             )
-            .map_err(|error| refused(super::safe_reconciliation_text(&error.to_string())))?;
+            .map_err(redact_all_and_home_error)?;
             let check = BaselineRemediationCheck {
                 command: command.clone(),
                 head_commit: head.clone(),
                 remediation_commit: remediation_commit.clone(),
+                landed_commit: Some(landed.clone()),
                 run,
                 actor: operator.actor.clone(),
                 provenance: operator.provenance.clone(),
@@ -448,6 +463,7 @@ fn accept_baseline(
                     recorded.command == command
                         && recorded.head_commit == head
                         && recorded.remediation_commit == remediation_commit
+                        && recorded.landed_commit.as_deref() == Some(landed.as_str())
                 })
                 .cloned()
                 .ok_or_else(|| refused("remediation check was not retained".into()))?;
@@ -462,29 +478,17 @@ fn accept_baseline(
         }
     };
     // A long remediation command must not authorize a decision after the
-    // provider's head, task meaning, or baseline moved while it ran.
-    let remediation_still_landed = [format!("origin/{landing}"), landing.clone()]
-        .iter()
-        .any(|tip| review_gate::contains_commit(repo, &remediation_commit, tip).unwrap_or(false));
-    if !remediation_still_landed {
-        return Err(refused(format!(
-            "remediation {remediation_commit} is no longer present on {landing}; fetch the \
-             landing branch and retry"
-        )));
-    }
-    let current = observe(runtime, task_id)?;
-    if current.binding_digest != binding_digest {
-        return Err(refused(format!(
-            "the delivery changed since reconciliation {reconciliation_id} observed it; submit a \
-             new request key"
-        )));
-    }
+    // remediation left the landing branch, or the provider's head, landed
+    // commit, task meaning or baseline moved while it ran.
+    delivery.admit(&remediation_commit)?;
+    ensure_binding_current(runtime, task_id, &reconciliation_id, &binding_digest)?;
     record.dispositions.push(BaselineDisposition {
         command: command.clone(),
         head_commit: head.clone(),
         failure_log_sha256: entry.head.log.sha256.clone(),
         baseline_log_sha256: baseline.log.sha256.clone(),
         remediation_commit: remediation_commit.clone(),
+        landed_commit: Some(landed.clone()),
         remediation_check: Some(check.run.log.clone()),
         reason: reason.trim().to_string(),
         actor: operator.actor.clone(),
@@ -504,7 +508,8 @@ fn accept_baseline(
             comment: Some(format!(
                 "Review reconciliation {reconciliation_id}: {} accepted the baseline failure of \
                  `{command_display}` at merged head {head}, remediated by landed commit \
-                 {remediation_commit} ({}). Validation of the merged head stays incomplete.{}",
+                 {remediation_commit}, which contains the landed delivery {landed} ({}). \
+                 Validation of the merged head stays incomplete.{}",
                 operator.actor,
                 reason.trim(),
                 if disposed {
@@ -519,6 +524,74 @@ fn accept_baseline(
     )?;
     audit(runtime, operator, &record, "baseline_disposed", None)?;
     view(runtime, task_id, &record, false)
+}
+
+/// The bound delivery a proposed remediation is judged against.
+struct Delivery<'a> {
+    repo: &'a std::path::Path,
+    landing: String,
+    number: u64,
+    head: String,
+    /// The provider's landed commit bound into the reconciliation.
+    landed: String,
+}
+
+impl Delivery<'_> {
+    /// Refuse a remediation that is not on the landing branch, is already
+    /// part of the merged head, or does not contain the landed delivery: a
+    /// check of such a commit says nothing about the code that merged. Only
+    /// containment of the landed commit is required, never of the pull
+    /// request's head, which a squash landing does not keep.
+    fn admit(&self, remediation: &str) -> Result<(), OrbitError> {
+        let Self {
+            repo,
+            landing,
+            number,
+            head,
+            landed,
+        } = self;
+        let on_landing = [format!("origin/{landing}"), landing.clone()]
+            .iter()
+            .any(|tip| review_gate::contains_commit(repo, remediation, tip).unwrap_or(false));
+        if !on_landing {
+            return Err(OrbitError::InvalidInput(format!(
+                "remediation {remediation} is not on {landing}; land the fix there (fetch the \
+                 landing branch if it already landed) and retry"
+            )));
+        }
+        if review_gate::contains_commit(repo, remediation, head)? {
+            return Err(OrbitError::InvalidInput(format!(
+                "remediation {remediation} is already part of the merged head {head}, so it \
+                 cannot explain a failure of that head"
+            )));
+        }
+        if !review_gate::contains_commit(repo, landed, remediation)? {
+            return Err(OrbitError::InvalidInput(format!(
+                "remediation {remediation} does not contain commit {landed} that pull request \
+                 #{number} landed as, so a check there cannot show the delivered code passes; \
+                 land the fix on {landing} after that commit and retry with the new commit"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Refuse once the provider no longer reports the delivery `binding_digest`
+/// was taken from.
+fn ensure_binding_current(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    reconciliation_id: &str,
+    binding_digest: &str,
+) -> Result<(), OrbitError> {
+    if observe(runtime, task_id)?.binding_digest != binding_digest {
+        return Err(OrbitError::InvalidInput(format!(
+            "the delivery changed since reconciliation {reconciliation_id} observed it (task \
+             meaning, claim, handoff, pull request, merged head or landed commit); inspect it \
+             and submit a new request key"
+        )));
+    }
+    Ok(())
 }
 
 fn remediation_check_path(
@@ -627,14 +700,12 @@ fn record_remediation_check(
                     record.reconciliation_id
                 ))
             })?;
-        if let Some(existing) = current.remediation_checks.iter().find(|existing| {
+        if current.remediation_checks.iter().any(|existing| {
             existing.command == check.command
                 && existing.head_commit == check.head_commit
                 && existing.remediation_commit == check.remediation_commit
+                && existing.landed_commit == check.landed_commit
         }) {
-            if existing.run.log != check.run.log || existing.run.passed != check.run.passed {
-                return Ok(current);
-            }
             return Ok(current);
         }
         current.remediation_checks.push(check.clone());

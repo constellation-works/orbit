@@ -34,6 +34,11 @@ pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
         )
         .map_err(|error| OrbitError::Store(error.to_string()))
     }),
+    // The persisted reconciliation JSON now binds the actual landed commit.
+    // There is no SQLite column change, but the feature version must advance
+    // so binaries that cannot read this record contract are refused before
+    // they can join and mutate the same store.
+    FeatureMigration::new(4, "reconciliation_landed_delivery_binding", |_| Ok(())),
 ];
 
 pub(crate) fn initialize(store: &Store) -> Result<(), OrbitError> {

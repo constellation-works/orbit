@@ -73,7 +73,8 @@ pub struct ReconcileAcceptBaselineArgs {
     /// Required command whose failure reproduced at the base
     #[arg(long)]
     pub command: String,
-    /// Landed commit on the landing branch that remediates the failure
+    /// Commit on the landing branch, landed on top of the delivery's merge or
+    /// squash commit, that remediates the failure
     #[arg(long)]
     pub remediation: String,
     /// Why the baseline failure is accepted; recorded with the disposition

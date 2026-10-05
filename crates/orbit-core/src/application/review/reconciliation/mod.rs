@@ -32,7 +32,7 @@ mod run;
 mod submit;
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::{redact_all, redact_home_dir};
+use orbit_common::security::redaction::redact_all_and_home;
 use orbit_types::workflow::{
     ReconciliationOutcome, ReviewReconciliation, handoff::AcceptedHandoff,
 };
@@ -71,7 +71,7 @@ pub(super) fn redact_reconciliation_report(value: &mut Value) {
 
 /// A display form for command selectors and other reconciliation prose.
 pub(super) fn safe_reconciliation_text(text: &str) -> String {
-    redact_home_dir(&redact_all(text))
+    redact_all_and_home(text)
 }
 
 /// Why a changed merged head cannot complete its task, or `None` when an
@@ -122,14 +122,15 @@ fn next_step(record: &ReviewReconciliation, task_id: &str) -> String {
             "the merged head is reconciled; complete the task from review".to_string()
         }
         Some(ReconciliationOutcome::AcceptedWithDisposition) => format!(
-            "reconciliation {rid} predates verified remediation evidence; inspect the merged \
-             head and submit a new request key to establish current evidence"
+            "reconciliation {rid} predates verified remediation evidence bound to the landed \
+             delivery; inspect the merged head and submit a new request key to establish \
+             current evidence"
         ),
         Some(ReconciliationOutcome::AwaitingDisposition { commands }) => format!(
             "reconciliation {rid} is waiting for an operator disposition of baseline failures \
-             in {}: once a landed commit remediates each one, run `orbit task reconcile-review \
-             accept-baseline {task_id} --reconciliation {rid} --command '<command>' \
-             --remediation <commit> --reason '<why>'`",
+             in {}: once a commit landed on top of the delivery remediates each one, run `orbit \
+             task reconcile-review accept-baseline {task_id} --reconciliation {rid} --command \
+             '<command>' --remediation <commit> --reason '<why>'`",
             commands
                 .iter()
                 .map(|command| safe_reconciliation_text(command))

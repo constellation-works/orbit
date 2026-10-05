@@ -641,6 +641,21 @@ request. Agents cannot submit or dispose one.
   The outcome becomes `accepted_with_disposition`; validation stays incomplete
   in the record.
 
+  The remediation must contain the delivery as it landed. `submit` binds the
+  commit the provider reports the pull request landed as (`binding.pull_request.landed`:
+  its merge commit, squash commit or last rebased commit), and the disposition
+  refuses, before running anything, a remediation that is not a descendant of
+  it. A fix that reached the landing branch before the pull request merged
+  passes the check without the delivery's code, so it would hide any failure
+  the delivery added to the same command. Land the fix on top of the landed
+  commit and name that new commit. Only the landed commit counts, not the pull
+  request's head, which a squash landing does not keep. The disposition also
+  refuses when the provider's answer (head, landed commit, task, claim or
+  handoff) changes before or while the check runs; inspect and submit a new
+  request key. A record written before the landed commit was bound (schema
+  3 or earlier) keeps its evidence but cannot be disposed or authorize
+  completion; submit a new request key to reconcile the same head again.
+
 On the dashboard, **approve** on a review task that has a handed-off claim
 sends **Approve handoff** for the exact candidate. A plain status write would
 be refused with `active execution claim requires a claim-scoped mutation`.
