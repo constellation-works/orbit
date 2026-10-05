@@ -55,15 +55,17 @@ pub(super) fn admit(
 }
 
 /// Record `attempt` as the exhausted failed input of every member it still
-/// carries, so none of them refires at the same fingerprint.
+/// carries, so none of them refires at the same fingerprint. Each member
+/// keeps its own failure record rather than a copy of the whole batch.
 pub(super) fn retire_attempt(
     host: &dyn MemberHost,
     members: &mut MemberState,
-    mut attempt: MemberAttempt,
+    attempt: MemberAttempt,
 ) -> Result<(), AutomationError> {
-    attempt.exhausted = true;
-    for member in attempt.members().to_vec() {
-        members.failed.insert(member.key, attempt.clone());
+    for member in attempt.members() {
+        if let Some(record) = attempt.failure_record(&member.key) {
+            members.failed.insert(member.key.clone(), record);
+        }
     }
     fit_failed(host, members, &attempt)
 }

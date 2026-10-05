@@ -1,7 +1,9 @@
 //! One member evaluation pass: reconcile, absorb a page, then admit due members.
 
 use super::admission::admit;
-use super::observe::{CAPACITY, absorb, observed, retire_superseded, retire_unobserved};
+use super::observe::{
+    CAPACITY, absorb, compact_failed, observed, retire_superseded, retire_unobserved,
+};
 use super::reconcile::reconcile;
 use super::{MemberAdmission, MemberEvaluation, MemberHost};
 use crate::AutomationError;
@@ -151,6 +153,7 @@ pub fn evaluate(
     }
     let deferred = absorb(host, members, &page);
     retire_superseded(members, &BTreeSet::new());
+    compact_failed(members);
     members.scan_after = page.next;
 
     state = if dry_run {

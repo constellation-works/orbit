@@ -32,34 +32,6 @@ pub(super) fn validate(
         return Err(invalid());
     }
 
-    // A failed record never changes, except into the one the active attempt
-    // just exhausted itself into for a member it carried. It may leave once it
-    // suppresses nothing: its member is neither in flight nor pending at the
-    // fingerprint it failed at.
-    for (key, failed) in &old.failed {
-        let exhausted_into = old.active.as_ref().is_some_and(|active| {
-            active.member_for(key).is_some()
-                && new.active.is_none()
-                && new
-                    .failed
-                    .get(key)
-                    .is_some_and(|next| next.id == active.id && next.exhausted)
-        });
-        let lifted = !new.failed.contains_key(key)
-            && new
-                .active
-                .as_ref()
-                .is_none_or(|active| active.member_for(key).is_none())
-            && !failed.member_for(key).is_some_and(|retired| {
-                new.pending
-                    .get(key)
-                    .is_some_and(|pending| pending.fingerprint == retired.fingerprint)
-            });
-        if new.failed.get(key) != Some(failed) && !exhausted_into && !lifted {
-            return Err(invalid());
-        }
-    }
-
     // An in-flight attempt keeps its identity and may only advance by one retry;
     // before admission it may shrink to the members still admissible.
     if let Some(active) = &old.active {
@@ -117,6 +89,9 @@ pub(super) fn validate(
         return Err(invalid());
     }
 
+    // Members a receipt certifies; the attempt's other members are the only
+    // ones a new failed record may be written for.
+    let mut certified = BTreeSet::new();
     if let Some(receipt) = receipt {
         let active = old.active.as_ref().ok_or_else(invalid)?;
         let evidence: MemberBatchEvidence =
@@ -167,6 +142,7 @@ pub(super) fn validate(
         if expected_assessments != new.assessed || !every_member_retired(active, new, &applied) {
             return Err(invalid());
         }
+        certified = applied;
     } else if new
         .assessed
         .iter()
@@ -177,12 +153,57 @@ pub(super) fn validate(
         return Err(invalid());
     }
 
+    let retiring = old.active.as_ref().filter(|_| new.active.is_none());
+    if !failed_records_valid(old, new, retiring, &certified) {
+        return Err(invalid());
+    }
+
     Ok(())
 }
 
-/// Whether every member of `active` outside `except` now holds the exhausted
-/// failed record of this very attempt: the only way an attempt clears the
-/// slot without certifying a member.
+/// Failed records are append-only evidence [ORB-14177]. One may be written
+/// only as the exact [`MemberAttempt::failure_record`] of the attempt this
+/// checkpoint retires, for a member it carried and did not certify; a stored
+/// record otherwise stays, is compacted to its own member's failure record,
+/// or leaves once it suppresses nothing: its member is neither in flight nor
+/// pending at the fingerprint it failed at.
+fn failed_records_valid(
+    old: &MemberState,
+    new: &MemberState,
+    retiring: Option<&MemberAttempt>,
+    certified: &BTreeSet<String>,
+) -> bool {
+    let retired_record = |key: &str| {
+        retiring
+            .filter(|_| !certified.contains(key))
+            .and_then(|active| active.failure_record(key))
+    };
+
+    let kept = old.failed.iter().all(|(key, failed)| {
+        let Some(next) = new.failed.get(key) else {
+            return new
+                .active
+                .as_ref()
+                .is_none_or(|active| active.member_for(key).is_none())
+                && !failed.member_for(key).is_some_and(|retired| {
+                    new.pending
+                        .get(key)
+                        .is_some_and(|pending| pending.fingerprint == retired.fingerprint)
+                });
+        };
+        next == failed
+            || (failed.exhausted && failed.failure_record(key).as_ref() == Some(next))
+            || retired_record(key).as_ref() == Some(next)
+    });
+
+    kept && new.failed.iter().all(|(key, next)| {
+        old.failed.contains_key(key) || retired_record(key).as_ref() == Some(next)
+    })
+}
+
+/// Whether every member of `active` outside `except` now holds this very
+/// attempt's failure record: the only way an attempt clears the slot without
+/// certifying a member.
 fn every_member_retired(
     active: &MemberAttempt,
     new: &MemberState,
@@ -192,13 +213,5 @@ fn every_member_retired(
         .members()
         .iter()
         .filter(|member| !except.contains(&member.key))
-        .all(|member| {
-            new.failed.get(&member.key).is_some_and(|retired| {
-                retired.exhausted
-                    && retired.id == active.id
-                    && retired.members() == active.members()
-                    && retired.attempt == active.attempt
-                    && retired.deadline == active.deadline
-            })
-        })
+        .all(|member| new.failed.get(&member.key) == active.failure_record(&member.key).as_ref())
 }

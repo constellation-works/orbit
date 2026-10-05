@@ -91,6 +91,21 @@ pub(super) fn retire_superseded(members: &mut MemberState, kept: &BTreeSet<Strin
     });
 }
 
+/// Rewrite each failed record a release before [ORB-14177] stored with its
+/// whole batch as that member's own failure record. The member, its
+/// fingerprint and the attempt identity survive unchanged, so the record
+/// suppresses exactly what it did; only its siblings' copies go.
+pub(super) fn compact_failed(members: &mut MemberState) {
+    for (key, failed) in &mut members.failed {
+        if failed.exhausted
+            && !failed.members.is_empty()
+            && let Some(record) = failed.failure_record(key)
+        {
+            *failed = record;
+        }
+    }
+}
+
 /// Retire the working state and failed records of members the source no
 /// longer observes. Observation is paged, so absence from one page proves
 /// nothing: the host answers for every retained key by identity instead.
