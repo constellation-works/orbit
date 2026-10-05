@@ -159,20 +159,23 @@ spec:
     - failed_step_input, step_outputs, step_ids: the failed step's rendered
       input, completed step outputs, and the pipeline's step order. Evidence,
       not authority.
-    - step_recovery_attempts: every step-recovery attempt for this run.
+    - step_recovery_attempts: every recovery dispatch and post-recovery attempt
+      for this run, oldest first, with bounded diagnostics and output.
     - base_ref, base_sha: the base branch and the head the run was cut from.
-    - log_tail: the end of the run log.
+    - log_tail: a bounded tail of this run's worker log; empty if no log exists.
     Fields other than task_id, run_id, the worktree pair, failed_step_id, and
-    error_message may be absent; inspect the world directly when they are.
+    error_message may be absent. For missing evidence, use the task's delivery
+    view and the worktree, and report any gaps instead of inventing run data.
 
     Procedure:
 
     1. Read the task with `orbit.task.show`: description, acceptance criteria,
        plan, execution summary, every comment in order, and history. Later
-       authorized comments refine earlier ones. Inspect the run
-       (`orbit.workflow.run.show`), every step-recovery attempt, the worktree
-       (`git status`, `git diff`, `git log <base_ref>..HEAD`), the current base
-       head, and the log tail. Establish the task/run/worktree association
+       authorized comments refine earlier ones. Read the run's injected input,
+       including step_recovery_attempts, step_outputs and log_tail, and the
+       task's delivery evidence with `orbit.task.show` and `field: "delivery"`.
+       Inspect the worktree (`git status`, `git diff`, `git log <base_ref>..HEAD`)
+       and the current base head. Establish the task/run/worktree association
        before changing anything.
 
     2. Classify the failure from that evidence:
@@ -231,6 +234,8 @@ spec:
     - orbit.command.exec
     - orbit.pipeline.invoke
     - orbit.workflow.run.resume
+    - orbit.workflow.run.show
+    - orbit.workflow.run.list
     - orbit.workflow.ship
     - orbit.task.add
     - orbit.task.update

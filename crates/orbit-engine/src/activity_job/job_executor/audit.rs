@@ -127,6 +127,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             recovery_succeeded,
             failure_phase,
             error_message,
+            ..
         } => {
             if *recovery_succeeded {
                 tracing::info!(
@@ -159,6 +160,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             recovery_activity,
             outcome,
             error_message,
+            ..
         } => {
             if outcome == "success" {
                 tracing::info!(

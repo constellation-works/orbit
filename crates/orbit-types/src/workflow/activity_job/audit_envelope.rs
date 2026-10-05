@@ -100,6 +100,10 @@ pub enum V2AuditEventKind {
         /// Bounded and redacted independently of the original step error.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
+        /// Bounded, redacted output reported by the recovery dispatch.
+        /// Absent on historical events or when dispatch never returned.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<serde_json::Value>,
     },
     /// The failed step's single re-attempt after recovery completed.
     StepPostRecoveryAttempt {
@@ -108,6 +112,9 @@ pub enum V2AuditEventKind {
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
+        /// Bounded, redacted output of the re-attempted step, if it returned.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<serde_json::Value>,
     },
     /// [ORB-13907] The job-level final recovery hook ran, or was skipped, for
     /// a failed top-level step.
