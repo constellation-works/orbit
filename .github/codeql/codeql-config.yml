@@ -4,9 +4,14 @@ name: orbit-codeql
 # benches trip the Rust query pack constantly (literal strings reaching a
 # hasher, run/task ids reaching `tracing`, temp dirs reaching `PathBuf::join`)
 # without ever describing a reachable defect.
+# Local Orbit state and Cargo output are untracked, so hosted checkouts never
+# contain them, but a local run must not extract their worktrees, toolchain
+# sources or generated code. scripts/codeql-rust-local.sh adds its scratch.
 paths-ignore:
   - "**/tests/**"
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "crates/**/examples/**"
   - "**/benches/**"
+  - ".orbit/**"
+  - "target/**"

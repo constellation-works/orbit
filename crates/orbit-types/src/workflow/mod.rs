@@ -10,15 +10,7 @@ pub mod handoff;
 mod job;
 mod review;
 mod routine;
-mod run {
-    // Retain the run subtree while exposing its validation failure classifier.
-    include!("run/mod.rs");
-
-    pub use state::{
-        VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
-        is_validation_environment_failure,
-    };
-}
+mod run;
 mod ship;
 mod skill;
 pub use error::WorkflowError;
