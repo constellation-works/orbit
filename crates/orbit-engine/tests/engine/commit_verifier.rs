@@ -498,3 +498,115 @@ fn commit_verifier_accepts_valid_already_landed_evidence() {
     assert_eq!(result["skipped_no_diff_expected"], true);
     assert_eq!(result["committed"], false);
 }
+
+/// Already-landed evidence that is valid except for the overrides applied.
+fn already_landed_refusal(
+    host: &VerifierHost,
+    repo: &Path,
+    head: &str,
+    mutate: impl FnOnce(&mut Value),
+) -> String {
+    let mut report = json!({
+        "schema_version": 1,
+        "task_id": TASK_ID,
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "covering_commit": head,
+        "covering_task_id": TASK_ID,
+        "scope": {
+            "title": "Test Task",
+            "description": "",
+            "acceptance_criteria": ["Criterion 1"],
+            "plan": "",
+            "context_files": ["file:README.md"],
+            "tags": [],
+            "relations": [],
+            "required_tools": [],
+            "type": "bug",
+            "comments": []
+        },
+        "required_commands": ["make test"],
+        "validation": [{
+            "command": "make test",
+            "outcome": "passed",
+            "role": "required",
+            "log_artifact": "validation.json"
+        }],
+        "criteria_evidence": ["Verified criterion"]
+    });
+    mutate(&mut report);
+    let log = json!({
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "command": "make test",
+        "exit_code": 0,
+        "output": "ok"
+    });
+    host.set_artifacts(
+        TASK_ID,
+        vec![
+            artifact("already-landed.json", report),
+            artifact("validation.json", log),
+        ],
+    );
+    action(host, &commit_input(repo, head))
+        .expect_err("malformed already-landed evidence must be refused")
+        .to_string()
+}
+
+#[test]
+fn commit_verifier_refusal_names_already_landed_field_contract() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), fixture_task());
+
+    let message = already_landed_refusal(&host, temp.path(), &head, |report| {
+        report["criteria_evidence"] = json!([{"criterion": "Criterion 1", "evidence": "ok"}]);
+    });
+    assert!(
+        message.contains("invalid already-landed.json")
+            && message.contains("criteria_evidence must be an array of non-empty strings"),
+        "object-shaped criteria_evidence must be refused with the string-per-criterion contract, got: {message}"
+    );
+
+    let message = already_landed_refusal(&host, temp.path(), &head, |report| {
+        report["validation"][0]["role"] = json!("acceptance");
+    });
+    assert!(
+        message.contains("invalid already-landed.json")
+            && message.contains("required, expected_failure, excluded, superseded"),
+        "unknown validation role must be refused with the accepted roles, got: {message}"
+    );
+}
+
+#[test]
+fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), fixture_task());
+
+    type Mutation = fn(&mut Value);
+    let cases: [(&str, Mutation); 4] = [
+        ("criteria_evidence count differs from the criteria", |r| {
+            r["criteria_evidence"] = json!(["a", "b"]);
+        }),
+        ("empty criteria_evidence string", |r| {
+            r["criteria_evidence"] = json!(["  "]);
+        }),
+        ("non-required role for a required command", |r| {
+            r["validation"][0]["role"] = json!("superseded");
+        }),
+        ("non-passed outcome", |r| {
+            r["validation"][0]["outcome"] = json!("failed");
+        }),
+    ];
+    for (case, mutate) in cases {
+        let message = already_landed_refusal(&host, temp.path(), &head, mutate);
+        assert!(
+            message.contains("already_landed_unverified"),
+            "{case} must stay refused, got: {message}"
+        );
+    }
+}

@@ -42,13 +42,8 @@ pub(super) fn verify<H: RuntimeHost + ?Sized>(
     let report = artifact(&artifacts, ARTIFACT)?;
     let evidence: Evidence = serde_json::from_slice(&report.content).map_err(|error| {
         let diagnostic = error.to_string();
-        let shape_hint = diagnostic.contains("missing field `command`").then_some(
-            "; each validation[] element must flatten command, outcome, role, and log_artifact as sibling fields",
-        );
-        refused(format!(
-            "invalid {ARTIFACT}: {diagnostic}{}",
-            shape_hint.unwrap_or_default()
-        ))
+        let hints = shape_hints(&diagnostic, &report.content);
+        refused(format!("invalid {ARTIFACT}: {diagnostic}{hints}"))
     })?;
     if evidence.schema_version != 1
         || evidence.task_id != task.id
@@ -115,6 +110,36 @@ pub(super) fn verify<H: RuntimeHost + ?Sized>(
         "already_landed": evidence,
         "validation_provenance": validation_provenance,
     }))
+}
+
+/// Field-contract reminders for a report that failed to decode. Type and role
+/// mistakes are located structurally, since serde's message names neither the
+/// field nor, under `flatten`, the accepted role vocabulary.
+fn shape_hints(diagnostic: &str, content: &[u8]) -> String {
+    let mut hints = String::new();
+    if diagnostic.contains("missing field `command`") {
+        hints.push_str("; each validation[] element must flatten command, outcome, role, and log_artifact as sibling fields");
+    }
+    let Ok(report) = serde_json::from_slice::<Value>(content) else {
+        return hints;
+    };
+    if report["criteria_evidence"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| !item.is_string()))
+    {
+        hints.push_str("; criteria_evidence must be an array of non-empty strings, one per acceptance criterion in order");
+    }
+    let unknown_role = report["validation"].as_array().is_some_and(|checks| {
+        checks.iter().any(|check| {
+            check
+                .get("role")
+                .is_some_and(|role| serde_json::from_value::<ValidationRole>(role.clone()).is_err())
+        })
+    });
+    if unknown_role {
+        hints.push_str("; validation[] role must be one of required, expected_failure, excluded, superseded (use required, with outcome passed, for each required command)");
+    }
+    hints
 }
 
 fn verify_covering_scope(

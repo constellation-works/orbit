@@ -224,7 +224,11 @@ spec:
         context_files, tags, relations, required_tools, type, comments),
         required_commands, criteria_evidence, validation. Use flat
         validation[] objects with sibling fields command, outcome, role,
-        log_artifact.
+        log_artifact. criteria_evidence is an array of non-empty strings, one
+        per acceptance criterion in order (never objects). Each required
+        command's validation[] entry has outcome "passed" and role
+        "required"; the role vocabulary is required, expected_failure,
+        excluded, superseded.
         After required checks pass, for a genuine no-op, attach `no-diff.json`
         and validation logs via `orbit.task.artifact.put`, using the schema in
         the Orbit task-execution reference (schema_version 1, task_id, run_id,
