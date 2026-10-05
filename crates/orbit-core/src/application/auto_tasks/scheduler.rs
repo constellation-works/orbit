@@ -89,6 +89,7 @@ impl OrbitRuntime {
         definition: &AutoTaskDefinition,
     ) -> Option<InactivePlugin> {
         crate::application::plugin::inactive_plugin(
+            &self.auto_task_definitions_dir(),
             &self.auto_task_definition_path(definition),
             self.plugin_load(),
         )
@@ -131,6 +132,10 @@ impl OrbitRuntime {
 
     fn auto_task_definition_path(&self, definition: &AutoTaskDefinition) -> PathBuf {
         crate::application::auto_tasks::definition_path(&self.paths().local_dir, &definition.name)
+    }
+
+    fn auto_task_definitions_dir(&self) -> PathBuf {
+        crate::application::auto_tasks::auto_tasks_dir(&self.paths().local_dir)
     }
 
     /// The id of a still-open instance of `definition`'s prior mints, if any.
@@ -204,11 +209,14 @@ pub(super) fn mint_task(
     // A task minted from a plugin's seeded definition carries `plugin:<ns>`
     // beside `auto-task:<name>`, so its provenance survives in task history
     // even after the plugin is removed (design §4.4).
+    let definitions_dir = runtime.auto_task_definitions_dir();
     let path = crate::application::auto_tasks::definition_path(
         &runtime.paths().local_dir,
         &definition.name,
     );
-    if let Some((namespace, _)) = crate::application::plugin::read_definition_provenance(&path) {
+    if let Some((namespace, _)) =
+        crate::application::plugin::read_definition_provenance(&definitions_dir, &path)
+    {
         let tag = format!("plugin:{namespace}");
         if !params.tags.contains(&tag) {
             params.tags.push(tag);

@@ -50,12 +50,17 @@ impl PluginActivity for PluginHostLoad {
 
 /// The plugin that makes the definition at `path` inactive, if any.
 ///
-/// A definition whose provenance header names a plugin that is not active in
-/// `activity` is inactive: the scheduler skips it and listings hide it unless
-/// asked. A user-authored definition (no header) and one seeded by an active
-/// plugin return `None`.
-pub fn inactive_plugin(path: &Path, activity: &dyn PluginActivity) -> Option<InactivePlugin> {
-    let (namespace, version) = super::read_definition_provenance(path)?;
+/// `definitions_dir` is the routines or auto-tasks directory that may contain
+/// `path`. A path that leaves that directory has no provenance. A definition
+/// whose header names a plugin that is not active in `activity` is inactive:
+/// the scheduler skips it and listings hide it unless asked. A user-authored
+/// definition (no header) and one seeded by an active plugin return `None`.
+pub fn inactive_plugin(
+    definitions_dir: &Path,
+    path: &Path,
+    activity: &dyn PluginActivity,
+) -> Option<InactivePlugin> {
+    let (namespace, version) = super::read_definition_provenance(definitions_dir, path)?;
     if activity.is_active(&namespace) {
         return None;
     }

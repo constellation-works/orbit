@@ -138,16 +138,26 @@ impl crate::application::plugin::PluginActivity for HostPluginActivity<'_> {
 /// `routine list` hides exactly what the sweep skips.
 fn inactive_plugin_skip(path: &Path, states: &[WorkspacePluginState]) -> Option<String> {
     use crate::application::plugin::inactive_plugin;
-    let Some(state) = states
+    if let Some(state) = states
         .iter()
         .find(|state| path.starts_with(&state.routines_dir))
-    else {
-        // Every collected routine comes from one of the discovered sources;
-        // a path outside them all is judged by the host-wide view.
-        return inactive_plugin(path, &HostPluginActivity(states))
-            .map(|inactive| inactive.reason(path, None));
-    };
-    inactive_plugin(path, state).map(|inactive| inactive.reason(path, Some(&state.workspace)))
+    {
+        return inactive_plugin(&state.routines_dir, path, state)
+            .map(|inactive| inactive.reason(path, Some(&state.workspace)));
+    }
+    // A collected path can miss the lexical prefix when an ancestor is a
+    // symlink (macOS `/tmp`). Resolve it and read only when that canonical
+    // file sits inside a discovered routines directory and is not itself a
+    // symlink. A path outside every discovered directory is not opened.
+    let canonical = std::fs::canonicalize(path).ok()?;
+    if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return None;
+    }
+    let state = states
+        .iter()
+        .find(|state| canonical.starts_with(&state.routines_dir))?;
+    inactive_plugin(&state.routines_dir, &canonical, &HostPluginActivity(states))
+        .map(|inactive| inactive.reason(path, None))
 }
 
 /// Discovery states the synchronization step for every retired definition
