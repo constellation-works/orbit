@@ -28,6 +28,11 @@
 //! kernel, and on ABI 4 refuses TCP for a plugin whose manifest declares
 //! `network: none` (design `docs/design/plugins/1_scope.md` §4.3).
 //!
+//! A write root carries read rights so the child can read what it writes,
+//! except where the root is at or above a read deny or a caller read
+//! exclusion. That subtree stays writable and is not readable: the write
+//! rule there carries no read right, and no ancestor is granted one either.
+//!
 //! `REFER` is handled because Landlock refuses a rename or link that would
 //! give a file *more* access at its destination. Without it, a child could
 //! move a denied file into a fully readable sibling directory and read it

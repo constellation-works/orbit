@@ -364,6 +364,11 @@ fn access_bits(grant: LandlockGrant) -> u64 {
                 | HANDLED_FS_WRITE_ACCESS
         }
         LandlockGrant::WriteFile => ACCESS_FS_READ_FILE | ACCESS_FS_WRITE_FILE | ACCESS_FS_TRUNCATE,
+        // No read bit: a write root above a read deny must not make that
+        // subtree readable. `REFER` stays so a rename into a readable
+        // directory is still refused as an upgrade.
+        LandlockGrant::WriteOnlyTree => ACCESS_FS_REFER | HANDLED_FS_WRITE_ACCESS,
+        LandlockGrant::WriteOnlyFile => ACCESS_FS_WRITE_FILE | ACCESS_FS_TRUNCATE,
     }
 }
 
