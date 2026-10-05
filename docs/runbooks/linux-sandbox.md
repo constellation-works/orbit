@@ -28,7 +28,8 @@ image build or container that runs as root.
 
 Preparation first runs Orbit's exact namespace-and-mount probe as that account and checks
 `--bind-fd`. A ready host causes no package or profile writes. When required, Orbit uses
-the distribution's package manager and, on Ubuntu 24.04, only the packaged
+an available package manager and, on Ubuntu with the exact
+`setting up uid map: Permission denied` probe failure, only the packaged
 `bwrap-userns-restrict` AppArmor rule. When the host still has no Bubblewrap, or only one
 without `--bind-fd`, Orbit installs its signed [bundled Bubblewrap](#bundled-bubblewrap). Administrator authentication is requested
 only during explicit interactive installation/onboarding. `orbit init --non-interactive`
@@ -40,7 +41,7 @@ elevates, installs, reloads a profile, or falls back.
 
 A failed preparation prints a warning with the reason and remedy; normal `orbit init`
 continues to seed the Orbit root and exits zero if initialization succeeds. This applies
-in interactive and non-interactive mode, including unsupported distributions, denied sudo
+in interactive and non-interactive mode, including missing package managers, denied sudo
 authentication, and kernel/container namespace denial. The warning names any privileged
 package/profile commands attempted, because host changes may be partial. Declining or
 failing sudo authentication stops preparation immediately without running further
@@ -66,23 +67,37 @@ Bubblewrap passed the check, `sandbox_wrapper` says which one (`host` or `bundle
 `sandbox_wrapper_path` and `sandbox_wrapper_version`; the table's `BWRAP` column shows the
 same, for example `host 0.11.1` or `bundled 0.12.0`.
 
-## Distribution matrix
+## Capability-based support matrix
 
-These are the **automatic preparation code paths**, based on distribution package
-inventories. Native package/profile/onboarding and sandboxed-subprocess validation is
-**not yet available** for any row; this change does not claim a validated supported row.
-The final probe refuses a package that lacks `--bind-fd` or cannot create the namespace.
-Every row falls back to the bundled Bubblewrap when the package path leaves no Bubblewrap
-with `--bind-fd`.
+Linux support depends on the capability probe, not a distribution or version allow-list:
+Bubblewrap must provide `--bind-fd` and create the user namespaces and mounts Orbit needs
+as the intended unprivileged account. A host that already passes needs no preparation.
+An initial kernel/container namespace denial stops before package changes.
 
-| Distribution/version | Package path | Security-policy handling | Native integration |
+When Bubblewrap is missing or lacks `--bind-fd`, Orbit selects an installed package
+manager at its fixed `/usr/bin/` path. `ID` and the ordered `ID_LIKE` families in
+`/etc/os-release` select the preferred manager when several are present. If none of those
+is available, Orbit tries `apt-get`, `dnf5`/`dnf`, `pacman`, then `zypper`, in that order;
+`dnf5` takes precedence over `dnf`. Versions do not affect selection. It installs
+`bubblewrap`, then repeats the probe. If the package remains missing or lacks `--bind-fd`,
+or no supported manager is installed, Orbit tries the signed bundled Bubblewrap.
+Failure reports retain the missing capability and identify a missing manager or unavailable
+bundled release. Namespace or other host-policy denial never triggers a bundled install.
+
+These rows describe automatic preparation paths, covered by Host-boundary decision and
+fault-injection tests. **No row has native package/profile/onboarding and sandboxed-subprocess
+validation recorded here.** The native integration column makes that limit explicit;
+package inventories alone do not establish readiness.
+
+| Distribution/family (any version) | Preferred package path, when installed | Security-policy handling | Native integration |
 |---|---|---|---|
-| Ubuntu 24.04 | `apt-get`: `bubblewrap`, `apparmor-profiles` | Install/load packaged `bwrap-userns-restrict` only if the probe still fails and no custom profile conflicts | Not run |
-| Debian 13 | `apt-get`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
-| Fedora 43–45 | `dnf5` or `dnf`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
-| RHEL, Rocky, AlmaLinux, CentOS 10 | `dnf5` or `dnf`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
-| Arch rolling | `pacman`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
-| Ubuntu 22.04, Debian 12, Enterprise Linux 9, other versions | No package changes; bundled Bubblewrap when `bwrap` is missing or lacks `--bind-fd` | Preserve existing host policy; explicit unsupported result for any other probe failure | Not run |
+| Ubuntu | `apt-get`: `bubblewrap` | Only the exact uid-map denial permits installing `apparmor-profiles` and loading packaged `bwrap-userns-restrict`; preserve custom or loaded profiles | Not run |
+| Debian, Mint, Pop!_OS and other `ID_LIKE=ubuntu/debian` derivatives | `apt-get`: `bubblewrap` | Preserve existing host policy; Ubuntu's profile remedy applies only to `ID=ubuntu` | Not run |
+| Fedora, RHEL, Rocky, AlmaLinux, CentOS and derivatives | `dnf5` or `dnf`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
+| Arch and derivatives | `pacman`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
+| openSUSE, SUSE and derivatives | `zypper`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
+| Other or unidentified distributions | Any installed supported manager, in the fallback order above | Preserve existing host policy; require probe | Not run |
+| No supported package manager installed | Bundled Bubblewrap when the host binary is missing or lacks `--bind-fd` | Preserve existing host policy; report the manager and capability gaps if the bundle cannot be installed | Not run |
 
 Package availability references: [Ubuntu Noble bubblewrap](https://packages.ubuntu.com/noble/bubblewrap),
 [Debian Trixie bubblewrap](https://packages.debian.org/trixie/bubblewrap),
@@ -102,8 +117,9 @@ nothing is bundled onto such a host.
 **When it is installed.** `orbit init` (and the shell installer, which runs it) installs
 the bundled binary only when the probe reports that `/usr/bin/bwrap` is missing or lacks
 `--bind-fd`, after the distribution package path, if any, has been tried. Namespace
-denial by the kernel or an enclosing container never triggers it, and Ubuntu 24.04's
-AppArmor handling is unchanged. The bundled binary is never setuid; it needs the same
+denial by the kernel or an enclosing container never triggers it. Ubuntu's AppArmor
+remedy requires the exact uid-map denial on any version with the packaged profile;
+derivatives and other distributions do not receive it. The bundled binary is never setuid; it needs the same
 unprivileged user namespaces as the packaged one.
 
 **Trust model.** The bundled binary lives at one fixed, root-owned path:
@@ -152,7 +168,7 @@ on each architecture in a digest-pinned Alpine image. To bump Bubblewrap, change
 
 Linux executors use `linux-bwrap`, which runs only `/usr/bin/bwrap` or the root-owned
 bundled `/usr/local/libexec/orbit/bwrap` and fails closed when neither has the required
-capabilities. Ubuntu 24.04 can restrict unprivileged user
+capabilities. Ubuntu can restrict unprivileged user
 namespaces through AppArmor; the narrow packaged rule can grant Bubblewrap the needed
 namespace access without changing the global restriction. Existing custom profile files
 or loaded profiles that still fail the probe are preserved and reported as conflicts.
