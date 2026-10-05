@@ -42,6 +42,11 @@ spec:
         enum: [remote, local]
       branch_prefix:
         type: string
+        description: >
+          Git branch namespace (`<prefix>/<task>-<hash>`). A prefix that
+          contains `..` or starts with `-` is rejected. The checkout directory
+          is a sanitized single component of this prefix, so a slash cannot
+          nest the worktree or place it outside the worktree root.
       landing_mode:
         type: string
         enum: [local, pr]
