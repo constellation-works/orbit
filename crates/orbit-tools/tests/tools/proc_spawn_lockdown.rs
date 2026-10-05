@@ -331,11 +331,166 @@ fn policy_with_profile(name: &str, read: Vec<String>) -> PolicyDef {
     }
 }
 
-/// `git` is on shipped activity program lists and runs a `!` alias through a
-/// shell. That child sees exactly the parent's read view. The outer OS sandbox
-/// supplies any masks; this fixture runs without one. [ORB-13689]
+/// Command-line aliases must not disguise writes to the primary checkout's
+/// shared Git configuration. [ORB-14114]
 #[test]
-fn a_git_shell_alias_can_read_a_benign_host_file_visible_to_its_parent() {
+fn command_line_options_cannot_hide_persistent_git_config_writes() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let ctx = workspace_activity_context(workspace.path(), &["git"]);
+    let registry = registry();
+    // A regression must fail in an isolated repository, without letting the
+    // now-allowed write reach the developer's or runner's shared Git config.
+    let init = registry
+        .execute(
+            "proc.spawn",
+            &ctx,
+            json!({ "program": "git", "args": ["init", "-q"] }),
+        )
+        .expect("initialize isolated Git fixture");
+    assert_eq!(init["exit_code"], json!(0), "{init:?}");
+    let config = workspace.path().join(".git/config");
+    let original = fs::read(&config).expect("read initial Git config");
+    let cases: &[&[&str]] = &[
+        &[
+            "-c",
+            "alias.x=config",
+            "x",
+            "remote.origin.url",
+            "https://example.invalid/repo",
+        ],
+        &["-c", "alias.x=remote", "x", "add", "a", "b"],
+        &[
+            "-calias.x=config",
+            "x",
+            "remote.origin.url",
+            "https://example.invalid/repo",
+        ],
+        &["-calias.x=remote", "x", "add", "a", "b"],
+        &[
+            "-c",
+            "alias.x=!git config remote.origin.url https://example.invalid/repo",
+            "x",
+        ],
+        &[
+            "-c",
+            "core.bare=false",
+            "-c",
+            "ALIAS.x=config",
+            "x",
+            "remote.origin.url",
+            "x",
+        ],
+        &[
+            "--config-env",
+            "alias.x=ORBIT_GIT_ALIAS",
+            "x",
+            "remote.origin.url",
+            "x",
+        ],
+        &["--config-env=alias.x=ORBIT_GIT_ALIAS", "x", "add", "a", "b"],
+        &["--config-env=ALIAS.x=ORBIT_GIT_ALIAS", "x"],
+        &["-c", "alias.x", "x"],
+        &["-c", "alias.x=status", "status"],
+        &[
+            "--config-env",
+            "core.bare=ORBIT_GIT_BARE",
+            "config",
+            "remote.origin.url",
+            "x",
+        ],
+    ];
+    for args in cases {
+        let result = registry.execute(
+            "proc.spawn",
+            &ctx,
+            json!({ "program": "git", "args": args }),
+        );
+        assert!(
+            matches!(result, Err(OrbitError::PolicyDenied(_))),
+            "command-line options must not bypass the persistent Git config guard: {args:?}: {result:?}"
+        );
+    }
+    assert_eq!(fs::read(config).expect("read final Git config"), original);
+}
+
+#[test]
+fn direct_git_config_and_remote_reads_remain_available() {
+    assert!(
+        on_path("git"),
+        "Git is required to exercise read-only queries"
+    );
+    let workspace = tempdir().expect("workspace tempdir");
+    let workspace_root = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let mut ctx = workspace_activity_context(&workspace_root, &["git"]);
+    ctx.proc_spawn_environment
+        .as_mut()
+        .expect("explicit child environment")
+        .push(("ORBIT_GIT_BARE".to_string(), "false".to_string()));
+    let registry = registry();
+    let init = registry
+        .execute(
+            "proc.spawn",
+            &ctx,
+            json!({ "program": "git", "args": ["init", "-q"] }),
+        )
+        .expect("initialize isolated Git fixture");
+    assert_eq!(init["exit_code"], json!(0), "{init:?}");
+    let config = workspace_root.join(".git/config");
+    let original =
+        "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = https://example.invalid/repo\n";
+    fs::write(&config, original).expect("seed isolated Git config");
+
+    let cases: &[(&[&str], &str)] = &[
+        (
+            &["config", "--get", "remote.origin.url"],
+            "https://example.invalid/repo",
+        ),
+        (&["remote", "-v"], "https://example.invalid/repo"),
+        (
+            &[
+                "-c",
+                "core.bare=false",
+                "config",
+                "--get",
+                "remote.origin.url",
+            ],
+            "https://example.invalid/repo",
+        ),
+        (
+            &[
+                "--config-env=core.bare=ORBIT_GIT_BARE",
+                "config",
+                "--get",
+                "core.bare",
+            ],
+            "false",
+        ),
+    ];
+    for &(args, expected) in cases {
+        let value = registry
+            .execute(
+                "proc.spawn",
+                &ctx,
+                json!({ "program": "git", "args": args }),
+            )
+            .expect("direct read-only queries must remain available");
+        assert_eq!(value["exit_code"], json!(0), "{args:?}: {value:?}");
+        assert!(stdout_of(&value).contains(expected), "{args:?}: {value:?}");
+    }
+    assert_eq!(
+        fs::read_to_string(config).expect("read Git config"),
+        original
+    );
+}
+
+/// `git` is on shipped activity program lists. Its child sees exactly the
+/// parent's read view. The outer OS sandbox supplies any masks; this fixture
+/// runs without one. [ORB-13689]
+#[test]
+fn git_can_read_a_benign_host_file_visible_to_its_parent() {
     if !on_path("git") {
         return;
     }
@@ -360,14 +515,15 @@ fn a_git_shell_alias_can_read_a_benign_host_file_visible_to_its_parent() {
             json!({
                 "program": "git",
                 "args": [
-                    "-c",
-                    format!("alias.orbitsecurityprobe=!cat {}", sentinel.display()),
-                    "orbitsecurityprobe",
+                    "diff",
+                    "--no-index",
+                    "/dev/null",
+                    sentinel,
                 ],
                 "timeout_ms": 10000,
             }),
         )
-        .expect("the alias may run");
+        .expect("Git may read a file visible to its parent");
 
     assert!(
         stdout_of(&value).contains("HOST_SENTINEL_ORB11514"),
@@ -378,7 +534,7 @@ fn a_git_shell_alias_can_read_a_benign_host_file_visible_to_its_parent() {
 /// Without an enclosing OS read mask, the activity's `denyRead` no longer
 /// governs a subprocess. Other filesystem tools still use that profile.
 #[test]
-fn a_git_shell_alias_inherits_parent_access_to_a_deny_read_file() {
+fn git_inherits_parent_access_to_a_deny_read_file() {
     if !on_path("git") {
         return;
     }
@@ -391,32 +547,28 @@ fn a_git_shell_alias_inherits_parent_access_to_a_deny_read_file() {
     fs::write(workspace_root.join("notes.txt"), "ALLOWED_CONTENT").expect("write allowed");
 
     let ctx = workspace_activity_context(&workspace_root, &["git"]);
-    let alias = |target: &str| {
+    let diff = |target: &str| {
         registry()
             .execute(
                 "proc.spawn",
                 &ctx,
                 json!({
                     "program": "git",
-                    "args": [
-                        "-c",
-                        format!("alias.orbitsecurityprobe=!cat {target}"),
-                        "orbitsecurityprobe",
-                    ],
+                    "args": ["diff", "--no-index", "/dev/null", target],
                     "timeout_ms": 10000,
                 }),
             )
-            .expect("the alias may run")
+            .expect("Git may read a file visible to its parent")
     };
 
-    // The trampoline itself works for ordinary files and for paths denied by
+    // Git reads ordinary files and paths denied by
     // the separate activity read profile when no outer mask covers them.
     assert!(
-        stdout_of(&alias("notes.txt")).contains("ALLOWED_CONTENT"),
-        "the alias mechanism should still reach an allowed file"
+        stdout_of(&diff("notes.txt")).contains("ALLOWED_CONTENT"),
+        "Git should still reach an allowed file"
     );
     assert!(
-        stdout_of(&alias(".env")).contains("DENY_READ_SECRET"),
+        stdout_of(&diff(".env")).contains("DENY_READ_SECRET"),
         "the child did not inherit the parent's read access"
     );
 }

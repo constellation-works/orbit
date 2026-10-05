@@ -85,6 +85,12 @@ The in-process `fs.*` builtins and their private helper `enforce_fs_policy` were
 
 What remains:
 
+- `proc.spawn` refuses persistent Git configuration writes through `git config`
+  and `git remote`, and refuses command-line alias definitions supplied through
+  `-c` or `--config-env` (including attached values). Git expands aliases before
+  dispatch and shell aliases can hide arbitrary writes to the shared
+  `.git/config`. Direct read-only queries such as `git config --get` and
+  `git remote -v`, and non-alias configuration options, remain available.
 - `FsCallEvent` / `FsAuditLogger` on `ToolContext` (`crates/orbit-tools/src/lib.rs`). The v2 dispatcher still wires `v2_fs_audit_logger`, which would convert an emitted `FsCallEvent` into a `V2AuditEvent` filesystem entry. No shipped builtin emits those events.
 - Historical audit/import fixtures that name retired `fs.*` tools. Those strings stay parseable; a removed tool name is not a deserialization error.
 - `ctx.fs_profile` / `ctx.policy_engine`, which the CLI sandbox compiler still uses to compile OS write confinement.
