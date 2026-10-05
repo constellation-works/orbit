@@ -26,8 +26,8 @@ a host that can create Linux mount namespaces.
 - Do not point workers at one shared mutable Cargo target directory. That
   serializes `cargo` on `target/.cargo-lock`.
 - Do not install system packages unless the host has no other way to obtain
-  `sccache`. `scripts/compiler-cache.sh setup --install` downloads a pinned
-  user-level binary into `$HOME/.orbit/cache/bin`.
+  `sccache`. `scripts/compiler-cache.sh setup --install` verifies the pinned
+  SHA-256 digest before extracting a user-level binary into `$HOME/.orbit/cache/bin`.
 - Do not delete `$HOME/.orbit/cache/compiler` while workers are compiling.
 - Do not change live worker processes; new cargo invocations pick up the
   committed wrapper after the branch is present in their worktree.
@@ -122,8 +122,12 @@ the live `~/.orbit/cache` from a task):
 scripts/compiler-cache.sh setup --install
 ```
 
-This creates `$HOME/.orbit/cache/compiler` and, with `--install`, fetches pinned
-sccache `v0.17.0` into `$HOME/.orbit/cache/bin`. No apt packages. The committed
+This creates `$HOME/.orbit/cache/compiler` and, with `--install`, fetches sccache
+`v0.17.0`, verifies the archive against its SHA-256 digest pinned in the script
+(using `sha256sum` or macOS `shasum`), and extracts only the expected binary
+into `$HOME/.orbit/cache/bin`. A mismatch fails without installing or replacing
+the binary. The temporary download directory is removed on success or failure.
+No apt packages. The committed
 wrapper looks there before `PATH`. The binary lives beside the cache data, not
 inside `SCCACHE_DIR`.
 

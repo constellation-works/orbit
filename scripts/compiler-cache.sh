@@ -19,8 +19,8 @@ usage() {
 Usage: scripts/compiler-cache.sh <status|setup|remove> [--install|--yes]
 
 status   Show whether the rustc wrapper would enable sccache, and cache stats.
-setup    Create $HOME/.orbit/cache/compiler. With --install, download a pinned
-         sccache binary into that directory's bin/ (no system packages).
+setup    Create $HOME/.orbit/cache/compiler. With --install, verify a pinned
+         sccache archive and install into $HOME/.orbit/cache/bin/.
 remove   Delete the compiler cache directory. Refuses unless --yes is passed.
 EOF
 }
@@ -66,26 +66,33 @@ resolve_sccache() {
 }
 
 sccache_asset() {
-  local os arch
+  local os arch target checksum
   os="$(uname -s)"
   arch="$(uname -m)"
+  # SHA-256 digests from the v0.17.0 release assets; update with SCCACHE_VERSION.
+  # https://api.github.com/repos/mozilla/sccache/releases/tags/v0.17.0
   case "${os}/${arch}" in
     Linux/x86_64 | Linux/amd64)
-      printf 'sccache-%s-x86_64-unknown-linux-musl.tar.gz\n' "$SCCACHE_VERSION"
+      target="x86_64-unknown-linux-musl"
+      checksum="67c4a96dd237c1f518f6b36083f270f9976d516f1e57fce891755ea782e50006"
       ;;
     Linux/aarch64 | Linux/arm64)
-      printf 'sccache-%s-aarch64-unknown-linux-musl.tar.gz\n' "$SCCACHE_VERSION"
+      target="aarch64-unknown-linux-musl"
+      checksum="821a86343191aa1cbab74bd42f9e93c9a63bf85e4742945f40d3ae84193c1c77"
       ;;
     Darwin/x86_64 | Darwin/amd64)
-      printf 'sccache-%s-x86_64-apple-darwin.tar.gz\n' "$SCCACHE_VERSION"
+      target="x86_64-apple-darwin"
+      checksum="c2144cafbfe3d22e34ae637f9974ce53613543ac19477fdb287df22ea3668261"
       ;;
     Darwin/arm64 | Darwin/aarch64)
-      printf 'sccache-%s-aarch64-apple-darwin.tar.gz\n' "$SCCACHE_VERSION"
+      target="aarch64-apple-darwin"
+      checksum="0c560bfba31aef5bdfb4fb3d2677f6e61d71c5c00952f2a83344f47aa31f00f1"
       ;;
     *)
       return 1
       ;;
   esac
+  printf 'sccache-%s-%s.tar.gz %s\n' "$SCCACHE_VERSION" "$target" "$checksum"
 }
 
 cmd_status() {
@@ -120,23 +127,34 @@ cmd_status() {
   fi
 }
 
-install_sccache() {
-  local bindir asset url tmp dest
+install_sccache() (
+  local bindir asset_info asset checksum actual url tmp dest member
   bindir="$(cache_bin_dir)"
   dest="$bindir/sccache"
-  mkdir -p "$bindir"
-  asset="$(sccache_asset)" || die "no pinned sccache asset for $(uname -s)/$(uname -m)"
+  asset_info="$(sccache_asset)" || die "no pinned sccache asset for $(uname -s)/$(uname -m)"
+  read -r asset checksum <<< "$asset_info"
   url="https://github.com/mozilla/sccache/releases/download/${SCCACHE_VERSION}/${asset}"
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  # A subshell-scoped EXIT trap also runs when errexit aborts curl, hashing or tar.
+  trap 'rm -rf "$tmp"' EXIT
   printf 'compiler-cache: downloading %s\n' "$url"
   curl -fsSL "$url" -o "$tmp/$asset"
-  tar -xzf "$tmp/$asset" -C "$tmp"
-  find "$tmp" -type f -name sccache -exec cp {} "$dest" \;
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmp/$asset")"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$tmp/$asset")"
+  else
+    die "SHA-256 verification requires sha256sum or shasum"
+  fi
+  [[ "${actual%% *}" == "$checksum" ]] || die "SHA-256 mismatch for $asset"
+  member="${asset%.tar.gz}/sccache"
+  tar -xzf "$tmp/$asset" -C "$tmp" "$member"
+  [[ -f "$tmp/$member" && ! -L "$tmp/$member" ]] || die "extracted sccache binary missing or not a regular file"
+  mkdir -p "$bindir"
+  cp "$tmp/$member" "$dest"
   chmod +x "$dest"
-  [[ -x "$dest" ]] || die "extracted sccache binary missing"
   "$dest" --version
-}
+)
 
 cmd_setup() {
   local install=0
