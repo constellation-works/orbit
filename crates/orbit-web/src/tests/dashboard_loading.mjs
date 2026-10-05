@@ -10,6 +10,9 @@ let metricsError = false;
 let marker = 'first';
 let taskPaging = false;
 let summaryReads = 0;
+let frictionTitle = 'stable friction title';
+let frictionBody = 'stable friction body';
+let frictionDuring = 'ORB-100';
 const pendingReads = [];
 const list = items => ({ items, total: items.length, limit: 50, truncated: false });
 function fixture(url) {
@@ -40,6 +43,21 @@ function fixture(url) {
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
     case '/api/audit/summary': summaryReads++; return { events: summaryReads };
+    case '/api/frictions': {
+      const status = url.searchParams.get('status');
+      const visible = status === null || status === 'all' || status === 'open';
+      const item = {
+        id: 'FRIC-1',
+        title: frictionTitle,
+        body: frictionBody,
+        status: 'open',
+        tags: ['dashboard'],
+        created_at: '2026-01-15T12:00:00Z',
+        during_task: frictionDuring,
+      };
+      return { items: visible ? [item] : [], tags: ['dashboard'], total: visible ? 1 : 0 };
+    }
+    case '/api/frictions/stats': return { open: 1, triaged: 0, resolved_this_month: 0, total: 1 };
     default: return [];
   }
 }
@@ -283,6 +301,40 @@ check(liveTimers().some(entry => entry !== polls[0] && entry.ms === 30000), 'una
 globalThis.fetch = fetchDuringHostHang;
 globalThis.setTimeout = realTimeout;
 globalThis.clearTimeout = realClearTimeout;
+
+// The Knowledge row stays mounted while its change-hash is unchanged. Identity,
+// status, tags, and created_at stay fixed; each painted field must repaint alone.
+heldPath = null;
+networkDown = false;
+metricsError = false;
+frictionTitle = 'stable friction title';
+frictionBody = 'stable friction body';
+frictionDuring = 'ORB-100';
+setActiveTab('knowledge');
+await settle();
+const frictionText = () => text('frictions-body');
+if (!frictionText().includes('stable friction title')) {
+  refresh();
+  await settle();
+}
+check(frictionText().includes('stable friction title'), 'knowledge list shows the friction title');
+check(frictionText().includes('stable friction body'), 'knowledge list shows the friction body');
+check(frictionText().includes('during ORB-100'), 'knowledge list shows the during-task');
+frictionTitle = 'retitled friction';
+refresh();
+await settle();
+check(frictionText().includes('retitled friction') && !frictionText().includes('stable friction title'), 'retitled friction replaces the list title');
+check(frictionText().includes('stable friction body') && frictionText().includes('during ORB-100'), 'title-only refresh keeps the unchanged body and during-task');
+frictionBody = 'rewritten friction body';
+refresh();
+await settle();
+check(frictionText().includes('rewritten friction body') && !frictionText().includes('stable friction body'), 'edited friction body replaces the list summary');
+frictionDuring = 'ORB-200';
+refresh();
+await settle();
+check(frictionText().includes('during ORB-200') && !frictionText().includes('during ORB-100'), 'edited during-task replaces the list meta');
+check(frictionText().includes('retitled friction') && frictionText().includes('rewritten friction body'), 'later field edits keep the updated title and body');
+
 globalThis.showTaskPaginationEvidence = async () => {
   networkDown = false;
   metricsError = false;
