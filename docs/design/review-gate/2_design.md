@@ -476,8 +476,12 @@ that SHA as the `sha` precondition on GitHub's synchronous REST merge mutation.
 A push between inspection and mutation is rejected by the provider. Gated runs
 wait locally for pending checks; they never enable auto-merge or enter a merge
 queue. Queue-only branches and other unsupported synchronous merges fail closed,
-leaving the task in review. Ungated runs retain ordinary `gh pr merge` and
-repository-enabled auto-merge. See the
+leaving the task in review. The one refusal retried is GitHub's "Base branch was
+modified" (HTTP 405), raised when another merge lands first [ORB-14205]: after
+the ordinary poll wait, completion re-reads the PR, reapplies its head, branch,
+base, check, review and merge-policy gates, and resends the same `sha`, for at
+most three requests within the unchanged wait budget. Ungated runs retain
+ordinary `gh pr merge` and repository-enabled auto-merge. See the
 [provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
 
 A conflicting reviewed PR is never merged as rebased, unreviewed content

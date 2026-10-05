@@ -45,6 +45,14 @@
 //! carries a published head waits for the mutation instead of enabling
 //! auto-merge, which cannot keep the condition. A run with no published SHA
 //! still uses the ungated merge.
+//!
+//! [ORB-14205] GitHub refuses that synchronous mutation with "Base branch was
+//! modified" (HTTP 405) when another merge lands on the base between its
+//! mergeability check and the request. That refusal alone is retried: after
+//! the ordinary poll wait, completion re-reads the PR, re-applies every pin
+//! and gate above, re-resolves the merge policy, and asks again with the same
+//! SHA. At most [`BASE_MODIFIED_MERGE_ATTEMPTS`] requests are made, within the
+//! unchanged wait budget.
 
 use std::thread::sleep;
 use std::time::Duration;
@@ -74,6 +82,9 @@ const DEFAULT_POLL_INTERVAL_SECONDS: u64 = 30;
 const MAX_WAIT_SECONDS: u64 = 6 * 60 * 60;
 const MIN_POLL_INTERVAL_SECONDS: u64 = 5;
 const MAX_POLL_INTERVAL_SECONDS: u64 = 10 * 60;
+/// Synchronous merge requests, the first included, that concurrent base
+/// landings may refuse before completion gives up [ORB-14205].
+const BASE_MODIFIED_MERGE_ATTEMPTS: u32 = 3;
 
 pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -233,6 +244,10 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let mut requested_landed_commit: Option<String> = None;
     let mut conflict_refresh_attempted = false;
     let mut merge_capabilities: Option<MergeCapabilities> = None;
+    let mut base_modified_refusals = 0_u32;
+    // The latest base-modification refusal, kept for the error that ends the
+    // wait.
+    let mut base_race: Option<String> = None;
 
     let reviewed_head_sha = reviewed_head_sha(input);
     // [ORB-11982] The candidate this run is authorized to deliver. It moves
@@ -260,6 +275,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         "poll_interval_seconds": poll_interval_seconds,
                         "landed_commit": landed_commit,
                         "managed_merge": managed_merge,
+                        "base_modified_refusals": base_modified_refusals,
                         "reviewed_head_sha": reviewed_head_sha,
                         "delivery_evidence": evidence.as_json(),
                     }),
@@ -333,13 +349,14 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         pr_number,
                         &mut merge_capabilities,
                     )?;
-                    requested_landed_commit = request_merge(
+                    let condition = merge_condition_sha(reviewed_head_sha.as_deref(), &pin);
+                    match request_merge(
                         host,
                         workspace_path,
                         pr_number,
                         capabilities.strategy,
                         false,
-                        merge_condition_sha(reviewed_head_sha.as_deref(), &pin),
+                        condition,
                     )
                     .map_err(|error| {
                         OrbitError::Execution(format!(
@@ -347,10 +364,40 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                                  #{pr_number}: {error}; the task stays in review",
                             capabilities.strategy.as_str()
                         ))
-                    })?;
-                    merge_requested = true;
-                    // Re-read rather than assuming the request landed.
-                    continue;
+                    })? {
+                        MergeRequest::Accepted(landed_commit) => {
+                            requested_landed_commit = landed_commit;
+                            merge_requested = true;
+                            // Re-read rather than assuming the request landed.
+                            continue;
+                        }
+                        MergeRequest::BaseModified(diagnostic) => {
+                            base_modified_refusals += 1;
+                            let race = format!(
+                                "synchronous merge attempt {base_modified_refusals} of \
+                                 {BASE_MODIFIED_MERGE_ATTEMPTS} conditioned on {} was refused \
+                                 because the base branch was modified ({diagnostic})",
+                                condition.unwrap_or_default()
+                            );
+                            if base_modified_refusals >= BASE_MODIFIED_MERGE_ATTEMPTS {
+                                return Err(OrbitError::Execution(format!(
+                                    "pr_complete: on pull request #{pr_number}, {race}; that is \
+                                     the attempt ceiling, so the task stays in review"
+                                )));
+                            }
+                            tracing::warn!(
+                                pr_number,
+                                attempt = base_modified_refusals,
+                                "pr_complete: merge refused by a concurrent base change; \
+                                 re-reading the pull request before asking again"
+                            );
+                            base_race = Some(race);
+                            // The base moved, so its merge policy may have too.
+                            merge_capabilities = None;
+                            // Wait one poll, then re-read: nothing here proves
+                            // the next request is permitted.
+                        }
+                    }
                 }
             }
             PrMergeState::Pending => {
@@ -400,10 +447,12 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
 
         if waited_seconds >= max_wait_seconds {
-            return Err(OrbitError::Execution(format!(
-                "pr_complete: timed out after {waited_seconds}s waiting for pull request \
-                 #{pr_number} to merge (budget {max_wait_seconds}s); the task stays in review"
-            )));
+            return Err(merge_wait_timeout(
+                pr_number,
+                waited_seconds,
+                max_wait_seconds,
+                base_race.as_deref(),
+            ));
         }
         let remaining_seconds = max_wait_seconds.saturating_sub(waited_seconds);
         let sleep_seconds = poll_interval_seconds.min(remaining_seconds);
@@ -411,12 +460,29 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         waited_seconds = waited_seconds.saturating_add(sleep_seconds);
 
         if waited_seconds >= max_wait_seconds {
-            return Err(OrbitError::Execution(format!(
-                "pr_complete: timed out after {waited_seconds}s waiting for pull request \
-                 #{pr_number} to merge (budget {max_wait_seconds}s); the task stays in review"
-            )));
+            return Err(merge_wait_timeout(
+                pr_number,
+                waited_seconds,
+                max_wait_seconds,
+                base_race.as_deref(),
+            ));
         }
     }
+}
+
+fn merge_wait_timeout(
+    pr_number: &str,
+    waited_seconds: u64,
+    max_wait_seconds: u64,
+    base_race: Option<&str>,
+) -> OrbitError {
+    let base_race = base_race
+        .map(|race| format!(" after {race}"))
+        .unwrap_or_default();
+    OrbitError::Execution(format!(
+        "pr_complete: timed out after {waited_seconds}s waiting for pull request \
+         #{pr_number} to merge (budget {max_wait_seconds}s){base_race}; the task stays in review"
+    ))
 }
 
 /// SHA the synchronous provider mutation must match.
@@ -614,6 +680,15 @@ fn read_pr_status<H: RuntimeHost + ?Sized>(
     Ok(response.get("pull_request").cloned().unwrap_or(Value::Null))
 }
 
+/// A merge request the provider answered without failing.
+enum MergeRequest {
+    /// Accepted. A synchronous merge names the commit it landed.
+    Accepted(Option<String>),
+    /// The SHA-conditioned merge was refused because another merge moved the
+    /// base first; carries the provider's diagnostic.
+    BaseModified(String),
+}
+
 fn request_merge<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &str,
@@ -621,23 +696,33 @@ fn request_merge<H: RuntimeHost + ?Sized>(
     strategy: MergeStrategy,
     auto: bool,
     reviewed_head_sha: Option<&str>,
-) -> Result<Option<String>, OrbitError> {
-    host.run_private_vcs_operation(
+) -> Result<MergeRequest, OrbitError> {
+    let result = host.run_private_vcs_operation(
         operations::PR_MERGE,
         json!({
             "pr": pr_number,
             "strategy": strategy.as_str(),
             "auto": auto,
             "reviewed_head_sha": reviewed_head_sha,
+            "report_base_modified": reviewed_head_sha.is_some(),
             "workspace_path": workspace_path,
         }),
-    )
-    .map(|result| {
+    )?;
+    if result.get("refusal").and_then(Value::as_str) == Some(operations::BASE_MODIFIED_REFUSAL) {
+        let diagnostic = result
+            .get("stderr")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        return Ok(MergeRequest::BaseModified(diagnostic));
+    }
+    Ok(MergeRequest::Accepted(
         result
             .get("landed_commit")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    })
+            .map(ToOwned::to_owned),
+    ))
 }
 
 fn resolved_capabilities<H: RuntimeHost + ?Sized>(

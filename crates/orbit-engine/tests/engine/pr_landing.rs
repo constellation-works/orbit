@@ -230,6 +230,392 @@ fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review() {
 }
 
 // ---------------------------------------------------------------------------
+// Synchronous merge refused by a concurrent base landing [ORB-14205]
+// ---------------------------------------------------------------------------
+
+const MERGE_CALL: &str = "api repos/{owner}/{repo}/pulls/42/merge";
+const BASE_MODIFIED: &str =
+    "gh: Base branch was modified. Review and try the merge again. (HTTP 405)";
+
+/// Opens the fixture's candidate and hands it to review, returning how many
+/// `gh` calls publication made so completion's own calls can be isolated.
+fn open_for_completion(fx: &Fixture, host: &DeliveryHost) -> usize {
+    action(host, "pr_open", &fx.open_input(&fx.candidate, &fx.base_sha))
+        .expect("open the reviewed candidate");
+    host.set_status(TASK_ID, TaskStatus::Review);
+    fx.forge_calls().len()
+}
+
+/// The refusal F2026-10-071 recorded: GitHub refuses the SHA-conditioned
+/// merge because another PR landed on the base first. Completion waits one
+/// poll, re-reads the PR, re-resolves the merge policy and asks again with the
+/// same authorized SHA, so the unchanged candidate lands without a provider
+/// recovery activity. Pending checks on that fresh read are waited out as
+/// before. A reviewed and an ungated-but-published candidate behave alike.
+#[test]
+fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() {
+    isolated(
+        "a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence",
+        |sandbox| {
+            for (case, reviewed, checks) in [
+                ("reviewed", true, &["success"][..]),
+                ("ungated but published", false, &["success"][..]),
+                (
+                    "pending on refresh",
+                    true,
+                    &["success", "pending", "success"][..],
+                ),
+            ] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                let published = open_for_completion(&fx, &host);
+                fx.script_checks(checks);
+                fx.script_merges(&["base_modified"]);
+                let input = if reviewed {
+                    fx.complete_input()
+                } else {
+                    fx.complete_ungated_input()
+                };
+
+                let completed = action(&host, "pr_complete", &input)
+                    .unwrap_or_else(|error| panic!("{case}: {error}"));
+
+                let condition = format!("sha={} merge_method=squash", fx.candidate);
+                assert_eq!(
+                    fx.merge_requests(),
+                    vec![condition.clone(), condition],
+                    "{case}: the retry is conditioned on the same authorized head"
+                );
+                // Every read after the refusal, up to the one that permits
+                // the retry.
+                let fresh_reads = checks.len().max(2) - 1;
+                let mut expected = vec!["pr view", "repo view", "api graphql", MERGE_CALL];
+                expected.extend(std::iter::repeat_n("pr view", fresh_reads));
+                expected.extend(["repo view", "api graphql", MERGE_CALL, "pr view"]);
+                assert_eq!(
+                    fx.forge_calls()[published..],
+                    expected,
+                    "{case}: a fresh status read and merge policy precede the retry, and \
+                     merged state is read back afterwards"
+                );
+
+                let merge = &completed["merge"];
+                let landed = fx.remote_tip(BASE);
+                let concurrent = fx.remote_parent(&landed);
+                assert_ne!(concurrent, fx.base_sha, "{case}: the base raced ahead");
+                assert_eq!(fx.remote_parent(&concurrent), fx.base_sha, "{case}");
+                assert_eq!(merge["merged"], true, "{case}");
+                assert_eq!(merge["landed_commit"], landed.as_str(), "{case}");
+                assert_eq!(merge["managed_merge"], true, "{case}");
+                assert_eq!(merge["auto_merge_requested"], false, "{case}");
+                assert_eq!(
+                    merge["waited_seconds"],
+                    5 * fresh_reads as u64,
+                    "{case}: one poll after the refusal, plus any pending wait"
+                );
+                assert_eq!(
+                    merge["delivery_evidence"]["head_sha"],
+                    fx.candidate.as_str(),
+                    "{case}"
+                );
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
+                let notes = host.completion_notes();
+                assert_eq!(notes.len(), 1, "{case}");
+                assert!(notes[0].contains(&landed), "{case}: {}", notes[0]);
+                let landings = host.landings();
+                if reviewed {
+                    assert_eq!(landings.len(), 1, "{case}");
+                    assert!(landings[0].managed_merge, "{case}");
+                    assert_eq!(landings[0].landed_commit.as_deref(), Some(landed.as_str()));
+                } else {
+                    assert!(landings.is_empty(), "{case}: no review to land");
+                }
+            }
+        },
+    );
+}
+
+/// Only a failed synchronous merge whose output is exactly the provider's
+/// base-modification refusal (HTTP 405) is retried. Policy, queue and
+/// protection 405s, an auth refusal, a moved head (409), the same message on
+/// another status, a body that disagrees or is not JSON, extra diagnostics, a
+/// transport timeout and a server error each fail on the one request, with the
+/// provider's message, and the task stays in review.
+#[test]
+fn other_merge_refusals_fail_on_the_first_request() {
+    isolated(
+        "other_merge_refusals_fail_on_the_first_request",
+        |sandbox| {
+            for (outcome, diagnostic) in [
+                (
+                    "policy",
+                    "Merge commits are not allowed on this repository. (HTTP 405)",
+                ),
+                (
+                    "queue",
+                    "Changes must be made through the merge queue (HTTP 405)",
+                ),
+                ("protection", "At least 1 approving review is required"),
+                ("auth", "Resource not accessible by integration (HTTP 403)"),
+                (
+                    "head_modified",
+                    "Head branch was modified. Review and try the merge again. (HTTP 409)",
+                ),
+                (
+                    "base_modified_422",
+                    "Base branch was modified. Review and try the merge again. (HTTP 422)",
+                ),
+                ("mismatched_body", BASE_MODIFIED),
+                ("malformed_body", BASE_MODIFIED),
+                ("trailing_stderr", "retried after a proxy reset"),
+                ("transport_timeout", "Client.Timeout exceeded"),
+                ("server_error", "Server Error (HTTP 502)"),
+            ] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                open_for_completion(&fx, &host);
+                fx.script_merges(&[outcome]);
+
+                let error = action(&host, "pr_complete", &fx.complete_input())
+                    .expect_err("an unclassified merge refusal must not complete");
+
+                let message = error.to_string();
+                assert!(
+                    message.contains("could not request squash merge"),
+                    "{outcome}: {message}"
+                );
+                assert!(message.contains(diagnostic), "{outcome}: {message}");
+                assert_eq!(fx.merge_requests().len(), 1, "{outcome}: no retry");
+                assert_eq!(fx.status_reads(), 1, "{outcome}: no refresh read");
+                assert_eq!(fx.forge_state("merged"), None, "{outcome}");
+                assert!(host.landings().is_empty(), "{outcome}");
+                assert!(host.completion_notes().is_empty(), "{outcome}");
+                assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{outcome}");
+            }
+        },
+    );
+}
+
+/// Shared by the two refresh-refusal tests: after one base-modification
+/// refusal, the fresh read in each case must refuse without a second merge
+/// request, leaving the checkout, landings and task untouched.
+fn assert_refresh_refuses(sandbox: &Path, cases: &[(&str, bool, &str, &str, &str)]) {
+    for &(case, reviewed, outcome, checks, refusal) in cases {
+        let fx = Fixture::new(sandbox);
+        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+        open_for_completion(&fx, &host);
+        fx.script_checks(&["success", checks]);
+        fx.script_merges(&[outcome]);
+        let input = if reviewed {
+            fx.complete_input()
+        } else {
+            fx.complete_ungated_input()
+        };
+
+        let error = action(&host, "pr_complete", &input)
+            .expect_err("changed evidence after a base race must not complete");
+
+        assert!(error.to_string().contains(refusal), "{case}: {error}");
+        assert_eq!(fx.merge_requests().len(), 1, "{case}: no second mutation");
+        assert_eq!(fx.status_reads(), 2, "{case}: one fresh read");
+        assert_eq!(fx.head(), fx.candidate, "{case}: no local rewrite");
+        assert!(host.landings().is_empty(), "{case}");
+        assert!(host.completion_notes().is_empty(), "{case}");
+        assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+    }
+}
+
+/// The read after a base-modification refusal still pins the candidate: a
+/// moved head or repointed base, a closed or contradictory PR, or a merge of
+/// some other head refuses without a second merge request.
+#[test]
+fn a_base_race_refresh_refuses_a_changed_candidate_without_another_merge() {
+    isolated(
+        "a_base_race_refresh_refuses_a_changed_candidate_without_another_merge",
+        |sandbox| {
+            assert_refresh_refuses(
+                sandbox,
+                &[
+                    (
+                        "moved head",
+                        true,
+                        "base_modified+head_moved",
+                        "success",
+                        "headRefOid",
+                    ),
+                    (
+                        "moved head, ungated",
+                        false,
+                        "base_modified+head_moved",
+                        "success",
+                        "headRefOid",
+                    ),
+                    (
+                        "repointed base",
+                        true,
+                        "base_modified+retargeted",
+                        "success",
+                        "baseRefName",
+                    ),
+                    (
+                        "repointed base, ungated",
+                        false,
+                        "base_modified+retargeted",
+                        "success",
+                        "baseRefName",
+                    ),
+                    (
+                        "other head merged",
+                        true,
+                        "base_modified+merged_other_head",
+                        "success",
+                        "headRefOid",
+                    ),
+                    (
+                        "closed",
+                        true,
+                        "base_modified",
+                        "closed",
+                        "closed without being merged",
+                    ),
+                    (
+                        "contradictory",
+                        true,
+                        "base_modified",
+                        "contradictory",
+                        "contradictory merge state",
+                    ),
+                ],
+            );
+        },
+    );
+}
+
+/// The read after a base-modification refusal still gates the merge: failed
+/// checks, an outstanding review, a merge policy that no longer permits a
+/// method, or a real conflict on a reviewed head refuses without a second
+/// merge request.
+#[test]
+fn a_base_race_refresh_refuses_unmet_gates_without_another_merge() {
+    isolated(
+        "a_base_race_refresh_refuses_unmet_gates_without_another_merge",
+        |sandbox| {
+            assert_refresh_refuses(
+                sandbox,
+                &[
+                    (
+                        "failed checks",
+                        true,
+                        "base_modified",
+                        "failure",
+                        "status check 'test' failed",
+                    ),
+                    (
+                        "review required",
+                        false,
+                        "base_modified",
+                        "review_required",
+                        "REVIEW_REQUIRED",
+                    ),
+                    (
+                        "policy disallowed",
+                        true,
+                        "base_modified+policy_disallowed",
+                        "success",
+                        "no permitted merge method",
+                    ),
+                    (
+                        "conflict on a reviewed head",
+                        true,
+                        "base_modified",
+                        "dirty",
+                        "review_gate_stale",
+                    ),
+                ],
+            );
+        },
+    );
+}
+
+/// A fresh read that finds the same candidate already merged reconciles
+/// through the pinned delivery check without another merge request. The
+/// refused request produced no merge commit, so the landing is not
+/// attributed to this run as a managed merge.
+#[test]
+fn an_already_merged_refresh_reconciles_without_another_merge_request() {
+    isolated(
+        "an_already_merged_refresh_reconciles_without_another_merge_request",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            open_for_completion(&fx, &host);
+            fx.script_merges(&["base_modified+merged"]);
+
+            let completed = action(&host, "pr_complete", &fx.complete_input())
+                .expect("the merged candidate reconciles");
+
+            assert_eq!(fx.merge_requests().len(), 1, "no second mutation");
+            let landed = fx.remote_tip(BASE);
+            let merge = &completed["merge"];
+            assert_eq!(merge["merged"], true);
+            assert_eq!(merge["landed_commit"], landed.as_str());
+            assert_eq!(merge["managed_merge"], false);
+            assert_eq!(
+                merge["delivery_evidence"]["head_sha"],
+                fx.candidate.as_str()
+            );
+            let landings = host.landings();
+            assert_eq!(landings.len(), 1);
+            assert!(!landings[0].managed_merge);
+            assert_eq!(landings[0].landed_commit.as_deref(), Some(landed.as_str()));
+            assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+        },
+    );
+}
+
+/// Repeated base races stop at the fixed attempt ceiling, and a budget that
+/// is zero or runs out first stops sooner; the refusal never resets the wait.
+/// Each exit names the provider refusal and the attempts made, and leaves the
+/// task in review.
+#[test]
+fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget() {
+    isolated(
+        "repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget",
+        |sandbox| {
+            for (case, max_wait_seconds, requests, refusal) in [
+                ("attempt ceiling", 30, 3, "attempt 3 of 3"),
+                ("zero budget", 0, 1, "timed out after 0s"),
+                ("budget spent by the wait", 5, 1, "timed out after 5s"),
+            ] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                open_for_completion(&fx, &host);
+                fx.script_merges(&["base_modified"; 4]);
+                let mut input = fx.complete_input();
+                input["max_wait_seconds"] = json!(max_wait_seconds);
+
+                let error = action(&host, "pr_complete", &input)
+                    .expect_err("repeated base races must stop");
+
+                let message = error.to_string();
+                assert!(message.contains(refusal), "{case}: {message}");
+                assert!(message.contains(BASE_MODIFIED), "{case}: {message}");
+                assert!(
+                    message.contains(&format!("attempt {requests} of 3")),
+                    "{case}: {message}"
+                );
+                assert!(message.contains("stays in review"), "{case}: {message}");
+                assert_eq!(fx.merge_requests().len(), requests, "{case}");
+                assert_eq!(fx.status_reads(), requests, "{case}: one read per request");
+                assert_eq!(fx.forge_state("merged"), None, "{case}");
+                assert!(host.completion_notes().is_empty(), "{case}");
+                assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+            }
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Reviewed-candidate binding at publication
 // ---------------------------------------------------------------------------
 
@@ -1159,6 +1545,16 @@ impl Fixture {
         .unwrap();
     }
 
+    /// Answers to successive merge requests (see `merge-outcomes` in
+    /// [`FAKE_GH`]); requests past the script merge normally.
+    fn script_merges(&self, outcomes: &[&str]) {
+        fs::write(
+            self.forge.join("merge-outcomes"),
+            format!("{}\n", outcomes.join("\n")),
+        )
+        .unwrap();
+    }
+
     /// Commit `file` on the checkout and push it, returning the new head.
     fn commit(&self, file: &str, contents: &str) -> String {
         let path = self.repo.join(file);
@@ -1195,6 +1591,18 @@ impl Fixture {
 
     fn head(&self) -> String {
         git(&self.repo, &["rev-parse", "HEAD"])
+    }
+
+    fn remote_parent(&self, commit: &str) -> String {
+        git(
+            &self.forge,
+            &[
+                "--git-dir",
+                "remote.git",
+                "rev-parse",
+                &format!("{commit}^"),
+            ],
+        )
     }
 
     fn local_tip(&self, branch: &str) -> String {
@@ -1256,6 +1664,14 @@ impl Fixture {
             "max_wait_seconds": 30,
             "poll_interval_seconds": 5,
         })
+    }
+
+    /// The same completion for an ungated run: the published head is still
+    /// pinned, but no before-PR review settled it.
+    fn complete_ungated_input(&self) -> Value {
+        let mut input = self.complete_input();
+        input.as_object_mut().unwrap().remove("reviewed_head_sha");
+        input
     }
 
     fn forge_state(&self, name: &str) -> Option<String> {
@@ -1665,6 +2081,8 @@ status() {
     printf '%s\n' "$reads" > "$forge/reads"
     observed=$(sed -n "${reads}p" "$forge/checks")
     [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+    state=OPEN
+    merged_at=null
     review=""
     case "$observed" in
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
@@ -1672,10 +2090,12 @@ status() {
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
         review_required) merge_state=BLOCKED; review=REVIEW_REQUIRED; rollup=$(check success) ;;
         dirty) merge_state=DIRTY; rollup=$(check success) ;;
+        closed) state=CLOSED; merge_state=CLEAN; rollup=$(check success) ;;
+        contradictory) merged_at='"2026-10-05T12:47:15Z"'; merge_state=CLEAN; rollup=$(check success) ;;
         *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;
     esac
-    printf '{"number":42,"state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
-        "$merge_state" "$review" "$rollup" "$pr_head" "$(head_sha)" "$pr_base" "$url"
+    printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
+        "$state" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$(head_sha)" "$pr_base" "$url"
 }
 
 create() {
@@ -1691,6 +2111,32 @@ create() {
     printf '%s\n' "$url"
 }
 
+# A provider error as `gh api` reports it: the response body on stdout and
+# `gh: <message> (HTTP <status>)` on stderr.
+refuse() {
+    printf '{"message":"%s","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"%s"}\n' "$2" "$1"
+    printf 'gh: %s (HTTP %s)\n' "$2" "$1" >&2
+    exit 1
+}
+
+# Advance a remote branch by one commit, as another writer would.
+advance() {
+    ref="refs/heads/$1"
+    parent=$(git --git-dir="$remote" rev-parse "$ref")
+    next=$(git --git-dir="$remote" commit-tree "$parent^{tree}" -p "$parent" -m "$2")
+    git --git-dir="$remote" update-ref "$ref" "$next" "$parent"
+}
+
+# Squash `$1` onto the PR base and mark the PR merged.
+land() {
+    base_ref="refs/heads/$(cat "$forge/pr-base")"
+    parent=$(git --git-dir="$remote" rev-parse "$base_ref")
+    tree=$(git --git-dir="$remote" rev-parse "$1^{tree}")
+    landed=$(git --git-dir="$remote" commit-tree "$tree" -p "$parent" -m "Squash pull request #42")
+    git --git-dir="$remote" update-ref "$base_ref" "$landed" "$parent"
+    printf '%s\n' "$landed" > "$forge/merged"
+}
+
 merge() {
     sha=""
     method=""
@@ -1701,17 +2147,57 @@ merge() {
         esac
     done
     printf 'sha=%s merge_method=%s\n' "$sha" "$method" >> "$forge/merge-requests"
+    # `merge-outcomes` scripts the answer to each merge request in turn; an
+    # unscripted request is an ordinary conditional merge.
+    attempt=$(( $(wc -l < "$forge/merge-requests") ))
+    outcome=$(sed -n "${attempt}p" "$forge/merge-outcomes" 2>/dev/null || true)
+    base_modified="Base branch was modified. Review and try the merge again."
+    case "$outcome" in
+        ""|merge) ;;
+        base_modified_422) refuse 422 "$base_modified" ;;
+        base_modified*)
+            # Another PR landed on the base between the provider's
+            # mergeability check and this mutation.
+            advance "$(cat "$forge/pr-base")" "Concurrent landing"
+            case "$outcome" in
+                *+head_moved) advance "$(cat "$forge/pr-head")" "Unreviewed push" ;;
+                *+retargeted) printf 'other-base\n' > "$forge/pr-base" ;;
+                *+merged) land "$sha" ;;
+                *+merged_other_head)
+                    advance "$(cat "$forge/pr-head")" "Unreviewed push"
+                    land "$(head_sha)" ;;
+                *+policy_disallowed) touch "$forge/merge-methods-disallowed" ;;
+            esac
+            refuse 405 "$base_modified" ;;
+        policy) refuse 405 "Merge commits are not allowed on this repository." ;;
+        queue) refuse 405 "Changes must be made through the merge queue" ;;
+        protection) refuse 405 "At least 1 approving review is required by reviewers with write access." ;;
+        auth) refuse 403 "Resource not accessible by integration" ;;
+        head_modified) refuse 409 "Head branch was modified. Review and try the merge again." ;;
+        server_error) refuse 502 "Server Error" ;;
+        mismatched_body)
+            printf '{"message":"Pull Request is not mergeable","status":"405"}\n'
+            printf 'gh: %s (HTTP 405)\n' "$base_modified" >&2
+            exit 1 ;;
+        malformed_body)
+            printf '<html>upstream error</html>\n'
+            printf 'gh: %s (HTTP 405)\n' "$base_modified" >&2
+            exit 1 ;;
+        trailing_stderr)
+            printf '{"message":"%s","status":"405"}\n' "$base_modified"
+            printf 'gh: %s (HTTP 405)\nwarning: retried after a proxy reset\n' "$base_modified" >&2
+            exit 1 ;;
+        transport_timeout)
+            echo 'Put "https://api.github.com/repos/orbit/test/pulls/42/merge": net/http: request canceled (Client.Timeout exceeded while awaiting headers)' >&2
+            exit 1 ;;
+        *) echo "fake gh: unknown merge outcome '$outcome'" >&2; exit 2 ;;
+    esac
     if [ "$sha" != "$(head_sha)" ]; then
         echo "gh: Head branch was modified. Review and try the merge again. (HTTP 409)" >&2
         exit 1
     fi
-    base_ref="refs/heads/$(cat "$forge/pr-base")"
-    parent=$(git --git-dir="$remote" rev-parse "$base_ref")
-    tree=$(git --git-dir="$remote" rev-parse "$sha^{tree}")
-    landed=$(git --git-dir="$remote" commit-tree "$tree" -p "$parent" -m "Squash pull request #42")
-    git --git-dir="$remote" update-ref "$base_ref" "$landed" "$parent"
-    printf '%s\n' "$landed" > "$forge/merged"
-    printf '{"sha":"%s","merged":true,"message":"Pull Request successfully merged"}\n' "$landed"
+    land "$sha"
+    printf '{"sha":"%s","merged":true,"message":"Pull Request successfully merged"}\n' "$(cat "$forge/merged")"
 }
 
 case "$1 ${2:-}" in
@@ -1729,7 +2215,9 @@ case "$1 ${2:-}" in
         esac ;;
     "repo view") echo '{"nameWithOwner":"orbit/test"}' ;;
     "api graphql")
-        printf '{"data":{"repository":{"autoMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"squashMergeAllowed":true,"pullRequest":{"baseRefName":"%s","baseRef":{"branchProtectionRule":{"requiresLinearHistory":true}}}}}}\n' "$(cat "$forge/pr-base")" ;;
+        allowed=true
+        [ ! -f "$forge/merge-methods-disallowed" ] || allowed=false
+        printf '{"data":{"repository":{"autoMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":%s,"squashMergeAllowed":%s,"pullRequest":{"baseRefName":"%s","baseRef":{"branchProtectionRule":{"requiresLinearHistory":true}}}}}}\n' "$allowed" "$allowed" "$(cat "$forge/pr-base")" ;;
     "api repos/{owner}/{repo}/pulls/42/merge") merge "$@" ;;
     *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
 esac
