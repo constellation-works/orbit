@@ -216,6 +216,13 @@ mod unix {
         ] {
             let submitted = fixture.installed_json(&installed, args);
             let run_id = submitted["run_id"].as_str().expect("submitted run id");
+            if args[1] == "auto" {
+                assert!(
+                    submitted["note"].is_string(),
+                    "a drain with no required validation commands is noted, not refused: \
+                     {submitted}"
+                );
+            }
             fixture.assert_worker_started(run_id);
             fixture.poll_run(run_id, "success", Duration::from_secs(10));
         }
@@ -252,6 +259,10 @@ mod unix {
             warning.contains("`workflow.validation_env.login_shell = false`")
                 && warning.contains("source: launcher_fallback"),
             "the submission names the disabled resolution and its fallback: {submitted}"
+        );
+        assert!(
+            submitted["note"].is_null(),
+            "configured required validation needs no note: {submitted}"
         );
         let run_id = submitted["run_id"]
             .as_str()

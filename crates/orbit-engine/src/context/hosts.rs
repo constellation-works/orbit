@@ -219,9 +219,8 @@ pub struct ClaimExecutionContext {
     pub ship_mode: String,
     pub base_branch: String,
     pub landing_branch: String,
-    /// Commands the owner requires this candidate to pass. Empty is
-    /// fail-closed: the owner's claim journal refuses a handoff whose
-    /// requirements are unset, so the activity refuses before running one.
+    /// Commands the owner requires this candidate to pass. Empty means no
+    /// required check: the activity runs nothing and records that it did not.
     pub required_commands: Vec<String>,
 }
 
@@ -671,8 +670,8 @@ pub trait RuntimeHost: Send + Sync {
     // ── Config accessors (implementors provide these) ──────────────────
 
     /// Commands every delivered candidate must pass
-    /// (`workflow.required_validation_commands`). Empty means the owner
-    /// delivery path validates nothing and claimed handoffs are refused.
+    /// (`workflow.required_validation_commands`). Empty means no required
+    /// check: the owner delivery path validates nothing.
     fn required_validation_commands(&self) -> Vec<String> {
         Vec::new()
     }

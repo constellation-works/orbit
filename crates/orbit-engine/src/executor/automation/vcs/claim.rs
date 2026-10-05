@@ -11,6 +11,8 @@
 //!   executor's own worktree, refuses a base the candidate does not descend
 //!   from, runs the commands the *owner* requires on that exact candidate, and
 //!   attaches one captured log per command to the owner's copy of the task.
+//!   An empty list runs nothing and records that no required validation
+//!   commands are configured, as [`candidate_validate`] does.
 //! - [`claim_handoff`] re-observes the same identity, builds the typed
 //!   [`TaskHandoff`], and records it as this claim's durable pending
 //!   settlement before anything is sent to the owner.
@@ -509,18 +511,16 @@ fn published_repository(status: &Value) -> Option<String> {
 
 /// Run the owner's required commands on the exact candidate and attach one
 /// captured log per command to the owner's copy of the task.
+///
+/// An empty requirement list runs no command: the candidate is still observed
+/// and pinned, and the output records `skipped_no_required_commands` with no
+/// validation references.
 pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let context = host.claim_execution_context()?;
     let workspace_path = required_workspace(input)?;
-    if context.required_commands.is_empty() {
-        return Err(refused(
-            "this owner declares no required validation commands \
-             (`workflow.required_validation_commands`), so no claimed handoff can be accepted",
-        ));
-    }
     let candidate = observe(&workspace_path, &context, input)?;
     require_clean_candidate(&workspace_path, &candidate)?;
 
@@ -566,7 +566,8 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         });
     }
 
-    Ok(json!({
+    let mut output = json!({
+        "decision": "passed",
         "candidate": serde_json::to_value(&candidate)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
         "validation": serde_json::to_value(&references)
@@ -575,8 +576,21 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         "tested_head": candidate.candidate.commit,
         "validated_base": candidate.base.commit,
         "validation_env": validation_env,
-    }))
+    });
+    if context.required_commands.is_empty() {
+        output["decision"] = json!(SKIPPED_NO_REQUIRED_COMMANDS);
+        output["note"] = json!(NO_REQUIRED_COMMANDS_NOTE);
+    }
+    Ok(output)
 }
+
+/// The decision a validation step records when the workspace requires no
+/// command, on the owner's delivery path and a claimed leaf alike.
+const SKIPPED_NO_REQUIRED_COMMANDS: &str = "skipped_no_required_commands";
+
+/// Why that decision ran nothing, in the step's own output.
+const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \
+     (`workflow.required_validation_commands` is empty); no check ran";
 
 /// Build the typed handoff and record it as this claim's durable settlement.
 pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
@@ -613,12 +627,12 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             OrbitError::InvalidInput(format!("invalid validation references: {error}"))
         })?
         .unwrap_or_default();
-    if validation.is_empty() {
+    if validation.is_empty() && !context.required_commands.is_empty() {
         return Err(refused(
             "a typed handoff carries its captured required validation; none was supplied",
         ));
     }
-    let execution_summary = handoff_execution_summary(input, &candidate)?;
+    let execution_summary = handoff_execution_summary(input, &candidate, !validation.is_empty())?;
 
     let handoff = TaskHandoff {
         schema_version: 1,
@@ -686,10 +700,15 @@ const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
 pub(super) fn handoff_execution_summary(
     input: &Value,
     candidate: &HandoffCandidate,
+    validated: bool,
 ) -> Result<String, OrbitError> {
+    let validation = if validated {
+        "required validation passed on the exact candidate and the owner holds every captured log"
+    } else {
+        "no required validation commands are configured, so no check ran"
+    };
     let delivered = format!(
-        "Claimed execution delivered candidate {} on base {}; required validation passed on the \
-         exact candidate and the owner holds every captured log.",
+        "Claimed execution delivered candidate {} on base {}; {validation}.",
         candidate.candidate.commit, candidate.base.commit
     );
     let implementation = implementation_output(input);
@@ -844,7 +863,8 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     if commands.is_empty() {
         let mut output = json!({
             "phase": "validate",
-            "decision": "skipped_no_required_commands",
+            "decision": SKIPPED_NO_REQUIRED_COMMANDS,
+            "note": NO_REQUIRED_COMMANDS_NOTE,
             "commands": [],
             "validation": [],
         });

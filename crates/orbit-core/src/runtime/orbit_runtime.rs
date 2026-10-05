@@ -652,14 +652,28 @@ impl OrbitRuntime {
         self.context.settings().workflow_base_branch()
     }
 
-    /// Commands this owner requires a distributed execution claim to pass on
-    /// its exact candidate before accepting the delivery handoff
-    /// (`[workflow] required_validation_commands`). Empty is fail-closed: the
-    /// claim journal refuses a handoff whose owner requirements are unset.
+    /// Commands every delivered candidate must pass on its exact commit
+    /// (`[workflow] required_validation_commands`): the owner's own delivery
+    /// runs them, and an owner accepts a distributed claim's handoff only with
+    /// a passing log for each. Empty means no required check on any path: no
+    /// command runs and a handoff carries no validation logs.
     pub fn workflow_required_validation_commands(&self) -> &[String] {
         self.context
             .settings()
             .workflow_required_validation_commands()
+    }
+
+    /// The note a drain submission shows when this host declares no required
+    /// validation commands, so "no check" reads as a configured choice rather
+    /// than a silent gap. `None` when commands are configured.
+    pub fn required_validation_note(&self) -> Option<String> {
+        self.workflow_required_validation_commands()
+            .is_empty()
+            .then(|| {
+                "no `workflow.required_validation_commands` configured; delivered candidates \
+                 run no required validation here"
+                    .to_string()
+            })
     }
 
     /// `[workflow.validation_env]` as admitted [ORB-13987].

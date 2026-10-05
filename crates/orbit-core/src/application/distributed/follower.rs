@@ -9,9 +9,11 @@
 //!   machine and **its** logical workspace;
 //! - the owner answers the read-only probe **as that machine**, and would
 //!   admit this executor now (binary, protocol schema, review policy, ship
-//!   mode);
-//! - this host declares the required validation commands a claimed leaf must
-//!   pass, because an empty list fails every handoff closed.
+//!   mode).
+//!
+//! An empty `workflow.required_validation_commands` is not a refusal: its
+//! claimed leaves run no required check, as an owner's own delivery does, and
+//! `orbit run auto` notes the empty list.
 //!
 //! The resolved destination is persisted on the run, so every iteration, leaf
 //! and retry addresses the same owner and workspace. A destination that later
@@ -101,16 +103,6 @@ impl crate::OrbitRuntime {
             ));
         }
         let destination = self.resolve_pull_destination(request.selector)?;
-        if self.workflow_required_validation_commands().is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "this host declares no `workflow.required_validation_commands`; a claimed leaf \
-                 must run the owner's required validation, and an empty list fails every \
-                 handoff closed. Set the same list the owner uses (`orbit config get \
-                 workflow.required_validation_commands` there, then `orbit config set \
-                 workflow.required_validation_commands '<list>'` here)."
-                    .into(),
-            ));
-        }
         let mut input = json!({
             "for_seconds": request.for_seconds.unwrap_or(0),
             "destination": serde_json::to_value(&destination)

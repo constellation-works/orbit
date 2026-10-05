@@ -2,6 +2,55 @@
 
 use super::*;
 
+/// A replica that declares no `workflow.required_validation_commands` starts
+/// its pull drain: an empty list means no required check, as it does for an
+/// owner's own delivery, so submission notes it rather than refusing. This
+/// fixture deploys no job asset, so a submission past every preflight — the
+/// owner probe included — reaches the job catalog and stops there.
+#[test]
+fn a_follower_without_required_validation_commands_starts_a_pull_drain() {
+    if !isolated(
+        module_path!(),
+        "a_follower_without_required_validation_commands_starts_a_pull_drain",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let follower = OrbitRuntime::in_memory()
+        .expect("replica runtime")
+        .with_automation_machine_identity(Some(FOLLOWER.into()))
+        .with_coordination_write_owner(Some(OWNER.into()))
+        .with_drain_owner_transport(pair.wire.clone());
+    assert!(follower.workflow_required_validation_commands().is_empty());
+    assert!(follower.required_validation_note().is_some());
+    let logical = follower
+        .workspace_runtime_binding()
+        .expect("registered replica")
+        .logical_workspace_id
+        .clone();
+
+    let submitted = follower
+        .submit_workspace_pull_run(
+            orbit_core::WorkspacePullRequest {
+                selector: &format!("{OWNER}/{logical}"),
+                for_seconds: Some(60),
+                max_active_leaf_runs: Some(1),
+                actor: None,
+            },
+            orbit_types::workflow::JobRunTrigger::cli(),
+        )
+        .expect_err("a fixture without job assets never submits a run");
+
+    assert!(
+        matches!(
+            submitted,
+            OrbitError::NotFound { ref id, .. } if id == "workspace_pull_pipeline"
+        ),
+        "an empty requirement list must not refuse a pull drain: {submitted}"
+    );
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 1);
+}
+
 /// An unreadable persisted cancel request fails the whole pass visibly; it
 /// cannot probe, request or launch work without readable control state.
 #[test]

@@ -772,8 +772,8 @@ impl PullDrain<'_> {
     ///
     /// A claim the owner still holds keeps its settlement pending too, and
     /// the refusal is recorded on it [ORB-13979]: the owner answered, and
-    /// will answer the same until an operator changes it (an owner that
-    /// declares no required validation commands refuses every handoff).
+    /// will answer the same until an operator changes it (for example, a
+    /// footprint widening onto a path the owner protects).
     /// Under [`RefusedDelivery::WhenDue`] the record is then not sent again
     /// until its backoff has elapsed. Either way the record is returned
     /// still `Settling`, and callers stop there.

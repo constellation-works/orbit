@@ -51,7 +51,8 @@ orbit config get operation.review_policy
 Require one owner per repository, matching binaries, matching distributed-drain
 protocol schema `3`, equivalent crew and toolchain resolution, and
 `operation.review_policy = none`. Empty
-`workflow.required_validation_commands` is fail-closed for a claimed handoff.
+`workflow.required_validation_commands` means no required check: a claimed
+leaf runs nothing and the owner accepts its handoff without validation logs.
 A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
 ignored: `orbit doctor` warns; delete the files. Deny a caller by removing its
 key from `~/.ssh/authorized_keys`.
@@ -115,7 +116,8 @@ exact paths. Both peers require protocol revision 3.
 
 On the follower, from the replica checkout, with the owner in
 `~/.orbit/mcp-destinations.toml` and the same
-`workflow.required_validation_commands` the owner declares:
+`workflow.required_validation_commands` the owner declares (an empty list on
+both sides runs no required check; the drain starts and notes it):
 
 ```bash
 orbit run auto --pull <selector> --for 8h --concurrency 3
@@ -151,8 +153,8 @@ returns.
   Failed passes are retried until three in a row degrade the drain; settlement
   retries continue in the degraded state. A request the owner refused and holds no receipt for closes as
   `Refused`; a committed one is carried forward.
-- A settlement the owner refuses while it still holds the claim (an owner with
-  no `workflow.required_validation_commands` refuses every handoff) stays
+- A settlement the owner refuses while it still holds the claim (for example a
+  footprint widening onto a path the owner protects) stays
   recorded, holds new requests, and is retried with a backoff of at most 15
   minutes rather than every pass. `orbit run show <drain-run>` prints it once
   as `Settlement refused:` with the owner's reason and remedy; fix the owner,

@@ -116,6 +116,19 @@ pub(crate) fn workflow_dispatch_payload_with_warning(
     runs: &[WorkflowDispatchResult],
     warnings: Vec<String>,
 ) -> CommandOut {
+    workflow_dispatch_payload_with_notices(workflow_alias, runs, warnings, Vec::new())
+}
+
+/// [`workflow_dispatch_payload_with_warning`] plus informational notes about
+/// how the submission is configured, such as running no required validation.
+/// Notes are `.note` in JSON (one per line) and one `Note:` line each in
+/// text; they never change the exit code.
+pub(crate) fn workflow_dispatch_payload_with_notices(
+    workflow_alias: &'static str,
+    runs: &[WorkflowDispatchResult],
+    warnings: Vec<String>,
+    notes: Vec<String>,
+) -> CommandOut {
     let mut doc = if runs.len() == 1 {
         workflow_dispatch_result_to_json(&runs[0])
     } else {
@@ -134,6 +147,10 @@ pub(crate) fn workflow_dispatch_payload_with_warning(
     if !warnings.is_empty() {
         lines.extend(warnings.iter().map(|warning| format!("Warning: {warning}")));
         doc["warning"] = json!(warnings.join("\n"));
+    }
+    if !notes.is_empty() {
+        lines.extend(notes.iter().map(|note| format!("Note: {note}")));
+        doc["note"] = json!(notes.join("\n"));
     }
     let payload = Payload::detail(doc, lines.join("\n"));
     if runs

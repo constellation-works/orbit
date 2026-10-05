@@ -97,7 +97,11 @@ task names no crew. Each drain declares the crews its host can run (see step
 8), and the owner skips a task whose crew is not among them, leaving it in
 the backlog for the owner or another follower. Use the same crew names on
 both sides: crews are matched by name. Empty
-`workflow.required_validation_commands` is fail-closed for a claimed handoff.
+`workflow.required_validation_commands` means no required check, as on an
+owner's own delivery: a claimed leaf runs nothing and records that, and the
+owner accepts its handoff without validation logs. Every other handoff check
+(footprint, protected paths, candidate and base integrity) still applies.
+`orbit doctor` reports the empty list, and `orbit run auto` notes it.
 
 Per-host compiler capacity is independent. Keep the shared build-budget
 defaults (two heavy slots, four Cargo jobs) unless you deliberately raise them;
@@ -315,9 +319,12 @@ submitted, the command refuses unless:
 - this checkout is a **replica**, and the selector names **its** owner machine
   and **its** logical workspace;
 - the owner answers the probe **as that machine** and would admit this
-  executor now (binary, protocol schema, review policy, ship mode);
-- this host declares `workflow.required_validation_commands` — the same list
-  the owner uses, since the owner re-checks the evidence against its own.
+  executor now (binary, protocol schema, review policy, ship mode).
+
+This host should declare the same `workflow.required_validation_commands` as
+the owner, since the owner re-checks the evidence against its own list. An
+empty list is not a refusal: the drain starts with a `Note:` line saying no
+required validation runs here.
 
 The drain is an ordinary durable run of `workspace_pull_pipeline`:
 
@@ -645,8 +652,8 @@ status decision: set a task to `done` if its pull request merged, otherwise
 move it back to `backlog`.
 
 **A settlement the owner refuses while it still holds the claim**
-([ORB-13979]) — for example, an owner that declares no
-`workflow.required_validation_commands` refuses every handoff — is an answer,
+([ORB-13979]) — for example, an owner that refuses a footprint widening onto
+a path it protects — is an answer,
 not a lost delivery, and repeats until an operator changes the owner. The
 follower records the refusal on the admission (`settlement_refusal`), logs it
 once, and keeps the record `settling` with its outcome unchanged; nothing is

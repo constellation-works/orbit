@@ -22,7 +22,7 @@ pub fn seed(runtime: &OrbitRuntime) {
             "protocol",
             "tool",
             "orbit.drain.claim.settle",
-            "this owner declares no required validation commands (`workflow.required_validation_commands`), so no handoff can be accepted",
+            "footprint widening refused protected path: .orbit/config.toml",
         ),
         (
             "auth-legacy",
