@@ -68,6 +68,7 @@ Do not run a repair merely to collect health evidence.
 | `fix-stale-artifacts` | `ok`, number of deprecated Orbit-written artifacts retired |
 | `fix-retired-activity-backends` | `ok`, number of activity files repaired; skipped files are reported on stderr |
 | `fix-orphan-task-stores` | `ok`, empty/populated partition and deleted bundle counts; requires `--confirm` |
+| `fix-automation-pins` | `ok`, reclaimed owned attempt pins and the in-flight, live-run, assessed, legacy and foreign-owner pins retained; `warning` when ownership was refused while owned pins exist or a pin could not be deleted (see [below](#release-leaked-automation-attempt-pins)) |
 
 Example excerpt (other checks omitted; counts vary by workspace):
 
@@ -114,8 +115,9 @@ This is distinct from `--fix-stale-locks`, which handles dead-holder filesystem 
 
 There is deliberately no blanket `--fix` or resolve-all option. Configuration repair, database
 recovery, job cancellation, graph cleanup, id-allocation retirement, filesystem holder-record cleanup,
-task-reservation release, retired activity-backend cleanup, and orphan task-store deletion have
-different evidence and safety gates, so each repair remains explicit and safety-scoped.
+task-reservation release, retired activity-backend cleanup, orphan task-store deletion, and
+automation attempt-pin release have different evidence and safety gates, so each repair remains
+explicit and safety-scoped.
 
 For definition convergence after installing a new Orbit binary, or to restore a shipped
 default that was deleted by hand, use `orbit workspace sync` rather than a doctor repair.
@@ -236,6 +238,49 @@ directory is a root even when it is a link, but nothing below it is followed: a 
 file, a linked directory, or a special file such as a FIFO is reported by doctor and listed as
 skipped by the repair, and its target is never read or rewritten. To have such an activity
 checked and repaired, replace the link with a regular file inside the catalog.
+
+### Release leaked automation attempt pins
+
+Admitting a state-routine attempt (the task-pilot routine) pins the commit it froze in a
+namespace owned by this Orbit root and workspace, `refs/orbit/pins/v1/<owner digest>/<attempt id>`,
+whose owner record is `refs/orbit/pin-owners/v1/<owner digest>`. Settlement, terminal failure
+or retirement releases the pin unless an accepted pre-upgrade `material_v1` assessment still
+needs that revision for its compatibility check. A crash between the checkpoint and the
+release, or a release refused for want of ownership proof, can leave an owned pin behind.
+
+Earlier releases pinned every attempt in one shared namespace,
+`refs/orbit/automation/<attempt id>`, and never released them. Those legacy pins record no
+owner: another Orbit root or an earlier client sharing the repository may still need one, so
+Orbit never deletes them. Count each kind with:
+
+```sh
+git for-each-ref 'refs/orbit/pins/v1/' | wc -l          # owned, all roots and workspaces
+git for-each-ref 'refs/orbit/automation/*' | wc -l      # legacy shared attempt pins
+```
+
+and reclaim this root and workspace's unreferenced pins with:
+
+```sh
+orbit doctor --fix-automation-pins
+```
+
+The repair holds the routine sweep lock, so it refuses while a sweep is evaluating consumers;
+rerun it after the sweep finishes. It first requires this namespace's owner record to match
+this root, workspace, machine and Git directory; a missing or conflicting record refuses and
+retains every owned pin. It lists the owned pins, then inventories this owner's consumers and
+this workspace's pending or running task-pilot runs. A pin is kept when an attempt is still in
+flight or retrying, a live run carries it, or an accepted assessment names it (an assessment
+certified before the material fingerprint became configurable is carried forward through that
+pin). Every other owned pin is deleted only while it still names the commit it was listed
+with, so a ref repointed meanwhile survives and is reported. Any inventory failure deletes
+nothing, and the repair is idempotent.
+
+Everything else is retained and reported, never deleted: legacy shared pins, the namespaces of
+other Orbit roots and workspaces sharing the Git directory, delivery batch pins
+(`refs/orbit/automation/<consumer digest>/<batch>/…`), and refs that are not 64-hex attempt
+ids. Legacy pins can only be deleted by hand once every root and client that shares the
+repository is known not to need them. The row is a warning when ownership was refused while
+owned pins exist or a pin could not be deleted.
 
 Graph is retired under the "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) and is not inspected by ordinary health checks. To remove
 leftover state explicitly, run `orbit doctor --remove-graph`. This deletes only the current

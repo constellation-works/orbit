@@ -72,6 +72,7 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-task-locks` | Task reservations whose owner and task state are conclusively inactive. |
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
 | `--fix-retired-activity-backends` | Removes known retired `spec.backend` values from agent-loop activities. |
+| `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
 | `--remove-graph` | Removes retired graph state from this worktree and the shared workspace. |
 
 `--fix-stale-artifacts` is how a workspace catches up after an Orbit upgrade

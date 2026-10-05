@@ -10,7 +10,7 @@ use orbit_types::workflow::automation::*;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Write},
     path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -45,7 +45,7 @@ impl<'a> Source<'a> {
     /// its stderr, so an operator reading a sweep row or `auto-task show`
     /// learns which ref git could not resolve instead of a bare token.
     fn command(&self, program: &str, args: &[&str]) -> Result<String, AutomationError> {
-        self.command_with(program, args, &[], COMMAND_BUDGET)
+        self.command_with(program, args, &[], None, COMMAND_BUDGET)
     }
 
     fn command_with(
@@ -53,11 +53,25 @@ impl<'a> Source<'a> {
         program: &str,
         args: &[&str],
         env: &[(&str, &str)],
+        input: Option<&[u8]>,
         budget: Duration,
     ) -> Result<String, AutomationError> {
         if self.started.elapsed() > SOURCE_DEADLINE {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }
+
+        let stdin = match input {
+            None => Stdio::null(),
+            Some(bytes) => {
+                let mut stdin =
+                    tempfile::tempfile().map_err(|e| AutomationError::Deferred(e.to_string()))?;
+                stdin
+                    .write_all(bytes)
+                    .and_then(|()| stdin.seek(SeekFrom::Start(0)).map(drop))
+                    .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+                Stdio::from(stdin)
+            }
+        };
 
         let mut file =
             tempfile::tempfile().map_err(|e| AutomationError::Deferred(e.to_string()))?;
@@ -82,7 +96,7 @@ impl<'a> Source<'a> {
 
         let mut child = command
             .current_dir(self.root)
-            .stdin(Stdio::null())
+            .stdin(stdin)
             .stdout(output)
             .stderr(errors)
             .spawn()
@@ -143,6 +157,15 @@ impl<'a> Source<'a> {
 
     pub(crate) fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
         self.command("git", args)
+    }
+
+    /// [`Self::git`] with `input` on standard input, under the same budget.
+    pub(crate) fn git_with_input(
+        &self,
+        args: &[&str],
+        input: &[u8],
+    ) -> Result<String, AutomationError> {
+        self.command_with("git", args, &[], Some(input), COMMAND_BUDGET)
     }
 
     pub(crate) fn revision(&self, spec: &str) -> Result<SourceRevision, AutomationError> {
@@ -253,7 +276,7 @@ impl<'a> Source<'a> {
         ];
         let mut last_error = AutomationError::Deferred(SOURCE_FETCH_FAILED.into());
         for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
-            match self.command_with("git", &args, &[("GIT_TERMINAL_PROMPT", "0")], budget) {
+            match self.command_with("git", &args, &[("GIT_TERMINAL_PROMPT", "0")], None, budget) {
                 Ok(_) => return Ok(()),
                 Err(error) => {
                     let text = match &error {
