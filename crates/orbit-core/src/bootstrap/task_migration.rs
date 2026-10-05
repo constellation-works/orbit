@@ -16,7 +16,9 @@ use orbit_store::maintenance::task_registry::{
     AllocatorSeedOutcome, BindWorkspaceParams, TaskRegistryStore, task_registry_path,
     task_workspaces_dir,
 };
-use orbit_store::workflow::task::{export_tasks, import_tasks, reindex_workspace};
+use orbit_store::workflow::task::{
+    audit_relation_targets, export_tasks, import_tasks, reindex_workspace,
+};
 use orbit_types::task::{TASK_ENVELOPE_FILE_NAME, is_valid_orb_task_id};
 
 use crate::OrbitRuntime;
@@ -158,15 +160,16 @@ impl OrbitRuntime {
 
     /// Audit task relation/dependency targets that no longer resolve to a
     /// registered task bundle — the grandfathered relations that make an index
-    /// rebuild fail its validator (ORB-10305). Pass `Some(workspace_id)` to
-    /// scope the sweep to one workspace, or `None` to audit the whole
-    /// coordination registry.
+    /// rebuild fail its validator (ORB-10305). The canonical bundles are the
+    /// authority, so an edge the generated index lost is still reported.
+    /// Pass `Some(workspace_id)` to scope the sweep to one workspace, or
+    /// `None` to audit the whole coordination registry.
     pub fn audit_dangling_relations(
         &self,
         workspace_id: Option<&str>,
     ) -> Result<Vec<DanglingRelationTarget>, OrbitError> {
         let registry = self.open_task_registry()?;
-        registry.dangling_relation_targets(workspace_id)
+        audit_relation_targets(&registry, workspace_id)
     }
 }
 

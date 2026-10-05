@@ -16,22 +16,15 @@ impl TaskV2Store {
         if let Some(unsettled) = self.validate_index()? {
             return self.indexed_candidates(&filter, limit, unsettled);
         }
-        // Rebuild/fallback validates task fields on every encountered
-        // bundle (envelope, bodies, events, event/envelope status).
-        // Artifact payload hashing is deferred; never swallow a
-        // task-field error while repairing a generated index.
+        // The scan validates task fields on every encountered bundle
+        // (envelope, bodies, events, event/envelope status) and fails on any
+        // error; only the index repair it feeds is gated and best effort.
+        // Artifact payload hashing is deferred.
         let envelopes = self
-            .bundle_store
-            .list_bundles()?
+            .scan_and_repair_index("missing or stale index")?
             .into_iter()
             .map(|bundle| bundle.envelope)
             .collect::<Vec<_>>();
-        if let Err(error) = self
-            .registry
-            .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
-        {
-            orbit_common::tracing::warn!(%error, "task index repair failed; using bundle scan metadata");
-        }
         Ok(select_candidates(envelopes, &filter, limit))
     }
 

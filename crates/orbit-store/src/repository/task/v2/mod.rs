@@ -4,6 +4,7 @@
 //! The `artifacts` module owns task artifact reads, manifests, and upserts.
 //! The `sidecars` module owns comments and history row reads.
 //! The `index` module owns generated index reads, rebuilds, bundle translation, and task locking helpers.
+//! The `repair_gate` module bounds repeated automatic index rebuilds that keep failing over unchanged bundles.
 //! The `envelope_cache` module owns freshness-stamped reuse of parsed envelopes.
 //! The `query` module owns in-memory, sidecar, and artifact query matching.
 //! The `relations` module owns relation construction and replacement helpers.
@@ -48,6 +49,7 @@ mod index;
 mod listing;
 mod query;
 mod relations;
+mod repair_gate;
 pub(crate) mod sequencing;
 mod sidecars;
 mod updates;

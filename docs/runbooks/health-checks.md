@@ -28,7 +28,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `job-runs` | orphaned `pending` or `running` runs with no live worker process |
 | `pull-settlements` | warns when a replica has recorded a leaf's outcome but not delivered it to the owner (nothing retries on a timer), naming the count and the age of the oldest. Remedy: `orbit run auto --stop` ([distributed drain](./distributed-drain.md#claim-inspection-and-manual-recovery)); `ok` on a workspace that never pulled |
 | `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
-| `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
+| `task-relations` | relation/dependency targets in canonical task bundles that resolve to no registered task and so block task-index rebuild (task reads then serve from a bundle scan). Each is named as source, relation type and target, marked when the generated index no longer holds the edge. Remedy: drop the edge through `orbit.task.update` `relations`, or restore the target; reads repair the index without a restart |
 | `host-shutdown` | warns while the host has a shutdown or reboot scheduled (logind's `/run/systemd/shutdown/scheduled`), naming its mode and time; unattended admissions are held until it clears ([distributed drain](./distributed-drain.md#scheduled-host-shutdown-or-reboot)) |
 | `orphan-task-stores` | task-store partitions (`~/.orbit/tasks/workspaces/<ws_id>/`) that no workspace binding on this host claims |
 | `tracked-orbit-files` | git still tracks files under `.orbit/`; `.orbit/` is per-user state. Remedy: `git rm -r --cached .orbit` |
