@@ -1,7 +1,7 @@
 //! The composed runtime through its public surface: dispatch admission, the
 //! distributed drain, `os:` tag routing, retired deterministic stubs, final
 //! recovery, repeated rebase recovery, relation auto-close, PR closure on
-//! terminal decisions and the sandbox opt-out.
+//! terminal decisions, plugin inspection and the sandbox opt-out.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -26,6 +26,7 @@ mod step_recovery;
 mod host_os_routing;
 mod host_resources;
 mod local_route_before_pr;
+mod plugin_inspection;
 
 mod task_delivery;
 mod task_pilot;
