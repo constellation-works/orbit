@@ -125,6 +125,8 @@ pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
             .map(|shell| shell.display().to_string()),
         "login_shell_enabled": environment.login_shell_enabled,
         "login_shell_error": environment.login_shell_error,
+        "probe_mode": environment.probe_mode.map(|mode| mode.as_str()),
+        "fallback_reason": environment.fallback_reason,
         "config_path": environment.config_path,
         "path_mode": environment.path_mode.as_str(),
     })

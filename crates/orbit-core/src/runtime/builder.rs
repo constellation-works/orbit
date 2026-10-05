@@ -275,6 +275,7 @@ pub(crate) fn build_context_from_roots(
     // layer's policy, as it does for PR settings above.
     let validation_env = orbit_exec::ValidationEnvPolicy {
         login_shell: runtime_config.snapshot.workflow_validation_env_login_shell,
+        interactive: runtime_config.snapshot.workflow_validation_env_interactive,
         path: runtime_config.snapshot.workflow_validation_env_path.clone(),
         path_mode: orbit_exec::ValidationPathMode::parse(
             &runtime_config.snapshot.workflow_validation_env_path_mode,

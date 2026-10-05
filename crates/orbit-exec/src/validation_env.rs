@@ -9,17 +9,21 @@
 //!
 //! [`ValidationEnvironment::resolve`] removes the launcher from the answer. It
 //! starts from the caller's allowlisted child environment and, by default,
-//! overlays the toolchain variables the owner user's *login shell* exports —
+//! overlays the toolchain variables the owner user's *interactive login shell* exports —
 //! [`LOGIN_SHELL_TOOLCHAIN_VARS`] only, never the rest of the login
 //! environment, so the allowlist model still decides everything else. An
 //! operator can prepend or replace PATH entries and disable the login-shell
 //! probe. Every resolution records which [`ValidationEnvSource`] decided PATH.
 //!
-//! The probe runs `<shell> -l -c "exec /bin/sh -c '<printer>'"` with a bounded
-//! timeout. The printer writes a marker and then one NUL-terminated record per
-//! toolchain variable, so banners or other output from profile files cannot be
-//! mistaken for values. Results are cached per process for
-//! [`LOGIN_SHELL_CACHE_TTL`].
+//! The probe runs `<shell> -i -l -c "exec /bin/sh -c '<printer>'"`, reading
+//! interactive rc files as well as profiles. Startup failure, nonzero exit,
+//! timeout or a missing marker triggers a fallback to `<shell> -l -c …`.
+//! `workflow.validation_env.interactive = false` uses only that login probe.
+//! Each attempt has a bounded timeout and null stdin. The printer writes a
+//! marker and then one NUL-terminated record per toolchain variable, ignoring
+//! banners and rc output. Successful probes ignore stderr (including bash's
+//! job-control warnings). The complete outcome, including probe mode and any
+//! fallback reason, is cached per process for [`LOGIN_SHELL_CACHE_TTL`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -81,6 +85,25 @@ impl ValidationEnvSource {
     }
 }
 
+/// The shell startup mode that produced the toolchain environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginShellMode {
+    /// Interactive rc files and login profiles (`-i -l -c`).
+    InteractiveLogin,
+    /// Login profiles only (`-l -c`).
+    Login,
+}
+
+impl LoginShellMode {
+    /// Stable name recorded on runs and in doctor diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InteractiveLogin => "interactive_login",
+            Self::Login => "login",
+        }
+    }
+}
+
 /// How `workflow.validation_env.path` combines with the resolved PATH.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ValidationPathMode {
@@ -116,6 +139,8 @@ impl ValidationPathMode {
 pub struct ValidationEnvPolicy {
     /// Resolve PATH and toolchain locators from the login shell.
     pub login_shell: bool,
+    /// Try an interactive login shell before the login-only fallback.
+    pub interactive: bool,
     /// Configured PATH entries; `~/` expands to the environment's `HOME`.
     pub path: Vec<String>,
     /// How [`Self::path`] combines with the resolved PATH.
@@ -126,6 +151,7 @@ impl Default for ValidationEnvPolicy {
     fn default() -> Self {
         Self {
             login_shell: true,
+            interactive: true,
             path: Vec::new(),
             path_mode: ValidationPathMode::Prepend,
         }
@@ -137,6 +163,10 @@ impl Default for ValidationEnvPolicy {
 pub struct LoginShellEnv {
     /// Set toolchain variables, by name.
     pub vars: BTreeMap<String, String>,
+    /// The successful probe's startup mode.
+    pub mode: LoginShellMode,
+    /// Why the interactive probe fell back to login-only resolution.
+    pub fallback_reason: Option<String>,
 }
 
 impl LoginShellEnv {
@@ -181,18 +211,61 @@ impl LoginShell {
         &self.program
     }
 
-    /// Probe the login shell now. `base` supplies the identity, locale and
-    /// starting PATH the shell's profile files build on.
+    /// Probe interactively, falling back to login-only resolution. `base`
+    /// supplies the identity, locale and starting PATH profiles build on.
     pub fn resolve(&self, base: &[(String, String)]) -> Result<LoginShellEnv, String> {
+        self.resolve_with_interactive(base, true)
+    }
+
+    /// Probe now, optionally trying interactive startup before login-only.
+    pub(crate) fn resolve_with_interactive(
+        &self,
+        base: &[(String, String)],
+        interactive: bool,
+    ) -> Result<LoginShellEnv, String> {
+        let fallback_reason = if interactive {
+            match self.probe(base, LoginShellMode::InteractiveLogin) {
+                Ok(env) => return Ok(env),
+                Err(reason) => Some(reason),
+            }
+        } else {
+            None
+        };
+        match self.probe(base, LoginShellMode::Login) {
+            Ok(mut env) => {
+                env.fallback_reason = fallback_reason;
+                Ok(env)
+            }
+            Err(error) => Err(match fallback_reason {
+                Some(reason) => format!("{reason}; login fallback failed: {error}"),
+                None => error,
+            }),
+        }
+    }
+
+    fn probe(
+        &self,
+        base: &[(String, String)],
+        mode: LoginShellMode,
+    ) -> Result<LoginShellEnv, String> {
         let shell = self.program.display().to_string();
+        let label = match mode {
+            LoginShellMode::InteractiveLogin => "interactive login shell",
+            LoginShellMode::Login => "login shell",
+        };
+        let mut args = Vec::new();
+        if mode == LoginShellMode::InteractiveLogin {
+            args.push("-i".to_string());
+        }
+        args.extend([
+            "-l".to_string(),
+            "-c".to_string(),
+            format!("exec /bin/sh -c '{}'", printer_script()),
+        ]);
         let outcome = run_process(
             &ExecRequest {
                 program: shell.clone(),
-                args: vec![
-                    "-l".to_string(),
-                    "-c".to_string(),
-                    format!("exec /bin/sh -c '{}'", printer_script()),
-                ],
+                args,
                 current_dir: lookup(base, "HOME").map(ToOwned::to_owned),
                 timeout_ms: Some(u64::try_from(self.timeout.as_millis()).unwrap_or(u64::MAX)),
                 stdin_mode: StdinMode::Null,
@@ -204,17 +277,17 @@ impl LoginShell {
             },
             &NoSandbox,
         )
-        .map_err(|error| format!("login shell `{shell}` could not start: {error}"))?;
+        .map_err(|error| format!("{label} `{shell}` could not start: {error}"))?;
         if outcome.timed_out {
             return Err(format!(
-                "login shell `{shell}` did not finish within {}s",
-                self.timeout.as_secs()
+                "{label} `{shell}` did not finish within {}ms",
+                self.timeout.as_millis()
             ));
         }
         if !outcome.success {
             let stderr = outcome.stderr.trim();
             return Err(format!(
-                "login shell `{shell}` exited with status {}{}",
+                "{label} `{shell}` exited with status {}{}",
                 outcome
                     .exit_code
                     .map_or_else(|| "unknown".to_string(), |code| code.to_string()),
@@ -225,22 +298,39 @@ impl LoginShell {
                 }
             ));
         }
-        parse_login_env(&outcome.stdout).ok_or_else(|| {
-            format!("login shell `{shell}` did not print its environment (marker missing)")
-        })
+        parse_login_env(&outcome.stdout)
+            .map(|vars| LoginShellEnv {
+                vars,
+                mode,
+                fallback_reason: None,
+            })
+            .ok_or_else(|| {
+                format!("{label} `{shell}` did not print its environment (marker missing)")
+            })
     }
 
     /// [`Self::resolve`], reused for [`LOGIN_SHELL_CACHE_TTL`] per shell,
-    /// starting PATH and HOME. A failure is cached too, so a broken profile
-    /// costs one timeout per window rather than one per command.
+    /// starting PATH, HOME, timeout and interactive policy. Failures and
+    /// fallback results are cached too, costing at most two probes per window.
     pub fn resolve_cached(&self, base: &[(String, String)]) -> Result<LoginShellEnv, String> {
+        self.resolve_cached_with_interactive(base, true)
+    }
+
+    /// Cached resolution with the configured interactive-startup policy.
+    pub(crate) fn resolve_cached_with_interactive(
+        &self,
+        base: &[(String, String)],
+        interactive: bool,
+    ) -> Result<LoginShellEnv, String> {
         type Cache = Mutex<HashMap<String, (Instant, Result<LoginShellEnv, String>)>>;
         static CACHE: OnceLock<Cache> = OnceLock::new();
         let key = format!(
-            "{}\0{}\0{}",
+            "{}\0{}\0{}\0{}\0{}",
             self.program.display(),
             lookup(base, "PATH").unwrap_or_default(),
-            lookup(base, "HOME").unwrap_or_default()
+            lookup(base, "HOME").unwrap_or_default(),
+            interactive,
+            self.timeout.as_nanos()
         );
         let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         if let Ok(entries) = cache.lock()
@@ -251,7 +341,7 @@ impl LoginShell {
         }
         // The probe runs without the lock held: a slow profile must not
         // serialize every other caller behind it.
-        let result = self.resolve(base);
+        let result = self.resolve_with_interactive(base, interactive);
         if let Ok(mut entries) = cache.lock() {
             entries.retain(|_, (at, _)| at.elapsed() < LOGIN_SHELL_CACHE_TTL);
             entries.insert(key, (Instant::now(), result.clone()));
@@ -273,6 +363,10 @@ pub struct ValidationEnvironment {
     pub login_shell_path: Option<String>,
     /// Why the probe failed, when it did.
     pub login_shell_error: Option<String>,
+    /// The startup mode that successfully produced the shell environment.
+    pub probe_mode: Option<LoginShellMode>,
+    /// Why interactive startup fell back to login-only resolution.
+    pub fallback_reason: Option<String>,
     /// Whether login-shell resolution was enabled.
     pub login_shell_enabled: bool,
     /// Expanded `workflow.validation_env.path` entries, when configured.
@@ -290,6 +384,8 @@ impl ValidationEnvironment {
             login_shell: None,
             login_shell_path: None,
             login_shell_error: None,
+            probe_mode: None,
+            fallback_reason: None,
             login_shell_enabled: false,
             config_path: Vec::new(),
             path_mode: ValidationPathMode::Prepend,
@@ -305,7 +401,7 @@ impl ValidationEnvironment {
     ) -> Self {
         let login = policy.login_shell.then(|| {
             shell
-                .resolve_cached(&base)
+                .resolve_cached_with_interactive(&base, policy.interactive)
                 .map(|env| (shell.program(), env))
         });
         Self::compose(base, policy, login)
@@ -323,9 +419,13 @@ impl ValidationEnvironment {
         let mut login_shell = None;
         let mut login_shell_path = None;
         let mut login_shell_error = None;
+        let mut probe_mode = None;
+        let mut fallback_reason = None;
         match login {
             Some(Ok((program, resolved))) => {
                 login_shell = Some(program.to_path_buf());
+                probe_mode = Some(resolved.mode);
+                fallback_reason = resolved.fallback_reason.clone();
                 login_shell_path = resolved.path().map(ToOwned::to_owned);
                 for name in LOGIN_SHELL_TOOLCHAIN_VARS {
                     if let Some(value) = resolved.vars.get(*name) {
@@ -364,6 +464,8 @@ impl ValidationEnvironment {
             login_shell,
             login_shell_path,
             login_shell_error,
+            probe_mode,
+            fallback_reason,
             login_shell_enabled: policy.login_shell,
             config_path,
             path_mode: policy.path_mode,
@@ -373,6 +475,31 @@ impl ValidationEnvironment {
     /// The PATH commands run with, when one is set.
     pub fn path(&self) -> Option<&str> {
         lookup(&self.env, "PATH")
+    }
+
+    /// Executable candidates in PATH order. Duplicate or symlinked entries
+    /// pointing to the same executable are reported once, so doctor does not
+    /// mistake aliases such as `/bin` and `/usr/bin` for shadowed tools.
+    pub fn program_paths(&self, program: &str) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut targets = Vec::new();
+        for entry in self.path().unwrap_or_default().split(':') {
+            if entry.is_empty() {
+                continue;
+            }
+            let candidate = Path::new(entry).join(program);
+            if !is_executable(&candidate) {
+                continue;
+            }
+            let target = candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.clone());
+            if !targets.contains(&target) {
+                targets.push(target);
+                found.push(candidate);
+            }
+        }
+        found
     }
 
     /// Login-shell PATH entries the resolved PATH does not contain. Empty
@@ -467,7 +594,7 @@ fn printer_script() -> String {
 }
 
 /// Read the printer's records: `NAME=<1 when set>=<value>`, after the marker.
-fn parse_login_env(stdout: &str) -> Option<LoginShellEnv> {
+fn parse_login_env(stdout: &str) -> Option<BTreeMap<String, String>> {
     let mut records = stdout.split('\0');
     records
         .by_ref()
@@ -484,7 +611,7 @@ fn parse_login_env(stdout: &str) -> Option<LoginShellEnv> {
             vars.insert(name.to_string(), value.to_string());
         }
     }
-    Some(LoginShellEnv { vars })
+    Some(vars)
 }
 
 /// The environment the probe's shell starts from: identity, locale and the

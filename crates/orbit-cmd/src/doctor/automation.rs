@@ -166,7 +166,9 @@ pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoc
 /// resolves that environment the way a delivery run would and warns when the
 /// login shell cannot be probed (validation then falls back to the launcher's
 /// PATH), when resolution is disabled without a configured PATH, or when the
-/// resolved PATH drops login-shell entries.
+/// resolved PATH drops login-shell entries. It also reports the successful
+/// probe mode, interactive fallback reason and tool locations, warning when a
+/// later PATH entry contains a different executable shadowed by an earlier one.
 pub(super) fn doctor_check_validation_env(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     if runtime.workflow_required_validation_commands().is_empty() {
         return check(
@@ -177,30 +179,68 @@ pub(super) fn doctor_check_validation_env(runtime: &OrbitRuntime) -> WorkspaceDo
         );
     }
     let environment = runtime.validation_environment();
-    match environment.preflight_warning() {
-        Some(warning) => actionable_check(
+    let mut details = vec![format!(
+        "required validation PATH comes from {}{}; probe mode: {}; PATH={}",
+        environment.source.as_str(),
+        environment
+            .login_shell
+            .as_ref()
+            .map(|shell| format!(" ({})", shell.display()))
+            .unwrap_or_default(),
+        environment.probe_mode.map_or(
+            if environment.login_shell_enabled {
+                "failed"
+            } else {
+                "disabled"
+            },
+            |mode| mode.as_str()
+        ),
+        environment.path().unwrap_or("<unset>")
+    )];
+    let mut warning = false;
+    if let Some(reason) = &environment.fallback_reason {
+        details.push(format!("interactive fallback reason: {reason}"));
+        warning = true;
+    }
+    if let Some(reason) = environment.preflight_warning() {
+        details.push(reason);
+        warning = true;
+    }
+    for tool in ["python3", "git", "make"] {
+        let paths = environment.program_paths(tool);
+        if let Some((first, later)) = paths.split_first() {
+            details.push(format!("{tool} resolves to {}", first.display()));
+            if !later.is_empty() {
+                details.push(format!(
+                    "{tool}: {} shadows later PATH executables: {}",
+                    first.display(),
+                    later
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                warning = true;
+            }
+        } else {
+            details.push(format!("{tool} is absent from PATH"));
+        }
+    }
+    let message = details.join("; ");
+    if warning {
+        actionable_check(
             "validation-env",
             WorkspaceDoctorStatus::Warning,
-            warning,
-            "Make the login shell's profile export the toolchain PATH (`$SHELL -l -c 'echo \
-             $PATH'` should list it), or set `workflow.validation_env.path` with `orbit config \
-             set`, then rerun `orbit doctor`."
+            message,
+            "Make the interactive login shell export the intended toolchain PATH (`$SHELL \
+             -i -l -c 'echo $PATH'` should list it first), fix rc failures or set \
+             `workflow.validation_env.interactive = false` to use login profiles only, or \
+             set `workflow.validation_env.path` with `orbit config set`, then rerun \
+             `orbit doctor`."
                 .to_string(),
-        ),
-        None => check(
-            "validation-env",
-            WorkspaceDoctorStatus::Ok,
-            format!(
-                "required validation PATH comes from {}{}: PATH={}",
-                environment.source.as_str(),
-                environment
-                    .login_shell
-                    .as_ref()
-                    .map(|shell| format!(" ({})", shell.display()))
-                    .unwrap_or_default(),
-                environment.path().unwrap_or("<unset>")
-            ),
-        ),
+        )
+    } else {
+        check("validation-env", WorkspaceDoctorStatus::Ok, message)
     }
 }
 

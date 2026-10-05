@@ -143,13 +143,15 @@ Eligibility is separate: a routine's `eligibility` block still decides which tas
 ```toml
 [workflow.validation_env]
 login_shell = true
+interactive = true
 path = []
 path_mode = "prepend"
 ```
 
 | Key | Default | What it does |
 |---|---|---|
-| `workflow.validation_env.login_shell` | `true` | Resolve PATH and toolchain locators (`CARGO_HOME`, `RUSTUP_HOME`, `GOPATH`, `GOROOT`, `GOBIN`, `JAVA_HOME`, `PYENV_ROOT`, `NVM_DIR`, `VOLTA_HOME`, `PNPM_HOME`, `BUN_INSTALL`, `HOMEBREW_*`) from the owner's login shell: the account's shell from the user database, else `$SHELL`, else `/bin/sh`, run as `<shell> -l -c …`. The probe has a 10-second limit and is cached for two minutes. Nothing else from the profile is taken. `false` never starts the shell. |
+| `workflow.validation_env.login_shell` | `true` | Resolve PATH and toolchain locators (`CARGO_HOME`, `RUSTUP_HOME`, `GOPATH`, `GOROOT`, `GOBIN`, `JAVA_HOME`, `PYENV_ROOT`, `NVM_DIR`, `VOLTA_HOME`, `PNPM_HOME`, `BUN_INSTALL`, `HOMEBREW_*`) from the owner's shell: the account's shell from the user database, else `$SHELL`, else `/bin/sh`. By default run `<shell> -i -l -c …`, reading interactive rc files (`~/.zshrc`, or `~/.bashrc` when sourced by the bash login profile) as well as login profiles. Fall back to `<shell> -l -c …` on startup failure, nonzero exit, timeout or a missing environment marker. Each attempt has a 10-second limit; the complete outcome, including fallback, is cached for two minutes. Nothing outside the toolchain allowlist is taken. `false` never starts the shell. |
+| `workflow.validation_env.interactive` | `true` | Try interactive login startup (`-i -l -c`) first. `false` uses only the previous login-only probe (`-l -c`). Ignored when `login_shell` is false. Stdin is null, banners and rc output before the marker are ignored, and stderr noise on success (such as bash's job-control warning) is ignored. |
 | `workflow.validation_env.path` | `[]` | PATH entries to add. A leading `~/` expands to `HOME`. |
 | `workflow.validation_env.path_mode` | `prepend` | `prepend` puts `path` before the resolved PATH; `replace` makes it the whole PATH. |
 
@@ -160,7 +162,9 @@ The owner-side commands that run repository tooling are `workflow.required_valid
   - otherwise `login_shell` when the probe returned a PATH;
   - otherwise `launcher_fallback`, the launching process's PATH.
 - the PATH itself;
-- the probed shell and any probe error.
+- the probed shell and any probe error;
+- `probe_mode`: `interactive_login` or `login` for a successful probe, otherwise null;
+- `fallback_reason`: why interactive startup failed when the login-only probe succeeded, otherwise null. When both probes fail, `login_shell_error` includes both failures.
 
 **Missing tools are environment failures.** A required command can fail because a tool is missing. Orbit detects this from:
 
@@ -173,7 +177,7 @@ The owner-side commands that run repository tooling are `workflow.required_valid
 
 Such a failure says nothing about the candidate. The step fails with the `[validation_environment]` marker and error code `validation_environment`, naming the tool, PATH and source; the log records `failure_kind: "environment"` and `missing_tool`. Step recovery, final recovery and blocked-task recovery do not run. No review, rework or recovery budget is spent. The failure handoff opens no `[BLOCKED]` PR and pushes nothing. It blocks the task under `validation_environment_blocked`, which keeps the validated candidate in its worktree. Fix the environment, check `orbit doctor`, then `orbit job resume <run>`. A claimed leaf on a follower skips repair the same way. Its claim settles as a failure carrying the diagnostic. It is not released for another follower to pull and implement again.
 
-`orbit doctor` reports the resolution as `validation-env`. `orbit run auto`, `orbit run ship`, MCP `orbit.workflow.auto` (`status` and `start`) and `orbit.workflow.ship` warn in two cases while required commands are configured. The first is when the login shell cannot be probed. The second is when resolution is disabled and `path` is empty. They also warn when the resolved PATH drops login-shell entries, which can happen under `replace`.
+`orbit doctor` reports the resolution as `validation-env`, with the probe mode, fallback reason, resolved PATH and executable locations for `python3`, `git` and `make`. It warns when interactive startup falls back or an earlier PATH entry shadows a different executable in a later entry (for example `/usr/bin/python3` before `/opt/homebrew/bin/python3`); duplicate entries and symlink aliases of the same executable are reported once. These diagnostics are advisory. `orbit run auto`, `orbit run ship`, MCP `orbit.workflow.auto` (`status` and `start`) and `orbit.workflow.ship` warn in two cases while required commands are configured. The first is when the login shell cannot be probed. The second is when resolution is disabled and `path` is empty. They also warn when the resolved PATH drops login-shell entries, which can happen under `replace`.
 
 **The `system` name.** Shipped job steps such as `task_pilot_pipeline` name `crew: system` directly. At load that name is aliased onto the crew `workflow.system_crew` names, so `system_crew = "luna"` runs the task pilot on Luna. A user-authored `[crews.system]` table wins over the alias. Older configs without `system_crew` fall back to an existing `[crews.qa]`, then to the default crew. An unknown custom name is not substituted and fails at dispatch. A missing or unusable system crew leaves the original failed step failed, with a diagnostic naming `workflow.system_crew`.
 
