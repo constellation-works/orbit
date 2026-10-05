@@ -744,6 +744,33 @@ fn sandbox_fixture() {
         &after["broker_gone"],
         "could not reach this run's coordinator",
     );
+    mcp_refused(
+        &after["broker_gone_mcp"],
+        "could not reach this run's coordinator",
+    );
+    let unavailable_rows = runner
+        .list_audit_events(
+            None,
+            Some("orbit.task.artifact.get".to_string()),
+            None,
+            None,
+            100,
+        )
+        .expect("follower failure audit");
+    let caller_failures = unavailable_rows
+        .iter()
+        .filter(|row| {
+            !row.brokered
+                && row.status != orbit_types::telemetry::AuditEventStatus::Success
+                && row.error_message.as_deref().is_some_and(|message| {
+                    message.contains("could not reach this run's coordinator")
+                })
+        })
+        .count();
+    assert_eq!(
+        caller_failures, 2,
+        "the CLI and MCP each retain one caller-side failure when the broker is stopped: {unavailable_rows:?}"
+    );
     assert_eq!(
         owner_runtime
             .get_task_artifact(&task, REVIEW_REPORT_ARTIFACT)
@@ -965,9 +992,9 @@ def with_broker(socket_path):
     env['ORBIT_PLUGIN_BROKER'] = socket_path
     return env
 
-def mcp(calls, cwd=None):
+def mcp(calls, cwd=None, env=None):
     server = subprocess.Popen([orbit, 'mcp', 'serve'], stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd)
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd, env=env)
     def send(message):
         server.stdin.write(json.dumps(message) + '\n')
         server.stdin.flush()
@@ -1095,5 +1122,7 @@ else:
         with_broker(os.environ['ORBIT_TEST_IMPLEMENTER_BROKER']))
     report['broker_gone'] = tool('orbit.task.artifact.get', get,
         with_broker(os.environ['ORBIT_TEST_DEAD_BROKER']))
+    report['broker_gone_mcp'] = mcp([('orbit_task_artifact_get', get)],
+        env=with_broker(os.environ['ORBIT_TEST_DEAD_BROKER']))[0]
 print(json.dumps(report))
 "#;

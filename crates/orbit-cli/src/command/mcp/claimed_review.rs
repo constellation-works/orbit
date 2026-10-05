@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_core::adapter::command::{ToolEntryPoint, bridge_claimed_review_artifact};
+use orbit_core::adapter::command::{
+    ToolEntryPoint, bridge_claimed_review_artifact, execute_global_in_process_tool_dispatch,
+};
 use orbit_mcp::McpHost;
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use serde_json::Value;
@@ -45,7 +47,7 @@ impl McpHost for ClaimedReviewBridge {
         session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         let cwd = std::env::current_dir()?;
-        if let Some(result) = bridge_claimed_review_artifact(
+        if let Some(route) = bridge_claimed_review_artifact(
             &self.global_root,
             session_context.worker_invocation.as_ref(),
             Some(&self.process_machine_id),
@@ -55,7 +57,25 @@ impl McpHost for ClaimedReviewBridge {
             &cwd,
             ToolEntryPoint::Mcp,
         ) {
-            return result.into_result();
+            return match route {
+                orbit_core::adapter::command::ClaimedReviewRoute::Forwarded(result) => result,
+                orbit_core::adapter::command::ClaimedReviewRoute::Refused(error) => {
+                    // The inner ServerMcpHost is deliberately bypassed for a
+                    // bridged artifact call. Persist adapter-side refusals and
+                    // transport failures here, with this MCP session's caller
+                    // and call identity; a broker response already owns its
+                    // audit row and is returned above without a duplicate.
+                    execute_global_in_process_tool_dispatch(
+                        &self.global_root,
+                        name,
+                        input,
+                        ToolEntryPoint::Mcp,
+                        session_context,
+                        move |_| Err(error),
+                    )
+                    .map(|outcome| outcome.value)
+                }
+            };
         }
         self.inner.call_tool(name, input, session_context)
     }

@@ -55,23 +55,14 @@ fn remote_owner<'a>(
 #[derive(Debug)]
 pub enum ClaimedReviewRoute {
     /// The broker answered, or could not be reached. The broker records the
-    /// call's audit row, so the caller writes none.
+    /// call's audit row when it answered; the caller audits a missing or
+    /// unusable response.
     Forwarded(Result<Value, OrbitError>),
-    /// Refused here, before reaching the broker: no broker inside a masked
-    /// sandbox, or a request the nested process could not prepare (a source
-    /// that is a symlink, oversize, or outside the workspace). Nothing else
-    /// records it, so the caller audits the refusal.
+    /// Refused before a valid broker response: no broker inside a masked
+    /// sandbox, a request the nested process could not prepare, or an
+    /// unavailable/invalid transport response. Nothing else can be relied on
+    /// to have recorded it, so the caller audits the refusal.
     Refused(OrbitError),
-}
-
-impl ClaimedReviewRoute {
-    /// The call's outcome, whichever side decided it.
-    pub fn into_result(self) -> Result<Value, OrbitError> {
-        match self {
-            Self::Forwarded(result) => result,
-            Self::Refused(error) => Err(error),
-        }
-    }
 }
 
 /// Route a claimed reviewer's artifact call from the nested `orbit` (CLI or
@@ -133,20 +124,26 @@ pub(super) fn bridge_through(
         Ok(request) => request,
         Err(error) => return Some(ClaimedReviewRoute::Refused(error)),
     };
-    Some(ClaimedReviewRoute::Forwarded(
-        crate::runtime::plugin::broker::forward_call(
-            socket,
-            name,
-            request,
-            cwd,
-            None,
-            match entry_point {
-                ToolEntryPoint::Cli => "cli",
-                ToolEntryPoint::Mcp => "mcp",
-            },
-        )
-        .map_err(|error| coordinator_unavailable(name, error)),
-    ))
+    let result = crate::runtime::plugin::broker::forward_call_with_status(
+        socket,
+        name,
+        request,
+        cwd,
+        None,
+        match entry_point {
+            ToolEntryPoint::Cli => "cli",
+            ToolEntryPoint::Mcp => "mcp",
+        },
+    );
+    Some(match result {
+        Ok(value) => ClaimedReviewRoute::Forwarded(Ok(value)),
+        Err(crate::runtime::plugin::broker::ForwardCallError::BrokerAudit(error)) => {
+            ClaimedReviewRoute::Forwarded(Err(error))
+        }
+        Err(crate::runtime::plugin::broker::ForwardCallError::CallerAudit(error)) => {
+            ClaimedReviewRoute::Refused(coordinator_unavailable(name, error))
+        }
+    })
 }
 
 /// Name what an unreachable broker means for the reviewer: its run's step

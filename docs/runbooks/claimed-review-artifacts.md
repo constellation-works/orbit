@@ -61,11 +61,12 @@ attaching a report by hand, or disabling before-PR review.
 
 | Error the reviewer sees | Cause | Recovery |
 | --- | --- | --- |
-| `plugin_broker_refused`, `review_attempt_stale` | The reviewer finished or ran past its deadline, or its attempt was settled or replaced | Re-queue the task; the next run admits a fresh attempt |
-| `plugin_broker_refused`, `review_manifest_stale` | The owner holds another attempt's manifest | Re-queue the task; the next run pins its own manifest |
-| `plugin_broker_refused`, `claimed_review_bridge_refused` | Another activity, task, path, request field, report attempt, or a malformed report | A prompt or binary mismatch: confirm both hosts run the same Orbit version, then re-queue |
-| `plugin_broker_unavailable`, "could not reach this run's coordinator" | The step runner stopped or restarted while its reviewer ran | Let the run fail and retry it; check `orbit run show <leaf-run-id>` for why the step runner stopped |
-| `capability_denied`, "ORBIT_PLUGIN_BROKER is not set" | The follower's binary predates the route, or launched the reviewer without a broker | Upgrade the follower, then re-queue |
+| `review_attempt_stale` | The reviewer finished or ran past its deadline, or its attempt was settled or replaced | Preserve the call and run evidence. Do not replay it. After the normal run reaches terminal settlement, verify there is no live owner, diagnose the cause, and use the existing authorized backlog recovery to start a fresh attempt. |
+| `review_manifest_stale` | The owner holds another attempt's manifest | Preserve the call and run evidence. Do not replay it. After terminal settlement and cause diagnosis, use the existing authorized recovery to start a fresh attempt. |
+| `claimed_review_bridge_refused` | Another activity, task, path, request field, report attempt, or a malformed report | Preserve the refusal and inspect the bound task, run, claim and review attempt. Correct the diagnosed prompt or binary cause before any normally authorized fresh run. |
+| `plugin_broker_unavailable`, "could not reach this run's coordinator" | The coordinator could not provide a usable response; the owner may or may not have received the request | Treat the outcome as unknown. Preserve both runs, the claim and ledger state, and use the existing idempotent/reconciliation path. Do not manufacture another claim or report. |
+| `plugin_broker_busy` | The listener rejected the connection before dispatch because its bounded queue is full | Retry only the same call and bytes while the admitted attempt remains current, following the retryable response. Do not create a second claim or report. |
+| `capability_denied`, "ORBIT_PLUGIN_BROKER is not set" | The coordinator capability was not passed to this process, or the follower binary/launch configuration is wrong | Preserve the refusal and inspect the run's launch evidence. Confirm the deployed binary hash and broker setup before normal recovery; a version string alone is not proof. |
 | An `orbit.task.artifact.put` source-path or size refusal | The report source is outside the workspace `.orbit/tmp`, is a link out of it, or is over 1 MiB | Fixed in the reviewer, not the host; the refusal happens before anything reaches the coordinator |
 
 An owner that cannot be reached over SSH fails the call outside the sandbox
@@ -73,46 +74,101 @@ with the owner-route error, which the coordinator returns unchanged. Recover it
 as an unreachable owner in the
 [distributed drain runbook](./distributed-drain.md).
 
+If the report PUT is refused, the reviewer cannot persist an authoritative
+`incomplete` report. Keep its refusal as diagnostic evidence and let the gate
+fail closed on the missing or invalid report. A response envelope or a
+manually attached artifact does not replace the report artifact.
+
 ## 3. Smoke procedure
 
-Run this on a follower whose drain claims leaves from an owner with
-`review.before_pr = true`. These commands only read state. The live
-end-to-end proof for a deployment is recorded separately in the rollout
-record below.
+The live before-PR smoke is owned by on-call after safe activation. Run the
+normal claimed Mac lane against the deployed owner and follower, and collect
+the evidence below through supported public commands. Do not start a second
+claim, edit a task store, or substitute a fabricated reviewer report. The
+retained rollout record starts as `NOT_VERIFIED` and is updated only from the
+observed lane.
 
 ```bash
-# Owner and follower: same binary, review gate on.
+# Set the lane's task and run IDs from the authorized on-call record before it
+# starts. Record START in UTC before dispatch so refusals are retained too.
+TASK='<task-id>'
+DRAIN_RUN='<drain-run-id>'
+LEAF_RUN='<leaf-run-id>'
+OWNER_LANDING_RUN='<owner-landing-run-id>'
+START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# On both hosts, record host, version and executable hash. Record the deployed
+# commit from the authenticated deployment/build receipt; orbit --version is
+# a version string and does not prove which commit was installed.
+hostname
 orbit --version
-ssh <owner-host> orbit --version
-ssh <owner-host> orbit config get review.before_pr      # expect: true
+shasum -a 256 "$(command -v orbit)"
+ssh '<owner-host>' orbit config get review.before_pr # expect true
+ssh '<owner-host>' 'hostname; orbit --version; shasum -a 256 "$(command -v orbit)"'
 
-# Follower: the claimed leaf that ran the reviewer.
-orbit run show <leaf-run-id>          # Claim: line, and the agent_review_repair step
+# Follower: inspect the actual drain, claimed leaf and accepted owner handoff.
+orbit run show "$DRAIN_RUN" --json --no-reconcile
+orbit run show "$LEAF_RUN" --json --no-reconcile
+orbit run show "$LEAF_RUN" --step handoff --json --no-reconcile
+orbit run show "$OWNER_LANDING_RUN" --json --no-reconcile
 
-# Follower: one brokered row per bridged call, under the reviewer activity.
-sqlite3 -readonly ~/.orbit/orbit.db "SELECT tool_name, status, brokered, peer_pid,
-  task_id, activity_id, job_run_id FROM audit_events
-  WHERE tool_name IN ('orbit.task.artifact.get','orbit.task.artifact.put')
-    AND task_id = '<owner-task-id>' ORDER BY timestamp"
+# Owner: verify the actual merged PR and compare its current head to the
+# accepted gate final_candidate and owner landing output.
+orbit tool run github.pr.list --input \
+  '{"state":"merged","repo":"<owner/repo>","limit":100}'
 
-# Owner: the follower's calls arrive over ssh-mcp, and the report is attached.
-ssh <owner-host> orbit audit list --tool orbit.task.artifact.put \
-  --caller-machine <follower-machine-id> --transport ssh-mcp --json
-ssh <owner-host> orbit tool run orbit.task.artifact.get \
-  --input '{"id":"<owner-task-id>","path":"review-report.json"}'
-ssh <owner-host> orbit task show <owner-task-id> --json | jq .review.verdict
+# Owner: inspect the task artifacts through the public tool surface. Save the
+# complete JSON output for each call; jq -j preserves content without adding
+# a newline when hashing its UTF-8 bytes.
+orbit tool run orbit.task.artifact.get --input "{\"id\":\"$TASK\",\"path\":\"review-manifest.json\"}" > review-manifest.output.json
+jq -j '.content' review-manifest.output.json | shasum -a 256
+jq -jr '.content' review-manifest.output.json | base64 | tr -d '\n'
+orbit tool run orbit.task.artifact.get --input "{\"id\":\"$TASK\",\"path\":\"review-report.json\"}" > review-report.output.json
+jq -j '.content' review-report.output.json | shasum -a 256
+jq -jr '.content' review-report.output.json | base64 | tr -d '\n'
+orbit tool run orbit.task.artifact.get --input "{\"id\":\"$TASK\",\"path\":\"review-gate.json\"}" > review-gate.output.json
+jq '{verdict, validation_complete, final_candidate}' review-gate.output.json
+
+# Follower: retain all success, failure and denial rows for each artifact call.
+orbit audit list --since "$START" --run "$LEAF_RUN" \
+  --tool orbit.task.artifact.get --limit 1000 --json > follower-get-audit.json
+orbit audit list --since "$START" --run "$LEAF_RUN" \
+  --tool orbit.task.artifact.put --limit 1000 --json > follower-put-audit.json
+
+# Owner: find the authenticated follower transport and report attachment.
+ssh '<owner-host>' orbit audit list --since "$START" --tool orbit.task.artifact.put \
+  --caller-machine '<follower-machine-id>' --transport ssh-mcp --limit 1000 --json \
+  > owner-put-audit.json
+
+# For every retained row, preserve its public audit identity and full details.
+orbit audit show '<audit-row-id>' --json
+ssh '<owner-host>' orbit audit show '<owner-audit-row-id>' --json
 ```
 
-Expect these results:
+Read every saved run and audit response; do not infer fields that the public
+projection does not return. Correlate the review step, the authenticated
+caller/process machine and transport, the task, the review attempt, and the
+manifest/report contents. The required evidence chain is:
 
-- The follower has at least one `success` row for each tool, with
-  `brokered = 1`, a `peer_pid`, the owner task and `agent_review_repair`.
-- The owner has a `success` put row from the follower over `ssh-mcp`.
-- The report's `attempt_id` matches the attempt in the owner's
-  `review-manifest.json`.
-- The verdict is set by the gate's settlement, not by the report.
+- task, drain, leaf, reviewer and owner-landing run IDs; owner and follower
+  machine identities; deployed commit and executable SHA-256 on both hosts;
+- claim ID and settlement result; manifest attempt, base and candidate SHAs;
+- exact manifest and report bytes with SHA-256, plus the public audit row IDs
+  for authenticated GET and PUT and any refusal/failure rows;
+- an independent reviewer finding with a substantive repair, its repair
+  commit and diff, and the report's repaired finding and paths;
+- `review-gate.json` with `validation_complete: true`, the deterministic
+  verdict and `final_candidate`; the report verdict by itself is not evidence;
+- accepted handoff output bound to the exact reviewed candidate, then owner
+  landing evidence showing the landed head equals `final_candidate` and the
+  corresponding PR is merged at that head.
 
-Record each result in the evidence schema below.
+The public audit projection does not expose every stored broker diagnostic.
+Use its returned row ID with `orbit audit show`; do not query Orbit's SQLite
+database directly or relabel another field as `peer_pid`.
+
+Record the actual evidence and row IDs in the rollout record. Keep each field
+`NOT_VERIFIED` until its evidence has been collected from the live lane.
 
 ### Native boundary regressions
 
@@ -135,15 +191,21 @@ reason, and run the test on a host that can start the sandbox.
 
 ## 4. Evidence schema
 
-Record one JSON object per verification in the shape of
-[`claimed-review-artifacts-rollout.json`](./claimed-review-artifacts-rollout.json):
+The retained
+[`claimed-review-artifacts-rollout.json`](./claimed-review-artifacts-rollout.json)
+has one object for this rollout. Keep the following identity chain explicit
+in that record:
 
 | Field | Meaning |
 | --- | --- |
-| `candidate` | Commit SHA of the Orbit binary on both hosts |
-| `owner`, `follower` | Host name and machine id, plus `orbit --version` |
+| `candidate`, `owner`, `follower` | Candidate commit and executable hash; host, machine ID, version and executable hash for both hosts |
+| `runs` | Drain, claimed leaf and owner landing run IDs |
+| `claim` | Claim ID and observed settlement state |
+| `review` | Attempt ID, base, candidate, final reviewed head and substantive finding/repair evidence |
+| `artifacts` | Exact manifest/report bytes and hashes, plus GET/PUT audit row IDs |
+| `gate`, `handoff`, `landing` | Deterministic gate result, accepted exact-head handoff, landed head and merged PR evidence |
 | `checks.<name>.status` | `VERIFIED`, `FAILED`, `NOT_RUN` or `NOT_VERIFIED` |
-| `checks.<name>.evidence` | The command run and the excerpt of its output that decides the status |
+| `checks.<name>.evidence` | The command run, retained public response/audit row IDs and the observed result |
 | `checks.<name>.recorded_at` | RFC 3339 time of the run |
 | `checks.<name>.reason` | Why a check is `NOT_RUN` or `FAILED` |
 
@@ -161,9 +223,10 @@ The checks are:
 - `live_refusal`: one refused call on a stale attempt, with nothing written
   on the owner.
 
-The record starts with every check `NOT_VERIFIED`. Change a check only with
-evidence; never mark a check `VERIFIED` from a final report or from the
-reviewer's own summary.
+The record starts with every stage `NOT_VERIFIED`. Change a stage only with
+evidence; never mark one `VERIFIED` from a final report, fixture, source merge,
+or the reviewer's own summary. The smoke requires a real independent repair;
+a clean review with no substantive finding does not prove the repair leg.
 
 ## 5. Related references
 

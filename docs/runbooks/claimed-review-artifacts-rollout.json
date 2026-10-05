@@ -2,16 +2,76 @@
   "schema_version": 1,
   "subject": "claimed-review artifacts through the run coordinator",
   "procedure": "docs/runbooks/claimed-review-artifacts.md",
-  "candidate": "NOT_VERIFIED",
+  "status": "NOT_VERIFIED",
+  "candidate": {
+    "commit": "NOT_VERIFIED",
+    "binary_sha256": "NOT_VERIFIED"
+  },
   "owner": {
     "host": "NOT_VERIFIED",
     "machine_id": "NOT_VERIFIED",
-    "version": "NOT_VERIFIED"
+    "version": "NOT_VERIFIED",
+    "commit": "NOT_VERIFIED",
+    "binary_sha256": "NOT_VERIFIED"
   },
   "follower": {
     "host": "NOT_VERIFIED",
     "machine_id": "NOT_VERIFIED",
-    "version": "NOT_VERIFIED"
+    "version": "NOT_VERIFIED",
+    "commit": "NOT_VERIFIED",
+    "binary_sha256": "NOT_VERIFIED"
+  },
+  "task_id": "NOT_VERIFIED",
+  "runs": {
+    "drain_run_id": "NOT_VERIFIED",
+    "leaf_run_id": "NOT_VERIFIED",
+    "owner_landing_run_id": "NOT_VERIFIED"
+  },
+  "claim": {
+    "claim_id": "NOT_VERIFIED",
+    "settlement_state": "NOT_VERIFIED"
+  },
+  "review": {
+    "attempt_id": "NOT_VERIFIED",
+    "base_commit": "NOT_VERIFIED",
+    "candidate_commit": "NOT_VERIFIED",
+    "final_reviewed_head": "NOT_VERIFIED",
+    "independent_finding": "NOT_VERIFIED",
+    "repair_commit": "NOT_VERIFIED",
+    "repair_diff": "NOT_VERIFIED",
+    "repaired_paths": []
+  },
+  "artifacts": {
+    "manifest": {
+      "exact_bytes_base64": "NOT_VERIFIED",
+      "sha256": "NOT_VERIFIED"
+    },
+    "report": {
+      "exact_bytes_base64": "NOT_VERIFIED",
+      "sha256": "NOT_VERIFIED"
+    },
+    "follower_get_audit_row_ids": [],
+    "follower_put_audit_row_ids": [],
+    "owner_put_audit_row_ids": []
+  },
+  "gate": {
+    "artifact_sha256": "NOT_VERIFIED",
+    "verdict": "NOT_VERIFIED",
+    "validation_complete": "NOT_VERIFIED",
+    "final_candidate": "NOT_VERIFIED"
+  },
+  "handoff": {
+    "accepted": "NOT_VERIFIED",
+    "identity": "NOT_VERIFIED",
+    "candidate_commit": "NOT_VERIFIED",
+    "review_attempt_id": "NOT_VERIFIED",
+    "output": "NOT_VERIFIED"
+  },
+  "landing": {
+    "head": "NOT_VERIFIED",
+    "pr_url": "NOT_VERIFIED",
+    "pr_state": "NOT_VERIFIED",
+    "pr_head": "NOT_VERIFIED"
   },
   "checks": {
     "native_macos_sandbox": {
@@ -57,6 +117,18 @@
       "reason": null
     },
     "live_refusal": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "live_reviewer_repair": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "live_gate_handoff_landing": {
       "status": "NOT_VERIFIED",
       "evidence": null,
       "recorded_at": null,

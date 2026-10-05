@@ -23,7 +23,10 @@ use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
 use serde_json::Value;
 
-pub(crate) use client::{forward_call, refuse_unbrokered_call, refuse_unbrokered_host_read};
+pub(crate) use client::{
+    ForwardCallError, forward_call, forward_call_with_status, refuse_unbrokered_call,
+    refuse_unbrokered_host_read,
+};
 pub(crate) use peer::PeerAnchor;
 pub(crate) use protocol::{BrokerRequest, EntryPoint};
 pub(crate) use socket::sweep_orphaned;

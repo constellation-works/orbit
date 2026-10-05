@@ -97,11 +97,18 @@ Identify the failed step from `orbit run show`, then act:
   `review_attempt_stale` (the reviewer ran past its attempt or the attempt
   was settled), `review_manifest_stale` (the owner holds another attempt's
   manifest), `claimed_review_bridge_refused` (another activity, task, path or
-  field), or "could not reach this run's coordinator" (the step runner
-  stopped). Each is safe to retry with a fresh run once the cause is gone; a
-  `capability_denied` naming a missing `ORBIT_PLUGIN_BROKER` means the
-  follower's binary predates the route and must be upgraded first. Never add
-  SSH credentials to the sandbox or attach a report by hand. See
+  field), or "could not reach this run's coordinator" (no usable response).
+  Preserve the exact call and inspect the task, run, claim and review ledger
+  before recovery. Do not replay a stale, expired, settled or cancelled
+  attempt. A transport loss has an unknown outcome and must use existing
+  idempotent/reconciliation behavior; it does not authorize a new claim or
+  report. Only after normal terminal settlement, no live owner and cause
+  diagnosis may existing task authorization start a fresh attempt. A
+  `capability_denied` naming a missing `ORBIT_PLUGIN_BROKER` is a launch or
+  binary capability failure; confirm the installed executable hash and launch
+  configuration. Never add SSH credentials to the sandbox or attach a report
+  by hand. If report PUT is refused, the gate fails closed on its missing or
+  invalid artifact. See
   [claimed-review artifacts](./claimed-review-artifacts.md).
 
 If the run's final recovery already settled the task (for example archived or
@@ -116,10 +123,19 @@ separate owner record, not a review-gate certificate.
 
 ## 4. Verify
 
-After the next delivery run, `orbit task show <task-id> --json | jq .review.verdict`
-reads `accept` or `accept_with_fixes`, and the PR body of an
-`accept_with_fixes` run ends with a `## Review fixes` section naming the
-reviewer commit.
+After the delivery run, read `review-gate.json` through the public artifact
+tool and verify its `verdict`, `validation_complete` and `final_candidate`:
+
+```bash
+orbit tool run orbit.task.artifact.get --input \
+  '{"id":"<task-id>","path":"review-gate.json"}'
+orbit run show <leaf-run-id> --step handoff --json --no-reconcile
+```
+
+The gate artifact is authoritative; the report verdict alone is not. The
+handoff output must show acceptance for the same final candidate. For
+`accept_with_fixes`, inspect the accepted handoff/PR body for the
+`## Review fixes` section and verify it names the reviewer commit.
 
 ## 5. Related references
 

@@ -559,7 +559,7 @@ fn the_nested_orbit_keeps_other_routes_and_names_a_missing_broker() {
     let socket = broker.socket_path().to_path_buf();
     drop(broker);
     match fixture.call(Some(&socket), GET, input) {
-        Some(ClaimedReviewRoute::Forwarded(Err(error))) => assert!(
+        Some(ClaimedReviewRoute::Refused(error)) => assert!(
             error
                 .to_string()
                 .contains("could not reach this run's coordinator"),
