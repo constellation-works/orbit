@@ -11,12 +11,17 @@
 //! useful signal. The record names the consumer that filed it and points at
 //! `orbit doctor` for the full set.
 //!
+//! An automatic settings adoption is reported the same way, deduplicated on
+//! the consumer and its identity change, so a retuned definition is visible
+//! without anyone having to act on it.
+//!
 //! The `dedupe-key` line in the body is the durable identity. A preliminary
 //! read can miss when two evaluations race; the store repeats that lookup
 //! and the insert in one immediate transaction so both resolve to one id.
 
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
+use orbit_automation::delivery::adopt::AdoptionReport;
 use orbit_automation::delivery::stall::StallReport;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
@@ -53,8 +58,85 @@ pub(super) fn report(
     runtime: &OrbitRuntime,
     report: &StallReport<'_>,
 ) -> Result<Option<String>, OrbitError> {
-    let frictions = crate::runtime::friction::store_for(runtime)?;
     let key = dedupe_key(report);
+    let mut wanted = vec![AUTOMATION_TAG];
+    if report.divergence.is_some() {
+        wanted.push(DIVERGENCE_TAG);
+    }
+
+    file(
+        runtime,
+        key.clone(),
+        title(report),
+        body(report, &key),
+        &wanted,
+        report.at,
+    )
+}
+
+/// File one friction for an automatic settings adoption, or reuse the record
+/// an earlier evaluation filed for the same consumer and identity change.
+///
+/// Nothing is stalled and no operator is asked for anything: the record
+/// exists so an edit that changed the consumer's identity is not invisible.
+pub(super) fn report_adoption(
+    runtime: &OrbitRuntime,
+    report: &AdoptionReport<'_>,
+) -> Result<Option<String>, OrbitError> {
+    let key = format!(
+        "automation-settings-adopted:{}:{}->{}",
+        report.consumer, report.previous_epoch, report.epoch
+    );
+    let definition = definition_name(report.consumer);
+    let changes = report.changes.join(", ");
+
+    let mut body = String::new();
+    let _ = writeln!(
+        body,
+        "Delivery automation adopted an edited `{definition}` definition on its own: only its \
+         settings changed, which cannot alter what the retained coverage debt means. Every \
+         covered, pending, unresolved, waived and excluded landing and every receipt was kept, \
+         and a recovery record attributed to `system:automation` names the old and new \
+         identity. No operator action is required; this record exists so the edit is not \
+         invisible."
+    );
+    let _ = writeln!(body);
+    let _ = writeln!(body, "- consumer: `{}`", report.consumer);
+    let _ = writeln!(body, "- repository: `{}`", report.repository);
+    let _ = writeln!(body, "- branch: `{}`", report.branch);
+    let _ = writeln!(body, "- changed: {changes}");
+    let _ = writeln!(
+        body,
+        "- identity: `{}` -> `{}`",
+        report.previous_epoch, report.epoch
+    );
+    let _ = writeln!(body);
+    let _ = writeln!(
+        body,
+        "`orbit auto-task recover {definition}` previews the consumer and lists the record."
+    );
+    let _ = writeln!(body, "dedupe-key: {key}");
+
+    file(
+        runtime,
+        key,
+        format!("Delivery automation adopted changed settings for {definition}: {changes}"),
+        body,
+        &[AUTOMATION_TAG],
+        report.at,
+    )
+}
+
+/// Find the friction whose body carries `key`, or insert one.
+fn file(
+    runtime: &OrbitRuntime,
+    key: String,
+    title: String,
+    body: String,
+    wanted: &[&str],
+    at: DateTime<Utc>,
+) -> Result<Option<String>, OrbitError> {
+    let frictions = crate::runtime::friction::store_for(runtime)?;
 
     let existing = frictions.list(&FrictionListFilter {
         q: Some(key.clone()),
@@ -77,11 +159,11 @@ pub(super) fn report(
         &key,
         FrictionAddParams {
             model: "system".to_string(),
-            title: Some(title(report)),
-            body: body(report, &key),
-            tags: tags(report, &frictions.tags()?),
+            title: Some(title),
+            body,
+            tags: tags(wanted, &frictions.tags()?),
             during_task: None,
-            created_at: report.at,
+            created_at: at,
         },
     )?;
 
@@ -147,12 +229,7 @@ fn dedupe_key(report: &StallReport<'_>) -> String {
 /// The taxonomy is per-workspace data seeded once, so a workspace created
 /// before these tags existed does not know them. Losing a tag is acceptable;
 /// losing the record because of a tag is not.
-fn tags(report: &StallReport<'_>, accepted: &[String]) -> Vec<String> {
-    let mut wanted = vec![AUTOMATION_TAG];
-    if report.divergence.is_some() {
-        wanted.push(DIVERGENCE_TAG);
-    }
-
+fn tags(wanted: &[&str], accepted: &[String]) -> Vec<String> {
     let tags = wanted
         .iter()
         .filter(|tag| accepted.iter().any(|known| known == *tag))

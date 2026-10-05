@@ -66,6 +66,12 @@ pub(super) struct Host {
     pub(super) admission_deferred: AtomicBool,
     pub(super) fail_head: AtomicBool,
     pub(super) head_calls: AtomicUsize,
+    /// Repository identity the configured branch resolves to.
+    pub(super) repository: Mutex<String>,
+    /// The host adopts compatible definition edits, as auto-tasks do.
+    pub(super) adopts_settings: AtomicBool,
+    /// Each automatic adoption reported, as `previous -> epoch: changes`.
+    pub(super) adoptions: Mutex<Vec<String>>,
 }
 
 impl Host {
@@ -90,6 +96,9 @@ impl Host {
             admission_deferred: AtomicBool::new(false),
             fail_head: AtomicBool::new(false),
             head_calls: AtomicUsize::new(0),
+            repository: Mutex::new("owner/repo".into()),
+            adopts_settings: AtomicBool::new(true),
+            adoptions: Mutex::new(vec![]),
         }
     }
 
@@ -146,7 +155,25 @@ impl DeliveryHost for Host {
         if self.fail_head.load(Ordering::SeqCst) {
             return Err(AutomationError::Deferred("evidence_unavailable".into()));
         }
-        Ok(("owner/repo".into(), revision(0)))
+        Ok((self.repository.lock().unwrap().clone(), revision(0)))
+    }
+
+    fn adopts_settings(&self) -> bool {
+        self.adopts_settings.load(Ordering::SeqCst)
+    }
+
+    fn report_adoption(
+        &self,
+        report: &delivery::adopt::AdoptionReport<'_>,
+    ) -> Result<Option<String>, AutomationError> {
+        let mut adoptions = self.adoptions.lock().unwrap();
+        adoptions.push(format!(
+            "{} -> {}: {}",
+            report.previous_epoch,
+            report.epoch,
+            report.changes.join(", ")
+        ));
+        Ok(Some(format!("friction-{}", adoptions.len())))
     }
 
     fn observe(&self, _: &str, _: &AutomationState) -> Result<SourcePage, AutomationError> {

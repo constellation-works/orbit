@@ -1,5 +1,6 @@
 //! One evaluation pass: baseline, reconcile, observe, then admit what is due.
 
+use super::adopt::{Adoption, adopt};
 use super::reconcile::{reconcile, retire_covered_prefix};
 use super::{DEFINITION_CHANGED, DeliveryHost, Evaluation, input_digest, observe, stall};
 use crate::AutomationError;
@@ -103,8 +104,17 @@ fn evaluate_pass(
         state = reconcile(store, host, state, now)?;
     }
 
+    // A settings-only edit is adopted in place and the pass carries on; any
+    // other edit holds the consumer and names why.
     if state.epoch != epoch || state.branch != trigger.branch {
-        return diagnostic(store, consumer, DEFINITION_CHANGED, Some(state));
+        match adopt(store, host, &request, &state)? {
+            Adoption::Adopted(adopted) => state = *adopted,
+            Adoption::Refused(refusals) => {
+                let mut changed = diagnostic(store, consumer, DEFINITION_CHANGED, Some(state))?;
+                changed.refusals = refusals;
+                return Ok(changed);
+            }
+        }
     }
 
     if !enabled {

@@ -253,6 +253,18 @@ impl DeliveryHost for Host<'_> {
         stall::report(self.runtime, report).map_err(Into::into)
     }
 
+    fn adopts_settings(&self) -> bool {
+        // Routines still follow the restore-the-definition path.
+        matches!(self.action, Action::Task(_))
+    }
+
+    fn report_adoption(
+        &self,
+        report: &delivery::adopt::AdoptionReport<'_>,
+    ) -> Result<Option<String>, AutomationError> {
+        stall::report_adoption(self.runtime, report).map_err(Into::into)
+    }
+
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
         self.source.head(branch)
     }

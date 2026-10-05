@@ -466,3 +466,85 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     set_policy(&fixture, "operation.review_crew", "missing-crew");
     assert_doctor_fails(&fixture, "does not resolve");
 }
+
+/// [ORB-14033] Retuning the after-landing consumer no longer holds it for an
+/// operator: the next evaluation adopts the edit under a `system:automation`
+/// recovery record and one friction, keeps admitting, and `orbit doctor` stays
+/// healthy throughout. An edit that changes what the debt means is still held,
+/// and doctor names why it was not adopted.
+#[test]
+fn a_settings_only_edit_is_adopted_without_an_operator() {
+    const TEST: &str =
+        "review_after_landing_cli::a_settings_only_edit_is_adopted_without_an_operator";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    enable_review_crew(&fixture);
+    git(&fixture, &["checkout", "-b", "fixture-delivery"]);
+    commit(&fixture, "baseline\n");
+    retarget(&fixture, &trigger());
+    toggle(&fixture, "on");
+    let runtime = open_runtime(&fixture);
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let baselined = store.automation_state(&consumer).unwrap().unwrap();
+
+    let mut retuned = trigger();
+    retuned["max_wait_minutes"] = json!(30);
+    retarget(&fixture, &retuned);
+    let (row, _) = doctor_row(&fixture);
+    assert_eq!(
+        row["status"], "ok",
+        "an edit the next tick adopts is not an error: {row}"
+    );
+
+    let runtime = open_runtime(&fixture);
+    let minted = land_and_evaluate(&fixture, &runtime, "landed after retuning\n");
+    assert!(minted.is_some(), "the retuned consumer keeps admitting");
+    let adopted = store.automation_state(&consumer).unwrap().unwrap();
+    assert_ne!(adopted.epoch, baselined.epoch);
+    assert_eq!(adopted.trigger.as_ref().unwrap().max_wait_minutes, 30);
+    assert_eq!(adopted.baseline, baselined.baseline);
+    assert_eq!(adopted.covered, baselined.covered);
+
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    let recoveries = store.automation_recoveries(&consumer, 10).unwrap();
+    assert_eq!(recoveries.len(), 1, "{recoveries:?}");
+    assert_eq!(recoveries[0].by, "system:automation");
+    assert!(recoveries[0].adopted_settings);
+    assert_eq!(recoveries[0].previous_epoch, baselined.epoch);
+    assert!(
+        recoveries[0].reason.contains("max_wait_minutes"),
+        "{}",
+        recoveries[0].reason
+    );
+    let frictions = fixture.json(&["friction", "list", "--json"]);
+    let adoptions = frictions
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|friction| {
+            friction["title"]
+                .as_str()
+                .is_some_and(|title| title.contains("adopted changed settings"))
+        })
+        .count();
+    assert_eq!(adoptions, 1, "{frictions}");
+    assert_eq!(doctor_row(&fixture).0["status"], "ok");
+
+    let mut moved = retuned.clone();
+    moved["branch"] = json!("another-branch");
+    retarget(&fixture, &moved);
+    assert_doctor_fails(&fixture, "not adopted automatically: branch_changed");
+    let runtime = open_runtime(&fixture);
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let held = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    assert_eq!(held.reason, "definition_changed");
+    assert!(held.refusals.contains(&"branch_changed".to_string()));
+    assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 1);
+}

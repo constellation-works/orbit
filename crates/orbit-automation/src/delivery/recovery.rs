@@ -6,7 +6,9 @@
 //! forward is this operation, not a hand-edited state file: it adopts the new
 //! configuration identity when the change cannot alter what the retained debt
 //! means, and it reissues an action that settled without accepted evidence
-//! over the exact obligations already frozen for it.
+//! over the exact obligations already frozen for it. For a delivery auto-task
+//! the evaluator runs the adoption itself (see `adopt`), so an operator is
+//! needed only for an edit it refuses.
 //!
 //! History replay follows the same invariant: it changes source identities only
 //! after deterministic source/provider proof and adds newly inserted debt.
@@ -250,7 +252,7 @@ fn reissue(
 /// Everything that forbids `requested`, named deterministically. Refusals that
 /// block any recovery of this consumer are always reported; the ones specific
 /// to an operation only when it was asked for.
-fn refusals(
+pub(super) fn refusals(
     store: &dyn AutomationStoreBackend,
     request: &Recovery<'_>,
     requested: &RecoveryRequest,
@@ -610,7 +612,7 @@ pub(super) fn scheduling_reason(
 
 /// Name each configured setting that differs from the recorded one. A consumer
 /// that never recorded its trigger can only report that the identity differs.
-fn changes(state: &AutomationState, request: &Recovery<'_>) -> Vec<String> {
+pub(super) fn changes(state: &AutomationState, request: &Recovery<'_>) -> Vec<String> {
     let Some(recorded) = state.trigger.as_ref() else {
         return if state.epoch == request.epoch {
             vec![]

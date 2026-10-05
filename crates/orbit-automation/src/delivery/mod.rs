@@ -4,6 +4,7 @@ use crate::AutomationError;
 use chrono::{DateTime, Utc};
 use orbit_types::workflow::automation::*;
 
+pub mod adopt;
 mod digest;
 mod evaluate;
 pub mod evidence;
@@ -67,6 +68,23 @@ pub trait DeliveryHost {
         Ok(None)
     }
 
+    /// Whether the evaluator adopts an edited definition on its own when
+    /// `recover --adopt-settings` would accept the change. Hosts that do not
+    /// opt in keep every edit at `definition_changed` for an operator.
+    fn adopts_settings(&self) -> bool {
+        false
+    }
+
+    /// File one friction for an automatic settings adoption, deduped on the
+    /// consumer and the identity change, and answer with the record filed or
+    /// found. Hosts without a friction corpus report nothing.
+    fn report_adoption(
+        &self,
+        _report: &adopt::AdoptionReport<'_>,
+    ) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError>;
 
     fn observe(&self, branch: &str, state: &AutomationState)
@@ -89,8 +107,9 @@ pub enum ActionOutcome {
     },
 }
 
-/// An edited definition pauses new admission until it is restored. Hosts that
-/// layer their own reasons over this one report it ahead of theirs.
+/// An edited definition the evaluator may not adopt on its own pauses new
+/// admission until it is restored or recovered. Hosts that layer their own
+/// reasons over this one report it ahead of theirs.
 pub const DEFINITION_CHANGED: &str = "definition_changed";
 
 /// Inputs supplied by the existing sweep clock.
