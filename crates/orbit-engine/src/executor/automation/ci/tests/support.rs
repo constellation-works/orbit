@@ -21,6 +21,9 @@ pub(super) struct FakeQueries {
     runs: Mutex<Vec<Vec<Value>>>,
     /// `failed_jobs` per run id; an unscripted run has none.
     failed_jobs: BTreeMap<String, Value>,
+    /// Every limit passed to `open_pull_requests` and `repository_runs`.
+    pub(super) pull_request_limits: Mutex<Vec<u64>>,
+    pub(super) run_limits: Mutex<Vec<u64>>,
 }
 
 impl FakeQueries {
@@ -65,11 +68,16 @@ impl CiQueries for FakeQueries {
         Ok(self.repo.clone())
     }
 
-    fn open_pull_requests(&self, _limit: u64) -> Result<Vec<Value>, OrbitError> {
+    fn open_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
+        self.pull_request_limits
+            .lock()
+            .expect("pull request limits lock")
+            .push(limit);
         Ok(Vec::new())
     }
 
-    fn repository_runs(&self, _limit: u64) -> Result<Vec<Value>, OrbitError> {
+    fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
+        self.run_limits.lock().expect("run limits lock").push(limit);
         let mut runs = self.runs.lock().expect("runs lock");
         if runs.len() > 1 {
             Ok(runs.remove(0))

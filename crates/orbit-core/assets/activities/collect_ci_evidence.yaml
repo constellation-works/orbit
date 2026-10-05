@@ -90,9 +90,15 @@ spec:
           Cap on the single repository-wide workflow-run listing. This is a
           whole-repository budget, not a per-head one; it must stay deep enough
           that the integration head's newest run survives the pull-request runs
-          that outnumber it. Defaults to 100, maximum 300.
+          that outnumber it. Defaults to 100, which is also the maximum: one
+          `gh run list` page holds at most 100 runs, so larger values are
+          clamped and the snapshot reports the applied limit. Values below 1
+          are raised to 1.
       max_pull_requests:
         type: number
+        description: >
+          Cap on the open pull requests whose heads are scanned. Defaults to
+          10, maximum 50; values below 1 are raised to 1.
       max_investigated_runs:
         type: number
       max_retired_ref_probes:
