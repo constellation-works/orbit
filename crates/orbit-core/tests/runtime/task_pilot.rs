@@ -955,10 +955,13 @@ fn owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git() {
     let attempt = workspace.admitted(&task, 1);
     let pin = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
 
-    let alias = workspace.root.path().join("alias");
-    std::os::unix::fs::symlink(workspace.root.path().join("home"), &alias).unwrap();
-    let aliased = runtime_at(&alias.join(".orbit"), &workspace.repo.join(".orbit"));
-    assert_eq!(pin_attempt_source(&aliased, &attempt).unwrap(), pin);
+    #[cfg(unix)]
+    {
+        let alias = workspace.root.path().join("alias");
+        std::os::unix::fs::symlink(workspace.root.path().join("home"), &alias).unwrap();
+        let aliased = runtime_at(&alias.join(".orbit"), &workspace.repo.join(".orbit"));
+        assert_eq!(pin_attempt_source(&aliased, &attempt).unwrap(), pin);
+    }
 
     let other_root = workspace.other_root("other-home");
     let linked = workspace.linked_workspace();
