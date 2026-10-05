@@ -531,7 +531,20 @@ function renderFrictions(payload) {
       ]),
     ]);
     row.dataset.key = `friction-${friction.id}`;
-    row.dataset.hash = `${friction.id}-${friction.status}-${(friction.tags || []).join(",")}-${friction.created_at}-${accordion}-${expanded}`;
+    // syncNodes keeps the mounted row when this hash is unchanged, so every
+    // field the row paints has to be present. `?? null` keeps absent values
+    // in the JSON (JSON.stringify drops undefined).
+    row.dataset.hash = JSON.stringify({
+      id: friction.id,
+      status: friction.status ?? null,
+      tags: friction.tags || [],
+      created_at: friction.created_at ?? null,
+      accordion,
+      expanded,
+      title: friction.title ?? null,
+      body: friction.body ?? null,
+      during_task: friction.during_task ?? null,
+    });
     if (expanded) row.classList.add("active");
     const toggle = () => {
       activeFrictionId = accordion && expanded ? null : friction.id;
