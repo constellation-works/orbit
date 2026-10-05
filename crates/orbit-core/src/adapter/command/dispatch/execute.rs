@@ -330,11 +330,14 @@ impl OrbitRuntime {
         session_context: ToolSessionContext,
     ) -> Result<ToolDispatchOutcome, OrbitError> {
         // The broker is the only dispatcher and audit writer for a forwarded
-        // plugin call. Intercept before the local audit boundary; built-ins
-        // and calls outside a managed broker environment keep their path.
+        // plugin call or host-credentialed read. Intercept before the local
+        // audit boundary; other built-ins and calls outside a managed broker
+        // environment keep their path.
+        #[cfg(unix)]
+        let host_read = crate::runtime::plugin::broker::is_host_credentialed_read(name);
         #[cfg(unix)]
         if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
-            && self.tool_registry().plugin_binding(name).is_some()
+            && (host_read || self.tool_registry().plugin_binding(name).is_some())
         {
             let cwd = std::env::current_dir()?;
             // The CLI/MCP adapter already resolved an explicit workspace
@@ -378,6 +381,13 @@ impl OrbitRuntime {
             },
             |input| {
                 self.ensure_tool_agent_facing(name)?;
+                #[cfg(unix)]
+                if host_read {
+                    crate::runtime::plugin::broker::refuse_unbrokered_host_read(
+                        &self.global_root(),
+                        name,
+                    )?;
+                }
                 let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
                 let activity_tool_policy = if trusted_env {
                     read_activity_tool_policy_from_env()

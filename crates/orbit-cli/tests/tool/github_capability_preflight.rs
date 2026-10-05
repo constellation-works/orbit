@@ -8,7 +8,8 @@
 //! denies reading the GitHub CLI's configuration and an execution environment
 //! that forwards no GitHub token. The preflight must come back as an ordinary
 //! result naming the missing capability — not as a tool error, and never as
-//! something a caller could mistake for a clean CI pipeline.
+//! something a caller could mistake for a clean CI pipeline. Inside an agent
+//! sandbox with no broker, the reads are refused up front instead.
 
 use std::path::{Path, PathBuf};
 
@@ -124,5 +125,46 @@ fn a_lane_with_no_credentials_reports_unauthenticated_rather_than_failing() {
             .as_str()
             .is_some_and(|detail| detail.contains("no usable credentials")),
         "the outcome must name the missing credential: {preflight}"
+    );
+}
+
+/// Inside an agent sandbox (the plugin-tree mask's sentinel is the signal)
+/// with no broker to reach, a GitHub read is refused with a capability error
+/// naming the masked credentials and the missing broker, before `gh` runs and
+/// prints its login prompt.
+#[cfg(unix)]
+#[test]
+fn a_masked_sandbox_without_a_broker_names_the_cause() {
+    let lane = Lane::new();
+    lane.install_unauthenticated_gh();
+    let plugins = lane.home.join(".orbit/state/plugins");
+    std::fs::create_dir_all(&plugins).expect("plugin state tree");
+    std::fs::write(plugins.join(".orbit-brokered"), "masked").expect("lay the mask sentinel");
+
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .current_dir(&lane.work)
+        .env("HOME", &lane.home)
+        .env("USERPROFILE", &lane.home)
+        .env("PATH", &lane.path)
+        .args(["tool", "run", "github.run.list"])
+        .output()
+        .expect("run github.run.list");
+
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{printed}");
+    assert!(
+        printed.contains("capability_denied")
+            && printed.contains("~/.config/gh")
+            && printed.contains("ORBIT_PLUGIN_BROKER")
+            && !printed.contains("To get started"),
+        "{printed}"
     );
 }

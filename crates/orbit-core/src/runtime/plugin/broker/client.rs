@@ -39,8 +39,29 @@ pub(crate) fn refuse_unbrokered_call(global_root: &Path, tool: &str) -> Result<(
     Ok(())
 }
 
-/// Send one plugin call. A failed connection never falls back to execution in
-/// the nested process, since its sandbox cannot read the plugin's secrets.
+/// Refuse a host-credentialed read (`github.*`) that has no broker to go to
+/// from inside an agent sandbox. The sandbox masks the host's `gh`
+/// credentials, so running `gh` here could only fail with its login prompt;
+/// the refusal names the cause instead. The plugin-tree mask is the signal:
+/// every sandbox that masks credentials lays it.
+pub(crate) fn refuse_unbrokered_host_read(
+    global_root: &Path,
+    tool: &str,
+) -> Result<(), OrbitError> {
+    if crate::runtime::plugin::sandbox_mask::plugin_trees_masked(global_root) {
+        return Err(OrbitError::CapabilityDenied(format!(
+            "'{tool}' needs the host's GitHub CLI credentials, which the agent sandbox masks \
+             (~/.config/gh is hidden); it runs only through this run's plugin broker, and \
+             ORBIT_PLUGIN_BROKER is not set"
+        )));
+    }
+    Ok(())
+}
+
+/// Send one plugin call, or one of the broker's host-credentialed reads. A
+/// failed connection never falls back to execution in the nested process,
+/// since its sandbox cannot read the plugin's secrets or the host's `gh`
+/// credentials.
 pub(crate) fn forward_call(
     socket: &Path,
     tool: &str,
@@ -116,9 +137,14 @@ pub(crate) fn forward_call(
             if let Some(detail) = error.get("detail").filter(|detail| !detail.is_null()) {
                 payload["detail"] = detail.clone();
             }
+            let kind = if super::is_host_credentialed_read(tool) {
+                "brokered tool"
+            } else {
+                "plugin tool"
+            };
             Err(OrbitError::RemoteTool {
                 code: code.to_string(),
-                message: format!("plugin tool '{tool}' failed: {message}"),
+                message: format!("{kind} '{tool}' failed: {message}"),
                 payload,
             })
         }

@@ -1,7 +1,7 @@
 //! A run's plugin broker end to end: requests over its real socket, executed
-//! by [`RunDispatch`] against fixture exec plugins, with the audit rows and
-//! secret store read back. The client is this test process, anchored by
-//! ancestry so no agent sandbox is needed.
+//! by [`RunDispatch`] against fixture exec plugins and a stand-in `gh`, with
+//! the audit rows and secret store read back. The client is this test
+//! process, anchored by ancestry so no agent sandbox is needed.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -45,6 +45,14 @@ version=$(printf '%s' "$input" | sed -n 's/.*"refresh_token":{"value":"[^"]*","v
 printf '{"ok":true,"output":{"rotated":true},"secret_updates":{"refresh_token":{"value":"rotated-token-7d1","expected_version":"%s"}}}\n' "$version"
 "##;
 
+/// A stand-in `gh` that, like the real one, needs the host account's config:
+/// without `~/.config/gh/hosts.yml` it prints the login prompt. Its one run's
+/// title is the directory it ran in.
+const GH_STUB: &str = r#"#!/bin/sh
+[ -f "$HOME/.config/gh/hosts.yml" ] || { echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4; }
+printf '[{"databaseId":7,"number":3,"workflowName":"CI","displayTitle":"%s","status":"completed","conclusion":"success","event":"push","headBranch":"main","headSha":"abc123","url":"https://example.invalid/run/7"}]\n' "$(pwd -P)"
+"#;
+
 struct Fixture {
     // Dropped first, so HOME and the decoys are restored before the tree goes.
     _env: ScopedEnv,
@@ -70,11 +78,33 @@ impl Fixture {
         let worktree = root.path().join("repo");
         let workspace_root = worktree.join(".orbit");
         let sources = root.path().join("sources");
-        for dir in [&home, &global_root, &workspace_root, &sources] {
+        let bin = root.path().join("bin");
+        let gh_config = home.join(".config/gh");
+        for dir in [
+            &home,
+            &global_root,
+            &workspace_root,
+            &sources,
+            &bin,
+            &gh_config,
+        ] {
             std::fs::create_dir_all(dir).expect("create fixture dir");
         }
+        std::fs::write(gh_config.join("hosts.yml"), "github.com: {}\n").expect("gh config");
+        std::fs::write(bin.join("gh"), GH_STUB).expect("write gh stub");
+        std::fs::set_permissions(
+            bin.join("gh"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .expect("chmod gh stub");
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .expect("PATH");
+        let path = path.to_str().expect("utf8 PATH").to_string();
         let home = home.to_str().expect("utf8 HOME").to_string();
         let env = orbit_common::test_env::scoped([
+            ("PATH", Some(path.as_str())),
             ("HOME", Some(home.as_str())),
             ("USERPROFILE", Some(home.as_str())),
             ("ORBIT_TASK_ID", Some(DECOY_TASK)),
@@ -317,4 +347,60 @@ fn a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned() {
         rows[0].plugin_secret_updates.get("refresh_token"),
         Some(&PluginSecretUpdateStatus::Applied)
     );
+}
+
+/// The read-only `github.*` built-ins run on the host, with the host's `gh`
+/// config, under the same run authority as a plugin tool; every other
+/// built-in is still answered only by the nested `orbit`.
+#[test]
+fn the_broker_runs_the_github_reads_and_refuses_every_other_builtin() {
+    let fixture = Fixture::new();
+    let serving = serve(
+        &fixture,
+        fixture.run(&["github.run.list", "orbit.task.update", "orbit.task.show"]),
+    );
+    let worktree = fixture.worktree.display().to_string();
+
+    for entry_point in ["cli", "mcp"] {
+        let mut call = request("github.run.list", json!({}), &fixture.worktree);
+        call["entry_point"] = json!(entry_point);
+        let response = serving.call(call);
+        assert_eq!(response["ok"], true, "{entry_point}: {response}");
+        assert_eq!(
+            response["output"]["runs"][0]["title"], worktree,
+            "{entry_point}: gh ran on the host, in the run's worktree: {response}"
+        );
+    }
+
+    let refusals = [
+        // Allowlisted by the run, but not one of the brokered reads.
+        request("orbit.task.update", json!({}), &fixture.worktree),
+        request("orbit.task.show", json!({}), &fixture.worktree),
+        // A brokered read the run's activity does not allow.
+        request("github.pr.list", json!({}), &fixture.worktree),
+        // A cwd outside the run's worktree.
+        request("github.run.list", json!({}), &fixture.global_root),
+    ];
+    for call in refusals {
+        let response = serving.call(call.clone());
+        assert_eq!(
+            response["error"]["code"], "plugin_broker_refused",
+            "{call}: {response}"
+        );
+    }
+
+    let rows = serving.rows("github.run.list");
+    assert_eq!(rows.len(), 3, "one row per brokered call");
+    assert!(rows.iter().all(|row| row.brokered), "{rows:?}");
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.status == AuditEventStatus::Success)
+            .count(),
+        2
+    );
+    for tool in ["orbit.task.update", "orbit.task.show", "github.pr.list"] {
+        let rows = serving.rows(tool);
+        assert_eq!(rows.len(), 1, "{tool}");
+        assert!(rows[0].brokered && rows[0].status == AuditEventStatus::Denied);
+    }
 }
