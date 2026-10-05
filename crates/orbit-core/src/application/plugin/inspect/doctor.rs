@@ -527,7 +527,7 @@ fn stale_seeded_definition_rows(
                 continue;
             }
             let Some((namespace, seeded_version)) =
-                crate::runtime::plugin::definitions::read_definition_provenance(&path)
+                crate::runtime::plugin::definitions::read_definition_provenance(&dir, &path)
             else {
                 continue;
             };
