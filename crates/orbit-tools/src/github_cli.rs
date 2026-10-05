@@ -41,7 +41,9 @@ pub use crate::builtin::github::repo::{
 pub use crate::builtin::github::run::jobs::{
     build_exec_request as run_jobs_request, project_job_labels,
 };
-pub use crate::builtin::github::run::list::{build_exec_request as run_list_request, project_run};
+pub use crate::builtin::github::run::list::{
+    MAX_LIMIT as RUN_LIST_MAX_LIMIT, build_exec_request as run_list_request, project_run,
+};
 pub use crate::builtin::github::run::view::{
     build_exec_request as run_view_request, project_run_view,
 };

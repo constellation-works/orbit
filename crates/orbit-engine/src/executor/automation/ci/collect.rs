@@ -21,6 +21,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_tools::github_cli;
 use serde_json::{Value, json};
 
 use super::investigate::{cancelled_without_failed_steps, investigate};
@@ -44,9 +45,11 @@ pub(super) const CI_EVIDENCE_SCHEMA_VERSION: u64 = 2;
 /// budget, not a per-ref one: it has to be deep enough that the integration
 /// head's most recent run is still in the page after the pull-request runs
 /// that outnumber it, which is why it is far larger than the per-ref bound it
-/// replaced.
+/// replaced. The ceiling is the largest page the run-list request will ask
+/// `gh` for, so the bound reported in `truncation` is the one actually applied
+/// and a full page always raises the cap note.
 const DEFAULT_MAX_RUNS: u64 = 100;
-const MAX_MAX_RUNS: u64 = 300;
+const MAX_MAX_RUNS: u64 = github_cli::RUN_LIST_MAX_LIMIT;
 const DEFAULT_MAX_PULL_REQUESTS: u64 = 10;
 const MAX_PULL_REQUESTS: u64 = 50;
 const DEFAULT_MAX_INVESTIGATED_RUNS: u64 = 6;
@@ -80,13 +83,17 @@ pub(super) struct Bounds {
 
 fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
     Ok(Bounds {
-        max_runs: bounded_u64(input, "max_runs", DEFAULT_MAX_RUNS, MAX_MAX_RUNS)?,
+        // Both listings need at least one entry: the list requests reject a
+        // zero limit, and a sweep that errors every time can never report a
+        // clean result.
+        max_runs: bounded_u64(input, "max_runs", DEFAULT_MAX_RUNS, MAX_MAX_RUNS)?.max(1),
         max_pull_requests: bounded_u64(
             input,
             "max_pull_requests",
             DEFAULT_MAX_PULL_REQUESTS,
             MAX_PULL_REQUESTS,
-        )?,
+        )?
+        .max(1),
         max_investigated_runs: bounded_u64(
             input,
             "max_investigated_runs",

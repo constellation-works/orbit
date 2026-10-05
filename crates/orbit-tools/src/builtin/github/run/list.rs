@@ -8,7 +8,9 @@ use crate::{TIMEOUT_DEFAULT_MS, check_exec_result};
 const RUN_LIST_FIELDS: &str = "databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url";
 
 const DEFAULT_LIMIT: u64 = 20;
-const MAX_LIMIT: u64 = 100;
+/// The largest `--limit` this tool passes to `gh run list`; larger requests
+/// are clamped to it.
+pub const MAX_LIMIT: u64 = 100;
 
 pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     let mut args = vec!["run".to_string(), "list".to_string()];
