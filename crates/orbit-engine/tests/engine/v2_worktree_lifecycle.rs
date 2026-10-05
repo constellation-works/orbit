@@ -678,6 +678,58 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
     );
 }
 
+/// A registered checkout whose admin `HEAD` is corrupt (a crash mid-commit)
+/// cannot report its status, so setup cannot tell dirty from clean. The edits
+/// in it are unrecoverable once the checkout is force-removed.
+#[test]
+fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits() {
+    isolated(
+        "worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-CORRUPT", TaskStatus::Backlog);
+            let input = setup_input(&["T-CORRUPT"], "jrun-corrupt");
+
+            let first = action(&host, "worktree_setup", &input).expect("first setup");
+            let checkout = Checkout::from_setup(&first);
+            fs::write(checkout.path.join("uncommitted.txt"), "agent edit\n").unwrap();
+            let admin_head = git_path(&checkout.path, "HEAD");
+            fs::write(&admin_head, "not a ref\n").unwrap();
+            assert!(
+                Command::new("git")
+                    .args(["status", "--porcelain"])
+                    .current_dir(&checkout.path)
+                    .output()
+                    .map(|output| !output.status.success())
+                    .unwrap_or(false),
+                "fixture: status must be unreadable for the corrupt checkout"
+            );
+
+            let error = action(&host, "worktree_setup", &input)
+                .expect_err("an unreadable-status checkout is refused, not removed");
+            let message = error.to_string();
+            assert!(
+                matches!(error, OrbitError::Execution(_))
+                    && message.contains("retains work")
+                    && message.contains("status=unreadable"),
+                "refusal carries the unreadable-status evidence: {message}"
+            );
+            assert_eq!(host.admitted().len(), 1, "a refused setup admits no task");
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("uncommitted.txt")).unwrap(),
+                "agent edit\n",
+                "the uncommitted edit survives the refused setup"
+            );
+            assert_eq!(
+                fs::read_to_string(&admin_head).unwrap(),
+                "not a ref\n",
+                "the corrupt admin state is left for inspection"
+            );
+        },
+    );
+}
+
 /// `origin/main` and `main` name one local landing branch. Setup's pre-check
 /// and `merge_batch_worktree_into_base` both inspect the linked checkout that
 /// holds it, including when the primary checkout is a different dirty tree.
