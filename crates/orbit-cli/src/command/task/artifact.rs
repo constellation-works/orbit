@@ -92,7 +92,7 @@ pub struct TaskArtifactGetArgs {
     /// Task ID that owns the artifact
     pub id: String,
     /// Artifact path relative to the task artifacts directory, as listed by
-    /// `orbit task artifacts --task <ID>`
+    /// `orbit artifacts <ID> --task`
     pub path: String,
     /// Write the artifact's bytes to this file instead of printing them
     #[arg(long = "out")]
