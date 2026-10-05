@@ -118,6 +118,7 @@ fn create_task_with_crew(
             crew: crew.map(ToString::to_string),
             orchestrator: None,
             comments: Vec::new(),
+            context_creation: Vec::new(),
         })
         .expect("create task")
 }

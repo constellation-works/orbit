@@ -473,3 +473,95 @@ async fn update_task_refuses_to_fabricate_or_reopen_a_completion() {
             .any(|entry| { entry["from_status"] == "review" && entry["to_status"] == "done" })
     );
 }
+
+/// Selectors the task's latest creation grant names, `None` when it has none.
+fn creation_grant(runtime: &OrbitRuntime, task_id: &str) -> Option<Value> {
+    let history = runtime.get_task_history(task_id).expect("task history");
+    let grant = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == "context_creation_authorized")?;
+    let note: Value =
+        serde_json::from_str(grant.note.as_deref().expect("grant note")).expect("grant JSON");
+    Some(note["selectors"].clone())
+}
+
+/// The dashboard's `allow_missing_context` records the same durable creation
+/// intent as the CLI and tool surfaces, and an ordinary dashboard edit
+/// re-sends a declared target without it while staying strict for any other
+/// missing selector.
+#[tokio::test]
+async fn dashboard_allow_missing_context_records_durable_creation_intent() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let repo_root = runtime.paths().repo_root.clone();
+    std::fs::write(repo_root.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
+
+    let created = router()
+        .with_state(crate::state::DashboardState::single(runtime.clone()))
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/tasks")
+                .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "title": "Dashboard-declared module",
+                        "description": "Creates src/future.rs.",
+                        "complexity": "low",
+                        "context_files": ["file:existing.rs", "file:src/future.rs"],
+                        "allow_missing_context": true,
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(created.status(), StatusCode::OK);
+    let id = body_json(created).await["id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+    assert_eq!(
+        creation_grant(&runtime, &id),
+        Some(json!(["file:src/future.rs"]))
+    );
+
+    let resent = patch_task(
+        runtime.clone(),
+        &id,
+        json!({"context_files": ["file:src/future.rs", "file:existing.rs"]}),
+    )
+    .await;
+    assert_eq!(resent.status(), StatusCode::OK);
+    assert_eq!(
+        creation_grant(&runtime, &id),
+        Some(json!(["file:src/future.rs"]))
+    );
+
+    let undeclared = patch_task(
+        runtime.clone(),
+        &id,
+        json!({"context_files": ["file:existing.rs", "file:src/other.rs"]}),
+    )
+    .await;
+    assert_eq!(undeclared.status(), StatusCode::BAD_REQUEST);
+
+    let declared = patch_task(
+        runtime.clone(),
+        &id,
+        json!({
+            "context_files": ["file:existing.rs", "file:src/other.rs"],
+            "allow_missing_context": true,
+        }),
+    )
+    .await;
+    assert_eq!(declared.status(), StatusCode::OK);
+    assert_eq!(
+        creation_grant(&runtime, &id),
+        Some(json!(["file:src/other.rs"])),
+        "replacing the scope revokes the dropped target's grant"
+    );
+}

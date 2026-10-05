@@ -322,6 +322,15 @@ impl TaskV2Store {
                 files: by_path.into_values().collect(),
             };
             self.bundle_store.rewrite_artifact_manifest(id, &manifest)?;
+            let context_files = bundle.envelope.context_files.clone();
+            append_creation_grant(
+                &self.bundle_store,
+                &mut bundle,
+                &context_files,
+                &[],
+                &fields.actor,
+                now,
+            )?;
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             self.replace_index_best_effort(&bundle.envelope, "task artifact update");

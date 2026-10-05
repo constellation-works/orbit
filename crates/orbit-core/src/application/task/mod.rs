@@ -41,6 +41,7 @@ pub use listing::{TaskCandidates, TaskListFilter, TaskListQuery, TaskPage, TaskR
 pub(crate) use listing::{TaskEligibilityQuery, list_task_metadata_in};
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
+pub use paths::ContextCreationAuthorization;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub(crate) use lifecycle::{

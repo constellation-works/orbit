@@ -5,7 +5,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::task::{ContextCreationState, TaskComplexity, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
@@ -22,9 +22,10 @@ use super::persist::{
 };
 use super::source::SourceSnapshot;
 use super::{
+    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
     VALIDATION_TOOL_WARNINGS, action_failed, member_ready, requested_workspace_root,
     required_string, required_string_array, string_array, string_array_value,
-    validate_after_selectors, validate_recommendations,
+    unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
 };
 
 #[derive(Clone)]
@@ -43,6 +44,9 @@ pub(super) struct PreparedTaskSnapshot {
     /// Deterministic feasibility findings for the tools this task's acceptance
     /// criteria require, computed at preparation [ORB-11980].
     validation_tool_warnings: Vec<String>,
+    /// Identity of the durable context creation grant the task held at
+    /// preparation, `None` for none (or a payload prepared before grants).
+    pub(super) context_creation_identity: Option<String>,
 }
 
 pub(super) struct ValidatedTask {
@@ -101,6 +105,17 @@ fn material_components(
         components.insert(key.clone(), digest.to_string());
     }
     Ok(Some(components))
+}
+
+fn context_creation_identity(entry: &Value, action: &str) -> Result<Option<String>, DispatchError> {
+    match entry.get(CONTEXT_CREATION_IDENTITY) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(identity)) => Ok(Some(identity.clone())),
+        Some(_) => Err(action_failed(
+            action,
+            format!("prepared task {CONTEXT_CREATION_IDENTITY} must be a string or null"),
+        )),
+    }
 }
 
 pub(in super::super) fn apply(
@@ -219,6 +234,7 @@ pub(in super::super) fn apply(
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
                     material_components: material_components(entry, action)?,
+                    context_creation_identity: context_creation_identity(entry, action)?,
                 },
             ))
         })
@@ -472,6 +488,28 @@ pub(in super::super) fn apply(
                         continue;
                     }
                 };
+            // The grant is read from the task, never from the prepared
+            // payload or the agent's result. The write boundary refuses a
+            // grant that moved since preparation, after its replay receipt
+            // check, so a retried apply still settles as already applied.
+            let creation = match runtime
+                .get_task(task_id)
+                .and_then(|task| runtime.context_creation_state(&task))
+            {
+                Ok(creation) => creation,
+                Err(OrbitError::NotFound { .. }) => ContextCreationState::Absent,
+                Err(error) => {
+                    outcomes.push(task_outcome(
+                        task_id,
+                        "apply_failed",
+                        Some(format!(
+                            "read task {task_id} creation authorization: {error}"
+                        )),
+                    ));
+                    continue;
+                }
+            };
+            let authorized_creation = creation.selectors();
             let selectors = match validate_after_selectors(
                 action,
                 task_id,
@@ -480,6 +518,7 @@ pub(in super::super) fn apply(
                 &proposed_after,
                 &workspace_root,
                 source.as_ref(),
+                authorized_creation,
             ) {
                 Ok(selectors) => selectors,
                 Err(error) => {
@@ -487,7 +526,46 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
-            let after = selectors.values;
+            if !authorized_creation.is_empty() && disposition != "selectors" {
+                outcomes.push(task_outcome(
+                    task_id,
+                    "invalid",
+                    Some(format!(
+                        "task {task_id} holds operator-authorized creation targets {}; a {disposition} \
+                         assessment cannot drop them. Keep them as selectors; only an operator \
+                         revokes them, by replacing context_files through orbit.task.update",
+                        authorized_creation.join(", ")
+                    )),
+                ));
+                continue;
+            }
+            // The pilot cannot revoke operator intent by omission: every
+            // granted target it left out is kept, and reported.
+            let mut after = selectors.values;
+            let retained = authorized_creation
+                .iter()
+                .filter(|selector| !after.contains(selector))
+                .cloned()
+                .collect::<Vec<_>>();
+            after.extend(retained.iter().cloned());
+            let reauthorization = match unauthorized_missing_targets(
+                action,
+                &snapshot.context_files,
+                &after,
+                authorized_creation,
+                &workspace_root,
+                source.as_ref(),
+            ) {
+                Ok(findings) => findings,
+                Err(error) => {
+                    outcomes.push(task_outcome(
+                        task_id,
+                        "apply_failed",
+                        Some(error.to_string()),
+                    ));
+                    continue;
+                }
+            };
             let complexity = match validate_recommendations(action, task_id, assessment) {
                 Ok(complexity) => complexity,
                 Err(error) => {
@@ -536,6 +614,15 @@ pub(in super::super) fn apply(
                     CONTEXT_ATTACHMENT_WARNINGS.to_string(),
                     json!(over_attachment_findings(complexity, &after)),
                 );
+                if !retained.is_empty() {
+                    fields.insert(CONTEXT_CREATION_RETAINED.to_string(), json!(retained));
+                }
+                if !reauthorization.is_empty() {
+                    fields.insert(
+                        CONTEXT_REAUTHORIZATION_REQUIRED.to_string(),
+                        json!(reauthorization),
+                    );
+                }
             }
 
             let admission = match &authority {

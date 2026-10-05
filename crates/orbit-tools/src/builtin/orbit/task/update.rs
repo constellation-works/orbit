@@ -158,7 +158,7 @@ impl Tool for OrbitTaskUpdateTool {
             },
             ToolParam {
                 name: "allow_missing_context".to_string(),
-                description: "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default."
+                description: "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor; re-sending a declared selector needs no flag, and a replacement list that omits it revokes it. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default."
                     .to_string(),
                 param_type: "boolean".to_string(),
                 required: false,

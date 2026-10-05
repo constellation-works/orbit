@@ -67,6 +67,13 @@ impl TaskV2Store {
         let relations = relations_from_create_params(&params)?;
         self.registry
             .validate_new_task_relation_targets(&self.workspace_id, &relations)?;
+        // Validated before an id is reserved; recorded once the id exists.
+        orbit_types::task::ContextCreationState::Absent.next_grant(
+            "",
+            &params.context_files,
+            &params.context_creation,
+            Utc::now(),
+        )?;
 
         let now = Utc::now();
         let id = if let Some(key) = key {
@@ -94,6 +101,39 @@ impl TaskV2Store {
                 body: comment.message.clone(),
             })
             .collect();
+        let mut events = vec![orbit_types::task::TaskEventRowV2 {
+            schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
+            event_id: "EV-0001".to_string(),
+            at: now,
+            by: params.actor.clone(),
+            event_type: "created".to_string(),
+            note: None,
+            from_status: None,
+            to_status: Some(params.status),
+        }];
+        // The initial grant is part of the bundle the create publishes, so a
+        // task never exists without the creation intent its writer declared.
+        if let Some(mut grant) = orbit_types::task::ContextCreationState::Absent.next_grant(
+            &id,
+            &params.context_files,
+            &params.context_creation,
+            now,
+        )? {
+            let event_id = next_event_id(&events);
+            if grant.generation.is_none() {
+                grant.generation = Some(event_id.clone());
+            }
+            events.push(orbit_types::task::TaskEventRowV2 {
+                schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id,
+                at: now,
+                by: params.actor.clone(),
+                event_type: orbit_types::task::CONTEXT_CREATION_AUTHORIZED_EVENT.to_string(),
+                note: Some(grant.to_note()),
+                from_status: None,
+                to_status: None,
+            });
+        }
         let bundle = TaskBundleV2 {
             envelope: orbit_types::task::TaskEnvelopeV2 {
                 job_run_machine: None,
@@ -123,16 +163,7 @@ impl TaskV2Store {
             acceptance: render_acceptance(&params.acceptance_criteria),
             plan: params.plan,
             execution_summary: params.execution_summary,
-            events: vec![orbit_types::task::TaskEventRowV2 {
-                schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
-                event_id: "EV-0001".to_string(),
-                at: now,
-                by: params.actor,
-                event_type: "created".to_string(),
-                note: None,
-                from_status: None,
-                to_status: Some(params.status),
-            }],
+            events,
             comments,
             artifact_manifest: None,
         };

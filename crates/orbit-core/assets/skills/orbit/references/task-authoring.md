@@ -115,10 +115,24 @@ precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
 
 For a known new target, use the supported `allow_missing_context` option and
-explain creation intent; a rejected selector's message names that option. A
-worker updating its own task through `orbit.task.update` from its run's linked
-worktree gets that relaxation automatically for that task, and the response
-lists the stored-but-unresolved selectors as `context_files_unverified`.
+explain creation intent; a rejected selector's message names that option. The
+option records each missing selector as durable creation intent for that exact
+canonical selector (at most 32 per task), committed with the scope change.
+Later writes may re-send a declared selector without the option, and
+task-pilot keeps it as a target to create. Maintained task writes carry intent
+forward for kept selectors and revoke selectors removed from the replacement
+list. The grant is bound to the task revision: an older writer that changes the
+stored task without maintaining the grant invalidates it, even if it later
+restores the same selector list. Reauthorize through `orbit.task.update` with
+the full `context_files` list plus `allow_missing_context: true`. Syntax,
+containment and file/directory kind are still checked, and comments, plans or
+agent proposals never grant intent. When task-pilot reports a missing selector
+that carries no such record, re-declare it through that update path.
+
+A worker updating its own task through `orbit.task.update` from its run's
+linked worktree gets the existence relaxation automatically for that task,
+without recording creation intent, and the response lists the
+stored-but-unresolved selectors as `context_files_unverified`.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Do not invent paths to satisfy admission. Unknown targets can be prepared by task-pilot before
 execution; empty context does not guarantee eligibility for every admission path.

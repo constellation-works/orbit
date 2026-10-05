@@ -973,6 +973,7 @@ impl Coordinated {
                 crew: None,
                 orchestrator: None,
                 comments: Vec::new(),
+                context_creation: Vec::new(),
             })
             .expect("create task")
     }

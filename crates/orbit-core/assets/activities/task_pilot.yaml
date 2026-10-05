@@ -179,6 +179,11 @@ spec:
        `file:`, `dir:`, or `symbol:`. Every anchor must already exist inside
        `workspace_path` at `source_revision` when that field is set; omit
        read-for-context files and working-tree-only or later-commit paths.
+       The one exception is an operator-declared creation target: a selector
+       named by the task's latest `context_creation_authorized` history entry.
+       Keep each one exactly as recorded even though it does not exist yet.
+       Never propose any other missing path; deterministic apply keeps
+       declared targets you omit and rejects every undeclared missing anchor.
        Preserve the exact current list as `context_files_before`.
        Derive the modification targets from evidence, never by sweeping a
        directory or a crate. For a removal or a rename, the targets are the

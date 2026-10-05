@@ -16,6 +16,12 @@ use super::apply::{Admission, PreparedTaskSnapshot, ValidatedTask};
 
 const STORAGE_APPLY_ATTEMPTS: usize = 3;
 
+/// Stale reason when the task's durable context creation grant is no longer
+/// the one preparation recorded.
+const CONTEXT_CREATION_CHANGED: &str = "context_creation_changed";
+const CONTEXT_CREATION_CHANGED_DETAIL: &str =
+    "task context creation authorization changed after preparation";
+
 pub(super) enum ApplyTaskOutcome {
     Applied(Option<String>),
     AlreadyApplied(Option<String>),
@@ -92,6 +98,15 @@ pub(super) fn apply_task(
                 }
                 return Ok(());
             }
+            if runtime.context_creation_state(&current)?.identity()
+                != snapshot.context_creation_identity
+            {
+                outcome = Some(ApplyTaskOutcome::Stale(
+                    CONTEXT_CREATION_CHANGED,
+                    CONTEXT_CREATION_CHANGED_DETAIL.to_string(),
+                ));
+                return Ok(());
+            }
             if attempt == 1 && !matches!(current.status, TaskStatus::Proposed | TaskStatus::Backlog)
             {
                 outcome = Some(ApplyTaskOutcome::Stale(
@@ -140,6 +155,7 @@ pub(super) fn apply_task(
                 expected_context_files: snapshot.context_files.clone(),
                 expected_status: snapshot.status,
                 expected_complexity: snapshot.complexity,
+                expected_context_creation: snapshot.context_creation_identity.clone(),
                 context_files: task.after.clone(),
                 status: target_status,
                 complexity: task.complexity,

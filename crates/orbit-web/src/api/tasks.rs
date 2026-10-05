@@ -126,10 +126,11 @@ pub(super) struct CreateTaskBody {
     plan: String,
     #[serde(default)]
     context_files: Vec<String>,
-    /// Escape for a `context_files` selector that names a target this task is
-    /// about to create, mirroring `orbit task add --allow-missing-context` and
-    /// the `orbit.task.add` tool's `allow_missing_context` input. See
-    /// [`OrbitRuntime::ensure_context_selectors_exist`](orbit_core::OrbitRuntime::ensure_context_selectors_exist).
+    /// Declares that missing `context_files` selectors name targets this task
+    /// is about to create, mirroring `orbit task add --allow-missing-context`
+    /// and the `orbit.task.add` tool's `allow_missing_context` input. Each
+    /// missing selector is recorded as durable creation intent; see
+    /// [`OrbitRuntime::authorize_missing_context`](orbit_core::OrbitRuntime::authorize_missing_context).
     #[serde(default)]
     allow_missing_context: bool,
     #[serde(default)]
@@ -603,9 +604,13 @@ pub(super) async fn create_task_action(
         source_task_id: body.source_task_id,
         crew: body.crew,
         orchestrator: body.orchestrator,
+        context_creation: Default::default(),
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
-        if !allow_missing_context {
+        let mut params = params;
+        if allow_missing_context {
+            params.context_creation = runtime.authorize_missing_context(&params.context_files)?;
+        } else {
             runtime.ensure_context_selectors_exist(&params.context_files)?;
         }
         runtime.add_task_with_identity(params, None, model)
@@ -681,14 +686,20 @@ pub(super) async fn update_task_action(
         crew: body.crew,
         orchestrator: body.orchestrator,
         context_files: body.context_files,
+        context_creation: Default::default(),
         upsert_artifacts: Vec::new(),
         trusted_artifact_origin: None,
         discard_candidate: false,
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {
-        if !allow_missing_context && let Some(candidates) = params.context_files.as_deref() {
-            runtime.ensure_context_selectors_exist(candidates)?;
+        let mut params = params;
+        if let Some(candidates) = params.context_files.as_deref() {
+            params.context_creation = if allow_missing_context {
+                runtime.authorize_missing_context(candidates)?
+            } else {
+                runtime.ensure_context_selectors_exist_for_update(&id, candidates)?
+            };
         }
         if force {
             runtime.force_update_task_with_identity(&id, params, None, model)

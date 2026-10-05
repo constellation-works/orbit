@@ -112,6 +112,7 @@ impl TaskRecordService<'_> {
                     job_run_machine: params.job_run_machine.clone(),
                     crew: params.crew.clone(),
                     orchestrator: params.orchestrator.clone(),
+                    context_creation: params.context_creation.clone(),
                 },
             )?;
         }

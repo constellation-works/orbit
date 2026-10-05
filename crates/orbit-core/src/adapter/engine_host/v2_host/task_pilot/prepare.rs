@@ -12,7 +12,10 @@ use super::input::{action_failed, bounded_usize, requested_workspace_root, strin
 use super::persist::no_target_assessment_marker;
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
-use super::{VALIDATION_TOOL_WARNINGS, requested_base_branch};
+use super::{
+    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, VALIDATION_TOOL_WARNINGS,
+    requested_base_branch,
+};
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
 const HARD_MAX_PARTITION_SIZE: usize = 5;
@@ -210,6 +213,11 @@ pub(in super::super) fn prepare(
             .get_task(task_id)
             .map_err(|error| action_failed(action, error.to_string()))?;
         snapshot[VALIDATION_TOOL_WARNINGS] = json!(lane.validation_warnings(&task));
+        let creation = runtime
+            .context_creation_state(&task)
+            .map_err(|error| action_failed(action, error.to_string()))?;
+        snapshot[CONTEXT_CREATION_SELECTORS] = json!(creation.selectors());
+        snapshot[CONTEXT_CREATION_IDENTITY] = json!(creation.identity());
 
         let Some(source) = &source else {
             continue;

@@ -407,10 +407,14 @@ fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears() {
 }
 
 /// The existence guard is an operator-surface default, not a wall: work that
-/// creates a file records its selector with the explicit escape.
+/// creates a file records its selector with the explicit escape, and that
+/// declaration is durable creation intent for exactly the selectors it named.
+/// Re-sending a declared target needs no new escape; a typo, a revoked
+/// target, a traversal and a wrong-kind target are refused.
 #[test]
-fn allow_missing_context_accepts_a_not_yet_existing_selector() {
+fn allow_missing_context_records_durable_exact_creation_intent() {
     let workspace = TestWorkspace::new();
+    fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
 
     let added = workspace.task_json(&[
         "task",
@@ -420,25 +424,93 @@ fn allow_missing_context_accepts_a_not_yet_existing_selector() {
         "--complexity",
         "low",
         "--context",
-        "file:src/future.rs",
-        "--allow-missing-context",
-        "--json",
-    ]);
-    assert_eq!(added["context_files"], json!(["file:src/future.rs"]));
-
-    let id = added["id"].as_str().expect("task id");
-    let updated = workspace.task_json(&[
-        "task",
-        "update",
-        id,
-        "--context",
-        "file:src/other_future.rs",
+        "file:existing.rs,file:src/future.rs",
         "--allow-missing-context",
         "--json",
     ]);
     assert_eq!(
-        updated["context_files"],
-        json!(["file:src/other_future.rs"])
+        added["context_files"],
+        json!(["file:existing.rs", "file:src/future.rs"])
+    );
+    let id = added["id"].as_str().expect("task id").to_string();
+    assert_eq!(workspace.creation_grant(&id), json!(["file:src/future.rs"]));
+
+    // An ordinary write keeps the declared target without the escape.
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--context",
+            "file:src/future.rs,file:existing.rs",
+        ],
+        "strict re-send",
+    );
+    assert_eq!(workspace.creation_grant(&id), json!(["file:src/future.rs"]));
+    let typo = workspace.run_raw(&[
+        "task",
+        "update",
+        &id,
+        "--context",
+        "file:existing.rs,file:src/futur.rs",
+    ]);
+    assert!(
+        !typo.status.success(),
+        "an undeclared missing selector stays refused"
+    );
+
+    // The agent tool surface: dropping the target revokes it, and a revoked
+    // target is not accepted back without a new declaration.
+    let revoke =
+        json!({"id": id, "model": "codex", "context_files": ["file:existing.rs"]}).to_string();
+    workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &revoke]);
+    assert_eq!(workspace.creation_grant(&id), json!([]));
+    let revived = json!({
+        "id": id, "model": "codex",
+        "context_files": ["file:existing.rs", "file:src/future.rs"],
+    })
+    .to_string();
+    let refused = workspace.run_raw(&["tool", "run", "orbit.task.update", "--input", &revived]);
+    assert!(!refused.status.success(), "a revoked grant must not revive");
+
+    let reauthorize = json!({
+        "id": id, "model": "codex",
+        "context_files": ["file:existing.rs", "file:src/future.rs"],
+        "allow_missing_context": true,
+    })
+    .to_string();
+    workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &reauthorize]);
+    assert_eq!(workspace.creation_grant(&id), json!(["file:src/future.rs"]));
+
+    for (selector, case) in [
+        ("file:../outside.rs", "traversal"),
+        ("dir:existing.rs", "an existing target of the other kind"),
+    ] {
+        let refused = workspace.run_raw(&[
+            "task",
+            "update",
+            &id,
+            "--context",
+            selector,
+            "--allow-missing-context",
+        ]);
+        assert!(!refused.status.success(), "{case} must stay refused");
+    }
+    assert_eq!(workspace.creation_grant(&id), json!(["file:src/future.rs"]));
+
+    let tool_add = json!({
+        "title": "Tool-declared module",
+        "description": "orbit.task.add records the same intent",
+        "complexity": "low",
+        "context_files": ["file:src/tool_future.rs"],
+        "allow_missing_context": true,
+    })
+    .to_string();
+    let added = workspace.task_json(&["tool", "run", "orbit.task.add", "--input", &tool_add]);
+    let tool_id = added["id"].as_str().expect("tool task id");
+    assert_eq!(
+        workspace.creation_grant(tool_id),
+        json!(["file:src/tool_future.rs"])
     );
 }
 
@@ -910,6 +982,23 @@ impl TestWorkspace {
             "to review",
         );
         self.run(&["task", "update", id, "--status", "done"], "to done");
+    }
+
+    /// Selectors the task's latest creation grant names, `null` for none.
+    fn creation_grant(&self, id: &str) -> Value {
+        let task = self.task_json(&["task", "show", id, "--json"]);
+        task["history"]
+            .as_array()
+            .expect("task history")
+            .iter()
+            .rev()
+            .find(|entry| entry["event"] == json!("context_creation_authorized"))
+            .map(|entry| {
+                let note: Value = serde_json::from_str(entry["note"].as_str().expect("grant note"))
+                    .expect("grant JSON");
+                note["selectors"].clone()
+            })
+            .unwrap_or(Value::Null)
     }
 
     fn task_json(&self, args: &[&str]) -> Value {

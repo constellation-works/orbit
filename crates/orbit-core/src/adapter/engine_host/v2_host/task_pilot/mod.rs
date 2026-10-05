@@ -9,6 +9,12 @@
 //! this boundary promotes only a current, warning-free repair from `proposed`
 //! to `backlog`. An `--approve-proposed` drain requests the same promotion
 //! under its own verified authority, through the ordinary approve transition.
+//!
+//! A selector that does not exist at the pinned source is accepted only when
+//! the task's durable creation grant names it exactly. Preparation records
+//! the grant's identity, apply refuses a task whose grant changed since, and
+//! the atomic write compares it again under the task lock. The pilot cannot
+//! drop a granted target: apply keeps any it omitted.
 
 mod apply;
 mod assessment;
@@ -23,7 +29,9 @@ mod validation_tools;
 
 pub(super) use apply::apply;
 pub(super) use assessment::member_ready;
-use assessment::{validate_after_selectors, validate_recommendations};
+use assessment::{
+    unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
+};
 pub(super) use drain_promotion::{
     approval_disqualification, approved_by_drain, held_classification,
 };
@@ -41,6 +49,17 @@ pub(crate) use source::requested_base_branch;
 /// both a prepared task snapshot and the assessment apply reports for it
 /// [ORB-11980].
 pub(super) const VALIDATION_TOOL_WARNINGS: &str = "validation_tool_warnings";
+
+/// Prepared-snapshot fields carrying the task's durable context creation
+/// grant: the exact selectors it authorizes and the identity of the record.
+pub(super) const CONTEXT_CREATION_SELECTORS: &str = "context_creation_selectors";
+pub(super) const CONTEXT_CREATION_IDENTITY: &str = "context_creation_identity";
+
+/// Assessment fields apply attaches: granted creation targets the pilot
+/// omitted and apply kept, and dropped missing selectors no grant covers,
+/// each naming the operator reauthorization path.
+pub(super) const CONTEXT_CREATION_RETAINED: &str = "context_creation_retained";
+pub(super) const CONTEXT_REAUTHORIZATION_REQUIRED: &str = "context_reauthorization_required";
 
 #[cfg(test)]
 mod tests;

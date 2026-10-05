@@ -16,7 +16,10 @@ use crate::repository::task::v2_bundle::TaskBundleV2;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock, with_shared_file_lock};
-use orbit_types::task::{TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskEventRowV2};
+use orbit_types::task::{
+    CONTEXT_CREATION_AUTHORIZED_EVENT, ContextCreationState, TASK_ARTIFACT_SCHEMA_VERSION,
+    TASK_EVENTS_FILE_NAME, TaskEventRowV2,
+};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -174,6 +177,7 @@ impl TaskCommitBoundary {
                     &params.actor,
                     effects,
                 )?;
+                self.append_creation_grant_to_intent(&mut intent, &bundle, &params.actor)?;
                 let intent_json = serde_json::to_string(&intent)
                     .map_err(|error| OrbitError::Store(error.to_string()))?;
                 let journal_id = unique_journal_id();
@@ -291,6 +295,53 @@ impl TaskCommitBoundary {
             envelope,
             evidence: Default::default(),
         })
+    }
+
+    /// Keep an existing grant bound to the task revision this commit writes.
+    /// Claim handoff may also replace the context scope; only still-in-scope
+    /// selectors survive that write.
+    fn append_creation_grant_to_intent(
+        &self,
+        intent: &mut TaskCommitIntent,
+        bundle: &TaskBundleV2,
+        actor: &str,
+    ) -> Result<(), OrbitError> {
+        let state = ContextCreationState::resolve(
+            &bundle.envelope.id,
+            &bundle.envelope.context_files,
+            bundle.envelope.updated_at,
+            bundle
+                .events
+                .iter()
+                .map(|event| (event.event_type.as_str(), event.note.as_deref())),
+        );
+        let Some(mut grant) = state.next_grant(
+            &bundle.envelope.id,
+            &intent.envelope.context_files,
+            &[],
+            intent.envelope.updated_at,
+        )?
+        else {
+            return Ok(());
+        };
+
+        let mut events = bundle.events.clone();
+        events.extend(intent.events.iter().cloned());
+        let event_id = format!("EV-{:04}", next_sequence(&events, "EV-"));
+        if grant.generation.is_none() {
+            grant.generation = Some(event_id.clone());
+        }
+        intent.events.push(TaskEventRowV2 {
+            schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+            event_id,
+            at: intent.envelope.updated_at,
+            by: actor.to_string(),
+            event_type: CONTEXT_CREATION_AUTHORIZED_EVENT.to_string(),
+            note: Some(grant.to_note()),
+            from_status: None,
+            to_status: None,
+        });
+        Ok(())
     }
 
     /// Roll a committed decision onto the bundle. Idempotent: the recorded

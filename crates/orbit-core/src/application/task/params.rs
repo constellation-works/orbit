@@ -1,4 +1,6 @@
 use orbit_types::identity::OrbitId;
+
+use super::paths::ContextCreationAuthorization;
 use orbit_types::task::{
     ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskPriority,
     TaskRelation, TaskStatus, TaskType,
@@ -37,6 +39,8 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) append_history: Vec<TaskHistoryEntry>,
     pub(crate) append_comments: Vec<TaskComment>,
     pub(crate) upsert_artifacts: Vec<TaskArtifact>,
+    /// Canonical selectors of `context_files` newly authorized for creation.
+    pub(crate) context_creation: Vec<String>,
     /// [ORB-11305] Forwarded to the store as a compare-and-set on the task's
     /// persisted status. Setting it does not itself constitute a history
     /// change — it only constrains one.
@@ -109,6 +113,11 @@ pub struct TaskAddParams {
     pub crew: Option<String>,
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
+    /// Creation intent an operator surface's selector screening established
+    /// for `context_files` ([`OrbitRuntime::authorize_missing_context`]).
+    ///
+    /// [`OrbitRuntime::authorize_missing_context`]: crate::OrbitRuntime::authorize_missing_context
+    pub context_creation: ContextCreationAuthorization,
 }
 
 impl Default for TaskAddParams {
@@ -134,6 +143,7 @@ impl Default for TaskAddParams {
             source_task_id: None,
             crew: None,
             orchestrator: None,
+            context_creation: ContextCreationAuthorization::default(),
         }
     }
 }
@@ -167,6 +177,9 @@ pub struct TaskUpdateParams {
     pub crew: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
     pub context_files: Option<Vec<String>>,
+    /// Creation intent an operator surface's selector screening established
+    /// for the replacement `context_files`. Ignored without `context_files`.
+    pub context_creation: ContextCreationAuthorization,
     pub upsert_artifacts: Vec<TaskArtifact>,
     /// Discard the candidate the task's last failed run preserved, so its
     /// next run implements fresh instead of resuming it [ORB-13985].
@@ -198,6 +211,7 @@ impl From<TaskUpdateParams> for TaskRecordUpdateParams {
             crew: p.crew,
             orchestrator: p.orchestrator,
             context_files: p.context_files,
+            context_creation: p.context_creation.authorize,
             upsert_artifacts: p.upsert_artifacts,
             ..Default::default()
         }

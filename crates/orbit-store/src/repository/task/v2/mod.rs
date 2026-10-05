@@ -3,6 +3,7 @@
 //! The `updates` module owns document and history mutations.
 //! The `artifacts` module owns task artifact reads, manifests, and upserts.
 //! The `sidecars` module owns comments and history row reads.
+//! The `creation_grant` module carries a task's context creation grant through envelope revisions.
 //! The `index` module owns generated index reads, rebuilds, bundle translation, and task locking helpers.
 //! The `repair_gate` module bounds repeated automatic index rebuilds that keep failing over unchanged bundles.
 //! The `envelope_cache` module owns freshness-stamped reuse of parsed envelopes.
@@ -42,6 +43,7 @@ use crate::repository::task::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDo
 mod acceptance;
 mod artifact_paths;
 mod artifacts;
+mod creation_grant;
 mod crud;
 mod desktop;
 mod envelope_cache;
@@ -61,6 +63,7 @@ use acceptance::{parse_acceptance, render_acceptance};
 pub(crate) use artifact_paths::normalize_v2_artifact_path;
 use artifact_paths::resolve_v2_artifact_file_path;
 pub(crate) use artifacts::review_report_history;
+use creation_grant::{append_creation_grant, creation_state, reject_forged_grant};
 use envelope_cache::EnvelopeCache;
 use relations::{relations_from_create_params, replace_relations};
 use sequencing::{next_event_id, next_sequence};
