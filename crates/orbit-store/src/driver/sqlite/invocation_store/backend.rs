@@ -4,9 +4,10 @@
 impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connection::Store {
     fn insert_invocation_trace_record(
         &self,
+        workspace_id: &str,
         params: &crate::contracts::InvocationInsertParams,
     ) -> Result<(), orbit_common::OrbitError> {
-        Self::insert_invocation_trace_record(self, params)
+        Self::insert_invocation_trace_record(self, workspace_id, params)
     }
 
     fn list_invocation_records(

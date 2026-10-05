@@ -1077,7 +1077,7 @@ After [ORB-10461], every detached pipeline worker appends stdout and stderr to t
 
 ### 8.7 Invocation metrics
 
-The dashboard metrics endpoints read knowledge usage from job-run state (`/api/metrics/knowledge`) and agent, tool, task, and invocation usage from the SQLite invocation store (`/api/metrics/activity`, `/api/metrics/tools`, `/api/metrics/task/:id`, `/api/metrics/invocations`). They do not scrape `.orbit/state/audit/v2_loop/` or diagnostics JSONL.
+The dashboard metrics endpoints read knowledge usage from job-run state (`/api/metrics/knowledge`) and agent, tool, task, and invocation usage from the SQLite invocation store (`/api/metrics/activity`, `/api/metrics/tools`, `/api/metrics/task/:id`, `/api/metrics/invocations`). They do not scrape `.orbit/state/audit/v2_loop/` or diagnostics JSONL. Each invocation row records the workspace whose run produced it, taken from the recording runtime's job-run partition rather than from the ingested payload. Run ids are only unique within a workspace, so listings filtered by `job_run_id` and the reliability counts match on that workspace; legacy rows the store could not attribute to exactly one workspace match neither.
 
 V2 jobs persist invocation traces explicitly after [T20260426-0526]. `DispatchOutcome` carries optional trace data; the executor attaches run and step IDs; orbit-core stores canonical agent/model names plus task IDs from rendered input and refreshes the token scoreboard.
 

@@ -150,6 +150,9 @@ fn keyed_run_in_window_conn(
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
+    fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
     fn local_pull_for_run(
         &self,
         run_id: &str,

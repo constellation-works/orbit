@@ -330,7 +330,8 @@ impl OrbitRuntime {
                 "reliability window `since` must be earlier than `until`".to_string(),
             ));
         }
-        let workspace_id = self.workspace_id()?;
+        // The partition `job_runs` and `invocations` are recorded under.
+        let workspace_id = self.stores().jobs().workspace_id().to_string();
         let store = self.sqlite_store()?;
 
         let facts = store.list_job_run_outcome_facts(
