@@ -1,5 +1,5 @@
-//! Commit verifier boundary contracts: refusal of unknown fields for no-diff
-//! and already-landed evidence, preserving deny_unknown_fields [ORB-13881].
+//! Task commit boundary contracts: staged rename delivery and refusal of
+//! unknown fields for no-diff and already-landed evidence [ORB-13881].
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -156,20 +156,26 @@ fn fixture_task() -> Task {
     }
 }
 
+fn git_output(dir: &Path, args: &[&str]) -> String {
+    let mut command = std::process::Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git execution");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
 fn init_git_repo(dir: &Path) {
-    let git = |args: &[&str]| {
-        let output = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git execution");
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
+    let git = |args: &[&str]| git_output(dir, args);
     git(&["init"]);
     git(&["config", "user.name", "Test User"]);
     git(&["config", "user.email", "test@example.invalid"]);
@@ -182,13 +188,7 @@ fn init_git_repo(dir: &Path) {
 }
 
 fn git_head(dir: &Path) -> String {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(dir)
-        .output()
-        .expect("git rev-parse HEAD");
-    assert!(output.status.success());
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    git_output(dir, &["rev-parse", "HEAD"])
 }
 
 fn action(host: &VerifierHost, input: &Value) -> Result<Value, OrbitError> {
@@ -215,6 +215,51 @@ fn commit_input(repo: &Path, head: &str) -> Value {
 
 fn artifact(path: &str, content: Value) -> TaskArtifact {
     TaskArtifact::from_text(path, serde_json::to_string_pretty(&content).unwrap())
+}
+
+#[test]
+fn per_task_commit_delivers_both_sides_of_a_staged_rename() {
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path();
+    init_git_repo(repo);
+    git_output(repo, &["config", "diff.renames", "true"]);
+    git_output(repo, &["mv", "README.md", "renamed.md"]);
+    let mut task = fixture_task();
+    task.context_files.push("file:renamed.md".to_string());
+    let host = VerifierHost::new(repo, task);
+
+    let result = action(
+        &host,
+        &json!({
+            "scope": "per_task",
+            "job_run_id": RUN_ID,
+            "workspace_path": repo,
+            "completed_task_ids": [TASK_ID],
+        }),
+    )
+    .expect("deliver staged rename");
+
+    assert_eq!(result["committed_task_ids"], json!([TASK_ID]));
+    assert_eq!(
+        git_output(
+            repo,
+            &[
+                "diff",
+                "--no-renames",
+                "--name-status",
+                "HEAD~1",
+                "HEAD",
+                "--"
+            ],
+        ),
+        "D\tREADME.md\nA\trenamed.md",
+        "ORB-14097: the task commit must include the rename source deletion and destination addition"
+    );
+    assert_eq!(git_output(repo, &["show", "HEAD:renamed.md"]), "base");
+    assert!(
+        git_output(repo, &["status", "--porcelain", "--untracked-files=all"]).is_empty(),
+        "ORB-14097: no staged deletion may leak into a later task's commit"
+    );
 }
 
 #[test]

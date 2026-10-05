@@ -72,8 +72,29 @@ pub(super) fn stage_paths(workspace_path: &Path, files: &[String]) -> Result<(),
         return Ok(());
     }
 
+    // Already-staged deletions (including rename sources) have no index or
+    // worktree entry, and `git add` refuses their pathspecs. Keep them in the
+    // caller's commit paths, but only stage paths Git can still add or remove.
+    let mut list_args = vec![
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+    ];
+    let literal_files = files
+        .iter()
+        .map(|path| literal_pathspec(path))
+        .collect::<Vec<_>>();
+    list_args.extend(literal_files.iter().map(String::as_str));
+    let stageable = git_output_paths(workspace_path, &list_args)?;
+    if stageable.is_empty() {
+        return Ok(());
+    }
+
     let mut args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
-    args.extend(files.iter().map(|path| literal_pathspec(path)));
+    args.extend(stageable.iter().map(|path| literal_pathspec(path)));
     git_success_dynamic(workspace_path, &args)
 }
 
