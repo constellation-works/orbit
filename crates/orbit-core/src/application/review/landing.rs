@@ -69,11 +69,7 @@ pub(crate) fn record_review_landing(
         REVIEW_AUDIT,
         Some(&request.run_id),
         Some("system"),
-        if landing.covered {
-            AuditEventStatus::Success
-        } else {
-            AuditEventStatus::Failure
-        },
+        AuditEventStatus::Success,
         json!({
             "phase": "landing",
             "attempt_id": certificate.attempt_id,

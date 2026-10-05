@@ -87,7 +87,7 @@ pub(crate) fn review_gate_settle(
     let (status, decision, error) = match &outcome {
         Ok(Settled::Passed(value)) => (AuditEventStatus::Success, value.clone(), None),
         Ok(Settled::Blocked { certificate }) => (
-            AuditEventStatus::Failure,
+            AuditEventStatus::Success,
             json!({
                 "verdict": certificate.verdict.as_str(),
                 "escalation": certificate.escalation,
