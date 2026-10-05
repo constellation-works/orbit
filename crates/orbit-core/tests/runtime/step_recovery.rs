@@ -96,6 +96,7 @@ struct Case<'a> {
     producer: &'a str,
     response: &'a str,
     retry_succeeds: bool,
+    read_failure: bool,
     claimed: bool,
     /// Runs on the fresh worktree before the job starts.
     prepare: fn(&Path),
@@ -108,6 +109,7 @@ impl Default for Case<'_> {
             producer: "",
             response: FRAME_ONLY,
             retry_succeeds: true,
+            read_failure: false,
             claimed: false,
             prepare: |_| {},
         }
@@ -161,6 +163,7 @@ struct RecoveryHost<'a> {
     runtime: &'a OrbitRuntime,
     provider: PathBuf,
     retry_succeeds: bool,
+    read_failure: bool,
     claimed: bool,
     deliveries: AtomicUsize,
     task_writes: AtomicUsize,
@@ -278,6 +281,9 @@ impl RuntimeHost for RecoveryHost<'_> {
         &self,
         slot: &StepRecoveryDecisionSlot,
     ) -> Result<StepRecoveryDecisionRead, OrbitError> {
+        if self.read_failure {
+            return Err(OrbitError::Io("injected decision read failure".to_string()));
+        }
         self.runtime.read_step_recovery_decision(slot)
     }
 
@@ -401,6 +407,7 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
         runtime: &fixture.runtime,
         provider: provider(&dir, case),
         retry_succeeds: case.retry_succeeds,
+        read_failure: case.read_failure,
         claimed: case.claimed,
         deliveries: AtomicUsize::new(0),
         task_writes: AtomicUsize::new(0),
@@ -795,42 +802,61 @@ fn read_write_and_allocation_failures_are_never_a_verified_recovery() {
     assert_eq!(unsafe_slot.deliveries, 1);
     assert!(unsafe_slot.failed_with_original());
 
-    // Permission bits do not bind a privileged user; the remaining cases
-    // need them to fail the write or the read.
-    let probe = fixture.root.join("probe");
-    std::fs::write(&probe, "x").unwrap();
-    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o000)).unwrap();
-    if std::fs::read(&probe).is_ok() {
-        return;
-    }
-
-    // A write the leaf could not make leaves nothing to verify.
+    // The leaf cannot create a child under the allocated file path. This is
+    // a deterministic failed write even when tests run with elevated access.
     let unwritable = run(
         &fixture,
         &Case {
-            name: "unwritable",
-            producer: r#"chmod 0555 "$(dirname "$path")"; bound not_recovered "x" > "$path" 2>/dev/null; chmod 0755 "$(dirname "$path")""#,
+            name: "write_failure",
+            producer: r#"bound not_recovered "x" > "$path/nope" 2>/dev/null"#,
             ..Case::default()
         },
     );
     assert_eq!(unwritable.decision().status, "absent");
     assert_eq!(unwritable.decision().verdict, None);
+    assert!(unwritable.decision().retry_admitted);
 
-    // A decision the host cannot read authorizes nothing.
+    // Inject a host read error after the producer has written a valid file.
+    // This exercises fail-closed gate behavior without relying on permissions
+    // that privileged test runners can bypass.
     let unreadable = run(
         &fixture,
         &Case {
-            name: "unreadable",
-            producer: r#"bound retry "x" > "$path"; chmod 0000 "$path""#,
+            name: "read_failure",
+            producer: r#"bound retry "x" > "$path""#,
+            read_failure: true,
             ..Case::default()
         },
     );
     assert_refused(
         &unreadable,
-        "unreadable",
+        "read_failure",
         "unavailable",
-        "Permission denied",
+        "injected decision read failure",
     );
+
+    // Where file permissions are enforced for this process, also exercise the
+    // composed reader's real I/O failure path. Root runners still execute the
+    // injected host-read case above instead of silently returning early.
+    let probe = fixture.root.join("probe");
+    std::fs::write(&probe, "x").unwrap();
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&probe).is_err() {
+        let unreadable_file = run(
+            &fixture,
+            &Case {
+                name: "unreadable_file",
+                producer: r#"bound retry "x" > "$path"; chmod 0000 "$path""#,
+                ..Case::default()
+            },
+        );
+        assert_refused(
+            &unreadable_file,
+            "unreadable_file",
+            "unavailable",
+            "Permission denied",
+        );
+    }
 }
 
 #[test]
