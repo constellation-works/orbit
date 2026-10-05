@@ -1,7 +1,7 @@
 ---
 type: glossary
 summary: Vocabulary for the routines scheduler feature.
-last_validated: 2026-09-12
+last_validated: 2026-10-04
 tags: [routines, scheduler]
 ---
 
@@ -17,7 +17,7 @@ activity-job feature (activity, job, run, catalog) are defined in
 | Clock | The per-user OS unit (launchd/systemd) that invokes the tick on a whole-minute cadence; host-local, configured and controlled through `orbit clock`. See [2_design.md](../2_design.md). |
 | Fire | One scheduled dispatch of a routine's target; an ordinary run tagged `origin: routine/<name>`. See [2_design.md §3](../2_design.md). |
 | Fire intent | The idempotency record (routine name + scheduled slot) written before dispatch so a slot never double-fires. See [2_design.md §3](../2_design.md). |
-| Host identity | The `host_id` in `~/.orbit/host.toml`. It names run ownership and display only; it takes no part in deciding what a host evaluates. See [2_design.md §2](../2_design.md). |
+| Host identity | The stable `machine.id`, display `machine.name`, and immutable `machine.task_prefix` in the global `~/.orbit/config.toml`; registered workspaces identify their owning machine by `machine.id`. See [host-registry glossary](../../host-registry/references/glossary.md). |
 | Local pause | A host-local, SQLite-persisted suppression of one routine (`orbit routine pause`); never versioned. See [2_design.md §4](../2_design.md). |
 | Missed-run policy | Per-routine handling of slots that elapsed while the host was down: `catch_up_once` or `skip`. See [2_design.md §1](../2_design.md). |
 | Owner checkout | A registered checkout whose logical workspace this machine owns (host-registry). The unit of scheduling: each one is an independent schedule against its own store. See [2_design.md §2](../2_design.md). |

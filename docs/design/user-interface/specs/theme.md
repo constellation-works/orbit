@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canon Refined Theme"
 tags: ["user-interface"]
-last_validated: 2026-09-12
+last_validated: 2026-10-04
 ---
 
 # Spec: Canon Refined Theme
@@ -55,7 +55,7 @@ Status colours are lighter than the Tailwind 500 steps they replaced so a 7px do
 
 ### Expandable Rows
 Data tables use expandable rows (`.row.expanded`). When expanded:
-- The row background shifts to an accent wash (`rgba(110, 159, 255, 0.05)`).
+- The row background shifts to an accent wash (`rgba(138, 179, 255, 0.1)`).
 - The expanded detail view uses `#050505` with a 2-column layout (main content + side metadata).
 - Collapsible field carets rotate `-90deg` for clear state indication.
 
