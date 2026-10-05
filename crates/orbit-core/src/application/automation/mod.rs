@@ -14,6 +14,7 @@ pub(crate) mod incidents;
 mod inspect;
 pub(crate) mod members;
 mod ownership;
+mod pins;
 pub(crate) mod preparation;
 mod provider;
 mod recovery;
@@ -31,6 +32,7 @@ pub use inspect::{
     inspect_auto_task, inspect_routine, unadmittable_delivery_definitions,
     unresolvable_delivery_branches, wedged_delivery_consumers,
 };
+pub use pins::{AttemptPinCleanup, pin_attempt_source, release_unreferenced_attempt_pins};
 pub use recovery::recover_auto_task;
 pub use reset::{ConsumerTeardown, reset_auto_task};
 pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};

@@ -53,6 +53,10 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub fix_orphan_task_stores: bool,
 
+    /// Delete this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared pins, other roots' and workspaces' pins, in-use pins and unrecognized refs are kept and reported. Refuses while a routine sweep runs.
+    #[arg(long)]
+    pub fix_automation_pins: bool,
+
     /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
     #[arg(long)]
     pub confirm: bool,
@@ -170,6 +174,24 @@ impl Execute for DoctorCommand {
             results.push(WorkspaceDoctorResult {
                 check_name: "fix-orphan-task-stores".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
+                message,
+                remediation: None,
+            });
+        }
+        if self.fix_automation_pins {
+            let cleanup =
+                orbit_core::application::automation::release_unreferenced_attempt_pins(runtime)?;
+            let message = automation_pin_cleanup_message(&cleanup);
+            eprintln!("{message}");
+            results.push(WorkspaceDoctorResult {
+                check_name: "fix-automation-pins".to_string(),
+                status: if cleanup.kept.is_empty()
+                    && (cleanup.refused.is_none() || cleanup.retained_unproven == 0)
+                {
+                    WorkspaceDoctorStatus::Ok
+                } else {
+                    WorkspaceDoctorStatus::Warning
+                },
                 message,
                 remediation: None,
             });
@@ -754,6 +776,48 @@ fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String
          ({} task bundle(s)).",
         removed.empty_partitions, removed.populated_partitions, removed.task_bundles
     )
+}
+
+/// Render `--fix-automation-pins`'s outcome: what it reclaimed, why the rest
+/// of its own namespace stayed, and every pin it retained without proof of
+/// ownership.
+fn automation_pin_cleanup_message(
+    cleanup: &orbit_core::application::automation::AttemptPinCleanup,
+) -> String {
+    let mut message = match &cleanup.refused {
+        Some(reason) => format!(
+            "Reclaimed no automation attempt pins: ownership of {} is not proved ({reason}); \
+             retained {} owned pin(s).",
+            cleanup.namespace, cleanup.retained_unproven,
+        ),
+        None => format!(
+            "Reclaimed {} unreferenced automation attempt pin(s) under {}; kept {} in flight, \
+             {} live-run, {} assessed.",
+            cleanup.released.len(),
+            cleanup.namespace,
+            cleanup.retained_active,
+            cleanup.retained_live_run,
+            cleanup.retained_assessed,
+        ),
+    };
+    message.push_str(&format!(
+        " Retained {} legacy shared pin(s) under refs/orbit/automation/ with no recorded owner \
+         and {} pin namespace(s) owned by other Orbit roots or workspaces.",
+        cleanup.retained_legacy, cleanup.foreign_owners,
+    ));
+    if !cleanup.kept.is_empty() {
+        message.push_str(&format!(
+            " Could not delete (moved or locked): {}.",
+            cleanup.kept.join(", ")
+        ));
+    }
+    if !cleanup.unrecognized.is_empty() {
+        message.push_str(&format!(
+            " Left unrecognized refs untouched: {}.",
+            cleanup.unrecognized.join(", ")
+        ));
+    }
+    message
 }
 
 fn human_detail(row: &WorkspaceDoctorResult) -> String {

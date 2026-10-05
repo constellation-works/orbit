@@ -1,22 +1,30 @@
-//! Duplicate pilot preparation is a successful skip, and state routines wait
-//! for active holds to end. Fixtures run in isolated children with real stores.
+//! Duplicate pilot preparation is a successful skip, state routines wait for
+//! active holds to end, and the source pins their attempts take are released
+//! once nothing can need them, by the one Orbit root and workspace that owns
+//! them. Fixtures run in isolated children with real stores and a real
+//! repository.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
-use orbit_core::application::automation::evaluate_routine;
+use orbit_automation::delivery::digest;
+use orbit_core::application::automation::{
+    consumer_key, evaluate_routine, pin_attempt_source, release_unreferenced_attempt_pins,
+};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, Task, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunStoreBackend;
 use orbit_tools::ToolContext;
+use orbit_types::workflow::automation::AutomationState;
+use orbit_types::workflow::automation::members::{MemberAttempt, StateTriggerKind};
 use orbit_types::workflow::{JobRunState, PipelineState, RoutineDefinition};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 struct Workspace {
-    _root: TempDir,
+    root: TempDir,
     runtime: OrbitRuntime,
     repo: PathBuf,
     jobs: Arc<dyn JobRunStoreBackend>,
@@ -35,12 +43,7 @@ impl Workspace {
         )
         .unwrap();
         let git = |args: &[&str]| {
-            let mut command = std::process::Command::new("git");
-            orbit_common::test_env::clear_inherited_authority(|key| {
-                command.env_remove(key);
-            });
-            let output = command.args(args).current_dir(&repo).output().unwrap();
-            assert!(output.status.success(), "git {args:?}: {output:?}");
+            git_in(&repo, args, None);
         };
         git(&["init", "-b", "main"]);
         git(&["config", "user.name", "Orbit Test"]);
@@ -67,19 +70,187 @@ impl Workspace {
             )
             .unwrap();
         }
-        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
-            .unwrap()
-            .with_automation_machine_identity(Some("fixture-machine".into()));
+        let runtime = runtime_at(&global, &repo.join(".orbit"));
         let jobs = orbit_store::compose::workspace_job_run_store(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
         Self {
-            _root: root,
+            root,
             runtime,
             repo,
             jobs,
         }
+    }
+
+    /// Another Orbit root over this checkout with the same machine identity,
+    /// as a copied or moved root would have.
+    fn other_root(&self, name: &str) -> OrbitRuntime {
+        let global = self.root.path().join(name).join(".orbit");
+        std::fs::create_dir_all(&global).unwrap();
+        runtime_at(&global, &self.repo.join(".orbit"))
+    }
+
+    /// A second workspace of this Orbit root in a linked worktree, sharing
+    /// this repository's Git common directory.
+    fn linked_workspace(&self) -> OrbitRuntime {
+        let checkout = self.root.path().join("linked");
+        self.git(&[
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            checkout.to_str().unwrap(),
+        ]);
+        std::fs::create_dir_all(checkout.join(".orbit")).unwrap();
+        std::fs::copy(
+            self.repo.join(".orbit/config.toml"),
+            checkout.join(".orbit/config.toml"),
+        )
+        .unwrap();
+        runtime_at(&self.runtime.global_root(), &checkout.join(".orbit"))
+    }
+
+    /// Runs an attempt carries resolve their catalog definition when read.
+    fn install_pilot_job(&self) {
+        let jobs = self.runtime.global_root().join("resources/jobs");
+        std::fs::create_dir_all(&jobs).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/jobs/task_pilot_pipeline.yaml"),
+            jobs.join("task_pilot_pipeline.yaml"),
+        )
+        .unwrap();
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        git_in(&self.repo, args, None)
+    }
+
+    /// Every attempt and batch pin: owned, legacy and delivery.
+    fn pins(&self) -> Vec<String> {
+        self.git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/orbit/pins/",
+            "refs/orbit/automation/",
+        ])
+        .lines()
+        .map(str::to_owned)
+        .collect()
+    }
+
+    fn object(&self, refname: &str) -> String {
+        self.git(&["rev-parse", refname]).trim().to_string()
+    }
+
+    fn pin(&self, refname: &str) {
+        let head = self.git(&["rev-parse", "HEAD"]);
+        self.git(&["update-ref", refname, head.trim()]);
+    }
+
+    fn routine_state(&self) -> AutomationState {
+        let consumer = consumer_key(&self.runtime, "routine", "fixture-pilot").unwrap();
+        self.runtime
+            .automation_store()
+            .unwrap()
+            .automation_state(&consumer)
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Claim and acknowledge an attempt for `task`'s pending member through
+    /// the store's own transitions, pinning its source the way admission
+    /// does, with the run's input carrying the claim.
+    fn admitted(&self, task: &Task, max_attempts: u32) -> MemberAttempt {
+        let store = self.runtime.automation_store().unwrap();
+        let state = self.routine_state();
+        let member = state.members.as_ref().unwrap().pending[&task.id].clone();
+        let id = digest(format!("attempt:{}", task.id).as_bytes());
+        let now = Utc::now();
+        let mut attempt = MemberAttempt {
+            consumer: state.consumer.clone(),
+            kind: StateTriggerKind::PreparationEligible,
+            action_key: format!("automation:{id}:1"),
+            id,
+            member: member.clone(),
+            members: vec![member],
+            attempt: 1,
+            max_attempts,
+            deadline: now + Duration::minutes(90),
+            retry_after: now,
+            action_id: None,
+            exhausted: false,
+        };
+        let mut claimed = state.clone();
+        claimed.generation += 1;
+        claimed.members.as_mut().unwrap().active = Some(attempt.clone());
+        assert!(store.automation_commit(&state, &claimed, None).unwrap());
+
+        let run = self
+            .jobs
+            .insert_automation_job_run(
+                "task_pilot_pipeline",
+                json!({"state_automation": attempt}),
+                &attempt.action_key,
+            )
+            .unwrap();
+        attempt.action_id = Some(run.run_id);
+        let mut acknowledged = claimed.clone();
+        acknowledged.generation += 1;
+        acknowledged.members.as_mut().unwrap().active = Some(attempt.clone());
+        assert!(
+            store
+                .automation_commit(&claimed, &acknowledged, None)
+                .unwrap()
+        );
+        pin_attempt_source(&self.runtime, &attempt).unwrap();
+        attempt
+    }
+
+    /// Settle `attempt` with every member applied, as a later pass does.
+    fn settle(&self, attempt: &MemberAttempt, at: chrono::DateTime<Utc>) {
+        self.applied(attempt);
+        evaluate_routine(&self.runtime, &pilot_routine(), false, at).unwrap();
+        let run_id = attempt.action_id.as_deref().unwrap();
+        self.jobs
+            .mark_job_run_running(run_id, Utc::now(), std::process::id())
+            .unwrap();
+        self.jobs
+            .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
+            .unwrap();
+    }
+
+    /// Record the deterministic apply step's evidence for every member.
+    fn applied(&self, attempt: &MemberAttempt) {
+        self.applied_with_fingerprint(attempt, None);
+    }
+
+    fn applied_with_fingerprint(
+        &self,
+        attempt: &MemberAttempt,
+        resulting_fingerprint: Option<&str>,
+    ) {
+        let run_id = attempt.action_id.clone().unwrap();
+        let evidence = attempt
+            .members()
+            .iter()
+            .map(|member| {
+                json!({
+                    "action_id": "", "attempt_id": attempt.id, "member_key": member.key,
+                    "input_fingerprint": member.fingerprint,
+                    "resulting_fingerprint": resulting_fingerprint.unwrap_or(&member.fingerprint),
+                    "ready": true, "result": {"task_id": member.key},
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut state = PipelineState::new(run_id.clone(), "task_pilot_pipeline".into(), json!({}));
+        state.record_step(
+            2,
+            JobRunState::Success,
+            Some(json!({"member_evidence": evidence})),
+            None,
+        );
+        self.runtime.write_run_state(&run_id, &state).unwrap();
     }
 
     fn task(&self, title: &str) -> Task {
@@ -227,6 +398,51 @@ fn mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks() {
     );
 }
 
+fn runtime_at(global: &Path, orbit_dir: &Path) -> OrbitRuntime {
+    OrbitRuntime::from_roots(global, orbit_dir)
+        .unwrap()
+        .with_automation_machine_identity(Some("fixture-machine".into()))
+}
+
+/// The owner record ref of the namespace `pin` lives in.
+fn owner_record(pin: &str) -> String {
+    let owner = pin
+        .strip_prefix("refs/orbit/pins/v1/")
+        .and_then(|rest| rest.split_once('/'))
+        .unwrap()
+        .0;
+    format!("refs/orbit/pin-owners/v1/{owner}")
+}
+
+/// The namespace `pin` lives in, with its trailing slash.
+fn namespace(pin: &str) -> &str {
+    &pin[..=pin.rfind('/').unwrap()]
+}
+
+fn git_in(repo: &Path, args: &[&str], input: Option<&str>) -> String {
+    use std::io::Write;
+    let mut command = std::process::Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let mut child = command
+        .args(args)
+        .current_dir(repo)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    if let Some(input) = input {
+        stdin.write_all(input.as_bytes()).unwrap();
+    }
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
 fn pilot_routine() -> RoutineDefinition {
     serde_json::from_value(json!({
         "schemaVersion": 1, "name": "fixture-pilot", "enabled": true,
@@ -368,4 +584,507 @@ fn preparation_routine_admission_withholds_a_held_member_off_the_scan_page() {
         "admission preserves the deferred member"
     );
     assert!(members.active.is_none());
+}
+
+/// An attempt's source pin outlives neither its settlement nor its terminal
+/// failure; before either it stays, so the run can still reach the source.
+#[test]
+fn routine_attempt_pins_are_released_once_the_attempt_settles_or_fails() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::routine_attempt_pins_are_released_once_the_attempt_settles_or_fails",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let settles = workspace.task("settles");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+
+    let attempt = workspace.admitted(&settles, 2);
+    // Pinning again is idempotent and names the same owned ref.
+    let pin = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
+    assert!(pin.starts_with("refs/orbit/pins/v1/"), "{pin}");
+    let pending = evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(3),
+    )
+    .unwrap();
+    assert_eq!(pending.reason, "batch_pending");
+    assert_eq!(
+        workspace.pins(),
+        std::slice::from_ref(&pin),
+        "the running attempt keeps it"
+    );
+
+    workspace.applied(&attempt);
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert!(members.active.is_none());
+    assert_eq!(members.assessed[&settles.id].receipt_id, attempt.id);
+    assert!(workspace.pins().is_empty(), "settlement released {pin}");
+
+    // Observed only now, so no pass admits it before the fixture does.
+    let fails = workspace.task("fails");
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(5),
+    )
+    .unwrap();
+    let attempt = workspace.admitted(&fails, 1);
+    workspace
+        .jobs
+        .finalize_job_run(
+            attempt.action_id.as_deref().unwrap(),
+            JobRunState::Interrupted,
+            Utc::now(),
+            None,
+        )
+        .unwrap();
+    let failed = evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(6),
+    )
+    .unwrap();
+    assert_eq!(failed.reason, "needs_attention");
+    let members = workspace.routine_state().members.unwrap();
+    assert!(members.active.is_none());
+    assert!(members.failed[&fails.id].exhausted);
+    assert!(workspace.pins().is_empty(), "terminal failure released it");
+}
+
+/// Record the `material_v1` fingerprint Core recomputes for `task` at
+/// `attempt`'s source as the attempt's applied result: no task dependencies,
+/// the resolved crew assignment, and the pinned tree's empty
+/// repository-instruction list.
+fn applied_legacy(workspace: &Workspace, task: &Task, attempt: &MemberAttempt) -> String {
+    let assignment = workspace
+        .runtime
+        .lookup_crew_for_task(None, task.crew.as_deref())
+        .unwrap();
+    let legacy_dependencies = json!([{
+        "effective_assignment": {
+            "crew": assignment.name,
+            "model": assignment.assignment.model,
+            "provider": assignment.assignment.provider,
+        }
+    }]);
+    let legacy_fingerprint = orbit_automation::members::preparation::legacy_fingerprint(
+        task,
+        &attempt.member.source.commit,
+        &legacy_dependencies,
+        "[]",
+        &Default::default(),
+    )
+    .unwrap();
+    workspace.applied_with_fingerprint(attempt, Some(&legacy_fingerprint));
+    legacy_fingerprint
+}
+
+/// A pre-upgrade accepted assessment still needs its pinned source to be
+/// compared under material_v1; current material_v2 assessments release at
+/// settlement as covered above.
+#[test]
+fn routine_attempt_pin_stays_for_a_legacy_assessment() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::routine_attempt_pin_stays_for_a_legacy_assessment",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("legacy assessment");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    let attempt = workspace.admitted(&task, 1);
+    let pin = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
+    let legacy_fingerprint = applied_legacy(&workspace, &task, &attempt);
+
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert_eq!(
+        members.assessed[&task.id].resulting_fingerprint,
+        legacy_fingerprint
+    );
+    assert_eq!(members.assessed[&task.id].receipt_id, attempt.id);
+    assert!(members.active.is_none());
+    assert_eq!(
+        workspace.pins(),
+        [pin],
+        "the legacy assessment still needs its pinned revision"
+    );
+    let run_id = attempt.action_id.as_deref().unwrap();
+    workspace
+        .jobs
+        .mark_job_run_running(run_id, Utc::now(), std::process::id())
+        .unwrap();
+    workspace
+        .jobs
+        .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert_eq!(cleanup.retained_assessed, 1);
+    assert!(cleanup.released.is_empty());
+}
+
+/// An attempt an earlier client admitted pinned only the legacy shared ref.
+/// The current client still reads it by its exact name to carry the
+/// assessment forward, and never deletes it: no owner is recorded for it.
+#[test]
+fn legacy_shared_pins_are_read_as_a_fallback_and_never_released() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::legacy_shared_pins_are_read_as_a_fallback_and_never_released",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("pinned by an earlier client");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    let attempt = workspace.admitted(&task, 1);
+    let owned = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
+    workspace.git(&["update-ref", "-d", &owned]);
+    let legacy = format!("refs/orbit/automation/{}", attempt.id);
+    workspace.pin(&legacy);
+
+    applied_legacy(&workspace, &task, &attempt);
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    assert_eq!(
+        workspace.pins(),
+        std::slice::from_ref(&legacy),
+        "settlement kept it"
+    );
+
+    // The next pass recomputes the legacy digest at the legacy pin, so the
+    // unchanged task keeps its assessment instead of joining a re-pilot.
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(5),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert_eq!(members.assessed[&task.id].receipt_id, attempt.id);
+    assert!(
+        !members.pending.contains_key(&task.id),
+        "the legacy fallback carried the assessment forward"
+    );
+
+    let run_id = attempt.action_id.as_deref().unwrap();
+    workspace
+        .jobs
+        .mark_job_run_running(run_id, Utc::now(), std::process::id())
+        .unwrap();
+    workspace
+        .jobs
+        .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert_eq!(cleanup.retained_legacy, 1);
+    assert!(cleanup.released.is_empty());
+    assert_eq!(workspace.pins(), [legacy]);
+}
+
+/// `orbit doctor --fix-automation-pins` reclaims leaked owned pins past the
+/// size one namespace listing could read, and keeps every pin a consumer or
+/// live run names, every legacy and delivery batch pin, and every ref it
+/// cannot prove is an attempt pin. It refuses while a sweep holds the lock.
+#[test]
+fn fix_automation_pins_releases_only_owned_attempt_pins_nothing_names() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::fix_automation_pins_releases_only_owned_attempt_pins_nothing_names",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let assessed = workspace.task("assessed");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+
+    // A pin from before settlement released them, backing an assessment.
+    let settled = workspace.admitted(&assessed, 1);
+    workspace.settle(&settled, now + Duration::minutes(3));
+    let assessed_pin = pin_attempt_source(&workspace.runtime, &settled).unwrap();
+    let owned = namespace(&assessed_pin).to_string();
+
+    let active = workspace.task("active");
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    let in_flight = workspace.admitted(&active, 1);
+    let active_pin = pin_attempt_source(&workspace.runtime, &in_flight).unwrap();
+
+    let live = MemberAttempt {
+        id: digest(b"live run attempt"),
+        ..in_flight.clone()
+    };
+    workspace
+        .jobs
+        .insert_job_run(
+            "task_pilot_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"state_automation": {"id": live.id}})),
+            None,
+        )
+        .unwrap();
+    let live_pin = pin_attempt_source(&workspace.runtime, &live).unwrap();
+
+    let batch_pin = format!("refs/orbit/automation/{}/batch/from", digest(b"consumer"));
+    workspace.pin(&batch_pin);
+    let legacy_pin = format!("refs/orbit/automation/{}", digest(b"legacy attempt"));
+    workspace.pin(&legacy_pin);
+    let unrecognized = [
+        "refs/orbit/automation/abc-not-an-attempt".to_string(),
+        format!("{owned}abc-not-an-attempt"),
+    ];
+    for refname in &unrecognized {
+        workspace.pin(refname);
+    }
+
+    // More leaked owned pins than one 1 MiB listing of the namespace holds.
+    let head = workspace.git(&["rev-parse", "HEAD"]);
+    let leaked = (0..9_000)
+        .map(|index| format!("{owned}{}", digest(format!("leaked {index}").as_bytes())))
+        .collect::<Vec<_>>();
+    let instructions = leaked
+        .iter()
+        .map(|name| format!("create {name} {}\n", head.trim()))
+        .collect::<String>();
+    git_in(
+        &workspace.repo,
+        &["update-ref", "--stdin"],
+        Some(&instructions),
+    );
+    let before = workspace.pins();
+    assert_eq!(before.len(), leaked.len() + 7);
+
+    let lock =
+        orbit_store::try_acquire_routine_sweep_lock(&workspace.runtime.global_root().join("state"))
+            .unwrap()
+            .unwrap();
+    assert!(release_unreferenced_attempt_pins(&workspace.runtime).is_err());
+    assert_eq!(workspace.pins(), before, "a refused repair deletes nothing");
+    drop(lock);
+
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert_eq!(cleanup.namespace, owned);
+    assert_eq!(cleanup.refused, None);
+    let mut released = cleanup.released.clone();
+    released.sort();
+    let mut expected = leaked.clone();
+    expected.sort();
+    assert_eq!(released, expected);
+    assert_eq!(
+        (
+            cleanup.retained_active,
+            cleanup.retained_assessed,
+            cleanup.retained_live_run,
+            cleanup.retained_legacy,
+            cleanup.foreign_owners,
+        ),
+        (1, 1, 1, 1, 0)
+    );
+    let mut reported = cleanup.unrecognized.clone();
+    reported.sort();
+    assert_eq!(reported, unrecognized);
+    assert!(cleanup.kept.is_empty());
+    let mut remaining = vec![assessed_pin, active_pin, live_pin, batch_pin, legacy_pin];
+    remaining.extend(unrecognized);
+    remaining.sort();
+    assert_eq!(workspace.pins(), remaining);
+
+    let again = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert!(again.released.is_empty(), "the repair is idempotent");
+}
+
+/// Orbit roots and workspaces sharing one Git common directory pin the same
+/// attempt — identical machine, consumer and attempt ids — in disjoint
+/// namespaces. Each releases and reclaims only its own; a canonical alias of
+/// a root is that root, and a second root (as a copy or move would be) never
+/// adopts the first one's pins.
+#[test]
+fn owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("shared");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    let attempt = workspace.admitted(&task, 1);
+    let pin = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
+
+    let alias = workspace.root.path().join("alias");
+    std::os::unix::fs::symlink(workspace.root.path().join("home"), &alias).unwrap();
+    let aliased = runtime_at(&alias.join(".orbit"), &workspace.repo.join(".orbit"));
+    assert_eq!(pin_attempt_source(&aliased, &attempt).unwrap(), pin);
+
+    let other_root = workspace.other_root("other-home");
+    let linked = workspace.linked_workspace();
+    assert_ne!(
+        linked.workspace_id().unwrap(),
+        workspace.runtime.workspace_id().unwrap()
+    );
+    let other_pin = pin_attempt_source(&other_root, &attempt).unwrap();
+    let linked_pin = pin_attempt_source(&linked, &attempt).unwrap();
+    let distinct = [&pin, &other_pin, &linked_pin]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(distinct.len(), 3, "{distinct:?}");
+    for refname in [&pin, &other_pin, &linked_pin] {
+        assert_eq!(workspace.object(refname), attempt.member.source.commit);
+    }
+
+    workspace.settle(&attempt, now + Duration::minutes(3));
+    let mut expected = vec![other_pin.clone(), linked_pin.clone()];
+    expected.sort();
+    assert_eq!(
+        workspace.pins(),
+        expected,
+        "settlement released only its own"
+    );
+
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert!(cleanup.released.is_empty());
+    assert_eq!(cleanup.foreign_owners, 2);
+    assert_eq!(workspace.pins(), expected, "foreign pins are never touched");
+
+    // Nothing in the linked workspace's or the other root's stores names the
+    // attempt, so each owner reclaims its own pin and only that one.
+    let cleanup = release_unreferenced_attempt_pins(&linked).unwrap();
+    assert_eq!(cleanup.released, [linked_pin]);
+    assert_eq!(workspace.pins(), std::slice::from_ref(&other_pin));
+    let cleanup = release_unreferenced_attempt_pins(&other_root).unwrap();
+    assert_eq!(cleanup.released, [other_pin]);
+    assert!(workspace.pins().is_empty());
+}
+
+/// A namespace whose owner record is missing or names another owner is not
+/// provably this owner's: admission refuses to pin into it, and neither
+/// settlement nor the repair deletes anything in it. A pin that names a
+/// different commit is never rebound or released by its attempt.
+#[test]
+fn unproven_ownership_and_moved_pins_retain_every_pin() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::unproven_ownership_and_moved_pins_retain_every_pin",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("conflicting owner");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    let attempt = workspace.admitted(&task, 1);
+    let pin = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
+    let record = owner_record(&pin);
+    let bound = workspace.object(&record);
+
+    let foreign = git_in(
+        &workspace.repo,
+        &["hash-object", "-w", "--stdin"],
+        Some(
+            r#"{"schema":1,"root":"/elsewhere","workspace":"other","machine":"fixture-machine","git_common_dir":"/elsewhere/.git"}"#,
+        ),
+    );
+    workspace.git(&["update-ref", &record, foreign.trim()]);
+    let other = MemberAttempt {
+        id: digest(b"admitted under a conflicting owner"),
+        ..attempt.clone()
+    };
+    let refused = pin_attempt_source(&workspace.runtime, &other).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("automation_pin_owner_unproven"),
+        "{refused}"
+    );
+
+    workspace.settle(&attempt, now + Duration::minutes(3));
+    assert_eq!(
+        workspace.pins(),
+        std::slice::from_ref(&pin),
+        "settlement kept it"
+    );
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert!(cleanup.refused.is_some());
+    assert_eq!(cleanup.retained_unproven, 1);
+    assert!(cleanup.released.is_empty());
+
+    workspace.git(&["update-ref", "-d", &record]);
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert!(cleanup.refused.is_some(), "a missing record proves nothing");
+    assert_eq!(workspace.pins(), std::slice::from_ref(&pin));
+
+    // Restored, the record proves the namespace again; the settled
+    // attempt's assessment still names the pin.
+    workspace.git(&["update-ref", &record, &bound]);
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert_eq!(cleanup.refused, None);
+    assert_eq!(cleanup.retained_assessed, 1);
+    assert_eq!(workspace.pins(), std::slice::from_ref(&pin));
+
+    // A pin repointed after admission is neither rebound nor released.
+    let moved_task = workspace.task("moved pin");
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    let moved = workspace.admitted(&moved_task, 1);
+    let moved_pin = pin_attempt_source(&workspace.runtime, &moved).unwrap();
+    std::fs::write(workspace.repo.join("README.md"), "moved\n").unwrap();
+    workspace.git(&["commit", "-am", "move"]);
+    let elsewhere = workspace.object("HEAD");
+    workspace.git(&["update-ref", &moved_pin, &elsewhere]);
+    assert!(pin_attempt_source(&workspace.runtime, &moved).is_err());
+    workspace.settle(&moved, now + Duration::minutes(5));
+    let mut expected = vec![pin, moved_pin.clone()];
+    expected.sort();
+    assert_eq!(workspace.pins(), expected);
+    assert_eq!(workspace.object(&moved_pin), elsewhere);
 }
