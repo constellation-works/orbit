@@ -30,11 +30,26 @@ required, Orbit uses the distribution's package manager and, on Ubuntu 24.04, on
 packaged `bwrap-userns-restrict` AppArmor rule. Administrator authentication is requested
 only during explicit interactive installation/onboarding. `orbit init --non-interactive`
 requires root or existing/passwordless `sudo` authority and never waits for a password.
-Package/profile failures are retryable by rerunning `orbit init` after correcting the
-reported cause. Dispatch itself never elevates, installs, reloads a profile, or falls back.
+Package/profile failures are retryable with `orbit init --host-prerequisites-only` after
+correcting the reported cause. This explicit host-preparation command exits non-zero on
+failure and does not seed an Orbit root or machine identity. Dispatch itself never
+elevates, installs, reloads a profile, or falls back.
 
-A failed preparation stops `orbit init` before it writes anything. Where an administrator
-or an image build owns the host's packages and security policy, pass
+A failed preparation prints a warning with the reason and remedy; normal `orbit init`
+continues to seed the Orbit root and exits zero if initialization succeeds. This applies
+in interactive and non-interactive mode, including unsupported distributions, denied sudo
+authentication, and kernel/container namespace denial. The warning names any privileged
+package/profile commands attempted, because host changes may be partial. Declining or
+failing sudo authentication stops preparation immediately without running further
+privileged commands. `linux-bwrap` dispatch stays blocked until `orbit doctor providers`
+reports the sandbox ready; successful init alone does not establish readiness.
+
+On Linux, `orbit init --format json` (or `--json`) includes `linux_sandbox` with `status`
+(`ready`, `skipped`, or `not_ready`) and `reason`. Warnings go to stderr, leaving stdout
+as a JSON document. `skipped` means preparation was deliberately omitted, including for
+a custom `--root`; it does not certify sandbox readiness.
+
+Where an administrator or an image build owns the host's packages and security policy, pass
 `--skip-host-prerequisites` (or set `ORBIT_SKIP_HOST_PREREQUISITES=1`): init then seeds
 Orbit without touching the host, and `linux-bwrap` dispatch stays fail-closed until
 `orbit doctor providers` reports the sandbox ready. The repository's `.cargo/config.toml`
@@ -130,7 +145,7 @@ replay, and record a nested denial as **not run**.
 Read `sandbox_readiness_detail` from `orbit doctor providers --json`. Missing
 privileges, an incompatible `--bind-fd` feature, a custom-profile conflict,
 and kernel/container denial have different remedies. Correct the reported
-cause, then rerun normal `orbit init`. Do not disable
+cause, then run `orbit init --host-prerequisites-only` and recheck doctor. Do not disable
 `kernel.apparmor_restrict_unprivileged_userns` globally or enable
 `allow_fallback`; both weaken or bypass the fail-closed boundary.
 
