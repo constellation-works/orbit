@@ -7,8 +7,8 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
     CrewConfig, DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, PluginBrokerHandle, PluginBrokerRun,
-    ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
-    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox,
+    ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -748,6 +748,15 @@ impl RuntimeHost for OrbitRuntime {
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
         self.apply_run_final_recovery(run_id, application)
+    }
+
+    fn begin_rebase_recovery_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError> {
+        checkpoints::begin_rebase_recovery_attempt(self, run_id, step_id, scope)
     }
 
     fn checkpoint_rebase_recovery(

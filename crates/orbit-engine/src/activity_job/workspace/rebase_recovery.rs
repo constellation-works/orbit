@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use orbit_types::task::ContextWideningStep;
 
-use crate::context::{RuntimeHost, StepRecoveryAdmission};
+use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost, StepRecoveryAdmission};
 use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
 
 use super::boundary_guard::is_host_owned_path;
@@ -20,6 +20,11 @@ use super::{DispatchError, WorktreeBoundaryGuard};
 
 pub(super) struct RebaseRecoveryCheckpoint {
     metadata: RecoveryMetadata,
+    /// The failed step this recovery completes.
+    step_id: String,
+    /// The attempt the host reserved when it admitted this recovery. Held only
+    /// here, never read back from provider output or the run store.
+    attempt: u64,
     branch: String,
     original_head: String,
     original_base_sha: String,
@@ -33,8 +38,12 @@ impl WorktreeBoundaryGuard {
     /// Admit file repair for the already stopped, checkpoint-matching rebase.
     /// The provider remains unable to write Git metadata; after it exits, the
     /// host boundary independently validates and completes this checkpoint.
+    /// Admission reserves the host's attempt identity for this recovery, so a
+    /// later legitimate recovery of the same step certifies as a new attempt
+    /// instead of colliding with this one.
     pub(crate) fn authorize_rebase_completion(
         &mut self,
+        host: &dyn RuntimeHost,
         input: &Value,
     ) -> Result<(), DispatchError> {
         let invalid = || {
@@ -77,7 +86,8 @@ impl WorktreeBoundaryGuard {
             .get("base_sha")
             .and_then(Value::as_str)
             .unwrap_or(target);
-        validate_failed_step_identity(input, prepared, original).ok_or_else(invalid)?;
+        let step_id =
+            validate_failed_step_identity(input, prepared, original).ok_or_else(invalid)?;
         // The stopped rebase is pinned by its own `onto` metadata below, not by
         // the moving base ref: a linked worktree shares remote-tracking refs
         // with every sibling checkout, so `origin/<base>` routinely advances
@@ -121,8 +131,20 @@ impl WorktreeBoundaryGuard {
             {
                 return Err(invalid());
             }
+            let metadata = RecoveryMetadata::capture(&self.assigned_root, path)?;
+            let attempt = host.begin_rebase_recovery_attempt(
+                &self.run_id,
+                step_id,
+                &RebaseRecoveryAttemptScope {
+                    workspace_path: self.assigned_root.to_string_lossy().into_owned(),
+                    head_sha_before: original.to_string(),
+                    target_base_sha: target.to_string(),
+                },
+            )?;
             self.rebase_recovery = Some(RebaseRecoveryCheckpoint {
-                metadata: RecoveryMetadata::capture(&self.assigned_root, path)?,
+                metadata,
+                step_id: step_id.to_string(),
+                attempt,
                 branch: branch.to_string(),
                 original_head: original.to_string(),
                 original_base_sha: original_base_sha.to_string(),
@@ -188,6 +210,11 @@ impl WorktreeBoundaryGuard {
                 "conflict recovery refused host Git continuation: {reason}"
             ))
         };
+        if step_id != checkpoint.step_id {
+            return Err(invalid(
+                "the failed step differs from the admitted recovery",
+            ));
+        }
 
         // Authenticate metadata before snapshotting or staging repaired files.
         // Matching commits/index alone cannot authenticate a copy.
@@ -316,6 +343,7 @@ impl WorktreeBoundaryGuard {
             "head_sha": completed.head,
             "companion_paths": companion_paths,
             "rewritten": true,
+            "recovery_attempt": checkpoint.attempt,
         }))
     }
 
@@ -589,7 +617,13 @@ fn recovery_metadata_files(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, Di
     Ok(files)
 }
 
-fn validate_failed_step_identity(input: &Value, prepared: &Value, original: &str) -> Option<()> {
+/// The failed step a conflict recovery may complete, when its input
+/// describes one of the two rebasing steps consistently.
+fn validate_failed_step_identity<'a>(
+    input: &'a Value,
+    prepared: &Value,
+    original: &str,
+) -> Option<&'a str> {
     let activity_name = input.get("activity_name")?.as_str()?;
     let failed_step_id = input.get("failed_step_id")?.as_str()?;
     if !matches!(
@@ -605,7 +639,7 @@ fn validate_failed_step_identity(input: &Value, prepared: &Value, original: &str
     {
         return None;
     }
-    Some(())
+    Some(failed_step_id)
 }
 
 fn recovery_conflicting_paths(input: &Value) -> Option<Vec<String>> {

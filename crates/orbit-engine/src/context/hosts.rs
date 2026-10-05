@@ -108,6 +108,16 @@ pub enum StepRecoveryAdmission {
     Denied { reason: String },
 }
 
+/// What one admitted conflict recovery may complete, fixed before its provider
+/// runs: the checkout, the HEAD the stopped rebase started from, and the
+/// pinned base it continues onto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebaseRecoveryAttemptScope {
+    pub workspace_path: String,
+    pub head_sha_before: String,
+    pub target_base_sha: String,
+}
+
 /// [ORB-13907] What the engine asks a host before dispatching a job's final
 /// recovery for a failed run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1057,8 +1067,29 @@ pub trait RuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability("apply_final_recovery"))
     }
 
+    /// Reserve the host-only identity of one admitted conflict recovery of
+    /// `step_id`, before its provider runs.
+    ///
+    /// The host assigns the attempt; the caller only carries it, in memory, to
+    /// the checkpoint it stamps as `recovery_attempt`. A later reservation for
+    /// the same run and step supersedes this one, so only the newest admitted
+    /// recovery can be certified. Hosts without a recovery authority refuse,
+    /// which stops the recovery before the provider launches.
+    fn begin_rebase_recovery_attempt(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError> {
+        Err(DispatchError::JobExecution(
+            "host does not support durable rebase recovery checkpoints".to_string(),
+        ))
+    }
+
     /// Persist an exact host-validated recovered rebase before reporting recovery
     /// success. Unlike ordinary step checkpoints, durability failure is fatal.
+    /// `output` carries the attempt reserved by
+    /// [`Self::begin_rebase_recovery_attempt`] as `recovery_attempt`.
     fn checkpoint_rebase_recovery(
         &self,
         _run_id: &str,
@@ -1070,8 +1101,9 @@ pub trait RuntimeHost: Send + Sync {
         ))
     }
 
-    /// Whether `checkpoint` is exactly the recovery evidence this host
-    /// certified for `run_id` / `step_id`.
+    /// Whether `checkpoint` is exactly the current recovery evidence this host
+    /// certified for `run_id` / `step_id`: its own attempt's evidence, with no
+    /// later attempt of that step certified since.
     ///
     /// The run store a checkpoint is read back from is writable by managed
     /// leaves, so the stored bytes are progress data. Authority lives in a

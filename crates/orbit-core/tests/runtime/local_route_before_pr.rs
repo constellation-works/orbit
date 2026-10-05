@@ -36,6 +36,7 @@ fn open(ship_mode: ShipMode, global: &str, workspace: &str) -> (TempDir, OrbitRu
         logical_workspace_id: "ws_local_route".to_string(),
         task_partition_id: "ws_local_route".to_string(),
         owner_machine_id: None,
+        checkout_role: None,
         repo_root: repo,
         ship_mode,
         base_branch: Some("main".to_string()),

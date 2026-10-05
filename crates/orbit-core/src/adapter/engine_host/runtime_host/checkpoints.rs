@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_engine::DispatchError;
+use orbit_engine::{DispatchError, RebaseRecoveryAttemptScope};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -81,12 +81,33 @@ pub(super) fn checkpoint_failure_activity(
         })
 }
 
+/// Reserve the host-assigned attempt one admitted conflict recovery will
+/// certify. The reservation lives in the host-only authority, so neither the
+/// provider nor the shared run store can name or advance it.
+pub(super) fn begin_rebase_recovery_attempt(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_id: &str,
+    scope: &RebaseRecoveryAttemptScope,
+) -> Result<u64, DispatchError> {
+    RecoveryAuthority::open(&runtime.global_root())
+        .and_then(|authority| authority.begin_attempt(run_id, step_id, scope))
+        .map_err(|error| {
+            DispatchError::JobExecution(format!(
+                "reserve rebase recovery attempt (run {run_id}, step `{step_id}`): {error}"
+            ))
+        })
+}
+
 /// Certify the host's completion first, then persist the advisory copy.
 ///
 /// The certificate lives outside every leaf write grant; the run-state
-/// entry that follows it is progress data a leaf can rewrite. Either half
-/// failing leaves the run without usable evidence rather than with
-/// unauthenticated evidence, so both orders are fail-closed.
+/// entry that follows it is progress data a leaf can rewrite, and holds only
+/// the latest attempt per step. Either half failing leaves the run without
+/// usable evidence rather than with unauthenticated evidence, so both orders
+/// are fail-closed: a certificate whose copy never landed is inert until the
+/// identical payload is issued again, and a reservation that was never
+/// certified certifies nothing.
 pub(super) fn checkpoint_rebase_recovery(
     runtime: &OrbitRuntime,
     run_id: &str,

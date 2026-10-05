@@ -388,16 +388,63 @@ Confinement here is by location, not by a secret. Bubblewrap mounts the host
 filesystem `--ro-bind / /` and enforces only write boundaries, so a key file
 would be readable by every leaf and a keyed MAC would add no authority.
 
-Each certificate binds the run ID, step ID, canonical workspace path, recovered
-`head_sha`, pinned `base_sha`, and a BLAKE3 digest over the whole checkpoint
-payload, so an edit to any field — including `task_ids` and `rewritten`, which
-the bound columns do not name — no longer matches. Certificates are immutable
-per `(run_id, step_id)`: re-issuing identical evidence is a harmless retry, and
-different evidence for an already certified step is refused rather than
-replacing the accepted record. `recovered_head_checkpoint` checks the
-certificate before it consults the source run, so a payload relabelled into
-another run or step, or replayed after a host restart, fails at the first gate;
-lineage and source-equality checks continue to apply behind it.
+Each certificate binds the run ID, step ID, recovery attempt, canonical
+workspace path, recovered `head_sha`, landed `base_sha`, and a BLAKE3 digest
+over the whole checkpoint payload, so an edit to any field — including
+`task_ids` and `rewritten`, which the bound columns do not name — no longer
+matches.
+
+**Recovery attempts.** One run can legitimately recover the same step more than
+once: recovery A keeps its pinned result when the advanced base conflicts
+again, the retry correctly refuses the moved base, final recovery resumes from
+preparation, and the re-pinned rebase stops again for recovery B. Each admitted
+`pr_conflict_recovery` therefore has its own identity. When the boundary guard
+admits a stopped rebase, after every checkpoint check and before the provider
+launches, it calls `RuntimeHost::begin_rebase_recovery_attempt`. The host
+reserves the next attempt number for that run and step in the authority
+database (`rebase_recovery_attempt`), bound to the canonical workspace, the
+original HEAD and the pinned target base. The guard holds the number in memory
+and stamps it into the completion it builds as `recovery_attempt`, so the
+payload digest covers it. Neither the provider nor the run store selects it.
+
+Issuance runs in one `BEGIN IMMEDIATE` transaction against
+`rebase_recovery_attempt_certificate`, keyed by `(run_id, step_id, attempt)`.
+An attempt the host never reserved is refused. So is one a later reservation
+superseded, and evidence whose workspace, original HEAD or pinned base differs
+from the reservation. Re-issuing identical evidence for the current attempt is
+a harmless retry, while different evidence for an attempt already certified is
+refused. No certificate row is ever updated or deleted. Verification accepts a
+payload only when it equals its own attempt's certificate and no later attempt
+of that step is certified. Once B is certified, A's record still exists, but A
+no longer vouches for the step: a leaf that replays A's bytes into the run store
+gets nothing. The run-store map stays keyed by step and holds the latest
+attempt's copy. `recovered_head_checkpoint` checks the certificate before it
+consults the source run, so a payload relabelled into another run, step or
+attempt, or replayed after a host restart, fails at the first gate. Lineage
+and source-equality checks continue to apply behind it.
+
+Interruptions are fail-closed. A reservation whose recovery never completed
+certifies nothing and leaves the previous certified attempt current. A newer
+reservation supersedes it, so the interrupted identity cannot certify later.
+A certificate whose run-store copy failed to persist makes the older copy stale
+without replacing it. The step then has no usable evidence until the identical
+completion is issued again, and Git has already moved HEAD past the older
+copy. This is the documented inspection case below, never a silent fallback to
+older evidence.
+
+**Attempt upgrade.** Certificates written before attempts existed live in the
+original `rebase_recovery_certificate` table, one row per `(run_id, step_id)`,
+for payloads that carry no `recovery_attempt`. That table keeps its schema and
+rows, and current code never writes it. A pre-attempt payload still verifies
+against it, so a run resumed across the upgrade keeps its certified recovery,
+until an attempt of the same step is certified. From then on it is stale and
+takes the uncertified path: the rebase is redone from the preserved candidate,
+or refused while the worktree is dirty, never reset over local work. A
+pre-attempt payload relabelled with an attempt matches no certificate.
+Binaries older than this change read only the original table, so they treat
+attempt certificates as uncertified and fail closed, never as authority.
+Upgrading needs no migration and no store edit, and a downgrade cannot strand
+a run in a half-migrated shape.
 
 **Migration.** Checkpoints written before this boundary have no certificate and
 are never backfilled — a row in a store the leaf can write is not evidence that
