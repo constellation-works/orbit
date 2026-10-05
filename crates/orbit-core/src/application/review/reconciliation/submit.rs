@@ -318,8 +318,9 @@ fn accept_baseline(
 ) -> Result<Value, OrbitError> {
     let reconciliation_id = required_string(input, &["reconciliation_id"], "reconciliation_id")?;
     let command = required_string(input, &["command"], "command")?;
+    let command_display = super::safe_reconciliation_text(&command);
     let remediation = required_string(input, &["remediation_commit"], "remediation_commit")?;
-    let reason = required_string(input, &["reason"], "reason")?;
+    let reason = super::safe_reconciliation_text(&required_string(input, &["reason"], "reason")?);
     let refused = |message: String| OrbitError::InvalidInput(message);
     let workspace_id = runtime.workspace_id()?;
     let store = runtime.review_store()?;
@@ -349,7 +350,7 @@ fn accept_baseline(
             return view(runtime, task_id, &record, true);
         }
         return Err(refused(format!(
-            "`{command}` was already disposed with remediation {}",
+            "`{command_display}` was already disposed with remediation {}",
             existing.remediation_commit
         )));
     }
@@ -360,10 +361,14 @@ fn accept_baseline(
     };
     let commands = commands.clone();
     if !commands.contains(&command) {
+        let waiting_on = commands
+            .iter()
+            .map(|command| super::safe_reconciliation_text(command))
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(refused(format!(
-            "`{command}` is not a baseline failure of reconciliation {reconciliation_id}; \
-             waiting on: {}",
-            commands.join(", ")
+            "`{command_display}` is not a baseline failure of reconciliation {reconciliation_id}; \
+             waiting on: {waiting_on}"
         )));
     }
     let entry = record
@@ -374,13 +379,13 @@ fn accept_baseline(
         .cloned()
         .ok_or_else(|| {
             refused(format!(
-                "`{command}` has no recorded failure reproduced at the base"
+                "`{command_display}` has no recorded failure reproduced at the base"
             ))
         })?;
     let baseline = entry
         .baseline
         .as_ref()
-        .ok_or_else(|| refused(format!("`{command}` has no baseline run")))?;
+        .ok_or_else(|| refused(format!("`{command_display}` has no baseline run")))?;
     let binding_digest = record.binding_digest.clone();
     let head = record.binding.pull_request.merged_head.commit.clone();
     let landing = record.binding.pull_request.landing_branch.clone();
@@ -411,7 +416,7 @@ fn accept_baseline(
         Some(check) if check.run.passed => check.clone(),
         Some(check) => {
             return Err(refused(format!(
-                "`{command}` failed at remediation {remediation_commit}; no disposition was \
+                "`{command_display}` failed at remediation {remediation_commit}; no disposition was \
                  recorded (see {})",
                 check.run.log.path
             )));
@@ -424,7 +429,8 @@ fn accept_baseline(
                 &head,
                 &remediation_commit,
                 operator,
-            )?;
+            )
+            .map_err(|error| refused(super::safe_reconciliation_text(&error.to_string())))?;
             let check = BaselineRemediationCheck {
                 command: command.clone(),
                 head_commit: head.clone(),
@@ -447,7 +453,7 @@ fn accept_baseline(
                 .ok_or_else(|| refused("remediation check was not retained".into()))?;
             if !check.run.passed {
                 return Err(refused(format!(
-                    "`{command}` did not pass at remediation {remediation_commit}; no \
+                    "`{command_display}` did not pass at remediation {remediation_commit}; no \
                      disposition was recorded (see {})",
                     check.run.log.path
                 )));
@@ -497,7 +503,7 @@ fn accept_baseline(
         TaskUpdateParams {
             comment: Some(format!(
                 "Review reconciliation {reconciliation_id}: {} accepted the baseline failure of \
-                 `{command}` at merged head {head}, remediated by landed commit \
+                 `{command_display}` at merged head {head}, remediated by landed commit \
                  {remediation_commit} ({}). Validation of the merged head stays incomplete.{}",
                 operator.actor,
                 reason.trim(),
@@ -559,7 +565,7 @@ fn run_remediation_command(
     let cleanup = runtime.remove_recovery_checkout(&checkout_id);
     let run: RequiredValidationRun = run?;
     cleanup?;
-    let value = json!({
+    let mut value = json!({
         "schema_version": 1,
         "reconciliation_id": record.reconciliation_id,
         "task_id": record.binding.task_id,
@@ -575,6 +581,7 @@ fn run_remediation_command(
         "provenance": operator.provenance,
         "output": run.output,
     });
+    super::redact_reconciliation_report(&mut value);
     let content = serde_json::to_vec_pretty(&value)
         .map_err(|error| OrbitError::Execution(format!("encode {path}: {error}")))?;
     let log = ReconciliationLog {

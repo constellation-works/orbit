@@ -32,9 +32,11 @@ mod run;
 mod submit;
 
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::{redact_all, redact_home_dir};
 use orbit_types::workflow::{
     ReconciliationOutcome, ReviewReconciliation, handoff::AcceptedHandoff,
 };
+use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::task::HandoffPullRequest;
@@ -47,6 +49,30 @@ const RECONCILIATION_AUDIT: &str = "review.reconciliation";
 
 /// Tag carried by the follow-up task a reconciliation files.
 const FOLLOW_UP_TAG_PREFIX: &str = "review-reconciliation:";
+
+/// Redact strings in reconciliation reports while keeping the stored command
+/// identity available to the evidence-bound disposition checks.
+pub(super) fn redact_reconciliation_report(value: &mut Value) {
+    match value {
+        Value::String(text) => *text = safe_reconciliation_text(text),
+        Value::Array(values) => {
+            for value in values {
+                redact_reconciliation_report(value);
+            }
+        }
+        Value::Object(fields) => {
+            for value in fields.values_mut() {
+                redact_reconciliation_report(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// A display form for command selectors and other reconciliation prose.
+pub(super) fn safe_reconciliation_text(text: &str) -> String {
+    redact_home_dir(&redact_all(text))
+}
 
 /// Why a changed merged head cannot complete its task, or `None` when an
 /// accepted reconciliation binds exactly this observation.
@@ -104,7 +130,11 @@ fn next_step(record: &ReviewReconciliation, task_id: &str) -> String {
              in {}: once a landed commit remediates each one, run `orbit task reconcile-review \
              accept-baseline {task_id} --reconciliation {rid} --command '<command>' \
              --remediation <commit> --reason '<why>'`",
-            commands.join(", ")
+            commands
+                .iter()
+                .map(|command| safe_reconciliation_text(command))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         Some(ReconciliationOutcome::Refused { reason, next_step }) => {
             format!("reconciliation {rid} was refused: {reason}. {next_step}")

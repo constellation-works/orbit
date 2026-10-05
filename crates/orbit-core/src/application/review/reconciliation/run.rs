@@ -254,7 +254,7 @@ fn persist_run(
     commit: &str,
     run: &RequiredValidationRun,
 ) -> Result<ReconciledCommandRun, OrbitError> {
-    let log = json!({
+    let mut log = json!({
         "schema_version": 1,
         "reconciliation_id": admitted.record.reconciliation_id,
         "run_id": admitted.run_id,
@@ -267,6 +267,7 @@ fn persist_run(
         "validation_env": run.environment,
         "output": run.output,
     });
+    super::redact_reconciliation_report(&mut log);
     let log = write_artifact(runtime, admitted, path, &log)?;
     Ok(ReconciledCommandRun {
         commit: commit.to_string(),
