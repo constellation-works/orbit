@@ -94,8 +94,9 @@ pub trait DoctorCommands {
     /// absent subsystems as `Skipped`.
     fn doctor_workspace(&self) -> Result<Vec<WorkspaceDoctorResult>, OrbitError>;
 
-    /// Remove lock files left by dead holders, without disturbing a lock that
-    /// is currently held by another process.
+    /// Clear records left by dead holders, without disturbing a lock that
+    /// is currently held by another process. Lock files remain in place so
+    /// queued openers keep sharing the same inode.
     fn remove_stale_lock_files(&self) -> Result<usize, OrbitError>;
 
     /// Release reservations that remain conclusively stale after a write-boundary recheck.
@@ -157,13 +158,13 @@ impl DoctorCommands for OrbitRuntime {
     }
 
     fn remove_stale_lock_files(&self) -> Result<usize, OrbitError> {
-        let mut removed = 0;
+        let mut cleared = 0;
         for path in collect_lock_files(self.paths()) {
             if remove_stale_lock_file(&path)? {
-                removed += 1;
+                cleared += 1;
             }
         }
-        Ok(removed)
+        Ok(cleared)
     }
 
     fn clear_stale_task_reservations(&self) -> Result<usize, OrbitError> {

@@ -46,8 +46,7 @@ $ orbit doctor
 │ database         ok        quick_check ok; schema version 1 matches this binary             │
 │ disk-space       ok        11.2 GiB free of 65.6 GiB (17.1%) on the volume holding …/.orbit │
 │ semantic-index   skipped   no semantic embeddings indexed yet                               │
-│ stale-locks      warning   1 lock file(s) left by dead holders (the OS already released     │
-│                            the flock; safe to delete): …/state/layout.lock                  │
+│ stale-locks      warning   1 lock file(s) with dead holder records: …/state/layout.lock      │
 │                            (dead pid 154488, op: layout upgrade, since 2026-07-04T09:25…)   │
 │ job-runs         ok        no orphaned job runs                                              │
 │ task-reservations ok       no conclusively stale active task reservations                    │
@@ -60,7 +59,9 @@ The command exits nonzero only when at least one check is `ERROR`; warnings and 
 zero. `--json` emits an array of objects with `check`, `status`, `message`, and `remediation`
 fields; statuses are lowercase and `remediation` is `null` for healthy/skipped rows. Human
 output prints the same guidance as an `Action:` line. Lock files flagged by `stale-locks`
-include holder diagnostics and are safe to delete only after confirming the holder PID is dead.
+include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
+record after acquiring the advisory lock and rechecking the holder. The repair preserves
+the lock file so queued openers and new openers share the same inode; do not delete it.
 
 ### Repair stale task reservations
 
@@ -87,7 +88,7 @@ normal task-lock release audit path with the `doctor_stale_task_lock` reason, an
 This is distinct from `--fix-stale-locks`, which handles dead-holder filesystem `.lock` files.
 
 There is deliberately no blanket `--fix` or resolve-all option. Configuration repair, database
-recovery, job cancellation, graph cleanup, id-allocation retirement, filesystem lock deletion,
+recovery, job cancellation, graph cleanup, id-allocation retirement, filesystem holder-record cleanup,
 task-reservation release, retired activity-backend cleanup, and orphan task-store deletion have
 different evidence and safety gates, so each repair remains explicit and safety-scoped.
 
