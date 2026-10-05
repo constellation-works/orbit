@@ -14,6 +14,16 @@ then use
 required outcome), `plan` (author one if blank or placeholder), `context_files`,
 and `status`.
 
+Task tools take `id`, including `orbit.task.show`, `orbit.task.update`,
+`orbit.task.artifact.put`, and `orbit.task.artifact.get`. Copy the identifier
+from workflow input `task_id`, `ORBIT_TASK_ID`, or the task snapshot's `id`
+into that argument; workflow and evidence keys named `task_id` are not
+task-tool argument names. Unknown fields are rejected with suggestions,
+not accepted as aliases. GitHub run tools take `run` despite returning
+`run_id`; task authoring takes `type` (feature, bug, refactor, or chore).
+Search statuses require the corpus prefix, such as `task:rejected` or
+`friction:resolved`, including when `kind` is supplied separately.
+
 Read `comments` (chronological, each with `by` and `at`) alongside the
 canonical description. An orchestrator or operator refinement posted after the
 description supersedes a stale "Suggested direction"/"Suggested fix" section

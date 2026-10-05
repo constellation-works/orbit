@@ -22,6 +22,10 @@ impl GithubRunLogsTool {
         ctx: &crate::ToolContext,
         input: &Value,
     ) -> Result<RunLogRequests, OrbitError> {
+        orbit_common::protocol::tool_input::reject_unknown_tool_fields(
+            input,
+            &["run", "job", "scope", "max_bytes", "repo"],
+        )?;
         let requests = RunLogRequests::from_input(input)?;
         Ok(match super::super::tool_workspace_dir(ctx) {
             Some(dir) => requests.in_directory(&dir),

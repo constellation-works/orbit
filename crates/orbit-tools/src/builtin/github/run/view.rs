@@ -142,6 +142,7 @@ super::super::gh_tool! {
         super::super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
     ];
     request: |ctx, input| {
+        orbit_common::protocol::tool_input::reject_unknown_tool_fields(input, &["run", "repo"])?;
         build_exec_request(input).map(|request| super::super::in_tool_workspace(request, ctx))
     }
     response: |_ctx, _input, result| {

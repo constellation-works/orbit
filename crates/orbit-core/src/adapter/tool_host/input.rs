@@ -327,7 +327,16 @@ pub(super) fn parse_assessed_task_complexity(
 }
 
 pub(super) fn parse_task_type(field: &str, raw: &str) -> Result<TaskType, OrbitError> {
-    TaskType::from_str(raw).map_err(|error| OrbitError::InvalidInput(format!("`{field}` {error}")))
+    TaskType::from_str(raw).map_err(|error| {
+        if raw.trim().eq_ignore_ascii_case("fix") {
+            OrbitError::invalid_input_with_suggestions(
+                format!("`{field}` {error}; did you mean `bug`?"),
+                vec!["bug".to_string()],
+            )
+        } else {
+            OrbitError::InvalidInput(format!("`{field}` {error}"))
+        }
+    })
 }
 
 pub(super) fn require_object_field<'a>(

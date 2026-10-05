@@ -23,7 +23,7 @@ pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace"];
 /// Refuse unknown top-level tool-argument keys with a did-you-mean hint.
 ///
 /// Transport wrappers in [`TOOL_INPUT_TRANSPORT_WRAPPER_KEYS`] are ignored.
-/// The first unknown key is reported; a close match against `allowed` is
+/// All unknown keys are reported; a close match against `allowed` is
 /// included in the message and on [`OrbitError::did_you_mean`].
 pub fn reject_unknown_tool_fields(input: &Value, allowed: &[&str]) -> Result<(), OrbitError> {
     let Some(object) = input.as_object() else {
@@ -42,8 +42,9 @@ pub fn reject_unknown_tool_fields(input: &Value, allowed: &[&str]) -> Result<(),
         return Ok(());
     }
 
-    let first = &unknown[0];
-    let suggestion = suggest_tool_field(first, allowed);
+    let suggestion = unknown
+        .iter()
+        .find_map(|key| suggest_tool_field(key, allowed));
     let message = unknown_tool_field_message(&unknown, suggestion);
     Err(OrbitError::invalid_input_with_suggestions(
         message,
@@ -111,6 +112,9 @@ fn suggest_tool_field<'a>(unknown: &str, allowed: &[&'a str]) -> Option<&'a str>
 
 fn synonym_tool_field(unknown: &str) -> Option<&'static str> {
     match unknown {
+        "task_id" => Some("id"),
+        "run_id" => Some("run"),
+        "task_type" => Some("type"),
         "note" | "notes" | "message" | "msg" => Some("comment"),
         "deps" | "depends_on" | "depends-on" => Some("dependencies"),
         "acceptancecriteria" => Some("acceptance_criteria"),
@@ -176,6 +180,22 @@ pub fn required_string(
             }
             return Ok(trimmed.to_string());
         }
+    }
+    // Task-owner routing reads required fields before dispatch can reject
+    // unknown arguments. Preserve the field hint on that early error path.
+    if let Some(object) = input.as_object()
+        && let Some(unknown) = object.keys().find(|key| {
+            synonym_tool_field(key).or_else(|| synonym_tool_field(&normalize_tool_field_name(key)))
+                == Some(canonical)
+        })
+    {
+        return Err(OrbitError::invalid_input_with_suggestions(
+            format!(
+                "missing `{canonical}`; {}",
+                unknown_tool_field_message(std::slice::from_ref(unknown), Some(canonical)),
+            ),
+            vec![canonical.to_string()],
+        ));
     }
     Err(OrbitError::InvalidInput(format!("missing `{canonical}`")))
 }
