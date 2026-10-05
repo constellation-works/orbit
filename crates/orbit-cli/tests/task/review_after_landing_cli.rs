@@ -548,3 +548,160 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
     assert!(held.refusals.contains(&"branch_changed".to_string()));
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 1);
 }
+
+/// [ORB-14168] A local-only workspace with `review.before_pr` on is not a
+/// healthy review setup, and readiness holds the backlog before a drain
+/// would spawn a delivery that admission refuses. A PR workspace with the
+/// same switch stays healthy. This fixture's `--root` is a single config
+/// layer, so the global/workspace override is covered by the runtime test.
+#[test]
+fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
+    const TEST: &str = "review_after_landing_cli::doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    enable_review_crew(&fixture);
+    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
+    set_policy(&fixture, "review.before_pr", "true");
+
+    let (row, success) = doctor_row(&fixture);
+    assert_eq!(row["status"], "ok", "{row}");
+    assert!(success, "a PR workspace may hold PR creation for review");
+    assert!(
+        !row["message"]
+            .as_str()
+            .unwrap()
+            .contains("local-only delivery"),
+        "{row}"
+    );
+
+    fixture
+        .command(&[
+            "workspace",
+            "init",
+            "--name",
+            "audit-qa",
+            "--ship-mode",
+            "local",
+            "--force",
+        ])
+        .assert()
+        .success();
+    let shown = fixture.command(&["workspace", "show"]).output().unwrap();
+    assert!(shown.status.success(), "{shown:?}");
+    let shown = String::from_utf8(shown.stdout).unwrap();
+    assert!(
+        shown
+            .lines()
+            .any(|line| line.contains("ship_mode:") && line.contains("local")),
+        "{shown}"
+    );
+
+    let (row, success) = doctor_row(&fixture);
+    assert_eq!(row["status"], "error", "{row}");
+    assert!(
+        !success,
+        "doctor must fail while every local delivery would"
+    );
+    let message = row["message"].as_str().unwrap();
+    assert!(
+        message.contains("review.before_pr (global)") && message.contains("local-only delivery"),
+        "{message}"
+    );
+    let remediation = row["remediation"].as_str().unwrap();
+    assert!(
+        remediation.contains("`orbit config set review.before_pr false`"),
+        "{remediation}"
+    );
+
+    set_policy(&fixture, "review.before_pr", "false");
+    let (row, success) = doctor_row(&fixture);
+    assert_eq!(
+        row["status"], "ok",
+        "turning the switch off clears the local-route failure: {row}"
+    );
+    assert!(success);
+
+    set_policy(&fixture, "review.before_pr", "true");
+    let (row, _) = doctor_row(&fixture);
+    assert_eq!(row["status"], "error", "{row}");
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("review.before_pr (global)"),
+        "{row}"
+    );
+
+    let added = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "local hold",
+        "--description",
+        "Held before a local delivery.",
+        "--type",
+        "chore",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Readiness names the hold.",
+        "--json",
+    ]);
+    let task_id = added["id"].as_str().unwrap().to_string();
+    fixture
+        .command(&["task", "update", &task_id, "--status", "backlog"])
+        .assert()
+        .success();
+    let readiness = fixture.json(&["run", "readiness", &task_id, "--json"]);
+    let entry = readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == task_id)
+        .unwrap_or_else(|| panic!("{task_id} missing: {readiness}"));
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "local_route_before_pr", "{entry}");
+    assert!(
+        entry["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("review.before_pr (global)")),
+        "{entry}"
+    );
+    let text = fixture.command(&["run", "readiness"]).output().unwrap();
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        text.contains(&task_id)
+            && text.contains("local_route_before_pr")
+            && text.contains("review.before_pr (global)"),
+        "{text}"
+    );
+
+    fixture
+        .command(&[
+            "workspace",
+            "init",
+            "--name",
+            "audit-qa",
+            "--ship-mode",
+            "pr",
+            "--force",
+        ])
+        .assert()
+        .success();
+    let readiness = fixture.json(&["run", "readiness", &task_id, "--json"]);
+    let entry = readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == task_id)
+        .unwrap_or_else(|| panic!("{task_id} missing: {readiness}"));
+    assert_eq!(entry["eligible"], true, "{entry}");
+    assert_eq!(entry["reason"], "ready", "{entry}");
+    let (row, success) = doctor_row(&fixture);
+    assert_eq!(row["status"], "ok", "{row}");
+    assert!(success, "the PR route keeps before-PR review eligible");
+}

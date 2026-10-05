@@ -104,6 +104,12 @@ Common reasons a backlog task waits:
   plugin delivery job whose plugin is disabled or uninstalled, or that does not
   declare the drain's ship mode. The detail names the plugin. Enable it or
   remove the tag.
+- **`local_route_before_pr`**: `review.before_pr` is on and this workspace
+  ships locally. Before-PR review holds pull-request creation and does not run
+  on the local-only route, so the task stays in the backlog instead of failing
+  after dispatch. The detail names whether the global or workspace config
+  turned the switch on. Turn `review.before_pr` off, or ship through the PR
+  route. `orbit doctor` names the same combination.
 
 Neither approval nor the drain bypasses dependencies or locks, so a window may
 end with some tasks still in the backlog.

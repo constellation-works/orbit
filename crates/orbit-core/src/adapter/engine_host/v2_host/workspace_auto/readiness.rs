@@ -323,6 +323,16 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("host_os".to_string(), json!(runtime.host_os()));
                     }
+                    BacklogTaskExclusionReason::LocalRouteBeforePr => {
+                        // [ORB-14168] The drain records the same snake_case
+                        // reason. The detail names the deciding layer and the
+                        // remedy the admission refusal already uses.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("local_route_before_pr".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::CrewNotAllowed => {
                         object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
                         object.insert("crew".to_string(), json!(excluded.crew));

@@ -30,7 +30,9 @@ mod landing;
 mod projection;
 mod switches;
 
-pub(crate) use admission::{install_review_admission, run_review_admission};
+pub(crate) use admission::{
+    install_review_admission, local_route_before_pr_conflict, run_review_admission,
+};
 pub(crate) use coverage::exclusions;
 pub(crate) use gate::{
     record_reviewer_invocation, release_review_attempt, review_gate_admit, review_gate_settle,

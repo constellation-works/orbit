@@ -22,6 +22,11 @@ spec:
     plugin disabled or uninstalled, or the mode undeclared — is withheld as
     `delivery_job_unavailable`, with the refusal in `detail`, rather than
     dispatched to a gate that would refuse it on every pass.
+    When `mode` is `local` and effective `review.before_pr` is on, a task
+    that cleared the per-task gates is withheld as `local_route_before_pr`,
+    with the deciding config layer and the remedy in `detail`. A PR-mode
+    delivery does not take that hold. The local-route pipeline admission
+    still refuses the same combination if a delivery is submitted anyway.
     Automatic mode includes an `excluded` array that attributes pre-gate lock
     exclusions; it does not report status-based admission or `max_tasks`
     truncation. Explicit `task_ids` input is treated as an override and skips
@@ -101,6 +106,7 @@ spec:
                 - delivery_job_unavailable
                 - group_member_conflict
                 - inherited_only_epic_root
+                - local_route_before_pr
                 - unassessed_complexity
             detail:
               type: string

@@ -539,6 +539,17 @@ impl OrbitRuntime {
         self.workspace_binding.as_deref()
     }
 
+    /// Ship mode an unattended drain delivers in.
+    ///
+    /// The bound workspace's mode, or [`ShipMode::Local`] when this runtime
+    /// has no workspace binding. Automatic admission, readiness and
+    /// `orbit doctor` share this so they cannot disagree with the drain about
+    /// a local-only route [ORB-14168].
+    pub fn automatic_delivery_ship_mode(&self) -> ShipMode {
+        self.workspace_runtime_binding()
+            .map_or(ShipMode::Local, |binding| binding.ship_mode)
+    }
+
     /// Short label naming this runtime's workspace in a refusal: the
     /// checkout directory's name, never an internal id.
     pub(crate) fn workspace_label(&self) -> String {

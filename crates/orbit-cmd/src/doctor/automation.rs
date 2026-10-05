@@ -445,7 +445,8 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
 /// `delivery-code-review` auto-task, with when its next batch is due), each
 /// with its source. A switch that is on but cannot run here reviews nothing
 /// while every other surface looks healthy, so that is an error, not a
-/// warning: before-PR review without a resolvable crew, or an after-landing
+/// warning: before-PR review on a local-only ship workspace [ORB-14168],
+/// before-PR review without a resolvable crew, or an after-landing
 /// consumer that is missing, owned by another machine, wedged, stalled, held
 /// for an operator, watching a branch that does not resolve, naming a crew
 /// that does not, or trailing `origin/<branch>` past the batch's
@@ -471,7 +472,17 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
         switches.after_landing_line()
     );
     let mut remediation = Vec::new();
-    if switches.before_pr_unhealthy() {
+    if switches.before_pr.local_route_incompatible {
+        remediation.push(
+            "`review.before_pr` is on and this workspace ships locally, so every local delivery \
+             is refused before it can run. Turn it off with `orbit config set review.before_pr \
+             false`, or ship through the PR route. After-landing review is the \
+             `delivery-code-review` auto-task, not this switch."
+                .to_string(),
+        );
+    }
+    if switches.before_pr.problems.len() > usize::from(switches.before_pr.local_route_incompatible)
+    {
         remediation.push(
             "Before-PR review needs `operation.review_crew` set to a crew that resolves on this \
              host; set it, or turn `review.before_pr` off."

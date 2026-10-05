@@ -9,9 +9,11 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_config::OperationPolicy;
+use orbit_types::workflow::ShipMode;
 use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 
+use super::local_route_before_pr_conflict;
 use crate::OrbitRuntime;
 use crate::application::automation::{
     AfterLandingHealth, after_landing_health, after_landing_switch,
@@ -39,6 +41,12 @@ pub struct BeforePrSwitch {
     /// Why before-PR review cannot run here while it is on; empty when it
     /// can or is off.
     pub problems: Vec<String>,
+    /// `review.before_pr` is on and automatic delivery uses the local-only
+    /// route [ORB-14168]. The problem text already says so; doctor uses this
+    /// to name the ship-mode remedy rather than the crew remedy. Omitted from
+    /// JSON because `problems` and `healthy` carry it.
+    #[serde(skip)]
+    pub local_route_incompatible: bool,
 }
 
 /// The `delivery-code-review` auto-task: review landed deliveries in batches.
@@ -145,7 +153,16 @@ fn review_switches_under(
     now: DateTime<Utc>,
 ) -> Result<ReviewSwitches, OrbitError> {
     let mut problems = Vec::new();
+    let mut local_route_incompatible = false;
     if policy.review_before_pr.value {
+        // The same mode the drain delivers in. A registered PR workspace is
+        // unaffected; a local-only one cannot run this switch [ORB-14168].
+        if runtime.automatic_delivery_ship_mode() == ShipMode::Local {
+            local_route_incompatible = true;
+            problems.push(local_route_before_pr_conflict(
+                policy.review_before_pr.source.label(),
+            ));
+        }
         match policy.review_crew.value.as_deref() {
             None => problems.push(
                 "operation.review_crew is unset, so every gated delivery is refused".to_string(),
@@ -168,6 +185,7 @@ fn review_switches_under(
             crew: policy.review_crew.value.clone(),
             crew_source: policy.review_crew.source.label().to_string(),
             problems,
+            local_route_incompatible,
         },
         after_landing: AfterLandingSwitch {
             enabled,

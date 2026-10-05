@@ -283,10 +283,13 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     if !task.blocked_by.is_empty() {
         line.push_str(&format!(" blocked-by={}", task.blocked_by.join(",")));
     }
-    // A host-OS wait names the host it waits for; other details (long repair
-    // instructions) stay in `--json`.
-    if task.reason.as_deref() == Some("host_os_mismatch")
-        && let Some(detail) = &task.detail
+    // A host-OS wait names the host it waits for. A local-route before-PR
+    // hold names the remedy. Other details (long repair instructions) stay
+    // in `--json`.
+    if matches!(
+        task.reason.as_deref(),
+        Some("host_os_mismatch" | "local_route_before_pr")
+    ) && let Some(detail) = &task.detail
     {
         line.push_str(&format!(" ({detail})"));
     }

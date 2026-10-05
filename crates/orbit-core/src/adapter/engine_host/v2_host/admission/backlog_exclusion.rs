@@ -72,6 +72,11 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// Work tagged [`NO_DIFF_EXPECTED_TAG`] is exempt — see
     /// [`clears_complexity_gate`].
     UnassessedComplexity,
+    /// Effective `review.before_pr` is on and this delivery is the local-only
+    /// route. Pipeline admission refuses that combination; the task stays in
+    /// `backlog` until the switch is turned off or delivery uses the PR route.
+    /// `detail` names the deciding config layer and the remedy [ORB-14168].
+    LocalRouteBeforePr,
 }
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same
@@ -328,14 +333,15 @@ pub(in crate::adapter::engine_host::v2_host) fn allowlist_from_input(
     })
 }
 
-/// The ship mode an unattended drain delivers in: the workspace binding's,
-/// local when the workspace is unregistered.
+/// The ship mode an unattended drain delivers in.
+///
+/// [`OrbitRuntime::automatic_delivery_ship_mode`]: the workspace binding's
+/// mode, local when the workspace is unregistered. Readiness and doctor call
+/// the same method.
 pub(in crate::adapter::engine_host::v2_host) fn workspace_ship_mode(
     runtime: &OrbitRuntime,
 ) -> ShipMode {
-    runtime
-        .workspace_runtime_binding()
-        .map_or(ShipMode::Local, |binding| binding.ship_mode)
+    runtime.automatic_delivery_ship_mode()
 }
 
 /// The drain's snapshot: admitted work is delivered in the workspace's ship
@@ -466,6 +472,25 @@ fn backlog_snapshot_in_mode(
         excluded.push(exclusion);
         false
     });
+    // [ORB-14168] A task that cleared the per-task gates would still fail
+    // closed at local-route admission while `review.before_pr` is on. Hold it
+    // here so the drain does not spawn that delivery. Tasks already excluded
+    // above keep the more specific reason. PR delivery skips this, and turning
+    // the switch off (workspace overriding global included) clears it.
+    if mode == ShipMode::Local && runtime.operation_policy().review_before_pr.value {
+        let detail = crate::application::review::local_route_before_pr_conflict(
+            runtime.operation_policy().review_before_pr.source.label(),
+        );
+        for task in backlog.drain(..) {
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason: BacklogTaskExclusionReason::LocalRouteBeforePr,
+                conflicts: Vec::new(),
+                crew: None,
+                detail: Some(detail.clone()),
+            });
+        }
+    }
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an
     // operator can act on — reassign it, or run a drain that permits its crew
