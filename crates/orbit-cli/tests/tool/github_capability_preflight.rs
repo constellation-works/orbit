@@ -36,6 +36,10 @@ impl Lane {
         for dir in [&home, &work, &path] {
             std::fs::create_dir_all(dir).expect("create fixture dir");
         }
+        // The lane's cwd is `work`. Lookup walks past a Git root to the
+        // nearest `.orbit`, which a managed TMPDIR finds in the enclosing
+        // checkout. Seal that walk on this lane.
+        crate::git_repo::seal_lookup_boundary(&work);
         Self {
             _temp: temp,
             home,

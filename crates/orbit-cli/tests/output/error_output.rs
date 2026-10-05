@@ -29,7 +29,7 @@ impl Fixture {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let work = home.join("work");
-        std::fs::create_dir_all(work.join(".git")).expect("create work repo");
+        crate::git_repo::init(&work);
         Self {
             _temp: temp,
             home,
@@ -56,7 +56,7 @@ impl Fixture {
     fn two_workspaces() -> Self {
         let fixture = Self::workspace();
         let other_work = fixture.home.join("other_work");
-        std::fs::create_dir_all(other_work.join(".git")).expect("create other work repo");
+        crate::git_repo::init(&other_work);
         let output = run_orbit(
             &other_work,
             &fixture.home,

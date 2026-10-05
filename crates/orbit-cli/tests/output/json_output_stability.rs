@@ -20,7 +20,8 @@ use std::path::Path;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
-use tempfile::{TempDir, tempdir};
+use serde_json::Value;
+use tempfile::TempDir;
 
 /// Commands with a `--json` flag whose output must not shift. Each is a list
 /// or detail command that renders through a different code path.
@@ -33,15 +34,11 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let temp = tempdir().expect("tempdir");
-    let home = temp.path().join("home");
-    let work = temp.path().join("work");
-    std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    let checkout = crate::git_repo::WorkCheckout::new();
     Fixture {
-        _temp: temp,
-        home,
-        work,
+        _temp: checkout.temp,
+        home: checkout.home,
+        work: checkout.work,
     }
 }
 
@@ -127,5 +124,39 @@ fn empty_list_json_is_exactly_an_empty_array() {
         b"[]\n",
         "`orbit {} --json` must stay a bare array",
         command.join(" ")
+    );
+}
+
+/// A temp directory nested in this crate's checkout is the managed-run case:
+/// `TMPDIR` lives under the worktree. The shared helper must still answer
+/// from its own empty workspace, not the enclosing checkout's config.
+#[test]
+fn shared_checkout_does_not_inherit_config_when_tempdir_is_nested_in_checkout() {
+    let checkout = crate::git_repo::WorkCheckout::new_in(Path::new(env!("CARGO_MANIFEST_DIR")));
+    assert_eq!(
+        run(
+            &checkout.home,
+            &checkout.work,
+            &["task", "list", "--json"],
+            &[]
+        ),
+        b"[]\n",
+        "a fixture checkout nested in another Git checkout must not load that checkout's config"
+    );
+    let shown = run(
+        &checkout.home,
+        &checkout.work,
+        &["config", "show", "--json"],
+        &[],
+    );
+    let document: Value = serde_json::from_slice(&shown).expect("config show json");
+    let workspace_path = document["source"]["workspace_path"]
+        .as_str()
+        .expect("config show names the workspace config it loaded");
+    assert_eq!(
+        std::fs::canonicalize(workspace_path).expect("canonical loaded config"),
+        std::fs::canonicalize(checkout.work.join(".orbit/config.toml"))
+            .expect("canonical fixture config"),
+        "lookup must stop at the fixture checkout, not an ancestor workspace config"
     );
 }
