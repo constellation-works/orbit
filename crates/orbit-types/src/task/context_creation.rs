@@ -7,14 +7,16 @@
 //! whole grant: a later entry replaces it, so removing a selector from the
 //! task's scope revokes its grant and nothing older can revive it.
 //!
-//! Each grant is bound to the scope it was recorded with
-//! ([`ContextCreationGrant::context_files_sha256`]). A writer that changes
-//! `context_files` without carrying the grant forward — an older client, or a
-//! path that does not maintain it — leaves the grant [`ContextCreationState::Void`]:
-//! no selector is authorized until an operator re-declares it.
+//! Each grant is bound to the scope and envelope revision it was recorded with
+//! ([`ContextCreationGrant::context_files_sha256`] and
+//! [`ContextCreationGrant::updated_at`]). A writer that changes a task without
+//! carrying the grant forward — an older client, or a path that does not
+//! maintain it — leaves the grant [`ContextCreationState::Void`], even if the
+//! writer later restores the same scope.
 
 use std::collections::BTreeSet;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -42,6 +44,15 @@ pub struct ContextCreationGrant {
     pub selectors: Vec<String>,
     /// [`context_files_sha256`] of the scope this grant was recorded with.
     pub context_files_sha256: String,
+    /// Unique id of the history event that recorded this grant. Older notes
+    /// omit it; maintained writers assign it before persisting a new grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
+    /// Task envelope revision this grant describes. A writer that changes the
+    /// envelope without maintaining grants makes the old grant stale even if
+    /// it later restores the same selector list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 impl ContextCreationGrant {
@@ -50,6 +61,7 @@ impl ContextCreationGrant {
         task_id: &str,
         selectors: impl IntoIterator<Item = String>,
         context_files: &[String],
+        updated_at: DateTime<Utc>,
     ) -> Self {
         Self {
             version: CONTEXT_CREATION_GRANT_VERSION,
@@ -60,6 +72,8 @@ impl ContextCreationGrant {
                 .into_iter()
                 .collect(),
             context_files_sha256: context_files_sha256(context_files),
+            generation: None,
+            updated_at: Some(updated_at),
         }
     }
 
@@ -76,7 +90,18 @@ impl ContextCreationGrant {
 
     /// Stable identity of this exact record, for compare-and-set checks.
     pub fn identity(&self) -> String {
-        format!("{:x}", Sha256::digest(self.to_note().as_bytes()))
+        // `updated_at` is a compatibility seal for older writers. Refreshing
+        // that seal must not make an unchanged authorization look like a new
+        // operator decision.
+        let identity = (
+            self.version,
+            &self.task_id,
+            &self.selectors,
+            &self.context_files_sha256,
+            &self.generation,
+        );
+        let encoded = serde_json::to_string(&identity).unwrap_or_default();
+        format!("{:x}", Sha256::digest(encoded.as_bytes()))
     }
 }
 
@@ -93,7 +118,7 @@ pub enum ContextCreationState {
     /// No grant was ever recorded.
     Absent,
     /// The latest grant is well formed, belongs to this task, and is bound to
-    /// the task's current `context_files`.
+    /// the task's current `context_files` and envelope revision.
     Current(ContextCreationGrant),
     /// The latest grant cannot be trusted for the current scope: it is
     /// malformed, names another task, or the scope changed without it.
@@ -106,6 +131,7 @@ impl ContextCreationState {
     pub fn resolve<'a>(
         task_id: &str,
         context_files: &[String],
+        updated_at: DateTime<Utc>,
         events: impl DoubleEndedIterator<Item = (&'a str, Option<&'a str>)>,
     ) -> Self {
         let mut events = events.rev();
@@ -121,6 +147,7 @@ impl ContextCreationState {
         if grant.version != CONTEXT_CREATION_GRANT_VERSION
             || grant.task_id != task_id
             || grant.context_files_sha256 != context_files_sha256(context_files)
+            || grant.updated_at != Some(updated_at)
             || grant.selectors.len() > MAX_CONTEXT_CREATION_SELECTORS
             || !canonical_order
             || !grant
@@ -164,6 +191,7 @@ impl ContextCreationState {
         task_id: &str,
         next_context_files: &[String],
         authorize: &[String],
+        updated_at: DateTime<Utc>,
     ) -> Result<Option<ContextCreationGrant>, TaskError> {
         let scope = next_context_files.iter().collect::<BTreeSet<_>>();
         if let Some(outside) = authorize.iter().find(|selector| !scope.contains(selector)) {
@@ -187,9 +215,21 @@ impl ContextCreationState {
         if granted.is_empty() && matches!(self, Self::Absent) {
             return Ok(None);
         }
-        let next = ContextCreationGrant::new(task_id, granted, next_context_files);
+        let mut next = ContextCreationGrant::new(task_id, granted, next_context_files, updated_at);
         match self {
-            Self::Current(current) if *current == next => Ok(None),
+            Self::Current(current)
+                if current.version == next.version
+                    && current.task_id == next.task_id
+                    && current.selectors == next.selectors
+                    && current.context_files_sha256 == next.context_files_sha256 =>
+            {
+                next.generation = current.generation.clone();
+                if current.updated_at == next.updated_at {
+                    Ok(None)
+                } else {
+                    Ok(Some(next))
+                }
+            }
             _ => Ok(Some(next)),
         }
     }

@@ -9,7 +9,8 @@ use orbit_types::task::{
 
 use super::*;
 use crate::contracts::{
-    AtomicTaskMutationOutcome, AtomicTaskMutationParams, TaskDocumentUpdateParams,
+    AtomicTaskMutationOutcome, AtomicTaskMutationParams, DesktopTaskMutationParams,
+    TaskDocumentUpdateParams,
 };
 
 const EXISTING: &str = "file:README.md";
@@ -32,6 +33,17 @@ fn granted_task(store: &TaskV2Store, context_files: &[&str], authorize: &[&str])
 
 fn state(store: &TaskV2Store, id: &str) -> ContextCreationState {
     creation_state(&store.bundle_store.read_bundle(id).expect("read bundle"))
+}
+
+fn old_client_rescope(store: &TaskV2Store, id: &str, context_files: &[&str]) {
+    store
+        .with_task_lock(id, || {
+            let mut bundle = store.bundle_store.read_bundle(id)?;
+            bundle.envelope.context_files = scope(context_files);
+            bundle.envelope.updated_at += chrono::Duration::seconds(1);
+            store.bundle_store.rewrite_envelope(id, &bundle.envelope)
+        })
+        .expect("old client envelope update");
 }
 
 fn rescope(
@@ -132,23 +144,87 @@ fn revoked_or_voided_grants_never_revive() {
     rescope(&store, &id, &[EXISTING, NEW], &[]).expect("restore scope");
     assert_eq!(state(&store, &id).selectors(), [] as [String; 0]);
 
-    // A writer that does not maintain grants (an older client) changes the
-    // scope: the grant it bypassed is void, not carried.
+    // Two older-client writes bypass grant maintenance and restore the exact
+    // authorized scope. The envelope revision binding prevents the first
+    // grant from becoming current again after the second write.
     rescope(&store, &id, &[EXISTING, NEW], &[NEW]).expect("re-declare");
-    store
-        .with_task_lock(&id, || {
-            let mut bundle = store.bundle_store.read_bundle(&id)?;
-            bundle.envelope.context_files = scope(&[EXISTING, NEW, OTHER_NEW]);
-            store.bundle_store.rewrite_envelope(&id, &bundle.envelope)
-        })
-        .expect("unmaintained rewrite");
+    old_client_rescope(&store, &id, &[EXISTING, OTHER_NEW]);
+    assert_eq!(state(&store, &id), ContextCreationState::Void);
+    old_client_rescope(&store, &id, &[EXISTING, NEW]);
     assert_eq!(state(&store, &id), ContextCreationState::Void);
 
     // The next maintained write records an explicit revocation, so a later
-    // return to the voided grant's own scope finds nothing to revive.
+    // return to the voided grant's scope finds nothing to revive.
     rescope(&store, &id, &[EXISTING, OTHER_NEW], &[]).expect("maintained write");
     rescope(&store, &id, &[EXISTING, NEW], &[]).expect("scope of the voided grant");
     assert_eq!(state(&store, &id).selectors(), [] as [String; 0]);
+}
+
+#[test]
+fn maintained_document_edits_rebind_creation_intent_to_the_new_revision() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
+    let ContextCreationState::Current(before_grant) = state(&store, &id) else {
+        panic!("authorized task has a current grant");
+    };
+    let before = before_grant.identity();
+
+    store
+        .update_task_document(
+            &id,
+            &TaskDocumentUpdateParams {
+                actor: "operator".to_string(),
+                title: Some("renamed task".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("maintained document update");
+
+    let after = state(&store, &id);
+    assert_eq!(after.selectors(), [NEW]);
+    let ContextCreationState::Current(after_grant) = after else {
+        panic!("maintained edit keeps the grant current");
+    };
+    assert_eq!(after_grant.identity(), before);
+    assert_eq!(after_grant.generation, before_grant.generation);
+    assert_ne!(after_grant.updated_at, before_grant.updated_at);
+}
+
+#[test]
+fn desktop_comment_refreshes_the_revision_seal_without_changing_intent() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
+    let ContextCreationState::Current(before_grant) = state(&store, &id) else {
+        panic!("authorized task has a current grant");
+    };
+    let revision = store.desktop_task_revision(&id).expect("desktop revision");
+
+    assert_eq!(
+        store
+            .apply_desktop_task_mutation(
+                &id,
+                &DesktopTaskMutationParams {
+                    actor: "operator".to_string(),
+                    request_id: "review-comment".to_string(),
+                    payload_digest: "a".repeat(64),
+                    expected_revision: revision,
+                    fields: Default::default(),
+                    comment: Some("A benign note.".to_string()),
+                    status: None,
+                },
+            )
+            .expect("desktop comment"),
+        AtomicTaskMutationOutcome::Applied
+    );
+
+    let ContextCreationState::Current(after_grant) = state(&store, &id) else {
+        panic!("desktop comment keeps the grant current");
+    };
+    assert_eq!(after_grant.identity(), before_grant.identity());
+    assert_eq!(after_grant.generation, before_grant.generation);
+    assert_ne!(after_grant.updated_at, before_grant.updated_at);
 }
 
 /// The pilot's write carries the grant it validated against: a different
@@ -190,14 +266,42 @@ fn the_atomic_pilot_write_compares_and_carries_the_grant() {
     );
 }
 
+/// Reauthorizing the exact same scope creates a new preparation generation:
+/// an assessment made before revoke + reauthorize must not pass the store CAS.
+#[test]
+fn revoke_and_same_scope_reauthorization_changes_the_pilot_generation() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
+    let prepared_identity = state(&store, &id).identity();
+    assert!(prepared_identity.is_some());
+
+    rescope(&store, &id, &[EXISTING], &[]).expect("remove authorized selector");
+    rescope(&store, &id, &[EXISTING, NEW], &[NEW]).expect("explicitly reauthorize same scope");
+    let current_identity = state(&store, &id).identity();
+    assert_ne!(current_identity, prepared_identity);
+    assert_eq!(state(&store, &id).selectors(), [NEW]);
+
+    assert_eq!(
+        pilot_write(&store, &id, prepared_identity, &[EXISTING, NEW]),
+        AtomicTaskMutationOutcome::Stale,
+        "an old preparation cannot apply against a newly recorded grant with identical contents"
+    );
+}
+
 /// Only scope writes record a grant; a caller-supplied history row cannot.
 #[test]
 fn a_history_append_cannot_forge_a_grant() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[]);
-    let forged =
-        orbit_types::task::ContextCreationGrant::new(&id, scope(&[NEW]), &scope(&[EXISTING, NEW]));
+    let task = store.get_task(&id).expect("get task").expect("task exists");
+    let forged = orbit_types::task::ContextCreationGrant::new(
+        &id,
+        scope(&[NEW]),
+        &scope(&[EXISTING, NEW]),
+        task.updated_at,
+    );
     let refused = store.update_task_history(
         &id,
         &TaskHistoryUpdateParams {

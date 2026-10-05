@@ -72,6 +72,7 @@ impl TaskV2Store {
             "",
             &params.context_files,
             &params.context_creation,
+            Utc::now(),
         )?;
 
         let now = Utc::now();
@@ -112,14 +113,19 @@ impl TaskV2Store {
         }];
         // The initial grant is part of the bundle the create publishes, so a
         // task never exists without the creation intent its writer declared.
-        if let Some(grant) = orbit_types::task::ContextCreationState::Absent.next_grant(
+        if let Some(mut grant) = orbit_types::task::ContextCreationState::Absent.next_grant(
             &id,
             &params.context_files,
             &params.context_creation,
+            now,
         )? {
+            let event_id = next_event_id(&events);
+            if grant.generation.is_none() {
+                grant.generation = Some(event_id.clone());
+            }
             events.push(orbit_types::task::TaskEventRowV2 {
                 schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
-                event_id: next_event_id(&events),
+                event_id,
                 at: now,
                 by: params.actor.clone(),
                 event_type: orbit_types::task::CONTEXT_CREATION_AUTHORIZED_EVENT.to_string(),

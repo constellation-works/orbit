@@ -191,20 +191,27 @@ impl TaskV2Store {
                 self.bundle_store.append_event(id, &approval)?;
                 b.events.push(approval);
             }
-            self.bundle_store.append_event(
-                id,
-                &TaskEventRowV2 {
-                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-                    event_id: next_event_id(&b.events),
-                    at: now,
-                    by: p.actor.clone(),
-                    event_type: "desktop_mutation".into(),
-                    note: Some(receipt),
-                    from_status: (!approval && old_status != b.envelope.status)
-                        .then_some(old_status),
-                    to_status: (!approval && old_status != b.envelope.status)
-                        .then_some(b.envelope.status),
-                },
+            let event = TaskEventRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id: next_event_id(&b.events),
+                at: now,
+                by: p.actor.clone(),
+                event_type: "desktop_mutation".into(),
+                note: Some(receipt),
+                from_status: (!approval && old_status != b.envelope.status).then_some(old_status),
+                to_status: (!approval && old_status != b.envelope.status)
+                    .then_some(b.envelope.status),
+            };
+            self.bundle_store.append_event(id, &event)?;
+            b.events.push(event);
+            let context_files = b.envelope.context_files.clone();
+            append_creation_grant(
+                &self.bundle_store,
+                &mut b,
+                &context_files,
+                &[],
+                &p.actor,
+                now,
             )?;
             b.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &b.envelope)?;

@@ -8,6 +8,7 @@ use orbit_core::application::task::{
     ContextCreationAuthorization, TaskAddParams, TaskUpdateParams,
 };
 use orbit_core::{Task, TaskStatus};
+use orbit_types::task::TaskArtifact;
 use serde_json::{Value, json};
 
 use super::{Workspace, runtime_at};
@@ -370,5 +371,85 @@ fn creation_grant_changed_after_preparation_is_stale() {
     // A fresh preparation applies.
     let prepared = workspace.prepare(&[&task.id]);
     let applied = workspace.apply_one(&prepared, &after.context_files, &[EXISTING, NEW_MODULE]);
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+}
+
+#[test]
+fn revoke_and_same_scope_reauthorization_stales_an_older_preparation() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::creation::revoke_and_same_scope_reauthorization_stales_an_older_preparation",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = workspace.scoped_task("declared", &[EXISTING, NEW_MODULE], true);
+    let prepared = workspace.prepare(&[&task.id]);
+    let prior_identity = prepared["tasks"][0]["context_creation_identity"].clone();
+    assert!(prior_identity.is_string());
+
+    workspace.rescope(&task.id, &[EXISTING], false);
+    workspace.rescope(&task.id, &[EXISTING, NEW_MODULE], true);
+    let current = workspace.runtime.get_task(&task.id).unwrap();
+    let applied = workspace.apply_one(&prepared, &task.context_files, &[EXISTING, NEW_MODULE]);
+
+    assert_eq!(outcome(&applied)["outcome"], "stale", "{applied}");
+    assert_eq!(outcome(&applied)["reason"], "context_creation_changed");
+    assert_eq!(current.context_files, task.context_files);
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), current);
+}
+
+#[test]
+fn benign_comment_and_artifact_writes_preserve_preparation() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::creation::benign_comment_and_artifact_writes_preserve_preparation",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = workspace.scoped_task("declared", &[EXISTING, NEW_MODULE], true);
+    let prepared = workspace.prepare(&[&task.id]);
+    let identity = prepared["tasks"][0]["context_creation_identity"].clone();
+    assert!(identity.is_string());
+
+    workspace
+        .runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some("A benign comment during assessment.".to_string()),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            Some("fixture-model".into()),
+        )
+        .unwrap();
+    let after_comment = workspace.prepare(&[&task.id]);
+    assert_eq!(
+        after_comment["tasks"][0]["context_creation_identity"], identity,
+        "history-only updates preserve the semantic creation grant"
+    );
+
+    workspace
+        .runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    "notes/review.txt",
+                    "A benign artifact during assessment.",
+                )],
+                ..Default::default()
+            },
+            Some("codex".into()),
+            Some("fixture-model".into()),
+        )
+        .unwrap();
+    let after_artifact = workspace.prepare(&[&task.id]);
+    assert_eq!(
+        after_artifact["tasks"][0]["context_creation_identity"], identity,
+        "artifact-only updates preserve the semantic creation grant"
+    );
+
+    let applied = workspace.apply_one(&prepared, &task.context_files, &[EXISTING, NEW_MODULE]);
     assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
 }

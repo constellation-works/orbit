@@ -3,7 +3,7 @@
 //! The `updates` module owns document and history mutations.
 //! The `artifacts` module owns task artifact reads, manifests, and upserts.
 //! The `sidecars` module owns comments and history row reads.
-//! The `creation_grant` module carries a task's context creation grant through scope writes.
+//! The `creation_grant` module carries a task's context creation grant through envelope revisions.
 //! The `index` module owns generated index reads, rebuilds, bundle translation, and task locking helpers.
 //! The `repair_gate` module bounds repeated automatic index rebuilds that keep failing over unchanged bundles.
 //! The `envelope_cache` module owns freshness-stamped reuse of parsed envelopes.

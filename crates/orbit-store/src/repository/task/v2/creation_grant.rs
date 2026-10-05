@@ -1,9 +1,9 @@
-//! Carrying a task's context creation grant through the bundle writes that
-//! change its scope.
+//! Carrying a task's context creation grant through task bundle revisions.
 //!
 //! The grant row is appended before the envelope publish, so the pending-write
 //! journal commits or aborts it together with the scope it describes.
 
+use chrono::{DateTime, Utc};
 use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, ContextCreationState};
 
 use super::*;
@@ -13,6 +13,7 @@ pub(super) fn creation_state(bundle: &TaskBundleV2) -> ContextCreationState {
     ContextCreationState::resolve(
         &bundle.envelope.id,
         &bundle.envelope.context_files,
+        bundle.envelope.updated_at,
         bundle
             .events
             .iter()
@@ -20,23 +21,32 @@ pub(super) fn creation_state(bundle: &TaskBundleV2) -> ContextCreationState {
     )
 }
 
-/// Append the grant row a scope change to `next_context_files` requires, if
-/// any, to the open bundle write. Call before the envelope is republished.
+/// Append the grant row the next envelope revision requires, if any, to the
+/// open bundle write. Call before the envelope is republished.
 pub(super) fn append_creation_grant(
     store: &TaskBundleStoreV2,
     bundle: &mut TaskBundleV2,
     next_context_files: &[String],
     authorize: &[String],
     actor: &str,
+    updated_at: DateTime<Utc>,
 ) -> Result<(), OrbitError> {
-    let Some(grant) =
-        creation_state(bundle).next_grant(&bundle.envelope.id, next_context_files, authorize)?
+    let Some(mut grant) = creation_state(bundle).next_grant(
+        &bundle.envelope.id,
+        next_context_files,
+        authorize,
+        updated_at,
+    )?
     else {
         return Ok(());
     };
+    let event_id = next_event_id(&bundle.events);
+    if grant.generation.is_none() {
+        grant.generation = Some(event_id.clone());
+    }
     let event = TaskEventRowV2 {
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-        event_id: next_event_id(&bundle.events),
+        event_id,
         at: Utc::now(),
         by: actor.to_string(),
         event_type: CONTEXT_CREATION_AUTHORIZED_EVENT.to_string(),

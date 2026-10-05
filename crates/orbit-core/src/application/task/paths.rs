@@ -130,6 +130,7 @@ impl OrbitRuntime {
         Ok(ContextCreationState::resolve(
             &task.id,
             &task.context_files,
+            task.updated_at,
             history
                 .iter()
                 .map(|entry| (entry.event.as_str(), entry.note.as_deref())),

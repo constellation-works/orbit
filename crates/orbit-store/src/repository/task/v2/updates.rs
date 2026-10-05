@@ -74,6 +74,7 @@ impl TaskV2Store {
                 &fields.context_files,
                 &[],
                 &fields.actor,
+                now,
             )?;
             bundle.envelope.context_files = fields.context_files.clone();
             bundle.envelope.status = fields.status;
@@ -100,6 +101,7 @@ impl TaskV2Store {
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let updated_at = Utc::now();
             let mut envelope_changed = false;
             let mut title_changed = false;
             let mut previous_title: Option<String> = None;
@@ -133,6 +135,7 @@ impl TaskV2Store {
                     value,
                     &fields.context_creation,
                     &fields.actor,
+                    updated_at,
                 )?;
                 bundle.envelope.context_files = value.clone();
                 envelope_changed = true;
@@ -285,7 +288,18 @@ impl TaskV2Store {
                 || fields.plan.is_some()
                 || fields.execution_summary.is_some()
             {
-                bundle.envelope.updated_at = Utc::now();
+                if fields.context_files.is_none() {
+                    let context_files = bundle.envelope.context_files.clone();
+                    append_creation_grant(
+                        &self.bundle_store,
+                        &mut bundle,
+                        &context_files,
+                        &[],
+                        &fields.actor,
+                        updated_at,
+                    )?;
+                }
+                bundle.envelope.updated_at = updated_at;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
                 self.replace_index_best_effort(&bundle.envelope, "task document update");
@@ -395,6 +409,15 @@ impl TaskV2Store {
                 || fields.status_event.is_some()
                 || fields.status_note.is_some()
             {
+                let context_files = bundle.envelope.context_files.clone();
+                append_creation_grant(
+                    &self.bundle_store,
+                    &mut bundle,
+                    &context_files,
+                    &[],
+                    &fields.actor,
+                    now,
+                )?;
                 bundle.envelope.status = target_status;
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
