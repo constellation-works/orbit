@@ -455,6 +455,98 @@ fn http_transports_keep_keys_in_headers() {
     });
 }
 
+#[test]
+fn empty_provider_replies_do_not_poison_session_continuation() {
+    isolated(
+        "empty_provider_replies_do_not_poison_session_continuation",
+        || {
+            for anthropic in [true, false] {
+                let (empty, answer, messages_key, blocks_key, assistant_role) = if anthropic {
+                    (
+                        json!({"content":[],"stop_reason":"end_turn"}),
+                        json!({"content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn"}),
+                        "messages",
+                        "content",
+                        "assistant",
+                    )
+                } else {
+                    (
+                        json!({"candidates":[{"finishReason":"SAFETY"}]}),
+                        json!({"candidates":[{"content":{"role":"model","parts":[{"text":"answer"}]},"finishReason":"STOP"}]}),
+                        "contents",
+                        "parts",
+                        "model",
+                    )
+                };
+                let server = Server::new(vec![empty, answer.clone(), answer]);
+                let transport: Box<dyn LoopTransport> = if anthropic {
+                    Box::new(
+                        AnthropicMessagesTransport::new(API_KEY, "fixture-model")
+                            .unwrap()
+                            .with_endpoint(format!("{}/v1/messages", server.base_url))
+                            .with_timeout(WAIT)
+                            .unwrap(),
+                    )
+                } else {
+                    Box::new(
+                        GeminiHttpTransport::new(API_KEY, "fixture-model", None)
+                            .unwrap()
+                            .with_base_url(&server.base_url)
+                            .with_timeout(WAIT)
+                            .unwrap(),
+                    )
+                };
+                let mut session = Session::new(transport.provider(), "fixture-model", "", None);
+                let cfg = AgentLoopConfig::new_for_run("fixture-run");
+                let registry = ToolRegistry::new();
+                let ctx = ToolContext::default();
+                for (turn, prompt) in ["first prompt", "continue", "continue again"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let outcome = session
+                        .send(&cfg, transport.as_ref(), &registry, &ctx, &NullSink, prompt)
+                        .expect("empty reply must not prevent later sends");
+                    assert_eq!(outcome.final_message, if turn == 0 { "" } else { "answer" });
+                    let recorded = server.request();
+                    let messages = recorded.body[messages_key].as_array().unwrap();
+                    let assistants: Vec<_> = messages
+                        .iter()
+                        .filter(|message| message["role"] == assistant_role)
+                        .collect();
+                    assert!(
+                        assistants
+                            .iter()
+                            .all(|message| { !message[blocks_key].as_array().unwrap().is_empty() }),
+                        "{} must never replay an empty assistant reply: {}",
+                        transport.provider(),
+                        recorded.body
+                    );
+                    assert_eq!(
+                        assistants.len(),
+                        turn.saturating_sub(1),
+                        "empty replies are omitted and non-empty replies remain on replay"
+                    );
+                    if turn == 2 {
+                        assert_eq!(assistants[0][blocks_key][0]["text"], "answer");
+                    }
+                    let prompts: Vec<_> = messages
+                        .iter()
+                        .filter(|message| message["role"] == "user")
+                        .flat_map(|message| message[blocks_key].as_array().unwrap())
+                        .map(|block| block["text"].as_str().unwrap())
+                        .collect();
+                    assert_eq!(
+                        prompts,
+                        &["first prompt", "continue", "continue again"][..=turn]
+                    );
+                }
+                server.finish();
+            }
+        },
+    );
+}
+
 struct SlowTool(Arc<Mutex<Vec<Value>>>);
 
 impl Tool for SlowTool {

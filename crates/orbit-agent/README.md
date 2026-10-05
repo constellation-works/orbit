@@ -30,7 +30,8 @@ runs one integration binary on Unix. Recording shell executables exercise every
 CLI adapter's public `Agent` invocation, including the internal mock provider;
 `Provider::ALL` requires a fixture for each shipped provider. Local HTTP servers
 exercise all three HTTP transports, including Gemini cache creation, and the
-real `AgentLoop` deadline, tool policy, and tool-result pairing behavior.
+real `AgentLoop` deadline, tool policy, tool-result pairing, and session
+continuation after empty Anthropic or Gemini replies.
 
 The CLI fixture launches descriptors with the shared
 `orbit_common::security::child_env` allowlist, checking prompt delivery, model
@@ -58,7 +59,9 @@ crates/orbit-agent/src/loop_engine/
   hands it to the transport, parses `tool_use` blocks out of the response,
   dispatches each through the shared `ToolRegistry`, and appends tool
   results as the next user turn until the provider returns `end_turn` or a
-  guardrail fires.
+  guardrail fires. A response with no content blocks still returns its turn
+  outcome, but adds no assistant message to history, so later sends do not
+  replay an empty assistant reply.
 - `Session::new(provider, model, system_prompt, audit_tag)` creates an
   in-process conversation handle with a stable opaque identifier.
   `Session::send(cfg, transport, registry, ctx, sink, prompt)` is a thin
