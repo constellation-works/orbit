@@ -194,7 +194,7 @@ define_config_settings! {
     },
     pr_close_on_terminal: bool => bool {
         key: "pr.close_on_terminal", value_type: "bool",
-        description: "Close a task's open Orbit-authored pull requests (delivery and [BLOCKED] PRs) when the task lands (done), is rejected or is archived, with a comment naming the landing or the decision. Branches are kept; a forge error is a warning, never a failure (default true).",
+        description: "Close a task's open Orbit-authored pull requests (delivery and preservation PRs for blocked tasks) when the task lands (done), is rejected or is archived, with a comment naming the landing or the decision. Branches are kept; a forge error is a warning, never a failure (default true).",
         section: ConfigSection::Delivery, order: 140,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
