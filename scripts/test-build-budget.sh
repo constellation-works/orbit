@@ -131,6 +131,68 @@ finally:
 PY
 chmod +x "$TMP/helper.py"
 
+# Agent subprocesses retain HOME and PATH but receive no ORBIT_* settings.
+# The host files must still control admission, and an explicit slot override
+# must beat the host file when one is present.
+run_agent_environment_case() {
+  local case_name="$1" expected_slots="$2" override_slots="${3:-}"
+  local home="$TMP/agent-home-$case_name"
+  local state="$TMP/agent-state-$case_name"
+  local pids=()
+  mkdir -p "$home" "$state"
+
+  for label in a b c d; do
+    if [[ -n "$override_slots" ]]; then
+      (env -i HOME="$home" PATH="$PATH" ORBIT_BUILD_SLOTS="$override_slots" \
+        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" sleep 0.35) &
+    else
+      (env -i HOME="$home" PATH="$PATH" \
+        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" sleep 0.35) &
+    fi
+    pids+=("$!")
+  done
+
+  local pid
+  for pid in "${pids[@]}"; do
+    wait "$pid"
+  done
+  [[ "$(cat "$state/max")" == "$expected_slots" ]] \
+    || fail "$case_name agent environment admitted $(cat "$state/max") commands, expected $expected_slots"
+}
+
+run_agent_environment_case agent-default 2
+
+agent_host_home="$TMP/agent-home-agent-host-file"
+mkdir -p "$agent_host_home/.orbit/cache/build-budget"
+printf '4\n' >"$agent_host_home/.orbit/cache/build-budget/slots"
+printf '6\n' >"$agent_host_home/.orbit/cache/build-budget/cargo-jobs"
+run_agent_environment_case agent-host-file 4
+env -i HOME="$agent_host_home" PATH="$PATH" \
+  "$WRAPPER" -- "$TMP/helper.py" "$TMP/agent-job-file" jobs-from-host-file sleep 0.01
+grep -Fq 'jobs=6' "$TMP/agent-job-file/events" || fail "host cargo-jobs file was not honored"
+env -i HOME="$agent_host_home" PATH="$PATH" ORBIT_CARGO_JOBS=7 \
+  "$WRAPPER" -- "$TMP/helper.py" "$TMP/agent-job-override" jobs-from-env sleep 0.01
+grep -Fq 'jobs=7' "$TMP/agent-job-override/events" || fail "ORBIT_CARGO_JOBS did not override the host file"
+
+agent_override_home="$TMP/agent-home-agent-override"
+mkdir -p "$agent_override_home/.orbit/cache/build-budget"
+printf '4\n' >"$agent_override_home/.orbit/cache/build-budget/slots"
+run_agent_environment_case agent-override 1 1
+
+for invalid_slots in banana 129; do
+  invalid_home="$TMP/agent-home-invalid-$invalid_slots"
+  mkdir -p "$invalid_home/.orbit/cache/build-budget"
+  printf '%s\n' "$invalid_slots" >"$invalid_home/.orbit/cache/build-budget/slots"
+  set +e
+  env -i HOME="$invalid_home" PATH="$PATH" "$WRAPPER" -- true \
+    >/dev/null 2>"$TMP/invalid-host-slots.err"
+  status=$?
+  set -e
+  [[ "$status" == "64" ]] || fail "host slots value $invalid_slots returned $status instead of 64"
+  grep -Fq 'ORBIT_BUILD_SLOTS must be a decimal integer from 1 through 128' \
+    "$TMP/invalid-host-slots.err" || fail "host slots value $invalid_slots had the wrong validation message"
+done
+
 # Different worktree paths share two slots, and enough overlapping work reaches both.
 pids=()
 for label in a b c d; do

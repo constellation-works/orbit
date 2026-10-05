@@ -38,9 +38,11 @@ def command_arguments(arguments: list[str]) -> list[str]:
         print(
             "usage: scripts/build-budget.py -- COMMAND [ARG ...]\n"
             "\n"
-            "Environment: ORBIT_BUILD_SLOTS (default 2), ORBIT_CARGO_JOBS "
-            "(default CARGO_BUILD_JOBS or 4), ORBIT_BUILD_BUDGET_DIR, and "
-            "ORBIT_BUILD_BUDGET=0 to bypass admission."
+            "Configuration: ORBIT_BUILD_SLOTS overrides <budget-dir>/slots "
+            "(default 2); ORBIT_CARGO_JOBS, then CARGO_BUILD_JOBS, override "
+            "<budget-dir>/cargo-jobs (default 4). The budget directory is "
+            "ORBIT_BUILD_BUDGET_DIR or ~/.orbit/cache/build-budget. "
+            "ORBIT_BUILD_BUDGET=0 bypasses admission."
         )
         raise SystemExit(0)
 
@@ -50,17 +52,61 @@ def command_arguments(arguments: list[str]) -> list[str]:
     return arguments[1:]
 
 
+def budget_directory_path() -> Path:
+    configured = os.environ.get("ORBIT_BUILD_BUDGET_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".orbit" / "cache" / "build-budget"
+
+
+def host_setting(
+    directory: Path,
+    filename: str,
+    name: str,
+    default: int,
+    maximum: int,
+) -> int:
+    path = directory / filename
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return default
+    except (OSError, UnicodeError) as error:
+        fail(f"cannot read {name} from {path}: {error}", 73)
+
+    return positive_integer(name, value, maximum)
+
+
 def configured_budget() -> tuple[int, int, bool]:
-    slots = positive_integer(
-        "ORBIT_BUILD_SLOTS",
-        os.environ.get("ORBIT_BUILD_SLOTS", str(DEFAULT_BUILD_SLOTS)),
-        MAX_BUILD_SLOTS,
-    )
-    jobs_source = (
-        os.environ["ORBIT_CARGO_JOBS"]
-        if "ORBIT_CARGO_JOBS" in os.environ
-        else os.environ.get("CARGO_BUILD_JOBS", str(DEFAULT_CARGO_JOBS))
-    )
+    directory = budget_directory_path()
+    if directory.is_symlink():
+        fail(f"lock directory must not be a symbolic link: {directory}")
+
+    if "ORBIT_BUILD_SLOTS" in os.environ:
+        slots = positive_integer("ORBIT_BUILD_SLOTS", os.environ["ORBIT_BUILD_SLOTS"], MAX_BUILD_SLOTS)
+    else:
+        slots = host_setting(
+            directory,
+            "slots",
+            "ORBIT_BUILD_SLOTS",
+            DEFAULT_BUILD_SLOTS,
+            MAX_BUILD_SLOTS,
+        )
+
+    if "ORBIT_CARGO_JOBS" in os.environ:
+        jobs_source = os.environ["ORBIT_CARGO_JOBS"]
+    elif "CARGO_BUILD_JOBS" in os.environ:
+        jobs_source = os.environ["CARGO_BUILD_JOBS"]
+    else:
+        jobs_source = str(
+            host_setting(
+                directory,
+                "cargo-jobs",
+                "ORBIT_CARGO_JOBS/CARGO_BUILD_JOBS",
+                DEFAULT_CARGO_JOBS,
+                MAX_CARGO_JOBS,
+            )
+        )
     jobs = positive_integer("ORBIT_CARGO_JOBS/CARGO_BUILD_JOBS", jobs_source, MAX_CARGO_JOBS)
 
     enabled = os.environ.get("ORBIT_BUILD_BUDGET", "1")
@@ -71,11 +117,7 @@ def configured_budget() -> tuple[int, int, bool]:
 
 
 def lock_directory() -> Path:
-    configured = os.environ.get("ORBIT_BUILD_BUDGET_DIR")
-    if configured:
-        directory = Path(configured).expanduser()
-    else:
-        directory = Path.home() / ".orbit" / "cache" / "build-budget"
+    directory = budget_directory_path()
 
     if directory.is_symlink():
         fail(f"lock directory must not be a symbolic link: {directory}")
