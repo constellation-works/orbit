@@ -6,7 +6,8 @@ name: orbit-codeql
 # without ever describing a reachable defect.
 # Local Orbit state and Cargo output are untracked, so hosted checkouts never
 # contain them, but a local run must not extract their worktrees, toolchain
-# sources or generated code. scripts/codeql-rust-local.sh adds its scratch.
+# sources or generated code. scripts/codeql-rust-local.sh adds its scratch and
+# earlier run directories.
 paths-ignore:
   - "**/tests/**"
   - "**/*_test.rs"
