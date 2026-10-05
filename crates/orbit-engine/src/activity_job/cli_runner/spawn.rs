@@ -620,6 +620,9 @@ fn probe_overriding_user_namespace_refusal() -> Option<BwrapProbeOutcome> {
         available: true,
         trusted_path: bwrap_program_for_audit().to_string(),
         detail: "test seam: compile the post-run guard without a user namespace".to_string(),
+        // This synthetic outcome does not probe or execute a wrapper.
+        source: None,
+        version: None,
     })
 }
 
