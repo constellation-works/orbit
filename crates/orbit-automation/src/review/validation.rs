@@ -80,6 +80,12 @@ pub enum ValidationDefect {
         outcome: ValidationOutcome,
         role: Option<ValidationRole>,
     },
+    /// The certificate has no captured owner validation policy. It must be
+    /// re-established under a fresh delivery admission.
+    HostContractMissing,
+    /// A captured host-required command is absent, reclassified, or has no
+    /// valid required replacement on the final candidate.
+    HostCheckNotEstablished { command: String },
 }
 
 impl ValidationDefect {
@@ -162,18 +168,36 @@ impl ValidationDefect {
                     None => "omits it".to_string(),
                 }
             ),
+            ValidationDefect::HostContractMissing => "validation_contract_missing: this review has no captured host required-check list; dispatch a fresh delivery run after upgrading the workspace".to_string(),
+            ValidationDefect::HostCheckNotEstablished { command } => format!(
+                "validation_incomplete: host-required check `{command}` is not established as a required pass or a valid same-check replacement on the final candidate"
+            ),
         }
     }
 }
 
 /// What the records are judged against beyond themselves.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct ValidationContext<'a> {
     /// Task selectors plus a `file:` selector for every path the candidate
     /// changed from its base.
     pub scope: &'a [String],
     /// Required-check records earlier report revisions of the attempt made.
     pub obligations: &'a [RetainedObligation],
+    /// Required commands captured by the candidate owner at delivery
+    /// admission. `None` is a legacy/ambiguous contract; `Some([])` is an
+    /// explicit empty host contract.
+    pub required_validation_commands: Option<&'a [String]>,
+}
+
+impl Default for ValidationContext<'_> {
+    fn default() -> Self {
+        Self {
+            scope: &[],
+            obligations: &[],
+            required_validation_commands: Some(&[]),
+        }
+    }
 }
 
 /// Read a reviewer's validation records as evidence about the final
@@ -248,6 +272,29 @@ pub fn validation_evidence(
                     .iter()
                     .find(|record| same_check(obligation, record))
                     .map(|record| record.role),
+            });
+        }
+    }
+
+    let Some(host_required) = context.required_validation_commands else {
+        return Err(ValidationDefect::HostContractMissing);
+    };
+    for command in host_required {
+        let established = records.iter().enumerate().any(|(index, record)| {
+            record.command == *command
+                && match record.role {
+                    ValidationRole::Required => record.outcome == ValidationOutcome::Passed,
+                    ValidationRole::Superseded => {
+                        replaced_by_required_check(record, &records[index + 1..])
+                    }
+                    ValidationRole::ExpectedFailure
+                    | ValidationRole::Excluded
+                    | ValidationRole::Diagnostic => false,
+                }
+        });
+        if !established {
+            return Err(ValidationDefect::HostCheckNotEstablished {
+                command: command.clone(),
             });
         }
     }

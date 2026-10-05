@@ -317,6 +317,7 @@ fn certificate_with(
         assurance: verdict.assurance(),
         findings: Vec::new(),
         validation,
+        required_validation_commands: Some(vec![]),
         validation_complete: true,
         retained_obligations,
         validation_scope: validation_scope.to_vec(),
@@ -437,6 +438,7 @@ fn an_unrelated_workspace_failure_is_an_honest_diagnostic_not_a_blocker_or_a_con
     let context = ValidationContext {
         scope: &scope,
         obligations: &[],
+        required_validation_commands: Some(&[]),
     };
     assert_eq!(validation_evidence(&records, &context), Ok(()));
 
@@ -640,6 +642,7 @@ fn relabeling_or_dropping_a_required_check_never_completes_validation() {
         let context = ValidationContext {
             scope: &scope,
             obligations: &obligations,
+            required_validation_commands: Some(&[]),
         };
         assert_eq!(
             validation_evidence(&records, &context),
@@ -758,6 +761,7 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
         let context = ValidationContext {
             scope: &scope,
             obligations: &obligations,
+            required_validation_commands: Some(&[]),
         };
         assert_eq!(validation_evidence(&records, &context), Ok(()), "{name}");
         assert_eq!(
@@ -824,6 +828,7 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
         let context = ValidationContext {
             scope: &scope,
             obligations: &[],
+            required_validation_commands: Some(&[]),
         };
         assert_eq!(
             validation_evidence(&records, &context),
@@ -836,4 +841,172 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn captured_host_checks_cannot_be_omitted_or_reclassified() {
+    let command = "make ci-fast";
+    let host_required = vec![command.to_string()];
+    let task_scope = scope();
+    let context = ValidationContext {
+        scope: &task_scope,
+        obligations: &[],
+        required_validation_commands: Some(&host_required),
+    };
+    let cases = [
+        (
+            "missing",
+            scoped_passes(),
+            ValidationDefect::HostCheckNotEstablished {
+                command: command.into(),
+            },
+        ),
+        (
+            "failed",
+            {
+                let mut records = scoped_passes();
+                records.push(record(
+                    command,
+                    None,
+                    ValidationOutcome::Failed,
+                    ValidationRole::Required,
+                    None,
+                ));
+                records
+            },
+            ValidationDefect::RequiredNotPassed {
+                command: command.into(),
+                outcome: ValidationOutcome::Failed,
+            },
+        ),
+        (
+            "denied",
+            {
+                let mut records = scoped_passes();
+                records.push(record(
+                    command,
+                    None,
+                    ValidationOutcome::Denied,
+                    ValidationRole::Required,
+                    None,
+                ));
+                records
+            },
+            ValidationDefect::RequiredNotPassed {
+                command: command.into(),
+                outcome: ValidationOutcome::Denied,
+            },
+        ),
+        (
+            "diagnostic substitution",
+            {
+                let mut records = scoped_passes();
+                records.push(diagnostic(
+                    command,
+                    ValidationOutcome::Failed,
+                    &[UNRELATED_FIXTURE],
+                ));
+                records
+            },
+            ValidationDefect::HostCheckNotEstablished {
+                command: command.into(),
+            },
+        ),
+        (
+            "negative-control substitution",
+            {
+                let mut records = scoped_passes();
+                records.push(control(
+                    command,
+                    Some(NegativeControl::PreFix),
+                    ValidationOutcome::Failed,
+                    &["crates/orbit-review/src/fix.rs"],
+                ));
+                records
+            },
+            ValidationDefect::HostCheckNotEstablished {
+                command: command.into(),
+            },
+        ),
+        (
+            "excluded substitution",
+            {
+                let mut records = scoped_passes();
+                records.push(record(
+                    command,
+                    None,
+                    ValidationOutcome::NotRun,
+                    ValidationRole::Excluded,
+                    Some("the check was not available"),
+                ));
+                records
+            },
+            ValidationDefect::HostCheckNotEstablished {
+                command: command.into(),
+            },
+        ),
+    ];
+
+    for (name, records, expected) in cases {
+        assert_eq!(
+            validation_evidence(&records, &context),
+            Err(expected),
+            "{name}"
+        );
+        let mut certificate = certificate_with(records, &task_scope, Vec::new());
+        certificate.required_validation_commands = Some(host_required.clone());
+        assert_eq!(
+            certificate_acceptable(&certificate),
+            Err(ReviewInvalidation::ValidationIncomplete),
+            "consumer refuses {name}"
+        );
+    }
+
+    let mut valid = scoped_passes();
+    valid.push(required(command, None, true));
+    assert_eq!(validation_evidence(&valid, &context), Ok(()));
+
+    let mut legacy = certificate(scoped_passes());
+    legacy.required_validation_commands = None;
+    assert_eq!(
+        certificate_acceptable(&legacy),
+        Err(ReviewInvalidation::ValidationContractMissing)
+    );
+}
+
+#[test]
+fn captured_host_check_can_be_resolved_by_a_valid_same_check_replacement() {
+    let command = "make ci-fast";
+    let required_commands = vec![command.to_string()];
+    let task_scope = scope();
+    let context = ValidationContext {
+        scope: &task_scope,
+        obligations: &[],
+        required_validation_commands: Some(&required_commands),
+    };
+    let records = vec![
+        record(
+            command,
+            Some("host-ci"),
+            ValidationOutcome::Failed,
+            ValidationRole::Superseded,
+            Some("the runner environment was corrected"),
+        ),
+        required("make ci-fast --locked", Some("host-ci"), true),
+    ];
+    assert_eq!(validation_evidence(&records, &context), Ok(()));
+}
+
+#[test]
+fn missing_host_snapshot_is_not_an_empty_requirement_list() {
+    let task_scope = scope();
+    let context = ValidationContext {
+        scope: &task_scope,
+        obligations: &[],
+        required_validation_commands: None,
+    };
+    assert_eq!(
+        validation_evidence(&scoped_passes(), &context),
+        Err(ValidationDefect::HostContractMissing)
+    );
 }

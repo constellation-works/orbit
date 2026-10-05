@@ -89,18 +89,21 @@ orbit config get operation.review_crew
 orbit config show        # the Review lines report both switches and their sources
 ```
 
-The owner's `review.before_pr` is captured on each claim with its review crew
-and minutes; the follower's own setting does not matter. With it on, each
+The owner's `review.before_pr` is captured on each claim with its review crew,
+minutes, and `workflow.required_validation_commands`; the follower's own
+setting does not define review requirements. With it on, each
 claimed PR leaf runs the before-PR review between base synchronization and
 push: one reviewer with the captured crew fixes what it finds as the
 candidate's second commit and comments a summary on the owner's task. A
 `reject` or `incomplete` verdict fails the leaf before anything is pushed, and
 the owner blocks the task with the findings already on it. A passed verdict
 travels in the handoff, and the owner checks the certificate against its own
-copy before it accepts. A follower that cannot resolve or run the captured
-crew stops pulling with `before_pr_reviewer_unavailable` rather than claiming
-work it cannot review. A local-only ship workspace with before-PR review on is
-refused (`before_pr_unsupported`).
+copy before it accepts, including the captured owner check list. The owner also
+verifies exact-run and exact-head validation logs using its own required
+commands; a command-list mismatch fails closed. A follower that cannot resolve
+or run the captured crew stops pulling with `before_pr_reviewer_unavailable`
+rather than claiming work it cannot review. A local-only ship workspace with
+before-PR review on is refused (`before_pr_unsupported`).
 After-landing review (the `delivery-code-review` auto-task) never affects
 admission: the owner reviews landed deliveries whatever host implemented them.
 A follower's landed PR reaches the owner's review batch under the claimed
@@ -126,7 +129,7 @@ show`, the Drain card, and the follower's idle receipt (`os_unavailable`). So
 an `os:macos` repair filed on a Linux owner waits for a macOS follower instead
 of blocking the owner's worker. Retag with `orbit.task.update` to reroute a
 backlog task; running or claimed work is not moved. Owner and followers must
-deploy the same protocol revision (currently 7, as defined by
+deploy the same protocol revision (currently 8, as defined by
 `DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA`; OS matching arrived in revision 4). Empty
 `workflow.required_validation_commands` means no required check, as on an
 owner's own delivery: a claimed leaf runs nothing and records that, and the
@@ -241,7 +244,7 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require the same protocol revision (currently 7;
+exact paths. Both peers require the same protocol revision (currently 8;
 widening arrived in 3).
 
 
@@ -276,13 +279,13 @@ agent envelope or `ORBIT_OPERATOR=1`.
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 7,
+  "caller_schema": 8,
   "caller_before_pr": false
 }'
 ```
 
 The probe reports owner machine, binary version, distributed-drain protocol
-schema `7`, this session's capabilities, diagnostic caller machine,
+schema `8`, this session's capabilities, diagnostic caller machine,
 owner-resolved ship configuration (`ship.before_pr`), and `review`: both review
 switches with their sources — before-PR on/off and minutes, after-landing
 enabled and its next batch due. Declaring version, schema, or `caller_before_pr`
@@ -910,7 +913,7 @@ orbit doctor
 orbit config get review.before_pr
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<owner-version>",
-  "caller_schema": 7,
+  "caller_schema": 8,
   "caller_before_pr": false
 }'
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'

@@ -83,12 +83,16 @@ pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), Rev
     if certificate.schema_version != REVIEW_CONTRACT_VERSION {
         return Err(ReviewInvalidation::MappingUnknown);
     }
+    if certificate.required_validation_commands.is_none() {
+        return Err(ReviewInvalidation::ValidationContractMissing);
+    }
     if !certificate.verdict.passed() || certificate.assurance.is_none() {
         return Err(ReviewInvalidation::VerdictNotPassed);
     }
     let context = ValidationContext {
         scope: &certificate.validation_scope,
         obligations: &certificate.retained_obligations,
+        required_validation_commands: certificate.required_validation_commands.as_deref(),
     };
     if !certificate.validation_complete
         || validation_evidence(&certificate.validation, &context).is_err()

@@ -215,6 +215,14 @@ fn admit(
     admission: &ReviewAdmission,
     rebase: Option<&CompletionRebase>,
 ) -> Result<Value, OrbitError> {
+    let required_validation_commands = admission
+        .required_validation_commands
+        .as_ref()
+        .ok_or_else(|| {
+            OrbitError::CapabilityDenied(
+                "review_validation_contract_missing: this admitted run predates the captured host required-check list; dispatch a fresh delivery run after upgrading the workspace".into(),
+            )
+        })?;
     let crew = resolve_reviewer_crew(runtime, admission, context)?;
     let candidate = candidate_identity(&context.workspace_path, &context.base_sha()?)?;
     if let Some(rebase) = rebase
@@ -278,6 +286,7 @@ fn admit(
         lineage_key: lineage_key.clone(),
         task_ids: context.task_ids.clone(),
         task_digests: task_digests.clone(),
+        required_validation_commands: Some(required_validation_commands.clone()),
         task_meaning_digest: task_meaning_digest.clone(),
         repository: context.repository.clone(),
         base: candidate.base.clone(),

@@ -27,15 +27,26 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> Self {
+        Self::new_with_required_commands(&[])
+    }
+
+    pub(super) fn new_with_required_commands(required: &[&str]) -> Self {
         let root = TempDir::new().unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");
         let workspace = repo.join(".orbit");
         std::fs::create_dir_all(&global).unwrap();
         std::fs::create_dir_all(&workspace).unwrap();
+        let required_commands = if required.is_empty() {
+            String::new()
+        } else {
+            format!("required_validation_commands = {required:?}\n")
+        };
         std::fs::write(
             workspace.join("config.toml"),
-            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n",
+            format!(
+                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n"
+            ),
         )
         .unwrap();
         let git = |args: &[&str]| {
@@ -84,6 +95,9 @@ impl Fixture {
             // A bounded fixture budget exercises exhaustion without depending
             // on the operational default.
             budget: ReviewBudget { minutes: 10 },
+            required_validation_commands: Some(
+                runtime.workflow_required_validation_commands().to_vec(),
+            ),
             captured_at: Utc::now(),
         };
         let run = runtime

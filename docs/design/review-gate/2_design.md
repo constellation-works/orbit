@@ -87,7 +87,8 @@ submission in the delivery family (`workspace_auto_pipeline`,
 `task_auto_pipeline`, `task_gate_pipeline`, `task_pr_pipeline`,
 `task_local_pipeline`) carries a versioned `review`
 snapshot in its immutable input: timing and its source, the configured
-reviewer crew and its source, the lineage budget, and the policy version. A
+reviewer crew and its source, the lineage budget, the policy version, and the
+owner's `workflow.required_validation_commands` list. A
 parent-authorized child inherits its parent's snapshot exactly; any other submission resolves from the
 workspace preferences at that moment. A distributed drain
 (`workspace_pull_pipeline`) captures the same snapshot, so the `before_pr` it
@@ -122,7 +123,12 @@ escalates (`review_crew_unconfigured`, `review_crew_unavailable`,
 retried admission in the same run resumes its open attempt for the same
 candidate and task meaning within the same minutes; a different
 candidate, or an attempt another run of the lineage left open, is released
-as `incomplete` first (§5).
+as `incomplete` first (§5). The manifest also carries the owner's
+`workflow.required_validation_commands` captured when the delivery was
+admitted. Each command must appear as a required passing record in the review;
+settlement never consults a later mutable config value. A legacy admission
+without this snapshot fails closed and directs the operator to dispatch a
+fresh delivery run.
 
 The deterministic gate writes manifests, certificates, settlement comments,
 and any fix-driven selector changes as `system`, regardless of the
@@ -207,6 +213,7 @@ Findings:
 - Final candidate: `<sha>`
 - Selectors widened for reviewer-changed paths: …
 - Validation on final candidate: … record(s) […], complete: …
+- Owner-required checks: <captured commands, or none configured>
 - Not established by this review: <failed diagnostics and their sources, or none>
 - Required checks retained from earlier report revisions: <command and outcome, or none>
 - Reviewer runtime: …s of … min
@@ -218,11 +225,13 @@ Findings:
 With a reviewer commit, settlement returns `reviewer_fixed: true`,
 `implementation_head_sha` (the head the reviewer examined), and
 `review_fixes`, a `## Review fixes` section listing each fixed finding with
-what changed and naming the reviewer commit. When a diagnostic failed (§4),
+what changed and naming the reviewer commit, and a `## Review validation`
+section listing the owner-required commands and each record's raw outcome,
+role, rationale, control kind and sources. When a diagnostic failed (§4),
 `review_fixes` also carries a `## Review validation limits` section naming
 each failed diagnostic and its sources, so the PR never reads as a claim that
-the whole workspace passed. `pr_open` appends whatever `review_fixes` holds
-to the PR body, generated or supplied, before bounding it.
+the whole workspace passed. `pr_open` appends these sections to the PR body,
+generated or supplied, before bounding it.
 
 `review_validate` (`candidate_validate`) runs only when `reviewer_fixed` is
 true. It first attributes every path changed between
@@ -241,7 +250,12 @@ validation record also carries a `role` saying what it is evidence of, and
 `orbit_automation::review::validation_evidence` decides what the set
 establishes. Settlement and delivery coverage both read that one function, so
 a certificate cannot mean one thing when it is issued and another when it is
-spent.
+spent. It also requires every command in the immutable owner snapshot to be
+present as `required` and `passed`, or to be a valid superseded record followed
+by a passing check with the same command or explicit check identity. A
+diagnostic, exclusion, negative control, omission, or later unrelated pass
+cannot satisfy a host-required command. Certificates retain that snapshot;
+legacy certificates without it cannot be spent as coverage.
 
 | `role` | Meaning | Passing requires |
 | --- | --- | --- |

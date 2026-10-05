@@ -128,6 +128,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             contract_version: REVIEW_CONTRACT_VERSION,
             crew: Some("reviewer".into()),
             budget: ReviewBudget::default(),
+            required_validation_commands: Some(vec![]),
         }),
     };
     let boundary = TaskCommitBoundary::new(
@@ -225,6 +226,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             control: None,
             sources: Vec::new(),
         }],
+        required_validation_commands: Some(vec![]),
         validation_complete: true,
         reviewer: ReviewerIdentity {
             crew: "reviewer".into(),

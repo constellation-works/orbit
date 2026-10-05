@@ -206,6 +206,12 @@ pub struct AdmissionReviewContract {
     pub crew: Option<String>,
     /// The owner's `review.minutes` budget for the leaf's review.
     pub budget: orbit_types::workflow::ReviewBudget,
+    /// Owner-required candidate checks captured at claim admission. `None`
+    /// means this is a legacy ship contract without enough evidence to
+    /// establish review validation; an empty list is an explicit no-check
+    /// contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_validation_commands: Option<Vec<String>>,
 }
 
 impl AdmissionShipContract {
@@ -221,6 +227,7 @@ impl AdmissionShipContract {
                         .crew
                         .as_deref()
                         .is_none_or(|crew| !crew.trim().is_empty())
+                    && review.required_validation_commands.is_some()
             }
         }
     }
@@ -238,8 +245,9 @@ impl AdmissionShipContract {
 /// ship contract's captured `review`, the executor's `review_gate` and the
 /// handoff's before-PR review evidence [ORB-13895]; revision 7 sends
 /// `review_gate` on `orbit.task.pull`, which revision 6 owners reject
-/// [ORB-13908].
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 7;
+/// [ORB-13908]; revision 8 captures the owner's required validation
+/// commands in the before-PR review contract [ORB-14192].
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 8;
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without

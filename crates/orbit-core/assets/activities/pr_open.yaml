@@ -54,9 +54,10 @@ spec:
         type: string
         description: >
           The before-PR review settlement's PR body sections: "Review
-          fixes" when the reviewer committed fixes and "Review validation
-          limits" when an out-of-scope diagnostic failed. It is appended to
-          the PR body, generated or supplied; empty adds nothing.
+          fixes" when the reviewer committed fixes, "Review validation" for
+          raw checks, and "Review validation limits" when an out-of-scope
+          diagnostic failed. It is appended to the PR body, generated or
+          supplied; empty adds nothing.
       # A claimed leaf's implement-step output. Under the claim's worker
       # binding the delivery gate judges its summary, not the owner's
       # stored one; any other run ignores it.

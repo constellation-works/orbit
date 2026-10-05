@@ -664,6 +664,9 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             crew: policy.review_crew.value.clone(),
             crew_source: policy.review_crew.source.label().into(),
             budget: policy.review_budget(),
+            required_validation_commands: Some(
+                runtime.workflow_required_validation_commands().to_vec(),
+            ),
             captured_at: Utc::now(),
         };
         let run = runtime

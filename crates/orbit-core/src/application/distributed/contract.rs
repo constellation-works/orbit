@@ -135,6 +135,9 @@ impl crate::OrbitRuntime {
                 contract_version: REVIEW_CONTRACT_VERSION,
                 crew: policy.review_crew.value.clone(),
                 budget: policy.review_budget(),
+                required_validation_commands: Some(
+                    self.workflow_required_validation_commands().to_vec(),
+                ),
             }),
         }
     }

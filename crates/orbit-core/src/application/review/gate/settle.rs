@@ -326,6 +326,7 @@ fn settle(
         assurance: judgement.verdict.assurance(),
         findings: judgement.findings.clone(),
         validation: judgement.validation.clone(),
+        required_validation_commands: judgement.required_validation_commands.clone(),
         validation_complete: judgement.validation_complete,
         retained_obligations: judgement.retained_obligations.clone(),
         validation_scope,

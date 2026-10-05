@@ -112,6 +112,12 @@ pub struct ReviewAdmission {
     pub crew_source: String,
     /// Captured review limit.
     pub budget: ReviewBudget,
+    /// The workspace owner's required candidate checks captured with this
+    /// run. `None` identifies a legacy admission that cannot establish the
+    /// host validation contract; an empty list is an explicit no-check
+    /// contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_validation_commands: Option<Vec<String>>,
     /// When the snapshot was captured.
     pub captured_at: DateTime<Utc>,
 }
@@ -736,6 +742,9 @@ pub struct ReviewManifest {
     /// Task-meaning digests per task, plus the combined digest the
     /// certificate binds to.
     pub task_digests: BTreeMap<String, String>,
+    /// Owner-captured checks that the report must establish as required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_validation_commands: Option<Vec<String>>,
     pub task_meaning_digest: String,
     pub repository: String,
     pub base: SourceRevision,
@@ -795,6 +804,10 @@ pub struct ReviewCertificate {
     pub assurance: Option<ReviewAssurance>,
     pub findings: Vec<ReviewFinding>,
     pub validation: Vec<ReviewValidation>,
+    /// Owner-captured host checks this certificate must establish. `None`
+    /// denotes a legacy certificate without an authoritative check snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_validation_commands: Option<Vec<String>>,
     /// Whether the records establish the final candidate: every required
     /// check passed, every other record is consistent with its role, and no
     /// obligation an earlier report revision recorded was dropped. Failed
@@ -867,6 +880,9 @@ pub struct ReviewLanding {
 pub enum ReviewInvalidation {
     VerdictNotPassed,
     ValidationIncomplete,
+    /// The certificate predates the captured owner check contract and must
+    /// be replaced by a fresh review under a current delivery admission.
+    ValidationContractMissing,
     TaskMeaningChanged,
     CandidateChanged,
     BaseChanged,
@@ -881,6 +897,7 @@ impl ReviewInvalidation {
         match self {
             ReviewInvalidation::VerdictNotPassed => "verdict_not_passed",
             ReviewInvalidation::ValidationIncomplete => "validation_incomplete",
+            ReviewInvalidation::ValidationContractMissing => "validation_contract_missing",
             ReviewInvalidation::TaskMeaningChanged => "task_meaning_changed",
             ReviewInvalidation::CandidateChanged => "candidate_changed",
             ReviewInvalidation::BaseChanged => "base_changed",

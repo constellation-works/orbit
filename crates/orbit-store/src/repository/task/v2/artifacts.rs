@@ -41,7 +41,39 @@ pub(crate) fn review_report_history(
             let content = fs::read(&path).map_err(|err| OrbitError::Io(err.to_string()))?;
             ReviewReportHistory::parse(&content).map_err(OrbitError::Store)?
         }
-        None => ReviewReportHistory::default(),
+        None => {
+            // A report written before revision retention was introduced is
+            // still an obligation source. Import the held report before
+            // replacing it, in this same locked manifest rewrite. Otherwise
+            // the first new-version put can erase a required failure before
+            // settlement ever has a chance to observe it.
+            let mut history = ReviewReportHistory::default();
+            if let Some(file) = held.get(REVIEW_REPORT_ARTIFACT) {
+                let path = resolve_v2_artifact_file_path(bundle_dir, &file.blob)?.ok_or_else(|| {
+                    OrbitError::Store(format!(
+                        "legacy {REVIEW_REPORT_ARTIFACT} blob {} is missing; refusing to replace evidence whose obligations cannot be established",
+                        file.blob
+                    ))
+                })?;
+                let content = fs::read(&path).map_err(|err| OrbitError::Io(err.to_string()))?;
+                let legacy = ReviewReport::parse(&content).map_err(|error| {
+                    OrbitError::Store(format!(
+                        "legacy {REVIEW_REPORT_ARTIFACT} is unreadable; refusing to replace evidence whose obligations cannot be established: {error}"
+                    ))
+                })?;
+                history
+                    .record(ReviewReportRevision {
+                        attempt_id: legacy.attempt_id,
+                        sha256: sha256_hex(&content),
+                        observed_at: file.created_at,
+                        recorded_by: file.created_by.clone(),
+                        verdict: legacy.verdict,
+                        validation: legacy.validation,
+                    })
+                    .map_err(OrbitError::InvalidInput)?;
+            }
+            history
+        }
     };
     let recorded = history
         .record(ReviewReportRevision {

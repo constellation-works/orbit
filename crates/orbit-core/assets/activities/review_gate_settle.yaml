@@ -14,8 +14,8 @@ spec:
     the certificate and settle the ledger. `accept` and `accept_with_fixes`
     return the reviewed head and base the PR steps recheck; with fixes,
     `reviewer_fixed` asks the pipeline to revalidate the new head and
-    `review_fixes` carries the PR body sections for the fixes and any failed
-    out-of-scope diagnostics the review does not cover. `reject` and `incomplete`
+    `review_fixes` carries the PR body sections for fixes, raw validation
+    records, and any failed out-of-scope diagnostics the review does not cover. `reject` and `incomplete`
     fail the step so the failure handoff preserves the candidate without
     publishing a PR.
   input_schema_json:
@@ -66,6 +66,6 @@ spec:
         description: Whether the reviewer committed fixes that owner validation must rerun on.
       review_fixes:
         type: string
-        description: The PR body's review sections, "Review fixes" for reviewer fixes and "Review validation limits" for failed diagnostics; empty when neither applies.
+        description: The PR body's review sections for fixes, raw validation records, and failed diagnostics; empty when none apply.
   action: review_gate_settle
   config: {}

@@ -67,6 +67,7 @@ pub fn task_review_projection(
         "repair_commits": certificate.repair_commits,
         "findings": certificate.findings,
         "validation": certificate.validation,
+        "required_validation_commands": certificate.required_validation_commands,
         "validation_complete": certificate.validation_complete,
         "validation_limitations": validation_limitations(&certificate.validation),
         "retained_obligations": certificate.retained_obligations,

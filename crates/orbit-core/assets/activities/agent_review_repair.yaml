@@ -92,6 +92,11 @@ spec:
        or CI result is not evidence; verify claims against code. Then review
        quality: correctness, error paths, tests, docs, and repository
        standards from the workspace AGENTS.md.
+       Treat the manifest's `required_validation_commands` as the captured
+       host contract. Each listed command must have a passing `required`
+       validation record for the final candidate. If the field is absent,
+       stop with an incomplete report and explain that a fresh delivery run is
+       needed; do not infer the list from this activity or current config.
        Enforce repository standards for `CHANGELOG.md`: non-release tasks must
        never add or edit its entries (AGENTS.md and RELEASING.md). Unless the
        pinned manifest or injected task identifies an authorized
@@ -114,7 +119,7 @@ spec:
        redesign, non-release `CHANGELOG.md` edits, and anything you are
        unsure about stay open findings: there is no second review round, so
        an open finding rejects the candidate and blocks the task.
-    4. Run the repository's required validation on the final worktree state
+    4. Run the manifest's required host commands and the repository's required validation on the final worktree state
        (for this repository at least `make ci-fast` and `make ci-lint`, plus the
        focused tests for the change). Record every command you ran or could not
        run with outcome `passed`, `failed`, `denied` (the runner refused it), or

@@ -33,6 +33,7 @@ pub(super) struct Judgement {
     pub(super) findings: Vec<orbit_types::workflow::ReviewFinding>,
     pub(super) validation: Vec<orbit_types::workflow::ReviewValidation>,
     pub(super) validation_complete: bool,
+    pub(super) required_validation_commands: Option<Vec<String>>,
     /// Required-check records earlier report revisions of this attempt made
     /// that the final report does not repeat verbatim.
     pub(super) retained_obligations: Vec<RetainedObligation>,
@@ -59,6 +60,10 @@ impl Judgement {
             findings: Vec::new(),
             validation: Vec::new(),
             validation_complete: false,
+            required_validation_commands: context
+                .admission
+                .as_ref()
+                .and_then(|admission| admission.required_validation_commands.clone()),
             retained_obligations: Vec::new(),
             escalation: Some(reason.to_string()),
             summary: String::new(),
@@ -123,6 +128,10 @@ impl Judgement {
             findings: report.findings,
             validation: report.validation,
             validation_complete: false,
+            required_validation_commands: context
+                .admission
+                .as_ref()
+                .and_then(|admission| admission.required_validation_commands.clone()),
             retained_obligations,
             escalation: report.escalation,
             summary: report.summary,
@@ -327,6 +336,7 @@ impl Judgement {
             let context = ValidationContext {
                 scope,
                 obligations: &self.retained_obligations,
+                required_validation_commands: self.required_validation_commands.as_deref(),
             };
             match validation_evidence(&self.validation, &context) {
                 Ok(()) => self.validation_complete = true,
@@ -550,6 +560,7 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
          - Final candidate: `{}`\n\
          - Selectors widened for reviewer-changed paths: {}\n\
          - Validation on final candidate: {} record(s) [{}], complete: {}\n\
+         - Owner-required checks: {}\n\
          - Not established by this review: {}\n\
          - Required checks retained from earlier report revisions: {}\n\
          - Reviewer runtime: {}s of {} min\n\
@@ -580,6 +591,7 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
         certificate.validation.len(),
         validation_roles(&certificate.validation),
         certificate.validation_complete,
+        required_commands_line(certificate.required_validation_commands.as_deref()),
         limitations_line(&certificate.validation),
         retained_line(certificate),
         certificate.consumed.seconds,
@@ -663,12 +675,60 @@ fn finding_change(finding: &orbit_types::workflow::ReviewFinding) -> Option<Stri
 pub(super) fn review_fixes_section(certificate: &ReviewCertificate) -> Option<String> {
     let sections = [
         fixes_section(certificate),
+        validation_section(certificate),
         limits_section(&certificate.validation),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
     (!sections.is_empty()).then(|| sections.join("\n"))
+}
+
+fn validation_section(certificate: &ReviewCertificate) -> Option<String> {
+    if certificate.validation.is_empty() && certificate.required_validation_commands.is_none() {
+        return None;
+    }
+    let mut section = format!(
+        "## Review validation\n\nOwner-required commands: {}. Validation complete: {}.\n",
+        required_commands_line(certificate.required_validation_commands.as_deref()),
+        certificate.validation_complete,
+    );
+    for record in &certificate.validation {
+        section.push_str(&format!(
+            "\n- `{}` — {} ({}){}{}{}",
+            one_line(&record.command),
+            record.outcome.as_str(),
+            record.role.as_str(),
+            record
+                .control
+                .map(|control| format!("; control: {}", control.as_str()))
+                .unwrap_or_default(),
+            record
+                .note
+                .as_deref()
+                .filter(|note| !note.trim().is_empty())
+                .map(|note| format!("; rationale: {}", one_line(note)))
+                .unwrap_or_default(),
+            if record.sources.is_empty() {
+                String::new()
+            } else {
+                format!("; sources: {}", record.sources.join(", "))
+            },
+        ));
+    }
+    Some(section)
+}
+
+fn required_commands_line(commands: Option<&[String]>) -> String {
+    match commands {
+        Some([]) => "none configured".to_string(),
+        Some(commands) => commands
+            .iter()
+            .map(|command| format!("`{}`", one_line(command)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        None => "missing legacy host contract; fresh review required".to_string(),
+    }
 }
 
 fn limits_section(records: &[ReviewValidation]) -> Option<String> {

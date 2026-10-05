@@ -61,8 +61,8 @@ use orbit_types::workflow::handoff::{
 use orbit_types::workflow::{
     CommitIdentity, JobRunState, PipelineState, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
     REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewBudget, ReviewCertificate,
-    ReviewConsumption, ReviewReportHistory, ReviewTiming, ReviewVerdict, ReviewerIdentity,
-    automation::SourceRevision,
+    ReviewConsumption, ReviewReportHistory, ReviewTiming, ReviewValidation, ReviewVerdict,
+    ReviewerIdentity, ValidationOutcome, ValidationRole, automation::SourceRevision,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -1791,6 +1791,7 @@ fn before_pr_ship() -> AdmissionShipContract {
         contract_version: REVIEW_CONTRACT_VERSION,
         crew: Some(REVIEW_CREW.into()),
         budget: ReviewBudget { minutes: 45 },
+        required_validation_commands: Some(vec!["build".into(), "test".into()]),
     });
     ship
 }
@@ -1825,7 +1826,19 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         verdict,
         assurance: verdict.assurance(),
         findings: vec![],
-        validation: vec![],
+        validation: ["build", "test"]
+            .into_iter()
+            .map(|command| ReviewValidation {
+                command: command.into(),
+                outcome: ValidationOutcome::Passed,
+                role: ValidationRole::Required,
+                note: None,
+                check: None,
+                control: None,
+                sources: vec![],
+            })
+            .collect(),
+        required_validation_commands: Some(vec!["build".into(), "test".into()]),
         validation_complete: verdict.passed(),
         reviewer: ReviewerIdentity {
             crew: REVIEW_CREW.into(),
