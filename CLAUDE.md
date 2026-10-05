@@ -37,6 +37,10 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 - File length is a heuristic, not a limit: past ~800 lines, check whether a file holds more than one responsibility and split along those if so; keep closely related functionality together when splitting would only scatter it.
 - Report commands and outcomes at handoff — passed, failed, not run — never "tested".
 
+## Local Rust CodeQL checks
+
+For Rust changes in this repository, follow the [local CodeQL runbook](docs/runbooks/codeql-local.md), which uses `scripts/codeql-rust-local.sh`. Its extraction checks are required evidence; a query result from incomplete semantic extraction cannot confirm a repair.
+
 ## Orbit Workflow
 
 For any Orbit lifecycle work, invoke the `orbit` skill; its `SKILL.md` routes to the matching reference.
