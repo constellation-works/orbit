@@ -292,6 +292,21 @@ the checkpoint owner. Direct ownership still authorizes the original run.
 An unrelated run, a broken lineage, or a task re-claimed by a superseding run
 fails before Orbit commits, pushes, or updates the task.
 
+When a completion attempt was blocked after promotion, resume restores `review`
+only when its reused host promotion checkpoint names the task and its latest
+status history proves that this source run or an ancestor blocked it from
+`review`. The checkpoint must precede unfinished PR completion, the submitted
+run must carry `completion: done`, and the task must still belong to that retry
+lineage and the same PR. The restoration records `resume_review_restored`, the
+source and resumed run IDs, and the blocking run in task history. Repeating the
+resume while the task is already in review adds no restoration event.
+
+Early implementation retries still restore `in-progress`. Missing stage evidence,
+an unrelated or superseding attempt, a manual block, and withdrawn or terminal
+states cannot gain review through this repair. A merged PR alone is not review
+authority: normal candidate, merge and task-completion guards still run after
+restoration. Source checkpoints and prior task history remain unchanged.
+
 A lineage has at most one live resume. While any run in the source's retry lineage
 (its `retry_source_run_id` ancestors and everything descended from them) is `pending`,
 `running`, or `retrying`, another resume of any member is refused on every surface — CLI,

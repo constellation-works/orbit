@@ -17,9 +17,6 @@ use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_re
 use super::params::TaskUpdateParams;
 
 const RELATION_RESOLVES: &str = "resolves";
-/// [ORB-10470] Status event recorded when a resumed run restores its own
-/// lineage's coupling to a task (re-admission and/or batch re-claim).
-const RESUME_READMITTED_EVENT: &str = "resume_readmitted";
 /// Status event recorded when `orbit task recheck-blocked --confirm` returns a
 /// task blocked by a missing provider launcher to backlog because the launcher
 /// now resolves.
@@ -631,75 +628,6 @@ impl OrbitRuntime {
         })?;
 
         Ok(updated)
-    }
-
-    /// [ORB-10470] Restore a task's coupling to a resumed run's lineage.
-    ///
-    /// Two repairs, applied as one write so the task's history records a single
-    /// reconciliation:
-    ///
-    /// - `blocked` → `in-progress`, undoing the block that the source run's own
-    ///   failure or interruption applied. This is a *restoration*, not a fresh admission: the
-    ///   lineage already admitted this task (it was `in-progress` under the
-    ///   source run), so the plan guard that gates a cold `blocked` → started
-    ///   transition does not apply here.
-    /// - `job_run_id` → the batch id the resumed checkpoints keep using, so the
-    ///   delivery tail's ownership check (`load_handoff_context`) sees the same
-    ///   identity the reused `worktree_setup` output carries.
-    ///
-    /// Callers must have already proven lineage ownership
-    /// (`reconcile_resume_task_ownership`); this function does not re-derive
-    /// it. Returns `None` when nothing needed changing, which makes a repeated
-    /// resume of the same source a no-op.
-    pub(crate) fn reclaim_task_for_resumed_run(
-        &self,
-        id: &str,
-        batch_run_id: Option<&str>,
-        source_run_id: &str,
-        resumed_run_id: &str,
-    ) -> Result<Option<Task>, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        let task = self.get_task(id)?;
-        let readmit = task.status == TaskStatus::Blocked;
-        let restamp = batch_run_id
-            .is_some_and(|batch_run_id| task.job_run_id.as_deref() != Some(batch_run_id));
-        if !readmit && !restamp {
-            return Ok(None);
-        }
-
-        let note = Some(format!(
-            "resume lineage reconciliation: run '{resumed_run_id}' resumes '{source_run_id}'"
-        ));
-        let event = if readmit {
-            OrbitEvent::TaskStarted {
-                id: id.to_string(),
-                started_by: SYSTEM_ACTOR_LABEL.to_string(),
-                approved_from_proposed: false,
-            }
-        } else {
-            OrbitEvent::TaskUpdated { id: id.to_string() }
-        };
-        let updated = self.with_mutation(|| {
-            let task = self.stores().task_records().update(
-                id,
-                StoreTaskUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    status_event: Some(RESUME_READMITTED_EVENT.to_string()),
-                    status_note: note.clone(),
-                    ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                        status: readmit.then_some(TaskStatus::InProgress),
-                        job_run_id: restamp
-                            .then(|| batch_run_id.map(ToOwned::to_owned))
-                            .flatten()
-                            .map(Some),
-                        ..Default::default()
-                    })
-                },
-            )?;
-            Ok((task.clone(), event))
-        })?;
-
-        Ok(Some(updated))
     }
 
     /// Return every task blocked by a missing provider launcher that now
