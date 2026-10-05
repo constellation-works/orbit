@@ -13,6 +13,8 @@
 mod candidate_resume;
 mod claimed_candidate_paths;
 mod commit_verifier;
+#[cfg(unix)]
+mod dependabot_collect;
 mod final_recovery;
 mod handoff_landing;
 mod history_note;

@@ -386,5 +386,41 @@
       "run": "123/../../secrets"
     },
     "raw": null
+  },
+  {
+    "name": "repo_view_passes_the_repository_as_a_positional_argument",
+    "op": "repo_view",
+    "input": {
+      "repo": "acme/orbit"
+    },
+    "raw": {
+      "name": "orbit",
+      "nameWithOwner": "acme/orbit",
+      "defaultBranchRef": {
+        "name": "agent-main"
+      }
+    }
+  },
+  {
+    "name": "repo_view_omits_the_repository_when_unset",
+    "op": "repo_view",
+    "input": {},
+    "raw": null
+  },
+  {
+    "name": "repo_view_ignores_a_blank_repository",
+    "op": "repo_view",
+    "input": {
+      "repo": "  "
+    },
+    "raw": null
+  },
+  {
+    "name": "repo_view_rejects_a_repository_that_looks_like_a_flag",
+    "op": "repo_view",
+    "input": {
+      "repo": "--repo"
+    },
+    "raw": null
   }
 ]
