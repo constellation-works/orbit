@@ -1332,6 +1332,139 @@ fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
     );
 }
 
+/// User Git presentation settings must not hide a second edit to tracked WIP
+/// or change the fingerprints and patches needed to detect and recover it.
+#[cfg(unix)]
+#[test]
+fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
+    isolated(
+        "user_git_diff_config_preserves_dirty_fingerprints_and_recovery",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-DIFF-CONFIG", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-DIFF-CONFIG"], "jrun-diff-config-setup"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let restore = fixture.root.path().join("restore");
+            git(
+                &fixture.repo,
+                &["worktree", "add", "--detach", path_str(&restore), "HEAD"],
+            );
+            let provider = fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                &provider_script(&format!(
+                    "printf 'candidate output\\n' > README.md\nprintf 'provider primary output\\n' > '{}/README.md'",
+                    fixture.repo.display(),
+                )),
+            );
+            let host = host.with_provider(&provider);
+            let global_config = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".gitconfig");
+            let cases: &[&[(&str, &str)]] = &[
+                &[],
+                &[("diff.noprefix", "true")],
+                &[("diff.mnemonicPrefix", "true")],
+                &[("color.ui", "always")],
+                &[
+                    ("diff.noprefix", "true"),
+                    ("diff.mnemonicPrefix", "true"),
+                    ("color.ui", "always"),
+                ],
+            ];
+            let mut baseline = None;
+            for (index, settings) in cases.iter().enumerate() {
+                // This HOME belongs only to the isolated child. Each case
+                // starts without any settings from the preceding case.
+                fs::write(&global_config, "").unwrap();
+                for (key, value) in *settings {
+                    git(&fixture.repo, &["config", "--global", key, value]);
+                    assert_eq!(
+                        git(&fixture.repo, &["config", "--global", "--get", key]),
+                        *value
+                    );
+                }
+                for (root, staged, unstaged) in [
+                    (&fixture.repo, "operator staged\n", "operator unstaged\n"),
+                    (&checkout.path, "candidate staged\n", "candidate unstaged\n"),
+                ] {
+                    fs::write(root.join("README.md"), staged).unwrap();
+                    git(root, &["add", "README.md"]);
+                    fs::write(root.join("README.md"), unstaged).unwrap();
+                }
+                let run_id = format!("jrun-diff-config-{index}");
+                let blobs = TempDir::new().unwrap();
+                let sink = Arc::new(InMemorySink::new(blobs.path()));
+                let audit = Arc::new(V2AuditWriter::new(
+                    &run_id,
+                    "codex:test-model",
+                    sink.clone(),
+                ));
+                let error = dispatch_audited_linked_activity(
+                    &host,
+                    "agent_implement",
+                    &run_id,
+                    "T-DIFF-CONFIG",
+                    &checkout.path,
+                    audit,
+                )
+                .expect_err(&format!(
+                    "{settings:?}: a second primary WIP edit must fail the boundary under user Git config",
+                ));
+                let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+                assert_eq!(diagnostic["primary_changed_paths"], json!(["README.md"]));
+                let fingerprints: Value = serde_json::from_slice(
+                    &sink
+                        .blob_store()
+                        .read(diagnostic["fingerprints_blob_ref"].as_str().unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                let before = &fingerprints["primary_before"];
+                let after = &fingerprints["primary_after"];
+                assert_ne!(
+                    before["tracked_patch_sha256"], after["tracked_patch_sha256"],
+                    "{settings:?}: second edit changes the fingerprint"
+                );
+                let before_path = &before["path_states"]["README.md"];
+                let after_path = &after["path_states"]["README.md"];
+                assert!(before_path["staged_patch_sha256"].is_string());
+                assert!(before_path["worktree_patch_sha256"].is_string());
+                assert_ne!(
+                    before_path["worktree_patch_sha256"],
+                    after_path["worktree_patch_sha256"]
+                );
+
+                let patch_path =
+                    Path::new(diagnostic["recovery"]["tracked_patch"].as_str().unwrap());
+                let patch = fs::read(patch_path).expect("durable recovery patch");
+                if let Some((expected_fingerprints, expected_patch)) = &baseline {
+                    assert_eq!(
+                        &fingerprints, expected_fingerprints,
+                        "{settings:?}: full fingerprints match clean Git config"
+                    );
+                    assert_eq!(
+                        &patch, expected_patch,
+                        "{settings:?}: recovery bytes match clean Git config"
+                    );
+                } else {
+                    baseline = Some((fingerprints, patch));
+                }
+                git(&restore, &["apply", "--binary", path_str(patch_path)]);
+                assert_eq!(
+                    fs::read_to_string(restore.join("README.md")).unwrap(),
+                    "candidate output\n"
+                );
+                fs::write(restore.join("README.md"), "base\n").unwrap();
+            }
+        },
+    );
+}
+
 /// Record-store dirt on a path the run also changed is still drift. The
 /// `.orbit/` prefix alone must not excuse an intersection with the candidate.
 #[cfg(unix)]
@@ -1520,6 +1653,18 @@ fn dispatch_linked_activity(
         "codex:test-model",
         Arc::new(InMemorySink::new(blobs.path().to_path_buf())),
     ));
+    dispatch_audited_linked_activity(host, activity_name, run_id, task_id, workspace, audit)
+}
+
+/// Keep the caller's audit sink available to inspect full boundary evidence.
+fn dispatch_audited_linked_activity(
+    host: &LifecycleHost,
+    activity_name: &str,
+    run_id: &str,
+    task_id: &str,
+    workspace: &Path,
+    audit: Arc<V2AuditWriter>,
+) -> Result<orbit_engine::DispatchOutcome, DispatchError> {
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Edit the assigned checkout.".to_string(),
