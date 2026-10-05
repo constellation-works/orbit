@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web SSH Local Forward"
-last_validated: 2026-09-30
+last_validated: 2026-10-05
 tags: [remote-access]
 ---
 
@@ -20,14 +20,15 @@ It is not used by MCP. MCP remote mode uses direct ssh -T stdio with no -L forwa
 
        ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:<local>:localhost:<remote> <host>
 
-3. Poll HTTP GET /healthz on the local port for up to five seconds.
-4. If the response status is 200, retain the probe child as an attached tunnel. No remote command is sent.
-5. If the probe times out while SSH remains alive, stop it and start:
+3. Wait until a TCP connect to the local forwarded port succeeds, or until the probe exits. OpenSSH binds `-L` only after authentication, so passphrase, password, and 2FA time is not part of the attach budget. An exit before the listener accepts is a connection failure, not "nothing is running". There is no separate authentication deadline; Ctrl-C cancels a stuck prompt.
+4. Once that connect succeeds, poll HTTP GET /healthz on the local port for up to five seconds.
+5. If the response status is 200, retain the probe child as an attached tunnel. No remote command is sent.
+6. If the probe times out while SSH remains alive, stop it and start:
 
        ssh -tt -o ExitOnForwardFailure=yes -L 127.0.0.1:<local>:localhost:<remote> <host> "<remote command>"
 
-6. By default, the remote command is `orbit web serve --no-open --operator --port <remote>`. `--no-operator` omits `--operator`. It may include a POSIX-quoted `--workspace` and the compatibility `--global` flag.
-7. Poll /healthz for up to 30 seconds. Once ready, open the local URL unless local --no-open was requested.
+7. By default, the remote command is `orbit web serve --no-open --operator --port <remote>`. `--no-operator` omits `--operator`. It may include a POSIX-quoted `--workspace` and the compatibility `--global` flag.
+8. Poll /healthz for up to 30 seconds. Once ready, open the local URL unless local --no-open was requested.
 
 A forward can exist while no service listens behind it, so SSH startup alone never proves readiness.
 
@@ -69,7 +70,7 @@ Attach mode sends no remote command, so --workspace and --global cannot reconfig
 - SSH exit 127: orbit is missing from the remote non-interactive PATH.
 - SSH exit 255: host, authentication, configuration, or network connection failed.
 - Other early exit: report the remote Web command and status.
-- Probe timeout: not an error; proceed to spawn mode.
+- Probe timeout: not an error; proceed to spawn mode. The five seconds start when the local listener accepts a connection, not when the probe process starts.
 - Spawn readiness timeout: fail and tear down the SSH child.
 - Local port selection is a time-of-check/time-of-use race; SSH fails loudly if another process claims the port.
 - Two simultaneous connects can both miss an absent server and try to spawn; one remote bind may fail. This is surfaced rather than hidden.
