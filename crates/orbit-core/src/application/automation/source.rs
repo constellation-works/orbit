@@ -340,16 +340,13 @@ impl<'a> Source<'a> {
             .git(&["rev-list", "--first-parent", "--count", &range])?
             .parse::<u64>()
             .map_err(|_| AutomationError::Deferred("source_count_invalid".into()))?;
-        let oldest = self.git(&[
-            "rev-list",
-            "--first-parent",
-            "--reverse",
-            "--max-count=1",
-            &range,
-        ])?;
-        let oldest_unobserved_epoch = if oldest.is_empty() {
+        let oldest_unobserved_epoch = if behind == 0 {
             None
         } else {
+            // Git applies max-count before reverse, which would select the tip.
+            // First-parent distance selects the oldest pending commit while
+            // keeping command output constant-sized, even for a long trail.
+            let oldest = format!("{remote}~{}", behind - 1);
             self.git(&["show", "-s", "--format=%ct", &oldest])?
                 .parse::<i64>()
                 .ok()
