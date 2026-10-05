@@ -1,6 +1,6 @@
 //! Narrow Core adapter for the shared state scheduling domain.
 
-use super::{consumer_key, preparation, preparation::InstructionSnapshot, source::Source};
+use super::{consumer_key, pins, preparation, preparation::InstructionSnapshot, source::Source};
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
@@ -75,9 +75,10 @@ pub(crate) struct Host<'a> {
     policy: PreparationPolicy,
     incidents: RefCell<super::incidents::IncidentSession>,
     instructions: RefCell<BTreeMap<String, InstructionSnapshot>>,
-    /// `refs/orbit/automation/<attempt>` → pinned commit, read once per host
-    /// to carry pre-upgrade assessments forward.
-    pinned: RefCell<Option<BTreeMap<String, String>>>,
+    /// Attempt id → the commit its `refs/orbit/automation/<attempt>` pin
+    /// names, resolved once per attempt to carry pre-upgrade assessments
+    /// forward.
+    pinned: RefCell<BTreeMap<String, Option<String>>>,
 }
 
 impl<'a> Host<'a> {
@@ -93,7 +94,7 @@ impl<'a> Host<'a> {
             policy: preparation::resolve_policy(runtime, Some(trigger)),
             incidents: RefCell::new(super::incidents::IncidentSession::new()),
             instructions: RefCell::new(BTreeMap::new()),
-            pinned: RefCell::new(None),
+            pinned: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -127,25 +128,17 @@ impl<'a> Host<'a> {
         )
     }
 
-    /// The commit an attempt pinned when it was admitted.
+    /// The commit an attempt pinned when it was admitted, read by that one
+    /// ref rather than by listing every pin the workspace holds [ORB-14164].
     fn pinned_revision(&self, attempt_id: &str) -> Result<Option<String>, AutomationError> {
-        if self.pinned.borrow().is_none() {
-            let listing = Source::new(&self.runtime.paths().repo_root).git(&[
-                "for-each-ref",
-                "--format=%(refname) %(objectname)",
-                "refs/orbit/automation/",
-            ])?;
-            let refs = listing
-                .lines()
-                .filter_map(|line| line.split_once(' '))
-                .map(|(name, object)| (name.to_string(), object.to_string()))
-                .collect();
-            *self.pinned.borrow_mut() = Some(refs);
+        if let Some(pinned) = self.pinned.borrow().get(attempt_id) {
+            return Ok(pinned.clone());
         }
-        Ok(self.pinned.borrow().as_ref().and_then(|refs| {
-            refs.get(&format!("refs/orbit/automation/{attempt_id}"))
-                .cloned()
-        }))
+        let pinned = pins::pinned(&Source::new(&self.runtime.paths().repo_root), attempt_id)?;
+        self.pinned
+            .borrow_mut()
+            .insert(attempt_id.to_string(), pinned.clone());
+        Ok(pinned)
     }
 
     /// The `material_v1` hash the member's task would certify at the revision
@@ -450,11 +443,7 @@ impl MemberHost for Host<'_> {
         }
 
         // Pin the source the attempt froze so the run can still reach it later.
-        Source::new(&self.runtime.paths().repo_root).git(&[
-            "update-ref",
-            &format!("refs/orbit/automation/{}", attempt.id),
-            &attempt.member.source.commit,
-        ])?;
+        pins::pin(&Source::new(&self.runtime.paths().repo_root), attempt)?;
 
         let origin = if self.trigger.kind == StateTriggerKind::ExecutionFailed {
             "execution_failure"
@@ -491,12 +480,39 @@ impl MemberHost for Host<'_> {
     /// at the pinned revision [ORB-13638]. When it still matches, nothing
     /// that contract covered has changed — in particular none of the default
     /// material fields — and the task keeps its assessment instead of joining
-    /// a re-pilot wave on upgrade. Any doubt answers `false`.
+    /// a re-pilot wave on upgrade. Any doubt answers `false`; a failure to
+    /// recompute is logged, so a silent re-pilot wave has a cause on record.
     fn carries_forward(&self, member: &StateMember, assessment: &MemberAssessment) -> bool {
-        self.trigger.kind == StateTriggerKind::PreparationEligible
-            && self
-                .legacy_fingerprint(member, assessment)
-                .is_ok_and(|legacy| legacy.as_ref() == Some(&assessment.resulting_fingerprint))
+        if self.trigger.kind != StateTriggerKind::PreparationEligible {
+            return false;
+        }
+        match self.legacy_fingerprint(member, assessment) {
+            Ok(legacy) => legacy.as_ref() == Some(&assessment.resulting_fingerprint),
+            Err(error) => {
+                tracing::warn!(
+                    routine = self.routine,
+                    member = member.key,
+                    receipt = assessment.receipt_id,
+                    error = %error,
+                    "could not recompute the material_v1 fingerprint at the assessment's pinned \
+                     revision; the member is assessed again"
+                );
+                false
+            }
+        }
+    }
+
+    fn release(&self, attempt: &MemberAttempt) {
+        self.pinned.borrow_mut().remove(&attempt.id);
+        if let Err(error) = pins::release(&Source::new(&self.runtime.paths().repo_root), attempt) {
+            tracing::warn!(
+                routine = self.routine,
+                attempt = attempt.id,
+                error = %error,
+                "could not release the retired attempt's source pin; \
+                 `orbit doctor --fix-automation-pins` releases it once nothing names it"
+            );
+        }
     }
 
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {

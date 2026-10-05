@@ -44,7 +44,8 @@ pub(super) fn reconcile(
         if now >= active.deadline {
             let mut next = state.clone();
             let members = member_state(&mut next)?;
-            if let Some(expired) = members.active.take() {
+            let expired = members.active.take();
+            if let Some(expired) = expired.clone() {
                 for member in expired.members() {
                     members
                         .withheld
@@ -53,7 +54,7 @@ pub(super) fn reconcile(
                 retire_attempt(host, members, expired)?;
             }
 
-            return commit(store, &state, next, None);
+            return commit_retiring(store, host, &state, next, None, expired);
         }
 
         // A member whose input went stale leaves the batch: a retired identity
@@ -85,6 +86,7 @@ pub(super) fn reconcile(
         let Some(mut shrunk) = members.active.take() else {
             return Ok(state);
         };
+        let mut retired = None;
         if let Some(first) = kept.first().cloned() {
             shrunk.member = first;
             shrunk.members = kept;
@@ -97,10 +99,11 @@ pub(super) fn reconcile(
                         .insert(member.key.clone(), "input_stale_or_deadline_expired".into());
                 }
             }
+            retired = Some(shrunk.clone());
             retire_attempt(host, members, shrunk)?;
         }
 
-        return commit(store, &state, next, None);
+        return commit_retiring(store, host, &state, next, None, retired);
     }
 
     match host.outcome(active)? {
@@ -193,7 +196,7 @@ pub(super) fn reconcile(
             }
             fit_failed(host, members, &settled)?;
 
-            commit(store, &state, next, receipt.as_ref())
+            commit_retiring(store, host, &state, next, receipt.as_ref(), Some(settled))
         }
         MemberOutcome::Failed(reason) => {
             let mut next = state.clone();
@@ -216,16 +219,36 @@ pub(super) fn reconcile(
                 }
             }
 
+            let mut retired = None;
             if members
                 .active
                 .as_ref()
                 .is_some_and(|active| active.exhausted)
                 && let Some(exhausted) = members.active.take()
             {
+                retired = Some(exhausted.clone());
                 retire_attempt(host, members, exhausted)?;
             }
 
-            commit(store, &state, next, None)
+            commit_retiring(store, host, &state, next, None, retired)
         }
     }
+}
+
+/// Commit `next`, then let the host release the attempt it retired. Only a
+/// checkpoint that won the generation fence proves no retry or run can still
+/// claim that attempt; a lost race keeps it, and what it retained, intact.
+fn commit_retiring(
+    store: &dyn AutomationStoreBackend,
+    host: &dyn MemberHost,
+    state: &AutomationState,
+    next: AutomationState,
+    receipt: Option<&AcceptedCoverage>,
+    retired: Option<MemberAttempt>,
+) -> Result<AutomationState, AutomationError> {
+    let committed = commit(store, state, next, receipt)?;
+    if let Some(attempt) = retired {
+        host.release(&attempt);
+    }
+    Ok(committed)
 }

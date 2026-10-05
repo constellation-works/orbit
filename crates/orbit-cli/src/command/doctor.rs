@@ -53,6 +53,10 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub fix_orphan_task_stores: bool,
 
+    /// Delete `refs/orbit/automation/<attempt>` source pins that no state-routine consumer or live run on this host still names. In-use pins, delivery batch pins and unrecognized refs are kept. Refuses while a routine sweep runs.
+    #[arg(long)]
+    pub fix_automation_pins: bool,
+
     /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
     #[arg(long)]
     pub confirm: bool,
@@ -170,6 +174,22 @@ impl Execute for DoctorCommand {
             results.push(WorkspaceDoctorResult {
                 check_name: "fix-orphan-task-stores".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
+                message,
+                remediation: None,
+            });
+        }
+        if self.fix_automation_pins {
+            let cleanup =
+                orbit_core::application::automation::release_unreferenced_attempt_pins(runtime)?;
+            let message = automation_pin_cleanup_message(&cleanup);
+            eprintln!("{message}");
+            results.push(WorkspaceDoctorResult {
+                check_name: "fix-automation-pins".to_string(),
+                status: if cleanup.kept.is_empty() {
+                    WorkspaceDoctorStatus::Ok
+                } else {
+                    WorkspaceDoctorStatus::Warning
+                },
                 message,
                 remediation: None,
             });
@@ -754,6 +774,34 @@ fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String
          ({} task bundle(s)).",
         removed.empty_partitions, removed.populated_partitions, removed.task_bundles
     )
+}
+
+/// Render `--fix-automation-pins`'s outcome: what it released, why the rest
+/// stayed, and every ref it left in place without proof of ownership.
+fn automation_pin_cleanup_message(
+    cleanup: &orbit_core::application::automation::AttemptPinCleanup,
+) -> String {
+    let mut message = format!(
+        "Released {} unreferenced automation attempt pin(s); kept {} in flight, {} live-run, \
+         {} assessed.",
+        cleanup.released.len(),
+        cleanup.retained_active,
+        cleanup.retained_live_run,
+        cleanup.retained_assessed,
+    );
+    if !cleanup.kept.is_empty() {
+        message.push_str(&format!(
+            " Could not delete (moved or locked): {}.",
+            cleanup.kept.join(", ")
+        ));
+    }
+    if !cleanup.unrecognized.is_empty() {
+        message.push_str(&format!(
+            " Left unrecognized refs untouched: {}.",
+            cleanup.unrecognized.join(", ")
+        ));
+    }
+    message
 }
 
 fn human_detail(row: &WorkspaceDoctorResult) -> String {

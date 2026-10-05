@@ -64,6 +64,12 @@ pub trait MemberHost {
 
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError>;
 
+    /// Drop what [`Self::admit`] retained for `attempt` [ORB-14164]. Called
+    /// once a committed checkpoint settled, exhausted or retired it, so no
+    /// run or retry can need it again. Best effort: a host that cannot
+    /// release reports it rather than failing the checkpoint already made.
+    fn release(&self, _attempt: &MemberAttempt) {}
+
     /// Whether `assessment`, certified under an earlier fingerprint contract,
     /// still describes `member` [ORB-13638]. A host that cannot tell answers
     /// `false`, so the member is assessed again rather than trusted.

@@ -1,16 +1,23 @@
-//! Duplicate pilot preparation is a successful skip, and state routines wait
-//! for active holds to end. Fixtures run in isolated children with real stores.
+//! Duplicate pilot preparation is a successful skip, state routines wait for
+//! active holds to end, and the source pins their attempts take are released
+//! once nothing can need them. Fixtures run in isolated children with real
+//! stores and a real repository.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
-use orbit_core::application::automation::evaluate_routine;
+use orbit_automation::delivery::digest;
+use orbit_core::application::automation::{
+    consumer_key, evaluate_routine, release_unreferenced_attempt_pins,
+};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, Task, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunStoreBackend;
 use orbit_tools::ToolContext;
+use orbit_types::workflow::automation::AutomationState;
+use orbit_types::workflow::automation::members::{MemberAttempt, StateTriggerKind};
 use orbit_types::workflow::{JobRunState, PipelineState, RoutineDefinition};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -35,12 +42,7 @@ impl Workspace {
         )
         .unwrap();
         let git = |args: &[&str]| {
-            let mut command = std::process::Command::new("git");
-            orbit_common::test_env::clear_inherited_authority(|key| {
-                command.env_remove(key);
-            });
-            let output = command.args(args).current_dir(&repo).output().unwrap();
-            assert!(output.status.success(), "git {args:?}: {output:?}");
+            git_in(&repo, args, None);
         };
         git(&["init", "-b", "main"]);
         git(&["config", "user.name", "Orbit Test"]);
@@ -80,6 +82,126 @@ impl Workspace {
             repo,
             jobs,
         }
+    }
+
+    /// Runs an attempt carries resolve their catalog definition when read.
+    fn install_pilot_job(&self) {
+        let jobs = self.runtime.global_root().join("resources/jobs");
+        std::fs::create_dir_all(&jobs).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/jobs/task_pilot_pipeline.yaml"),
+            jobs.join("task_pilot_pipeline.yaml"),
+        )
+        .unwrap();
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        git_in(&self.repo, args, None)
+    }
+
+    /// Every ref under the automation pin namespace.
+    fn pins(&self) -> Vec<String> {
+        self.git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/orbit/automation/",
+        ])
+        .lines()
+        .map(str::to_owned)
+        .collect()
+    }
+
+    fn pin(&self, refname: &str) {
+        let head = self.git(&["rev-parse", "HEAD"]);
+        self.git(&["update-ref", refname, head.trim()]);
+    }
+
+    fn routine_state(&self) -> AutomationState {
+        let consumer = consumer_key(&self.runtime, "routine", "fixture-pilot").unwrap();
+        self.runtime
+            .automation_store()
+            .unwrap()
+            .automation_state(&consumer)
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Claim and acknowledge an attempt for `task`'s pending member through
+    /// the store's own transitions, pinning its source the way admission
+    /// does, with the run's input carrying the claim.
+    fn admitted(&self, task: &Task, max_attempts: u32) -> MemberAttempt {
+        let store = self.runtime.automation_store().unwrap();
+        let state = self.routine_state();
+        let member = state.members.as_ref().unwrap().pending[&task.id].clone();
+        let id = digest(format!("attempt:{}", task.id).as_bytes());
+        let now = Utc::now();
+        let mut attempt = MemberAttempt {
+            consumer: state.consumer.clone(),
+            kind: StateTriggerKind::PreparationEligible,
+            action_key: format!("automation:{id}:1"),
+            id,
+            member: member.clone(),
+            members: vec![member],
+            attempt: 1,
+            max_attempts,
+            deadline: now + Duration::minutes(90),
+            retry_after: now,
+            action_id: None,
+            exhausted: false,
+        };
+        let mut claimed = state.clone();
+        claimed.generation += 1;
+        claimed.members.as_mut().unwrap().active = Some(attempt.clone());
+        assert!(store.automation_commit(&state, &claimed, None).unwrap());
+
+        let run = self
+            .jobs
+            .insert_automation_job_run(
+                "task_pilot_pipeline",
+                json!({"state_automation": attempt}),
+                &attempt.action_key,
+            )
+            .unwrap();
+        attempt.action_id = Some(run.run_id);
+        let mut acknowledged = claimed.clone();
+        acknowledged.generation += 1;
+        acknowledged.members.as_mut().unwrap().active = Some(attempt.clone());
+        assert!(
+            store
+                .automation_commit(&claimed, &acknowledged, None)
+                .unwrap()
+        );
+        self.git(&[
+            "update-ref",
+            &format!("refs/orbit/automation/{}", attempt.id),
+            &attempt.member.source.commit,
+        ]);
+        attempt
+    }
+
+    /// Record the deterministic apply step's evidence for every member.
+    fn applied(&self, attempt: &MemberAttempt) {
+        let run_id = attempt.action_id.clone().unwrap();
+        let evidence = attempt
+            .members()
+            .iter()
+            .map(|member| {
+                json!({
+                    "action_id": "", "attempt_id": attempt.id, "member_key": member.key,
+                    "input_fingerprint": member.fingerprint,
+                    "resulting_fingerprint": member.fingerprint,
+                    "ready": true, "result": {"task_id": member.key},
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut state = PipelineState::new(run_id.clone(), "task_pilot_pipeline".into(), json!({}));
+        state.record_step(
+            2,
+            JobRunState::Success,
+            Some(json!({"member_evidence": evidence})),
+            None,
+        );
+        self.runtime.write_run_state(&run_id, &state).unwrap();
     }
 
     fn task(&self, title: &str) -> Task {
@@ -227,6 +349,30 @@ fn mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks() {
     );
 }
 
+fn git_in(repo: &Path, args: &[&str], input: Option<&str>) -> String {
+    use std::io::Write;
+    let mut command = std::process::Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let mut child = command
+        .args(args)
+        .current_dir(repo)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    if let Some(input) = input {
+        stdin.write_all(input.as_bytes()).unwrap();
+    }
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
 fn pilot_routine() -> RoutineDefinition {
     serde_json::from_value(json!({
         "schemaVersion": 1, "name": "fixture-pilot", "enabled": true,
@@ -368,4 +514,206 @@ fn preparation_routine_admission_withholds_a_held_member_off_the_scan_page() {
         "admission preserves the deferred member"
     );
     assert!(members.active.is_none());
+}
+
+/// An attempt's source pin outlives neither its settlement nor its terminal
+/// failure; before either it stays, so the run can still reach the source.
+#[test]
+fn routine_attempt_pins_are_released_once_the_attempt_settles_or_fails() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::routine_attempt_pins_are_released_once_the_attempt_settles_or_fails",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let settles = workspace.task("settles");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+
+    let attempt = workspace.admitted(&settles, 2);
+    let pin = format!("refs/orbit/automation/{}", attempt.id);
+    let pending = evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(3),
+    )
+    .unwrap();
+    assert_eq!(pending.reason, "batch_pending");
+    assert_eq!(
+        workspace.pins(),
+        std::slice::from_ref(&pin),
+        "the running attempt keeps it"
+    );
+
+    workspace.applied(&attempt);
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert!(members.active.is_none());
+    assert_eq!(members.assessed[&settles.id].receipt_id, attempt.id);
+    assert!(workspace.pins().is_empty(), "settlement released {pin}");
+
+    // Observed only now, so no pass admits it before the fixture does.
+    let fails = workspace.task("fails");
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(5),
+    )
+    .unwrap();
+    let attempt = workspace.admitted(&fails, 1);
+    workspace
+        .jobs
+        .finalize_job_run(
+            attempt.action_id.as_deref().unwrap(),
+            JobRunState::Interrupted,
+            Utc::now(),
+            None,
+        )
+        .unwrap();
+    let failed = evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(6),
+    )
+    .unwrap();
+    assert_eq!(failed.reason, "needs_attention");
+    let members = workspace.routine_state().members.unwrap();
+    assert!(members.active.is_none());
+    assert!(members.failed[&fails.id].exhausted);
+    assert!(workspace.pins().is_empty(), "terminal failure released it");
+}
+
+/// `orbit doctor --fix-automation-pins` releases leaked attempt pins past the
+/// size one namespace listing could read, and keeps every pin a consumer or
+/// live run names, every delivery batch pin, and every ref it cannot prove is
+/// an attempt pin. It refuses while a sweep holds the lock.
+#[test]
+fn fix_automation_pins_releases_only_attempt_pins_nothing_names() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::fix_automation_pins_releases_only_attempt_pins_nothing_names",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let assessed = workspace.task("assessed");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+
+    // A pin from before settlement released them, backing an assessment.
+    let settled = workspace.admitted(&assessed, 1);
+    workspace.applied(&settled);
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(3),
+    )
+    .unwrap();
+    let settled_run = settled.action_id.as_deref().unwrap();
+    workspace
+        .jobs
+        .mark_job_run_running(settled_run, Utc::now(), std::process::id())
+        .unwrap();
+    workspace
+        .jobs
+        .finalize_job_run(settled_run, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+    let assessed_pin = format!("refs/orbit/automation/{}", settled.id);
+    workspace.pin(&assessed_pin);
+
+    let active = workspace.task("active");
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    let in_flight = workspace.admitted(&active, 1);
+    let active_pin = format!("refs/orbit/automation/{}", in_flight.id);
+
+    let live = digest(b"live run attempt");
+    workspace
+        .jobs
+        .insert_job_run(
+            "task_pilot_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"state_automation": {"id": live}})),
+            None,
+        )
+        .unwrap();
+    let live_pin = format!("refs/orbit/automation/{live}");
+    workspace.pin(&live_pin);
+
+    let batch_pin = format!("refs/orbit/automation/{}/batch/from", digest(b"consumer"));
+    workspace.pin(&batch_pin);
+    let unrecognized = "refs/orbit/automation/abc-not-an-attempt".to_string();
+    workspace.pin(&unrecognized);
+
+    // More leaked pins than one 1 MiB listing of the namespace can hold.
+    let head = workspace.git(&["rev-parse", "HEAD"]);
+    let leaked = (0..9_000)
+        .map(|index| {
+            format!(
+                "refs/orbit/automation/{}",
+                digest(format!("leaked {index}").as_bytes())
+            )
+        })
+        .collect::<Vec<_>>();
+    let instructions = leaked
+        .iter()
+        .map(|name| format!("create {name} {}\n", head.trim()))
+        .collect::<String>();
+    git_in(
+        &workspace.repo,
+        &["update-ref", "--stdin"],
+        Some(&instructions),
+    );
+    let before = workspace.pins();
+    assert_eq!(before.len(), leaked.len() + 5);
+
+    let lock =
+        orbit_store::try_acquire_routine_sweep_lock(&workspace.runtime.global_root().join("state"))
+            .unwrap()
+            .unwrap();
+    assert!(release_unreferenced_attempt_pins(&workspace.runtime).is_err());
+    assert_eq!(workspace.pins(), before, "a refused repair deletes nothing");
+    drop(lock);
+
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    let mut released = cleanup.released.clone();
+    released.sort();
+    let mut expected = leaked.clone();
+    expected.sort();
+    assert_eq!(released, expected);
+    assert_eq!(
+        (
+            cleanup.retained_active,
+            cleanup.retained_assessed,
+            cleanup.retained_live_run
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(cleanup.unrecognized, std::slice::from_ref(&unrecognized));
+    assert!(cleanup.kept.is_empty());
+    let mut remaining = vec![assessed_pin, active_pin, live_pin, batch_pin, unrecognized];
+    remaining.sort();
+    assert_eq!(workspace.pins(), remaining);
+
+    let again = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert!(again.released.is_empty(), "the repair is idempotent");
 }

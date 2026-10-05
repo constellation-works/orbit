@@ -529,6 +529,18 @@ audit window. Explicit retention cleanup after that window may delete the refs;
 no automatic GC policy is added here. `orbit auto-task reset` deletes the pins of
 the batches it forgets, and records which ones it released.
 
+State-member attempts pin their frozen source at the namespace's top level,
+`refs/orbit/automation/<attempt id>` [ORB-14164]. The checkpoint that settles,
+exhausts or retires the attempt releases the pin once it commits; a retry
+keeps it, and a checkpoint that loses the generation fence releases nothing.
+The release deletes the ref only while it still names the attempt's commit;
+a failure is logged and leaves the pin for the repair below. Pins that
+releases before this left behind are released with
+`orbit doctor --fix-automation-pins`: under the routine sweep lock, it keeps
+every pin an in-flight attempt, a live run or an accepted assessment of any
+consumer in the host store names, and deletes the rest at their listed commit
+([health-checks runbook](../../runbooks/health-checks.md#release-leaked-automation-attempt-pins)).
+
 The source currently understands GitHub PR evidence and authorized local direct
 landings. Other/manual direct changes stay unresolved until an authoritative
 receipt exists. A history rewrite is replayed only on deterministic proof, and
@@ -575,7 +587,9 @@ supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
 identity, frozen attempts and receipt acceptance. Store uses its existing
 consumer/coverage transaction and generation fence. No new database or clock is
-introduced. Source retention uses the existing `refs/orbit/automation/` namespace.
+introduced. Source retention uses the existing `refs/orbit/automation/` namespace:
+each admitted attempt pins its source until it settles, exhausts or is retired
+(see [Rollback and limits](#rollback-and-limits)).
 
 Since [ORB-12745] the shipped `task_pilot.yaml` default *is* this form:
 `orbit workspace init` renders `owner_machine` from the host's registered
@@ -661,7 +675,12 @@ Assessments accepted under the earlier `material_v1` fingerprint, which
 hashed every field and the source revision, are carried forward rather than
 re-piloted: a scheduled member stays fresh while the `material_v1` hash
 recomputed at the revision its receipt pinned still matches, and becomes due
-at the first edit that hash covers.
+at the first edit that hash covers. The pinned revision is read from that one
+attempt's ref, never by listing the namespace, and a failure to recompute the
+hash is logged before the member is assessed again. Assessments accepted since
+the upgrade carry the current contract, so their attempt's pin is released at
+settlement; `orbit doctor --fix-automation-pins` keeps any pin an assessment
+still names.
 
 `kind: execution_failed` targets `job:task_triage_pipeline`, which this Orbit no
 longer ships; the shape is recorded here for definitions written before the

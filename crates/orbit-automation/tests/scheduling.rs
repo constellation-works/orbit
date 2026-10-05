@@ -44,6 +44,8 @@ use orbit_types::workflow::{
 
 #[path = "scheduling/failed_members.rs"]
 mod failed_members;
+#[path = "scheduling/released_attempts.rs"]
+mod released_attempts;
 
 fn at(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)

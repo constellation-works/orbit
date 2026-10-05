@@ -89,7 +89,8 @@ This is distinct from `--fix-stale-locks`, which handles dead-holder filesystem 
 
 There is deliberately no blanket `--fix` or resolve-all option. Configuration repair, database
 recovery, job cancellation, graph cleanup, id-allocation retirement, filesystem holder-record cleanup,
-task-reservation release, retired activity-backend cleanup, and orphan task-store deletion have
+task-reservation release, retired activity-backend cleanup, orphan task-store deletion, and
+automation attempt-pin release have
 different evidence and safety gates, so each repair remains explicit and safety-scoped.
 
 For definition convergence after installing a new Orbit binary, or to restore a shipped
@@ -211,6 +212,35 @@ directory is a root even when it is a link, but nothing below it is followed: a 
 file, a linked directory, or a special file such as a FIFO is reported by doctor and listed as
 skipped by the repair, and its target is never read or rewritten. To have such an activity
 checked and repaired, replace the link with a regular file inside the catalog.
+
+### Release leaked automation attempt pins
+
+Admitting a state-routine attempt (the task-pilot routine) pins the commit it froze as
+`refs/orbit/automation/<attempt id>`; the attempt's settlement, terminal failure or retirement
+releases the pin. Releases before ORB-14164 never released them, so a long-running workspace
+can hold hundreds of leaked pins that keep their commits from `git gc`. Count them with:
+
+```sh
+git for-each-ref 'refs/orbit/automation/*' | wc -l
+```
+
+and release the ones nothing still needs with:
+
+```sh
+orbit doctor --fix-automation-pins
+```
+
+The repair holds the routine sweep lock, so it refuses while a sweep is evaluating consumers;
+rerun it after the sweep finishes. It lists the top-level pins first, then inventories every
+consumer recorded in this host's automation store and every pending or running task-pilot
+run. A pin is kept when an attempt is still in flight, a live run carries it, or an accepted
+assessment names it (an assessment certified before the material fingerprint became
+configurable is carried forward through that pin). Every other attempt pin is deleted only
+while it still names the commit it was listed with, so a ref repointed meanwhile survives and
+is reported. Delivery batch pins (`refs/orbit/automation/<consumer digest>/<batch>/…`) are never
+touched, and top-level refs that are not 64-hex attempt ids are reported and left in place.
+The row reports released, in-flight, live-run and assessed counts; it is a warning only when a
+pin could not be deleted. Any inventory failure deletes nothing. The repair is idempotent.
 
 Graph is retired under the "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) and is not inspected by ordinary health checks. To remove
 leftover state explicitly, run `orbit doctor --remove-graph`. This deletes only the current
