@@ -11,7 +11,8 @@ TEST_COMPLETE=0
 # Clear any build-budget environment inherited from an outer wrapper (e.g. `make ci`).
 # Fixtures manage their own slots, lock directory, and admission hermetically [ORB-12350].
 unset ORBIT_BUILD_BUDGET ORBIT_BUILD_BUDGET_DIR ORBIT_BUILD_BUDGET_HELD \
-  ORBIT_BUILD_BUDGET_SLOT ORBIT_BUILD_SLOTS ORBIT_CARGO_JOBS CARGO_BUILD_JOBS
+  ORBIT_BUILD_BUDGET_SLOT ORBIT_BUILD_SLOTS ORBIT_CARGO_JOBS CARGO_BUILD_JOBS \
+  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS
 for var in $(compgen -v ORBIT_BUILD_ 2>/dev/null || true); do
   unset "$var"
 done
@@ -248,6 +249,73 @@ run_queue_case() {
 run_queue_case after-success sleep
 run_queue_case after-failure fail
 run_queue_case after-termination block
+
+# A held slot produces bounded diagnostics on stderr while the wrapped command
+# remains queued. The private interval override keeps this process test short.
+wait_state="$TMP/wait-reporting"
+mkdir -p "$wait_state"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 \
+  "$WRAPPER" -- "$TMP/helper.py" "$wait_state" owner block 0 &
+owner_pid=$!
+BACKGROUND_PIDS+=("$owner_pid")
+wait_for "$wait_state/started-owner"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 \
+  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
+  "$WRAPPER" -- bash -c 'printf "wrapped stdout\\n"; exit 23' \
+  >"$TMP/wait-command.out" 2>"$TMP/wait-command.err" &
+queued_pid=$!
+BACKGROUND_PIDS+=("$queued_pid")
+sleep 0.18
+[[ ! -s "$TMP/wait-command.out" ]] || fail "wait-reporting command ran before the owner released its slot"
+[[ -e "$wait_state/active/owner" ]] || fail "wait-reporting owner lost its held slot"
+grep -Fq "build-budget: waiting for admission (slots=1, budget_dir=$TMP/locks-wait-reporting)" \
+  "$TMP/wait-command.err" || fail "wait-reporting start line omitted slot count or budget directory"
+grep -Eq '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
+  "$TMP/wait-command.err" || fail "wait-reporting progress line did not include elapsed time"
+progress_lines="$(grep -c '^build-budget: still waiting for admission ' "$TMP/wait-command.err")"
+[[ "$progress_lines" -le 5 ]] || fail "wait-reporting emitted too many progress lines while queued"
+
+# Both documented bypass paths execute immediately even while the only slot is held.
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 \
+  ORBIT_BUILD_BUDGET_HELD=1 _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
+  timeout 2 "$WRAPPER" -- bash -c 'printf "reentry stdout\\n"' \
+  >"$TMP/reentry.out" 2>"$TMP/reentry.err" \
+  || fail "held-marker re-entry tried to acquire a second slot"
+[[ "$(cat "$TMP/reentry.out")" == "reentry stdout" ]] || fail "held-marker re-entry changed stdout"
+[[ ! -s "$TMP/reentry.err" ]] || fail "held-marker re-entry emitted admission diagnostics"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 ORBIT_BUILD_BUDGET=0 \
+  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
+  timeout 2 "$WRAPPER" -- bash -c 'printf "bypass stdout\\n"' \
+  >"$TMP/bypass-held.out" 2>"$TMP/bypass-held.err" \
+  || fail "budget bypass tried to acquire a slot"
+[[ "$(cat "$TMP/bypass-held.out")" == "bypass stdout" ]] || fail "budget bypass changed stdout"
+[[ ! -s "$TMP/bypass-held.err" ]] || fail "budget bypass emitted admission diagnostics"
+
+kill -TERM "$owner_pid"
+set +e
+wait "$owner_pid" 2>/dev/null
+owner_status=$?
+wait "$queued_pid"
+queued_status=$?
+set -e
+forget_pid "$owner_pid"
+forget_pid "$queued_pid"
+[[ "$owner_status" == "143" ]] || fail "wait-reporting owner returned $owner_status after termination"
+[[ "$queued_status" == "23" ]] || fail "wait-reporting changed wrapped command exit status to $queued_status"
+[[ "$(cat "$TMP/wait-command.out")" == "wrapped stdout" ]] || fail "wait-reporting changed wrapped command stdout"
+grep -Eq '^build-budget: acquired slot 1 after [0-9]+\.[0-9]s$' \
+  "$TMP/wait-command.err" || fail "wait-reporting did not report the acquired slot and total wait"
+[[ "$(grep -c '^build-budget: waiting for admission ' "$TMP/wait-command.err")" == "1" ]] \
+  || fail "wait-reporting did not emit exactly one start line"
+[[ "$(grep -c '^build-budget: acquired slot ' "$TMP/wait-command.err")" == "1" ]] \
+  || fail "wait-reporting did not emit exactly one acquired line"
+
+# Immediate acquisition remains silent and preserves command output.
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-immediate" ORBIT_BUILD_SLOTS=1 \
+  "$WRAPPER" -- bash -c 'printf "immediate stdout\\n"' \
+  >"$TMP/immediate.out" 2>"$TMP/immediate.err"
+[[ "$(cat "$TMP/immediate.out")" == "immediate stdout" ]] || fail "immediate acquisition changed stdout"
+[[ ! -s "$TMP/immediate.err" ]] || fail "immediate acquisition emitted wait diagnostics"
 
 # A nested admitted entry point must not try to acquire a second slot.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-nested" ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=5 \
