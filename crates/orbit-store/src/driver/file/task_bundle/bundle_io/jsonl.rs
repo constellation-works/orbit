@@ -1,7 +1,6 @@
 //! JSONL sidecars (events, comments): whole-file writes, reads, durable
 //! appends and torn-tail repair.
 
-use crate::driver::file::task_bundle::bundle_io::read_required_text;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_types::task::{TaskCommentRowV2, TaskEventRowV2};
@@ -9,6 +8,8 @@ use serde::de::DeserializeOwned;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
+
+use super::read_required_bytes;
 
 pub(super) fn write_jsonl_file<T>(path: &Path, rows: &[T]) -> Result<(), OrbitError>
 where
@@ -44,7 +45,7 @@ fn read_jsonl_file<T>(path: &Path) -> Result<Vec<T>, OrbitError>
 where
     T: DeserializeOwned,
 {
-    let raw = read_required_text(path)?;
+    let raw = read_required_bytes(path)?;
     scan_jsonl_records(path, &raw)
 }
 
@@ -77,8 +78,8 @@ fn repair_jsonl_tail(path: &Path) -> Result<(), OrbitError> {
         return Ok(());
     };
 
-    let mut raw = String::new();
-    file.read_to_string(&mut raw).map_err(OrbitError::from)?;
+    let mut raw = Vec::new();
+    file.read_to_end(&mut raw).map_err(OrbitError::from)?;
     let scan = scan_jsonl_tail(path, &raw)?;
     if scan.truncate_at < raw.len() as u64 {
         file.set_len(scan.truncate_at)
@@ -91,12 +92,13 @@ fn repair_jsonl_tail(path: &Path) -> Result<(), OrbitError> {
     Ok(())
 }
 
-pub(super) fn scan_jsonl_records<T>(path: &Path, raw: &str) -> Result<Vec<T>, OrbitError>
+pub(super) fn scan_jsonl_records<T>(path: &Path, raw: &[u8]) -> Result<Vec<T>, OrbitError>
 where
     T: DeserializeOwned,
 {
     let scan = scan_jsonl_tail(path, raw)?;
-    let valid = &raw[..scan.truncate_at as usize];
+    let valid = std::str::from_utf8(&raw[..scan.truncate_at as usize])
+        .map_err(|err| OrbitError::Io(err.to_string()))?;
     valid
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -112,22 +114,25 @@ struct JsonlTailScan {
     truncate_at: u64,
 }
 
-fn scan_jsonl_tail(path: &Path, raw: &str) -> Result<JsonlTailScan, OrbitError> {
+fn scan_jsonl_tail(path: &Path, raw: &[u8]) -> Result<JsonlTailScan, OrbitError> {
     if raw.is_empty() {
         return Ok(JsonlTailScan { truncate_at: 0 });
     }
 
     let mut offset = 0usize;
     let mut last_good = 0usize;
-    for chunk in raw.split_inclusive('\n') {
+    for chunk in raw.split_inclusive(|byte| *byte == b'\n') {
         let next_offset = offset + chunk.len();
-        if !chunk.ends_with('\n') {
+        if !chunk.ends_with(b"\n") {
             return Ok(JsonlTailScan {
                 truncate_at: last_good as u64,
             });
         }
 
-        let line = chunk.trim_end_matches('\n').trim_end_matches('\r');
+        let line_bytes = chunk.strip_suffix(b"\n").unwrap_or(chunk);
+        let line_bytes = line_bytes.strip_suffix(b"\r").unwrap_or(line_bytes);
+        let line =
+            std::str::from_utf8(line_bytes).map_err(|err| OrbitError::Io(err.to_string()))?;
         if line.trim().is_empty() {
             return Err(OrbitError::Store(format!(
                 "blank JSONL row before tail at {}",
