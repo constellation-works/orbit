@@ -11,7 +11,7 @@
 // after the write is the server's answer, never a local guess.
 
 import { captureFocus, el, fetchJson, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
-import { hostReading, hostVerdict, onHostResources } from './host-resources.js';
+import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -786,10 +786,7 @@ async function fetchSystem(source) {
 
 async function fetchHostResources() {
   try {
-    // The host is the serving machine, whatever workspace is selected, so this
-    // read deliberately skips the workspace parameter the other reads carry.
-    const response = await fetch("/api/host/resources");
-    return response.ok ? await response.json() : null;
+    return await fetchHostResourcePayload();
   } catch {
     return null;
   }

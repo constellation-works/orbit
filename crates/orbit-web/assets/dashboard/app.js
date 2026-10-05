@@ -1288,8 +1288,11 @@ function activeRefreshJobs() {
 
   // The health strip is global; refresh on every tick alongside the active tab.
   // The per-workspace summary (/api/audit/summary) is replaced by a placeholder
-  // instead of fetched in aggregate mode.
-  const jobs = [fetchAndRenderHostResources()];
+  // instead of fetched in aggregate mode. Host chips start on this tick too,
+  // but a stalled /api/host/resources must not leave the status line on
+  // "fetching…" or postpone the next poll. The call has its own 30s abort.
+  void fetchAndRenderHostResources().catch(error => console.error(error));
+  const jobs = [];
   if (aggregate) {
     renderAggregatePlaceholders();
   } else {

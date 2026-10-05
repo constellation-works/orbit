@@ -254,6 +254,33 @@ check(activePoll().ms === 120000, 'consecutive failures continue exponential bac
 networkDown = false;
 await runPoll();
 check(activePoll().ms === 30000, 'successful retry restores the 30s interval');
+// A host snapshot that never answers must not pin the status line or the next
+// poll. Other panels still render, and the open request keeps a 30s abort.
+const hungHostSignals = [];
+const fetchDuringHostHang = globalThis.fetch;
+globalThis.fetch = (path, options = {}) => {
+  const url = new URL(path, 'http://dashboard.test');
+  if (url.pathname === '/api/host/resources') {
+    return new Promise((_resolve, reject) => {
+      hungHostSignals.push(options.signal || null);
+      if (options.signal) {
+        options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      }
+    });
+  }
+  return fetchDuringHostHang(path, options);
+};
+const summaryBeforeHostHang = summaryReads;
+const eventsBeforeHostHang = text('tile-events-value');
+await runPoll();
+const liveTimers = () => scheduledPolls.filter(entry => !entry.handle.cancelled);
+const polls = liveTimers().filter(entry => String(entry.fn).includes('refreshDashboard'));
+check(hungHostSignals.length >= 1 && hungHostSignals.every(signal => signal && !signal.aborted), 'host request stays unanswered and carries an abort signal');
+check(summaryReads > summaryBeforeHostHang && text('tile-events-value') !== eventsBeforeHostHang, 'other panels refresh while host resources never answer');
+check(!text('meta-text').includes('fetching') && node('conn-status').className.includes('green'), 'hung host request does not leave the dashboard fetching');
+check(polls.length === 1 && polls[0].ms === 30000, 'next poll is scheduled while host resources are still unanswered');
+check(liveTimers().some(entry => entry !== polls[0] && entry.ms === 30000), 'unanswered host request remains bounded by the 30s timeout');
+globalThis.fetch = fetchDuringHostHang;
 globalThis.setTimeout = realTimeout;
 globalThis.clearTimeout = realClearTimeout;
 globalThis.showTaskPaginationEvidence = async () => {
