@@ -464,7 +464,7 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
          - Final candidate: `{}`\n\
          - Selectors widened for reviewer-changed paths: {}\n\
          - Validation on final candidate: {} record(s) [{}], complete: {}\n\
-         - Consumed: {} reviewer start(s), {}s of {} min\n\
+         - Reviewer runtime: {}s of {} min\n\
          - Escalation: {}\n\n\
          {}",
         certificate.attempt_id,
@@ -492,7 +492,6 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
         certificate.validation.len(),
         validation_roles(&certificate.validation),
         certificate.validation_complete,
-        certificate.consumed.reviewer_starts,
         certificate.consumed.seconds,
         certificate.budget.minutes,
         certificate.escalation.as_deref().unwrap_or("none"),

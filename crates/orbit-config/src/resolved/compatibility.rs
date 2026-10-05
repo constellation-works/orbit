@@ -91,6 +91,9 @@ pub(super) struct CompatibilityKeys {
     /// Fixed keys from [`registry::REMOVED_CONFIG_KEYS`] the document still
     /// sets, with their migration notes.
     pub(super) removed_keys: Vec<(&'static str, &'static str)>,
+    /// Keys from [`registry::DEPRECATED_CONFIG_KEYS`] the document still
+    /// sets: translated on load, with their deprecation notes.
+    pub(super) deprecated_keys: Vec<(&'static str, &'static str)>,
 }
 
 impl CompatibilityKeys {
@@ -110,6 +113,9 @@ impl CompatibilityKeys {
         for (key, note) in &self.removed_keys {
             warn_removed_key(config_path, key, note);
         }
+        for (key, note) in &self.deprecated_keys {
+            warn_deprecated_key(config_path, key, note);
+        }
     }
 }
 
@@ -120,13 +126,24 @@ pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path
         retired_routines: value_at_path(document, "routines").is_some(),
         retired_docs: value_at_path(document, "docs").is_some(),
         removed_keys: removed_keys_present(document),
+        deprecated_keys: deprecated_keys_present(document),
     }
     .warn(config_path);
 }
 
 pub(super) fn removed_keys_present(document: &toml::Value) -> Vec<(&'static str, &'static str)> {
-    registry::REMOVED_CONFIG_KEYS
-        .iter()
+    keys_present(registry::REMOVED_CONFIG_KEYS, document)
+}
+
+pub(super) fn deprecated_keys_present(document: &toml::Value) -> Vec<(&'static str, &'static str)> {
+    keys_present(registry::DEPRECATED_CONFIG_KEYS, document)
+}
+
+fn keys_present(
+    keys: &[(&'static str, &'static str)],
+    document: &toml::Value,
+) -> Vec<(&'static str, &'static str)> {
+    keys.iter()
         .copied()
         .filter(|(key, _)| value_at_path(document, key).is_some())
         .collect()
@@ -146,6 +163,23 @@ fn warn_removed_key(config_path: &Path, key: &str, note: &str) {
         key,
         note,
         REMOVED_CONFIG_KEY_WARNING,
+    );
+}
+
+/// [ORB-13992] A deprecated key is still honoured — translated into its
+/// replacement when the document is parsed — and warned on every load. A
+/// later release makes it an error; delete its
+/// [`registry::DEPRECATED_CONFIG_KEYS`] entry and translation then.
+pub(crate) const DEPRECATED_CONFIG_KEY_WARNING: &str = "config key is deprecated and translated \
+     on load; move it to its replacement — a later release makes it an error";
+
+fn warn_deprecated_key(config_path: &Path, key: &str, note: &str) {
+    let path = redact_home_dir(&config_path.display().to_string());
+    tracing::warn!(
+        config = %path,
+        key,
+        note,
+        DEPRECATED_CONFIG_KEY_WARNING,
     );
 }
 

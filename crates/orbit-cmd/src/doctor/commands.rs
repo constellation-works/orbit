@@ -144,7 +144,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_infra_blocked_tasks(self),
             doctor_check_blocked_task_recovery(self),
             doctor_check_stalled_automation(self),
-            doctor_check_after_landing_review(self),
+            doctor_check_review(self),
             doctor_check_host_shutdown(self),
             doctor_check_validation_env(self),
             doctor_check_orphan_task_stores(self),

@@ -4,13 +4,13 @@ summary: Read a before-PR review's verdict, reviewer commit and findings comment
 tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure.rs"]
 related_features: [review-gate]
-related_artifacts: ["ORB-13989"]
+related_artifacts: ["ORB-13989", "ORB-13992"]
 last_validated: 2026-10-04
 ---
 
 # Operate the Before-PR Review Gate
 
-Use this runbook when `operation.review_policy = "before-pr"` and you need to
+Use this runbook when `review.before_pr = true` and you need to
 read what a review did to a delivery, or a task is `blocked` with a
 `review_gate_escalation` event.
 
@@ -83,9 +83,10 @@ Identify the failed step from `orbit run show`, then act:
   step; it widens the selectors, recorded as a `context_files_widened` entry
   in task history. If a widened path is not in intent, record that on the
   task. Then re-queue it.
-- **`review_gate_admit` refused with `review_budget_exhausted`**: the lineage
-  spent its reviewer starts or minutes. Renew it only with a recorded
-  decision:
+- **`review_gate_admit` refused with `review_budget_exhausted`**: the
+  candidate already had its one review (`review_candidate_reviewed`) or its
+  reviewer spent `review.minutes` (`review_minutes_exhausted`). Renew it only
+  with a recorded decision:
   `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`.
 
 If the run's final recovery already settled the task (for example archived or

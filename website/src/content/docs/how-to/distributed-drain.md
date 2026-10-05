@@ -25,7 +25,7 @@ task that fails.
   shows how.
 - **Matching machines.** Every replica runs the same Orbit version and
   distributed-drain protocol revision as the owner, uses
-  `operation.review_policy = none`, and declares the same
+  before-PR review off (`review.before_pr = false`), and declares the same
   `workflow.required_validation_commands`. Crews may differ: a replica only
   receives tasks whose crew it can run. Operating systems may differ too: a
   task tagged `os:macos` (or `os:linux`, `os:windows`) only goes to a machine
@@ -55,7 +55,7 @@ Check that the two machines match. On each one:
 
 ```bash
 orbit --version
-orbit config get operation.review_policy   # must be none
+orbit config get review.before_pr   # must be false
 orbit doctor
 ```
 
@@ -65,8 +65,8 @@ first reason a real pull would be refused:
 ```bash
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<replica-version>",
-  "caller_schema": 2,
-  "caller_review_policy": "none"
+  "caller_schema": 5,
+  "caller_before_pr": false
 }'
 ```
 

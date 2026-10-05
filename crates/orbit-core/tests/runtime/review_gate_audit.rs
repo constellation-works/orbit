@@ -5,12 +5,12 @@ use std::path::PathBuf;
 use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, TaskStatus};
-use orbit_engine::{ReviewLandingRequest, RuntimeHost};
+use orbit_engine::{ReviewLandingRequest, ReviewerInvocationRequest, RuntimeHost};
 use orbit_store::contracts::{FailureClass, classify};
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
-    ReviewBudget, ReviewCertificate,
+    ReviewBudget, ReviewCertificate, ReviewTiming, ReviewerInvocationEvent,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -33,7 +33,7 @@ impl Fixture {
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(
             workspace.join("config.toml"),
-            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\n",
+            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n",
         )
         .unwrap();
         let git = |args: &[&str]| {
@@ -75,16 +75,13 @@ impl Fixture {
         let admission = ReviewAdmission {
             contract_version: REVIEW_CONTRACT_VERSION,
             policy_version: policy.version,
-            timing: policy.review_policy.value.timing(),
-            timing_source: policy.review_policy.source.label().into(),
+            timing: ReviewTiming::BeforePr,
+            timing_source: policy.review_before_pr.source.label().into(),
             crew: policy.review_crew.value.clone(),
             crew_source: policy.review_crew.source.label().into(),
             // A bounded fixture budget exercises exhaustion without depending
             // on the operational default.
-            budget: ReviewBudget {
-                reviewer_starts: 1,
-                minutes: 10,
-            },
+            budget: ReviewBudget { minutes: 10 },
             captured_at: Utc::now(),
         };
         let run = runtime
@@ -220,6 +217,58 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
     }
     let mut fixture = Fixture::new();
     fixture.admit();
+    // The reviewer runs past the candidate's ten minutes without a verdict:
+    // the preflight and a re-admission are both denied.
+    for event in [
+        ReviewerInvocationEvent::Started {
+            timeout_seconds: 3600,
+        },
+        ReviewerInvocationEvent::Finished {
+            runtime_seconds: 601,
+        },
+    ] {
+        RuntimeHost::record_reviewer_invocation(
+            &fixture.runtime,
+            &ReviewerInvocationRequest {
+                run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
+                lineage_key: fixture.input["admission"]["lineage_key"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                attempt_id: fixture.input["admission"]["attempt_id"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                event,
+            },
+        )
+        .unwrap();
+    }
+    for preflight in [false, true] {
+        let mut input = fixture.input.clone();
+        input["preflight"] = json!(preflight);
+        assert!(
+            fixture
+                .runtime
+                .run_deterministic("review_gate_admit", &json!({}), &input, Default::default())
+                .is_err()
+        );
+        let (row, detail) = fixture.latest(if preflight { "preflight" } else { "admit" });
+        assert_eq!(row.status, AuditEventStatus::Denied);
+        assert!(
+            row.error_message
+                .as_deref()
+                .is_some_and(|message| !message.trim().is_empty())
+        );
+        assert!(
+            row.error_message
+                .as_deref()
+                .unwrap()
+                .contains("review_budget_exhausted")
+        );
+        assert_eq!(classify(&row), FailureClass::Denied);
+        assert_eq!(detail["outcome"], "refused");
+    }
     fixture.report("accept");
     fixture
         .runtime
@@ -275,31 +324,6 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
             .len(),
         2
     );
-    for preflight in [false, true] {
-        let mut input = fixture.input.clone();
-        input["preflight"] = json!(preflight);
-        assert!(
-            fixture
-                .runtime
-                .run_deterministic("review_gate_admit", &json!({}), &input, Default::default())
-                .is_err()
-        );
-        let (row, detail) = fixture.latest(if preflight { "preflight" } else { "admit" });
-        assert_eq!(row.status, AuditEventStatus::Denied);
-        assert!(
-            row.error_message
-                .as_deref()
-                .is_some_and(|message| !message.trim().is_empty())
-        );
-        assert!(
-            row.error_message
-                .as_deref()
-                .unwrap()
-                .contains("review_budget_exhausted")
-        );
-        assert_eq!(classify(&row), FailureClass::Denied);
-        assert_eq!(detail["outcome"], "refused");
-    }
 }
 
 #[test]

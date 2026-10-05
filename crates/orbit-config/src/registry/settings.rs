@@ -164,27 +164,9 @@ define_config_settings! {
     },
     operation_review_crew: Option<String> => String {
         key: "operation.review_crew", value_type: "string",
-        description: "Crew for automatic review: the before-PR reviewer, and the crew of every review task the after-landing delivery-code-review consumer mints (unset, that definition's template crew).",
-        section: ConfigSection::Operation, order: 20,
+        description: "Crew for automatic review: the before-PR reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). Before-PR review refuses to start without it.",
+        section: ConfigSection::Review, order: 30,
         resolve: |raw: Option<String>| operation::review_crew(raw),
-    },
-    operation_review_minutes: Option<u32> => u32 {
-        key: "operation.review_minutes", value_type: "integer",
-        description: "Aggregate before-PR reviewer runtime minutes per delivery run lineage (a delivery run and its resumes; a fresh delivery run starts a new lineage). Once spent, no further reviewer start is admitted; an admitted reviewer is bounded by its own activity timeout, not by this remainder (1..=1440, default 90).",
-        section: ConfigSection::Operation, order: 50,
-        resolve: |raw: Option<u32>| operation::review_minutes(raw),
-    },
-    operation_review_policy: Option<String> => String {
-        key: "operation.review_policy", value_type: "string",
-        description: "Automatic review timing: none (default), before-pr, or after-landing. before-pr holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery. after-landing enables the delivery-code-review auto-task, which reviews landed deliveries in batches; orbit doctor fails while that consumer cannot run here.",
-        section: ConfigSection::Operation, order: 10,
-        resolve: |raw: Option<String>| operation::admit_review_policy(raw),
-    },
-    operation_review_reviewer_starts: Option<u32> => u32 {
-        key: "operation.review_reviewer_starts", value_type: "integer",
-        description: "Fresh reviewer starts allowed per delivery run lineage. Retrying a failed reviewer step continues its start; a review of a changed candidate, including a completion rebase, takes a new one (1..=10, default 3).",
-        section: ConfigSection::Operation, order: 30,
-        resolve: |raw: Option<u32>| operation::review_reviewer_starts(raw),
     },
     plugin_legacy_callback_identity: bool => bool {
         key: "plugin.legacy_callback_identity", value_type: "bool",
@@ -209,6 +191,18 @@ define_config_settings! {
         description: "URL template used to link a task ID in PR descriptions.",
         section: ConfigSection::Housekeeping, order: 70,
         resolve: |raw: Option<String>| Ok::<_, OrbitError>(raw),
+    },
+    review_before_pr: bool => bool {
+        key: "review.before_pr", value_type: "bool",
+        description: "Hold PR creation for a fresh reviewer that fixes what it finds (default false). A drain or ship captures it at submission, so a run in flight keeps the value it started with. PR route only: refused for local-only delivery, and distributed admission refuses an endpoint that has it on. After-landing review is not a config key: it is the delivery-code-review auto-task's own enabled flag.",
+        section: ConfigSection::Review, order: 10,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    review_minutes: u32 => u32 {
+        key: "review.minutes", value_type: "integer",
+        description: "Reviewer runtime minutes for one candidate's before-PR review, its fix commit and final validation included. Each candidate gets one review: retries and interruptions share these minutes, and once they are spent the review is not restarted; a changed candidate, such as a completion rebase, is a new review (1..=1440, default 30).",
+        section: ConfigSection::Review, order: 20,
+        resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
     },
     runtime_log_max_file_mb: u64 => u64 {
         key: "runtime.log_max_file_mb", value_type: "integer",

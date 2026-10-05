@@ -123,7 +123,6 @@ fn auto_task_rows(runtime: &OrbitRuntime) -> Result<Vec<Value>, OrbitError> {
     let cursors = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir))?;
     runtime.auto_task_listing(true)?.iter().map(|s|{
         let d=&s.definition;
-        let enabled_by_review_policy=runtime.auto_task_enabled_by_review_policy(d);
         let effective_enabled=runtime.auto_task_enabled(d);
         let cursor=cursors.definitions.get(&d.name);
         let baseline=cursor.and_then(|c|chrono::DateTime::parse_from_rfc3339(&c.baseline_at).ok()).map(|d|d.with_timezone(&Utc));
@@ -132,7 +131,7 @@ fn auto_task_rows(runtime: &OrbitRuntime) -> Result<Vec<Value>, OrbitError> {
         Ok(json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"schedule":d.schedule,
             "state":state,"next_due":if state=="scheduled"{next}else{None},
             "target":text(&d.template.title),"dedupe":d.dedupe,"skip_reason":s.skipped_reason,
-            "enabled_by_review_policy":enabled_by_review_policy,"effective_enabled":effective_enabled,
+            "effective_enabled":effective_enabled,
             "toggle_available":s.inactive_plugin.is_none(),"mint_available":s.inactive_plugin.is_none(),
             "updated_at":d.updated_at}))
     }).collect()
@@ -201,7 +200,6 @@ pub(in crate::adapter::tool_host) fn control(
                 boolean(&input, "enabled")?,
             )?;
             json!({"enabled":d.enabled,
-                "enabled_by_review_policy":runtime.auto_task_enabled_by_review_policy(&d),
                 "effective_enabled":runtime.auto_task_enabled(&d)})
         }
         ("auto_task", "mint") => {

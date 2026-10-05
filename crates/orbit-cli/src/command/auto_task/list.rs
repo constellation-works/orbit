@@ -28,9 +28,9 @@ impl Execute for AutoTaskListArgs {
         // A definition a plugin seeded never fires while that plugin is off
         // in this workspace or on the host, so it is hidden unless asked for.
         let mut listed = runtime.auto_task_listing(self.include_inactive_plugins)?;
-        // `operation.review_policy = after-landing` enables its consumer
-        // whatever the file says, so filters and states read the effective
-        // value [ORB-13896].
+        // For one release the deprecated `operation.review_policy =
+        // "after-landing"` still enables an unconfigured `delivery-code-review`,
+        // so filters and states read the effective value [ORB-13992].
         if self.enabled {
             listed.retain(|l| runtime.auto_task_enabled(&l.definition));
         }
@@ -65,8 +65,7 @@ impl Execute for AutoTaskListArgs {
                     None => Value::Null,
                 };
                 record["plugin_inactive"] = Value::Bool(l.inactive_plugin.is_some());
-                record["enabled_by_review_policy"] =
-                    Value::Bool(runtime.auto_task_enabled_by_review_policy(&l.definition));
+                record["effective_enabled"] = Value::Bool(runtime.auto_task_enabled(&l.definition));
                 record
             })
             .collect();

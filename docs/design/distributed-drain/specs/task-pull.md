@@ -8,7 +8,7 @@ status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992]
 ---
 
 # Spec: `orbit.task.pull`
@@ -68,8 +68,9 @@ and caller-side managed-run restrictions remain. There is no destination callers
 proof, forced-command acceptance requirement, or replacement identity registry. Trusted runtime
 invocation context supplies attempt ownership; remote machine labels alone are attribution, not
 credentials. Owner-local drains use trusted local
-runtime identity and the same logical admission contract. V1 admits only `review_policy = none`;
-reject `before-pr` and `after-landing` before creating a claim. The read-only preflight response is
+runtime identity and the same logical admission contract. Admission refuses a pull while
+`review.before_pr` is on at either endpoint, before creating a claim; after-landing review (the
+owner's `delivery-code-review` auto-task) never affects admission [ORB-13992]. The read-only preflight response is
 defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 
 ## Input
@@ -80,7 +81,7 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `request_id` | string | Durable unique ID for one intended admission; reused unchanged after uncertainty |
 | `caller_version` | string | Caller binary version |
 | `caller_schema` | integer | Caller distributed-drain wire-protocol schema version |
-| `caller_review_policy` | enum | Executor's effective review policy; only `none` is supported |
+| `caller_before_pr` | bool | The `review.before_pr` the calling drain captured at submission; only `false` is admitted |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 | `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
 | `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
@@ -88,8 +89,10 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 The caller persists the request before sending it. One drain run uses many request IDs. There is
 no count, slot declaration, or caller scan bound. The crew capability is part of the immutable
 request, so a replay is judged by the capability it was first sent with, and so is the
-declared OS. Protocol revision 2 adds `crews` and revision 4 adds `os`: an older owner rejects
-the new field even though it is optional. Before persisting a
+declared OS. Protocol revision 2 adds `crews`, revision 4 adds `os`, and revision 5 replaces
+`caller_review_policy` with `caller_before_pr` and the ship contract's `review_policy` with
+`before_pr`: an older owner rejects the new field even though it is optional, and a revision-4
+caller still sending `caller_review_policy` is answered `protocol_mismatch`. Before persisting a
 new request, the follower compares the probe's `protocol_schema` with its own revision and
 reports `protocol_mismatch` naming both revisions. Binary-version equality is insufficient
 because wire changes can land between releases. Completion authorization is resolved
@@ -111,8 +114,9 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
 ## Idempotency and admission
 
 1. Apply pre-admission refusals in the table order below: selector, current authorization,
-   trusted invocation context, input shape, version/schema, ship mode, then review policy. Check both owner
-   policy and the executor's declared `caller_review_policy`; neither may differ from `none`.
+   trusted invocation context, input shape, version/schema, ship mode, then before-PR review. Check
+   both the owner's `review.before_pr` and the executor's declared `caller_before_pr`; neither may
+   be on.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
 2. Begin the owner store transaction. Its substrate is the task/reservation commit boundary
@@ -188,7 +192,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, `review_policy: none`, completion policy and optional durable authorization reference |
+| `ship` | Owner-resolved mode, base/landing branches, `before_pr: false`, completion policy and optional durable authorization reference |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
@@ -218,7 +222,7 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `version_mismatch` | Caller binary version differs from owner |
 | `protocol_mismatch` | Caller and owner protocol revisions differ; diagnostics name both |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
-| `review_policy_unsupported` | Owner/executor review policy is not `none` |
+| `before_pr_unsupported` | Owner or executor has `review.before_pr` on (stored receipts may spell it `review_policy_unsupported`) |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 | `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now; replays keep their stored contract |

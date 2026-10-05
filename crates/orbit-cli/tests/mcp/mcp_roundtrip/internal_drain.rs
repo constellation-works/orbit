@@ -246,7 +246,7 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     assert_eq!(probe["owner_machine_id"], machine);
     assert_eq!(probe["session"]["caller_machine_id"], "hm_follower");
     let request = json!({"request_id":"same-admission", "caller_version":probe["binary_version"],
-        "caller_schema":probe["protocol_schema"],"caller_review_policy":"none",
+        "caller_schema":probe["protocol_schema"],"caller_before_pr":false,
         "run_context":{"run_id":"follower-drain","job_name":"workspace_pull_pipeline"},"ship":probe["ship"]});
     std::fs::write(&lose, "drop the next committed reply").unwrap();
     let lost = call(&follower, "orbit.task.pull", request.clone()).unwrap_err();

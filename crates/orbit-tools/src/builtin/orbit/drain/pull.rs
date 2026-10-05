@@ -40,10 +40,21 @@ impl Tool for OrbitTaskPullTool {
                 "The caller's distributed-drain wire-protocol schema version.",
             ),
             param(
-                "caller_review_policy",
-                "string",
-                "The executor's effective review policy. Only `none` is admitted in v1.",
+                "caller_before_pr",
+                "boolean",
+                "The `review.before_pr` the executor's drain captured at submission. Only \
+                 `false` is admitted; after-landing review never affects admission.",
             ),
+            ToolParam {
+                required: false,
+                ..param(
+                    "caller_review_policy",
+                    "string",
+                    "Deprecated and ignored: the review-policy label distributed-drain protocol \
+                     revisions before 5 sent. Accepted only so an older caller is refused as \
+                     `protocol_mismatch` rather than for an unknown field.",
+                )
+            },
             param(
                 "run_context",
                 "object",

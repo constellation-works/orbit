@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992]
 ---
 
 # Distributed Drain — Design
@@ -480,8 +480,11 @@ through the task journal.
 and PR identity, source branch, published candidate head SHA, validated base SHA, intended base
 and landing branch, execution summary and validation artifact references.
 
-- V1 admits only `review_policy = none`, captured at admission ([V1 review policy is
-  none](./4_decisions.md#v1-review-policy-is-none)). Review evidence is the typed
+- Admission refuses while `review.before_pr` is on at either endpoint; the drain declares the
+  value it captured at submission ([V1 review policy is
+  none](./4_decisions.md#v1-review-policy-is-none), narrowed to the before-PR switch by
+  [ORB-13992]). After-landing review is the owner's `delivery-code-review` auto-task and never
+  affects admission. Review evidence is the typed
   `{ policy: none, disposition: not_required }`, with no reviewed SHA, verdict or review artifact;
   the PR pipeline's `gate: not_required` is adapted into it. Task status `review` means a delivery
   handoff awaiting completion authority, not that a review occurred.
@@ -589,9 +592,10 @@ what it can run and the owner admits only that. Policy and toolchain must still 
 
 The owner serves a read-only probe ([ORB-12495]). Input: the host-qualified workspace selector.
 Response: owner/workspace, binary version, distributed-drain protocol schema version, effective
-session capabilities, diagnostic caller machine, resolved ship mode and review policy. It creates
-no receipts, reservations, claims or tasks. A caller may declare its version, protocol schema and
-review policy, and the probe reports the first refusal admission would raise by running the same
+session capabilities, diagnostic caller machine, resolved ship mode and `review`: both review
+switches with their sources (before-PR on/off and minutes; after-landing enabled and its next batch
+due). It creates no receipts, reservations, claims or tasks. A caller may declare its version,
+protocol schema and `caller_before_pr`, and the probe reports the first refusal admission would raise by running the same
 ordered ladder (`orbit_store::admission_refusal`).
 
 - Protocol revision `2` includes executor crew capabilities. Increment the revision for request
@@ -750,9 +754,10 @@ reports:
   claimed task is `in-progress` or `review` (a status lock holder) and the journal refuses ordinary
   mutations of it.
 
-It also reports the owner's review policy and the verdict of `orbit_store::admission_refusal`,
-without raising it: v1 admits only `none` through the claim contract, while a workspace configured
-for `before-pr` or `after-landing` keeps shipping through its legacy leaf and review gate.
+It also reports the owner's review switches and the verdict of `orbit_store::admission_refusal`,
+without raising it: the claim contract admits only with `review.before_pr` off, while a workspace
+with before-PR review on keeps shipping through its legacy leaf and review gate. After-landing
+review does not change the verdict.
 
 ### 7.4 Host shutdown hold
 
@@ -815,7 +820,7 @@ Acceptance criteria, not reported as passing.
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
 | Missing file selector, then reservation expiry | Full declared footprint stays protected |
 | Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
-| `none`, `before-pr`, `after-landing` policies | Only `none` admits; typed not-required handoff needs no reviewed SHA or artifact |
+| `review.before_pr` on or off, after-landing auto-task on or off | Only `before_pr` off admits, whatever after-landing says; typed not-required handoff needs no reviewed SHA or artifact |
 | Owner-local task without origin | Local candidate handoff and authorized local landing; no PR or remote credentials |
 | SSH session and managed worker invocation | Session capability gates operator actions; managed runs never propagate operator authority; payload labels cannot replace claim/run authority |
 | Revocation during a live attempt | Revoked attempt cannot bind, mutate, settle or promote; its receipt reports the revoked phase |
@@ -829,7 +834,8 @@ Acceptance criteria, not reported as passing.
 ## 9. Concerns & Honest Limitations
 
 - **Receipt metadata grows** as permanent tombstones (§2).
-- **No automatic review.** Only `review_policy = none`; other policies need a protocol extension.
+- **No before-PR review.** Only `review.before_pr` off admits; gating a pulled candidate needs a
+  protocol extension. After-landing review still covers what pulled work lands.
 - **Manual recovery limits availability.** A dead or unreachable follower can hold its task's
   footprint indefinitely; claim age and TTL are diagnostics, not failure detectors.
 - **Revocation cannot stop remote compute or retract external writes.** An old attempt may push
@@ -870,5 +876,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-13663] — moved settlement ownership from the admitting drain to the admission record.
 - [ORB-13755] — scoped the claimed delivery gate to the attempt being delivered.
 - [ORB-13756] — let claimed runs deliver new files inside their frozen footprint.
+- [ORB-13992] — narrowed review admission to the captured `review.before_pr`; after-landing review never refuses a pull.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

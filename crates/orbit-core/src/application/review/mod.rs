@@ -7,7 +7,7 @@
 //!   immutable input, so a later preference edit cannot weaken a gate that
 //!   is already active. Children inherit their parent's snapshot.
 //! - **The gate** runs as two deterministic Core actions around a fresh
-//!   reviewer invocation: `review_gate_admit` reserves a reviewer start,
+//!   reviewer invocation: `review_gate_admit` reserves the candidate's review,
 //!   pins the candidate and hands the reviewer an immutable manifest;
 //!   `review_gate_settle` turns the reviewer's report plus the repository
 //!   state into an honest verdict, commits reviewer repairs under the
@@ -28,8 +28,9 @@ mod gate;
 mod handoff;
 mod landing;
 mod projection;
+mod switches;
 
-pub(crate) use admission::install_review_admission;
+pub(crate) use admission::{install_review_admission, run_review_admission};
 pub(crate) use coverage::exclusions;
 pub(crate) use gate::{
     record_reviewer_invocation, release_review_attempt, review_gate_admit, review_gate_settle,
@@ -40,21 +41,27 @@ pub(crate) use gate::{
 pub use handoff::{ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal};
 pub(crate) use landing::record_review_landing;
 pub use projection::task_review_projection;
+pub use switches::{
+    AfterLandingSwitch, BeforePrSwitch, ReviewSwitches, review_switches, review_switches_view,
+};
 
 /// Audit command name shared by every gate decision.
 pub(crate) const REVIEW_AUDIT: &str = "review.gate";
 
 /// The jobs that carry a review admission: the delivery family, so a leaf
-/// PR pipeline can inherit the policy its coordinator captured.
+/// PR pipeline can inherit the `review.before_pr` its coordinator captured,
+/// and the follower's pull drain, which declares its captured value on every
+/// pull [ORB-13992].
 pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "workspace_auto_pipeline",
+    "workspace_pull_pipeline",
     "task_auto_pipeline",
     "task_gate_pipeline",
     "task_pr_pipeline",
     "task_local_pipeline",
 ];
 
-/// The job that delivers locally and therefore cannot honour `before-pr`
+/// The job that delivers locally and therefore cannot honour `review.before_pr`
 /// as a final route.
 pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
 

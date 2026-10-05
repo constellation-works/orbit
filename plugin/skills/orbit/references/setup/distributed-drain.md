@@ -25,8 +25,10 @@ routing is in [tool-surface.md](../tool-surface.md).
 ## What v1 does not do
 
 - No heartbeat, automatic reclamation, fleet registry, or follower merge.
-- No automatic review. v1 admits only `review_policy = none`. Status `review`
-  means a delivery handoff is waiting, not that a reviewer ran.
+- No before-PR review. A pull is admitted only with `review.before_pr` off on
+  both hosts. After-landing review (the owner's `delivery-code-review`
+  auto-task) never affects admission. Status `review` means a delivery handoff
+  is waiting, not that a reviewer ran.
 - Age, reservation TTL, and a missing local run are diagnostics, not proof of
   death.
 - Seeded `ship_sweep`, `workspace_ship_pipeline`, and `orbit run ship-sweep`
@@ -45,12 +47,12 @@ orbit --version
 orbit config get machine.id
 orbit workspace show
 orbit doctor
-orbit config get operation.review_policy
+orbit config get review.before_pr
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `4`, equivalent crew and toolchain resolution, and
-`operation.review_policy = none`. Hosts may run different operating systems:
+protocol schema `5`, equivalent crew and toolchain resolution, and
+`review.before_pr = false`. Hosts may run different operating systems:
 each follower declares its OS, and a task tagged `os:linux`, `os:macos` or
 `os:windows` is claimed only by a host of a named OS; it waits in the backlog,
 named, until one pulls it. Empty
@@ -193,8 +195,8 @@ destination refuses them. They need an identified caller (`agent` or
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 3,
-  "caller_review_policy": "none"
+  "caller_schema": 5,
+  "caller_before_pr": false
 }'
 ```
 
@@ -280,7 +282,7 @@ someone inspects `blocked` and `job_run_machine`.
 
 ## Verify
 
-A clean probe, matching versions, `review_policy = none`, and a replica role
+A clean probe, matching versions, `review.before_pr` off, and a replica role
 mean the hosts are **installed**. Start a drain only when the user asked for
 one, and leave schedules untouched. After the first claim, confirm on the owner
 that `orbit.drain.claims` shows it on the follower's machine, and that after

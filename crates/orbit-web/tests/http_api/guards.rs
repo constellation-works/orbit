@@ -215,6 +215,23 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                 "a boolean config write stays a boolean on HTTP readback"
             );
             assert_eq!(row["source"]["layer"], "workspace");
+
+            // [ORB-13992] The Config tab reports both review switches with
+            // their sources, as `orbit config show` and `orbit doctor` do.
+            super::support::json_ok(server.send(
+                "PUT",
+                "/api/config/keys/review.before_pr?workspace=ws_http_fixture",
+                json!({"value":true}),
+            ));
+            let review = &super::support::json_ok(
+                server.get("/api/config/effective?workspace=ws_http_fixture"),
+            )["review"];
+            assert_eq!(review["before_pr"]["enabled"], true, "{review}");
+            assert_eq!(review["before_pr"]["source"], "workspace", "{review}");
+            assert_eq!(review["before_pr"]["minutes"], 30, "{review}");
+            assert_eq!(review["after_landing"]["enabled"], false, "{review}");
+            assert!(review["after_landing"]["source"].is_string(), "{review}");
+            assert!(review["before_pr"]["line"].is_string(), "{review}");
         },
     );
 }

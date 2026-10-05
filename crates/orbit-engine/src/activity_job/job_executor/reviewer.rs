@@ -5,6 +5,10 @@
 //! post-recovery re-attempt included — so retry backoff, recovery
 //! activities and the gate's own steps never count against the lineage's
 //! review minutes.
+//!
+//! [ORB-13992] `review.minutes` is the wall-clock limit for one candidate's
+//! review: the host answers a start with what the review has left, and the
+//! reviewer process is bounded by it.
 
 use std::time::Instant;
 
@@ -23,6 +27,8 @@ const REVIEWER_ACTIVITY: &str = "agent_review_repair";
 pub(super) struct ReviewerInvocation {
     request: ReviewerInvocationRequest,
     started: Instant,
+    /// Seconds the host allows this invocation, when it bounds reviews.
+    bound_seconds: Option<u64>,
 }
 
 impl ReviewerInvocation {
@@ -52,11 +58,35 @@ impl ReviewerInvocation {
                 timeout_seconds: timeout_seconds(target, spec),
             },
         };
-        record(ctx, &request);
+        let bound_seconds = record(ctx, &request);
         Some(Self {
             request,
             started: Instant::now(),
+            bound_seconds,
         })
+    }
+
+    /// Whether the review's minutes were already spent: dispatching would
+    /// start a reviewer with no time to run.
+    pub(super) fn exhausted(&self) -> bool {
+        self.bound_seconds == Some(0)
+    }
+
+    /// `spec` shortened to the review's remaining minutes, when that is
+    /// tighter than the activity's own wall-clock bound.
+    pub(super) fn bounded_spec(&self, spec: &ActivityV2Spec) -> Option<ActivityV2Spec> {
+        let bound = self.bound_seconds.filter(|bound| *bound > 0)?;
+        match spec {
+            ActivityV2Spec::AgentLoop(agent)
+                if agent.wall_clock_timeout_seconds == 0
+                    || bound < agent.wall_clock_timeout_seconds =>
+            {
+                let mut agent = agent.clone();
+                agent.wall_clock_timeout_seconds = bound;
+                Some(ActivityV2Spec::AgentLoop(agent))
+            }
+            _ => None,
+        }
     }
 
     /// Report the reviewer's end with the runtime it actually took, whether
@@ -65,7 +95,7 @@ impl ReviewerInvocation {
         self.request.event = ReviewerInvocationEvent::Finished {
             runtime_seconds: self.started.elapsed().as_secs(),
         };
-        record(ctx, &self.request);
+        let _ = record(ctx, &self.request);
     }
 }
 
@@ -83,14 +113,17 @@ fn timeout_seconds(target: &TargetStep, spec: &ActivityV2Spec) -> u64 {
 
 /// Charging is evidence, not the reviewer's work: a failed write is logged
 /// and the lineage falls back to bounding the invocation by its deadline.
-fn record(ctx: &ExecCtx<'_>, request: &ReviewerInvocationRequest) {
-    if let Err(error) = ctx.host.record_reviewer_invocation(request) {
-        tracing::warn!(
-            target: "orbit.engine.job_executor",
-            run_id = %request.run_id,
-            attempt_id = %request.attempt_id,
-            error = %error,
-            "could not record the reviewer invocation's runtime"
-        );
-    }
+fn record(ctx: &ExecCtx<'_>, request: &ReviewerInvocationRequest) -> Option<u64> {
+    ctx.host
+        .record_reviewer_invocation(request)
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %request.run_id,
+                attempt_id = %request.attempt_id,
+                error = %error,
+                "could not record the reviewer invocation's runtime"
+            );
+            None
+        })
 }

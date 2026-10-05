@@ -44,14 +44,15 @@ pub fn ensure_distributed_mutation_available(entry_point: &str) -> Result<(), Or
 pub struct DeclaredCallerContract {
     pub caller_version: Option<String>,
     pub caller_schema: Option<u32>,
-    pub caller_review_policy: Option<String>,
+    pub caller_before_pr: Option<bool>,
 }
 
 impl crate::OrbitRuntime {
-    /// This host's effective review policy, as the distributed protocol spells
-    /// it. A follower declares it on every probe and pull.
-    pub(crate) fn local_review_policy_label(&self) -> String {
-        review_policy_label(self.operation_policy().review_policy.value)
+    /// This host's `review.before_pr`. A follower declares it on every probe;
+    /// a pull declares the value its drain captured at submission
+    /// [ORB-13992]. After-landing review never enters the protocol.
+    pub(crate) fn local_review_before_pr(&self) -> bool {
+        self.operation_policy().review_before_pr.value
     }
 
     /// Only the owner checkout serves the distributed control plane.
@@ -94,7 +95,7 @@ impl crate::OrbitRuntime {
             },
             landing_branch: base_branch.clone(),
             base_branch,
-            review_policy: review_policy_label(self.operation_policy().review_policy.value),
+            before_pr: self.local_review_before_pr(),
             completion: self.workflow_distributed_completion().to_string(),
             authorization_reference: self.owner_completion_authority(),
         }
@@ -121,11 +122,11 @@ impl crate::OrbitRuntime {
         ship: &AdmissionShipContract,
         diagnostics: &mut Vec<String>,
     ) -> Result<Option<AdmissionRefusal>, OrbitError> {
-        if ship.review_policy != "none" {
-            diagnostics.push(format!(
-                "owner review policy is '{}'; v1 admits only 'none'",
-                ship.review_policy
-            ));
+        if ship.before_pr {
+            diagnostics.push(
+                "owner has review.before_pr on; pulled leaves require it off on both endpoints"
+                    .to_string(),
+            );
         }
         let machine_id = session_machine_id(session).unwrap_or_else(|| "probe".to_string());
         let request = AdmissionRequest {
@@ -134,7 +135,7 @@ impl crate::OrbitRuntime {
             // pull makes against its own values. Undeclared optional caller
             // fields are unknown, not empty: fill the owner-matching value so
             // those caller-dependent legs are skipped while owner-resolved
-            // ship mode and review policy still run.
+            // ship mode and the owner's review.before_pr still run.
             request_id: "probe".to_string(),
             caller_version: declared
                 .caller_version
@@ -143,10 +144,7 @@ impl crate::OrbitRuntime {
             caller_schema: declared
                 .caller_schema
                 .unwrap_or(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA),
-            caller_review_policy: declared
-                .caller_review_policy
-                .clone()
-                .unwrap_or_else(|| "none".to_string()),
+            caller_before_pr: declared.caller_before_pr.unwrap_or(false),
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),
@@ -179,9 +177,10 @@ impl crate::OrbitRuntime {
                     "ship mode '{}' is not available to this caller",
                     request.ship.mode
                 ),
-                AdmissionRefusal::ReviewPolicyUnsupported => format!(
-                    "review policy must be 'none' on both endpoints; owner '{}', executor '{}'",
-                    request.ship.review_policy, request.caller_review_policy
+                AdmissionRefusal::BeforePrUnsupported => format!(
+                    "review.before_pr must be off on both endpoints; owner {}, executor {}",
+                    on_off(request.ship.before_pr),
+                    on_off(request.caller_before_pr)
                 ),
             });
         }
@@ -195,13 +194,8 @@ pub fn owner_binary_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-fn review_policy_label(policy: orbit_config::ReviewPolicy) -> String {
-    match policy {
-        orbit_config::ReviewPolicy::None => "none",
-        orbit_config::ReviewPolicy::BeforePr => "before-pr",
-        orbit_config::ReviewPolicy::AfterLanding => "after-landing",
-    }
-    .to_string()
+pub(super) fn on_off(enabled: bool) -> &'static str {
+    if enabled { "on" } else { "off" }
 }
 
 /// The machine a session may speak for. A remote session's forwarded label

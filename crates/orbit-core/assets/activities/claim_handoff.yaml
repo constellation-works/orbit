@@ -9,8 +9,8 @@ spec:
     candidate, refuses one the validation evidence no longer pins, and records
     the handoff as this claim's durable pending settlement before anything is
     sent to the owner. It merges nothing, completes nothing, and asserts no
-    review: the recorded disposition is `not_required` under `review_policy =
-    none`.
+    review: the recorded disposition is `not_required`, since a claim is
+    admitted only while `review.before_pr` is off.
   input_schema_json:
     type: object
     required: [workspace_path, candidate, validation]

@@ -528,7 +528,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
     use orbit_core::application::task::TaskUpdateParams;
     use orbit_types::workflow::{
         REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-        REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewCertificate, ReviewVerdict,
+        REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewCertificate, ReviewTiming, ReviewVerdict,
     };
 
     for verdict in [
@@ -544,7 +544,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(
             workspace.join("config.toml"),
-            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\n",
+            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n",
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &workspace)
@@ -587,8 +587,8 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         let admission = ReviewAdmission {
             contract_version: REVIEW_CONTRACT_VERSION,
             policy_version: policy.version,
-            timing: policy.review_policy.value.timing(),
-            timing_source: policy.review_policy.source.label().into(),
+            timing: ReviewTiming::BeforePr,
+            timing_source: policy.review_before_pr.source.label().into(),
             crew: policy.review_crew.value.clone(),
             crew_source: policy.review_crew.source.label().into(),
             budget: policy.review_budget(),

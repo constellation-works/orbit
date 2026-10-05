@@ -203,10 +203,9 @@ crew or the workspace default.
 | `runtime.log_max_file_mb` | integer | `100` | Roll the active JSONL log past this size. At least 1 and at most `runtime.log_max_total_mb`. |
 | `runtime.log_max_total_mb` | integer | `500` | Total size budget for JSONL log archives; the oldest are pruned first. |
 | `runtime.log_retention_days` | integer | `7` | Delete JSONL log archives older than this. |
-| `operation.review_policy` | string | `none` | Automatic review timing: `none`, `before-pr`, or `after-landing`. `before-pr` holds PR creation for a fresh reviewer and is refused for local-only delivery. `after-landing` turns on the `delivery-code-review` auto-task, which reviews landed deliveries in batches. |
+| `review.before_pr` | bool | `false` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
+| `review.minutes` | integer | `30` | Time limit for one candidate's before-PR review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
 | `operation.review_crew` | string | Unset | Crew for automatic review: the before-PR reviewer and every review task the after-landing auto-task mints. Unset, after-landing review uses that auto-task's template crew. |
-| `operation.review_reviewer_starts` | integer | `3` | Fresh reviewer starts allowed per delivery run lineage (1–10). Retrying a failed reviewer step reuses its start; reviewing a changed candidate takes a new one. |
-| `operation.review_minutes` | integer | `90` | Total before-PR reviewer minutes per delivery run lineage (1–1440). Once spent, no new reviewer starts. |
 
 Notes:
 
@@ -217,9 +216,17 @@ Notes:
 - `orbit run ship --strict-worker-containment` and
   `orbit run auto --strict-worker-containment` turn on strict containment for
   one run, whatever `machine.worker_containment_strict` says.
-- A delivery run lineage is a delivery run and its resumes; a fresh delivery
-  run starts a new one.
-- `operation.review_repair_cycles` is retired and ignored with a warning.
+- After-landing review is not a config key. Turn it on with
+  `orbit auto-task toggle delivery-code-review on`; it reviews landed
+  deliveries in batches. `orbit config show` and `orbit doctor` report both
+  review switches.
+- `operation.review_policy` and `operation.review_minutes` are deprecated and
+  still load with a warning: `before-pr` becomes `review.before_pr = true`,
+  `after-landing` turns on the `delivery-code-review` auto-task until you
+  toggle it yourself, and `none` turns neither on. A later release rejects
+  them.
+- `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
+  retired and ignored with a warning.
 - `orbit config keys` also lists `machine.id` and `machine.task_prefix`.
   `orbit init` writes both once; neither is settable.
 

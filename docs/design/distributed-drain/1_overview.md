@@ -11,7 +11,7 @@ summary: Run the workspace drain on more than one host against one owner store �
 tags: [distributed-drain, multi-host, pull, federated-mcp, resident-orchestrator]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-store/src/repository/task/coordination/admission.rs", "crates/orbit-core/src/application/automation/ownership.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, state-compatibility, task-migration, automation-triggers]
-related_artifacts: [ORB-12488, ORB-12490, ORB-12491, ORB-12492, ORB-12495, ORB-12500, ORB-12516, ORB-12528, ORB-12616, ORB-12617, ORB-13625, ORB-13639, ORB-13642, ORB-13649, ORB-13663, ORB-13664]
+related_artifacts: [ORB-12488, ORB-12490, ORB-12491, ORB-12492, ORB-12495, ORB-12500, ORB-12516, ORB-12528, ORB-12616, ORB-12617, ORB-13625, ORB-13639, ORB-13642, ORB-13649, ORB-13663, ORB-13664, ORB-13992]
 ---
 
 # Distributed Drain — Overview
@@ -50,7 +50,8 @@ planes over one repository, which the federated-mcp spec names an operator misco
 
 Existing roles, capability routing, reservations, and PR checks were the foundations. V1 added
 atomic admission, durable request/claim identity, routed task reads and writes, settlement, and an
-owner landing consumer. V1 supports only `review_policy = none`; implementation validation still
+owner landing consumer. Pulls are admitted only while before-PR review (`review.before_pr`) is
+off at both endpoints; after-landing review never affects admission. Implementation validation still
 runs, and declared context selectors remain protected even when their files do not exist. These
 were substantive integration changes. Throughput depends on file conflicts, provider limits, shared CI,
 and landing capacity as well as local build slots.
@@ -82,7 +83,7 @@ runs. The owner does not track host capacity.
 no longer names a pipeline, a worktree, a reservation class, or an admission rule.
 
 **Handoff.** Durable PR (or owner-local candidate), validation evidence, and a typed
-`review_policy: none` disposition, accepted by the owner atomically with promotion to `review`. Execution writes close at this boundary.
+`not_required` review disposition, accepted by the owner atomically with promotion to `review`. Execution writes close at this boundary.
 
 **Landing.** An owner-side consumer verifies the pinned candidate and merges only with recorded
 completion authority, then verifies actual merge evidence before marking the task done. This
@@ -104,7 +105,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Durable handoff and authorized landing consumer | [crates/orbit-core/src/application/landing/mod.rs](../../../crates/orbit-core/src/application/landing/mod.rs), [task_landing_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_landing_pipeline.yaml); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | live |
 | Review-only handoff approval and revocation | dashboard `handoff.approve` / `handoff.revoke`; [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | [ORB-12516] | done |
 | Non-pruning selector storage/projection and frozen footprints | `declared_context_files` in [crates/orbit-core/src/runtime/task/mod.rs](../../../crates/orbit-core/src/runtime/task/mod.rs); [2_design.md §2](./2_design.md#2-the-ready-queue-and-orbittaskpull) | [ORB-12490] | done |
-| Enforce v1 review policy `none` and typed handoff evidence | `admission_refusal` in [admission.rs](../../../crates/orbit-store/src/repository/task/coordination/admission.rs); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | done |
+| Refuse pulls while `review.before_pr` is on, and typed handoff evidence | `admission_refusal` in [admission.rs](../../../crates/orbit-store/src/repository/task/coordination/admission.rs); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | done |
 | Claim-aware capacity accounting and interrupted-run recovery | [leaf_occupancy.rs](../../../crates/orbit-core/src/adapter/engine_host/v2_host/admission/leaf_occupancy.rs); [2_design.md §3](./2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) | [ORB-12617] | done |
 | Failure and concurrency acceptance coverage | [2_design.md §8](./2_design.md#8-required-validation-scenarios) | [ORB-12617] | partial |
 | Execution provenance on runs, tasks, artifacts | [2_design.md §6](./2_design.md#6-execution-provenance) | [ORB-13649] | done |
@@ -138,5 +139,6 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 - [ORB-13649] — scoped run-keyed task lookups to the run ID plus the executing machine, after an owner and a follower minted the same run ID.
 - [ORB-13663] — moved settlement from the admitting drain to the admission record, so cancelling a drain no longer strands its live leaves.
 - [ORB-13664] — the claude provider disables background tasks on every child it spawns, so an agent's validation gates run in the foreground and finish before the leaf reports.
+- [ORB-13992] — admission keys only on before-PR review; the probe reports both review switches.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

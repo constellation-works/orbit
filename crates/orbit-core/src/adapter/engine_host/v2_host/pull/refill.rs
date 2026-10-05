@@ -191,12 +191,13 @@ pub(crate) fn pull_refill(
     // Whether `refill` ran, and so already reconciled this pass.
     let mut refilled = false;
     if admitting {
-        match probe(runtime, &transport, &destination) {
+        match probe(runtime, &run_id, &transport, &destination) {
             Ok(ProbeVerdict {
                 ship: Some(ship),
                 refusal: None,
             }) => {
                 let template = || {
+                    let caller_before_pr = captured_before_pr(runtime, &run_id)?;
                     let window = crew_window(runtime, &run_id)?;
                     let capability = (!window.runs_nothing()).then(|| window.capability());
                     *crews.borrow_mut() = Some(window);
@@ -204,7 +205,7 @@ pub(crate) fn pull_refill(
                         request_id: String::new(),
                         caller_version: owner_binary_version().to_string(),
                         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-                        caller_review_policy: runtime.local_review_policy_label(),
+                        caller_before_pr,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
                             job_name: PULL_DRAIN_JOB_NAME.to_string(),
@@ -560,11 +561,12 @@ fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
 
 /// Ask the owner whether it would admit this executor now, and for the ship
 /// contract a new request must carry. Declaring this binary's version, the
-/// protocol schema and this host's review policy makes the owner report the
-/// first refusal admission would raise, so a mismatch stops new requests
-/// before any is persisted.
+/// protocol schema and the drain's captured `review.before_pr` makes the
+/// owner report the first refusal admission would raise, so a mismatch stops
+/// new requests before any is persisted.
 fn probe(
     runtime: &OrbitRuntime,
+    run_id: &str,
     transport: &std::sync::Arc<dyn orbit_tools::DrainOwnerTransport>,
     destination: &PullDestination,
 ) -> Result<ProbeVerdict, OrbitError> {
@@ -574,7 +576,7 @@ fn probe(
         json!({
             "caller_version": owner_binary_version(),
             "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            "caller_review_policy": runtime.local_review_policy_label(),
+            "caller_before_pr": captured_before_pr(runtime, run_id)?,
         }),
     )?;
     if report.get("owner_machine_id").and_then(Value::as_str)
@@ -644,4 +646,17 @@ fn u64_input(input: &Value, key: &str, default: u64) -> u64 {
         Some(Value::String(text)) => text.trim().parse().unwrap_or(default),
         _ => default,
     }
+}
+
+/// The `review.before_pr` the pull drain captured at submission
+/// [ORB-13992]: turning it on later does not change what a running drain
+/// declares. A drain submitted before the capture existed falls back to this
+/// host's current setting.
+fn captured_before_pr(runtime: &OrbitRuntime, run_id: &str) -> Result<bool, OrbitError> {
+    Ok(
+        crate::application::review::run_review_admission(runtime, run_id)?.map_or_else(
+            || runtime.local_review_before_pr(),
+            |admission| admission.gates_pr(),
+        ),
+    )
 }

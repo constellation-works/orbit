@@ -5,7 +5,7 @@
 //! snapshot a run captures, the manifest handed to the reviewer, the honest
 //! verdict, the certificate that binds a passed verdict to exact base and
 //! candidate trees, the mapping to the commit that actually landed, and the
-//! per-lineage budget ledger. None of these is a task status, a human
+//! per-lineage attempt ledger. None of these is a task status, a human
 //! approval, or merge permission; they only describe what was examined.
 
 use std::collections::BTreeMap;
@@ -38,21 +38,24 @@ pub const REVIEW_REPORT_ARTIFACT: &str = "review-report.json";
 /// Task artifact carrying the settled gate result for the latest attempt.
 pub const REVIEW_GATE_ARTIFACT: &str = "review-gate.json";
 
-/// Default budgets per delivery run lineage. One reviewer that runs the
-/// repository's full validation must fit several times over, so a retried or
-/// re-reviewed candidate is not starved by the first invocation.
-pub const DEFAULT_REVIEW_REVIEWER_STARTS: u32 = 3;
-pub const DEFAULT_REVIEW_MINUTES: u32 = 90;
+/// Default `review.minutes`: reviewer runtime for one candidate's review,
+/// its fix commit and final validation included [ORB-13992].
+pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
 
-/// When automatic code review applies to a managed delivery.
+/// Whether a managed delivery holds PR creation for a reviewer. A run
+/// captures `before-pr` exactly when `review.before_pr` was on at submission,
+/// and `none` otherwise [ORB-13992].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewTiming {
-    /// No automatic review managed by this policy.
+    /// The run delivers without a before-PR review.
     None,
     /// Hold PR creation for a fresh reviewer that fixes what it finds.
     BeforePr,
-    /// Accumulate uncovered landed deliveries for a scheduled review.
+    /// Captured by runs submitted under the retired
+    /// `operation.review_policy = after-landing`; it never gated the run.
+    /// After-landing review is the `delivery-code-review` auto-task, which
+    /// no run captures, so nothing new records this value.
     AfterLanding,
 }
 
@@ -67,26 +70,24 @@ impl ReviewTiming {
     }
 }
 
-/// Limits captured for one delivery run lineage: the run that first admitted
-/// the candidate and every resume of it. They cover retries, interruptions,
-/// and candidate invalidations within that lineage; a fresh delivery run
-/// starts a new lineage with a fresh budget.
+/// The limit captured for one delivery run lineage: the run that first
+/// admitted a candidate and every resume of it. Each candidate gets one
+/// review [ORB-13992]: once an attempt on a candidate settles with a verdict
+/// no further reviewer is started for it, and `minutes` bounds the reviewer
+/// runtime that one review may spend across retries and interruptions. A
+/// changed candidate, such as a completion rebase, is a new review.
 ///
-/// Budgets captured before [ORB-13989] also carry a `repair_cycles` limit.
-/// The reviewer now fixes its findings in the one reviewer commit an attempt
-/// may add, so nothing is charged against it and reading ignores it.
+/// Budgets captured before [ORB-13992] also carry a `reviewer_starts` limit,
+/// and those before [ORB-13989] a `repair_cycles` limit; reading ignores both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewBudget {
-    /// Fresh reviewer invocations allowed for the lineage.
-    pub reviewer_starts: u32,
-    /// Aggregate reviewer runtime after which no further start is admitted.
+    /// Reviewer runtime one candidate's review may spend.
     pub minutes: u32,
 }
 
 impl Default for ReviewBudget {
     fn default() -> Self {
         Self {
-            reviewer_starts: DEFAULT_REVIEW_REVIEWER_STARTS,
             minutes: DEFAULT_REVIEW_MINUTES,
         }
     }
@@ -109,7 +110,7 @@ pub struct ReviewAdmission {
     pub crew: Option<String>,
     /// Which layer decided the crew.
     pub crew_source: String,
-    /// Captured lineage budgets.
+    /// Captured review limit.
     pub budget: ReviewBudget,
     /// When the snapshot was captured.
     pub captured_at: DateTime<Utc>,
@@ -592,10 +593,10 @@ pub struct ReviewerIdentity {
     pub same_model_as_implementer: bool,
 }
 
-/// Consumed or remaining lineage limits.
+/// Consumed or remaining reviewer runtime. Records written before
+/// [ORB-13992] also carry a `reviewer_starts` count; reading ignores it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewConsumption {
-    pub reviewer_starts: u32,
     pub seconds: u64,
 }
 
@@ -819,8 +820,9 @@ pub struct ReviewResetDecision {
     pub budget: ReviewBudget,
 }
 
-/// Aggregate review consumption for one delivery candidate lineage. Retry,
-/// interruption, candidate invalidation, and delivery lineage share it.
+/// Review attempts for one delivery run lineage. Each candidate's attempts
+/// make up its one review; `consumed_seconds` totals the lineage's settled
+/// reviewer runtime since the last reset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewLedger {
     pub lineage_key: String,
@@ -863,47 +865,86 @@ impl ReviewLedger {
             .map_or(0, |decision| decision.after_attempt_index)
     }
 
-    /// What the current budget has consumed so far.
+    /// Reviewer runtime the lineage settled under the current budget.
     pub fn consumed(&self) -> ReviewConsumption {
         ReviewConsumption {
-            reviewer_starts: u32::try_from(
-                self.attempts
-                    .iter()
-                    .filter(|a| a.index > self.reset_through())
-                    .count(),
-            )
-            .unwrap_or(u32::MAX),
             seconds: self.consumed_seconds,
         }
     }
 
-    /// What the lineage may still spend after settled consumption. An open
-    /// attempt's reviewer runtime is not included; use [`Self::remaining_at`]
-    /// for a live leftover.
-    pub fn remaining(&self) -> ReviewConsumption {
-        Self::remaining_from(self.budget, self.consumed())
+    /// Attempts on `candidate` under `task_meaning_digest` since the last
+    /// reset: together they are that candidate's one review.
+    fn review_attempts<'a>(
+        &'a self,
+        candidate: &'a SourceRevision,
+        task_meaning_digest: &'a str,
+    ) -> impl Iterator<Item = &'a ReviewAttempt> + 'a {
+        let reset_through = self.reset_through();
+        self.attempts.iter().filter(move |attempt| {
+            attempt.index > reset_through
+                && attempt.candidate == *candidate
+                && attempt.task_meaning_digest == task_meaning_digest
+        })
     }
 
-    /// Remaining allowance at `now`, counting an open attempt's reviewer
-    /// time so a resumed invocation sees leftover seconds rather than the
-    /// full captured budget.
-    pub fn remaining_at(&self, now: DateTime<Utc>) -> ReviewConsumption {
-        let mut consumed = self.consumed();
-        if let Some(open) = self.open_attempt() {
-            consumed.seconds = consumed.seconds.saturating_add(open.elapsed_at(now));
-        }
-        Self::remaining_from(self.budget, consumed)
+    /// Whether `candidate` already had its review: an attempt on it settled
+    /// with a reviewer verdict rather than being released unfinished.
+    pub fn reviewed(&self, candidate: &SourceRevision, task_meaning_digest: &str) -> bool {
+        self.review_attempts(candidate, task_meaning_digest)
+            .any(|attempt| {
+                attempt.released_at.is_none()
+                    && matches!(attempt.state, ReviewAttemptState::Settled { .. })
+            })
     }
 
-    fn remaining_from(budget: ReviewBudget, consumed: ReviewConsumption) -> ReviewConsumption {
+    /// Reviewer runtime `candidate`'s review has spent at `now`, counting an
+    /// open attempt's running reviewer.
+    pub fn consumed_for(
+        &self,
+        candidate: &SourceRevision,
+        task_meaning_digest: &str,
+        now: DateTime<Utc>,
+    ) -> ReviewConsumption {
         ReviewConsumption {
-            reviewer_starts: budget
-                .reviewer_starts
-                .saturating_sub(consumed.reviewer_starts),
-            seconds: u64::from(budget.minutes)
+            seconds: self
+                .review_attempts(candidate, task_meaning_digest)
+                .map(|attempt| attempt.elapsed_at(now))
+                .fold(0, u64::saturating_add),
+        }
+    }
+
+    /// What `candidate`'s review may still spend at `now`.
+    pub fn remaining_for(
+        &self,
+        candidate: &SourceRevision,
+        task_meaning_digest: &str,
+        now: DateTime<Utc>,
+    ) -> ReviewConsumption {
+        let consumed = self.consumed_for(candidate, task_meaning_digest, now);
+        ReviewConsumption {
+            seconds: u64::from(self.budget.minutes)
                 .saturating_mul(60)
                 .saturating_sub(consumed.seconds),
         }
+    }
+
+    /// What the latest review may still spend at `now`: the candidate of the
+    /// most recent attempt since the last reset, or the whole budget when
+    /// none was admitted since.
+    pub fn remaining_at(&self, now: DateTime<Utc>) -> ReviewConsumption {
+        match self.latest_attempt() {
+            Some(latest) => self.remaining_for(&latest.candidate, &latest.task_meaning_digest, now),
+            None => ReviewConsumption {
+                seconds: u64::from(self.budget.minutes).saturating_mul(60),
+            },
+        }
+    }
+
+    /// The most recent attempt admitted under the current budget.
+    pub fn latest_attempt(&self) -> Option<&ReviewAttempt> {
+        self.attempts
+            .last()
+            .filter(|attempt| attempt.index > self.reset_through())
     }
 
     /// The ledger as `attempt_id`'s settlement left it: attempts admitted
@@ -961,10 +1002,12 @@ pub enum ReviewReservation {
     /// An open attempt for the same candidate and task meaning is resumed
     /// after an interruption; no new start is consumed.
     Resumed { attempt: ReviewAttempt },
-    /// The lineage budget is spent; the caller must escalate.
+    /// The candidate's one review is spent; the caller must escalate.
     Exhausted {
-        /// `review_starts_exhausted` or `review_minutes_exhausted`.
+        /// `review_candidate_reviewed` (an attempt on the candidate already
+        /// settled with a verdict) or `review_minutes_exhausted`.
         reason: &'static str,
+        /// The candidate's reviewer runtime.
         consumed: ReviewConsumption,
     },
 }

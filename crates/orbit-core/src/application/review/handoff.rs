@@ -613,7 +613,8 @@ fn handoff_json(
             "base": {"commit": candidate.base.commit, "tree": candidate.base.tree},
             "delivery": candidate.delivery,
         },
-        // v1 admits `review_policy = none` only. The typed disposition records
+        // Pulled leaves are admitted only with `review.before_pr` off on both
+        // endpoints [ORB-13992]. The typed disposition records
         // that no review was required — it is not a review that passed, and the
         // task's `review` status means "delivery awaiting completion authority".
         "review": {

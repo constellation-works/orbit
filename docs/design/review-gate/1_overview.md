@@ -7,11 +7,11 @@ status: Accepted
 feature: review-gate
 doc_role: overview
 type: design
-summary: Independent automatic code review — before-PR gating with a fresh reviewer that fixes its findings as a second commit, after-landing scheduling, lineage budgets, and exact-tree delivery coverage.
+summary: Independent automatic code review — before-PR gating with a fresh reviewer that fixes its findings as a second commit, after-landing scheduling, one review per candidate, and exact-tree delivery coverage.
 tags: [review-gate, review-policy, automation, delivery]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13989]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13989, ORB-13992]
 ---
 
 # Review Gate — Overview
@@ -28,10 +28,12 @@ preserved; there is no second review round). Passed certificates exclude exactly
 landings from redundant after-landing review while QA stays independent.
 Neither review timing nor a reviewer verdict grants merge permission.
 
-The keys live under the `[operation]` table in `config.toml`. That table once
-also carried operation-mode presets and grants; those were removed on
-2026-09-21 (see [orbit-core decisions](../orbit-core/4_decisions.md)), and the
-table name was kept so existing configuration keeps resolving.
+Two independent switches turn review on [ORB-13992]: `review.before_pr` in
+`config.toml` (with `review.minutes`, the limit for one candidate's review),
+and the `delivery-code-review` auto-task's own `enabled` flag for
+after-landing review. The reviewer crew stays `operation.review_crew`; the
+`[operation]` table once also carried operation-mode presets and grants,
+removed on 2026-09-21 (see [orbit-core decisions](../orbit-core/4_decisions.md)).
 
 ## 1. Motivation
 
@@ -47,14 +49,16 @@ anything else stays an ordinary review obligation.
 
 ## 2. Core Concepts
 
-- **Review timing:** `none`, `before-pr`, or `after-landing`, captured once
-  per delivery run in its immutable input and never re-read.
+- **Before-PR switch:** `review.before_pr`, captured once per delivery run
+  or drain in its immutable input and never re-read.
+- **After-landing switch:** the `delivery-code-review` auto-task's `enabled`
+  flag; it never affects delivery admission.
 - **Reviewer:** a fresh invocation with its own instruction, tool allowlist
   and wall clock, resolved from `operation.review_crew`. It never becomes the
   implementer and never merges.
-- **Lineage budget:** reviewer starts and reviewer minutes bounding one
-  delivery run lineage (workspace, task set, base branch, and the run with
-  its resumes).
+- **One review per candidate:** each candidate in a delivery run lineage
+  (workspace, task set, base branch, and the run with its resumes) gets one
+  review, bounded by `review.minutes` of reviewer wall clock.
 - **Two-commit shape:** the implementation commit, never amended, then at
   most one reviewer commit carrying every fix; owner validation reruns on
   the reviewer commit before publication, and its paths widen the task's

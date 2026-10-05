@@ -323,7 +323,7 @@ fn settle(
         validation: judgement.validation.clone(),
         validation_complete: judgement.validation_complete,
         reviewer,
-        consumed: settled.consumed(),
+        consumed: settled.consumed_for(&reviewed.head, &judgement.task_meaning_digest, now),
         budget: settled.budget,
         escalation: judgement.escalation.clone(),
         selectors_widened: judgement.selectors_widened.clone(),

@@ -11,68 +11,73 @@ summary: Shipped review contract — captured timing, the before-PR gate whose r
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992]
 ---
 
 # Review Gate — Design [ORB-11333]
 
 This file describes what shipped. A preference edit grants no authority and
-changes no schedule except the one `after-landing` names (§1); a verdict grants
-no merge permission.
+changes no schedule; a verdict grants no merge permission.
 
-## 1. Preferences: the `[operation]` review keys
+## 1. Preferences: two switches [ORB-13992]
 
-Preferences resolve **built-in → global → workspace**. Unknown keys and
-out-of-range values fail config load; the operation-mode keys removed on
-2026-09-21 are warned about by name and ignored so an older `config.toml`
-keeps loading.
+Automatic review has two independent switches. Before-PR review is a
+`config.toml` boolean; after-landing review is the `delivery-code-review`
+auto-task's own `enabled` flag. Config preferences resolve **built-in →
+global → workspace**. Unknown keys and out-of-range values fail config load.
 
 | Key | Values (default) |
 | --- | --- |
-| `operation.review_policy` | `none` (default), `after-landing`, `before-pr` |
+| `review.before_pr` | bool (`false`) |
+| `review.minutes` | 1..=1440 (30): wall-clock limit for one candidate's review |
 | `operation.review_crew` | crew name (before-PR reviewer; crew of after-landing review tasks) |
-| `operation.review_reviewer_starts` | 1..=10 (3) |
-| `operation.review_minutes` | 1..=1440 (90) |
 
-`orbit config show` lists the explicit `operation.*` values with their file
-provenance and the layer that supplied each effective value.
+`review.before_pr` holds PR creation for a fresh reviewer (§3); it needs an
+explicit `review_crew`, and admission escalates `review_crew_unconfigured`
+until one is set. Each candidate gets one review, bounded by `review.minutes`
+(§5).
 
-`before-pr` holds PR creation for a fresh reviewer (§3); it needs an explicit
-`review_crew`, and admission escalates `review_crew_unconfigured` until one is
-set.
+After-landing review is carried out by the workspace's shipped
+`delivery-code-review` delivery auto-task [ORB-13896], switched with
+`orbit auto-task toggle delivery-code-review on|off`. While enabled it freezes
+landed base-branch deliveries into batches and mints one review task per batch
+at its threshold or maximum wait. When `review_crew` is set it is the crew of
+every review task the consumer mints; unset, the definition's template crew
+(`system`) applies. Changing `review_crew` changes only future mints, never the
+consumer's epoch or its retained debt. The consumer admits only on the machine
+that owns the workspace (see [delivery automation
+operations](../automation-triggers/5_operations.md)). After-landing review
+never affects delivery admission, local or distributed.
 
-`after-landing` is carried out by the workspace's shipped `delivery-code-review`
-delivery auto-task [ORB-13896]. The policy is its switch: while the policy is
-`after-landing` that consumer is enabled whatever its own `enabled` field says,
-so it freezes landed base-branch deliveries into batches and mints one review
-task per batch at its threshold or maximum wait. `orbit auto-task list` and
-`show` report it as enabled by the policy, and toggling it off does not stop it;
-setting the policy to `none` or `before-pr` does. When `review_crew` is set it
-is the crew of every review task the consumer mints; unset, the definition's
-template crew (`system`) applies. Changing `review_crew` changes only future
-mints, never the consumer's epoch or its retained debt. The consumer admits only
-on the machine that owns the workspace (see [delivery automation
-operations](../automation-triggers/5_operations.md)).
+`orbit config show` (`review` in `--json`), `orbit doctor` (the `review`
+check), the dashboard Config tab and `orbit.drain.probe` render one view of
+both switches, each with its source: before-PR on/off with its minutes and
+crew, and after-landing enabled with when the next batch is due. While the
+after-landing consumer is enabled the view adds its health: whether it is
+present, whether this host owns it, whether it is wedged on a closed action
+or stalled, whether its branch and review crew resolve, its scheduling state,
+and when its last batch was minted or covered. Anything short of healthy — the
+definition missing, owned by another machine or by none, wedged, stalled, held
+for an operator (`definition_changed`, `needs_attention`,
+`retry_deadline_expired`), on a branch that does not resolve, or naming a crew
+that does not — is an `error`, so `orbit doctor` exits nonzero. So is
+before-PR review switched on without a resolvable `review_crew`.
 
-Because nothing else performs after-landing review, `orbit doctor` reports a
-`review-after-landing` row whenever the policy is `after-landing`, and
-`orbit config show` prints the same line (`review_after_landing` in `--json`):
-whether the consumer is present and enabled, whether this host owns it, whether
-it is wedged on a closed action or stalled, whether its branch and review crew
-resolve, its scheduling state, and when its last batch was minted or covered.
-Anything short of healthy — the definition missing, owned by another machine or
-by none, wedged, stalled, held for an operator (`definition_changed`,
-`needs_attention`, `retry_deadline_expired`), on a branch that does not resolve,
-or naming a crew that does not — is an `error`, so `orbit doctor` exits nonzero.
-Under any other policy the row is `skipped`.
-
-The two `review_*` budgets bound one delivery run lineage (§5).
-`operation.review_repair_cycles` is retired [ORB-13989]: the reviewer fixes
-its findings in one commit and nothing goes back to the implementer, so the
-key is warned about by name and ignored. The resolved-policy version is 2; a
-version-1 snapshot fails closed and must be replaced. A version-2 snapshot
-captured before the retirement still carries `repair_cycles`; it reads and
-the value is ignored.
+**Migration.** `operation.review_policy` and `operation.review_minutes` are
+deprecated: they are translated on load with a warning naming each key, and a
+later release makes them errors. `before-pr` sets `review.before_pr = true`;
+`none` turns neither switch on; `after-landing` enables the consumer only while
+no operator has configured it (its `updated_by` is unset or `system`) — once
+`orbit auto-task toggle` or any other edit stamps an actor, its own flag
+decides. `orbit auto-task list`/`show` report that as `effective_enabled`. A
+`[review]` table in the same file wins over the deprecated spelling.
+`operation.review_minutes` becomes `review.minutes`. The budget keys
+`operation.review_reviewer_starts` and `operation.review_repair_cycles` are
+retired [ORB-13989]: one review per candidate counts neither, so both are
+warned about by name and ignored. The resolved-policy version is 2; a
+version-1 snapshot fails closed and must be replaced. A snapshot captured
+before the retirement still carries `reviewer_starts` or `repair_cycles`; it
+reads and the values are ignored.
 
 ## 2. Captured timing
 
@@ -83,11 +88,14 @@ submission in the delivery family (`workspace_auto_pipeline`,
 snapshot in its immutable input: timing and its source, the configured
 reviewer crew and its source, the lineage budget, and the policy version. A
 parent-authorized child inherits its parent's snapshot exactly; any other submission resolves from the
-workspace preferences at that moment. Ordinary input naming the
-reserved `review` key is refused, and a resume keeps its persisted input, so
-rolling a preference back to `none` never weakens a gate that is already
-active and switching to `before-pr` never gates a run already admitted.
-`before-pr` is refused at submission for `task_local_pipeline` delivery,
+workspace preferences at that moment. A distributed drain
+(`workspace_pull_pipeline`) captures the same snapshot, so the `before_pr` it
+declares to owners is the value it was submitted with. Ordinary input naming
+the reserved `review` key is refused, and a resume keeps its persisted input,
+so switching `review.before_pr` off never weakens a gate that is already
+active and switching it on never gates a run already admitted. A run captured
+under the retired `after-landing` policy value reads as not gated.
+`review.before_pr` is refused at submission for `task_local_pipeline` delivery,
 with no exemption: epic assembly was the one caller that gated a combined
 candidate later, and it is retired [ORB-12491].
 
@@ -97,21 +105,21 @@ candidate later, and it is retired [ORB-12491].
 before push/PR creation, as four top-level steps: `review_gate_admit`,
 `review` (`agent_review_repair`), `review_gate_settle`, and
 `review_validate` (§3.1). One fresh reviewer examines each candidate and
-fixes what it finds; there is no second review round [ORB-13989]. Under
-`none`, `after-landing`, or a checked no-diff exemption the gate reports
+fixes what it finds; there is no second review round [ORB-13989]. With
+before-PR review off at capture, or a checked no-diff exemption, the gate reports
 `applies: false` and publication proceeds unchanged with no certificate.
 
 Admission pins the candidate (base and head commits and trees, every
 implementation commit with the attribution Git recorded), digests each task's
 meaning (title, description, criteria, plan, selectors, tags, relations, type;
 never comments, summaries, status, or priority), resolves the configured
-review crew on this host inside the run's `allowed_crews`, reserves a reviewer
-start against the lineage ledger, and writes `review-manifest.json` on every
+review crew on this host inside the run's `allowed_crews`, reserves the
+candidate's one review against the lineage ledger, and writes `review-manifest.json` on every
 task under the run's authority. An unconfigured, unresolvable, or excluded crew
 escalates (`review_crew_unconfigured`, `review_crew_unavailable`,
 `review_crew_excluded`); the gate never substitutes the implementer. A
 retried admission in the same run resumes its open attempt for the same
-candidate and task meaning without consuming another start; a different
+candidate and task meaning within the same minutes; a different
 candidate, or an attempt another run of the lineage left open, is released
 as `incomplete` first (§5).
 
@@ -124,8 +132,8 @@ reviewer agent attribution. Any history generated by a system write uses the
 same system actor; settlement does not add synthetic history stubs.
 
 The reviewer is a fresh invocation, a crew separate from the implementer's,
-with its own instruction, tool allowlist, and 60-minute wall clock,
-independent of what the lineage has already spent. It runs under the same
+with its own instruction, tool allowlist, and 60-minute wall clock, shortened
+to what the candidate's `review.minutes` has left (§5). It runs under the same
 sandbox as the implementer, with write access to the worktree. It reads the
 manifest, verifies claims against code, fixes concrete defects directly in
 the worktree — any path a fix requires, each listed on the finding it fixes
@@ -198,7 +206,7 @@ Findings:
 - Final candidate: `<sha>`
 - Selectors widened for reviewer-changed paths: …
 - Validation on final candidate: … record(s) […], complete: …
-- Consumed: … reviewer start(s), …s of … min
+- Reviewer runtime: …s of … min
 - Escalation: …
 
 <what the verdict means for delivery>
@@ -317,11 +325,17 @@ resumed run shares its source's ledger, so resuming never resets the budget;
 a fresh delivery run of the same tasks — the re-admission after a block —
 starts a new lineage with a full budget [ORB-13890]. Settlement uses the
 lineage its admission named. The first budget written on a lineage is
-captured; a later config change cannot expand or replace it. Reviewer starts
-are reserved before a reviewer launches. The PR pipeline checks the same
-lineage before `implement_bundle`: an exhausted resumed lineage refuses
-without invoking the implementer. This preflight reserves no start and writes
-no reviewer manifest; final admission still atomically checks the budget.
+captured; a later config change cannot expand or replace it. Each candidate
+(head commit plus task meaning) gets one review [ORB-13992], reserved before a
+reviewer launches: once an attempt on it settles with a verdict, or its
+reviewer runtime reaches `review.minutes`, the candidate is not reviewed again.
+A changed candidate — new implementation work or a completion rebase — is a
+new review with its own minutes. The PR pipeline checks the same lineage
+before `implement_bundle`: a resumed lineage whose latest candidate spent its
+minutes without a verdict refuses without invoking the implementer. A
+candidate that was reviewed does not block the preflight, since new work makes
+a new candidate. This preflight reserves nothing and writes no reviewer
+manifest; final admission still atomically checks the candidate.
 
 An operator can renew a selected lineage with
 `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`.
@@ -368,13 +382,15 @@ attempt with its verdict, keeping the runtime already charged and adding the
 reviewer runtime it records; a released attempt that a later start superseded
 is stale.
 
-`review_minutes` gates admission only: once the lineage's charged reviewer
-runtime reaches it, no new start is admitted. It does not shorten an admitted
-reviewer, whose own activity timeout bounds each invocation, and an accept
-that overran the remainder still settles on its evidence. A reviewer commit
-costs no separate budget; there are no repair cycles. Exhaustion refuses
-admission (`review_budget_exhausted: review_starts_exhausted |
-review_minutes_exhausted`). Provider token/cost
+`review.minutes` is a wall-clock limit on the candidate's review. Each
+reviewer invocation records its start, and the ledger sets its deadline to the
+lesser of its activity timeout and the minutes the candidate has left; the
+engine shortens the reviewer's wall clock to that deadline and refuses the
+step (`review_minutes_exhausted`) when nothing is left. An accept that
+finished within its deadline settles on its evidence. A reviewer commit costs
+no separate budget; there are no reviewer-start counts or repair cycles.
+Exhaustion refuses admission (`review_budget_exhausted:
+review_candidate_reviewed | review_minutes_exhausted`). Provider token/cost
 caps are not enforced; usage stays unknown.
 
 ## 6. Managed completion and landing
@@ -394,7 +410,7 @@ A conflicting reviewed PR is never merged as rebased, unreviewed content
 branch locally through the pinned `git_rebase` (a real conflict still reaches
 `pr_conflict_recovery`), publishes nothing, completes no task, and returns
 `re_review_required` with the rebase checkpoint. The pipeline then reviews the
-rebased head with a new start in the same lineage (`re_review_gate_admit`,
+rebased head as a new review in the same lineage (`re_review_gate_admit`,
 `re_review`, `re_review_gate_settle`, and `re_review_validate` when that
 reviewer committed fixes), republishes the reviewed final candidate under a
 lease on the old published head (`re_push`), and completes it
@@ -439,8 +455,8 @@ observed; a certificate that arrives later does not rewrite pending debt.
 
 ## 8. Surfaces
 
-`orbit config show` reports the review policy, crew, and budgets with the
-layer that supplied each. `orbit task show --json`, the task API, and the
+`orbit config show`, `orbit doctor`, the dashboard Config tab and
+`orbit.drain.probe` report both review switches with their sources (§1). `orbit task show --json`, the task API, and the
 task detail view carry a `review` block: verdict, assurance, reviewer
 (including `same_model_as_implementer`), base/reviewed/final candidate,
 implementation and reviewer commits, findings, validation, consumed and
@@ -465,9 +481,9 @@ Existing runs without a `review` snapshot behave exactly as before. The
 seeded cron `code-review` auto-task and any custom definition stay untouched;
 migrating to delivery-triggered review remains the explicit edit described in
 [delivery automation operations](../automation-triggers/5_operations.md).
-To roll back, set `review_policy` to `none` or `after-landing` (which also
-enables the `delivery-code-review` consumer, §1): future
-submissions capture the new timing, admitted runs keep their gate, and
+To roll back, set `review.before_pr = false` (and toggle the
+`delivery-code-review` consumer on for after-landing review, §1): future
+submissions capture the new value, admitted runs keep their gate, and
 certificates, ledgers, and landings stay readable. An older binary cannot settle an
 in-flight gate; drain gated runs with a supporting binary before downgrading.
 
@@ -481,9 +497,9 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
   `independent_review_with_self_authored_repairs` and says so; owner
   revalidation checks the fixed head's ownership and required commands, not
   its intent.
-- Provider token and cost caps are not enforced; only starts and reviewer
-  runtime are bounded, so reviewer spend stays unknown.
-- `before-pr` has no meaning on the local-only delivery route and is refused
+- Provider token and cost caps are not enforced; only reviewer runtime is
+  bounded, so reviewer spend stays unknown.
+- `review.before_pr` has no meaning on the local-only delivery route and is refused
   at submission rather than downgraded.
 - A denied required check is not evidence either way: it keeps its own
   `validation_unavailable` reason instead of counting as a failure.
@@ -503,6 +519,7 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
 - [ORB-13890] — closes failed attempts, keys budgets per delivery run lineage, adds gate retry/recovery, tolerant report reading, and the completion re-review.
 - [ORB-13891] — added an implementer rework loop for `changes_required`; retired by [ORB-13989].
 - [ORB-13989] — the reviewer fixes its findings as a second commit, comments them, and owner validation reruns on that head; retires the rework loop and repair-cycle budget.
+- [ORB-13992] — splits review into the `review.before_pr` switch and the `delivery-code-review` auto-task flag, makes `review.minutes` the wall-clock limit of one review per candidate, and retires `operation.review_policy` and the reviewer-start budget.
 - [ORB-13990] — the reviewer may change any path the repair requires; settlement and revalidation widen selectors with review provenance instead of downgrading or failing.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

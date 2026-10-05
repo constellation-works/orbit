@@ -9,7 +9,7 @@ use orbit_types::workflow::{
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::attempts::{
-    record_invocation, release_attempt, reserve_new, reserve_new_in, settle_attempt,
+    record_invocation, release_attempt, reserve_new, reserve_new_in, review_spent, settle_attempt,
 };
 use super::ledger::{decode, encode, ledgers_held_by, read_ledger, write_ledger};
 use crate::Store;
@@ -45,7 +45,7 @@ impl ReviewStoreBackend for Store {
                 release_attempt(&mut ledger, &open.attempt_id, request.now, request.now);
             }
             let budget = request.budget.unwrap_or(ledger.budget);
-            if budget.reviewer_starts == 0 || budget.minutes == 0 {
+            if budget.minutes == 0 {
                 return Err(OrbitError::InvalidInput(
                     "review reset requires a usable review budget".into(),
                 ));
@@ -92,13 +92,17 @@ impl ReviewStoreBackend for Store {
                 )
             });
 
-            // An interrupted attempt on the same candidate resumes; on a
-            // different candidate it is partial work, released as incomplete
-            // with the reviewer runtime already spent.
+            // An interrupted attempt on the same candidate resumes while its
+            // review has minutes left; on a different candidate it is partial
+            // work, released as incomplete with the reviewer runtime already
+            // spent.
             if let Some(open) = ledger.open_attempt().cloned() {
                 if open.candidate == *request.candidate
                     && open.task_meaning_digest == request.task_meaning_digest
                 {
+                    if let Some(exhausted) = review_spent(&ledger, request) {
+                        return Ok((exhausted, ledger));
+                    }
                     return Ok((ReviewReservation::Resumed { attempt: open }, ledger));
                 }
                 release_attempt(&mut ledger, &open.attempt_id, request.now, request.now);

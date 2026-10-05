@@ -8,8 +8,8 @@
 //! - this checkout is a **replica**, and the selector names **its** owner
 //!   machine and **its** logical workspace;
 //! - the owner answers the read-only probe **as that machine**, and would
-//!   admit this executor now (binary, protocol schema, review policy, ship
-//!   mode).
+//!   admit this executor now (binary, protocol schema, `review.before_pr`,
+//!   ship mode).
 //!
 //! An empty `workflow.required_validation_commands` is not a refusal: its
 //! claimed leaves run no required check, as an owner's own delivery does, and
@@ -171,7 +171,7 @@ impl crate::OrbitRuntime {
                 json!({
                     "caller_version": owner_binary_version(),
                     "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-                    "caller_review_policy": self.local_review_policy_label(),
+                    "caller_before_pr": self.local_review_before_pr(),
                 }),
             )
             .map_err(|error| match error {

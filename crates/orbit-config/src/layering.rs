@@ -22,8 +22,11 @@
 //!   only plugin toggles does not count as a distinct workspace file for the
 //!   replace-only keys.
 //!
-//! The `[operation]` review keys are resolved per layer by [`crate::operation`]
-//! rather than from the merged document, so their provenance is exact.
+//! The review keys are resolved per layer by [`crate::operation`] rather than
+//! from the merged document, so their provenance is exact. Each document's
+//! deprecated review keys are translated to their `[review]` spelling as it
+//! is parsed, so the merge, the snapshot and `orbit config get` all see the
+//! translated value.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -34,7 +37,9 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::crew_pools::reject_unpoolable_crew_names_in_document;
-use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
+use crate::operation::{
+    OperationLayer, OperationLayerSource, OperationPolicy, translate_legacy_review_keys,
+};
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
@@ -370,8 +375,8 @@ fn load_layered_resolved_with_workspace(
     })
 }
 
-/// Resolve the `[operation]` review preferences from the exact layers rather
-/// than the merged document, so each field records the layer that set it.
+/// Resolve the review preferences from the exact layers rather than the
+/// merged document, so each field records the layer that set it.
 fn resolve_operation_layers(
     global: Option<&ConfigDocument>,
     workspace: Option<&ConfigDocument>,
@@ -426,12 +431,13 @@ fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>, OrbitErro
 }
 
 fn parse_config_document(path: &Path, raw: &str) -> Result<ConfigDocument, OrbitError> {
-    let value = toml::from_str(raw).map_err(|err| {
+    let mut value = toml::from_str(raw).map_err(|err| {
         OrbitError::InvalidInput(format!(
             "invalid runtime config '{}': {err}",
             redact_home_dir(&path.display().to_string())
         ))
     })?;
+    translate_legacy_review_keys(&mut value, path)?;
     Ok(ConfigDocument {
         path: path.to_path_buf(),
         value,
@@ -478,7 +484,7 @@ fn crew_entry<'a>(
         .as_table()
 }
 
-fn set_value_at_path(document: &mut toml::Value, key: &str, value: toml::Value) {
+pub(crate) fn set_value_at_path(document: &mut toml::Value, key: &str, value: toml::Value) {
     let segments = key.split('.').collect::<Vec<_>>();
     let Some((last, ancestors)) = segments.split_last() else {
         return;

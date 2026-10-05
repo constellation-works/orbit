@@ -492,8 +492,10 @@ pub(super) fn allocate(
     {
         return Err(invalid("followers cannot execute owner-local leaves"));
     }
-    if request.ship.review_policy != "none" || request.caller_review_policy != "none" {
-        return Err(invalid("pulled leaves require review policy none"));
+    if request.ship.before_pr || request.caller_before_pr {
+        return Err(invalid(
+            "pulled leaves require review.before_pr off on both endpoints",
+        ));
     }
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
