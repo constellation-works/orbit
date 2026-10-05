@@ -6,6 +6,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -14,7 +15,7 @@ use crate::adapter::engine_host::v2_host::ci_failure::admission as ci_failure_ad
 use super::attachment_budget::{
     CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
 };
-use super::drain_promotion::{self, DrainAuthority};
+use super::drain_promotion::{self, Approval, DrainAuthority};
 use super::persist::{
     ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, stale_task,
     task_operation_id, task_outcome,
@@ -599,7 +600,8 @@ pub(in super::super) fn apply(
                         | ApplyTaskOutcome::AlreadyApplied(_)),
                     ),
                     PromotionAuthority::Drain(drain),
-                ) => approve_promoted(runtime, &mut validated, drain).map(|()| applied),
+                ) => approve_promoted(runtime, &mut validated, snapshot, &policy, drain)
+                    .map(|()| applied),
                 (outcome, _) => outcome,
             };
             match outcome {
@@ -899,19 +901,35 @@ pub(in super::super) fn apply(
 }
 
 /// Approve a drain-promoted task once its pilot write landed, recording on
-/// the decision whether this apply made the transition.
+/// the decision whether this apply made the transition. A hold found at the
+/// approval boundary turns the decision into a withhold with its own
+/// classification.
 fn approve_promoted(
     runtime: &OrbitRuntime,
     validated: &mut ValidatedTask,
+    snapshot: &PreparedTaskSnapshot,
+    policy: &PreparationPolicy,
     drain: &DrainAuthority,
 ) -> Result<(), OrbitError> {
-    let Some(Admission::Drain(decision)) = validated.admission.as_mut() else {
+    let Some(Admission::Drain(decision)) = validated.admission.as_ref() else {
         return Ok(());
     };
     if decision["decision"] != "promote" {
         return Ok(());
     }
-    let approved = drain_promotion::approve(runtime, &validated.task_id, &drain.run_id)?;
-    decision["approved"] = json!(approved);
+    let approval = drain_promotion::approve(runtime, validated, snapshot, policy, &drain.run_id)?;
+    let Some(Admission::Drain(decision)) = validated.admission.as_mut() else {
+        return Ok(());
+    };
+    decision["approved"] = json!(matches!(approval, Approval::Approved));
+    if let Approval::Held {
+        classification,
+        evidence,
+    } = approval
+    {
+        decision["decision"] = json!("withhold");
+        decision["classification"] = json!(classification);
+        decision["evidence"] = evidence;
+    }
     Ok(())
 }
