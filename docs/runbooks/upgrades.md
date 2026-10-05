@@ -40,7 +40,7 @@ The check downloads no release archive and does not converge workspace state.
    sequence instead — uninstall the legacy formula, then install the canonical one — because the
    two conflict rather than coexisting; a canonical-only install gets the ordinary qualified
    upgrade.
-3. Acquire generation admission against the same resolved authority `--preflight` uses,
+3. Acquire generation admission against the same resolved authorities `--preflight` uses,
    refusing while any participating Orbit process is live, then take the exclusive
    install-directory lock so two updates cannot interleave.
 4. Re-read the installed binary's version under that lock, and on Linux resolve a replaced
@@ -223,9 +223,17 @@ invocation can be refused by, in the order the update takes them:
    replaces: the executable is the running one (`~/.orbit/bin/orbit` for a
    managed install), and every client started *without* an override — including
    persistent `orbit mcp serve` processes — joins the host-global root.
+3. The initialized workspace that convergence would use, when that directory
+   is a different authority. An initialized `--root` / `ORBIT_ROOT` selects it. An
+   override that is not yet an initialized workspace is still probed as a
+   generation root: `--preflight` does not require `orbit workspace init` on
+   that path, and it includes a workspace discovered from the working directory
+   when one exists. `orbit update` without `--preflight` still refuses that
+   uninitialized explicit root before it converges. Spellings of the same
+   directory are one authority.
 
-Both are listed in `admission_roots`, and a refusal names the authority it came
-from. Exit 0 returns:
+Every distinct authority is listed in `admission_roots`, and a refusal names
+the authority it came from. Exit 0 returns:
 
 ```json
 {"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","admission_contract":"compatibility-generation-v2","compatibility":{…},"quiesce_timeout_secs":120,"global_root":"/srv/project","admission_roots":["/srv/project","/home/operator/.orbit"]}

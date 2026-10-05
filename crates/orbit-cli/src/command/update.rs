@@ -129,12 +129,16 @@ impl UpdateCommand {
             .into());
         }
         if self.preflight {
-            // Use the same workspace discovery and authority list as the
-            // update itself, so preflight names every root the next command
-            // must admit, including cwd-discovered workspace data and the
-            // host-global root an override does not move the executable out
-            // of.
-            let workspace = UpdateEnvironment::workspace_for_process(root_override)?;
+            // Probe the explicit generation root without requiring it to
+            // already be an initialized workspace. Still name every authority
+            // the next update admits: that root, the host-global root an
+            // override does not move the executable out of, and the
+            // initialized convergence workspace (the explicit root when it is
+            // initialized, otherwise one discovered from the working
+            // directory). `orbit update` itself keeps strict initialization
+            // through `workspace_for_process`. This observation does not
+            // reserve admission.
+            let workspace = UpdateEnvironment::workspace_for_preflight(root_override)?;
             let roots = orbit_cmd::update::admission_authorities(
                 root_override,
                 workspace.as_ref().map(|workspace| workspace.root.as_path()),
