@@ -91,6 +91,15 @@ in the current run, including the first attempt. The artifact names the current
 task and the covering task separately. `git_commit` checks the pinned HEAD,
 covering commit marker and ancestry, unchanged task scope, clean tree, and
 required validation logs. A success summary alone does not satisfy that gate.
+`already-landed.json` has `schema_version` 1, `task_id`, `run_id`,
+`tested_head`, `covering_commit`, `covering_task_id`, `scope`,
+`required_commands`, `validation` and `criteria_evidence`; unknown fields are
+refused. `criteria_evidence` is an array of non-empty strings, one per
+acceptance criterion in order, never objects. Each `validation[]` entry
+flattens `command`, `outcome`, `role` and `log_artifact` as siblings; every
+required command's entry carries `outcome: "passed"` and `role: "required"`.
+The role vocabulary is `required`, `expected_failure`, `excluded` and
+`superseded`; other values such as `acceptance` or `gate` are refused.
 If a required check or covering evidence is unavailable, record the blocker;
 do not claim a verified already-landed result.
 
