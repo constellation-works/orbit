@@ -2,10 +2,11 @@
 //!
 //! Every visible dashboard tab polls the same endpoints. Keying by the live
 //! runtime plus a request key collapses overlapping polls into one compute,
-//! and a runtime rebuild naturally starts a fresh cache namespace. Three memos
-//! use it: `/api/audit/summary` (keyed by the raw `since` window, so relative
-//! cutoffs such as `24h` still hit), audited plugin panel reads, and
-//! `/api/diagnostics/errors` (keyed by its row limit).
+//! and a runtime rebuild naturally starts a fresh cache namespace. Dashboard
+//! memos use it: `/api/audit/summary` (keyed by the raw `since` window, so relative
+//! cutoffs such as `24h` still hit), audited plugin panel reads,
+//! `/api/diagnostics/errors` (keyed by its row limit), and
+//! `/api/diagnostics/friction` (keyed by month and row limit).
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -23,6 +24,10 @@ pub(crate) const AUDIT_SUMMARY_TTL: Duration = Duration::from_secs(15);
 /// every 30s and each miss scans up to 50k audit rows plus stderr blobs, so
 /// this only needs to collapse overlapping tabs, not hide new errors long.
 pub(crate) const DIAGNOSTICS_ERRORS_TTL: Duration = Duration::from_secs(15);
+
+/// Freshness bound for cached friction rows. Matches the diagnostics errors
+/// memo so overlapping Runs-tab polls share one bounded audit/blob scan.
+pub(crate) const DIAGNOSTICS_FRICTION_TTL: Duration = Duration::from_secs(15);
 
 /// In-process TTL cache and single-flight gate for one dashboard server.
 pub(crate) struct RuntimeMemo<K> {

@@ -50,6 +50,9 @@ pub(super) struct StateInner {
     /// Per-server memo for `/api/diagnostics/errors`, keyed by the bounded
     /// row limit. Collapses overlapping Errors-tab polls into one scan.
     diagnostics_errors: RuntimeMemo<usize>,
+    /// Per-server memo for `/api/diagnostics/friction`, keyed by month and
+    /// bounded row limit. Collapses overlapping Runs-tab polls into one scan.
+    diagnostics_friction: RuntimeMemo<(String, usize)>,
     /// `orbit web serve --operator` (and `orbit web connect` by default):
     /// stamp operator onto the dashboard session envelope regardless of TTY
     /// or `ORBIT_OPERATOR`.
@@ -378,6 +381,7 @@ impl DashboardState {
                 audit_summary: RuntimeMemo::new("audit summary aggregation"),
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
+                diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
@@ -442,6 +446,11 @@ impl DashboardState {
     /// Process-local `/api/diagnostics/errors` memo for this server instance.
     pub(crate) fn diagnostics_errors_memo(&self) -> &RuntimeMemo<usize> {
         &self.inner.diagnostics_errors
+    }
+
+    /// Process-local `/api/diagnostics/friction` memo for this server instance.
+    pub(crate) fn diagnostics_friction_memo(&self) -> &RuntimeMemo<(String, usize)> {
+        &self.inner.diagnostics_friction
     }
 
     /// Whether this server was started with `--operator`, granting operator

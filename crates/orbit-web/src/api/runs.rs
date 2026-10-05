@@ -34,7 +34,7 @@ pub(super) const RUN_EVENTS_MAX_SCAN_LINES: usize = 50_000;
 /// request input, regardless of how large a `limit` a caller requests.
 const RUN_EVENTS_PAGE_CAPACITY_HINT: usize = 64;
 /// Maximum bytes included in stdout/stderr previews returned by run-log APIs.
-const RUN_LOG_PREVIEW_MAX_BYTES: usize = 8192;
+pub(super) const RUN_LOG_PREVIEW_MAX_BYTES: usize = 8192;
 /// Maximum lines included in stdout/stderr previews returned by run-log APIs.
 const RUN_LOG_PREVIEW_MAX_LINES: usize = 120;
 
@@ -767,12 +767,14 @@ fn run_cli_invocation_to_json(record: RunCliInvocationRecord) -> Value {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Preview {
-    text: String,
-    truncated: bool,
+pub(super) struct Preview {
+    pub(super) text: String,
+    pub(super) truncated: bool,
 }
 
-fn bounded_preview(raw: &str) -> Preview {
+// Shared with audit-derived friction rows so dashboard stderr previews use
+// the same byte/line bounds and defensive redaction.
+pub(super) fn bounded_preview(raw: &str) -> Preview {
     let mut out = String::new();
     let mut truncated = false;
     for (index, line) in raw.lines().enumerate() {
