@@ -110,7 +110,11 @@ Each binary is compiled with a **compatibility identity**, which `orbit update
 The authority records the envelope of every identity admitted since it last had no
 participant in `.generation-compat.json`, and each live process registers a
 record — pid, role, access, digest, identity and start time — under
-`.generation-participants/`. A newcomer is admitted beside the live processes when:
+`.generation-participants/`. The next joiner replaces that envelope when it can
+take `.generation.lock` exclusively, which happens only after every previous
+holder has exited. An exited process does not stay in the envelope, and it does
+not make a process that is still running yield. A newcomer is admitted beside
+the live processes when:
 
 - every live reader can read what the newcomer migrates to, and it can read theirs;
 - the oldest live writer keeps writing correctly through the newcomer's migrations;
