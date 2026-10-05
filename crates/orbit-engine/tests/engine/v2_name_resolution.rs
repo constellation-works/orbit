@@ -281,6 +281,104 @@ fn validate_job_rejects_duplicate_step_ids_across_nested_bodies() {
     }
 }
 
+/// Quorums must require a success and remain achievable for a static parallel
+/// branch list; fan-out cardinality is resolved from items only at runtime.
+#[test]
+fn validate_job_checks_quorum_bounds() {
+    let parallel = |n, branch_count| {
+        validation_step(
+            "quorum_parallel",
+            None,
+            JobV2StepBody::Parallel {
+                parallel: ParallelBlock {
+                    join: JoinMode::Quorum { n },
+                    branches: (0..branch_count)
+                        .map(|index| validation_target(&format!("branch_{index}"), None))
+                        .collect(),
+                },
+            },
+        )
+    };
+    let fan = |n| {
+        let mut step = validation_fan("quorum_fan", None, "results");
+        if let JobV2StepBody::FanOut { fan_in, .. } = &mut step.body {
+            fan_in.join = JoinMode::Quorum { n };
+        }
+        step
+    };
+    let mut nested_worker = validation_fan("outer_fan", None, "outer_results");
+    if let JobV2StepBody::FanOut { fan_out, .. } = &mut nested_worker.body {
+        fan_out.worker = Box::new(parallel(0, 2));
+    }
+
+    for (case, step, valid, diagnostic_step) in [
+        ("parallel zero", parallel(0, 2), false, "quorum_parallel"),
+        ("parallel minimum", parallel(1, 2), true, "quorum_parallel"),
+        ("parallel maximum", parallel(2, 2), true, "quorum_parallel"),
+        (
+            "parallel above count",
+            parallel(3, 2),
+            false,
+            "quorum_parallel",
+        ),
+        (
+            "parallel extreme",
+            parallel(u32::MAX, 2),
+            false,
+            "quorum_parallel",
+        ),
+        (
+            "empty parallel zero",
+            parallel(0, 0),
+            false,
+            "quorum_parallel",
+        ),
+        (
+            "empty parallel positive",
+            parallel(1, 0),
+            false,
+            "quorum_parallel",
+        ),
+        ("fan-out zero", fan(0), false, "quorum_fan"),
+        ("fan-out minimum", fan(1), true, "quorum_fan"),
+        ("fan-out above max_workers", fan(3), true, "quorum_fan"),
+        ("fan-out runtime count", fan(u32::MAX), true, "quorum_fan"),
+        (
+            "quorum in parallel branch",
+            validation_parallel("outer_parallel", None, vec![fan(0)]),
+            false,
+            "quorum_fan",
+        ),
+        (
+            "quorum in loop body",
+            validation_loop("outer_loop", None, vec![parallel(3, 2)], None),
+            false,
+            "quorum_parallel",
+        ),
+        (
+            "quorum in fan-out worker",
+            nested_worker,
+            false,
+            "quorum_parallel",
+        ),
+    ] {
+        let mut job = synthetic_job_using_ref("noop");
+        job.steps = vec![step];
+        if valid {
+            validate_job(&job).unwrap_or_else(|error| panic!("{case}: {error}"));
+        } else {
+            let error = validate_job(&job).expect_err(case);
+            let DispatchError::JobValidation(message) = error else {
+                panic!("{case}: expected JobValidation, got {error:?}");
+            };
+            assert!(
+                message.contains(&format!("`{diagnostic_step}`")),
+                "{case}: invalid quorum diagnostic must name the owning step: {message}"
+            );
+        }
+    }
+}
+
 fn validation_step(id: &str, when: Option<&str>, body: JobV2StepBody) -> JobV2Step {
     JobV2Step {
         id: id.to_string(),
