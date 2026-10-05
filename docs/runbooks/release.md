@@ -41,7 +41,10 @@ The installers carry a small release-signing trust set:
 
 Key IDs are generation labels, not dates. During verification the installers
 try each known public key, then reject a matching key when its `not_after`
-date has passed or its `revoked_at` field is set.
+date has passed or its `revoked_at` field is set. The shell and npm installers
+validate every record's non-empty `not_after` and `revoked_at` as exactly
+`YYYY-MM-DD` before accepting any signature. A malformed date aborts installation;
+an empty date remains optional.
 
 > **Operator custody requirement.** Keep the successor private key in custody
 > independent from the primary. Storing both private halves together defeats
