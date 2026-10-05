@@ -32,6 +32,11 @@ impl OrbitRuntime {
     /// request; the owner landing job is dispatched from that request here, so
     /// no drain or ship sweep has to be running for authorized work to land.
     /// A review-only handoff records no request and dispatches nothing.
+    ///
+    /// An accepted before-PR handoff's certificate is recorded in this
+    /// owner's review store, so after-landing coverage excludes the reviewed
+    /// tree as it does for the owner's own gate [ORB-13895]. A replayed
+    /// acceptance records it again, which is a no-op.
     pub fn accept_task_handoff(
         &self,
         context: &ClaimInvocation,
@@ -39,14 +44,29 @@ impl OrbitRuntime {
         handoff: TaskHandoff,
         observation: HandoffObservation,
     ) -> Result<ClaimMutationResult, OrbitError> {
+        let claim_id = handoff.claim_id.clone();
         let context = context.clone().with_handoff_observation(observation);
         let result = self.mutate_execution_claim(
             Some(&context),
             request_id,
             &ClaimMutation::AcceptHandoff(handoff),
         )?;
+        self.record_handoff_review_certificate(&claim_id)?;
         dispatch_recorded_authority(self);
         Ok(result)
+    }
+
+    /// Record the certificate an accepted before-PR handoff pinned, read
+    /// back through the claim journal's digest check.
+    fn record_handoff_review_certificate(&self, claim_id: &str) -> Result<(), OrbitError> {
+        let Some(certificate) = self
+            .admission_boundary()?
+            .accepted_review_certificate(claim_id)?
+        else {
+            return Ok(());
+        };
+        self.review_store()?
+            .review_certificate_record(&self.workspace_id()?, &certificate)
     }
 
     /// Explicit review-state approval. Does not reuse the backlog grant validator.
@@ -258,6 +278,9 @@ impl OrbitRuntime {
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
             owner_completion_authority: self.owner_completion_authority(),
+            // Acceptance observed the review's base and repository; the store
+            // rechecks the review evidence the handoff pinned without them.
+            review: None,
         };
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),

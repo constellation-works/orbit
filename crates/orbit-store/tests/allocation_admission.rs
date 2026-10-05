@@ -32,8 +32,9 @@ use orbit_store::compose::{
 };
 use orbit_store::contracts::{
     ActiveTaskReservation, AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest,
-    AdmissionRunContext, AdmissionShipContract, ClaimEvidence, ClaimInvocation, ClaimMutation,
-    ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionLocation, HandoffObservation,
+    AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ClaimEvidence,
+    ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim,
+    ExecutionLocation, HandoffObservation, HandoffReviewObservation, HandoffReviewRefusal,
     JobRunStoreBackend, PullDestination, TaskCreateParams,
 };
 use orbit_store::maintenance::task_registry::{
@@ -48,9 +49,14 @@ use orbit_types::task::{
 };
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
-    HandoffValidationLog, LandingStartRequest, LandingStartState, TaskHandoff,
+    HandoffReviewEvidence, HandoffValidationLog, LandingStartRequest, LandingStartState,
+    TaskHandoff,
 };
-use orbit_types::workflow::{JobRunState, PipelineState, ReviewTiming, automation::SourceRevision};
+use orbit_types::workflow::{
+    CommitIdentity, JobRunState, PipelineState, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
+    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewTiming, ReviewVerdict,
+    ReviewerIdentity, automation::SourceRevision,
+};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -352,6 +358,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
         caller_version: "1".into(),
         caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
         caller_before_pr: false,
+        review_gate: false,
         run_context: AdmissionRunContext {
             run_id: run_id.into(),
             job_name: "workspace_auto_pipeline".into(),
@@ -364,6 +371,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
             before_pr: false,
             completion: "review".into(),
             authorization_reference: None,
+            review: None,
         },
         crews: None,
         os: None,
@@ -654,24 +662,23 @@ impl Coordinated {
         self.backends.commit_boundary.execution_claims().unwrap()
     }
 
-    fn pull(&self, request: &AdmissionRequest) -> AdmissionReceipt {
+    fn try_pull(&self, request: &AdmissionRequest) -> Result<AdmissionLookup, OrbitError> {
         let location = ExecutionLocation {
             machine_id: "machine-a".into(),
             machine_name: Some("display".into()),
         };
-        let lookup = self
-            .backends
-            .commit_boundary
-            .admit_task(
-                &AdmissionIdentity::trusted_remote(location),
-                request,
-                "test",
-                self.orbit_dir.parent().unwrap(),
-                &self.orbit_dir,
-                &BTreeMap::new(),
-            )
-            .expect("pull");
-        match lookup {
+        self.backends.commit_boundary.admit_task(
+            &AdmissionIdentity::trusted_remote(location),
+            request,
+            "test",
+            self.orbit_dir.parent().unwrap(),
+            &self.orbit_dir,
+            &BTreeMap::new(),
+        )
+    }
+
+    fn pull(&self, request: &AdmissionRequest) -> AdmissionReceipt {
+        match self.try_pull(request).expect("pull") {
             AdmissionLookup::Found { receipt, .. } => *receipt,
             other => panic!("expected a receipt: {other:?}"),
         }
@@ -688,6 +695,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
         caller_version: "test".into(),
         caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
         caller_before_pr: false,
+        review_gate: false,
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "auto".into(),
@@ -700,6 +708,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
             before_pr: false,
             completion: "review".into(),
             authorization_reference: None,
+            review: None,
         },
         crews: None,
         os: None,
@@ -772,6 +781,11 @@ fn distinct_concurrent_requests_never_claim_overlapping_tasks() {
 }
 
 const OWNER_POLICY: &str = "workspace-config:workflow.distributed_completion";
+const REPOSITORY: &str = "owner/repository";
+const REVIEW_CREW: &str = "reviewer";
+
+/// One way a handoff's review evidence is spoiled before acceptance.
+type Tamper = fn(&mut Delivery);
 
 /// An admitted and bound claim with its owner-held validation logs and the
 /// handoff a worker would submit for it.
@@ -801,6 +815,7 @@ impl Delivery {
         owner.create_task_in("typed handoff", selectors);
         let mut request = owner_request("first");
         request.ship = ship.clone();
+        request.review_gate = ship.before_pr;
         let claim = owner.pull(&request).claim.expect("claim");
         let unbound = ClaimInvocation::trusted_worker(
             claim.task_id.clone(),
@@ -836,6 +851,15 @@ impl Delivery {
             candidate: self.handoff.candidate.clone(),
             required_commands: self.required.clone(),
             owner_completion_authority: policy.map(str::to_string),
+            review: self
+                .handoff
+                .review
+                .before_pr()
+                .map(|evidence| HandoffReviewObservation {
+                    reviewed_base_sha: evidence.reviewed_base_sha.clone(),
+                    reviewed_base_is_ancestor: true,
+                    repository: REPOSITORY.into(),
+                }),
         }
     }
 
@@ -857,15 +881,69 @@ impl Delivery {
     }
 
     fn accept(&self, policy: Option<&str>) -> Result<ClaimMutationResult, OrbitError> {
+        self.accept_observed(self.observation(policy))
+    }
+
+    fn accept_observed(
+        &self,
+        observation: HandoffObservation,
+    ) -> Result<ClaimMutationResult, OrbitError> {
         self.owner.backends.commit_boundary.mutate_execution_claim(
-            Some(
-                &self
-                    .worker()
-                    .with_handoff_observation(self.observation(policy)),
-            ),
+            Some(&self.worker().with_handoff_observation(observation)),
             "handoff",
             &ClaimMutation::AcceptHandoff(self.handoff.clone()),
         )
+    }
+
+    /// Persist `certificate` on the owner as the leaf's claim evidence and
+    /// make the handoff carry it as its before-PR review.
+    fn reviewed(&mut self, certificate: &ReviewCertificate) {
+        let content = serde_json::to_vec(certificate).unwrap();
+        let reference = HandoffArtifactRef {
+            path: REVIEW_GATE_ARTIFACT.into(),
+            sha256: format!("{:x}", Sha256::digest(&content)),
+        };
+        self.owner
+            .backends
+            .commit_boundary
+            .mutate_execution_claim(
+                Some(&self.worker()),
+                &format!("review-certificate-{}", certificate.verdict.as_str()),
+                &ClaimMutation::Evidence(ClaimEvidence {
+                    artifacts: vec![TaskArtifact {
+                        path: reference.path.clone(),
+                        content,
+                        media_type: "application/json".into(),
+                        created_by: None,
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .expect("persist the certificate on the owner");
+        self.handoff.review = HandoffReview {
+            policy: ReviewTiming::BeforePr,
+            disposition: HandoffReviewDisposition::BeforePr(Box::new(HandoffReviewEvidence {
+                attempt_id: certificate.attempt_id.clone(),
+                verdict: certificate.verdict,
+                reviewed_head_sha: self.handoff.candidate.candidate.commit.clone(),
+                reviewed_base_sha: certificate.base.commit.clone(),
+                reviewer_commit: certificate
+                    .repair_commits
+                    .last()
+                    .map(|repair| repair.commit.clone()),
+                reviewer_crew: certificate.reviewer.crew.clone(),
+                reviewer_run_id: "leaf".into(),
+                certificate: reference,
+                artifacts: vec![],
+            })),
+        };
+    }
+
+    fn review_evidence(&mut self) -> &mut HandoffReviewEvidence {
+        match &mut self.handoff.review.disposition {
+            HandoffReviewDisposition::BeforePr(evidence) => evidence,
+            HandoffReviewDisposition::NotRequired => panic!("the handoff carries no review"),
+        }
     }
 
     fn approve(&self) -> Result<ClaimMutationResult, OrbitError> {
@@ -934,7 +1012,7 @@ fn handoff_with_logs(
         machine_id: claim.executed_on.machine_id.clone(),
         run_id: "leaf".into(),
         candidate: HandoffCandidate {
-            repository: "owner/repository".into(),
+            repository: REPOSITORY.into(),
             source_branch: "attempt/leaf".into(),
             base_branch: "agent-main".into(),
             landing_branch: "agent-main".into(),
@@ -948,10 +1026,7 @@ fn handoff_with_logs(
             },
             delivery: HandoffDelivery::PullRequest { number: 42 },
         },
-        review: HandoffReview {
-            policy: ReviewTiming::None,
-            disposition: HandoffReviewDisposition::NotRequired,
-        },
+        review: HandoffReview::not_required(),
         execution_summary: "Outcome: success\nRequired checks passed for pinned candidate".into(),
         validation: vec![],
         footprint_widening: vec![],
@@ -1367,4 +1442,222 @@ fn handoff_widening_accepts_locked_paths_and_refuses_observation_mismatch() {
             TaskStatus::Review
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Before-PR review contract and evidence [ORB-13895]
+// ---------------------------------------------------------------------------
+
+fn before_pr_ship() -> AdmissionShipContract {
+    let mut ship = owner_request("first").ship;
+    ship.before_pr = true;
+    ship.review = Some(AdmissionReviewContract {
+        contract_version: REVIEW_CONTRACT_VERSION,
+        crew: Some(REVIEW_CREW.into()),
+        budget: ReviewBudget { minutes: 45 },
+    });
+    ship
+}
+
+/// The certificate a leaf's gate would issue for `handoff`: the reviewer
+/// examined an implementation and fixed its findings in the candidate's
+/// last commit.
+fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertificate {
+    let commit = |revision: &SourceRevision, subject: &str| CommitIdentity {
+        commit: revision.commit.clone(),
+        tree: revision.tree.clone(),
+        author: "implementer".into(),
+        committer: "implementer".into(),
+        subject: subject.into(),
+    };
+    let reviewed = SourceRevision {
+        commit: "e".repeat(40),
+        tree: "f".repeat(40),
+    };
+    ReviewCertificate {
+        schema_version: REVIEW_CONTRACT_VERSION,
+        attempt_id: "attempt-1".into(),
+        lineage_key: "lineage".into(),
+        task_ids: vec![handoff.task_id.clone()],
+        task_meaning_digest: "meaning".into(),
+        repository: REPOSITORY.into(),
+        base: handoff.candidate.base.clone(),
+        implementation_commits: vec![commit(&reviewed, "implement")],
+        reviewed_candidate: reviewed,
+        final_candidate: handoff.candidate.candidate.clone(),
+        repair_commits: vec![commit(&handoff.candidate.candidate, "reviewer fixes")],
+        verdict,
+        assurance: verdict.assurance(),
+        findings: vec![],
+        validation: vec![],
+        validation_complete: verdict.passed(),
+        reviewer: ReviewerIdentity {
+            crew: REVIEW_CREW.into(),
+            provider: "provider".into(),
+            model: "model".into(),
+            reasoning_effort: None,
+            implementer_model: None,
+            same_model_as_implementer: false,
+        },
+        consumed: ReviewConsumption::default(),
+        budget: ReviewBudget { minutes: 45 },
+        escalation: None,
+        selectors_widened: vec![],
+        issued_at: Utc::now(),
+    }
+}
+
+/// An owner with `review.before_pr` on pins its review contract (crew,
+/// budget, contract version) into the claim it admits, but only to a leaf
+/// that declares it runs the gate; no executor does yet, so every pull
+/// without that declaration is still refused. A before-PR contract without
+/// its review terms is malformed.
+#[test]
+fn a_before_pr_owner_captures_its_review_contract_on_the_claim() {
+    if !isolated("a_before_pr_owner_captures_its_review_contract_on_the_claim") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    owner.create_task("reviewed work");
+
+    let mut request = owner_request("ungated");
+    request.ship = before_pr_ship();
+    let refused = owner
+        .try_pull(&request)
+        .expect_err("a leaf that runs no gate is refused");
+    assert!(
+        refused.to_string().contains("before_pr_unsupported"),
+        "{refused}"
+    );
+
+    let mut termless = owner_request("termless");
+    termless.ship = before_pr_ship();
+    termless.ship.review = None;
+    termless.review_gate = true;
+    let malformed = owner.try_pull(&termless).expect_err("malformed contract");
+    assert!(
+        malformed.to_string().contains("invalid_input"),
+        "{malformed}"
+    );
+    assert!(owner.claims().is_empty(), "nothing was admitted");
+
+    let mut gated = owner_request("gated");
+    gated.ship = before_pr_ship();
+    gated.review_gate = true;
+    let receipt = owner.pull(&gated);
+    assert!(receipt.claim.is_some(), "a gate-running leaf is admitted");
+    assert_eq!(receipt.request.ship.review, before_pr_ship().review);
+    assert_eq!(owner.claims().len(), 1);
+}
+
+/// A before-PR claim's handoff is accepted only with passing evidence for
+/// the handed-off head on a base the owner holds, reviewed by the captured
+/// crew under the captured contract, and bound by the certificate the owner
+/// holds; every other disposition is refused with a typed reason and leaves
+/// the task in progress. A claim without the contract refuses evidence it
+/// never asked for.
+#[test]
+fn before_pr_handoffs_are_accepted_only_with_matching_passing_evidence() {
+    if !isolated("before_pr_handoffs_are_accepted_only_with_matching_passing_evidence") {
+        return;
+    }
+    let reviewed = |verdict: ReviewVerdict| {
+        let mut delivery = Delivery::admit(before_pr_ship());
+        let certificate = certificate(&delivery.handoff, verdict);
+        delivery.reviewed(&certificate);
+        (delivery, certificate)
+    };
+
+    let (delivery, issued) = reviewed(ReviewVerdict::AcceptWithFixes);
+    delivery.accept(None).expect("passing evidence is accepted");
+    assert_eq!(
+        delivery.owner.task_status(&delivery.claim.task_id),
+        TaskStatus::Review
+    );
+    assert_eq!(
+        delivery
+            .owner
+            .backends
+            .commit_boundary
+            .accepted_review_certificate(&delivery.claim.claim_id)
+            .unwrap(),
+        Some(issued),
+        "the owner reads back the certificate the handoff pinned"
+    );
+    delivery
+        .approve()
+        .expect("approval rechecks the pinned review evidence");
+
+    let refusals: [(&str, HandoffReviewRefusal, Tamper); 6] = [
+        (
+            "no evidence",
+            HandoffReviewRefusal::ReviewEvidenceMissing,
+            |d| d.handoff.review = HandoffReview::not_required(),
+        ),
+        ("rejected", HandoffReviewRefusal::ReviewNotPassed, |d| {
+            let rejected = certificate(&d.handoff, ReviewVerdict::Reject);
+            d.reviewed(&rejected);
+        }),
+        (
+            "another head",
+            HandoffReviewRefusal::ReviewedHeadMismatch,
+            |d| d.review_evidence().reviewed_head_sha = "9".repeat(40),
+        ),
+        (
+            "another crew",
+            HandoffReviewRefusal::ReviewContractMismatch,
+            |d| d.review_evidence().reviewer_crew = "other".into(),
+        ),
+        (
+            "another attempt",
+            HandoffReviewRefusal::ReviewCertificateMismatch,
+            |d| d.review_evidence().attempt_id = "attempt-2".into(),
+        ),
+        (
+            "another certificate digest",
+            HandoffReviewRefusal::ReviewCertificateMismatch,
+            |d| d.review_evidence().certificate.sha256 = "0".repeat(64),
+        ),
+    ];
+    for (case, refusal, change) in refusals {
+        let (mut delivery, _) = reviewed(ReviewVerdict::Accept);
+        change(&mut delivery);
+        let error = delivery.accept(None).expect_err(case).to_string();
+        assert!(error.contains(refusal.as_str()), "{case}: {error}");
+        assert_eq!(
+            delivery.owner.task_status(&delivery.claim.task_id),
+            TaskStatus::InProgress,
+            "{case}"
+        );
+    }
+
+    // The owner's own observation decides ancestry and repository identity.
+    let (delivery, _) = reviewed(ReviewVerdict::Accept);
+    let mut unrelated = delivery.observation(None);
+    unrelated.review.as_mut().unwrap().reviewed_base_is_ancestor = false;
+    let error = delivery.accept_observed(unrelated).unwrap_err().to_string();
+    assert!(
+        error.contains(HandoffReviewRefusal::ReviewedBaseNotAncestor.as_str()),
+        "{error}"
+    );
+    let mut elsewhere = delivery.observation(None);
+    elsewhere.review.as_mut().unwrap().repository = "fork/repository".into();
+    let error = delivery.accept_observed(elsewhere).unwrap_err().to_string();
+    assert!(
+        error.contains(HandoffReviewRefusal::ReviewCertificateMismatch.as_str()),
+        "{error}"
+    );
+    let mut unobserved = delivery.observation(None);
+    unobserved.review = None;
+    assert!(delivery.accept_observed(unobserved).is_err());
+
+    let mut unasked = Delivery::admit(owner_request("first").ship);
+    let certificate = certificate(&unasked.handoff, ReviewVerdict::Accept);
+    unasked.reviewed(&certificate);
+    let error = unasked.accept(None).unwrap_err().to_string();
+    assert!(
+        error.contains(HandoffReviewRefusal::ReviewEvidenceUnexpected.as_str()),
+        "{error}"
+    );
 }

@@ -565,6 +565,7 @@ pub fn admission_refusal(
                 .authorization_reference
                 .as_deref()
                 .is_none_or(|r| r.trim().is_empty()))
+        || !request.ship.review_contract_consistent()
     {
         return Some(AdmissionRefusal::InvalidInput);
     }
@@ -579,10 +580,12 @@ pub fn admission_refusal(
     {
         return Some(AdmissionRefusal::ShipModeUnsupported);
     }
-    // Distributed before-PR review is not built yet: either endpoint that
-    // captured `review.before_pr` is refused by name rather than delivered
-    // unreviewed. After-landing review is owner-side and never refuses.
-    if request.caller_before_pr || request.ship.before_pr {
+    // An owner that captured `review.before_pr` admits only a leaf that runs
+    // the gate its ship contract carries, so nothing is delivered unreviewed;
+    // no executor declares one yet [ORB-13908]. An executor's own captured
+    // switch is refused by name. After-landing review is owner-side and
+    // never refuses.
+    if request.caller_before_pr || (request.ship.before_pr && !request.review_gate) {
         return Some(AdmissionRefusal::BeforePrUnsupported);
     }
     None

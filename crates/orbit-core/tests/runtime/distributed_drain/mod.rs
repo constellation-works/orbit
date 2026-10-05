@@ -52,6 +52,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod admission;
+mod before_pr;
 mod cancel;
 mod landing_attribution;
 mod recovery;
@@ -179,6 +180,7 @@ impl Wire {
             candidate: handoff.candidate.clone(),
             required_commands: vec![],
             owner_completion_authority: None,
+            review: None,
         };
         let context = ClaimInvocation::trusted_worker(
             handoff.task_id.clone(),

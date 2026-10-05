@@ -16,7 +16,7 @@ use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };
 use super::git::{
-    base_sync_mode_from_input, git_output, git_output_raw, git_success,
+    base_sync_mode_from_input, git_command_success, git_output, git_output_raw, git_success,
     resolve_worktree_start_point,
 };
 
@@ -269,6 +269,25 @@ pub struct LandedFacts {
     pub is_candidate_commit: bool,
     pub parents: usize,
     pub span_commits: usize,
+}
+
+/// Whether `ancestor` is `descendant` or in its history. An object the
+/// checkout does not hold is not contained.
+pub fn contains_commit(
+    workspace_path: &Path,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<bool, OrbitError> {
+    git_command_success(
+        workspace_path,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            ancestor,
+            descendant,
+        ],
+    )
 }
 
 /// Fetch the landed commit from `origin` so it can be read locally. A

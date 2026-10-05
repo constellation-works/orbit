@@ -108,6 +108,7 @@ fn admission(
         caller_version: "fixture".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
         caller_before_pr: false,
+        review_gate: false,
         run_context: AdmissionRunContext {
             run_id: drain.run_id.clone(),
             job_name: drain.job_id.clone(),
@@ -120,6 +121,7 @@ fn admission(
             before_pr: false,
             completion: "review".into(),
             authorization_reference: None,
+            review: None,
         },
         crews: None,
         os: None,

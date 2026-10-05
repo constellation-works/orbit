@@ -42,7 +42,8 @@ use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment,
     TaskPriority, TaskStatus, TaskType,
 };
-use orbit_types::workflow::handoff::{HandoffDelivery, TaskHandoff};
+use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
+use orbit_types::workflow::{ReviewTiming, ReviewVerdict};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -750,6 +751,64 @@ fn claimed_validation_without_commands_is_a_recorded_no_op() {
                 !handoffs[0].execution_summary.contains("validation passed"),
                 "a handoff that ran no check must not report one passing: {}",
                 handoffs[0].execution_summary
+            );
+        },
+    );
+}
+
+/// A leaf that ran the before-PR gate hands its review off as typed evidence
+/// for the exact candidate, and a leaf without it reports `not_required`
+/// rather than inventing a review. Evidence for another head is refused
+/// before anything is recorded [ORB-13895].
+#[test]
+fn claimed_handoff_carries_before_pr_evidence_only_for_its_candidate() {
+    isolated(
+        "claimed_handoff_carries_before_pr_evidence_only_for_its_candidate",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            let validated = action(&host, "claim_validate", &input).expect("validate");
+            input["candidate"] = validated["candidate"].clone();
+            input["validation"] = validated["validation"].clone();
+            let evidence = |head: &str| {
+                json!({
+                    "attempt_id": "attempt-1",
+                    "verdict": "accept_with_fixes",
+                    "reviewed_head_sha": head,
+                    "reviewed_base_sha": fx.base_sha,
+                    "reviewer_commit": head,
+                    "reviewer_crew": "reviewer",
+                    "reviewer_run_id": "leaf-run",
+                    "certificate": {"path": "review-gate.json", "sha256": "0".repeat(64)},
+                })
+            };
+
+            let mut moved = input.clone();
+            moved["review_evidence"] = evidence(&fx.base_sha);
+            let refused = action(&host, "claim_handoff", &moved)
+                .expect_err("review evidence for another head is refused");
+            assert!(matches!(refused, OrbitError::PolicyDenied(_)), "{refused}");
+            assert!(host.handoffs.lock().unwrap().is_empty());
+
+            let mut reviewed = input.clone();
+            reviewed["review_evidence"] = evidence(&fx.candidate);
+            action(&host, "claim_handoff", &reviewed).expect("reviewed handoff");
+            action(&host, "claim_handoff", &input).expect("unreviewed handoff");
+
+            let handoffs = host.handoffs.lock().unwrap();
+            assert_eq!(handoffs[0].review.policy, ReviewTiming::BeforePr);
+            let carried = handoffs[0].review.before_pr().expect("before-PR evidence");
+            assert_eq!(carried.reviewed_head_sha, fx.candidate);
+            assert_eq!(carried.verdict, ReviewVerdict::AcceptWithFixes);
+            assert_eq!(handoffs[1].review.policy, ReviewTiming::None);
+            assert_eq!(
+                handoffs[1].review.disposition,
+                HandoffReviewDisposition::NotRequired
             );
         },
     );

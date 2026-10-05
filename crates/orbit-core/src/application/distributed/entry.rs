@@ -320,6 +320,7 @@ impl crate::OrbitRuntime {
             caller_version: owner_binary_version().to_string(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             caller_before_pr: ship.before_pr,
+            review_gate: false,
             run_context: AdmissionRunContext {
                 run_id: "entry-point".to_string(),
                 job_name: "entry-point".to_string(),

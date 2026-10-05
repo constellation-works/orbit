@@ -51,7 +51,7 @@ orbit config get review.before_pr
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `5`, equivalent crew and toolchain resolution, and
+protocol schema `6`, equivalent crew and toolchain resolution, and
 `review.before_pr = false`. Hosts may run different operating systems:
 each follower declares its OS, and a task tagged `os:linux`, `os:macos` or
 `os:windows` is claimed only by a host of a named OS; it waits in the backlog,
@@ -195,7 +195,7 @@ destination refuses them. They need an identified caller (`agent` or
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 5,
+  "caller_schema": 6,
   "caller_before_pr": false
 }'
 ```
