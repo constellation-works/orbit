@@ -17,6 +17,7 @@ use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
 use super::*;
 
+mod git;
 mod import;
 mod inspect;
 mod publish;

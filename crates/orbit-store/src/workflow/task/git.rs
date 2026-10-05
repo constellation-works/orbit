@@ -20,7 +20,7 @@ use std::time::Duration;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::create_private_dir_all;
 use orbit_common::process::run_bounded;
-use orbit_types::workspace::git_remotes_equivalent;
+use orbit_types::workspace::{git_remotes_equivalent, redact_git_remote};
 
 /// Highest-precedence attributes for an Orbit-owned cache. Unsets every
 /// conversion Git would otherwise apply from a published `.gitattributes`,
@@ -200,11 +200,11 @@ fn isolate_git_dir(git_dir: &Path) -> Result<(), OrbitError> {
     Ok(())
 }
 
-/// Absolute paths are local filesystem detail; keep them out of error text.
+/// Keep local filesystem details and remote credentials out of error text.
 fn redact_args(args: &[&str]) -> String {
     args.iter()
         .filter(|arg| !Path::new(arg).is_absolute())
-        .cloned()
+        .map(|arg| redact_git_remote(arg))
         .collect::<Vec<_>>()
         .join(" ")
 }
