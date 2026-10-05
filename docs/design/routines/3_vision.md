@@ -1,8 +1,8 @@
 ---
 title: Routines — Vision
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: routines
 doc_role: vision
@@ -36,10 +36,12 @@ and validation evidence, not by drifting in.
    additive answer is an `owner:` field on the definition, not a lease protocol; it is
    deliberately not designed now.
 2. **State-driven triggers.** The [shared trigger proposal](../automation-triggers/2_design.md)
-   from [ORB-11315] defines bounded reconciliation of deliveries, preparation eligibility
-   and settled failures over the existing sweep clock. This does not require a resident
-   process. Immediate file-watch/webhook wakeups remain optional future optimizations;
-   the proposal is unimplemented and does not change the current cron-only contract.
+   from [ORB-11315] has shipped in part: delivery-trigger routines and auto-tasks,
+   plus `preparation_eligible` state routines, evaluate on the existing sweep clock
+   with durable batches and checkpoints. Broader multi-member coordination,
+   policy-driven waiver/migration workflows, and usage accounting remain proposals.
+   Immediate file-watch/webhook wakeups remain optional future optimizations; see
+   [2_design.md](./2_design.md) for the current cron, interval, delivery and state-trigger contract.
 3. **Routine-emitted tasks.** A routine whose job files an Orbit task on findings (nightly
    drift check → task per drift) works today via job semantics; what's open is whether
    routines should get first-class dedup support ("don't file a duplicate of an open task
