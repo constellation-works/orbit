@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState,
-    members::{MemberAttempt, MemberBatchEvidence, MemberState},
+    members::{MEMBER_CAPACITY, MemberAttempt, MemberBatchEvidence, MemberState},
 };
 use std::collections::BTreeSet;
 
@@ -26,25 +26,36 @@ pub(super) fn validate(
         || previous.pending != next.pending
         || previous.pending_commits != next.pending_commits
         || previous.waived != next.waived
-        || new.pending.len() + new.assessed.len() + new.withheld.len() > 1000
-        || new.failed.len() > 1000
+        || new.retained() > MEMBER_CAPACITY
+        || new.failed.len() > MEMBER_CAPACITY
     {
         return Err(invalid());
     }
 
-    // A failed record is permanent, except the ones the active attempt just
-    // exhausted itself into for members it carried.
+    // A failed record never changes, except into the one the active attempt
+    // just exhausted itself into for a member it carried. It may leave once it
+    // suppresses nothing: its member is neither in flight nor pending at the
+    // fingerprint it failed at.
     for (key, failed) in &old.failed {
-        if new.failed.get(key) != Some(failed)
-            && !old.active.as_ref().is_some_and(|active| {
-                active.member_for(key).is_some()
-                    && new.active.is_none()
-                    && new
-                        .failed
-                        .get(key)
-                        .is_some_and(|next| next.id == active.id && next.exhausted)
-            })
-        {
+        let exhausted_into = old.active.as_ref().is_some_and(|active| {
+            active.member_for(key).is_some()
+                && new.active.is_none()
+                && new
+                    .failed
+                    .get(key)
+                    .is_some_and(|next| next.id == active.id && next.exhausted)
+        });
+        let lifted = !new.failed.contains_key(key)
+            && new
+                .active
+                .as_ref()
+                .is_none_or(|active| active.member_for(key).is_none())
+            && !failed.member_for(key).is_some_and(|retired| {
+                new.pending
+                    .get(key)
+                    .is_some_and(|pending| pending.fingerprint == retired.fingerprint)
+            });
+        if new.failed.get(key) != Some(failed) && !exhausted_into && !lifted {
             return Err(invalid());
         }
     }
