@@ -309,6 +309,66 @@ impl Delivery {
         back_to_review(&self.owner, &self.task, None);
     }
 
+    /// Retain the observed protocol-7 shape for a stopped legacy handoff.
+    /// The accepted handoff is schema 1 with before-PR review disabled and
+    /// the captured validation commands; its admission has no review
+    /// snapshot. Rewriting only the isolated fixture's old caller schema
+    /// exercises the current public read path without re-admitting the claim.
+    fn retain_protocol7_handoff(&self, command: &str) {
+        let workspace_id = self.owner.workspace_id().unwrap();
+        let database = self.owner.global_root().join("orbit.db");
+        let connection = rusqlite::Connection::open(database).unwrap();
+        let accepted_raw: String = connection
+            .query_row(
+                "SELECT payload_json FROM task_coordination_rows WHERE workspace_id=?1 AND kind=?2 AND row_id=?3",
+                rusqlite::params![workspace_id, "distributed-handoff-v1", self.claim_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let accepted: Value = serde_json::from_str(&accepted_raw).unwrap();
+        assert_eq!(accepted["handoff"]["schema_version"], 1);
+        assert_eq!(accepted["handoff"]["review"]["policy"], "none");
+        assert_eq!(accepted["handoff"]["review"]["disposition"], "not_required");
+        assert_eq!(accepted["required_commands"], json!([command]));
+
+        let rows = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT row_id, payload_json FROM task_coordination_rows WHERE workspace_id=?1 AND kind=?2",
+                )
+                .unwrap();
+            statement
+                .query_map(
+                    rusqlite::params![workspace_id, "distributed-admission-receipt-v1"],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let (row_id, payload) = rows
+            .into_iter()
+            .find(|(_, payload)| {
+                serde_json::from_str::<Value>(payload)
+                    .is_ok_and(|stored| stored["receipt"]["claim"]["claim_id"] == self.claim_id)
+            })
+            .expect("the retained admission receipt for this claim");
+        let mut stored: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(stored["state"], "full");
+        assert_eq!(stored["receipt"]["request"]["caller_schema"], 8);
+        assert_eq!(stored["receipt"]["request"]["ship"]["before_pr"], false);
+        assert!(stored["receipt"]["request"]["ship"].get("review").is_none());
+        stored["receipt"]["request"]["caller_schema"] = json!(7);
+        stored["receipt"]["request"]["caller_before_pr"] = json!(false);
+        let payload = serde_json::to_string(&stored).unwrap();
+        connection
+            .execute(
+                "UPDATE task_coordination_rows SET payload_json=?1 WHERE workspace_id=?2 AND kind=?3 AND row_id=?4",
+                rusqlite::params![payload, workspace_id, "distributed-admission-receipt-v1", row_id],
+            )
+            .unwrap();
+    }
+
     /// The provider reports PR #42 merged at the delivery's head.
     fn merged(&self) {
         pull_request_is("MERGED", &self.head, &self.landing, Some(&self.merge));
@@ -720,8 +780,14 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     }
     let command = "test -f NOTICE";
     let delivery = Delivery::handed_off(&[command]);
+    delivery.retain_protocol7_handoff(command);
     delivery.recover();
     delivery.merged();
+    let inspected = delivery
+        .reconcile(json!({"action": "inspect"}))
+        .expect("the retained protocol-7 handoff is readable through public inspect");
+    assert_eq!(inspected["eligible"], true, "{inspected:#}");
+    assert_eq!(inspected["contract"]["accepted_commands"], json!([command]));
     delivery.reviewer_reports("accept", json!([]));
     let submitted = delivery.submit("baseline");
     let settled = delivery.run(&submitted);
@@ -874,6 +940,50 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
             .review_certificate(&owner.workspace_id().unwrap(), &reconciliation)
             .unwrap()
             .is_none()
+    );
+}
+
+/// A command that fails as code at the merged head but cannot be judged at
+/// the base is not an attributable head-only regression or a baseline
+/// disposition candidate.
+#[test]
+fn a_baseline_environment_failure_is_not_misreported_as_head_only() {
+    if !isolated(
+        module_path!(),
+        "a_baseline_environment_failure_is_not_misreported_as_head_only",
+    ) {
+        return;
+    }
+    let command =
+        "grep -q fixed_by_hand src/f0.rs && exit 1 || orbit-baseline-environment-probe-14175";
+    let delivery = Delivery::handed_off(&[command]);
+    delivery.recover();
+    delivery.merged();
+    delivery.reviewer_reports("accept", json!([]));
+    let submitted = delivery.submit("base-environment");
+    let settled = delivery.run(&submitted);
+
+    assert_eq!(settled["outcome"], "refused", "{settled:#}");
+    assert!(
+        settled["next_step"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("make the required check runnable at both revisions"),
+        "{settled:#}"
+    );
+    let command_result = &settled["record"]["validation"]["commands"][0];
+    assert_eq!(command_result["head"]["passed"], false);
+    assert_eq!(command_result["head"]["failure_kind"], "candidate");
+    assert_eq!(command_result["baseline"]["passed"], false);
+    assert_eq!(command_result["baseline"]["failure_kind"], "environment");
+    assert_eq!(settled["record"]["follow_up_task_id"], Value::Null);
+    assert!(settled["record"]["dispositions"].is_null());
+    assert!(
+        !delivery
+            .snapshot(McpCapability::Operator)
+            .actions
+            .complete
+            .enabled
     );
 }
 

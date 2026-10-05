@@ -458,7 +458,10 @@ fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decis
         .filter(|command| {
             !command.head.passed
                 && command.head.failure_kind.as_deref() == Some("candidate")
-                && !command.reproduced_on_base()
+                && command
+                    .baseline
+                    .as_ref()
+                    .is_some_and(|baseline| baseline.passed)
         })
         .collect();
     follow_up.extend(broken.iter().map(|command| {
@@ -496,6 +499,27 @@ fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decis
     let outcome = outcome.unwrap_or_else(|| {
         if validation.complete {
             return ReconciliationOutcome::Accepted;
+        }
+        if let Some(command) = validation.commands.iter().find(|command| {
+            !command.head.passed
+                && command.head.failure_kind.as_deref() == Some("candidate")
+                && command
+                    .baseline
+                    .as_ref()
+                    .is_none_or(|baseline| !baseline.passed && baseline.failure_kind.as_deref() != Some("candidate"))
+        }) {
+            let baseline_log = command
+                .baseline
+                .as_ref()
+                .map(|baseline| baseline.log.path.as_str())
+                .unwrap_or("unavailable");
+            return refused(
+                format!(
+                    "required validation `{}` fails at the merged head, but its base run did not establish whether the failure was already present (log {baseline_log})",
+                    command.command
+                ),
+                "make the required check runnable at both revisions and submit a new request key",
+            );
         }
         if let Some(command) = broken.first() {
             return refused(
