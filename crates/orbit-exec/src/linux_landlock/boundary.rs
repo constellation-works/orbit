@@ -21,13 +21,15 @@ use crate::runner::ExecRequest;
 /// This is the plugin backend's boundary. Unlike the activity path there is
 /// no policy profile to compile: the operator granted concrete paths at
 /// `orbit plugin enable`, and those are what the ruleset carries beside the
-/// host runtime grants every confined child needs.
+/// host runtime grants every confined child needs. The read restrictions bind
+/// both: a host grant never reopens a denied or excluded path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LandlockBoundary {
     /// Directories (read as trees) or files the child may read and execute.
     pub read: Vec<PathBuf>,
-    /// Directories beneath [`Self::read`] the child must *not* reach: the
-    /// grant is compiled so each of them keeps no granted ancestor, which
+    /// Directories beneath [`Self::read`] or a host runtime grant (a tool
+    /// state directory such as `$GH_CONFIG_DIR`) the child must *not* reach:
+    /// the grant is compiled so each of them keeps no granted ancestor, which
     /// refuses listing them as well as reading what is inside. An absent
     /// entry is carved out the same way, so it stays unreachable when it is
     /// created after spawn. A rule binds an
@@ -38,8 +40,8 @@ pub struct LandlockBoundary {
     /// file and nothing else beside it.
     pub read_denies: Vec<PathBuf>,
     /// Absolute glob rules, in the profile grammar, naming paths beneath
-    /// [`Self::read`] the child must not read: the read exclusions of the
-    /// agent run a brokered backend serves (design
+    /// [`Self::read`] or a host runtime grant the child must not read: the
+    /// read exclusions of the agent run a brokered backend serves (design
     /// `docs/design/plugins/2_agent_call_broker.md` §5). Carved out the way
     /// the activity ruleset carves an agent's own exclusions: the directory
     /// holding an excluded path stays listable, the path itself keeps no
@@ -84,20 +86,13 @@ const WRITABLE_DEVICES: &[&str] = &["/dev/null", "/dev/tty", "/dev/zero", "/dev/
 /// Compile the grant list for
 /// [`spawn_under_linux_landlock_boundary`](super::spawn_under_linux_landlock_boundary): the
 /// host runtime grants for the child's own environment, the program itself,
-/// then the boundary's roots.
+/// then the boundary's roots. The read denies and read exclusions are carved
+/// out of the host grants as well as the roots.
 pub fn linux_landlock_boundary_grants(
     req: &ExecRequest,
     boundary: &LandlockBoundary,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     let environment = child_environment(req);
-    let mut grants = host::host_read_grants(&environment);
-    grants.extend(host::program_grants(&req.program, &environment));
-    for device in WRITABLE_DEVICES {
-        let path = Path::new(device);
-        if path.exists() {
-            grants.push(LandlockPathGrant::write_file(path.to_path_buf()));
-        }
-    }
     // A denied tree that does not exist yet is still carved out: its
     // ancestors get no grant, so a directory created there after spawn — a
     // second plugin's first `state/plugins/<ns>` while a long-lived backend
@@ -113,6 +108,18 @@ pub fn linux_landlock_boundary_grants(
         &boundary.write,
         &boundary.write_files,
     )?;
+    // The host grants follow the child's environment, which can name a
+    // denied tree or one above it (`$GH_CONFIG_DIR`, `$ORBIT_ROOT`). Grants
+    // are a union, so they are carved here too or they would reopen it.
+    let mut grants =
+        workspace::carve_out_grants(host::host_read_grants(&environment), &denied, &excluded)?;
+    grants.extend(host::program_grants(&req.program, &environment));
+    for device in WRITABLE_DEVICES {
+        let path = Path::new(device);
+        if path.exists() {
+            grants.push(LandlockPathGrant::write_file(path.to_path_buf()));
+        }
+    }
     for root in &boundary.read {
         let Some(path) = existing_canonical(root) else {
             continue;

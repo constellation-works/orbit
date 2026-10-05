@@ -340,9 +340,18 @@ fn spawn_confined(
     req: &ExecRequest,
     inherited_fds: &[InheritedFd],
 ) -> Result<Child, OrbitError> {
+    // The macOS compiler keeps every default credential deny for a plugin.
+    // Landlock has no such base, so the boundary carries them, which also
+    // carves them out of the host tool state grants (`~/.config/gh`).
+    let mut read_denies = profile.read_denies.clone();
+    for credential in orbit_exec::default_credential_read_denies() {
+        if !read_denies.contains(&credential) {
+            read_denies.push(credential);
+        }
+    }
     let boundary = orbit_exec::LandlockBoundary {
         read: profile.read.clone(),
-        read_denies: profile.read_denies.clone(),
+        read_denies,
         read_exclusions: profile.caller_read_exclusions.clone(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),
