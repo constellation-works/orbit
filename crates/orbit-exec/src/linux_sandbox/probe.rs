@@ -237,7 +237,9 @@ fn wrapper_version(path: &str, identity: Option<(u32, u32)>) -> Option<String> {
 }
 
 fn probe_command(path: &str, identity: Option<(u32, u32)>) -> Command {
-    let mut command = Command::new(path);
+    let command = Command::new(path);
+    #[cfg(target_os = "linux")]
+    let mut command = command;
     #[cfg(target_os = "linux")]
     if let Some((uid, gid)) = identity {
         drop_to_probe_user(&mut command, uid, gid);
