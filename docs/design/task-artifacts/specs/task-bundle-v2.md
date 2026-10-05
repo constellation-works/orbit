@@ -348,8 +348,15 @@ such query with terminal statuses ordered last, not two queries: the index
 orders non-terminal tasks before done, archived and rejected ones, each
 partition newest first, and the limit spans both.
 Missing/stale indexes require a lightweight bundle scan (task fields only) and
-best-effort index repair; task-field errors encountered reading that scan
-propagate. An update racing selected-row hydration causes one rescan with
+best-effort index repair from the same scan; task-field errors encountered
+reading that scan propagate. A refused repair is recorded per process,
+registry and workspace against the envelope stamps of every registered task
+and the targets it found unresolved (ORB-14181). While that evidence holds,
+reads serve from the scan without retrying the rebuild, and at most one read
+attempts a repair at a time; a supported write, a created or deleted task, a
+restored target, or a retry interval re-admits one attempt. The relation
+validator stays strict, and the warning names each canonical edge that blocks
+publication. An update racing selected-row hydration causes one rescan with
 filter-before-limit semantics. In-flight creation/deletion retains the
 existing list-read tolerance.
 

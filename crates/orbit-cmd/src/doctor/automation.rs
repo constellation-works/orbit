@@ -517,10 +517,10 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
 
 /// Task relation/dependency targets that no longer resolve to a registered
 /// task bundle — the "grandfathered" relations that make a generated task
-/// index fail to rebuild against its relation validator, forcing an unbounded
-/// bundle-scan fallback (ORB-10305). Scoped to the current
-/// workspace; surfacing them here lets an operator fix or remove the offending
-/// relation before the validator trips over it at rebuild time.
+/// index fail to rebuild against its relation validator, so task reads serve
+/// from a bundle scan (ORB-10305). Audited from the canonical bundles and
+/// scoped to the current workspace: an edge the generated index lost is the
+/// one blocking its repair, so it is reported (and marked) rather than hidden.
 pub(super) fn doctor_check_task_relations(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let workspace_id = match runtime.workspace_id() {
         Ok(id) => id,
@@ -548,8 +548,15 @@ pub(super) fn doctor_check_task_relations(runtime: &OrbitRuntime) -> WorkspaceDo
                 .iter()
                 .map(|target| {
                     format!(
-                        "{} ({}) -> {}",
-                        target.source_task_id, target.relation_type, target.target_task_id
+                        "{} ({}) -> {}{}",
+                        target.source_task_id,
+                        target.relation_type,
+                        target.target_task_id,
+                        if target.indexed {
+                            ""
+                        } else {
+                            " [missing from generated index]"
+                        }
                     )
                 })
                 .collect::<Vec<_>>()
@@ -558,11 +565,11 @@ pub(super) fn doctor_check_task_relations(runtime: &OrbitRuntime) -> WorkspaceDo
                 "task-relations",
                 WorkspaceDoctorStatus::Warning,
                 format!(
-                    "{} unresolved relation/dependency target(s) will block index rebuild \
-                     until fixed or removed: {detail}",
+                    "{} unresolved relation/dependency target(s) block task-index rebuild, so \
+                     task reads fall back to a bundle scan until fixed or removed: {detail}",
                     dangling.len()
                 ),
-                "Inspect each named source with `orbit task show <task-id>` and update or remove its unresolved relation/dependency target.".to_string(),
+                "Inspect each named source with `orbit task show <task-id>`, then drop the unresolved edge from its `relations` through `orbit.task.update` or restore the target task; reads repair the index automatically once either lands.".to_string(),
             )
         }
     }
