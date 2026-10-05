@@ -310,9 +310,24 @@ fn an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_repla
         sha256(&backup_path(&install.installed))
     );
     assert_eq!(local["installed_sha256_after"], sha256(&candidate));
-    assert_eq!(
-        updated["admission_roots"],
-        serde_json::json!([install.home.join(".orbit")])
+    let admission_roots = updated["admission_roots"]
+        .as_array()
+        .expect("admission roots");
+    let host_global_root = install.home.join(".orbit");
+    let workspace_root = updated["workspace_root"]
+        .as_str()
+        .expect("selected workspace root");
+    assert!(
+        admission_roots
+            .iter()
+            .any(|root| root.as_str() == host_global_root.to_str()),
+        "host-global authority remains admitted: {updated}"
+    );
+    assert!(
+        admission_roots
+            .iter()
+            .any(|root| root.as_str() == Some(workspace_root)),
+        "the convergence workspace is admitted: {updated}"
     );
     assert_converged(&updated);
     assert_eq!(
@@ -491,6 +506,13 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     let mut mixed = install.install_args(&candidate, &manifest, COMMIT_B);
     mixed.extend(args(&["--version".as_ref(), "99.0.0".as_ref()]));
     assert_eq!(run(&candidate, mixed).status.code(), Some(2));
+    let mut mixed = install.install_args(&candidate, &manifest, COMMIT_B);
+    mixed.push("--contract".into());
+    assert_eq!(
+        run(&candidate, mixed).status.code(),
+        Some(2),
+        "--contract must not silently bypass a local-candidate update"
+    );
 
     // The producer never overwrites a file, including the candidate itself.
     let output = run(
@@ -519,6 +541,40 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     overridden.extend(install.install_args(&candidate, &manifest, COMMIT_B));
     let output = run(&candidate, overridden);
     install.assert_refused(&output, "upgrade admission refused", &before, &record);
+}
+
+/// A discovered workspace can differ from the isolated host-global authority.
+/// Its live clients still have to block the executable replacement because
+/// the update runs convergence against that workspace after the swap.
+#[test]
+fn a_live_discovered_workspace_client_blocks_a_local_candidate_update() {
+    let install = LocalInstall::new();
+    let before = fs::read(&install.installed).expect("installed bytes");
+    let candidate = install.candidate("orbit-b");
+    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let workspace_root = install.repo.join(".orbit");
+    let workspace_record = workspace_root.join(".generation.lock");
+    let workspace_client = GenerationGuard::acquire(&workspace_root, &sha256(&install.installed))
+        .expect("pin the discovered workspace authority");
+    let record = fs::read(&workspace_record).expect("workspace generation record");
+
+    let output = install.run(
+        &candidate,
+        &install.install_args(&candidate, &manifest, COMMIT_B),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("upgrade admission refused"), "{stderr}");
+    assert_eq!(
+        fs::read(&install.installed).expect("installed bytes"),
+        before
+    );
+    assert!(!backup_path(&install.installed).exists());
+    assert_eq!(
+        fs::read(&workspace_record).expect("generation record"),
+        record
+    );
+    drop(workspace_client);
 }
 
 /// A candidate that cannot coordinate with protected clients is refused

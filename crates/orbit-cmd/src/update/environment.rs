@@ -57,6 +57,21 @@ pub struct UpdateWorkspace {
 }
 
 impl UpdateEnvironment {
+    /// Resolve the initialized workspace this process's convergence steps use.
+    pub fn workspace_for_process(
+        root_override: Option<&Path>,
+    ) -> Result<Option<UpdateWorkspace>, OrbitError> {
+        let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
+        let root_was_explicit = root_override.is_some()
+            || std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
+        let roots = RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?;
+        Ok(roots.map(|roots| UpdateWorkspace {
+            cwd,
+            root_argument: root_was_explicit.then(|| roots.shared_root.clone()),
+            root: roots.shared_root,
+        }))
+    }
+
     /// Read this process's own installation, platform, and workspace.
     pub fn from_process(root_override: Option<&Path>) -> Result<Self, OrbitError> {
         let executable =
@@ -103,19 +118,12 @@ impl UpdateEnvironment {
         install_channel: InstallChannel,
         trusted_keys: &'static [TrustedReleaseKey],
     ) -> Result<Self, OrbitError> {
-        let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
-        let root_was_explicit = root_override.is_some()
-            || std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
-        let workspace =
-            RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?.map(
-                |roots| UpdateWorkspace {
-                    cwd,
-                    root_argument: root_was_explicit.then(|| roots.shared_root.clone()),
-                    root: roots.shared_root,
-                },
-            );
+        let workspace = Self::workspace_for_process(root_override)?;
         Ok(Self {
-            admission_roots: admission_authorities(root_override)?,
+            admission_roots: admission_authorities(
+                root_override,
+                workspace.as_ref().map(|workspace| workspace.root.as_path()),
+            )?,
             install_channel,
             executable,
             current_version: env!("CARGO_PKG_VERSION").to_string(),

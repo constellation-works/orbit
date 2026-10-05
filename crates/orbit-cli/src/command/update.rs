@@ -50,7 +50,16 @@ pub struct UpdateCommand {
     #[arg(long)]
     pub allow_downgrade: bool,
     /// Describe the executable admission protocol without opening state
-    #[arg(long, conflicts_with_all = ["check", "version", "allow_downgrade", "preflight"])]
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "check",
+            "version",
+            "allow_downgrade",
+            "preflight",
+            "local_candidate"
+        ]
+    )]
     pub contract: bool,
     /// Check whether running Orbit processes prevent an upgrade, without opening stores
     #[arg(long, conflicts_with_all = ["check", "version", "allow_downgrade", "local_candidate"])]
@@ -120,12 +129,16 @@ impl UpdateCommand {
             .into());
         }
         if self.preflight {
-            // Same `admission_authorities` `UpdateEnvironment::from_process`
-            // uses for exclusive admission, so a green preflight names every
-            // file the following `orbit update` will lock — including the
-            // host-global root a `--root`/`ORBIT_ROOT` override does not move
-            // the replaced executable out of.
-            let roots = orbit_cmd::update::admission_authorities(root_override)?;
+            // Use the same workspace discovery and authority list as the
+            // update itself, so preflight names every root the next command
+            // must admit, including cwd-discovered workspace data and the
+            // host-global root an override does not move the executable out
+            // of.
+            let workspace = UpdateEnvironment::workspace_for_process(root_override)?;
+            let roots = orbit_cmd::update::admission_authorities(
+                root_override,
+                workspace.as_ref().map(|workspace| workspace.root.as_path()),
+            )?;
             let _admissions = orbit_cmd::update::acquire_admissions(&roots)?;
             let quiesce = generation::quiesce_bound().as_secs();
             return Ok(Payload::detail(

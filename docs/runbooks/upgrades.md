@@ -416,8 +416,14 @@ under the update lock and again immediately before the swap.
 
 Then the ordinary update order applies, with the candidate in place of a download:
 
-1. Inspect the install target, acquire generation admission (refused while any Orbit
-   client is live) and the install-directory lock.
+1. Inspect the install target, acquire generation admission for the invocation,
+   host-global, and selected workspace roots (each distinct authority is locked;
+   a live client on any of them refuses the update), then acquire the
+   install-directory lock. Workspace discovery follows the current directory
+   independently of `HOME`: run from the intended workspace, and for isolated
+   smoke checks use an isolated checkout as well as isolated `HOME` and install
+   target. The JSON report's `workspace_root` and `admission_roots` show the
+   selected workspace and every authority held through convergence.
 2. Stream the candidate into the staging file beside the target (1 GiB limit) and hash
    the staged copy. Those are the accepted bytes: replacing or rewriting the candidate
    path afterwards does not change what is installed.

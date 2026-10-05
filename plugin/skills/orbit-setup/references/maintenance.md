@@ -198,13 +198,18 @@ each platform builds its own candidate from the same commit.
 
 `--install-target` must be the managed `orbit` executable (not a symlink, owned
 by the invoking user); package-manager or unknown installs are refused. The
-update runs the normal admission, staging, backup, swap and convergence: the
-staged copy is what installs even if the candidate path changes, an equal
-version with a different digest replaces, and live MCP/dashboard/clock/drain
-clients make it refuse before anything changes — quiesce them, retry, then
-reconnect. Rerunning the same command is idempotent and finishes partial
-convergence; `needs_recovery` (exit 4) carries the exact retry command in
-`local_candidate.retry_command`. See the upgrades runbook for the full procedure.
+update admits the invocation, host-global, and selected workspace roots for the
+whole staging, backup, swap and convergence sequence. Workspace discovery
+follows the current directory independently of `HOME`; run from the intended
+workspace, and use an isolated checkout as well as isolated `HOME` and install
+target for smoke checks. The JSON report's `workspace_root` and
+`admission_roots` show what was selected and held. The staged copy is what
+installs even if the candidate path changes, an equal version with a different
+digest replaces, and live MCP/dashboard/clock/drain clients make it refuse
+before anything changes — quiesce them, retry, then reconnect. Rerunning the
+same command is idempotent and finishes partial convergence; `needs_recovery`
+(exit 4) carries the exact retry command in `local_candidate.retry_command`.
+See the upgrades runbook for the full procedure.
 
 ## Database and layout upgrades
 

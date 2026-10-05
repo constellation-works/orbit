@@ -7,30 +7,43 @@ use orbit_common::OrbitError;
 
 /// Every generation authority that can hold a live pin on the host binary.
 ///
-/// Two authorities can, and a root override splits them. The invocation's own
-/// resolution comes first — `--root`, then `ORBIT_ROOT`, otherwise the
-/// host-global root (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a managed run) —
-/// because that is the authority this process would pin as a client. The
-/// host-global root follows whenever the override named something else: what
-/// `orbit update` replaces is `current_exe()`, which no root override moves,
-/// and every client started without an override pins the host-global root. An
-/// upgrade that locked only the override would replace the binary those
-/// clients are running and strand every later host-global process behind a
-/// digest mismatch it can never win.
+/// The invocation's own resolution comes first — `--root`, then `ORBIT_ROOT`,
+/// otherwise the host-global root (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a
+/// managed run) — because that is the authority this process would pin as a
+/// client. The host-global root follows whenever the override named something
+/// else: what `orbit update` replaces is `current_exe()`, which no root
+/// override moves, and every client started without an override pins the
+/// host-global root. The initialized workspace selected from the current
+/// directory also needs admission: convergence runs there even when its root
+/// differs from both the invocation and host-global roots.
 ///
 /// Identical authorities spelled differently collapse to one entry: flock
 /// would treat a second open of the same lock as a foreign holder and refuse
 /// the update against itself.
-pub fn admission_authorities(root_override: Option<&Path>) -> Result<Vec<PathBuf>, OrbitError> {
+pub fn admission_authorities(
+    root_override: Option<&Path>,
+    workspace_root: Option<&Path>,
+) -> Result<Vec<PathBuf>, OrbitError> {
     let resolved = orbit_core::runtime::resolve_generation_root(root_override)?;
     let host_global = orbit_core::runtime::resolve_global_root()?;
-    let mut roots = vec![resolved];
-    if orbit_common::fs::generation::authority_root(&host_global)?
-        != orbit_common::fs::generation::authority_root(&roots[0])?
-    {
-        roots.push(host_global);
+    let mut roots = Vec::with_capacity(3);
+    push_unique_authority(&mut roots, resolved)?;
+    push_unique_authority(&mut roots, host_global)?;
+    if let Some(workspace_root) = workspace_root {
+        push_unique_authority(&mut roots, workspace_root.to_path_buf())?;
     }
     Ok(roots)
+}
+
+fn push_unique_authority(roots: &mut Vec<PathBuf>, root: PathBuf) -> Result<(), OrbitError> {
+    let identity = orbit_common::fs::generation::authority_root(&root)?;
+    for existing in roots.iter() {
+        if orbit_common::fs::generation::authority_root(existing)? == identity {
+            return Ok(());
+        }
+    }
+    roots.push(root);
+    Ok(())
 }
 
 /// Take exclusive admission on every authority, refusing if any is live.
