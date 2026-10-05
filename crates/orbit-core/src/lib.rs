@@ -71,6 +71,10 @@ pub mod test_support {
     /// must install one: a test harness has no production entry-point marker,
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
+    /// The review ledger requests that admit an attempt and record its
+    /// reviewer's start and end, as the before-PR gate writes them, for tests
+    /// that drive a reviewer without running the whole delivery pipeline.
+    pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
 }
 
 // Store metric/scoreboard projections consumed by the dashboard's JSON API.

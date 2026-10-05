@@ -23,6 +23,9 @@ use super::git::{
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
 pub const REVIEW_ATTEMPT_TRAILER: &str = "Orbit-Review-Attempt";
 
+/// The catalog activity a before-PR reviewer runs as.
+pub const REVIEWER_ACTIVITY: &str = "agent_review_repair";
+
 /// The pinned candidate a reviewer is handed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateIdentity {

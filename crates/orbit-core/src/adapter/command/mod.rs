@@ -31,6 +31,8 @@ pub use dispatch::{
     mark_tool_audit_recorded, refuse_plugin_child_cli_command, take_tool_audit_recorded,
     trusted_mcp_audit_context,
 };
+#[cfg(unix)]
+pub use dispatch::{ClaimedReviewRoute, bridge_claimed_review_artifact};
 pub use plugin::{
     MAX_PLUGIN_SECRET_BYTES, PluginAddOptions, PluginAddResult, PluginCliGroup, PluginCliVerb,
     PluginDoctorResult, PluginEnableOptions, PluginEnableResult, PluginLinkSummary,
