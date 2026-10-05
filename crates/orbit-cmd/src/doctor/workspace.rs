@@ -276,8 +276,7 @@ pub(super) fn doctor_check_stale_locks(runtime: &OrbitRuntime) -> WorkspaceDocto
             "stale-locks",
             WorkspaceDoctorStatus::Warning,
             format!(
-                "{} lock file(s) left by dead holders (the OS already released the \
-                 flock; safe to delete): {}",
+                "{} lock file(s) with dead holder records: {}",
                 stale.len(),
                 stale.join("; ")
             ),

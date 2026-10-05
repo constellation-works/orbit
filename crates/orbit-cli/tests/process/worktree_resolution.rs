@@ -1013,9 +1013,9 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     );
 }
 
-/// `--fix-stale-locks` removes a lock whose recorded holder is dead. It keeps
-/// a lock whose recorded holder is alive, and one a live process holds through
-/// the OS lock even though the recorded holder is dead.
+/// `--fix-stale-locks` clears a dead holder record while preserving its file.
+/// It keeps a live holder record, and a dead record in a file a live process
+/// holds through the OS lock.
 #[cfg(unix)]
 #[test]
 fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
@@ -1056,11 +1056,20 @@ fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
             .any(|row| row["check"] == "fix-stale-locks" && row["status"] == "ok"),
         "the repair reports its outcome: {rows}"
     );
-    assert!(!dead_lock.exists(), "a dead holder's lock is removed");
-    assert!(live_lock.exists(), "a live holder's lock must remain");
+    assert_eq!(
+        fs::read(&dead_lock).expect("dead holder's lock file remains"),
+        b"",
+        "a dead holder's record is cleared"
+    );
     assert!(
-        held_lock.exists(),
-        "a lock a live process holds must remain whatever its metadata says"
+        orbit_common::fs::file_lock::read_file_lock_holder(&live_lock)
+            .is_some_and(|holder| holder.pid == std::process::id()),
+        "a live holder's record must remain"
+    );
+    assert!(
+        orbit_common::fs::file_lock::read_file_lock_holder(&held_lock)
+            .is_some_and(|holder| holder.pid == dead_pid),
+        "a held lock's record must remain whatever its metadata says"
     );
 }
 

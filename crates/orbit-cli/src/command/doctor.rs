@@ -29,7 +29,7 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub json: bool,
 
-    /// Remove lock files whose recorded holder process is dead before diagnosing the workspace.
+    /// Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace.
     #[arg(long)]
     pub fix_stale_locks: bool,
 
@@ -95,12 +95,12 @@ impl Execute for DoctorCommand {
         }
         let mut results = Vec::new();
         if self.fix_stale_locks {
-            let removed = runtime.remove_stale_lock_files()?;
-            eprintln!("Removed {removed} stale lock file(s).");
+            let cleared = runtime.remove_stale_lock_files()?;
+            eprintln!("Cleared {cleared} stale lock holder record(s).");
             results.push(WorkspaceDoctorResult {
                 check_name: "fix-stale-locks".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
-                message: format!("Removed {removed} stale lock file(s)."),
+                message: format!("Cleared {cleared} stale lock holder record(s)."),
                 remediation: None,
             });
         }
