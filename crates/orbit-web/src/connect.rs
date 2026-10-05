@@ -44,11 +44,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 /// a cap a remote that keeps streaming would hold the probe indefinitely.
 const PROBE_MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
-/// How long to wait, when first probing for an already-running remote
-/// dashboard through a bare port forward, before concluding nothing is
-/// listening and falling back to spawning one ourselves. Short: it only needs
-/// to cover `ssh` handshake plus a couple of probe round trips, not a remote
-/// process boot (that is what [`READINESS_TIMEOUT`] is for).
+/// How long to wait, once the local forward is accepting connections, for an
+/// already-running remote dashboard to answer `/healthz` before concluding
+/// nothing is listening and spawning one. Authentication is not included:
+/// OpenSSH binds `-L` only after the passphrase, password, or 2FA prompt
+/// finishes, and that time must not consume this budget (a remote process
+/// boot is what [`READINESS_TIMEOUT`] is for).
 const ATTACH_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Arguments for `orbit web connect`.
@@ -167,6 +168,7 @@ fn tunnel_spec(cfg: &ConnectArgs, local_port: u16) -> TunnelSpec {
         readiness_target: format!("the remote dashboard at http://localhost:{local_port}/healthz"),
         attach_timeout: ATTACH_PROBE_TIMEOUT,
         ready_timeout: READINESS_TIMEOUT,
+        ssh_program: "ssh".to_string(),
     }
 }
 

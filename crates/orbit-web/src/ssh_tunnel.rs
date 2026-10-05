@@ -7,13 +7,16 @@
 //! Establishing is attach-first: a bare `-N` forward that
 //! invokes nothing remotely is opened and probed, and only when nothing answers
 //! behind it is a second `ssh` run that both forwards the port and starts the
-//! remote command. Teardown therefore only ever stops what this process
-//! started — an attached, pre-existing remote server is never touched.
+//! remote command. OpenSSH binds the local `-L` listener only after
+//! authentication, so the short attach budget starts at that bind — a
+//! passphrase, password, or 2FA prompt does not expire it. Teardown therefore
+//! only ever stops what this process started — an attached, pre-existing
+//! remote server is never touched.
 //!
 //! Deliberately synchronous: the tunnel is a child-process lifetime, not a
 //! future. The `connect` command owns the small async wait around it.
 
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -21,6 +24,12 @@ use orbit_core::OrbitError;
 
 /// Delay between readiness probes.
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How long one "has `-L` bound yet?" connect may block.
+///
+/// Connection refused — the listener is not up yet — returns immediately.
+/// This only bounds a black-holed route. It is not the attach budget.
+const FORWARD_BIND_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Grace period between SIGTERM and SIGKILL when tearing the tunnel down.
 #[cfg(unix)]
@@ -49,12 +58,17 @@ pub(crate) struct TunnelSpec {
     /// http://localhost:7878/healthz"), used in the timeout error.
     pub(crate) readiness_target: String,
     /// How long to wait for an *already-running* remote server to answer
-    /// through a bare forward before concluding nothing is listening. Short:
-    /// it covers an SSH handshake plus a couple of probes, not a process boot.
+    /// through a bare forward *after the local listener accepts a connection*.
+    /// Authentication is not included: OpenSSH binds `-L` only once the
+    /// passphrase, password, or 2FA prompt has finished, and this budget must
+    /// not expire while that prompt is still open.
     pub(crate) attach_timeout: Duration,
     /// How long to wait for a freshly spawned remote server to answer.
     /// Generous: it covers SSH connect plus remote process startup.
     pub(crate) ready_timeout: Duration,
+    /// Executable that opens the tunnel. `orbit web connect` passes `ssh`,
+    /// resolved on `PATH`. A test may pass a stub with the same argv contract.
+    pub(crate) ssh_program: String,
 }
 
 /// Whether [`establish`] attached to something already running or started it.
@@ -77,17 +91,23 @@ pub(crate) enum TunnelOrigin {
 /// alone would not be enough (it still surfaces separately — see
 /// [`classify_ssh_exit`] — when `ssh` itself fails, e.g. a bad host).
 ///
+/// The attach budget does not include authentication. The probe stays up
+/// until its local listener accepts a TCP connection (OpenSSH binds `-L`
+/// only after auth) or the probe exits. Only then does [`TunnelSpec::attach_timeout`]
+/// bound the `/healthz` wait.
+///
 /// The returned [`SshTunnel`] tears the forward down on drop, so every exit
 /// path — error, panic, normal return — releases it.
 pub(crate) fn establish(
     spec: &TunnelSpec,
     mut ready: impl FnMut() -> bool,
 ) -> Result<(SshTunnel, TunnelOrigin), OrbitError> {
-    let mut probe = SshTunnel::new(spawn_ssh(&probe_forward_args(
-        &spec.ssh_host,
-        spec.local_port,
-        spec.remote_port,
-    ))?);
+    let mut probe = SshTunnel::new(spawn_ssh(
+        &spec.ssh_program,
+        &probe_forward_args(&spec.ssh_host, spec.local_port, spec.remote_port),
+    )?);
+    // A refused connect here is "still authenticating", not "nothing listening".
+    wait_until_forward_bound(&mut probe, spec.local_port, &spec.remote_description)?;
     if poll_until_ready(
         &mut probe,
         &mut ready,
@@ -98,12 +118,15 @@ pub(crate) fn establish(
     }
     probe.shutdown();
 
-    let mut tunnel = SshTunnel::new(spawn_ssh(&command_forward_args(
-        &spec.ssh_host,
-        spec.local_port,
-        spec.remote_port,
-        &spec.remote_command,
-    ))?);
+    let mut tunnel = SshTunnel::new(spawn_ssh(
+        &spec.ssh_program,
+        &command_forward_args(
+            &spec.ssh_host,
+            spec.local_port,
+            spec.remote_port,
+            &spec.remote_command,
+        ),
+    )?);
     if poll_until_ready(
         &mut tunnel,
         &mut ready,
@@ -120,18 +143,18 @@ pub(crate) fn establish(
     }
 }
 
-/// Spawn `ssh` with the given argument vector. `stdin` is null so Ctrl-C is
-/// delivered to *us* (the foreground process) rather than being forwarded down
-/// a pty to the remote.
+/// Spawn `program` (normally `ssh`) with the given argument vector. `stdin`
+/// is null so Ctrl-C is delivered to *us* (the foreground process) rather
+/// than being forwarded down a pty to the remote.
 ///
 /// `stdout`/`stderr` are inherited so `ssh`'s own diagnostics (host key
 /// prompts, auth failures) still reach the operator.
-pub(crate) fn spawn_ssh(ssh_args: &[String]) -> Result<Child, OrbitError> {
-    Command::new("ssh")
+pub(crate) fn spawn_ssh(program: &str, ssh_args: &[String]) -> Result<Child, OrbitError> {
+    Command::new(program)
         .args(ssh_args)
         .stdin(Stdio::null())
         .spawn()
-        .map_err(|error| OrbitError::Io(format!("failed to launch ssh: {error}")))
+        .map_err(|error| OrbitError::Io(format!("failed to launch {program}: {error}")))
 }
 
 /// Arguments for a bare probe forward: the port forward and nothing else
@@ -225,6 +248,38 @@ pub(crate) fn select_local_port(
         None if probe_bindable(preferred_default).is_ok() => Ok(preferred_default),
         None => ephemeral_port(),
     }
+}
+
+/// Wait until `ssh` has bound the local forward, or until it exits.
+///
+/// No deadline: OpenSSH listens on `-L` only after authentication, and a
+/// passphrase, password, or second-factor prompt must not be cut off by
+/// [`TunnelSpec::attach_timeout`]. Ctrl-C cancels a stuck prompt; it is
+/// delivered here because the child's stdin is null. An exit before the
+/// listener accepts is a connection failure, not "nothing is running".
+fn wait_until_forward_bound(
+    tunnel: &mut SshTunnel,
+    local_port: u16,
+    remote_description: &str,
+) -> Result<(), OrbitError> {
+    loop {
+        if let Some(status) = tunnel.try_wait()? {
+            return Err(classify_ssh_exit(status, remote_description));
+        }
+        if forward_listener_up(local_port) {
+            return Ok(());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// True when a TCP handshake to the loopback forward port completes.
+///
+/// A completed handshake means the local listener is bound. It does not mean
+/// the far side accepted the forwarded channel.
+fn forward_listener_up(local_port: u16) -> bool {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
+    TcpStream::connect_timeout(&addr, FORWARD_BIND_PROBE_TIMEOUT).is_ok()
 }
 
 /// Poll `ready` through `tunnel`'s forward until it answers or `timeout`

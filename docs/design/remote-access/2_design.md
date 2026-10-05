@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Design"
 owner: codex
-last_updated: 2026-10-03
-last_validated: 2026-10-03
+last_updated: 2026-10-05
+last_validated: 2026-10-05
 status: Accepted
 feature: remote-access
 doc_role: design
@@ -69,11 +69,12 @@ connect reads no local workspace state. It selects a local loopback port: an exp
 The Web-owned tunnel then follows an attach-first lifecycle:
 
 1. Start ssh -N with ExitOnForwardFailure=yes and -L 127.0.0.1:<local>:localhost:<remote>.
-2. Poll GET /healthz through the forward for up to five seconds.
-3. If health answers 200, keep that commandless forward and mark the session attached.
-4. If nothing answers, tear down the probe and start ssh -tt with the same forward plus orbit web serve --no-open --port <remote-port>.
-5. Poll health for up to 30 seconds, then open the local browser unless --no-open was requested.
-6. Block until Ctrl-C, SIGTERM, or SSH exit; dropping the tunnel terminates and reaps the local SSH child.
+2. Wait until a TCP connect to that local port succeeds, or until ssh exits. OpenSSH binds -L only after authentication, so passphrase, password, and 2FA time is outside the attach budget. An exit before the listener accepts is a connection failure. Ctrl-C cancels a stuck prompt; there is no separate authentication deadline.
+3. Poll GET /healthz through the forward for up to five seconds, measured from that successful connect.
+4. If health answers 200, keep that commandless forward and mark the session attached.
+5. If nothing answers, tear down the probe and start ssh -tt with the same forward plus orbit web serve --no-open --port <remote-port>.
+6. Poll health for up to 30 seconds, then open the local browser unless --no-open was requested.
+7. Block until Ctrl-C, SIGTERM, or SSH exit; dropping the tunnel terminates and reaps the local SSH child.
 
 In spawn mode, the forced PTY makes connection teardown deliver SIGHUP to the remote serve process started by this session. In attach mode there is no remote command, so teardown closes only the forward and leaves the pre-existing dashboard running.
 
