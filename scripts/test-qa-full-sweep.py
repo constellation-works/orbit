@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import re
+import runpy
 import select
 import signal
 import shutil
@@ -21,6 +22,9 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+validate_npm_evidence = runpy.run_path(
+    str(Path(__file__).with_name("check_npm_package.py")))["validate_evidence"]
 
 
 # The supervisor retains process-group ownership after the command exits. We
@@ -433,6 +437,19 @@ def parse_json(evidence, description):
         return json.loads(evidence["stdout"])
     except json.JSONDecodeError as error:
         raise ValueError(f"{description} returned invalid JSON: {error}") from error
+
+
+def validate_npm_result(repo, command, evidence):
+    if command != ["./scripts/smoke-npm-install.sh", "--local-package-check"]:
+        raise ValueError("npm assertions require the local candidate package command")
+    body = parse_json(evidence, "local npm package check")
+    validate_npm_evidence(repo, body)
+    evidence["npm_package_evidence"] = body
+    archive = repo / body["archive"]["path"]
+    evidence["retained_evidence"] = {
+        "directory": str(archive.parent),
+        "files": [{"path": archive.name, "sha256": body["archive"]["sha256"]}]}
+    return body["assertions"]
 
 
 def validate_cargo_test_evidence(command, evidence, required_tests=()):
@@ -1317,9 +1334,98 @@ def builtin_init_self_test():
             raise AssertionError("dependent scenarios ran after a failed disposable init")
 
 
+def npm_package_self_test():
+    """Exercise the inventory command on disposable candidate inputs, never npm publication."""
+    repo = Path(__file__).resolve().parent.parent
+    scratch = repo / ".orbit/tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="npm-controls-", dir=scratch) as directory:
+        temp = Path(directory)
+        command = ["./scripts/smoke-npm-install.sh", "--local-package-check"]
+        cases = ["valid", "malformed-npm", "malformed-server", "malformed-cargo",
+                 "npm-drift", "server-drift", "registry-drift", "cargo-drift",
+                 "missing-runtime", "excluded-runtime", "identity-drift", "lifecycle-scripts"]
+        for case in cases:
+            candidate = temp / case
+            shutil.copytree(repo / "npm", candidate / "npm")
+            (candidate / "scripts").mkdir()
+            for script in ("smoke-npm-install.sh", "check_npm_package.py"):
+                shutil.copy2(repo / "scripts" / script, candidate / "scripts" / script)
+            for path in ("Cargo.toml", "server.json"):
+                shutil.copyfile(repo / path, candidate / path)
+            npm_path = candidate / "npm/package.json"
+            server_path = candidate / "server.json"
+            if case.startswith("malformed-"):
+                target = {"npm": npm_path, "server": server_path, "cargo": candidate / "Cargo.toml"}[case.split("-", 1)[1]]
+                target.write_text("{broken")
+            elif case in ("npm-drift", "identity-drift", "excluded-runtime", "lifecycle-scripts"):
+                package = json.loads(npm_path.read_text())
+                if case == "npm-drift":
+                    package["version"] = "0.0.1"
+                elif case == "identity-drift":
+                    package["name"] = "@invalid/cli"
+                elif case == "excluded-runtime":
+                    package["files"].remove("scripts/")
+                else:
+                    package["scripts"]["prepack"] = "node -e \"require('fs').writeFileSync('lifecycle-ran', 'bad')\""
+                npm_path.write_text(json.dumps(package))
+            elif case in ("server-drift", "registry-drift"):
+                server = json.loads(server_path.read_text())
+                target = server if case == "server-drift" else server["packages"][0]
+                target["version"] = "0.0.1"
+                server_path.write_text(json.dumps(server))
+            elif case == "cargo-drift":
+                (candidate / "Cargo.toml").write_text('[workspace.package]\nversion = "0.0.1"\n')
+            elif case == "missing-runtime":
+                (candidate / "npm/bin/orbit.js").rename(candidate / "removed-orbit.js")
+            env = isolated_environment(temp / f"env-{case}")
+            evidence = run(command, cwd=candidate, env=env)
+            failure = None
+            assertions = []
+            try:
+                assertions = validate_npm_result(candidate, command, evidence)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                failure = str(error)
+            result = finalize_result(evidence, assertions, "fixture", failure)
+            if case in ("valid", "lifecycle-scripts"):
+                if result["outcome"] != "PASS" or len(assertions) != 2:
+                    raise AssertionError(f"local candidate package failed: {result}")
+                if (candidate / "npm/lifecycle-ran").exists():
+                    raise AssertionError("candidate npm packaging executed a lifecycle script")
+                # The retained tarball and metadata are independently checked on consumption.
+                body = json.loads(evidence["stdout"])
+                body["archive"]["sha256"] = "0" * 64
+                try:
+                    validate_npm_evidence(candidate, body)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("altered archive evidence earned npm assertions")
+            elif evidence["exit_code"] == 0 or result["outcome"] != "FAIL" or assertions:
+                raise AssertionError(f"broken candidate earned npm assertions: {case}: {result}")
+        predicate = run(["./scripts/smoke-npm-install.sh", "--dry-run-version-assertion"],
+                        cwd=temp / "malformed-npm", env=env)
+        try:
+            validate_npm_result(temp / "malformed-npm",
+                                ["./scripts/smoke-npm-install.sh", "--dry-run-version-assertion"], predicate)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("constant version self-test certified candidate packaging")
+        if predicate["exit_code"] != 0:
+            raise AssertionError("narrow version predicate self-test regressed")
+        try:
+            validate_npm_result(temp / "valid", command, predicate)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("exit-zero predicate output substituted for candidate evidence")
+
+
 def self_test():
     process_self_test()
     builtin_init_self_test()
+    npm_package_self_test()
     grouped = "Usage: orbit task <COMMAND>\n\nTasks:\n  add  Create task\nHealth:\n  recheck-blocked\n               Requeue\nOptions:\n  --json\nExamples:\n  orbit task add\n"
     if cli_help_children(grouped) != ["add", "recheck-blocked"]:
         raise AssertionError("grouped CLI help omitted commands or admitted examples")
@@ -1703,12 +1809,18 @@ def main():
                                     "browser_version": browser_record["version"]}, indent=2) + "\n")
                 unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
                 failure = None if unchanged else "source candidate changed while the scenario ran"
+                assertions = scenario["assertions"]
                 try:
                     validate_cargo_test_evidence(command, evidence, scenario.get("required_tests", []))
-                except ValueError as error:
+                    if scenario["id"] == "npm-package":
+                        assertions = []
+                        assertions = validate_npm_result(repo, command, evidence)
+                except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                     failure = str(error) if failure is None else failure + "; " + str(error)
+                if scenario["id"] == "npm-package" and failure:
+                    assertions = []
                 result = {"scenario":scenario["id"],
-                          **finalize_result(evidence, scenario["assertions"], candidate_id, failure)}
+                          **finalize_result(evidence, assertions, candidate_id, failure)}
                 if scenario["capability"] == "browser":
                     artifacts = []
                     if browser_evidence_dir.is_dir():

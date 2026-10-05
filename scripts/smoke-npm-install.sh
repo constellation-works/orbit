@@ -14,6 +14,8 @@
 #
 # Pass: exit 0. Fail: non-zero with the relevant stderr captured.
 # Supported: macOS arm64 / x86_64, Linux x86_64 / arm64. Not Windows.
+# --local-package-check instead builds/inspects the unpublished local candidate.
+# --dry-run-version-assertion only self-tests the version comparison predicate.
 set -euo pipefail
 NPM_PKG="@orbit-tools/cli"
 
@@ -37,12 +39,15 @@ run_version_assertion_test() {
   echo "PASS: version assertion rejects a mismatched tag version"
 }
 
-if [[ "${1:-}" == "--dry-run-version-assertion" ]]; then
+if [[ "$#" -eq 1 && "$1" == "--local-package-check" ]]; then
+  exec python3 "$(dirname "$0")/check_npm_package.py"
+fi
+if [[ "$#" -eq 1 && "$1" == "--dry-run-version-assertion" ]]; then
   run_version_assertion_test
   exit 0
 fi
 if [[ "$#" -ne 0 ]]; then
-  echo "usage: $0 [--dry-run-version-assertion]" >&2
+  echo "usage: $0 [--local-package-check|--dry-run-version-assertion]" >&2
   exit 2
 fi
 
