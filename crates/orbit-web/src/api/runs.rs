@@ -18,10 +18,12 @@ use orbit_core::{InvocationQuery, JobRun, OrbitRuntime, V2AuditEventFilter};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
-use super::routines::{authorization_denied, authorized_caller};
+use super::routines::{
+    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
+};
 use super::{
-    HISTORY_DEFAULT_LIMIT, LimitQuery, RunEventsQuery, bad_request, blocking, bounded_limit,
-    map_runtime_error, validate_id,
+    HISTORY_DEFAULT_LIMIT, LimitQuery, OptionalJson, RunEventsQuery, bad_request, blocking,
+    bounded_limit, map_runtime_error, validate_id,
 };
 
 const RUN_EVENTS_DEFAULT_LIMIT: usize = 100;
@@ -36,7 +38,13 @@ const RUN_LOG_PREVIEW_MAX_BYTES: usize = 8192;
 /// Maximum lines included in stdout/stderr previews returned by run-log APIs.
 const RUN_LOG_PREVIEW_MAX_LINES: usize = 120;
 
+/// Request body for `POST /workflows/ship`.
+///
+/// Unknown keys are rejected. A misspelled selector such as `task_id` must
+/// not deserialize as an empty `task_ids`: an empty selection is
+/// backlog-discovery mode and would ship every eligible task.
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ShipBody {
     /// Explicit task selection; empty selects auto (backlog-discovery) mode.
     #[serde(default)]
@@ -74,9 +82,8 @@ pub(super) struct ShipBody {
 /// and is unaffected.
 pub(super) async fn ship_workflow_action(
     Ws(runtime): Ws,
-    body: Option<Json<ShipBody>>,
+    OptionalJson(body): OptionalJson<ShipBody>,
 ) -> Response {
-    let Json(body) = body.unwrap_or_default();
     let mode = match body.mode.as_deref() {
         Some(raw) => match orbit_core::ShipMode::parse(raw) {
             Ok(mode) => mode,
@@ -174,19 +181,23 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 ///
 /// Dashboard counterpart to `orbit run auto --for <duration> [--concurrency
 /// N] [--complete]`, reusing the same `submit_workspace_auto_run` runtime
-/// path: a concrete workspace only (the `Ws` extractor refuses all-workspace
-/// mode the same way `ship_workflow_action` does, and `submit_workspace_auto_run`
-/// enforces the workspace claim), a required bounded duration, and an
-/// explicit, separately-governed opt-in to `CompletionPolicy::Done` — opting
-/// in authorizes `review -> done` for every task the window ships, not only
-/// the ones visible now, so it is gated the same way `auto_task.mint`'s
-/// unconditional mint is.
+/// path. `?workspace` is required: a missing or blank selector returns 400
+/// `workspace_required` and starts nothing, including when the server has a
+/// default workspace (`Ws` would otherwise select that default).
+/// `submit_workspace_auto_run` still enforces the workspace claim. The
+/// duration must be a bounded window, and opting into `CompletionPolicy::Done`
+/// is explicit and separately governed — it authorizes `review -> done` for
+/// every task the window ships, not only the ones visible now, so it is gated
+/// the same way `auto_task.mint`'s unconditional mint is.
 pub(super) async fn auto_drain_workflow_action(
     State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    body: Option<Json<AutoDrainBody>>,
+    OptionalJson(body): OptionalJson<AutoDrainBody>,
 ) -> Response {
-    let Json(body) = body.unwrap_or_default();
+    if let Err(rejection) = explicit_workspace(&query) {
+        return rejection.into_response();
+    }
     let for_seconds = match parse_drain_duration_seconds(&body.for_duration) {
         Ok(seconds) => seconds,
         Err(message) => return bad_request(message),
@@ -239,8 +250,13 @@ pub(super) struct AutoDrainStopBody {
     claim_token: Option<String>,
 }
 
-/// Stop new admissions for the workspace's live `auto` window
+/// Stop new admissions for one workspace's live `auto` window
 /// (`POST /workflows/auto/stop?workspace=<id>`) [ORB-12728].
+///
+/// `?workspace` is required. A missing or blank selector returns 400
+/// `workspace_required` and stops nothing, including when the server has a
+/// default workspace. `Ws` would otherwise fall back to that default; this
+/// handler does not.
 ///
 /// Dashboard counterpart to `orbit run auto --stop`, reusing
 /// `stop_workspace_auto_admissions`: every live coordinator in this concrete
@@ -253,10 +269,13 @@ pub(super) struct AutoDrainStopBody {
 /// runtime call.
 pub(super) async fn auto_drain_stop_action(
     State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    body: Option<Json<AutoDrainStopBody>>,
+    OptionalJson(body): OptionalJson<AutoDrainStopBody>,
 ) -> Response {
-    let Json(body) = body.unwrap_or_default();
+    if let Err(rejection) = explicit_workspace(&query) {
+        return rejection.into_response();
+    }
     if let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, state.operator_session()) {
         return authorization_denied(denial);
     }
@@ -379,13 +398,12 @@ pub(super) struct CancelRunBody {
 pub(super) async fn cancel_run_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
-    body: Option<Json<CancelRunBody>>,
+    OptionalJson(body): OptionalJson<CancelRunBody>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let Json(body) = body.unwrap_or_default();
     match blocking("cancel run", move || {
         Ok(runtime.cancel_job_run_with_options(
             &id,

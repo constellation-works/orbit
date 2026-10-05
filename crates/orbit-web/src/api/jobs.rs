@@ -11,7 +11,7 @@ use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
+use super::{OptionalJson, bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
 use crate::projections::job_catalog_to_json_with_last_run;
 use crate::state::DashboardState;
 
@@ -259,13 +259,12 @@ pub(super) struct ResumeBody {
 pub(super) async fn resume_job_run_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
-    body: Option<Json<ResumeBody>>,
+    OptionalJson(body): OptionalJson<ResumeBody>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id,
         Err(message) => return bad_request(message),
     };
-    let Json(body) = body.unwrap_or_default();
     let id = id.to_string();
     let retry_source_run_id = id.clone();
     match blocking("resume run", move || {

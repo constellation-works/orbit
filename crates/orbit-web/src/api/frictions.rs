@@ -18,7 +18,9 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::{bad_request, blocking, bounded_limit, map_runtime_error, non_empty_string};
+use super::{
+    OptionalJson, bad_request, blocking, bounded_limit, map_runtime_error, non_empty_string,
+};
 
 const FRICTIONS_DEFAULT_LIMIT: usize = 100;
 const HUMAN_ACTOR_LABEL: &str = "human";
@@ -288,11 +290,8 @@ pub(super) async fn friction_stats(Ws(runtime): Ws) -> Response {
 pub(super) async fn update_friction_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
-    body: Option<Json<FrictionPatchBody>>,
+    OptionalJson(body): OptionalJson<FrictionPatchBody>,
 ) -> Response {
-    let Some(Json(body)) = body else {
-        return bad_request("request body must include `status` or `tags`".to_string());
-    };
     let status = body.status.as_deref().and_then(non_empty_string);
     let title = body.title.as_deref().and_then(non_empty_string);
     if status.is_none() && body.tags.is_none() && title.is_none() {
