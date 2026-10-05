@@ -10,7 +10,11 @@
 //! newest migrations older binaries could not keep reading or writing — not
 //! the executable's digest. Every participant holds `.generation.lock` shared
 //! for its lifetime. `.generation-compat.json` records the envelope of every
-//! identity admitted since the authority last had no participant:
+//! identity admitted since the authority last had no participant. A joiner
+//! that finds the generation lock unheld replaces that envelope with its own
+//! identity before the compatibility check. Dropping a guard does not clear
+//! the file; the lock is what shows the authority is empty. Admission then
+//! follows that envelope:
 //!
 //! - A newcomer compatible with that envelope joins as an ordinary writer (or
 //!   reader) whatever its digest, and widens it. A rebuild or patch release

@@ -175,6 +175,10 @@ impl GenerationGuard {
                 store_schema,
             );
         };
+        // Admission is still held, so this probe cannot race another joiner.
+        // An exited process keeps its place in the envelope until then; the
+        // lock, not the file, is what shows the authority is empty.
+        let envelope = reseed_if_unheld(root, &generation, &recorded, participant, envelope)?;
         let (identity, access) = (participant.identity, participant.access);
         match envelope.refusal(identity, access) {
             None => {
@@ -353,6 +357,47 @@ impl GenerationGuard {
         }
         .pin(digest, None)
     }
+}
+
+/// Replace `envelope` when no other process holds the generation lock.
+///
+/// The caller holds admission. Releasing this descriptor cannot admit another
+/// participant, and a live participant holds the lock until it exits, so a
+/// successful exclusive probe means every identity in `envelope` has exited.
+/// The v1 digest in the lock file stays: the compat record is valid only
+/// while its `record_digest` matches that digest.
+fn reseed_if_unheld(
+    root: &Path,
+    generation: &Record,
+    recorded: &str,
+    participant: &Participant<'_>,
+    envelope: Envelope,
+) -> Result<Envelope, OrbitError> {
+    FileExt::unlock(&generation.file).map_err(refusal)?;
+    if FileExt::try_lock_exclusive(&generation.file).is_err() {
+        FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
+        return Ok(envelope);
+    }
+    let fresh = Envelope::of(participant.identity, participant.access);
+    if fresh != envelope {
+        let written = if generation.writable {
+            write_compat(root, recorded, &fresh)
+        } else {
+            Err(unwritable(
+                "joining an empty authority would replace the recorded generation, which \
+                 cannot be written from here",
+            ))
+        };
+        // A reader that cannot record itself still joins, as when a widening
+        // cannot be written. A writer must be visible to the next newcomer.
+        if let Err(error) = written
+            && participant.access == Access::Write
+        {
+            return Err(error);
+        }
+    }
+    FileExt::lock_shared(&generation.file).map_err(refusal)?;
+    Ok(fresh)
 }
 
 /// Take the admission mutex once no pending switch stands in the way.
