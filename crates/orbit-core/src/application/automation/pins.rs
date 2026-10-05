@@ -56,9 +56,16 @@ pub(super) fn pinned(source: &Source, attempt_id: &str) -> Result<Option<String>
     }
     let name = name(attempt_id);
     // A literal pattern also matches refs below `<name>/`; only the exact
-    // name is this attempt's pin.
+    // name is this attempt's pin. Ref names sort before their descendants, so
+    // one row bounds stdout even when the exact ref is absent and a matching
+    // subtree has accumulated a long history.
     Ok(source
-        .git(&["for-each-ref", "--format=%(refname) %(objectname)", &name])?
+        .git(&[
+            "for-each-ref",
+            "--count=1",
+            "--format=%(refname) %(objectname)",
+            &name,
+        ])?
         .lines()
         .filter_map(|line| line.split_once(' '))
         .find(|(refname, _)| *refname == name)

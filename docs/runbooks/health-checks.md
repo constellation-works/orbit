@@ -216,8 +216,9 @@ checked and repaired, replace the link with a regular file inside the catalog.
 ### Release leaked automation attempt pins
 
 Admitting a state-routine attempt (the task-pilot routine) pins the commit it froze as
-`refs/orbit/automation/<attempt id>`; the attempt's settlement, terminal failure or retirement
-releases the pin. Releases before ORB-14164 never released them, so a long-running workspace
+`refs/orbit/automation/<attempt id>`; settlement, terminal failure or retirement releases the
+pin unless an accepted pre-upgrade `material_v1` assessment still needs that revision for its
+compatibility check. Releases before ORB-14164 never released pins, so a long-running workspace
 can hold hundreds of leaked pins that keep their commits from `git gc`. Count them with:
 
 ```sh

@@ -531,8 +531,11 @@ the batches it forgets, and records which ones it released.
 
 State-member attempts pin their frozen source at the namespace's top level,
 `refs/orbit/automation/<attempt id>` [ORB-14164]. The checkpoint that settles,
-exhausts or retires the attempt releases the pin once it commits; a retry
-keeps it, and a checkpoint that loses the generation fence releases nothing.
+exhausts or retires the attempt releases the pin once it commits, except when
+the accepted result is a pre-upgrade `material_v1` assessment whose compatibility
+check still needs that revision; a retry keeps it, and a checkpoint that loses
+the generation fence releases nothing. Current `material_v2` results release
+at settlement.
 The release deletes the ref only while it still names the attempt's commit;
 a failure is logged and leaves the pin for the repair below. Pins that
 releases before this left behind are released with
@@ -675,12 +678,14 @@ Assessments accepted under the earlier `material_v1` fingerprint, which
 hashed every field and the source revision, are carried forward rather than
 re-piloted: a scheduled member stays fresh while the `material_v1` hash
 recomputed at the revision its receipt pinned still matches, and becomes due
-at the first edit that hash covers. The pinned revision is read from that one
+at the first edit that hash covers. Settlement keeps the pin for a legacy result
+that still matches this hash; once its assessment is replaced, doctor cleanup
+can release the now-unreferenced pin. The pinned revision is read from that one
 attempt's ref, never by listing the namespace, and a failure to recompute the
 hash is logged before the member is assessed again. Assessments accepted since
 the upgrade carry the current contract, so their attempt's pin is released at
-settlement; `orbit doctor --fix-automation-pins` keeps any pin an assessment
-still names.
+settlement; `orbit doctor --fix-automation-pins` keeps any legacy assessment
+pin still needed for carry-forward.
 
 `kind: execution_failed` targets `job:task_triage_pipeline`, which this Orbit no
 longer ships; the shape is recorded here for definitions written before the

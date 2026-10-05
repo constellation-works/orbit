@@ -165,6 +165,39 @@ impl<'a> Host<'a> {
         )
         .map(Some)
     }
+
+    /// Whether a just-settled pre-upgrade assessment still needs its source
+    /// revision to be carried forward. Current `material_v2` receipts do not
+    /// match this legacy digest and can release their attempt pin immediately.
+    fn has_legacy_assessment(&self, attempt: &MemberAttempt) -> Result<bool, AutomationError> {
+        let Some(state) = self
+            .runtime
+            .automation_store()?
+            .automation_state(&attempt.consumer)?
+        else {
+            return Ok(false);
+        };
+        let Some(members) = state.members else {
+            return Ok(false);
+        };
+
+        for member in attempt.members() {
+            let Some(assessment) = members
+                .assessed
+                .get(&member.key)
+                .filter(|assessment| assessment.receipt_id == attempt.id)
+            else {
+                continue;
+            };
+            if self
+                .legacy_fingerprint(member, assessment)?
+                .is_some_and(|fingerprint| fingerprint == assessment.resulting_fingerprint)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 impl MemberHost for Host<'_> {
@@ -503,6 +536,28 @@ impl MemberHost for Host<'_> {
     }
 
     fn release(&self, attempt: &MemberAttempt) {
+        if attempt.kind == StateTriggerKind::PreparationEligible {
+            match self.has_legacy_assessment(attempt) {
+                Ok(true) => {
+                    tracing::debug!(
+                        routine = self.routine,
+                        attempt = attempt.id,
+                        "keeping the retired attempt's pin for its material_v1 assessment"
+                    );
+                    return;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        routine = self.routine,
+                        attempt = attempt.id,
+                        error = %error,
+                        "could not determine whether the retired attempt's pin backs a material_v1 assessment; keeping it for doctor cleanup"
+                    );
+                    return;
+                }
+            }
+        }
         self.pinned.borrow_mut().remove(&attempt.id);
         if let Err(error) = pins::release(&Source::new(&self.runtime.paths().repo_root), attempt) {
             tracing::warn!(

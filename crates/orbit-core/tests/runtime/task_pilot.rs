@@ -181,6 +181,14 @@ impl Workspace {
 
     /// Record the deterministic apply step's evidence for every member.
     fn applied(&self, attempt: &MemberAttempt) {
+        self.applied_with_fingerprint(attempt, None);
+    }
+
+    fn applied_with_fingerprint(
+        &self,
+        attempt: &MemberAttempt,
+        resulting_fingerprint: Option<&str>,
+    ) {
         let run_id = attempt.action_id.clone().unwrap();
         let evidence = attempt
             .members()
@@ -189,7 +197,7 @@ impl Workspace {
                 json!({
                     "action_id": "", "attempt_id": attempt.id, "member_key": member.key,
                     "input_fingerprint": member.fingerprint,
-                    "resulting_fingerprint": member.fingerprint,
+                    "resulting_fingerprint": resulting_fingerprint.unwrap_or(&member.fingerprint),
                     "ready": true, "result": {"task_id": member.key},
                 })
             })
@@ -592,6 +600,82 @@ fn routine_attempt_pins_are_released_once_the_attempt_settles_or_fails() {
     assert!(members.active.is_none());
     assert!(members.failed[&fails.id].exhausted);
     assert!(workspace.pins().is_empty(), "terminal failure released it");
+}
+
+/// A pre-upgrade accepted assessment still needs its pinned source to be
+/// compared under material_v1; current material_v2 assessments release at
+/// settlement as covered above.
+#[test]
+fn routine_attempt_pin_stays_for_a_legacy_assessment() {
+    if !super::dispatch_admission::isolated(
+        "task_pilot::routine_attempt_pin_stays_for_a_legacy_assessment",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("legacy assessment");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    let attempt = workspace.admitted(&task, 1);
+
+    // This is the exact legacy material shape Core recomputes: no task
+    // dependencies, the resolved crew assignment, and the pinned tree's
+    // empty repository-instruction list.
+    let assignment = workspace
+        .runtime
+        .lookup_crew_for_task(None, task.crew.as_deref())
+        .unwrap();
+    let legacy_dependencies = json!([{
+        "effective_assignment": {
+            "crew": assignment.name,
+            "model": assignment.assignment.model,
+            "provider": assignment.assignment.provider,
+        }
+    }]);
+    let legacy_fingerprint = orbit_automation::members::preparation::legacy_fingerprint(
+        &task,
+        &attempt.member.source.commit,
+        &legacy_dependencies,
+        "[]",
+        &Default::default(),
+    )
+    .unwrap();
+    workspace.applied_with_fingerprint(&attempt, Some(&legacy_fingerprint));
+
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(4),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert_eq!(
+        members.assessed[&task.id].resulting_fingerprint,
+        legacy_fingerprint
+    );
+    assert_eq!(members.assessed[&task.id].receipt_id, attempt.id);
+    assert!(members.active.is_none());
+    assert_eq!(
+        workspace.pins(),
+        [format!("refs/orbit/automation/{}", attempt.id)],
+        "the legacy assessment still needs its pinned revision"
+    );
+    let run_id = attempt.action_id.as_deref().unwrap();
+    workspace
+        .jobs
+        .mark_job_run_running(run_id, Utc::now(), std::process::id())
+        .unwrap();
+    workspace
+        .jobs
+        .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+
+    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
+    assert_eq!(cleanup.retained_assessed, 1);
+    assert!(cleanup.released.is_empty());
 }
 
 /// `orbit doctor --fix-automation-pins` releases leaked attempt pins past the
