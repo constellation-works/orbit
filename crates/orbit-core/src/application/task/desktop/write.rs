@@ -155,11 +155,13 @@ impl OrbitRuntime {
             }
             return self.desktop_write_result(&id, true, session);
         }
-        let head = if let DesktopTaskOperation::Review { verdict, .. } = &request.operation {
+        let pull_request = if let DesktopTaskOperation::Review { verdict, .. } = &request.operation
+        {
             self.desktop_observe_pr_head(&self.get_task(&id)?, verdict)?
         } else {
             None
         };
+        let head = pull_request.as_ref().map(|pr| pr.head.clone());
         let mut outcome = None;
         // The status a desktop write replaced, when it changed one.
         let mut previous_status = None;
@@ -245,7 +247,7 @@ impl OrbitRuntime {
                 DesktopTaskOperation::Review {
                     verdict, complete, ..
                 } => {
-                    self.desktop_validate_verdict(&task, verdict)?;
+                    self.desktop_validate_verdict(&task, verdict, pull_request.as_ref())?;
                     if *complete {
                         if verdict.decision != DesktopReviewDecision::Accept {
                             return Err(invalid("changes requested cannot complete a task"));
@@ -254,15 +256,30 @@ impl OrbitRuntime {
                         if verdict.expected_head != head {
                             return Err(invalid("reviewed PR head changed or cannot be verified"));
                         }
+                        if let Some(reason) = pull_request
+                            .as_ref()
+                            .and_then(|pr| pr.completion_refusal.as_deref())
+                        {
+                            return Err(invalid(reason));
+                        }
                         self.ensure_resolves_are_workspace_local(&task)?;
                         status = Some(TaskStatus::Done);
                     }
-                    comment = Some(format!(
+                    // The audit names where the reviewed run executed and
+                    // which pull request the verdict observed.
+                    let mut audit = format!(
                         "desktop_review_verdict={}\nreviewed_revision={}\nrequest_id={}",
                         serde_json::to_string(verdict).map_err(|e| invalid(&e.to_string()))?,
                         expected_revision,
                         request.request_id
-                    ));
+                    );
+                    if let Some(location) = &task.job_run_machine {
+                        audit.push_str(&format!("\nexecution_machine={}", location.machine_id));
+                    }
+                    if let Some(url) = pull_request.as_ref().and_then(|pr| pr.url.as_deref()) {
+                        audit.push_str(&format!("\npull_request={url}"));
+                    }
+                    comment = Some(audit);
                 }
                 DesktopTaskOperation::Create { .. } => unreachable!(),
             }

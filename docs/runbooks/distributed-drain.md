@@ -561,6 +561,18 @@ one. From then on:
 Do not merge follower pull requests on the provider by hand. That skips the
 owner's validation gate, and the owner still has to settle the claim.
 
+If a follower's pull request was merged by hand anyway ([ORB-14175]), revoke the
+handoff and use **Recover claim → blocked** on the owner. Then move the task
+through `in-progress` back to `review` and complete it with an operator's
+evidence-bound desktop review. The task keeps the follower's `job_run_id` and
+`job_run_machine`. Completion reads the recovered claim and the accepted
+handoff for that exact host and run, takes the pull request from the handoff,
+and requires that pull request to be merged into the landing branch. If the
+merged head is not the handed-off candidate (for example, after a base merge), the
+candidate's validation and review do not carry over. Run the review gate on the
+merged head so the task holds a passed, fully validated certificate for it,
+then complete.
+
 On the dashboard, **approve** on a review task that has a handed-off claim
 sends **Approve handoff** for the exact candidate. A plain status write would
 be refused with `active execution claim requires a claim-scoped mutation`.

@@ -17,6 +17,19 @@ fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
     .map_err(|e| OrbitError::Store(e.to_string()))?;
     Ok(sha256_hex(&bytes))
 }
+/// Why an active claim refuses desktop writes, and the supported way out: a
+/// claim-scoped mutation, never a status change.
+fn active_claim_reason(phase: crate::contracts::ExecutionClaimPhase) -> &'static str {
+    if phase == crate::contracts::ExecutionClaimPhase::HandedOff {
+        "active execution claim requires a claim-scoped mutation: its handoff awaits the \
+         owner's completion authority; land it through that authority, or revoke the handoff \
+         and recover the claim from the owner's operator console"
+    } else {
+        "active execution claim requires a claim-scoped mutation: its run is still executing; \
+         wait for it to settle, or recover the claim from the owner's operator console"
+    }
+}
+
 impl TaskV2Store {
     pub(crate) fn read_desktop_task(
         &self,
@@ -50,14 +63,12 @@ impl TaskV2Store {
             Some("task storage is read-only".into())
         } else if let Some(boundary) = &self.coordination {
             match boundary.inspect_execution_claims() {
-                Ok(claims)
-                    if claims.iter().any(|claim| {
+                Ok(claims) => claims
+                    .iter()
+                    .find(|claim| {
                         claim.claim.task_id == id && claim.claim.phase.protects_footprint()
-                    }) =>
-                {
-                    Some("active execution claim requires a claim-scoped mutation".into())
-                }
-                Ok(_) => None,
+                    })
+                    .map(|claim| active_claim_reason(claim.claim.phase).into()),
                 Err(error) => Some(error.to_string()),
             }
         } else {

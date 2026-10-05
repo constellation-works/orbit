@@ -5,7 +5,7 @@ use orbit_common::governance::authorization::{
 use orbit_common::{OrbitError, security::redaction::redact_all};
 use orbit_types::{
     desktop::*,
-    task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus},
+    task::{Task, TaskStatus},
     tool::ToolSessionContext,
 };
 
@@ -400,16 +400,23 @@ impl OrbitRuntime {
             review: review_projection,
             review_reason,
         };
-        if !snapshot.content_truncated
-            && snapshot.task.status == TaskStatus::Review
-            && snapshot
-                .task
-                .external_refs
-                .iter()
-                .any(|r| r.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
-        {
-            match self.desktop_current_pr_head(&snapshot.task) {
-                Ok(head) => snapshot.reviewed_head = head,
+        // The same observation a review write binds to: the PR the task
+        // references, or the one its accepted foreign handoff delivered.
+        if !snapshot.content_truncated && snapshot.task.status == TaskStatus::Review {
+            match self.desktop_current_pull_request(&snapshot.task) {
+                Ok(pull_request) => {
+                    if let Some(reason) = pull_request
+                        .as_ref()
+                        .and_then(|pr| pr.completion_refusal.clone())
+                        && snapshot.actions.complete.enabled
+                    {
+                        snapshot.actions.complete = DesktopAction {
+                            enabled: false,
+                            reason: Some(reason),
+                        };
+                    }
+                    snapshot.reviewed_head = pull_request.map(|pr| pr.head);
+                }
                 Err(error) => {
                     let reason = error.to_string();
                     snapshot.reviewed_head_reason = Some(reason.clone());
