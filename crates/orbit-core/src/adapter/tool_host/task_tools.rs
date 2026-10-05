@@ -626,6 +626,9 @@ fn task_update_params_from_input(
         orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
         context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
         upsert_artifacts: parse_artifacts(input)?,
+        // Discarding a preserved candidate is an operator decision taken
+        // from the CLI (`orbit task update --discard-candidate`).
+        discard_candidate: false,
     })
 }
 

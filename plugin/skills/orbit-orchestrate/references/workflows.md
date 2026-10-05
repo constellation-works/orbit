@@ -77,6 +77,43 @@ not a rewrite of failed history.
 Inspect any of them with `orbit job show <id>` before invoking — the step list is
 the contract.
 
+### Re-running a task with a preserved candidate
+
+When a `task_pr_pipeline` run fails after implementation, its failure handoff
+keeps the candidate on the task's `orbit/<task>-…` branch (usually behind a
+`[BLOCKED]` PR) and records it on the run. When the task is requeued, the next
+`task_pr_pipeline` or `task_local_pipeline` run resumes that candidate instead
+of re-implementing it. Its `resume_candidate` step squash-applies the candidate
+onto the new base as uncommitted changes, then:
+
+| Outcome | When | Implementation step |
+|---|---|---|
+| `resumed_validated` | The candidate applies cleanly and `workflow.required_validation_commands` pass on it. | Skipped. The candidate goes straight to commit, validation, review and delivery. |
+| `resumed_repaired` | The candidate conflicts with the new base, a required command fails, or the before-PR review refused it. | Starts from the applied candidate, with the conflict paths, the failing command and output, or the review findings as `resume_candidate`. |
+| `resumed_unjudged` | A required command's tool is missing, so validation could not judge the candidate. | Skipped. The pipeline's own `validate` step reports the environment failure. |
+| `fresh` | No candidate was preserved, an operator discarded it, the task's description, acceptance criteria or selectors changed since that run, the run is a bundle, or the commit is unreachable. | Implements from scratch. The reason is recorded. |
+
+Whenever a candidate was found, the outcome, the source run, branch and SHA
+are written to the task's history as a `candidate_resume` event and returned
+in the step's output. Required validation runs twice on a resumed candidate:
+once to decide the outcome, and again in the pipeline's `validate` step on the
+committed, synchronized head that is delivered.
+
+To throw a candidate away, run
+`orbit task update <task-id> --discard-candidate --status backlog`. This
+records a `candidate_discarded` history event, and the next run implements
+fresh. It is refused while the task is `in-progress`.
+
+Scope limits:
+
+- Claimed (distributed-drain) runs never resume. Their pipelines have no
+  failure handoff, so they never preserve a candidate: a failure settles the
+  claim. Their delivery steps also judge the implementation step's output,
+  which a skipped implementation does not produce. The evidence also lives in
+  the owner's run store, which a follower cannot read.
+- A failure after the PR opened (completion, CI on the published PR) leaves
+  the task in `review` with its PR, not a preserved candidate.
+
 CI-sweep filing is deliberately non-executable: `file_ci_failure_tasks` always
 creates `proposed` tasks. The CI job invokes `task_pilot_pipeline` for each new
 task and retries matching tasks that a prior pilot left proposed, carrying

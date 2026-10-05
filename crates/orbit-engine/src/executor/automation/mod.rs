@@ -74,6 +74,7 @@ pub(crate) fn execute_engine_action<
         // ---- generic built-in actions ----
         EngineDeterministicAction::ClaimHandoff => vcs::claim_handoff(host, input),
         EngineDeterministicAction::ClaimValidate => vcs::claim_validate(host, input),
+        EngineDeterministicAction::CandidateResume => vcs::candidate_resume(host, input),
         EngineDeterministicAction::CandidateValidate => vcs::candidate_validate(host, input),
         EngineDeterministicAction::CollectCiEvidence => ci::collect_ci_evidence(host, input),
         EngineDeterministicAction::CollectDependabotAlerts => {

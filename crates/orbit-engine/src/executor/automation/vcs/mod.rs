@@ -1,5 +1,6 @@
 mod attribution;
 mod base_obsolescence;
+mod candidate_resume;
 pub mod claim;
 mod commit;
 mod delivery_marker;
@@ -19,6 +20,7 @@ mod worktree;
 #[cfg(test)]
 mod tests;
 
+pub(super) use candidate_resume::candidate_resume;
 pub(super) use claim::{candidate_validate, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
 pub use commit::validate_claim_new_paths;

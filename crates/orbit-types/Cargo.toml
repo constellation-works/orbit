@@ -20,11 +20,11 @@ clap = { workspace = true, optional = true }
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 serde_yaml.workspace = true
-sha2.workspace = true
 tempfile.workspace = true

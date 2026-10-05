@@ -1370,6 +1370,7 @@ fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation()
     for name in [
         "worktree_setup",
         "review_gate_admit",
+        "candidate_resume",
         "agent_implement",
         RECOVERY,
     ] {

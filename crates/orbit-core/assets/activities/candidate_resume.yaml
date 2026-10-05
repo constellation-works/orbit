@@ -1,0 +1,70 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: candidate_resume
+spec:
+  type: deterministic
+  description: >
+    Resume the candidate a single task's last failed run preserved instead of
+    re-implementing it. The candidate is the branch and head
+    `pr_failure_handoff` recorded on the run the task was linked to before
+    this run (`prior_job_run_id`). It is used only when no operator discarded
+    it since that run (`orbit task update --discard-candidate`) and the task's
+    description, acceptance criteria and selectors still match the digest
+    recorded with it; otherwise the outcome is `fresh` with the reason.
+    A usable candidate is squash-merged onto the run's clean checkout of
+    `base_sha` and left as uncommitted changes. A clean merge then runs
+    `workflow.required_validation_commands` on it: passing is
+    `resumed_validated` and `implement` is false. A conflict, a failing
+    command, or a candidate the before-PR review refused is
+    `resumed_repaired`: `implement` stays true and `repair` carries the
+    trigger and output the implementer repairs from. A command that lacks a
+    tool is `resumed_unjudged`: the run's own validation step decides. Every
+    outcome with a candidate is written to the task history as a
+    `candidate_resume` event naming the source run and SHA.
+  input_schema_json:
+    type: object
+    required: [job_run_id, workspace_path, base_sha, task_ids]
+    properties:
+      job_run_id:
+        type: string
+      workspace_path:
+        type: string
+      base_sha:
+        type: string
+      task_ids:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      prior_job_run_id:
+        type: [string, "null"]
+  output_schema_json:
+    type: object
+    required: [phase, outcome, implement]
+    properties:
+      phase:
+        type: string
+      outcome:
+        type: string
+        enum: [fresh, resumed_validated, resumed_repaired, resumed_unjudged]
+      implement:
+        type: boolean
+      reason:
+        type: [string, "null"]
+      repair:
+        type: [object, "null"]
+        description: >
+          What the implementer repairs: `trigger` (`conflict`, `validation` or
+          `review`) and its `output`, plus `conflicting_paths` or the failing
+          `command`.
+      source_run_id:
+        type: [string, "null"]
+      source_branch:
+        type: [string, "null"]
+      source_sha:
+        type: [string, "null"]
+      base_sha:
+        type: string
+  action: candidate_resume
+  config: {}

@@ -2,8 +2,8 @@ use orbit_common::OrbitError;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskHistoryEntry, TaskStatus, is_valid_orb_task_id, normalize_task_dependencies,
-    normalize_task_tags, validate_task_dependencies_with,
+    CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus, is_valid_orb_task_id,
+    normalize_task_dependencies, normalize_task_tags, validate_task_dependencies_with,
 };
 
 use super::TaskRecordUpdateParams;
@@ -333,6 +333,11 @@ impl OrbitRuntime {
         {
             ensure_status_change_allowed(self, &task, &params, target)?;
         }
+        if params.discard_candidate && task.status == TaskStatus::InProgress {
+            return Err(OrbitError::InvalidInput(format!(
+                "task {id} is in-progress; discard a preserved candidate after its run stops"
+            )));
+        }
         let validated = self.validate_and_normalize_task_field_edits(id, &task, params)?;
         let crew_assignment = validated.crew_assignment;
         params = validated.params;
@@ -389,6 +394,24 @@ impl OrbitRuntime {
                     describe_optional_field_value(task.crew.as_deref()),
                     describe_optional_field_value(replacement.as_deref()),
                 )),
+                from_status: None,
+                to_status: None,
+            });
+        }
+        if params.discard_candidate {
+            // [ORB-13985] `candidate_resume` honours a discard recorded since
+            // the candidate's run began, so the next run implements fresh.
+            append_history.push(TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: effective_label.clone(),
+                event: CANDIDATE_DISCARDED_EVENT.to_string(),
+                note: Some(match task.job_run_id.as_deref() {
+                    Some(run_id) => format!(
+                        "discarded any candidate run `{run_id}` preserved; the next run implements fresh"
+                    ),
+                    None => "discarded any preserved candidate; the next run implements fresh"
+                        .to_string(),
+                }),
                 from_status: None,
                 to_status: None,
             });

@@ -88,6 +88,11 @@ pub struct TaskUpdateArgs {
     /// Note recorded on the approval's status history entry (with `--approve`)
     #[arg(long, requires = "approve")]
     pub note: Option<String>,
+    /// Discard the candidate the task's last failed run preserved, so its next
+    /// run implements fresh instead of resuming it. Combine with `--status
+    /// backlog` to requeue.
+    #[arg(long)]
+    pub discard_candidate: bool,
     /// Apply `--status` even when the task lifecycle refuses the transition
     /// (for example reopening a done task). Human-operator override: the
     /// change is recorded in task history as `forced`.
@@ -104,7 +109,7 @@ pub struct TaskUpdateArgs {
 /// same invocation, and `--status` would be a direct contradiction of the
 /// transition being requested. Rejecting the combination in the parser keeps
 /// approval one write with one history entry.
-const APPROVE_CONFLICTS: [&str; 20] = [
+const APPROVE_CONFLICTS: [&str; 21] = [
     "force",
     "title",
     "description",
@@ -125,6 +130,7 @@ const APPROVE_CONFLICTS: [&str; 20] = [
     "orchestrator",
     "context_files",
     "artifacts",
+    "discard_candidate",
 ];
 
 impl Execute for TaskUpdateArgs {
@@ -156,6 +162,7 @@ impl Execute for TaskUpdateArgs {
             approve,
             note,
             force,
+            discard_candidate,
             json: _,
         } = self;
 
@@ -238,7 +245,8 @@ impl Execute for TaskUpdateArgs {
             && crew.is_none()
             && orchestrator.is_none()
             && context_files.is_none()
-            && upsert_artifacts.is_empty();
+            && upsert_artifacts.is_empty()
+            && !discard_candidate;
         if changes_nothing {
             return Err(OrbitError::InvalidInput(
                 "nothing to update: pass at least one field flag, e.g. `--status` or `--title` (see `orbit task update --help`)"
@@ -271,6 +279,7 @@ impl Execute for TaskUpdateArgs {
             orchestrator,
             context_files,
             upsert_artifacts,
+            discard_candidate,
             ..Default::default()
         };
         let task = if force {

@@ -26,6 +26,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/classify_workspace_auto_tasks.yaml"),
     ),
     (
+        "candidate_resume",
+        include_str!("../../assets/activities/candidate_resume.yaml"),
+    ),
+    (
         "candidate_validate",
         include_str!("../../assets/activities/candidate_validate.yaml"),
     ),
