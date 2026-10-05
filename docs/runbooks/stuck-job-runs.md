@@ -327,8 +327,11 @@ resume the latest attempt instead of the original source. A lineage run stuck as
 `running` after its worker died (for example after a host reboot) is reconciled to
 `interrupted` before the check, so it does not block recovery.
 
-Resume needs the job present in the catalog (`orbit job list --all`). A run started from
-a raw YAML path can be resumed only after that YAML is registered under `resources/jobs/`.
+Resume first uses the run's pinned definition snapshot, when one was recorded. A run
+started from a raw YAML path does not need that job registered under `resources/jobs/`,
+and can resume after the original YAML file is gone. Only a run without a recorded
+definition snapshot needs its job in the catalog (`orbit job list --all`). Referenced
+activities still resolve through the current activity catalog.
 A run with no successful checkpoints degrades to a full replay.
 
 ## Replay from the beginning

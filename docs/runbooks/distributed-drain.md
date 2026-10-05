@@ -126,7 +126,8 @@ show`, the Drain card, and the follower's idle receipt (`os_unavailable`). So
 an `os:macos` repair filed on a Linux owner waits for a macOS follower instead
 of blocking the owner's worker. Retag with `orbit.task.update` to reroute a
 backlog task; running or claimed work is not moved. Owner and followers must
-deploy the same protocol revision (the OS field is revision 4). Empty
+deploy the same protocol revision (currently 7, as defined by
+`DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA`; OS matching arrived in revision 4). Empty
 `workflow.required_validation_commands` means no required check, as on an
 owner's own delivery: a claimed leaf runs nothing and records that, and the
 owner accepts its handoff without validation logs. Every other handoff check
@@ -240,7 +241,7 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require the same protocol revision (currently 4;
+exact paths. Both peers require the same protocol revision (currently 7;
 widening arrived in 3).
 
 
@@ -648,8 +649,9 @@ Leaf delivery can still fail — the owner was unreachable when the leaf ended,
 or when `--force` released it. The settlement stays recorded on the follower
 as `settling` and is retried without a new drain. A live drain retries on
 each pass, and a leaf's worker retries briefly (15s, 60s, 240s). After both
-have ended, the OS clock sweep (`orbit clock tick`, every minute once
-`orbit clock install` has run) retries it: each tick opens the host's replica
+have ended, the OS clock sweep (`orbit clock tick`, every minute by default
+after `orbit routine init --install-clock`; use `orbit clock enable` to resume
+an installed paused clock) retries it: each tick opens the host's replica
 checkouts too, only to deliver what their drains recorded. A tick never ends
 unlaunched work, and it delivers a leaf's failure once the leaf's dead worker
 is reconciled. On a host without the clock, flush it with

@@ -15,44 +15,69 @@ database recovery, or upgrade.
 
 ## Run `orbit doctor`
 
-`orbit doctor` performs infrastructure checks and one row for each definition-artifact kind.
-Every check degrades to a row rather than aborting unless the store itself cannot open.
+Without repair flags, `orbit doctor` diagnoses workspace and host infrastructure, definition
+artifacts, routed provider CLIs, MCP configuration, and the clock unit. Individual probes
+normally report a row on failure; runtime/store startup failures can prevent a report.
 
-| Check | What it verifies |
+| Check | What it reports | Status and next step |
+|---|---|---|
+| `config` | Effective global + workspace configuration | `ok` when valid; `warning` for ignored crew properties or lanes pointing at disabled crews (possibly several rows); `error` for selection/parse failures. Correct the named config field. |
+| `database` | Store DB `PRAGMA quick_check` and schema-ledger version versus this binary | `ok` when integrity and version match; `warning` for an older schema or unreadable ledger; `error` for open/integrity failure or a newer schema. Follow the diagnostic; newer schemas need a newer binary. |
+| `disk-space` | Free space on the volume holding the local `.orbit` | `warning` below 1 GiB or 5%, or when the probe fails; `error` below 256 MiB or 1%. Free space on that volume. |
+| `search-index` | Lexical index chunk count and indexed-task count versus stored-task count | `ok` when task counts agree, including an empty workspace; `warning` on a count mismatch or read failure. A mismatch names `orbit search reindex`; this check does not inspect embeddings or prove freshness when counts agree. |
+| `stale-locks` | Immediate `*.lock` files in the workspace-local `state_dir` whose recorded holder PID is dead | `ok` with the number scanned when none are stale; otherwise `warning` with holder details and `orbit doctor --fix-stale-locks`. No recursive scan of task, learning, or ADR trees. |
+| `job-runs` | Orphaned `pending` or `running` runs with no live worker process | `warning` for orphans or inspection failures; otherwise `ok`. Follow the named run's resume/cancel guidance; see [stuck runs](./stuck-job-runs.md). |
+| `pull-settlements` | Replica leaf outcomes recorded locally but not delivered to the owner, including count and oldest age | `warning` while delivery is owed or inspection fails; otherwise `ok`, including workspaces that never pulled. Once the owner is reachable, `orbit run auto --stop` flushes pending delivery ([distributed drain](./distributed-drain.md#claim-inspection-and-manual-recovery)). |
+| `task-reservations` | Active reservations whose owner run or terminal task association proves inactivity | `warning` for conclusively stale reservations or inspection failure; otherwise `ok`. `orbit doctor --fix-stale-task-locks` rechecks before releasing; see below. |
+| `task-relations` | Unresolved relation/dependency targets that would block a task-index rebuild | `warning` for dangling targets or audit failure; otherwise `ok`. Inspect the named source tasks and correct/remove those targets. |
+| `infra-blocked-tasks` | Tasks blocked by a missing provider launcher, distinguishing launchers that now resolve from ones still missing | `warning` for either group or classification failure; otherwise `ok`. Install a still-missing launcher, then use `orbit task recheck-blocked --confirm` to requeue cleared infrastructure blocks. |
+| `blocked-task-recovery` | Final-recovery backstop: pending, human-intervened, too-old, unattributed, and decided block episodes | `skipped` for claimed workers, replicas, or empty `workflow.final_recovery_crews`; `warning` on inspection failure or tasks still blocked after final recovery; otherwise `ok` (pending recovery alone does not warn). Read each named task's `final_recovery` comment before a manual decision. |
+| `automation-consumers` | Stalled/wedged delivery consumers and enabled definitions with an unresolvable branch or an owner this host cannot serve | `warning` for findings or inspection failure; otherwise `ok`. Follow the row's recover/reset, branch, ownership, or disable guidance; disabled definitions do not trigger branch/ownership findings. |
+| `review` | Before-PR and after-landing review switches, sources, crew/minutes, and next batch due | `error` if inspection fails or enabled review cannot run here: incompatible local ship route, missing crew, or an unhealthy after-landing consumer (missing, wrong owner, stalled, wedged, held, unresolved branch/crew, or remote-tracking lag beyond its wait budget). Otherwise `ok`, including disabled review. Fix the named review configuration/consumer; this probe does not fetch. |
+| `host-shutdown` | Scheduled host shutdown/reboot, with mode and time (Linux logind's `/run/systemd/shutdown/scheduled`) | `warning` while a schedule holds unattended admissions; otherwise `ok`. Admissions resume after it clears; see [scheduled shutdown](./distributed-drain.md#scheduled-host-shutdown-or-reboot). |
+| `validation-env` | Required-validation PATH source, login-shell probe mode/fallback, and `python3`/`git`/`make` locations and shadowing | `skipped` when `workflow.required_validation_commands` is empty; `warning` for probe/preflight/fallback or shadowing concerns; otherwise `ok`. Correct shell startup or `workflow.validation_env` as advised. A listed missing tool alone does not change the status, and this row does not execute validation commands. |
+| `orphan-task-stores` | Host-global task-store partitions and their live, missing, unreachable, or absent checkout claims | `skipped` when no partitions exist; `warning` for findings or inspection failure; otherwise `ok`. Reindex unowned populated stores, restore unreachable checkouts, or use the confirmed repair only for removable partitions; see below. |
+| `tracked-orbit-files` | Git-tracked paths under `.orbit/` | `warning` when tracked (`git rm -r --cached .orbit`); `ok` when none; `skipped` outside Git or when Git cannot answer. |
+| `plugin-builds` | Host source-built plugin provenance and build drift | `skipped` when no plugin was built from source; `ok` for healthy or intentional findings; `warning` for actionable drift or inspection failure. Follow the plugin row's step and rerun `orbit plugin doctor`. |
+| `empty-task-stubs` | Empty task-bundle directories, or ones holding only `.task.yaml.lock`, that never received `task.yaml` | `warning` for stubs or scan failure; otherwise `ok`. `orbit task reindex` clears stubs. Data-bearing directories are handled by the next row. |
+| `unresolved-task-bundles` | Directories missing `task.yaml` that still hold bundle content (`events.jsonl`, `artifacts/`, …) | `warning` for retained unresolved data or scan failure; otherwise `ok`. Restore `task.yaml` or move the directory aside; reindex will not delete it. |
+| `artifacts-skills`, `artifacts-jobs`, `artifacts-activities`, `artifacts-auto-tasks`, `artifacts-routines` | One row per definition kind: missing shipped defaults, stale, deprecated, residual, or faulty catalog content | `skipped` for no files/findings, `ok` for healthy content, `error` only for an unloadable/missing shipped default, `warning` for other findings. Each finding names its remedy; use `orbit workspace sync` for shipped-default convergence and the scoped repair/manual edit when advised. |
+| `artifacts` | Fallback when the definition-artifact inspection itself fails | One `warning` replaces the per-kind rows. Resolve the runtime/store error and rerun doctor. |
+| `state-directory-permissions` | Unix group/world write bits on Orbit-owned state directories | `warning` for writable directories (`chmod go-w <directory>`); `error` for resolution/inspection failure; otherwise `ok`. `skipped` on non-Unix platforms. See scan scope below. |
+| `provider:<crew>` | One row per enabled crew selected by default/system/positive-weight complexity routing: executor definition and CLI lookup | `ok` when the CLI resolves (authentication is **not** checked); `skipped` for an executor without a CLI command; `error` for missing crew/executor/CLI or inspection failure. Restore the named dependency or change routing. Disabled crews are omitted. |
+| `provider-routing` | Fallback when effective routing config or a complexity crew pool cannot be inspected | One `error` replaces the per-crew rows. Repair the named configuration. |
+| `mcp-registration` | Recognized client configuration for this workspace | `ok` when a registration is found (connection is **not** checked); otherwise `warning` naming `orbit mcp init --auto` or `orbit mcp init --client <client>`. |
+| `mcp-callers` | Retired destination-side caller-authorization files under the user's `~/.orbit` | `warning` when inert files remain; otherwise `ok`. Remove the obsolete files; SSH keys govern remote access. The row is omitted when the home directory cannot be resolved. |
+| `clock-unit` | Installed launchd/systemd sweep unit's invocation, program path, and `--version` | `skipped` when no unit is installed; `ok` when matching; `warning` for a different path, stale invocation, unrunnable program, or inspection failure; `error` for version mismatch. Follow the unit-file/access remedy or `orbit clock repair`; this row does not establish native timer readiness. |
+
+The state-permission probe checks the global and workspace Orbit roots themselves, then
+recurses through global `state/`, `tasks/`, `cache/`, `frictions/` and workspace `state/`,
+`tasks/`, `frictions/`. Missing roots are ignored. Configured roots are resolved first;
+child symlinks are not followed. The separate filesystem-lock probe scans only immediate
+files in `state_dir`; on non-Unix platforms holder PIDs are conservatively treated as alive.
+
+Explicit repair flags prepend these additional rows before the diagnostics. They are not
+emitted during ordinary diagnosis; a repair error can abort the command before a report.
+Do not run a repair merely to collect health evidence.
+
+| Conditional check | Emitted after a successful repair |
 |---|---|
-| `config` | layered config parses (`~/.orbit/config.toml` + workspace `config.toml`) |
-| `database` | store DB `PRAGMA quick_check` + schema-ledger version versus this binary |
-| `disk-space` | free space on the volume holding `.orbit` (warn below 1 GiB or 5%; fail below 256 MiB or 1%) |
-| `semantic-index` | stale embedding rows; skipped if never indexed |
-| `stale-locks` | `.lock` files under `state/`, `tasks/`, `learnings/`, and `adrs/.locks/` whose recorded holder PID is dead |
-| `job-runs` | orphaned `pending` or `running` runs with no live worker process |
-| `pull-settlements` | warns when a replica has recorded a leaf's outcome but not delivered it to the owner (nothing retries on a timer), naming the count and the age of the oldest. Remedy: `orbit run auto --stop` ([distributed drain](./distributed-drain.md#claim-inspection-and-manual-recovery)); `ok` on a workspace that never pulled |
-| `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
-| `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
-| `host-shutdown` | warns while the host has a shutdown or reboot scheduled (logind's `/run/systemd/shutdown/scheduled`), naming its mode and time; unattended admissions are held until it clears ([distributed drain](./distributed-drain.md#scheduled-host-shutdown-or-reboot)) |
-| `orphan-task-stores` | task-store partitions (`~/.orbit/tasks/workspaces/<ws_id>/`) that no workspace binding on this host claims |
-| `tracked-orbit-files` | git still tracks files under `.orbit/`; `.orbit/` is per-user state. Remedy: `git rm -r --cached .orbit` |
-| `empty-task-stubs` | empty `ORB-*` directories under those partitions, or ones that hold only `.task.yaml.lock` (aborted creates). Data-bearing dirs missing `task.yaml` are not stubs; `orbit task reindex` still clears this row |
-| `unresolved-task-bundles` | `ORB-*` directories missing `task.yaml` that still hold bundle content (`events.jsonl`, `artifacts/`, …). Retained task data: restore `task.yaml` or move the directory aside; `orbit task reindex` will not delete them |
-| `artifacts-*` | skills, jobs, activities, auto-tasks, and routines on disk: stale, deprecated, residual, catalog-invalid, or a previously reconciled shipped default that is missing |
-| `clock-unit` | the installed launchd/systemd sweep unit invokes this Orbit binary (path and `--version`); skipped when no unit is installed |
+| `fix-stale-locks` | `ok`, number of dead-holder records cleared (lock files preserved) |
+| `fix-stale-task-locks` | `ok`, number of conclusively stale reservations released |
+| `remove-graph` | `ok`, number of retired graph locations removed |
+| `fix-stale-artifacts` | `ok`, number of deprecated Orbit-written artifacts retired |
+| `fix-retired-activity-backends` | `ok`, number of activity files repaired; skipped files are reported on stderr |
+| `fix-orphan-task-stores` | `ok`, empty/populated partition and deleted bundle counts; requires `--confirm` |
 
-Example:
+Example excerpt (other checks omitted; counts vary by workspace):
 
 ```text
-$ orbit doctor
-│ CHECK            STATUS    DETAILS                                                          │
-│ config           ok        valid (~/.orbit/config.toml)                                     │
-│ database         ok        quick_check ok; schema version 1 matches this binary             │
-│ disk-space       ok        11.2 GiB free of 65.6 GiB (17.1%) on the volume holding …/.orbit │
-│ semantic-index   skipped   no semantic embeddings indexed yet                               │
-│ stale-locks      warning   1 lock file(s) with dead holder records: …/state/layout.lock      │
-│                            (dead pid 154488, op: layout upgrade, since 2026-07-04T09:25…)   │
-│ job-runs         ok        no orphaned job runs                                              │
-│ task-reservations ok       no conclusively stale active task reservations                    │
-│ task-relations   ok        no unresolved relation/dependency targets                        │
-│ orphan-task-stores ok      2 task-store partition(s) scanned, all claimed …                 │
-0 failure(s), 1 warning(s).
+$ orbit doctor --format table
+│ CHECK         STATUS    DETAILS                                           │
+│ database      ok        quick_check ok; schema version 35 matches this binary │
+│ search-index  ok        26430 chunks, 3707 indexed tasks / 3707 stored tasks │
+│ stale-locks   ok        3 lock file(s) scanned, none stale                  │
+…
 ```
 
 The command exits nonzero only when at least one check is `ERROR`; warnings and skips exit
@@ -289,7 +314,7 @@ binary is left alone, and a paused clock is corrected on disk without being resu
 A failed reload is remembered in `~/.orbit/clock.reload-pending`: re-running `orbit clock
 repair` (or `orbit update`) retries the `launchctl load` / `systemctl --user restart` even
 though the unit file already names this binary, reports `reloaded` once the manager accepts
-it, and keeps exiting non-zero until then. `orbit clock enable` and `orbit clock disable` clear
+it, and keeps exiting non-zero until then. `orbit clock enable` and `orbit clock pause` clear
 the pending retry — the operator's explicit choice wins over a repair that is still catching up.
 
 Operators do not have to reach for it after an ordinary upgrade: `orbit update` runs
