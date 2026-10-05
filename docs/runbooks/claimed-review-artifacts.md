@@ -151,6 +151,12 @@ jq -e --argjson pr "$PR_NUMBER" \
 # under a squash merge; read it from GitHub's public PR view.
 gh pr view "$PR_NUMBER" --repo "$REPO" \
   --json number,state,headRefOid,mergeCommit,mergedAt,url > pr-view.json
+MERGE_COMMIT="$(jq -er '.mergeCommit.oid' pr-view.json)"
+gh api "repos/$REPO/git/commits/$MERGE_COMMIT" > merge-commit.json
+jq -e '{merge_commit: .sha, merge_tree: .tree.sha, landing_base: .parents[0].sha}' \
+  merge-commit.json
+jq -e '.. | objects | select(.phase == "complete" and has("merge")) | .merge |
+  {strategy, managed_merge, delivery_evidence}' owner-landing-run.json
 
 # Follower: retain all success, failure and denial rows for each artifact call.
 orbit audit list --since "$START" --run "$LEAF_RUN" \
@@ -185,12 +191,13 @@ manifest/report contents. The required evidence chain is:
 - the reviewed identity: the gate's `final_candidate.commit`, the accepted
   handoff's candidate and the merged PR's `reported_head_sha` are the same
   commit;
-- the landed identity, kept separate: the merge commit and its tree from
-  `gh pr view`, the base it landed on, how it was integrated (a squash merge
-  produces a new commit, so its SHA never equals the reviewed head) and the
-  owner landing run's output showing the landed content is the reviewed
-  candidate's change. If the landed content differs from the reviewed
-  candidate, the review does not cover it.
+- the landed identity, kept separate: the merge commit from `gh pr view`, its
+  tree and first parent from GitHub's public Git commits API, the integration
+  strategy and `managed_merge` evidence from the owner's successful completion
+  step, and that step's `delivery_evidence` tying its head to the merge commit.
+  A squash merge produces a new commit, so its SHA never equals the reviewed
+  head. If the landed content differs from the reviewed candidate, the review
+  does not cover it.
 
 The public audit projection does not expose every stored broker diagnostic.
 Use its returned row ID with `orbit audit show`; do not query Orbit's SQLite
