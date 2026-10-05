@@ -50,12 +50,20 @@ orbit --version
 orbit config get machine.id
 orbit workspace show
 orbit doctor
-orbit config get review.before_pr
+orbit config get review.before_pr        # decisive on the owner only
+orbit config get operation.review_crew   # the owner's before-PR reviewer crew
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `7`, equivalent crew and toolchain resolution, and
-`review.before_pr = false`. Hosts may run different operating systems:
+protocol schema `7`, and equivalent crew and toolchain resolution. Review policy
+is the owner's: admission captures the owner's `review.before_pr` and, when it
+is on, its `operation.review_crew` and review budget into the claim. With it
+on, the owner must ship through PRs (the before-PR review runs only on that
+route; admission refuses otherwise) and set `operation.review_crew`, and every
+follower must resolve that crew; `orbit run auto --pull` refuses before
+claiming with `before_pr_reviewer_unavailable` otherwise. The follower's own
+`review.before_pr` is reported to the owner but never gates admission or the
+leaf, so a follower need not change it. Hosts may run different operating systems:
 each follower declares its OS, and a task tagged `os:linux`, `os:macos` or
 `os:windows` is claimed only by a host of a named OS; it waits in the backlog,
 named, until one pulls it. Empty
@@ -117,8 +125,7 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require the same protocol revision (currently 5;
-widening arrived in 3).
+exact paths. Both peers require the same protocol revision (currently 7).
 
 
 ## Start a follower's drain
@@ -203,8 +210,12 @@ orbit tool run orbit.drain.probe --input '{
 }'
 ```
 
-Declaring version, schema, or review policy reports the first refusal
-admission would raise. The probe is never a health check for admission.
+Declaring version or schema reports the first refusal admission would raise.
+`caller_before_pr` is diagnostic: whatever the follower declares, the probe
+evaluates the owner's captured contract, reports it under `ship` and `review`,
+and names the before-PR reviewer crew in `diagnostics` when it is on. `admits`
+does not check whether this follower can resolve that crew; the pull
+preflight does. The probe is never a health check for admission.
 
 ```bash
 orbit tool run orbit.drain.receipt.lookup --input '{"request_id":"<request-id>"}'
@@ -285,8 +296,14 @@ someone inspects `blocked` and `job_run_machine`.
 
 ## Verify
 
-A clean probe, matching versions, `review.before_pr` off, and a replica role
-mean the hosts are **installed**. Start a drain only when the user asked for
-one, and leave schedules untouched. After the first claim, confirm on the owner
-that `orbit.drain.claims` shows it on the follower's machine, and that after
-handoff the task is in `review` with its PR and nothing merged.
+A probe with `admits: true`, matching versions and protocol, a replica role
+and, when the owner's `review.before_pr` is on, a follower that resolves the
+owner's `operation.review_crew` mean the hosts are **installed**. Start a drain
+only when the user asked for one, and leave schedules untouched. After the
+first claim, confirm on the owner that `orbit.drain.claims` shows it on the
+follower's machine, and that after handoff the task is in `review` with its PR
+and nothing merged. With before-PR review captured, the owner accepts a handoff
+only with the leaf's passing review of exactly the handed-off head, by the
+captured reviewer and contract; otherwise acceptance is refused
+(`review_evidence_missing`, `review_not_passed`, `reviewed_head_mismatch`, and
+related `review_*` reasons). The task's `review-gate.json` records the review.

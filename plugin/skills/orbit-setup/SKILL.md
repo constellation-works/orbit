@@ -22,6 +22,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | First installation or another repository | [First run](references/first-run.md) |
 | Providers, crews, policies and workspace settings | [Configuration](references/configuration.md) |
 | Linux execution prerequisites or sandbox failure | [Linux sandbox](references/linux-sandbox.md) |
+| Windows host (Orbit runs inside WSL2) | [Windows through WSL2](references/windows-wsl2.md) |
 | Scheduled execution | [Automation](references/automation.md) |
 | Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
 | MCP clients, SSH federation or remote dashboard | [Remote access](references/remote-access.md) |
