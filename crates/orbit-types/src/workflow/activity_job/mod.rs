@@ -46,6 +46,7 @@ macro_rules! deterministic_action_catalog {
                 PrepareTaskPilot => "prepare_task_pilot",
                 PromoteAgentMain => "promote_agent_main",
                 PullRefill => "pull_refill",
+                RecordProposedApprovals => "record_proposed_approvals",
                 ReleaseLocks => "release_locks",
                 ReserveLocks => "reserve_locks",
                 ResolveDeliveryJob => "resolve_delivery_job",
@@ -54,6 +55,7 @@ macro_rules! deterministic_action_catalog {
                 ReviewGateSettle => "review_gate_settle",
                 RevertOnRed => "revert_on_red",
                 ScanUnresolvedWork => "scan_unresolved_work",
+                SelectProposedApprovals => "select_proposed_approvals",
                 Sleep => "sleep",
                 ValidateBundles => "validate_bundles",
             }

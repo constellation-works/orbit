@@ -7,25 +7,34 @@
 //! the same task-bundle commit. A CI-failure sweep may additionally request
 //! explicit admission: after the selectors and every recommendation validate,
 //! this boundary promotes only a current, warning-free repair from `proposed`
-//! to `backlog`.
+//! to `backlog`. An `--approve-proposed` drain requests the same promotion
+//! under its own verified authority, through the ordinary approve transition.
 
 mod apply;
 mod assessment;
 mod attachment_budget;
+mod drain_promotion;
 mod input;
 mod persist;
 mod prepare;
+mod promotion;
 mod source;
 mod validation_tools;
 
 pub(super) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{validate_after_selectors, validate_recommendations};
+pub(super) use drain_promotion::{
+    approval_disqualification, approved_by_drain, held_classification,
+};
 use input::{
     action_failed, requested_workspace_root, required_string, required_string_array, string_array,
     string_array_value,
 };
 pub(super) use prepare::prepare;
+pub(super) use promotion::{
+    PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
+};
 pub(crate) use source::requested_base_branch;
 
 /// Field carrying the deterministic validation-tool feasibility findings, on

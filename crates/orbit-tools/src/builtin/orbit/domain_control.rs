@@ -70,7 +70,13 @@ impl Tool for WorkflowAutoTool {
                 "complete",
                 "boolean",
                 false,
-                "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
+                "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review. Does not approve proposed tasks",
+            ),
+            parameter(
+                "approve_proposed",
+                "boolean",
+                false,
+                "Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window. Tasks tagged no-auto-approve are never approved. Others stay proposed; status reports approved and held counts. Default false",
             ),
             parameter(
                 "force",

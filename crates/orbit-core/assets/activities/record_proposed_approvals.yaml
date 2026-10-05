@@ -1,0 +1,53 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: record_proposed_approvals
+spec:
+  type: deterministic
+  description: >
+    Record what one `--approve-proposed` pass's task-pilot child did. A task
+    counts as approved only when it has left `proposed` and its history holds
+    a `proposal_approved` entry whose note names this drain; the pilot's own
+    output is not trusted for that. The approvals are added to the drain run's
+    `drain_approvals` report, and the held view of every remaining `proposed`
+    task is refreshed with its reason: the qualification it misses, the
+    task-pilot classification that held it, or `pilot_unresolved` when the
+    pilot left no decision.
+  input_schema_json:
+    type: object
+    required: [task_ids]
+    properties:
+      task_ids:
+        type: array
+        items:
+          type: string
+      pilot:
+        type: object
+  output_schema_json:
+    type: object
+    required: [approved, approved_count, held, held_total, held_by_reason]
+    properties:
+      approved:
+        type: array
+        items:
+          type: string
+      approved_count:
+        type: number
+      held:
+        type: array
+        items:
+          type: object
+      held_total:
+        type: number
+      held_by_reason:
+        type: object
+      pilot_run_id:
+        oneOf:
+          - type: string
+          - type: "null"
+      pilot_status:
+        oneOf:
+          - type: string
+          - type: "null"
+  action: record_proposed_approvals
+  config: {}

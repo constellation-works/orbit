@@ -21,8 +21,10 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
   backlog work immediately, so finish scope changes before exposing it.
 - Creation, promotion and completion are distinct. `--complete` authorizes
   delivery for work admitted in that invocation's window; it does not itself
-  authorize promotion, future windows or releases. Existing continuous-delivery
-  authorization may cover them; apply the user's actual instructions.
+  authorize promotion, future windows or releases; `run auto --approve-proposed`
+  is the separate opt-in for a drain to approve qualifying proposed tasks.
+  Existing continuous-delivery authorization may cover them; apply the user's
+  actual instructions.
 - Verify persisted preparation, actual diffs, required checks and merge state.
   Post-merge review/QA findings become repairs under continuous delivery; do not
   invent an extra pre-merge approval gate. Repository protections still apply.

@@ -14,10 +14,20 @@ spec:
     independently valid siblings still apply. Each accepted task mutation and
     idempotency receipt commits atomically. Every other task
     field, lifecycle state, dispatch state, and recommendation remains unchanged
-    unless a CI sweep supplies its exact filing record and explicit promotion
-    authority. In that mode only a proposed, selector-backed task with no
-    duplicate, already-landed, conflict, or warning finding advances to backlog;
-    all other findings remain proposed and are classified in the output.
+    unless explicit promotion authority arrives with one authority record:
+    a CI sweep's exact filing record (`ci_sweep_filing`) or an
+    `--approve-proposed` drain's `drain_promotion` record. Both modes share
+    one finding check: a duplicate, already-landed, conflict, or warning
+    finding keeps the task proposed and is classified in the output. Under
+    CI-sweep authority only a proposed, selector-backed task advances, inside
+    the atomic pilot write (`ci_sweep_admission`). A `drain_promotion` record
+    is verified first: it must name a live `workspace_auto_pipeline` run
+    started with `approve_proposed` that dispatched this pilot run. Under it
+    a proposed task qualifies by its `no-diff-expected` tag, or by non-empty
+    selectors and an assessed complexity, and is approved through the
+    ordinary approve transition with a note naming the drain run
+    (`drain_approval`); a held task's pilot history entry records the hold
+    classification so the drain does not pilot it again until it changes.
   input_schema_json:
     type: object
     # No `crew`: this apply step is deterministic and runs no agent, so it has
@@ -38,6 +48,10 @@ spec:
         oneOf:
           - type: object
           - type: "null"
+      drain_promotion:
+        oneOf:
+          - type: object
+          - type: "null"
       prior_applied_count:
         type: number
       carried_task_outcomes:
@@ -51,7 +65,7 @@ spec:
        partition_decisions, partition_count, received_partition_count,
        failed_partitions, skipped_stale_partitions, task_outcomes, applied_count,
        unresolved_count, repair_count, repair_partitions, repair_prepared,
-       non_repairable_outcomes, tasks, ci_sweep_admission]
+       non_repairable_outcomes, tasks, ci_sweep_admission, drain_approval]
     properties:
       status:
         type: string
@@ -112,6 +126,10 @@ spec:
         items:
           type: object
       ci_sweep_admission:
+        type: array
+        items:
+          type: object
+      drain_approval:
         type: array
         items:
           type: object

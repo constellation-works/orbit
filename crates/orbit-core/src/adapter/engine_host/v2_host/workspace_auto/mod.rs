@@ -1,14 +1,17 @@
 //! The workspace auto-drain's deterministic actions: the per-iteration
-//! admission classifier, the drain window, and the read-only readiness
-//! projection, plus the live drain and leaf-run reads they share.
+//! admission classifier, the `--approve-proposed` selection and report, the
+//! drain window, and the read-only readiness projection, plus the live drain
+//! and leaf-run reads they share.
 
 use orbit_engine::DispatchError;
 
+mod approvals;
 mod classify;
 mod drains;
 mod readiness;
 mod window;
 
+pub(super) use approvals::{record_proposed_approvals, select_proposed_approvals};
 pub(super) use classify::classify_workspace_auto_tasks;
 pub(super) use window::drain_window;
 

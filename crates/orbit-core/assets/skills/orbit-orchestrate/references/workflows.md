@@ -122,8 +122,11 @@ creates `proposed` tasks. The CI job invokes `task_pilot_pipeline` for each new
 task and retries matching tasks that a prior pilot left proposed, carrying
 explicit promotion authority into its deterministic apply boundary. Invalid or
 empty selectors, pilot failure, duplicates, already-landed
-work, conflicts, and warnings leave that task proposed without blocking other
-pilot children. A standalone task-pilot run has no promotion authority. The
+work, conflicts, warnings and a `no-auto-approve` tag leave that task proposed
+without blocking other pilot children. An `orbit run auto --approve-proposed`
+drain hands the same apply boundary a drain-scoped authority instead, verified
+against the drain that dispatched the pilot. A standalone task-pilot run has no
+promotion authority. The
 source run/job/SHA/step remains in the task description, while parent and child
 run state retain the pilot run ID, result, and admission decision. Filing
 clusters failures by a normalized error signature that prefers a concrete test

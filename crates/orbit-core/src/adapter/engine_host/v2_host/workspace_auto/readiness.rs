@@ -20,6 +20,7 @@ use crate::application::distributed::RESOURCE_THROTTLED;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
+use super::approvals::readiness_approvals;
 use super::classify::{DEFAULT_CANDIDATE_POOL, candidate_pool_limit};
 use super::drains::{
     DEFAULT_MAX_ACTIVE_LEAF_RUNS, DRAIN_JOB_NAME, LEAF_JOB_NAME, live_pull_drain,
@@ -390,6 +391,17 @@ pub fn explain_workspace_auto_readiness(
         })
         .collect::<Vec<_>>();
 
+    // [ORB-14117] The status drain's proposed-task approvals, when it was
+    // started with `--approve-proposed`.
+    let approvals = readiness_approvals(
+        runtime,
+        status_run_id,
+        active_drain
+            .as_ref()
+            .map(|drain| &drain.input)
+            .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref())),
+    )?;
+
     Ok(json!({
         "snapshot": {
             "read_only": true,
@@ -444,6 +456,7 @@ pub fn explain_workspace_auto_readiness(
             "resource_throttle": resource.throttle,
             "resource_telemetry_unknown": resource.unknown,
         },
+        "approvals": approvals,
         "tasks": tasks,
     }))
 }

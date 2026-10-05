@@ -109,6 +109,9 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     if let Some(phases) = occupancy_phases(&capacity["occupancy"]["phases"]) {
         lines.push(format!("Occupied slots: {phases}."));
     }
+    if let Some(approvals) = approval_line(&payload["approvals"]) {
+        lines.push(approvals);
+    }
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
@@ -134,6 +137,33 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
         }
     }
     lines
+}
+
+/// [ORB-14117] An `--approve-proposed` drain's approvals so far, and why the
+/// remaining proposed tasks are held.
+fn approval_line(approvals: &Value) -> Option<String> {
+    if approvals["enabled"].as_bool() != Some(true) {
+        return None;
+    }
+    let held = approvals["held_by_reason"]
+        .as_object()
+        .map(|reasons| {
+            reasons
+                .iter()
+                .map(|(reason, count)| format!("{reason}={count}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|reasons| !reasons.is_empty())
+        .map(|reasons| format!(" ({reasons})"))
+        .unwrap_or_default();
+    Some(format!(
+        "Proposed approval: {} approved by drain {}; {} awaiting pilot; {} held{held}.",
+        approvals["approved_total"],
+        approvals["drain_run_id"].as_str().unwrap_or("-"),
+        approvals["awaiting_pilot"],
+        approvals["held_total"],
+    ))
 }
 
 /// [ORB-12968] A pending host shutdown holds every new admission, so it is
