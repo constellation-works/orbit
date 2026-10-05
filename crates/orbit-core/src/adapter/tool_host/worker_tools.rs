@@ -126,12 +126,23 @@ pub(crate) fn execute(
         .map_err(|error| OrbitError::Store(error.to_string()))?;
         return Ok(Some(value));
     }
+    if action == OrbitBuiltinAction::TaskArtifactGet {
+        require_active_claim(runtime, session)?;
+        return Ok(None);
+    }
     let mut friction_tag_substitutions = Vec::new();
     let mutation = match action {
         OrbitBuiltinAction::TaskUpdate => {
             binding
                 .validate_arguments(input)
                 .map_err(OrbitError::InvalidInput)?;
+            // Artifact attachments can reach the mutation receipt path, which
+            // intentionally reconciles a lost reply before rechecking claim
+            // authority. Check the current claim first so a stale replay cannot
+            // turn an old successful report upload into a new apparent success.
+            if input.get("artifacts").is_some() {
+                require_active_claim(runtime, session)?;
+            }
             if input
                 .get("id")
                 .is_some_and(|id| id.as_str() != Some(&binding.task_id))
@@ -214,7 +225,6 @@ pub(crate) fn execute(
         OrbitBuiltinAction::TaskShow
         | OrbitBuiltinAction::TaskList
         | OrbitBuiltinAction::TaskEligible
-        | OrbitBuiltinAction::TaskArtifactGet
         | OrbitBuiltinAction::TaskLint
         | OrbitBuiltinAction::TaskLocks
         | OrbitBuiltinAction::Friction(
@@ -259,6 +269,48 @@ fn optional_field<T: serde::de::DeserializeOwned>(
         .transpose()
 }
 
+/// The claim invocation a bound worker's call acts under: its own claim and
+/// bound run, never anything the call's input names.
+fn worker_auth(binding: &orbit_types::tool::WorkerInvocation) -> ClaimInvocation {
+    ClaimInvocation::trusted_worker(
+        binding.task_id.clone(),
+        binding.claim_id.clone(),
+        binding.execution.machine_id.clone(),
+        Some(ClaimRun {
+            machine_id: binding.execution.machine_id.clone(),
+            run_id: binding.bound_run_id.clone(),
+        }),
+    )
+}
+
+/// [ORB-14221] A worker's artifact read stands on the authority its artifact
+/// write does: the owner answers only while the claim could still take that
+/// worker's update. Once the claim is released, failed, revoked, landed or
+/// superseded, or bound to another run, the read is refused as `stale_claim`
+/// whatever the worker's own records still show — a claimed reviewer's
+/// manifest read through its run's broker included.
+fn require_active_claim(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+) -> Result<(), OrbitError> {
+    let binding = session
+        .worker_invocation
+        .as_ref()
+        .ok_or_else(|| OrbitError::PolicyDenied("worker binding missing".into()))?;
+    runtime
+        .verify_worker_claim(&worker_auth(binding))
+        .map_err(|error| match error {
+            OrbitError::InvalidInput(cause) if cause == "stale_claim" => OrbitError::PolicyDenied(
+                "stale_claim: the owner no longer holds this worker's claim as active (it was \
+                 released, failed, revoked, landed or superseded, or is bound to another run), \
+                 so the owner refuses its artifact reads as it refuses its writes. Do not retry \
+                 or route around the owner; report the work incomplete and let the run end"
+                    .into(),
+            ),
+            other => other,
+        })
+}
+
 fn apply(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
@@ -269,15 +321,7 @@ fn apply(
         .worker_invocation
         .as_ref()
         .ok_or_else(|| OrbitError::PolicyDenied("worker binding missing".into()))?;
-    let auth = ClaimInvocation::trusted_worker(
-        binding.task_id.clone(),
-        binding.claim_id.clone(),
-        binding.execution.machine_id.clone(),
-        Some(ClaimRun {
-            machine_id: binding.execution.machine_id.clone(),
-            run_id: binding.bound_run_id.clone(),
-        }),
-    );
+    let auth = worker_auth(binding);
     let mut identity = mutation.clone();
     if let ClaimMutation::Friction(params) = &mut identity {
         params.created_at = chrono::DateTime::UNIX_EPOCH;

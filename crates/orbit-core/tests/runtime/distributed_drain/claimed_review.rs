@@ -10,14 +10,15 @@
 
 use super::*;
 
-use orbit_store::contracts::HandoffReviewObservation;
+use orbit_store::contracts::{HandoffReviewObservation, ReviewInvocationRecord};
+use orbit_types::task::TaskStatus;
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::handoff::HandoffReviewEvidence;
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
     REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
     ReviewAdmission, ReviewFinding, ReviewReport, ReviewReportHistory, ReviewValidation,
-    ReviewVerdict, ValidationOutcome, ValidationRole,
+    ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome, ValidationRole,
 };
 
 /// A crew every runtime's default registry resolves.
@@ -214,6 +215,135 @@ impl ReviewedLeaf {
                 ToolContext::default(),
             )
             .map_err(|error| error.to_string())
+    }
+
+    /// The claim the leaf is bound to, and the follower's invocation of it.
+    fn claim(&self) -> (String, ClaimInvocation) {
+        let claim = self
+            .pair
+            .admission(&self.leaf)
+            .receipt
+            .unwrap()
+            .claim
+            .unwrap();
+        let worker = ClaimInvocation::trusted_worker(
+            claim.task_id.clone(),
+            claim.claim_id.clone(),
+            FOLLOWER.into(),
+            Some(ClaimRun {
+                machine_id: FOLLOWER.into(),
+                run_id: self.leaf.clone(),
+            }),
+        );
+        (claim.claim_id, worker)
+    }
+
+    /// The reviewer's manifest read, through the leaf's binding as its tool
+    /// call is.
+    fn read_manifest(&self) -> Result<Value, String> {
+        self.bound
+            .run_tool(
+                "orbit.task.artifact.get",
+                json!({"id": self.task, "path": REVIEW_MANIFEST_ARTIFACT}),
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    /// The reviewer, started in the leaf and not yet finished, as the
+    /// follower's review ledger records it.
+    fn reviewer_running(&self, attempt_id: &str, lineage_key: &str) {
+        self.bound
+            .review_store()
+            .unwrap()
+            .review_record_invocation(
+                &self.pair.follower.workspace_id().unwrap(),
+                &ReviewInvocationRecord {
+                    lineage_key,
+                    attempt_id,
+                    run_id: &self.leaf,
+                    event: ReviewerInvocationEvent::Started {
+                        timeout_seconds: 1800,
+                    },
+                    now: Utc::now(),
+                },
+            )
+            .unwrap();
+    }
+
+    /// Let the owner's reservation for the leaf's claim run out: its window
+    /// is moved, in the owner's own store, to one that closed a minute ago,
+    /// and the owner's console, read at the real clock, then reports it
+    /// expired while the claim stays live.
+    fn elapse_reservation(&self) -> Value {
+        let owner = &self.pair.wire.owner;
+        let (claim_id, _) = self.claim();
+        let console = |owner: &OrbitRuntime| {
+            owner.distributed_claim_console().unwrap()["claims"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|claim| claim["claim_id"] == claim_id.as_str())
+                .cloned()
+                .unwrap()
+        };
+        let current = console(owner);
+        let reservation_id = current["reservation"]["id"].as_str().unwrap();
+        let window = current["reservation"]["expires_at"].as_str().unwrap();
+        let expires_at = Utc::now() - chrono::Duration::minutes(1);
+        let shift = chrono::DateTime::parse_from_rfc3339(window)
+            .unwrap()
+            .signed_duration_since(expires_at);
+        let expired = expires_at.to_rfc3339();
+        let workspace_id = owner.workspace_id().unwrap();
+        let connection = rusqlite::Connection::open(owner.global_root().join("orbit.db")).unwrap();
+        let created: String = connection
+            .query_row(
+                "SELECT created_at FROM task_reservations WHERE reservation_id=?1",
+                rusqlite::params![reservation_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let created =
+            (chrono::DateTime::parse_from_rfc3339(&created).unwrap() - shift).to_rfc3339();
+        let moved = connection
+            .execute(
+                "UPDATE task_reservations SET created_at=?1, expires_at=?2 WHERE reservation_id=?3",
+                rusqlite::params![created, expired, reservation_id],
+            )
+            .unwrap();
+        assert_eq!(moved, 1, "the claim's reservation row");
+        // The claim and its admission keep their own copy of the window.
+        let copies = connection
+            .execute(
+                "UPDATE task_coordination_rows SET payload_json=replace(payload_json, ?1, ?2)
+                 WHERE workspace_id=?3 AND instr(payload_json, ?1) > 0",
+                rusqlite::params![window, expired, workspace_id],
+            )
+            .unwrap();
+        assert!(copies >= 1, "the claim records its reservation window");
+        let elapsed = console(owner);
+        assert_eq!(elapsed["reservation"]["expires_at"], expired.as_str());
+        assert_eq!(elapsed["reservation"]["expired"], true, "{elapsed}");
+        elapsed
+    }
+
+    /// Every artifact on the owner's task, by path, and whether the owner
+    /// recorded a certificate for `attempt_id`.
+    fn owner_evidence(&self, attempt_id: &str) -> (Vec<(String, Vec<u8>)>, bool) {
+        let owner = &self.pair.wire.owner;
+        let artifacts = owner
+            .get_task_artifacts(&self.task)
+            .unwrap()
+            .into_iter()
+            .map(|artifact| (artifact.path, artifact.content))
+            .collect();
+        let certificate = owner
+            .review_store()
+            .unwrap()
+            .review_certificate(&owner.workspace_id().unwrap(), attempt_id)
+            .unwrap()
+            .is_some();
+        (artifacts, certificate)
     }
 
     fn owner_artifact(&self, path: &str) -> Option<Vec<u8>> {
@@ -440,4 +570,214 @@ fn a_follower_without_the_review_crew_claims_nothing() {
     );
     assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
     assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+}
+
+/// [ORB-14221] The owner answers a claimed reviewer's manifest read only while
+/// the claim could still take that worker's report: once the owner released,
+/// failed or revoked the claim, or a later pull superseded it, the read and
+/// the report are refused as `stale_claim` and nothing on the owner changes,
+/// though the follower's ledger still records the reviewer running. An
+/// elapsed reservation alone ends nothing: the live claim still reads and
+/// writes until the owner recovers it. The leaf's binding reaches the owner
+/// exactly as its run's broker forwards a bridged call.
+#[test]
+fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_reviewers_manifest_read_needs_the_owners_active_claim",
+    ) {
+        return;
+    }
+    type Settle = fn(&ReviewedLeaf);
+    let release: Settle = |leaf| {
+        let (_, worker) = leaf.claim();
+        leaf.pair
+            .wire
+            .owner
+            .mutate_execution_claim(
+                Some(&worker),
+                "release",
+                &ClaimMutation::Release(ClaimEvidence {
+                    summary: Some("The executor gave the claim back.".into()),
+                    ..ClaimEvidence::default()
+                }),
+            )
+            .expect("the executor releases its claim");
+    };
+    let fail: Settle = |leaf| {
+        let (_, worker) = leaf.claim();
+        leaf.pair
+            .wire
+            .owner
+            .mutate_execution_claim(
+                Some(&worker),
+                "fail",
+                &ClaimMutation::Fail(ClaimEvidence {
+                    summary: Some("The leaf failed.".into()),
+                    ..ClaimEvidence::default()
+                }),
+            )
+            .expect("the executor fails its claim");
+    };
+    let revoke: Settle = |leaf| {
+        let (claim_id, _) = leaf.claim();
+        leaf.pair
+            .wire
+            .owner
+            .recover_claim_as_operator(
+                &claim_id,
+                "running",
+                TaskStatus::Backlog,
+                "operator",
+                "The operator took the claim back.",
+                "recover",
+            )
+            .expect("the operator revokes the claim");
+    };
+    let recover_expired: Settle = |leaf| {
+        let (claim_id, _) = leaf.claim();
+        leaf.pair
+            .wire
+            .owner
+            .recover_claim_as_operator(
+                &claim_id,
+                "running",
+                TaskStatus::Backlog,
+                "operator",
+                "The claim outlived its reservation.",
+                "recover",
+            )
+            .expect("the operator recovers the expired claim");
+    };
+    for (case, settle) in [
+        ("released", release),
+        ("failed", fail),
+        ("revoked", revoke),
+        ("expired", recover_expired),
+    ] {
+        let mut leaf = ReviewedLeaf::admit();
+        let admitted = leaf.admit_review();
+        let attempt_id = admitted["attempt_id"].as_str().unwrap().to_string();
+        let lineage_key = admitted["lineage_key"].as_str().unwrap().to_string();
+        leaf.reviewer_running(&attempt_id, &lineage_key);
+        let pinned = leaf.owner_artifact(REVIEW_MANIFEST_ARTIFACT).unwrap();
+        let read = leaf.read_manifest().expect("the active claim reads");
+        assert_eq!(
+            read["content"].as_str().map(str::as_bytes),
+            Some(pinned.as_slice()),
+            "{case}: {read}"
+        );
+
+        let source = leaf.pair.follower_repo.join(".orbit/tmp/report.json");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(
+            &source,
+            serde_json::to_vec(&json!({
+                "schema_version": REVIEW_CONTRACT_VERSION, "attempt_id": attempt_id,
+                "verdict": "incomplete", "summary": "Fixture report.", "findings": [],
+                "validation": [], "escalation": "fixture only",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let put = json!({
+            "id": leaf.task, "path": REVIEW_REPORT_ARTIFACT, "source_path": source,
+        });
+        leaf.bound
+            .run_tool("orbit.task.artifact.put", put.clone())
+            .expect("the active claim writes its report");
+        leaf.bound
+            .run_tool("orbit.task.artifact.put", put.clone())
+            .expect("the active claim can reconcile its report replay");
+
+        if case == "expired" {
+            // The reservation window has really closed, yet the owner never
+            // ended the claim: it is still live, its footprint still
+            // protected, and the reviewer, inside its own deadline, still
+            // reads and reconciles its report.
+            let elapsed = leaf.elapse_reservation();
+            assert_eq!(elapsed["phase"], "running", "{elapsed}");
+            assert_eq!(elapsed["footprint_protected"], true, "{elapsed}");
+            let read = leaf
+                .read_manifest()
+                .expect("an elapsed reservation leaves the claim reading");
+            assert_eq!(
+                read["content"].as_str().map(str::as_bytes),
+                Some(pinned.as_slice()),
+                "{read}"
+            );
+            leaf.bound
+                .run_tool("orbit.task.artifact.put", put.clone())
+                .expect("an elapsed reservation leaves the claim writing");
+        }
+
+        settle(&leaf);
+        let before = leaf.owner_evidence(&attempt_id);
+        let refused = leaf
+            .read_manifest()
+            .expect_err("a settled claim reads nothing");
+        assert!(refused.contains("stale_claim"), "{case}: {refused}");
+        let put = leaf
+            .bound
+            .run_tool("orbit.task.artifact.put", put)
+            .expect_err("a settled claim writes nothing")
+            .to_string();
+        assert!(put.contains("stale_claim"), "{case}: {put}");
+        assert_eq!(
+            leaf.owner_evidence(&attempt_id),
+            before,
+            "{case}: the refusals change nothing on the owner"
+        );
+        assert!(!before.1, "{case}: no certificate");
+        let ledger = leaf
+            .bound
+            .review_store()
+            .unwrap()
+            .review_ledger(&leaf.pair.follower.workspace_id().unwrap(), &lineage_key)
+            .unwrap()
+            .unwrap();
+        assert!(
+            ledger.attempts[0]
+                .reviewer_running
+                .as_ref()
+                .is_some_and(|running| running.run_id == leaf.leaf && Utc::now() < running.deadline),
+            "{case}: the follower still records the reviewer running"
+        );
+
+        if matches!(case, "revoked" | "expired") {
+            // The task went back to the backlog and a later pull claims it
+            // again: the new claim's leaf reads, the superseded one does not.
+            let next = leaf.pair.queued_leaf(&leaf.drain, 2);
+            let record = leaf.pair.admission(&next);
+            let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
+            assert_eq!(claim.task_id, leaf.task, "the same task is claimed again");
+            let current = leaf
+                .pair
+                .follower
+                .clone()
+                .with_worker_invocation(
+                    WorkerInvocation {
+                        owner_machine_id: OWNER.into(),
+                        owner_workspace_id: record.destination.owner_workspace_id.clone(),
+                        owner_destination: record.destination.selector.clone(),
+                        task_id: claim.task_id.clone(),
+                        claim_id: claim.claim_id.clone(),
+                        execution: claim.executed_on.clone(),
+                        bound_run_id: next.clone(),
+                    },
+                    Arc::new(ToOwner(leaf.pair.wire.owner.clone())),
+                )
+                .unwrap();
+            current
+                .run_tool(
+                    "orbit.task.artifact.get",
+                    json!({"id": leaf.task, "path": REVIEW_MANIFEST_ARTIFACT}),
+                )
+                .expect("the current claim reads");
+            let superseded = leaf
+                .read_manifest()
+                .expect_err("a superseded claim reads nothing");
+            assert!(superseded.contains("stale_claim"), "{superseded}");
+        }
+    }
 }

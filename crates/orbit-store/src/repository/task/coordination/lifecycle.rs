@@ -61,6 +61,16 @@ pub(super) struct EvidenceIntent {
     manifest: Option<ArtifactManifestV2>,
 }
 
+/// What [`TaskCommitBoundary::claim_authority`] established about a claim.
+struct ClaimAuthority {
+    row: TaskCoordinationRow,
+    claim: ExecutionClaim,
+    state: ClaimInspection,
+    state_row: Option<TaskCoordinationRow>,
+    bundle: TaskBundleV2,
+    expected_status: TaskStatus,
+}
+
 impl TaskCommitBoundary {
     /// Strictly read-only: an interrupted commit requires explicit journal recovery
     /// or an ordinary operational read first. Inspection never performs that repair.
@@ -152,6 +162,114 @@ impl TaskCommitBoundary {
         self.with_admission(|| self.mutate_claim_locked(auth, mutation_id, mutation))
     }
 
+    /// The claim `auth` acts under, refused as `stale_claim` unless it is the
+    /// task's current, unsettled claim, held by the invoking machine and bound
+    /// run, with the task in the status the claim's phase implies. Every claim
+    /// mutation and every worker read fence stands on exactly these checks.
+    /// `recovering` admits a failed claim for an operator's recovery.
+    fn claim_authority(
+        &self,
+        auth: &ClaimInvocation,
+        recovering: bool,
+    ) -> Result<ClaimAuthority, OrbitError> {
+        let row = self
+            .coordination_row(CLAIM, &auth.claim_id)?
+            .ok_or_else(|| invalid("stale_claim"))?;
+        let claim: ExecutionClaim = decode(&row.payload_json)?;
+        let recover_failed =
+            auth.operator && recovering && claim.phase == ExecutionClaimPhase::Failed;
+        if claim.task_id != auth.task_id || !(claim.phase.is_unsettled() || recover_failed) {
+            return Err(invalid("stale_claim"));
+        }
+        let state = self.claim_state(claim.clone())?;
+        if (matches!(
+            claim.phase,
+            ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
+        ) && state.bound_run.is_none())
+            || (claim.phase == ExecutionClaimPhase::Claimed && state.bound_run.is_some())
+        {
+            return Err(invalid("claim binding is inconsistent with phase"));
+        }
+        let state_row = self.coordination_row(STATE, &claim.claim_id)?;
+        if !auth.operator
+            && (auth.machine_id != claim.executed_on.machine_id || auth.run != state.bound_run)
+        {
+            return Err(invalid("stale_claim"));
+        }
+        let bundle = self.bundle_store.read_bundle_lightweight(&claim.task_id)?;
+        let current_claim = bundle
+            .events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == "pulled_by")
+            .and_then(|e| e.note.as_deref())
+            .map(serde_json::from_str::<serde_json::Value>)
+            .transpose()
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        if current_claim
+            .as_ref()
+            .and_then(|v| v.get("claim_id"))
+            .and_then(serde_json::Value::as_str)
+            != Some(claim.claim_id.as_str())
+        {
+            return Err(invalid("stale_claim"));
+        }
+        let expected_status = match claim.phase {
+            ExecutionClaimPhase::HandedOff => TaskStatus::Review,
+            ExecutionClaimPhase::Failed => TaskStatus::Blocked,
+            ExecutionClaimPhase::Landed => TaskStatus::Done,
+            _ => TaskStatus::InProgress,
+        };
+        if bundle.envelope.status != expected_status {
+            return Err(invalid("stale_claim"));
+        }
+        if let Some(bound) = &state.bound_run
+            && (bundle.envelope.job_run_id.as_deref() != Some(&bound.run_id)
+                || bundle
+                    .envelope
+                    .job_run_machine
+                    .as_ref()
+                    .map(|location| location.machine_id.as_str())
+                    != Some(bound.machine_id.as_str()))
+        {
+            return Err(invalid("stale_claim"));
+        }
+        Ok(ClaimAuthority {
+            row,
+            claim,
+            state,
+            state_row,
+            bundle,
+            expected_status,
+        })
+    }
+
+    /// [ORB-14221] The read-side counterpart of a worker's claim mutation:
+    /// succeed only while `auth` could still update its claim. A claim that
+    /// was released, failed, revoked by recovery, landed or superseded by a
+    /// later pull, or that is bound to another run, is refused as
+    /// `stale_claim`, exactly as that worker's write would be. Reads the claim
+    /// journal and the task bundle and records nothing.
+    pub fn verify_worker_claim(&self, auth: &ClaimInvocation) -> Result<(), OrbitError> {
+        if auth.operator
+            || [&auth.task_id, &auth.claim_id, &auth.machine_id]
+                .iter()
+                .any(|s| s.trim().is_empty())
+        {
+            return Err(invalid("invalid claim invocation"));
+        }
+        self.with_admission(|| {
+            let authority = self.claim_authority(auth, false)?;
+            if !matches!(
+                authority.claim.phase,
+                ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
+            ) {
+                return Err(invalid("stale_claim"));
+            }
+            Ok(())
+        })
+    }
+
     fn mutate_claim_locked(
         &self,
         auth: &ClaimInvocation,
@@ -204,69 +322,14 @@ impl TaskCommitBoundary {
             }
             return self.with_friction_result(receipt.result, &receipt_id);
         }
-        let old = self
-            .coordination_row(CLAIM, &auth.claim_id)?
-            .ok_or_else(|| invalid("stale_claim"))?;
-        let claim: ExecutionClaim = decode(&old.payload_json)?;
-        let recover_failed = auth.operator
-            && claim.phase == ExecutionClaimPhase::Failed
-            && matches!(mutation, ClaimMutation::Recover { .. });
-        if claim.task_id != auth.task_id || !(claim.phase.is_unsettled() || recover_failed) {
-            return Err(invalid("stale_claim"));
-        }
-        let mut state = self.claim_state(claim.clone())?;
-        if (matches!(
-            claim.phase,
-            ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
-        ) && state.bound_run.is_none())
-            || (claim.phase == ExecutionClaimPhase::Claimed && state.bound_run.is_some())
-        {
-            return Err(invalid("claim binding is inconsistent with phase"));
-        }
-        let old_state = self.coordination_row(STATE, &claim.claim_id)?;
-        if !auth.operator
-            && (auth.machine_id != claim.executed_on.machine_id || auth.run != state.bound_run)
-        {
-            return Err(invalid("stale_claim"));
-        }
-        let bundle = self.bundle_store.read_bundle_lightweight(&claim.task_id)?;
-        let current_claim = bundle
-            .events
-            .iter()
-            .rev()
-            .find(|e| e.event_type == "pulled_by")
-            .and_then(|e| e.note.as_deref())
-            .map(serde_json::from_str::<serde_json::Value>)
-            .transpose()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        if current_claim
-            .as_ref()
-            .and_then(|v| v.get("claim_id"))
-            .and_then(serde_json::Value::as_str)
-            != Some(claim.claim_id.as_str())
-        {
-            return Err(invalid("stale_claim"));
-        }
-        let expected_status = match claim.phase {
-            ExecutionClaimPhase::HandedOff => TaskStatus::Review,
-            ExecutionClaimPhase::Failed => TaskStatus::Blocked,
-            ExecutionClaimPhase::Landed => TaskStatus::Done,
-            _ => TaskStatus::InProgress,
-        };
-        if bundle.envelope.status != expected_status {
-            return Err(invalid("stale_claim"));
-        }
-        if let Some(bound) = &state.bound_run
-            && (bundle.envelope.job_run_id.as_deref() != Some(&bound.run_id)
-                || bundle
-                    .envelope
-                    .job_run_machine
-                    .as_ref()
-                    .map(|location| location.machine_id.as_str())
-                    != Some(bound.machine_id.as_str()))
-        {
-            return Err(invalid("stale_claim"));
-        }
+        let ClaimAuthority {
+            row: old,
+            claim,
+            mut state,
+            state_row: old_state,
+            bundle,
+            expected_status,
+        } = self.claim_authority(auth, matches!(mutation, ClaimMutation::Recover { .. }))?;
         let mut params = TaskCoordinationCommitParams {
             task_id: claim.task_id.clone(),
             actor: auth.machine_id.clone(),
