@@ -58,6 +58,8 @@ pub fn run_update(
             .workspace
             .as_ref()
             .map(|workspace| workspace.root.clone()),
+        admission_roots: environment.admission_roots.clone(),
+        local_candidate: None,
         recovery: None,
     };
 
@@ -217,18 +219,18 @@ pub fn run_update(
 }
 
 /// Probe the on-disk executable after the install lock is held.
-fn locked_installed_version(executable: &Path) -> Result<ReleaseVersion, OrbitError> {
+pub(super) fn locked_installed_version(executable: &Path) -> Result<ReleaseVersion, OrbitError> {
     let reported = converge::probe_version(executable)?;
     ReleaseVersion::parse(&reported)
 }
 
-/// Refuse a downgrade the target release cannot actually open.
+/// Refuse a downgrade the target release or local candidate cannot actually open.
 ///
 /// Asks the *staged* binary — before it is installed — whether it can read
 /// this workspace for writes. A zero exit code also permits additive-newer
 /// read-only inspections, so require the structured current/supported versions
 /// and explicit up-to-date result instead of treating success as compatibility.
-fn assert_downgrade_is_compatible(
+pub(super) fn assert_downgrade_is_compatible(
     environment: &UpdateEnvironment,
     staged: &Path,
     current: &ReleaseVersion,
@@ -249,7 +251,7 @@ fn assert_downgrade_is_compatible(
 }
 
 /// Where the outgoing executable is preserved.
-fn backup_path(executable: &Path) -> PathBuf {
+pub(super) fn backup_path(executable: &Path) -> PathBuf {
     let mut name = executable.as_os_str().to_os_string();
     name.push(".previous");
     PathBuf::from(name)

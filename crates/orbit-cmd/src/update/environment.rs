@@ -57,35 +57,79 @@ pub struct UpdateWorkspace {
 }
 
 impl UpdateEnvironment {
+    /// Resolve the initialized workspace this process's convergence steps use.
+    pub fn workspace_for_process(
+        root_override: Option<&Path>,
+    ) -> Result<Option<UpdateWorkspace>, OrbitError> {
+        let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
+        let root_was_explicit = root_override.is_some()
+            || std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
+        let roots = RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?;
+        Ok(roots.map(|roots| UpdateWorkspace {
+            cwd,
+            root_argument: root_was_explicit.then(|| roots.shared_root.clone()),
+            root: roots.shared_root,
+        }))
+    }
+
     /// Read this process's own installation, platform, and workspace.
     pub fn from_process(root_override: Option<&Path>) -> Result<Self, OrbitError> {
         let executable =
             converge::resolve_installed_executable(&std::env::current_exe().map_err(|error| {
                 OrbitError::Io(format!("cannot locate the running orbit: {error}"))
             })?);
-        let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
-        let root_was_explicit = root_override.is_some()
-            || std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
-        let workspace =
-            RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?.map(
-                |roots| UpdateWorkspace {
-                    cwd,
-                    root_argument: root_was_explicit.then(|| roots.shared_root.clone()),
-                    root: roots.shared_root,
-                },
-            );
+        let install_channel = InstallChannel::detect_with_homebrew_ownership(
+            &executable,
+            channel::managed_install_dir().as_deref(),
+            &channel::SystemHomebrewInventory::system(),
+        );
+        Self::assemble(
+            root_override,
+            executable,
+            install_channel,
+            super::trust::trusted_keys_from_env()?,
+        )
+    }
+
+    /// The environment for `--local-candidate`: the explicit `install_target`,
+    /// never this process's own executable — which is normally the candidate
+    /// itself, bootstrapping the update capability an older installed binary
+    /// lacks. A local candidate reads no published release, so it carries no
+    /// release trust.
+    pub fn for_install_target(
+        root_override: Option<&Path>,
+        install_target: &Path,
+    ) -> Result<Self, OrbitError> {
+        let executable = if install_target.is_absolute() {
+            install_target.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|error| OrbitError::Io(error.to_string()))?
+                .join(install_target)
+        };
+        let install_channel =
+            InstallChannel::detect(&executable, channel::managed_install_dir().as_deref());
+        Self::assemble(root_override, executable, install_channel, &[])
+    }
+
+    fn assemble(
+        root_override: Option<&Path>,
+        executable: PathBuf,
+        install_channel: InstallChannel,
+        trusted_keys: &'static [TrustedReleaseKey],
+    ) -> Result<Self, OrbitError> {
+        let workspace = Self::workspace_for_process(root_override)?;
         Ok(Self {
-            admission_roots: admission_authorities(root_override)?,
-            install_channel: InstallChannel::detect_with_homebrew_ownership(
-                &executable,
-                channel::managed_install_dir().as_deref(),
-                &channel::SystemHomebrewInventory::system(),
-            ),
+            admission_roots: admission_authorities(
+                root_override,
+                workspace.as_ref().map(|workspace| workspace.root.as_path()),
+            )?,
+            install_channel,
             executable,
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             target_triple: channel::release_target_triple()?.to_string(),
             source: release_source_from_env(),
-            trusted_keys: super::trust::trusted_keys_from_env()?,
+            trusted_keys,
             today: chrono::Utc::now().date_naive(),
             workspace,
             bundled_bwrap_installed: cfg!(target_os = "linux")
