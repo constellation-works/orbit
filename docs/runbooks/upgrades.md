@@ -23,6 +23,12 @@ orbit update --allow-downgrade --version 0.18.0
 orbit update --json               # machine-readable report
 ```
 
+`--check` exits `0` with `outcome: already_current` when the resolved release is
+equal to or older than the running version. This includes a prerelease newer than
+the latest stable release, or a mirror whose published version lags the installed
+one. Only a newer target reports `outcome: update_available` and exits `3`.
+The check downloads no release archive and does not converge workspace state.
+
 `orbit update` does the whole upgrade in one defined order:
 
 1. Resolve the target version — the newest published release, or the one `--version` names.
