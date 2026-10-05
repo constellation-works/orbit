@@ -5,6 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989"]
+last_validated: 2026-10-04
 ---
 
 # Operate the Before-PR Review Gate
@@ -16,8 +17,10 @@ read what a review did to a delivery, or a task is `blocked` with a
 ## 1. What the gate does
 
 One fresh reviewer, from `operation.review_crew`, examines the implementation
-commit, fixes what it finds, and returns one of three verdicts. There is no
-rework loop and no second review round.
+commit, fixes what it finds, and returns a verdict. There is no findings-driven
+rework loop. If PR completion rebases a conflicting reviewed head, the pipeline
+may admit one fresh re-review in the same lineage; a second conflict leaves the
+task in review as `review_gate_stale`.
 
 | Verdict | Candidate branch | Delivery |
 | --- | --- | --- |

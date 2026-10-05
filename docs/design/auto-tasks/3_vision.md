@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Vision
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Accepted
 feature: auto-tasks
 doc_role: vision
@@ -16,13 +16,15 @@ related_artifacts: [ORB-10149, ORB-11315, ORB-12237]
 
 # Auto-tasks — Vision
 
-Forward-looking directions for the primitive. Everything here is speculative and
-deliberately unbuilt; the shipped surface is in 2_design.md.
+Forward-looking directions for the primitive. Open items remain speculative unless
+marked graduated; the shipped contract is in 2_design.md.
 
 The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
-from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
-immutable batches and separate successful-coverage checkpoints. It is proposed
-and unimplemented; existing scheduling and action semantics remain current.
+from [ORB-11315] has since shipped in part: delivery-trigger consumers and
+`preparation_eligible` state routines use the existing sweep clock with durable
+batches and checkpoints. Broader multi-member coordination, policy-driven
+waiver/migration workflows, and usage accounting remain proposals; the current
+contract and limits are in [automation-triggers/2_design.md](../automation-triggers/2_design.md).
 
 ## 1. Open Questions
 
@@ -37,10 +39,11 @@ and unimplemented; existing scheduling and action semantics remain current.
    re-introduce the "periodic work is code" coupling auto-tasks removed?
 3. **Retention / expiry.** Should a definition support a `max_open` or a
    sunset date so one-off recurring campaigns retire themselves?
-4. **Observability depth.** After the consolidation, fires no longer appear on
-   `/api/routines` at all; per-definition history (which slots minted which
-   tasks) lives in the cursor's `last_task_id`, the tagged tasks themselves, and
-   the tick report. Is a fuller per-definition ledger warranted?
+4. **Observability depth.** Auto-task records no longer appear on
+   `/api/routines`; `GET /api/auto-tasks` reports each definition's last scheduler
+   evaluation and minted task. Time-trigger cursors retain `last_task_id`, while
+   delivery-trigger consumers persist batches, receipts and coverage checkpoints.
+   Is a unified longer-term ledger warranted?
 5. **Per-owner vs. repo-global definitions.** Under the multi-owner model every
    owner checkout mints every enabled definition. Most defaults are per-owner by
    nature (curate *my* frictions, review *my* merged commits). If a repo-global

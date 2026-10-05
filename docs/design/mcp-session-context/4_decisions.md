@@ -4,7 +4,7 @@ type: design
 title: "MCP Session Context — Decisions"
 owner: codex
 last_updated: 2026-08-22
-last_validated: 2026-09-12
+last_validated: 2026-10-04
 status: Accepted
 feature: mcp-session-context
 doc_role: decisions
