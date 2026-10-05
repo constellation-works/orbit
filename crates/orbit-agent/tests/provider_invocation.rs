@@ -2,6 +2,8 @@
 #![cfg(unix)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "provider_invocation/loop_policy.rs"]
+mod loop_policy;
 mod support;
 
 use std::fs;

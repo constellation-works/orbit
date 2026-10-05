@@ -23,14 +23,15 @@ use super::transport::{
 };
 
 pub struct AgentLoopConfig {
-    /// Tools the model is permitted to actually execute. Empty = no tools.
+    /// Execution allowlist. Calls must also appear in the active tool specs
+    /// advertised to the model. Empty = no tools.
     pub tool_allowlist: Vec<String>,
     /// Tools advertised to the model. When `None`, the advertised set is the
     /// same as `tool_allowlist`. When `Some`, this set is advertised instead —
     /// useful when a caller wants the model to *attempt* a disallowed tool so
-    /// the dispatch-time allowlist check exercises. The intersection with
-    /// `tool_allowlist` defines what the model can both call and execute; the
-    /// rest triggers `PolicyDenied` when invoked.
+    /// the dispatch-time policy check exercises. Only active schemas are
+    /// advertised. Their intersection with `tool_allowlist` defines what the
+    /// model can execute; other calls trigger `PolicyDenied` when invoked.
     pub advertised_tools: Option<Vec<String>>,
     pub max_iterations: u32,
     pub max_total_tokens: u64,
@@ -157,7 +158,7 @@ impl std::fmt::Display for AgentLoopError {
             } => {
                 write!(
                     f,
-                    "tool '{tool_name}' denied by allowlist at iteration {iteration}"
+                    "tool '{tool_name}' denied by tool policy at iteration {iteration}"
                 )
             }
             AgentLoopError::Transport(err) => write!(f, "transport: {err}"),
@@ -283,8 +284,15 @@ impl AgentLoop {
                 }
                 iter_tool_names.push(tool_name.clone());
 
-                if !tool_allowed(&tool_name, &cfg.tool_allowlist) {
-                    let reason = "tool not in allowlist".to_string();
+                let denial_reason = if !tool_allowed(&tool_name, &cfg.tool_allowlist) {
+                    Some("tool not in allowlist")
+                } else if !tool_specs.iter().any(|spec| spec.name == tool_name) {
+                    Some("tool not advertised")
+                } else {
+                    None
+                };
+                if let Some(reason) = denial_reason {
+                    let reason = reason.to_string();
                     let denial_payload = serde_json::json!({
                         "error": {
                             "code": "tool_denied",

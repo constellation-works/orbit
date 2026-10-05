@@ -30,7 +30,7 @@ runs one integration binary on Unix. Recording shell executables exercise every
 CLI adapter's public `Agent` invocation, including the internal mock provider;
 `Provider::ALL` requires a fixture for each shipped provider. Local HTTP servers
 exercise all three HTTP transports, including Gemini cache creation, and the
-real `AgentLoop` deadline and tool-result pairing behavior.
+real `AgentLoop` deadline, tool policy, and tool-result pairing behavior.
 
 The CLI fixture launches descriptors with the shared
 `orbit_common::security::child_env` allowlist, checking prompt delivery, model
@@ -118,20 +118,23 @@ the bytes a server returns.
 Two independent knobs on `AgentLoopConfig`:
 
 - `tool_allowlist: Vec<String>` — the **dispatch** allowlist. The only
-  tools the loop will actually execute. Empty = **no tools**, not "all
-  tools".
+  tools the loop may execute, provided they are also advertised as active
+  tool specs. Empty = **no tools**, not "all tools".
 - `advertised_tools: Option<Vec<String>>` — the set advertised to the
   model in the request payload. When `None`, this equals
-  `tool_allowlist` (the common case: the model only knows about tools
-  it's allowed to call). When `Some`, the advertised set can be a
+  `tool_allowlist` after expanding permitted wildcards and filtering to
+  active registry entries. When `Some`, the advertised set can be a
   superset of the allowlist — useful when exercising the enforcement
-  path end-to-end, since a model won't emit a `tool_use` block for a
-  tool it was never told exists.
+  path end-to-end. An override can also narrow the callable tool set.
 
-When the model returns a `tool_use` block whose `name` is not in
-`tool_allowlist`, the loop emits a `PolicyDenial` audit event naming the
-tool and returns `AgentLoopError::PolicyDenied`. The tool is never
-dispatched through `ToolRegistry::execute`.
+Every `tool_use` must match `tool_allowlist` and a name in the actual
+`build_tool_specs` output advertised in the request. Inactive tools,
+unknown names, and tools omitted from that advertisement are refused,
+even when a dispatch wildcard matches them. The loop emits a
+`PolicyDenial` audit event and an error tool result without executing the
+tool. With the default `on_denial: Terminate`, it returns
+`AgentLoopError::PolicyDenied`; `Continue` feeds the denial back to the
+model and continues the conversation.
 
 All tool dispatch runs through `orbit_tools::ToolRegistry::execute` —
 there is no parallel tool path. Tool attribution, workspace boundaries,
