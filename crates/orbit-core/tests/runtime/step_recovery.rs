@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 //! [ORB-14152] Step recovery's durable decision, end to end.
 //!
 //! The shipped `step_failure_recovery` activity runs through the CLI runner
