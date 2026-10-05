@@ -1,6 +1,7 @@
 // Execute the shipped Settings modules against a small DOM and fixture API:
 // the System sub-view's render, provenance, workspace-override marker, edit
-// round-trip and refused write.
+// round-trip, refused write, and a key row that stays read-only when
+// config_set.authorized is false.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -123,20 +124,21 @@ const defaults = { enabled: true, cpu_high_percent: 90, cpu_resume_percent: 85, 
 const globalSet = { disk_resume_percent: 80 };
 const workspaceSet = { memory_high_percent: 75 };
 const GLOBAL_PATH = '/home/test/.orbit/config.toml';
+const configSet = { authorized: true, reason: null };
 const value = name => globalSet[name] ?? defaults[name];
 const row = (name, layerValue, set, layer) => ({
   key: KEY + name, label: name, value: layerValue, value_type: name === 'enabled' ? 'bool' : 'integer',
   state: set ? 'set' : 'default', source: { layer, path: set ? GLOBAL_PATH : null }, shadowed_by: [], description: `${name} description`,
 });
 const globalFile = () => ({
-  scope: 'global', layers: { global: { path: GLOBAL_PATH, exists: true }, workspace: { path: '/ws/.orbit/config.toml', exists: true } },
+  scope: 'global', config_set: configSet, layers: { global: { path: GLOBAL_PATH, exists: true }, workspace: { path: '/ws/.orbit/config.toml', exists: true } },
   sections: [{ token: 'delivery', title: 'Delivery', keys: [
     { key: 'workflow.base_branch', label: 'base_branch', value: 'main', value_type: 'string', state: 'default', source: { layer: 'built-in' }, shadowed_by: [] },
     ...Object.keys(defaults).map(name => row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')),
   ] }],
 });
 const effective = () => ({
-  scope: 'effective', layers: { global: { path: GLOBAL_PATH }, workspace: { path: '/ws/.orbit/config.toml' } },
+  scope: 'effective', config_set: configSet, layers: { global: { path: GLOBAL_PATH }, workspace: { path: '/ws/.orbit/config.toml' } },
   sections: [{ token: 'delivery', keys: Object.keys(defaults).map(name => name in workspaceSet
     ? { ...row(name, workspaceSet[name], true, 'workspace'), source: { layer: 'workspace', path: '/ws/.orbit/config.toml' } }
     : row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')) }],
@@ -284,4 +286,31 @@ respond(null);
 await assert.rejects(host.fetchAndRenderHostResources(), 'a failed poll is reported to its caller');
 assert.equal(textOf(body, 'config-verdict')[0], 'unknown');
 assert.match(textOf(body, 'config-sys-verdict-text')[0], /Verdict unknown/);
-console.log('settings system tab: render, provenance, workspace override, edit round-trip, refused write and live readings passed');
+
+// ---- a caller without the operator capability sees keys read-only ----
+setConfigSubtab('global-file');
+await fetchAndRenderConfig();
+let keyRows = named(body, 'config-row');
+assert.ok(keyRows.length > 0, 'the global file renders key rows');
+assert.ok(named(body, 'config-pencil').length > 0, 'an authorized payload renders key edit controls');
+named(body, 'config-pencil')[0].click();
+assert.equal(named(body, 'config-editor').length, 1, 'an authorized key row opens an editor');
+configSet.authorized = false;
+configSet.reason = 'config.set requires operator';
+await fetchAndRenderConfig();
+keyRows = named(body, 'config-row');
+assert.ok(keyRows.length > 0, 'an unauthorized payload still renders its key rows');
+assert.equal(named(body, 'config-pencil').length, 0, 'an unauthorized payload renders no key edit control');
+assert.equal(named(body, 'config-editor').length, 0, 'a refresh that withdraws authority closes the key editor');
+for (const row of keyRows) {
+  const main = named(row, 'config-row-main')[0];
+  assert.ok(main, 'a key row keeps its read-only cells');
+  assert.equal(classesOf(main).includes('clickable'), false, 'an unauthorized key row is not an edit affordance');
+  main.dispatch('click');
+}
+assert.equal(named(body, 'config-editor').length, 0, 'activating an unauthorized key row does not open an editor');
+setConfigSubtab('system');
+await fetchAndRenderConfig();
+assert.equal(named(body, 'config-pencil').length, 0, 'system key cells stay read-only without operator authority');
+assert.equal(named(body, 'config-editor').length, 0, 'the system view does not open an editor without operator authority');
+console.log('settings system tab: render, provenance, workspace override, edit round-trip, refused write, live readings and unauthorized key rows passed');
