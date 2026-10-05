@@ -1,7 +1,11 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
+#[cfg(test)]
+use orbit_exec::bwrap_program_for_audit;
 use orbit_exec::{
     BwrapProbeOutcome, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
     LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, MacosSandboxSpawnRequest,
@@ -88,7 +92,7 @@ pub(crate) fn prepare_sandbox_for_dispatch(
             },
         }),
         Some(sandbox) if sandbox.kind == ExecutorSandboxKind::LinuxBwrap => {
-            let probe = probe_bwrap();
+            let probe = linux_bwrap_probe_for_dispatch();
             prepare_linux_sandbox_for_dispatch_with_probe(sandbox, probe)
         }
         Some(sandbox)
@@ -137,6 +141,14 @@ pub(crate) fn prepare_sandbox_for_dispatch(
             },
         }),
     }
+}
+
+fn linux_bwrap_probe_for_dispatch() -> BwrapProbeOutcome {
+    #[cfg(test)]
+    if let Some(probe) = probe_overriding_user_namespace_refusal() {
+        return probe;
+    }
+    probe_bwrap()
 }
 
 fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
@@ -305,6 +317,15 @@ fn spawn_linux_bwrap(
     .map_err(|error| SpawnError::permanent(error.to_string()))?;
     reject_unsatisfiable_managed_grants(sandbox.managed_worktree, &plan.dropped_grants)?;
     report_unsatisfied_grants(&plan.dropped_grants);
+    // Test builds can keep this compiled guard and exec the provider bare
+    // when the host refuses the user namespace `bwrap` needs. Production
+    // always reaches `spawn_under_linux_bwrap` below.
+    #[cfg(test)]
+    if post_run_guard_without_user_namespace() {
+        let mut spawned = spawn_bare(program, args, env, cwd)?;
+        spawned._linux_mount_plan = Some(plan);
+        return Ok(spawned);
+    }
     let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
         plan: &plan,
         env,
@@ -581,4 +602,43 @@ fn validate_ca_certificate_path(
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static POST_RUN_GUARD_WITHOUT_USER_NAMESPACE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+fn post_run_guard_without_user_namespace() -> bool {
+    POST_RUN_GUARD_WITHOUT_USER_NAMESPACE.with(Cell::get)
+}
+
+#[cfg(test)]
+fn probe_overriding_user_namespace_refusal() -> Option<BwrapProbeOutcome> {
+    post_run_guard_without_user_namespace().then(|| BwrapProbeOutcome {
+        available: true,
+        trusted_path: bwrap_program_for_audit().to_string(),
+        detail: "test seam: compile the post-run guard without a user namespace".to_string(),
+    })
+}
+
+/// Compile a managed Linux post-run guard and let the provider exit without
+/// a user namespace.
+///
+/// Some kernels refuse unprivileged user namespaces, so `/usr/bin/bwrap`
+/// never reaches provider exit and the guard cannot be observed. This seam
+/// exists only in test builds: dispatch still snapshots the real deny rules,
+/// then execs the provider bare. Production probes and spawns Bubblewrap.
+#[cfg(test)]
+pub(crate) fn with_post_run_guard_without_user_namespace<T>(body: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            POST_RUN_GUARD_WITHOUT_USER_NAMESPACE.with(|flag| flag.set(false));
+        }
+    }
+    POST_RUN_GUARD_WITHOUT_USER_NAMESPACE.with(|flag| flag.set(true));
+    let _reset = Reset;
+    body()
 }

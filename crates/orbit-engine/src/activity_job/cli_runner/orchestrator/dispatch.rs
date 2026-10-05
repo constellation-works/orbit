@@ -575,31 +575,26 @@ pub fn run_cli_backend(
         }
     };
 
-    if let Some(snapshot) = &inspection {
-        snapshot.verify()?;
-    }
-
-    if let Some(guard) = linux_post_run_guard {
-        guard
-            .verify()
-            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-    }
-
-    let stdout_blob_ref = audit.write_blob(stdout.bytes());
-    let stderr_blob_ref = audit.write_blob(stderr.bytes());
-
-    // The provider has exited and the supervisor owns its exact status,
-    // captured response, and durable blob evidence. Rebind before the first
-    // completion event: a sandboxed provider may have opened the explicitly
-    // granted SQLite/WAL files while this long-lived worker retained handles
-    // from before spawn.
-    host.refresh_persistence_after_cli_provider()
-        .map_err(|error| {
+    // A post-run check fails the step, but the run trail must still hold the
+    // provider's output. Refresh before those writes: a sandboxed provider may
+    // have opened the granted SQLite/WAL files while this worker kept its
+    // pre-spawn handles, and every clone of that store shares the connection.
+    // The swap happens only after the replacement is open and writable, so a
+    // failure before it leaves the previous connection and a failure after it
+    // leaves the new one. Blobs and `CliInvocationFinished` are recorded on
+    // whichever connection remains, then inspection, the Linux guard, and the
+    // worktree boundary run. Integrity failures keep that classification.
+    let refresh_error = host
+        .refresh_persistence_after_cli_provider()
+        .err()
+        .map(|error| {
             DispatchError::CliInvocationPermanent(format!(
                 "refresh durable store after provider `{provider}` exited: {error}"
             ))
-        })?;
+        });
 
+    let stdout_blob_ref = audit.write_blob(stdout.bytes());
+    let stderr_blob_ref = audit.write_blob(stderr.bytes());
     audit.emit_lossy(V2AuditEventKind::CliInvocationFinished {
         provider: provider.clone(),
         exit_code,
@@ -610,7 +605,18 @@ pub fn run_cli_backend(
         timed_out,
     });
 
-    project_completion(ProviderExit {
+    let inspection_error = inspection
+        .as_ref()
+        .and_then(|snapshot| snapshot.verify().err());
+    let guard_error = linux_post_run_guard.as_ref().and_then(|guard| {
+        guard
+            .verify()
+            .err()
+            .map(|error| DispatchError::CliInvocationPermanent(error.to_string()))
+    });
+    let post_run_error = inspection_error.or(guard_error).or(refresh_error);
+
+    let completion = project_completion(ProviderExit {
         host,
         spec,
         input,
@@ -624,14 +630,119 @@ pub fn run_cli_backend(
         timeout_seconds,
         argv_redacted,
         stdin_blob_ref,
-        stdout_blob_ref,
-        stderr_blob_ref,
+        stdout_blob_ref: stdout_blob_ref.clone(),
+        stderr_blob_ref: stderr_blob_ref.clone(),
         stdout,
         stderr,
         exit_code,
         duration,
         timed_out,
-    })
+    });
+    step_error_after_provider_evidence(
+        completion,
+        post_run_error,
+        &stdout_blob_ref,
+        &stderr_blob_ref,
+    )
+}
+
+/// Keep a worktree-integrity failure as the step error, and cite the stored
+/// provider output on every failure that follows a post-run check.
+fn step_error_after_provider_evidence(
+    completion: Result<DispatchOutcome, DispatchError>,
+    post_run_error: Option<DispatchError>,
+    stdout_blob_ref: &str,
+    stderr_blob_ref: &str,
+) -> Result<DispatchOutcome, DispatchError> {
+    let Some(post_run_error) = post_run_error else {
+        return completion;
+    };
+    let cited_post_run = cite_output_evidence(post_run_error, stdout_blob_ref, stderr_blob_ref);
+    let error = match completion {
+        Err(DispatchError::WorktreeIntegrity { code, diagnostic }) => {
+            DispatchError::WorktreeIntegrity {
+                code,
+                diagnostic: cite_integrity_diagnostic(
+                    &diagnostic,
+                    stdout_blob_ref,
+                    stderr_blob_ref,
+                ),
+            }
+        }
+        Err(error) => cite_output_evidence(error, stdout_blob_ref, stderr_blob_ref),
+        Ok(_) => cited_post_run,
+    };
+    Err(error)
+}
+
+/// Attach blob refs when `error` carries a message this layer can extend.
+/// Other variants fall back to a permanent error that still names the blobs,
+/// so a post-run failure cannot return without those references.
+fn cite_output_evidence(
+    error: DispatchError,
+    stdout_blob_ref: &str,
+    stderr_blob_ref: &str,
+) -> DispatchError {
+    let cite = output_blob_cite(stdout_blob_ref, stderr_blob_ref);
+    match error {
+        DispatchError::CliInvocationFailed(message) => {
+            DispatchError::CliInvocationFailed(format!("{message} ({cite})"))
+        }
+        DispatchError::CliInvocationPermanent(message) => {
+            DispatchError::CliInvocationPermanent(format!("{message} ({cite})"))
+        }
+        DispatchError::JobExecution(message) => {
+            DispatchError::JobExecution(format!("{message} ({cite})"))
+        }
+        DispatchError::GitTimeout {
+            operation,
+            root,
+            timeout_ms,
+            diagnostic,
+        } => DispatchError::GitTimeout {
+            operation,
+            root,
+            timeout_ms,
+            diagnostic: format!("{diagnostic} ({cite})"),
+        },
+        DispatchError::WorktreeIntegrity { code, diagnostic } => DispatchError::WorktreeIntegrity {
+            code,
+            diagnostic: cite_integrity_diagnostic(&diagnostic, stdout_blob_ref, stderr_blob_ref),
+        },
+        other => DispatchError::CliInvocationPermanent(format!("{other} ({cite})")),
+    }
+}
+
+fn cite_integrity_diagnostic(
+    diagnostic: &str,
+    stdout_blob_ref: &str,
+    stderr_blob_ref: &str,
+) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(diagnostic) else {
+        return format!(
+            "{diagnostic} ({})",
+            output_blob_cite(stdout_blob_ref, stderr_blob_ref)
+        );
+    };
+    let Some(object) = value.as_object_mut() else {
+        return format!(
+            "{diagnostic} ({})",
+            output_blob_cite(stdout_blob_ref, stderr_blob_ref)
+        );
+    };
+    object.insert(
+        "stdout_blob_ref".to_string(),
+        Value::String(stdout_blob_ref.to_string()),
+    );
+    object.insert(
+        "stderr_blob_ref".to_string(),
+        Value::String(stderr_blob_ref.to_string()),
+    );
+    value.to_string()
+}
+
+fn output_blob_cite(stdout_blob_ref: &str, stderr_blob_ref: &str) -> String {
+    format!("stdout_blob_ref={stdout_blob_ref}, stderr_blob_ref={stderr_blob_ref}")
 }
 
 /// Compose the provider environment while admitting Codex's two documented
