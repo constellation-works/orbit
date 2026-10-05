@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Serialize;
 
 use super::declared_pair::git_common_dir;
-use super::fingerprint::{GitWorktreeFingerprint, git_stdout_bytes};
+use super::fingerprint::{DIFF_IDENTITY_FLAGS, GitWorktreeFingerprint, git_stdout_bytes};
 use super::{DispatchError, WorktreeBoundaryGuard};
 
 /// Durable, content-bearing evidence written before a dirty integrity failure
@@ -100,19 +100,10 @@ impl WorktreeBoundaryGuard {
             recovery_io_error("create untracked recovery payload", &pending_payload, error)
         })?;
 
-        let patch = git_stdout_bytes(
-            &self.assigned_root,
-            &[
-                "diff",
-                "--binary",
-                "--full-index",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-renames",
-                "HEAD",
-                "--",
-            ],
-        )?;
+        let mut diff_args = vec!["diff"];
+        diff_args.extend(DIFF_IDENTITY_FLAGS);
+        diff_args.extend(["HEAD", "--"]);
+        let patch = git_stdout_bytes(&self.assigned_root, &diff_args)?;
         let patch_path = pending.join("tracked.patch");
         fs::write(&patch_path, patch)
             .map_err(|error| recovery_io_error("write tracked patch", &patch_path, error))?;

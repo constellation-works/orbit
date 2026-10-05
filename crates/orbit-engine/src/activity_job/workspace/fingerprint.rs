@@ -38,12 +38,17 @@ pub(crate) struct GitPathState {
     pub(crate) untracked_content_sha256: Option<String>,
 }
 
-const DIFF_IDENTITY_FLAGS: [&str; 5] = [
+// Fingerprint parsing and recovery patches require uncolored a/ and b/
+// paths regardless of the user's Git presentation settings.
+pub(super) const DIFF_IDENTITY_FLAGS: [&str; 8] = [
     "--binary",
     "--full-index",
     "--no-ext-diff",
     "--no-textconv",
     "--no-renames",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -290,7 +295,7 @@ fn git_diff_bytes_for_paths(
     extra: &[&str],
     paths: &[String],
 ) -> Result<Vec<u8>, DispatchError> {
-    let mut args = Vec::with_capacity(8 + extra.len() + paths.len());
+    let mut args = Vec::with_capacity(2 + DIFF_IDENTITY_FLAGS.len() + extra.len() + paths.len());
     args.push("diff");
     args.extend(DIFF_IDENTITY_FLAGS);
     args.extend(extra.iter().copied());
