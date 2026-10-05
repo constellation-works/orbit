@@ -72,6 +72,16 @@ spec:
     - This invocation has its own wall-clock bound, independent of what the
       lineage has already spent. If you cannot finish, write an `incomplete`
       report before stopping rather than leaving no report.
+    - Read the manifest and attach the report only with
+      `orbit.task.artifact.get` and `orbit.task.artifact.put`, through the
+      CLI or MCP. On a distributed-drain follower the host carries exactly
+      these two calls to the task's owner for you. If either is refused with
+      `review_attempt_stale`, `review_manifest_stale` or
+      `claimed_review_bridge_refused`, or cannot reach the run's coordinator,
+      do not retry around it: do not read SSH credentials, change the sandbox,
+      or use another tool or path. Return verdict `incomplete` with the
+      refusal in `summary` and `escalation`; the run is retried with a fresh
+      attempt.
     - The worktree may already hold uncommitted changes when you start: an
       earlier invocation of this same attempt was interrupted after editing.
       Treat them as your own unverified fixes. Keep each one only if a

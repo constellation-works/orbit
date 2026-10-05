@@ -18,6 +18,7 @@ mod isolated_cli_fixture;
 #[path = "../support/tool_input_hints.rs"]
 mod tool_input_hint_cases;
 
+mod claimed_review_bridge_sandbox;
 mod github_broker_sandbox;
 mod github_capability_preflight;
 mod plugin_broker_sandbox;

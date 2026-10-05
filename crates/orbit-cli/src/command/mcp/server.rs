@@ -113,6 +113,7 @@ pub(super) fn serve_mcp_federated_stdio(
         identity.process_machine_name.clone(),
         remotes,
     );
+    let global_root_for_bridge = global_root.clone();
     let local_machine = Arc::new(ServerMcpHost::new(
         global_root,
         identity.process_machine_id.clone(),
@@ -139,6 +140,12 @@ pub(super) fn serve_mcp_federated_stdio(
         destinations,
         Arc::new(probe),
     ));
+    let host = with_claimed_review_bridge(
+        host,
+        &identity.session_context,
+        &global_root_for_bridge,
+        &identity.process_machine_id,
+    );
     tracing::info!(
         machine_id = %identity.process_machine_id,
         "serving the federated MCP mux"
@@ -240,12 +247,39 @@ fn compose_server(
     }
     identity.session_context.workspace = normalized_selector(bound_workspace);
     identity.session_context.orchestrator = normalized_selector(bound_orchestrator);
-    let host = Arc::new(ServerMcpHost::new(
-        global_root,
-        identity.process_machine_id,
+    let host: Arc<dyn McpHost> = Arc::new(ServerMcpHost::new(
+        global_root.clone(),
+        identity.process_machine_id.clone(),
         identity.process_machine_name,
     ));
+    let host = with_claimed_review_bridge(
+        host,
+        &identity.session_context,
+        &global_root,
+        &identity.process_machine_id,
+    );
     Ok((host, identity.session_context))
+}
+
+/// A managed worker's host, with a claimed reviewer's manifest read and
+/// report write routed through its run's broker as its CLI routes them.
+fn with_claimed_review_bridge(
+    host: Arc<dyn McpHost>,
+    session_context: &ToolSessionContext,
+    global_root: &Path,
+    process_machine_id: &str,
+) -> Arc<dyn McpHost> {
+    #[cfg(unix)]
+    if session_context.worker_invocation.is_some() {
+        return Arc::new(super::claimed_review::ClaimedReviewBridge {
+            inner: host,
+            global_root: global_root.to_path_buf(),
+            process_machine_id: process_machine_id.to_string(),
+        });
+    }
+    #[cfg(not(unix))]
+    let _ = (session_context, global_root, process_machine_id);
+    host
 }
 
 /// Reduce a launch-time selector to the value a session should carry, so an

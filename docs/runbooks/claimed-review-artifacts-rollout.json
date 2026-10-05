@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "subject": "claimed-review artifacts through the run coordinator",
+  "procedure": "docs/runbooks/claimed-review-artifacts.md",
+  "candidate": "NOT_VERIFIED",
+  "owner": {
+    "host": "NOT_VERIFIED",
+    "machine_id": "NOT_VERIFIED",
+    "version": "NOT_VERIFIED"
+  },
+  "follower": {
+    "host": "NOT_VERIFIED",
+    "machine_id": "NOT_VERIFIED",
+    "version": "NOT_VERIFIED"
+  },
+  "checks": {
+    "native_macos_sandbox": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "native_linux_bwrap": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "broker_scope_unit": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "live_follower_get": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "live_follower_put": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "live_owner_attach": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "live_no_credentials": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    },
+    "live_refusal": {
+      "status": "NOT_VERIFIED",
+      "evidence": null,
+      "recorded_at": null,
+      "reason": null
+    }
+  }
+}

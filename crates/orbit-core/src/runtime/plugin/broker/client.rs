@@ -137,7 +137,9 @@ pub(crate) fn forward_call(
             if let Some(detail) = error.get("detail").filter(|detail| !detail.is_null()) {
                 payload["detail"] = detail.clone();
             }
-            let kind = if super::is_host_credentialed_read(tool) {
+            let kind = if super::is_host_credentialed_read(tool)
+                || super::is_claimed_review_artifact(tool)
+            {
                 "brokered tool"
             } else {
                 "plugin tool"

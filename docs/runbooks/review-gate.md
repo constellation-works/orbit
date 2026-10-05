@@ -4,7 +4,7 @@ summary: Read a before-PR review's verdict, reviewer commit and findings comment
 tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure.rs"]
 related_features: [review-gate]
-related_artifacts: ["ORB-13989", "ORB-13992"]
+related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194"]
 last_validated: 2026-10-04
 ---
 
@@ -89,6 +89,21 @@ Identify the failed step from `orbit run show`, then act:
   with a recorded decision:
   `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`.
 
+- **A claimed reviewer reported `incomplete` because its manifest or report
+  call was refused** (distributed drain follower): the reviewer's
+  `orbit.task.artifact.get`/`put` reaches the owner only through the run's
+  coordinator, the step runner outside the sandbox, which carries those two
+  calls and nothing else. The refusal names the cause:
+  `review_attempt_stale` (the reviewer ran past its attempt or the attempt
+  was settled), `review_manifest_stale` (the owner holds another attempt's
+  manifest), `claimed_review_bridge_refused` (another activity, task, path or
+  field), or "could not reach this run's coordinator" (the step runner
+  stopped). Each is safe to retry with a fresh run once the cause is gone; a
+  `capability_denied` naming a missing `ORBIT_PLUGIN_BROKER` means the
+  follower's binary predates the route and must be upgraded first. Never add
+  SSH credentials to the sandbox or attach a report by hand. See
+  [claimed-review artifacts](./claimed-review-artifacts.md).
+
 If the run's final recovery already settled the task (for example archived or
 requeued it), the failure handoff did not run; read that decision on the task
 before acting.
@@ -111,5 +126,7 @@ reviewer commit.
 - [Review gate design](../design/review-gate/2_design.md) — verdicts, the
   two-commit shape, revalidation, budgets, and coverage.
 - [CONFIG.md](../CONFIG.md) — the `operation.review_*` keys.
+- [Claimed-review artifacts](./claimed-review-artifacts.md) — the follower
+  reviewer's coordinator route, its smoke procedure and rollout record.
 - [Recover stuck job runs](./stuck-job-runs.md) — runs that never reached the
   gate's failure handoff.
