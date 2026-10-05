@@ -13,8 +13,11 @@ use super::super::dispatcher::DispatchError;
 
 /// Exact, read-only identity of the Git state that an agent invocation can
 /// observe or mutate. Large byte streams are represented by domain-separated
-/// SHA-256 identities; untracked files retain one content identity per path so
-/// diagnostics can name the primary-checkout delta without staging it.
+/// SHA-256 identities; each untracked path retains one content identity so
+/// diagnostics can name the primary-checkout delta without staging it. A file
+/// is `git-blob:<oid>`. A directory — the shape `git status` uses for an
+/// untracked nested repository — is `git-head:<oid>` when that repository has
+/// a HEAD, or `opaque-directory` when it does not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct GitWorktreeFingerprint {
     pub(crate) head: String,
@@ -235,6 +238,7 @@ fn untracked_file_identity(root: &Path, path: &str) -> Result<Option<String>, Di
     match untracked_path_kind(root, path)? {
         UntrackedPathKind::Missing => Ok(None),
         UntrackedPathKind::Symlink => untracked_symlink_identity(root, path),
+        UntrackedPathKind::Directory => untracked_directory_identity(root, path),
         UntrackedPathKind::File => untracked_regular_file_identity(root, path),
     }
 }
@@ -577,21 +581,112 @@ fn unescape_git_escape(bytes: &[u8]) -> Option<(u8, &[u8])> {
 enum UntrackedPathKind {
     Missing,
     Symlink,
+    Directory,
     File,
 }
+
+/// Stable identity for an untracked directory that is not a repository with a
+/// resolved HEAD. An unborn nested repository and a directory Git listed
+/// without its own toplevel share this marker, so two snapshots of the same
+/// directory still match.
+const OPAQUE_DIRECTORY_IDENTITY: &str = "opaque-directory";
 
 fn untracked_path_kind(root: &Path, path: &str) -> Result<UntrackedPathKind, DispatchError> {
     match fs::symlink_metadata(root.join(path)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(UntrackedPathKind::Missing)
         }
-        Err(error) => Err(DispatchError::CliInvocationPermanent(format!(
-            "snapshot Git state in '{}': inspect untracked path '{}': {error}",
-            root.display(),
-            path
-        ))),
+        Err(error) => Err(untracked_inspect_error(root, path, &error)),
         Ok(metadata) if metadata.file_type().is_symlink() => Ok(UntrackedPathKind::Symlink),
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(UntrackedPathKind::Directory),
         Ok(_) => Ok(UntrackedPathKind::File),
+    }
+}
+
+fn untracked_inspect_error(root: &Path, path: &str, error: &std::io::Error) -> DispatchError {
+    DispatchError::CliInvocationPermanent(format!(
+        "snapshot Git state in '{}': inspect untracked path '{}': {error}",
+        root.display(),
+        path
+    ))
+}
+
+/// Identity of one untracked directory.
+///
+/// `git status --untracked-files=all` still reports a nested repository as a
+/// single directory, and `git hash-object` fails on it (`Unable to hash`).
+/// When `rev-parse --show-toplevel` names this directory, the identity is its
+/// HEAD. Git walks up to the parent checkout when the directory is not its
+/// own repository, so a mismatched toplevel must not borrow the parent HEAD.
+/// No resolved HEAD — an unborn repository, dubious ownership, or a directory
+/// that is not a repository — is [`OPAQUE_DIRECTORY_IDENTITY`]. A path that
+/// disappears between status and this read is omitted, matching files.
+fn untracked_directory_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
+    let directory = root.join(path);
+    match fs::symlink_metadata(&directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(untracked_inspect_error(root, path, &error)),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return untracked_symlink_identity(root, path);
+        }
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return untracked_regular_file_identity(root, path);
+        }
+        Ok(_) => {}
+    }
+
+    // `-C` consumes the next argument, so a path that itself starts with `-`
+    // has to be anchored or Git treats it as an option.
+    let cd = if path.starts_with('-') {
+        format!("./{path}")
+    } else {
+        path.to_string()
+    };
+    let toplevel = git_output_raw(root, &["-C", &cd, "rev-parse", "--show-toplevel"])?;
+    let nested_root =
+        toplevel.success && directory_is_reported_toplevel(&directory, &toplevel.stdout);
+    if !nested_root {
+        return missing_or_opaque(root, path, &directory);
+    }
+    let head = git_output_raw(root, &["-C", &cd, "rev-parse", "--verify", "HEAD"])?;
+    if head.success
+        && let Some(oid) = git_oid(&head.stdout)
+    {
+        return Ok(Some(format!("git-head:{oid}")));
+    }
+    missing_or_opaque(root, path, &directory)
+}
+
+fn directory_is_reported_toplevel(directory: &Path, stdout: &[u8]) -> bool {
+    let reported = String::from_utf8_lossy(stdout);
+    let reported = reported.trim();
+    if reported.is_empty() {
+        return false;
+    }
+    match (directory.canonicalize(), Path::new(reported).canonicalize()) {
+        (Ok(directory), Ok(reported)) => directory == reported,
+        _ => false,
+    }
+}
+
+fn git_oid(stdout: &[u8]) -> Option<&str> {
+    let text = std::str::from_utf8(stdout).ok()?.trim();
+    if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+fn missing_or_opaque(
+    root: &Path,
+    path: &str,
+    directory: &Path,
+) -> Result<Option<String>, DispatchError> {
+    match fs::symlink_metadata(directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(untracked_inspect_error(root, path, &error)),
+        Ok(_) => Ok(Some(OPAQUE_DIRECTORY_IDENTITY.to_string())),
     }
 }
 
@@ -666,7 +761,10 @@ fn untracked_content_identities(
     for path in paths {
         match untracked_path_kind(root, path)? {
             UntrackedPathKind::Missing => {}
-            UntrackedPathKind::Symlink => record_per_path(path)?,
+            // Directories are never blob inputs. `hash-object --stdin-paths`
+            // fails the whole batch with "Unable to hash" when one path is a
+            // nested repository.
+            UntrackedPathKind::Symlink | UntrackedPathKind::Directory => record_per_path(path)?,
             UntrackedPathKind::File if path.contains('\n') || path.starts_with('"') => {
                 record_per_path(path)?
             }

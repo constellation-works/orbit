@@ -163,21 +163,32 @@ pub(super) fn safe_relative_path(path: &str) -> Result<PathBuf, DispatchError> {
 /// Copy one untracked path into a recovery payload as what it is. A symlink
 /// is recreated, never followed: an agent-created link to a file outside the
 /// worktree must not pull that file's contents into the payload, and a
-/// dangling or directory link must not fail preservation.
+/// dangling or directory link must not fail preservation. A directory,
+/// including an untracked nested repository, is copied as a tree; links
+/// inside it are recreated rather than followed.
 fn copy_untracked_entry(source: &Path, destination: &Path) -> std::io::Result<()> {
-    if !fs::symlink_metadata(source)?.file_type().is_symlink() {
-        return fs::copy(source, destination).map(|_| ());
+    let file_type = fs::symlink_metadata(source)?.file_type();
+    if file_type.is_symlink() {
+        let target = fs::read_link(source)?;
+        #[cfg(unix)]
+        {
+            return std::os::unix::fs::symlink(target, destination);
+        }
+        #[cfg(not(unix))]
+        {
+            // Record the link target as text rather than follow it.
+            return fs::write(destination, target.to_string_lossy().as_bytes());
+        }
     }
-    let target = fs::read_link(source)?;
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, destination)
+    if file_type.is_dir() {
+        fs::create_dir(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            copy_untracked_entry(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        return Ok(());
     }
-    #[cfg(not(unix))]
-    {
-        // Record the link target as text rather than follow it.
-        fs::write(destination, target.to_string_lossy().as_bytes())
-    }
+    fs::copy(source, destination).map(|_| ())
 }
 
 fn recovery_io_error(action: &str, path: &Path, error: std::io::Error) -> DispatchError {

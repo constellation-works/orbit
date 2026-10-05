@@ -1677,6 +1677,225 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
     );
 }
 
+/// [ORB-14084] `git status --untracked-files=all` lists a nested repository as
+/// one directory, and `git hash-object` cannot hash it. Both checkouts must
+/// still fingerprint — committed repos by HEAD, an unborn repo as
+/// `opaque-directory` — so dispatch proceeds, an agent-created clone is an
+/// ordinary attributed edit, and a real boundary failure still writes recovery
+/// that includes the directory.
+#[cfg(unix)]
+#[test]
+fn untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree() {
+    isolated(
+        "untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree",
+        || {
+            fn commit_nested(parent: &Path, relative: &str, body: &str) -> String {
+                let dir = parent.join(relative);
+                fs::create_dir_all(&dir).unwrap();
+                git(&dir, &["init"]);
+                git(&dir, &["config", "user.name", "Orbit Test"]);
+                git(
+                    &dir,
+                    &["config", "user.email", "orbit-test@example.invalid"],
+                );
+                fs::write(dir.join("lib.txt"), body).unwrap();
+                git(&dir, &["add", "lib.txt"]);
+                git(&dir, &["commit", "-m", "nested"]);
+                git(&dir, &["rev-parse", "HEAD"])
+            }
+
+            fn seed_unborn(parent: &Path, relative: &str) {
+                let dir = parent.join(relative);
+                fs::create_dir_all(&dir).unwrap();
+                git(&dir, &["init"]);
+            }
+
+            fn identity_at<'a>(fingerprint: &'a Value, relative: &str) -> (&'a str, &'a str) {
+                let entries = fingerprint["untracked_content"]
+                    .as_object()
+                    .unwrap_or_else(|| panic!("untracked_content missing: {fingerprint}"));
+                let mut matches = entries
+                    .iter()
+                    .filter(|(path, _)| path.trim_end_matches('/') == relative);
+                let Some((path, value)) = matches.next() else {
+                    panic!(
+                        "{relative} missing from {}",
+                        fingerprint["untracked_content"]
+                    );
+                };
+                assert!(
+                    matches.next().is_none(),
+                    "{relative} matched more than one untracked path"
+                );
+                (
+                    path.as_str(),
+                    value
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{path} identity is not a string")),
+                )
+            }
+
+            let fixture = Fixture::new();
+            fs::write(fixture.repo.join("notes.txt"), "note\n").unwrap();
+            let primary_head = commit_nested(&fixture.repo, "vendor/somelib", "lib\n");
+            seed_unborn(&fixture.repo, "vendor/unborn");
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-NESTED", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-NESTED"], "jrun-nested-setup"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let assigned_head = commit_nested(&checkout.path, "vendor/otherlib", "other\n");
+
+            let provider = fixture.root.path().join("codex");
+            write_executable(&provider, &provider_script(""));
+            let host = host.with_provider(&provider);
+            let outcome =
+                dispatch_linked_provider(&host, "jrun-nested-stable", "T-NESTED", &checkout.path)
+                    .expect("a nested repository must not fail the checkout snapshot");
+            assert!(
+                outcome.success,
+                "dispatch proceeds with nested repos in both checkouts: {:?}",
+                outcome.message
+            );
+            assert!(
+                host.widenings().is_empty(),
+                "a nested repo already in the checkout is not a new agent edit: {:?}",
+                host.widenings()
+            );
+
+            write_executable(
+                &provider,
+                &provider_script(
+                    "git init -q vendor/fresh\n\
+                     git -C vendor/fresh config user.name 'Orbit Test'\n\
+                     git -C vendor/fresh config user.email orbit-test@example.invalid\n\
+                     printf 'fresh\\n' > vendor/fresh/lib.txt\n\
+                     git -C vendor/fresh add lib.txt\n\
+                     git -C vendor/fresh commit -qm fresh\n",
+                ),
+            );
+            let outcome =
+                dispatch_linked_provider(&host, "jrun-nested-created", "T-NESTED", &checkout.path)
+                    .expect("an assigned clone must not fail verify");
+            assert!(
+                outcome.success,
+                "an agent-created nested repo dispatches: {:?}",
+                outcome.message
+            );
+            let widenings = host.widenings();
+            assert_eq!(widenings.len(), 1, "{widenings:?}");
+            let (task_id, step, activity, paths) = &widenings[0];
+            assert_eq!(task_id, "T-NESTED");
+            assert_eq!(*step, ContextWideningStep::Implement);
+            assert_eq!(activity, "agent_implement");
+            assert_eq!(
+                paths
+                    .iter()
+                    .map(|path| path.trim_end_matches('/'))
+                    .collect::<Vec<_>>(),
+                vec!["vendor/fresh"],
+                "the new nested repository is the attributed path"
+            );
+            let fresh_head = git(&checkout.path.join("vendor/fresh"), &["rev-parse", "HEAD"]);
+
+            let primary = fixture.repo.display().to_string();
+            write_executable(
+                &provider,
+                &provider_script(&format!(
+                    "printf 'primary drift\\n' > '{primary}/README.md'\n"
+                )),
+            );
+            let blobs = TempDir::new().unwrap();
+            let sink = Arc::new(InMemorySink::new(blobs.path()));
+            let run_id = "jrun-nested-drift";
+            let audit = Arc::new(V2AuditWriter::new(run_id, "codex:test-model", sink.clone()));
+            let error = dispatch_audited_linked_activity(
+                &host,
+                "agent_implement",
+                run_id,
+                "T-NESTED",
+                &checkout.path,
+                audit,
+            )
+            .expect_err("primary drift beside a nested repo is still a boundary failure");
+            let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+            assert!(
+                error.is_non_retryable(),
+                "nested-repo drift stays a non-retryable integrity failure"
+            );
+            assert!(
+                diagnostic["recovery"].get("preservation_error").is_none(),
+                "recovery must copy the nested directory: {diagnostic}"
+            );
+            assert_eq!(diagnostic["primary_dirt_paths"], json!(["README.md"]));
+
+            let fingerprints: Value = serde_json::from_slice(
+                &sink
+                    .blob_store()
+                    .read(diagnostic["fingerprints_blob_ref"].as_str().unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            for side in ["primary_before", "primary_after"] {
+                let fingerprint = &fingerprints[side];
+                let (path, identity) = identity_at(fingerprint, "vendor/somelib");
+                assert_eq!(identity, format!("git-head:{primary_head}"), "{side}");
+                assert_eq!(
+                    fingerprint["path_states"][path]["untracked_content_sha256"], identity,
+                    "{side}"
+                );
+                let (path, identity) = identity_at(fingerprint, "vendor/unborn");
+                assert_eq!(identity, "opaque-directory", "{side}");
+                assert_eq!(
+                    fingerprint["path_states"][path]["untracked_content_sha256"], identity,
+                    "{side}"
+                );
+                let notes = fingerprint["untracked_content"]["notes.txt"]
+                    .as_str()
+                    .expect("ordinary untracked file");
+                assert!(
+                    notes.starts_with("git-blob:"),
+                    "{side}: file hashing still produces a blob identity, got {notes}"
+                );
+            }
+            assert_eq!(
+                fingerprints["primary_before"]["untracked_content"]["notes.txt"],
+                fingerprints["primary_after"]["untracked_content"]["notes.txt"]
+            );
+            for side in ["assigned_before", "assigned_after"] {
+                let fingerprint = &fingerprints[side];
+                let (_, identity) = identity_at(fingerprint, "vendor/otherlib");
+                assert_eq!(identity, format!("git-head:{assigned_head}"), "{side}");
+                let (_, identity) = identity_at(fingerprint, "vendor/fresh");
+                assert_eq!(identity, format!("git-head:{fresh_head}"), "{side}");
+            }
+
+            let payload = PathBuf::from(
+                diagnostic["recovery"]["untracked_payload"]
+                    .as_str()
+                    .expect("recovery names the untracked payload"),
+            );
+            assert_eq!(
+                fs::read_to_string(payload.join("vendor/otherlib/lib.txt")).unwrap(),
+                "other\n",
+                "recovery copies a nested repository as a tree"
+            );
+            assert_eq!(
+                fs::read_to_string(payload.join("vendor/fresh/lib.txt")).unwrap(),
+                "fresh\n"
+            );
+            assert!(
+                payload.join("vendor/otherlib/.git").is_dir(),
+                "the nested git dir is part of the preserved tree"
+            );
+        },
+    );
+}
+
 fn recover(
     host: &LifecycleHost,
     run_id: &str,
