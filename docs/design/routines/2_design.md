@@ -372,9 +372,11 @@ the owner machine and never dispatches it. `orbit routine list` and `show`, the
 dashboard's `owner_only` rows and the MCP `orbit.routine.control` list all project the
 same rule from one Core predicate, so a toggle is offered exactly where it succeeds. A
 toggle or pause of an owner-only routine is refused with the owner named and writes
-nothing. Auto-tasks and blocked-task recovery never run in a replica. Auto-task
-toggle and manual-mint controls are refused there too; the dashboard names the
-owner in their capability reasons.
+nothing. Auto-task evaluation and blocked-task recovery never run in a replica.
+Core refuses auto-task definition add, update, toggle, delete, and restore, as
+well as manual mint, across the CLI, dashboard, and MCP surfaces. Read-only
+definition views and delivery recovery/reset previews remain available; apply
+operations stay owner-only. Refusals name the owner machine.
 
 Worktree cleanup therefore has two paths. On the owner, a delivery run removes its own
 worktree once it lands (§1, *Delivered worktree cleanup*), with the owner's hourly GC

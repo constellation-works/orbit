@@ -8,6 +8,7 @@
 //! rather than read or write a task store of its own. The owner checkout's
 //! scheduling is the control: its routines are evaluated exactly as before.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
@@ -181,6 +182,149 @@ fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged(
         "{retained}"
     );
     assert!(replica_worktree.exists(), "retained worktree was removed");
+}
+
+#[test]
+fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let owner_repo = temp.path().join("owner");
+    let replica_repo = temp.path().join("replica");
+    fs::create_dir_all(&home).expect("create home");
+    init_git_repo(&owner_repo);
+    init_git_repo(&replica_repo);
+
+    run_success(
+        &owner_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "replica-auto-task-host",
+            "--task-prefix",
+            "RA",
+        ],
+    );
+    fixture_crew::configure_sol(&home.join(".orbit"));
+    run_success(&owner_repo, &home, &["workspace", "init", "--name", OWNER]);
+    run_success(
+        &replica_repo,
+        &home,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            REPLICA,
+            "--role",
+            "replica",
+            "--owner",
+            REMOTE_OWNER,
+        ],
+    );
+
+    // Model a deleted shipped default so restore would write its definition
+    // and managed-asset record if the Core authority check were missing.
+    fs::remove_file(replica_repo.join(".orbit/auto_tasks/backlog-hygiene.yaml"))
+        .expect("remove restore target in isolated fixture");
+    let cursor_path = replica_repo.join(".orbit/state/auto-tasks.json");
+    fs::create_dir_all(cursor_path.parent().expect("cursor parent"))
+        .expect("create cursor directory");
+    fs::write(
+        &cursor_path,
+        r#"{"definitions":{"doc-duties":{"baseline_at":"2026-10-05T00:00:00Z"}}}"#,
+    )
+    .expect("seed auto-task cursor");
+
+    let listed = run_json(
+        &replica_repo,
+        &home,
+        &["auto-task", "list", "--format", "json"],
+    );
+    assert!(listed.to_string().contains("qa-sweep"), "{listed}");
+    let shown = run_json(
+        &replica_repo,
+        &home,
+        &["auto-task", "show", "qa-sweep", "--json"],
+    );
+    assert_eq!(shown["name"], "qa-sweep");
+
+    for args in [
+        vec![
+            "auto-task",
+            "add",
+            "--name",
+            "replica-add-check",
+            "--every-minutes",
+            "60",
+            "--title",
+            "Must stay absent",
+            "--json",
+        ],
+        vec![
+            "auto-task",
+            "update",
+            "qa-sweep",
+            "--description",
+            "Must stay unchanged",
+            "--json",
+        ],
+        vec!["auto-task", "toggle", "qa-sweep", "on", "--json"],
+        vec!["auto-task", "delete", "doc-duties", "--json"],
+        vec!["auto-task", "restore", "backlog-hygiene", "--json"],
+        vec!["auto-task", "mint", "qa-sweep", "--json"],
+    ] {
+        let before = auto_task_state_snapshot(&replica_repo, &home);
+        let output = command(&replica_repo, &home)
+            .args(&args)
+            .output()
+            .expect("run replica auto-task mutation");
+        assert!(
+            !output.status.success(),
+            "orbit {args:?} unexpectedly succeeded"
+        );
+        let diagnostic = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            diagnostic.contains(REMOTE_OWNER),
+            "refusal must name the owner for {args:?}: {diagnostic}"
+        );
+        assert_eq!(
+            auto_task_state_snapshot(&replica_repo, &home),
+            before,
+            "refused orbit {args:?} must preserve definition bytes, cursor, managed assets, and task state"
+        );
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AutoTaskStateSnapshot {
+    definitions_and_assets: BTreeMap<String, Vec<u8>>,
+    cursor: Option<Vec<u8>>,
+    tasks: Value,
+}
+
+fn auto_task_state_snapshot(repo: &Path, home: &Path) -> AutoTaskStateSnapshot {
+    let definitions_dir = repo.join(".orbit/auto_tasks");
+    let definitions_and_assets = fs::read_dir(&definitions_dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", definitions_dir.display()))
+        .map(|entry| {
+            let entry = entry.expect("read auto-task entry");
+            let bytes = fs::read(entry.path())
+                .unwrap_or_else(|error| panic!("read {}: {error}", entry.path().display()));
+            (entry.file_name().to_string_lossy().into_owned(), bytes)
+        })
+        .collect();
+    let cursor = fs::read(repo.join(".orbit/state/auto-tasks.json")).ok();
+    let tasks = run_json(repo, home, &["task", "list", "--json"]);
+    AutoTaskStateSnapshot {
+        definitions_and_assets,
+        cursor,
+        tasks,
+    }
 }
 
 fn assert_owner_work_refused(outcome: &Value, routine: &str) {
