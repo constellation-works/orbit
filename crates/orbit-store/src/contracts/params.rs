@@ -414,6 +414,10 @@ pub struct WorkspaceClaimCheckResult {
 #[derive(Debug, Clone)]
 pub struct JobRunQuery {
     pub job_id: Option<String>,
+    /// Exact string membership in the run's submitted `input.task_ids` array.
+    /// Applied before ordering, limiting and row/step hydration. Missing or
+    /// non-array bindings do not match; other input fields confer no ownership.
+    pub task_id: Option<String>,
     pub state: Option<JobRunState>,
     /// Whether to include only states for which `JobRunState::is_terminal()`
     /// returns true. Applied before ordering and limiting.
@@ -438,6 +442,7 @@ impl Default for JobRunQuery {
     fn default() -> Self {
         Self {
             job_id: None,
+            task_id: None,
             state: None,
             terminal_only: false,
             active_only: false,

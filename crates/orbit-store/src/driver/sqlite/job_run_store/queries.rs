@@ -448,6 +448,17 @@ fn job_run_filter_sql(
         conditions.push(format!("job_id = ?{}", params.len() + 1));
         params.push(Box::new(job_id.clone()));
     }
+    if let Some(task_id) = &query.task_id {
+        // Only text elements of the top-level submitted array confer task
+        // ownership. EXISTS avoids duplicate rows for repeated bindings.
+        conditions.push(format!(
+            "json_type(input_json, '$.task_ids') = 'array' AND EXISTS (\
+             SELECT 1 FROM json_each(input_json, '$.task_ids') AS task_binding \
+             WHERE task_binding.type = 'text' AND task_binding.value = ?{})",
+            params.len() + 1
+        ));
+        params.push(Box::new(task_id.clone()));
+    }
     if let Some(state) = query.state {
         conditions.push(format!("state = ?{}", params.len() + 1));
         params.push(Box::new(state.to_string()));

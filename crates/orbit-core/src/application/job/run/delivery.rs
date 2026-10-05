@@ -175,8 +175,11 @@ impl OrbitRuntime {
     }
 
     fn latest_delivery_run_id(&self, task_id: &str) -> Result<String, OrbitError> {
-        // Newest first; steps are not needed to choose the run.
+        // Filter submitted task bindings before hydrating run inputs, newest
+        // first. No global cap: newer non-delivery jobs must not hide the
+        // latest delivery run. Steps are not needed to choose the run.
         let runs = self.list_job_runs_filtered_backend(&JobRunQuery {
+            task_id: Some(task_id.to_string()),
             include_steps: false,
             ..JobRunQuery::default()
         })?;
