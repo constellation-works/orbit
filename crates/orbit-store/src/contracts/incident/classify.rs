@@ -32,17 +32,27 @@ const DENIAL_MARKERS: &[&str] = &["policy denied", "capability denied", "permiss
 /// path. Anything unmatched is treated as unexpected — the conservative
 /// direction, since under-reporting a real failure is the costlier mistake.
 pub fn classify(event: &AuditEvent) -> FailureClass {
-    if is_lifecycle_diagnostic(event) {
+    classify_failure(
+        &surface_of(event),
+        event.status,
+        event.error_message.as_deref(),
+    )
+}
+
+/// The same classifier over the columns used by SQL aggregates, without
+/// hydrating unrelated audit metadata or truncating to the incident scan cap.
+pub(crate) fn classify_failure(
+    surface: &str,
+    status: AuditEventStatus,
+    error_message: Option<&str>,
+) -> FailureClass {
+    if is_failure_only_diagnostic_surface(surface) {
         return FailureClass::Diagnostic;
     }
-    if matches!(event.status, AuditEventStatus::Denied) {
+    if matches!(status, AuditEventStatus::Denied) {
         return FailureClass::Denied;
     }
-    let message = event
-        .error_message
-        .as_deref()
-        .unwrap_or_default()
-        .to_lowercase();
+    let message = error_message.unwrap_or_default().to_lowercase();
     if message.is_empty() {
         return FailureClass::Unexpected;
     }

@@ -190,6 +190,9 @@ table.policy-table.policy-cause-table td {
 .audit-summary-card .card-body {
   padding: 0;
 }
+.audit-summary-card[data-key="tool-call-failures-by-tool"] .card-body {
+  overflow-x: auto;
+}
 .summary-table {
   width: 100%;
   border-collapse: collapse;

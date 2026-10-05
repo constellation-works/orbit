@@ -324,7 +324,7 @@ function renderToolCallFailureRateCard(stats, window = "24h") {
   }));
   body.appendChild(el("div", {
     class: "metric-trend tool-call-failure-rate-note",
-    text: "Raw status=failure over callable tool calls (tool run + tool run-mcp). Distinct from unexpected failure rate.",
+    text: `Raw status=failure over successful + failed callable tool calls (tool run + tool run-mcp). ${Number(stats && stats.denied) || 0} denied calls excluded. Distinct from unexpected failure rate.`,
   }));
   card.appendChild(body);
   return card;
@@ -456,8 +456,10 @@ function renderAuditSummary(data, ctx) {
       renderTable(namedToolFailures, [
         { key: "tool", label: "tool" },
         { key: "failed", label: "failed", num: true },
-        { key: "total", label: "total", num: true },
+        { key: "total", label: "total", num: true, title: "Successful + failed calls; denied calls excluded" },
         { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
+        { key: "unexpected", label: "unexpected", num: true, title: "Failed calls classified as unexpected" },
+        { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
       ], filterByTool),
     ), [namedToolFailures, windowLabel]);
   }

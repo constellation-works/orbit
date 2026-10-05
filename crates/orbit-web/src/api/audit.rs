@@ -799,33 +799,42 @@ fn is_named_tool(name: &str) -> bool {
 
 /// Raw callable-tool failure rate for the audit-summary pane.
 ///
-/// Counts `subcommand IN ('run', 'run-mcp')` rows on named, non-diagnostic
+/// Counts `command = tool`, `subcommand IN ('run', 'run-mcp')` rows on named, non-diagnostic
 /// surfaces. The numerator is `status = failure` (expected negatives included);
-/// denials stay in the denominator only. Every tool with at least one failure
-/// is listed — unlike unexpected `failure_rate_by_tool`, this is not
+/// the denominator is success + failure, with denied rows reported separately.
+/// Unexpected counts use the same classifier as the incident card. Every tool
+/// with at least one failure or denial is listed — unlike unexpected
+/// `failure_rate_by_tool`, this is not
 /// sample-size gated and is not truncated.
 fn callable_tool_call_failure_stats(tool_aggs: &[AuditToolAggregate]) -> (Value, Vec<Value>) {
     let mut failed: i64 = 0;
     let mut total: i64 = 0;
+    let mut unexpected: i64 = 0;
+    let mut denied: i64 = 0;
     let mut by_tool = Vec::new();
     for tool in tool_aggs {
         if !is_named_tool(&tool.tool_name) || is_failure_only_diagnostic_surface(&tool.tool_name) {
             continue;
         }
-        let tool_total = tool.mcp_total + tool.cli_total;
-        if tool_total <= 0 {
-            continue;
-        }
+        let tool_total = tool.mcp_total + tool.cli_total - tool.callable_denials;
         let tool_failed = tool.mcp_failures + tool.cli_failures;
         failed += tool_failed;
         total += tool_total;
-        if tool_failed > 0 {
-            let rate = tool_failed as f64 / tool_total as f64;
+        unexpected += tool.callable_unexpected_failures;
+        denied += tool.callable_denials;
+        if tool_failed > 0 || tool.callable_denials > 0 {
+            let rate = if tool_total > 0 {
+                tool_failed as f64 / tool_total as f64
+            } else {
+                0.0
+            };
             by_tool.push(json!({
                 "tool": tool.tool_name,
                 "failed": tool_failed,
                 "total": tool_total,
                 "rate": rate,
+                "unexpected": tool.callable_unexpected_failures,
+                "denied": tool.callable_denials,
             }));
         }
     }
@@ -851,7 +860,9 @@ fn callable_tool_call_failure_stats(tool_aggs: &[AuditToolAggregate]) -> (Value,
             "failed": failed,
             "total": total,
             "rate": rate,
-            "denominator": "callable tool calls (run + run-mcp)",
+            "unexpected": unexpected,
+            "denied": denied,
+            "denominator": "successful + failed callable tool calls (run + run-mcp); denied excluded",
         }),
         by_tool,
     )
