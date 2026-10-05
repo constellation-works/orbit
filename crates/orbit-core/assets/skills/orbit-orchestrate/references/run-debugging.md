@@ -48,10 +48,23 @@ attempts. Each item names the durable run/event and failed-step identifiers,
 the recovery activity, outcome, failure phase, and a redacted bounded
 diagnostic. `limit` and `truncated` say when older attempts were omitted.
 
+An item's `outcome` says only whether the recovery activity completed. Whether
+the failed step was then retried is `retry_admitted`, decided by `decision`:
+the decision file `step_failure_recovery` writes under the worktree's
+`.orbit/tmp/step-recovery/`, never the `recovered` field of its response.
+`decision.status` is `verified` (with `verdict` `retry` or `not_recovered`),
+`absent` (no file: the legacy retry-on-success), `invalid` (malformed, stale,
+for another run/step/attempt, or an unsafe path) or `unavailable` (the host
+could not read it); the last two never admit a retry and `detail` names why.
+Older runs and other recovery activities carry no `decision`. The retried
+step's own result is the `step.post_recovery_attempt` audit event and the
+`orbit.job.step_post_recovery_attempt` log line.
+
 Keep `error_code` and `error_message` from the run itself as the original
 workflow failure. A recovery attempt is secondary evidence: `succeeded` does
-not rewrite that original failure, and a failed `authorization`, preparation,
-`dispatch`, or `activity` attempt explains why recovery did not complete.
+not rewrite that original failure, and a failed `authorization`, `decision`,
+preparation, `dispatch`, or `activity` attempt explains why recovery did not
+complete.
 
 ### Tell a working agent from an abandoned wrapper
 
@@ -105,7 +118,7 @@ tail -80 .orbit/state/audit/v2_loop/<run_id>.jsonl
 rg -n 'failed|error|recovery|cli.invocation|step.started|step.finished|activity.started|activity.finished|run.finished' .orbit/state/audit/v2_loop/<run_id>.jsonl
 ```
 
-Interpretation: `run.started`/`run.finished` define the overall lifecycle; `step.started`/`step.finished` are job step boundaries; `activity.started`/`activity.finished` identify activity execution and deterministic vs agent-loop type; `cli.invocation.started`/`.finished` identify provider command, model, cwd, timeout, exit code, stdout/stderr blob refs; `step.recovery_attempted` tells whether recovery ran and succeeded — a failed recovery can be a secondary problem, diagnose the original failed step first.
+Interpretation: `run.started`/`run.finished` define the overall lifecycle; `step.started`/`step.finished` are job step boundaries; `activity.started`/`activity.finished` identify activity execution and deterministic vs agent-loop type; `cli.invocation.started`/`.finished` identify provider command, model, cwd, timeout, exit code, stdout/stderr blob refs; `step.recovery_attempted` tells whether recovery ran and completed and, in `decision`, whether its written decision admitted the retry; `step.post_recovery_attempt` is that retry's outcome — a failed recovery can be a secondary problem, diagnose the original failed step first.
 
 ## Read Logs And Blobs
 

@@ -20,6 +20,7 @@ mod retired_stubs;
 mod review_gate_audit;
 mod sandbox_off;
 mod session_events;
+mod step_recovery;
 
 mod host_os_routing;
 mod host_resources;

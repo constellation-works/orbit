@@ -35,6 +35,7 @@ pub mod mutation;
 mod orbit_runtime;
 pub mod plugin;
 pub(crate) mod recovery_authority;
+pub(crate) mod recovery_decision;
 mod resolve;
 pub(crate) mod run_input;
 pub(crate) mod task;

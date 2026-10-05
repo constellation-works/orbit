@@ -75,14 +75,47 @@ spec:
       # activity must resolve workflow.system_crew into its crew input.
       system_crew:
         const: true
+      # Host-allocated, run-local decision file for this one invocation.
+      # Absent when the host has no decision slot; the executor then keeps
+      # its legacy single post-recovery attempt whenever recovery completes.
+      recovery_decision:
+        type: object
+        additionalProperties: false
+        required:
+          - path
+          - schema_version
+          - run_id
+          - failed_step_id
+          - attempt
+          - nonce
+        properties:
+          path:
+            type: string
+            minLength: 1
+          schema_version:
+            const: 1
+          run_id:
+            type: string
+            minLength: 1
+          failed_step_id:
+            type: string
+            minLength: 1
+          attempt:
+            type: integer
+            minimum: 1
+          nonce:
+            type: string
+            minLength: 1
   # Advisory reporting surface only — never a contract anything depends on.
   #
   # Nothing consumes these fields. A step's `recovery_activity` has no step id,
   # so no workflow template can reference its output; the executor gates its
-  # single post-recovery attempt on this activity completing, not on any value
-  # reported here; and the recovery outcome itself is established from durable
-  # state (the task record, the run's checkpoints, and the observable git/PR
-  # world). The fields exist for logs, audits, and post-mortems.
+  # single post-recovery attempt on this activity completing and on the
+  # decision file named by `recovery_decision`, never on any value reported
+  # here — `recovered` included; and the recovery outcome itself is
+  # established from durable state (the task record, the run's checkpoints,
+  # and the observable git/PR world). The fields exist for logs, audits, and
+  # post-mortems.
   #
   # Therefore: no `required` list and no `additionalProperties: false`. An
   # agent's structured result is best-effort — it is not persisted as the system
@@ -135,12 +168,38 @@ spec:
     and to deliver completed work when it is not.
 
     What actually counts as recovery: the structured result you return at the
-    end is NOT persisted and is NOT the system of record. Nothing reads it to
-    decide what happens next. Recovery succeeds only insofar as you changed
-    durable state — the worktree, the branch, the task record, the pushed
-    commit, the PR — so that the pipeline's remaining steps, or an operator
-    reading the world afterwards, find it repaired. Judge every decision below
-    against that durable state, never against something you plan to report.
+    end is NOT the system of record. Nothing reads it to decide what happens
+    next. Recovery succeeds only insofar as you changed durable state — the
+    worktree, the branch, the task record, the pushed commit, the PR — so that
+    the pipeline's remaining steps, or an operator reading the world
+    afterwards, find it repaired. Judge every decision below against that
+    durable state, never against something you plan to report.
+
+    Your decision about the executor's one post-recovery attempt is durable
+    too. When the input carries `recovery_decision`, write that decision to the
+    file at `recovery_decision.path` before you finish, with your ordinary
+    file-writing tools (the path is in the worktree's run-local scratch
+    directory, `.orbit/tmp/`). Write exactly one JSON object, copying the
+    binding fields verbatim from `recovery_decision`:
+
+        {"schema_version": 1, "run_id": "<run_id>",
+         "failed_step_id": "<failed_step_id>", "attempt": <attempt>,
+         "nonce": "<nonce>", "decision": "retry" | "not_recovered",
+         "reason": "<one short sentence>"}
+
+    - `retry`: you repaired what made the step fail, so its re-run can
+      succeed on its own. The executor makes exactly one attempt; that
+      attempt's own checks, not your decision, say whether it worked.
+    - `not_recovered`: you could not repair it (for example a red base, a
+      missing precondition you may not create, or anything you only
+      diagnosed). The executor skips the attempt and keeps the original
+      failure.
+    No other fields. Write it once, at that exact path, as a regular file —
+    never a link, and never anywhere else. A file that does not match this
+    invocation exactly is refused and also prevents the attempt. If you
+    write nothing, the executor keeps its legacy behavior and re-runs the
+    step whenever this activity completes. The `recovered` field of your
+    final response is a report for humans; it decides nothing.
 
     Repository configuration is out of bounds. Never add, rename, retarget, or
     remove a Git remote, and never write persistent Git configuration by any
@@ -149,11 +208,12 @@ spec:
     so such a change outlives the run and rewrites a repository nobody handed
     you. Orbit refuses these commands at its tool boundary; do not route around
     them. If the failed step could only succeed after such a change, recovery is
-    not possible: file the friction, report `recovered: false` with the blocker,
-    and let the step fail. Manufacturing a step's precondition is not recovery —
-    it makes a failed publication indistinguishable from a real one.
+    not possible: file the friction, write the `not_recovered` decision,
+    report `recovered: false` with the blocker, and let the step fail.
+    Manufacturing a step's precondition is not recovery — it makes a failed
+    publication indistinguishable from a real one.
 
-    Input is a JSON object with exactly these keys:
+    Input is a JSON object with these keys:
     - failed_step_id: the job step id that failed
     - activity_name: the activity or action name associated with the failed step
     - error_message: the original retry-exhausted error text
@@ -165,6 +225,8 @@ spec:
     - run_id: the current run's authoritative identity, never a rendered stale value
     - failed_step_input: the complete rendered failed-target input for inspecting
       delivery checkpoints; it is evidence, not independent execution authority
+    - recovery_decision (optional): where and how to write your decision file,
+      described above
 
     Claimed leaves: a run of `task_claimed_pr_pipeline` or
     `task_claimed_local_pipeline` (its implement input carries
@@ -201,8 +263,9 @@ spec:
        task record and the run's own checkpoints — not from anything an earlier
        agent reported about itself. If any condition is false, diagnose and
        report only. Do not modify the worktree, commit, branch, push, open a PR,
-       or change task lifecycle state. An implementation that did not complete is
-       never a delivery candidate.
+       or change task lifecycle state; the decision file is the one write you
+       still make, and it is `not_recovered`. An implementation that did not
+       complete is never a delivery candidate.
 
     3. For every delivery candidate, file an Orbit friction naming the failed
        step and original error. Delivery fixes the immediate run; the friction
@@ -216,11 +279,11 @@ spec:
        on its own. A repair may change any path it needs, inside or outside
        the task's selectors; Orbit widens the task's selectors over the paths
        you change and records the recovery step in task history. Do not rerun
-       or duplicate the failed operation. The executor
-       performs its one post-recovery attempt whenever this activity completes,
-       and then continues through the normal commit, branch preparation, base
-       sync, push, PR open/reuse, and PR promotion steps. The pipeline, not you,
-       moves the task to review in this path.
+       or duplicate the failed operation. Write the `retry` decision; the
+       executor then performs its one post-recovery attempt and continues
+       through the normal commit, branch preparation, base sync, push, PR
+       open/reuse, and PR promotion steps. The pipeline, not you, moves the
+       task to review in this path.
 
        Unresolved merge or rebase conflicts in the assigned worktree are a
        repair you make, not a reason to stop: resolve every unmerged path,
@@ -243,7 +306,8 @@ spec:
        worktree clean: the retry validates the exact committed HEAD and
        refuses uncommitted changes. Never edit, skip, or weaken the required
        command, and never rewrite the branch's existing commits. A failure
-       outside the candidate's changes (a red base) is a blocker to report.
+       outside the candidate's changes (a red base) is a blocker to report
+       with the `not_recovered` decision: re-running it cannot pass.
 
     5. For an already-terminal source run, prefer repairing for resume over
        direct delivery when the checkpointed remaining steps can run. You
@@ -272,15 +336,17 @@ spec:
        rewrite or discard implementation content merely to make delivery easy.
        The evidence that direct delivery worked is the PR existing and the task
        record showing review — both re-checkable by anyone, at any later time.
+       The failed step itself was not repaired, so write `not_recovered`.
 
     7. If a delivery candidate still cannot be delivered safely, leave its
        lifecycle transition to the failing pipeline, change nothing you cannot
-       justify, and explain the blocker and next action. The friction is still
-       required.
+       justify, write the `not_recovered` decision, and explain the blocker and
+       next action. The friction is still required.
 
     Finally, report what you did. Return exactly one JSON object whose result is
     a JSON object. Every field below is optional and advisory — it feeds logs,
-    audits, and post-mortems, and no step, gate, or branch consumes it. Report
+    audits, and post-mortems, and no step, gate, or branch consumes it; the
+    decision file, not `recovered`, is what the executor reads. Report
     as many as you can support with evidence, and omit any you cannot; a missing
     field never undoes durable work you already performed.
     - recovered: boolean

@@ -1,9 +1,15 @@
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 
+use orbit_types::workflow::activity_job::StepRecoveryDecisionRecord;
+
 use super::*;
-use crate::context::StepRecoveryAdmission;
+use crate::context::{
+    STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict,
+};
 
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
+const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
 
 /// Largest `error_message` the recovery input may carry, in bytes.
 ///
@@ -199,13 +205,19 @@ pub(super) fn attempt_recovery_activity(
         Err(error) => Err(("authorization", error.to_string())),
     };
 
-    let (recovery_succeeded, failure_phase, error_message, output) = match result {
-        Ok(dispatch) => {
+    let (recovery_succeeded, failure_phase, error_message, output, decision) = match result {
+        Ok(RecoveryDispatch { dispatch, slot }) => {
             let error_message = (!dispatch.success).then(|| {
                 redacted_recovery_diagnostic(dispatch.message.as_deref().unwrap_or(
                     "recovery activity returned an unsuccessful outcome without a diagnostic",
                 ))
             });
+            // Only a completed invocation's decision is read. Its response
+            // body stays advisory and never reaches this gate.
+            let decision = slot
+                .as_ref()
+                .filter(|_| dispatch.success)
+                .map(|slot| read_recovery_decision(ctx, slot));
             (
                 dispatch.success,
                 (!dispatch.success).then(|| "activity".to_string()),
@@ -214,6 +226,7 @@ pub(super) fn attempt_recovery_activity(
                     &ctx.run_id,
                     orbit_common::security::redaction::redact_all_json(dispatch.output),
                 )),
+                decision,
             )
         }
         Err((phase, message)) => (
@@ -221,8 +234,26 @@ pub(super) fn attempt_recovery_activity(
             Some(phase.to_string()),
             Some(redacted_recovery_diagnostic(&message)),
             None,
+            None,
         ),
     };
+    // Without a slot (custom or conflict recovery, or a host without the
+    // capability) a completed recovery keeps the legacy single re-attempt.
+    let retry_admitted = recovery_succeeded
+        && decision
+            .as_ref()
+            .is_none_or(|decision| decision.retry_admitted);
+    if let Some(decision) = decision.as_ref().filter(|_| !retry_admitted) {
+        tracing::warn!(
+            target: "orbit.engine.job_executor",
+            run_id = %ctx.run_id,
+            failed_step_id = %step.id,
+            decision_status = %decision.status,
+            decision_verdict = decision.verdict.as_deref(),
+            decision_detail = decision.detail.as_deref(),
+            "recovery decision admits no post-recovery attempt; returning the original failure"
+        );
+    }
     emit_job_event_lossy(
         &ctx.audit,
         ctx.task_id(),
@@ -233,9 +264,88 @@ pub(super) fn attempt_recovery_activity(
             failure_phase,
             error_message,
             output,
+            decision,
         },
     );
-    recovery_succeeded
+    retry_admitted
+}
+
+/// A completed recovery dispatch and the decision slot its input named.
+struct RecoveryDispatch {
+    dispatch: super::super::dispatcher::DispatchOutcome,
+    slot: Option<StepRecoveryDecisionSlot>,
+}
+
+/// Read the invocation's durable decision through the host [ORB-14152].
+///
+/// Only a verified `retry` or an absent file admits the post-recovery
+/// attempt. Anything present but not bound to this invocation, and any read
+/// failure, refuses it: neither is evidence that recovery repaired the step.
+fn read_recovery_decision(
+    ctx: &ExecCtx<'_>,
+    slot: &StepRecoveryDecisionSlot,
+) -> StepRecoveryDecisionRecord {
+    let record =
+        |status: &str, verdict: Option<StepRecoveryVerdict>, retry, detail: Option<&str>| {
+            StepRecoveryDecisionRecord {
+                status: status.to_string(),
+                verdict: verdict.map(|verdict| verdict.as_str().to_string()),
+                retry_admitted: retry,
+                detail: detail.map(redacted_recovery_diagnostic),
+            }
+        };
+    match ctx.host.read_step_recovery_decision(slot) {
+        Ok(StepRecoveryDecisionRead::Absent) => record("absent", None, true, None),
+        Ok(StepRecoveryDecisionRead::Verified { verdict, reason }) => record(
+            "verified",
+            Some(verdict),
+            verdict == StepRecoveryVerdict::Retry,
+            reason.as_deref(),
+        ),
+        Ok(StepRecoveryDecisionRead::Invalid { diagnostic }) => {
+            record("invalid", None, false, Some(&diagnostic))
+        }
+        Err(error) => record("unavailable", None, false, Some(&error.to_string())),
+    }
+}
+
+/// Ask the host for this invocation's decision slot and name it in the
+/// recovery input. Only `step_failure_recovery` carries the contract.
+fn allocate_recovery_decision(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    recovery: &ResolvedRecoveryActivity,
+    attempt: u32,
+    input: &mut Value,
+) -> Result<Option<StepRecoveryDecisionSlot>, orbit_common::OrbitError> {
+    if recovery.name != STEP_FAILURE_RECOVERY_ACTIVITY {
+        return Ok(None);
+    }
+    let workspace_path = input
+        .get("workspace_path")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let Some(slot) = ctx
+        .host
+        .allocate_step_recovery_decision(&StepRecoveryDecisionRequest {
+            run_id: ctx.run_id.clone(),
+            failed_step_id: step.id.clone(),
+            attempt,
+            workspace_path,
+        })?
+    else {
+        return Ok(None);
+    };
+    input["recovery_decision"] = serde_json::json!({
+        "path": slot.path.display().to_string(),
+        "schema_version": STEP_RECOVERY_DECISION_SCHEMA_VERSION,
+        "run_id": slot.run_id,
+        "failed_step_id": slot.failed_step_id,
+        "attempt": slot.attempt,
+        "nonce": slot.nonce,
+    });
+    Ok(Some(slot))
 }
 
 fn dispatch_recovery(
@@ -245,7 +355,7 @@ fn dispatch_recovery(
     failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
-) -> Result<super::super::dispatcher::DispatchOutcome, (&'static str, String)> {
+) -> Result<RecoveryDispatch, (&'static str, String)> {
     let mut input = serde_json::json!({
         "failed_step_id": step.id,
         "activity_name": step_activity_name(step),
@@ -294,16 +404,18 @@ fn dispatch_recovery(
     }
     if matches!(
         recovery.name.as_str(),
-        "step_failure_recovery" | PR_CONFLICT_RECOVERY_ACTIVITY
+        STEP_FAILURE_RECOVERY_ACTIVITY | PR_CONFLICT_RECOVERY_ACTIVITY
     ) {
         bind_recovery_context(step, ctx, &mut input)
             .map_err(|error| ("input", error.to_string()))?;
-        if recovery.name == "step_failure_recovery" {
+        if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY {
             validate_bound_recovery_context(&input)
                 .map_err(|error| ("input", error.to_string()))?;
         }
         input["system_crew"] = Value::Bool(true);
     }
+    let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)
+        .map_err(|error| ("decision", error.to_string()))?;
     let input =
         inject_system_crew_input(ctx.host, &input).map_err(|error| ("crew", error.to_string()))?;
     let crew_overridden_spec = crew_overridden_recovery_spec(recovery, ctx, &input)
@@ -322,7 +434,7 @@ fn dispatch_recovery(
     match dispatch {
         Ok(dispatch) => {
             persist_dispatch_invocation(ctx, &recovery.name, &input, &dispatch);
-            Ok(dispatch)
+            Ok(RecoveryDispatch { dispatch, slot })
         }
         Err(error) => Err(("dispatch", error.to_string())),
     }

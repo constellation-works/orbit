@@ -157,9 +157,9 @@ pub use activity_v2::{
     RETIRED_BACKEND_MIGRATION, RetiredAgentBackend, check_retired_backend_value,
 };
 pub use audit_envelope::{
-    AUDIT_ENVELOPE_SCHEMA_VERSION, BranchOutcome, V2_DENIAL_EVENT_TYPES,
-    V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED,
-    V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
+    AUDIT_ENVELOPE_SCHEMA_VERSION, BranchOutcome, StepRecoveryDecisionRecord,
+    V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_STEP_DENIED,
+    V2_EVENT_TYPE_TOOL_DENIED, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };
 pub use job_v2::{
     BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobTaskDelivery, JobV2, JobV2Step,

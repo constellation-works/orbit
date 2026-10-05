@@ -364,6 +364,12 @@ fn run_json_enriched(
                 "failure_phase": attempt.failure_phase,
                 "diagnostic": attempt.diagnostic,
                 "diagnostic_truncated": attempt.diagnostic_truncated,
+                "decision": attempt.decision.as_ref().map(|decision| json!({
+                    "status": decision.status,
+                    "verdict": decision.verdict,
+                    "detail": decision.detail,
+                })),
+                "retry_admitted": attempt.retry_admitted,
             })).collect::<Vec<_>>(),
         }),
         None => json!({

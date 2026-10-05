@@ -18,8 +18,10 @@ pub use hosts::{
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingStep,
     HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
     RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
-    ReviewerInvocationRequest, RuntimeHost, StepRecoveryAdmission, TaskActivityUpdate,
-    TaskAutomationUpdate, WorktreeGcTaskLookup,
+    ReviewerInvocationRequest, RuntimeHost, STEP_RECOVERY_DECISION_SCHEMA_VERSION,
+    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
+    StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate,
+    WorktreeGcTaskLookup,
 };
 pub use outcome::{
     WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, blocked_workflow_failure_update,

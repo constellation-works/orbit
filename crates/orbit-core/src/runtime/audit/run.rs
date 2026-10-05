@@ -61,10 +61,29 @@ pub struct RunRecoveryAttempt {
     pub attempted_at: Option<DateTime<Utc>>,
     pub failed_step_id: String,
     pub recovery_activity: String,
+    /// Whether the recovery activity completed (`succeeded`) or not
+    /// (`failed`); completion alone is not a repair.
     pub outcome: String,
     pub failure_phase: Option<String>,
     pub diagnostic: Option<String>,
     pub diagnostic_truncated: bool,
+    /// [ORB-14152] The durable decision the executor read back, absent for
+    /// historical events and attempts without a decision slot.
+    pub decision: Option<RunRecoveryDecision>,
+    /// Whether the executor made its single post-recovery attempt of the
+    /// failed step. That attempt's own outcome is the
+    /// `step.post_recovery_attempt` audit event.
+    pub retry_admitted: bool,
+}
+
+/// The read-back recovery decision, bounded like the attempt diagnostic.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunRecoveryDecision {
+    /// `verified`, `absent`, `invalid` or `unavailable`.
+    pub status: String,
+    /// `retry` or `not_recovered` when `verified`.
+    pub verdict: Option<String>,
+    pub detail: Option<String>,
 }
 
 /// The recovery portion of a run's persisted audit trail.
