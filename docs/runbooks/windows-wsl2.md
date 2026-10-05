@@ -111,8 +111,9 @@ caller's cgroup with one warning (`machine.worker_containment`; refused when
 
 ## 4. Install the toolchain, Orbit and provider CLIs inside the distribution
 
-Run everything from here on **inside the distribution, as the Linux user that
-will run Orbit** — not through `sudo`, and not from PowerShell.
+Run setup from here on **inside the distribution, as the Linux user that will
+run Orbit**. Use `sudo` only to install system packages; install Orbit and
+provider CLIs and authenticate as that Linux user, not from PowerShell.
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git curl ca-certificates   # Debian/Ubuntu; use your distro's manager otherwise
@@ -343,7 +344,7 @@ that commit on Linux; it does not mean the command ran under WSL.
 | `wsl --install`, `--list`, `--set-version`, `--version`, `--update`, `--shutdown`, `--terminate` | Microsoft docs, 2026-10-05 | n/a | **Not verified** |
 | `wsl.exe --distribution/--user/--exec` argument handling | `wsl.exe` usage text (Microsoft WSL repository), 2026-10-05 | n/a | **Not verified** |
 | `/etc/wsl.conf` `[boot] systemd=true`, `[interop] appendWindowsPath` | Microsoft docs, 2026-10-05 | n/a | **Not verified** |
-| `orbit init` flags, `--format json` `linux_sandbox` | CLI help and init source | Linux sandbox runbook covers the Linux path | **Not verified** |
+| `orbit init` flags, `--format json` `linux_sandbox` | CLI help and init source | Not run for this guide; see the Linux sandbox runbook | **Not verified** |
 | Bubblewrap probe, bundled `bwrap`, AppArmor rule | `crates/orbit-exec`, init source, [Linux sandbox runbook](linux-sandbox.md) | No native onboarding run is recorded for any distribution | **Not verified** |
 | `orbit doctor providers --json` readiness fields | CLI help and doctor source | Ran read-only on a Linux host: a JSON array with the fields above; inside an agent sandbox the probe reported the nested-namespace denial, as expected | **Not verified** |
 | `orbit workspace init --mcp`, `orbit mcp init` write Linux-side files only | `orbit-cli` MCP setup source | Not run for this runbook | n/a (does not touch Windows) |
