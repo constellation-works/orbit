@@ -123,6 +123,19 @@ window (one `workspace_pull_pipeline` run):
 A request without `crews` (owner-local admission) is unrestricted, as before. Crews are matched
 by registry name, so a crew both sides configure must use the same name.
 
+*Operator restriction* [ORB-14174]. `orbit run auto --pull <selector> --allow-crew a,b` narrows the
+declared capability for one drain. Submission canonicalizes the names against this host's
+`[crews.*]` (an unknown or blank name refuses before the probe) and persists them as
+`allowed_crews` in the `workspace_pull_pipeline` run input, so every refill pass and a resumed run
+read the same set. Each pass declares only the preflight-runnable crews the allowlist permits (by
+name or provider/model identity), minus exclusions; a pass with nothing left refuses
+`no_runnable_crew` naming `--allow-crew` and requests nothing. The wire shape is unchanged: the
+owner sees a smaller `runnable` list, never an exclusion. The restriction selects implementation
+crews only. The owner's before-PR review crew is judged against the unrestricted window, so it
+still has to run here (`before_pr_reviewer_unavailable` otherwise) but need not be named, and the
+restriction is not forwarded to claimed leaves. No configuration, credential, owner pool or task
+crew changes.
+
 ## 3. Pull-mode drain and the pulled leaf pipeline
 
 ### Caller-side implementation status
@@ -320,7 +333,20 @@ after its window until every admission has settled. It is no longer the only pro
 them ([Settlement belongs to the admission record, not to the drain that admitted
 it](./4_decisions.md#settlement-belongs-to-the-admission-record-not-to-the-drain-that-admitted-it)):
 each leaf delivers its own settlement as it terminalizes, and the drain's pass is one of several
-idempotent deliverers. Admission:
+idempotent deliverers.
+
+A drain started without `--for` (or with `--for 0s`) has no window but one admission pass
+[ORB-14174]. Its zero deadline still reads expired through the shared `drain_window`, which is not
+special-cased; `pull_refill` instead takes the pass from run state. The first iteration that finds
+no admission stop and no cancel atomically records `pull_single_pass` (one SQLite run-state
+transaction) before it probes or requests, then tops up to the free slots; every later iteration,
+a retry of that activity and a resumed run (which clones the run state) see the record and only
+settle. The pass also ends early when a stop or cancel lands between two requests. Requests
+allocated before a crash are carried under their recorded IDs, so a retried pass neither loses nor
+duplicates a claim. A positive window that has expired never gains the pass, and a windowless
+drain ends once nothing it admitted is unsettled, including at once over an empty backlog.
+
+Admission:
 
 1. Reconcile pending local pull requests and claimed-but-not-launched work first.
 2. Count live leaf runs **and pending admissions without a live run** against local capacity,

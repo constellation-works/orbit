@@ -13,6 +13,18 @@
 # `orbit run auto --stop` closes the window early the same way it does for the
 # owner drain; live leaves keep running.
 #
+# `for_seconds: 0` (`--for` omitted) is one admission pass [ORB-14174]. Its
+# window is expired from the first iteration, so `pull_refill` takes that pass
+# from run state rather than from the window: the first iteration not stopped
+# or cancelled records it and requests up to the free slots; every later
+# iteration, retry or resumed run only settles. A positive window that has
+# expired never gains a pass.
+#
+# `allowed_crews` (`--allow-crew`) is read by `pull_refill` from this run's
+# input, never from activity input: every request declares only those crews,
+# for the whole window and on resume. The owner's before-PR reviewer is not
+# restricted by it.
+#
 # Settlement does not depend on this run being alive [ORB-13663]. The admission
 # record is the outbox: each leaf's own worker records and delivers its handoff
 # or failure as it terminalizes (retrying a while if the owner is unreachable),
@@ -83,6 +95,7 @@ spec:
             default_input:
               destination: "{{ input.destination }}"
               window_expired: "{{ steps.window.output.expired }}"
+              for_seconds: "{{ input.for_seconds }}"
               max_active_leaf_runs: "{{ input.max_active_leaf_runs }}"
               poll_sleep_seconds: "{{ input.poll_sleep_seconds }}"
               idle_sleep_seconds: "{{ input.idle_sleep_seconds }}"

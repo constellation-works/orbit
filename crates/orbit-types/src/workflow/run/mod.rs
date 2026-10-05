@@ -14,7 +14,7 @@ pub use state::{
     DrainWaitingTask, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
     FinalRecoveryKey, FinalRecoveryObservedTask, PROVIDER_CAPACITY_ERROR_CODE,
     PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER,
-    PipelineState, PullCrewPreflight, ResourcePressure, ResourceThrottle,
+    PipelineState, PullCrewPreflight, PullSinglePass, ResourcePressure, ResourceThrottle,
     VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
     is_provider_capacity_exhausted, is_provider_unavailable, is_validation_environment_failure,
 };

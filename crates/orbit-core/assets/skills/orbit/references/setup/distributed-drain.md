@@ -150,6 +150,13 @@ unless the checkout is a replica of that owner and workspace and the owner's
 probe admits this executor. It prints a `workspace_pull_pipeline` run ID and
 returns.
 
+- Without `--for` (or `--for 0s`) the drain makes one admission pass up to
+  `--concurrency`, admits no replacements, and ends once those claims settle.
+- `--allow-crew <crew-a>,<crew-b>` limits the crews this drain declares, on
+  every pass and on resume; unknown or blank names refuse before submission.
+  The owner's before-PR review crew still has to run here but need not be
+  named. Task crews and configuration are unchanged.
+
 - Each claim runs locally as `task_claimed_pr_pipeline` and ends at a pull
   request handed to the owner, which moves the task to `review`. The owner
   approves before anything lands; the follower never merges. With

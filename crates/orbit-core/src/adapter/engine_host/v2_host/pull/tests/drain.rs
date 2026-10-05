@@ -282,6 +282,52 @@ fn pull_lost_request_and_binding_responses_recover_the_same_leaf() {
     );
 }
 
+/// [ORB-14174] A stop or cancel recorded while a pass is requesting ends it
+/// before the next request: the guard is asked before every allocation, and
+/// the claims already made are kept.
+#[test]
+fn pull_admission_stop_mid_pass_ends_it_before_the_next_request() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_admission_stop_mid_pass_ends_it_before_the_next_request",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+        refused_delivery: RefusedDelivery::WhenDue,
+    };
+    let asked = Cell::new(0);
+    // Open for the first request; the stop lands while it is answered.
+    let admitting = || {
+        asked.set(asked.get() + 1);
+        Ok(asked.get() == 1)
+    };
+
+    let pass = drain.refill_pass(&destination, &|| Ok(Some(template.clone())), &admitting, 3);
+
+    assert!(pass.error.is_none());
+    assert_eq!(pass.admitted, 1);
+    assert_eq!(peer.requests.get(), 1, "no request after the stop");
+    assert_eq!(asked.get(), 2);
+    assert_eq!(
+        launcher.launches.get(),
+        1,
+        "the admitted claim still launches"
+    );
+
+    let failing = || Err(OrbitError::Store("run state unreadable".into()));
+    let pass = drain.refill_pass(&destination, &|| Ok(Some(template.clone())), &failing, 3);
+    assert!(pass.error.is_some(), "an unreadable stop ends the pass");
+    assert_eq!(peer.requests.get(), 1);
+}
+
 pub(super) fn isolated_pull_test(name: &str) -> bool {
     const CHILD: &str = "ORBIT_TEST_LOCAL_PULL_CHILD";
     if std::env::var(CHILD).ok().as_deref() == Some(name) {

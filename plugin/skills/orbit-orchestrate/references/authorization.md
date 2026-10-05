@@ -75,7 +75,11 @@ excludes others. On an explicit `ship`, an excluded task is refused before its
 run is created; on an auto drain, excluded backlog tasks are skipped. Neither
 path automatically remaps a task.
 It is scoped to the run and checked against resolved crew identity, including
-system activities; it does not cancel already-running workers. Diagnose with:
+system activities; it does not cancel already-running workers. On a replica
+pull drain (`--pull <selector> --allow-crew ...`) it limits the crews the drain
+declares to the owner for its whole life, resume included; the owner's
+before-PR reviewer is not restricted but must still run on that host.
+Diagnose with:
 
 ```bash
 orbit run readiness --allow-crew <crew-a>,<crew-b> --json

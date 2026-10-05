@@ -263,6 +263,49 @@ mod unix {
         );
     }
 
+    /// [ORB-14174] `--allow-crew` restricts a pull drain: an undefined crew is
+    /// refused by name before anything is submitted, and a defined one is
+    /// accepted alongside `--pull` and reaches the replica check.
+    #[test]
+    fn auto_pull_validates_its_crew_restriction_before_submitting() {
+        let fixture = Fixture::new();
+        let pull = |crews: &str| {
+            let output = fixture
+                .command()
+                .args([
+                    "run",
+                    "auto",
+                    "--pull",
+                    "hm_owner/ws_orbit",
+                    "--allow-crew",
+                    crews,
+                ])
+                .assert()
+                .failure()
+                .get_output()
+                .clone();
+            assert_ne!(output.status.code(), Some(2), "clap accepts the pair");
+            String::from_utf8_lossy(&output.stderr).into_owned()
+        };
+
+        let unknown = pull("orbit-test-no-such-crew");
+        assert!(
+            unknown.contains("orbit-test-no-such-crew"),
+            "the refusal names the crew: {unknown}"
+        );
+        let known = pull("sol");
+        assert!(
+            !known.contains("--allow-crew") && !known.contains("sol"),
+            "a defined crew passes validation: {known}"
+        );
+        let history = fixture.json(&["run", "history", "--json"]);
+        assert_eq!(
+            history["runs"].as_array().map(Vec::len),
+            Some(0),
+            "nothing was submitted: {history}"
+        );
+    }
+
     /// [ORB-13987] `orbit run auto` still starts a drain whose required
     /// validation cannot use the login shell, and says so at submission.
     #[test]

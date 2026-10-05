@@ -38,6 +38,7 @@ fn a_follower_without_required_validation_commands_starts_a_pull_drain() {
                 selector: &format!("{OWNER}/{logical}"),
                 for_seconds: Some(60),
                 max_active_leaf_runs: Some(1),
+                allowed_crews: &[],
                 actor: None,
             },
             orbit_types::workflow::JobRunTrigger::cli(),
