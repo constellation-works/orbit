@@ -199,6 +199,25 @@ fn spec_build_parses_and_refuses_unknown_fields() {
     );
 }
 
+/// Whitespace-padded `{{ build_dir }}` in a build argv passes structural
+/// validation and is substituted by [`crate::plugin::render_build_argv`].
+#[test]
+fn spec_build_substitutes_padded_build_dir() {
+    let manifest_yaml = BUILD_MANIFEST.replace(
+        "\"{{build_dir}}/target\"]",
+        "\"{{ build_dir }}/target\", \"--extra={{  build_dir  }}\"]",
+    );
+    let manifest: PluginManifest =
+        serde_yaml::from_str(&manifest_yaml).expect("parse padded build_dir");
+    manifest
+        .validate_structure()
+        .expect("padded build_dir reference is valid");
+    let build = manifest.spec.build.expect("spec.build is read");
+    let rendered = crate::plugin::render_build_argv(&build.command, "/b");
+    assert_eq!(rendered[6], "/b/target");
+    assert_eq!(rendered[7], "--extra=/b");
+}
+
 /// Each structural refusal names the offending key, so `orbit plugin
 /// validate` points at what to fix.
 #[test]
