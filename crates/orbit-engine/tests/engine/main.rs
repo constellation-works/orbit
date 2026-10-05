@@ -11,6 +11,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod candidate_resume;
+mod claimed_candidate_paths;
 mod commit_verifier;
 mod final_recovery;
 mod handoff_landing;
