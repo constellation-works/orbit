@@ -34,7 +34,7 @@ before the subcommand.
 | `orbit plugin add` \| `list` \| `show` \| `upgrade` \| `enable` \| `disable` \| `remove` \| `doctor` \| `sync` | Install and manage plugins. `validate`, `test`, `scaffold`, and `migrate` support plugin authoring. Installed plugins' command groups appear under `Plugins:` in `orbit --help`. |
 | `orbit plugin secret set` \| `list` \| `rm` | Manage the secrets a plugin declares in `spec.secrets`. `set <plugin> <name>` reads the value from stdin or a no-echo prompt, never from an argument. `list <plugin>` shows whether each secret is set, never its value. `rm <plugin> <name>` deletes one. |
 | `orbit migrate` | List pending `.orbit` layout and store migrations; `--confirm` applies them. |
-| `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. |
+| `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. `--local-candidate <PATH> --source-commit <SHA>` installs an operator-attested local build pinned to a full commit, with `--write-candidate-manifest`, then `--candidate-manifest` and `--install-target`. |
 
 A plugin source keeps its plugin in a `.orbit-plugin/` directory that holds
 `plugin.yaml`. That directory is the plugin root and the only tree installed.

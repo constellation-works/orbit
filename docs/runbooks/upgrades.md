@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631]
-last_validated: 2026-09-27
+last_validated: 2026-10-05
 ---
 
 # Upgrade Orbit Safely
@@ -372,6 +372,83 @@ metadata and `latest-version.txt` to 64 KiB, the checksum manifest to 1 MiB, its
 signature to 16 KiB, and the compressed archive to 256 MiB. An input over its limit fails
 before the installed executable is replaced, including when an HTTP server omits
 `Content-Length`. The extracted executable has a separate 256 MiB limit.
+
+### Deploy a locally built candidate pinned to a source commit
+
+When a fix must reach a host before it is released, install a build of an exact
+source commit through the same guarded replacement instead of copying a binary over
+the installed one. `--preflight` followed by a raw copy is not an install: it gives up
+admission between the probe and the copy, keeps no backup and converges nothing.
+
+```sh
+SHA=<full 40- or 64-hex commit>
+git checkout --detach "$SHA" && test -z "$(git status --porcelain)"
+cargo build --release --locked -p orbit-cli
+C=$PWD/target/release/orbit
+"$C" update --local-candidate "$C" --source-commit "$SHA" \
+  --write-candidate-manifest ~/orbit-candidate-"$SHA".json
+# quiesce Orbit clients (see below), then from the workspace to converge:
+"$C" update --local-candidate "$C" --candidate-manifest ~/orbit-candidate-"$SHA".json \
+  --source-commit "$SHA" --install-target ~/.orbit/bin/orbit --json
+```
+
+**Trust is `operator_attested`.** The manifest records what the operator asserts — the
+source commit — beside what Orbit can compute: the candidate's SHA-256 and its target
+triple read from the executable header. Orbit cannot prove the bytes were built from
+that commit, so the report says `trust: operator_attested`, `signed_release: false`, and
+gives each field's evidence (`operator_attested`, `computed_from_accepted_bytes`,
+`executable_header`). Build from a clean checkout of the pinned commit and keep your own
+build evidence. Each platform builds its own candidate: two hosts on the same commit
+share source, not bytes. The release path, its signature verification and trusted keys
+are unchanged; a local candidate never satisfies them.
+
+The manifest (`kind: orbit-local-candidate`, `schema_version: 1`) is written once —
+an existing path is never overwritten — and abbreviated commits are refused.
+
+**Bootstrap.** Run the *candidate's* `orbit update`, not the installed one: an installed
+build that predates `--local-candidate` cannot install it, and the candidate never
+assumes it is the install target. `--install-target` is required and names the managed
+executable (`~/.orbit/bin/orbit`, or `$ORBIT_INSTALL_DIR/orbit`). It is refused when
+it is not named `orbit`, is a symbolic link or not a regular file, is not owned by the
+invoking user, or is owned by a package manager (npm, Homebrew, `cargo install`, a
+checkout build) or an unknown install. Its identity (device and inode) is re-checked
+under the update lock and again immediately before the swap.
+
+Then the ordinary update order applies, with the candidate in place of a download:
+
+1. Inspect the install target, acquire generation admission (refused while any Orbit
+   client is live) and the install-directory lock.
+2. Stream the candidate into the staging file beside the target (1 GiB limit) and hash
+   the staged copy. Those are the accepted bytes: replacing or rewriting the candidate
+   path afterwards does not change what is installed.
+3. Require the manifest's commit to equal `--source-commit`, its digest and target to
+   equal the accepted bytes, and the target to match the installation. A candidate
+   rebuilt after its manifest was written is refused.
+4. Require the staged candidate's admission contract and version, and apply the
+   [downgrade](#downgrades) rules with `--allow-downgrade`. An **equal** version with a
+   different digest is a replacement, not `already_current`.
+5. Back up to `<orbit>.previous`, swap atomically, confirm the installed digest and
+   version, pin the candidate's generation, then run the convergence steps as the
+   installed candidate.
+
+Every refusal before step 5 leaves the executable, its backup, the generation record
+and every store untouched.
+
+**Clients.** Live stdio MCP sessions, the dashboard, clock ticks and drain coordinators
+make the update refuse with `upgrade admission refused`; they keep running on the
+installed build and a claimed run is not interrupted or reset. Stop them (close the
+MCP client or its window and confirm the backend exited, stop the dashboard, pause the
+clock, let or cancel drains finish), run the update, and reconnect: they start from the
+installed candidate.
+
+**Replay and recovery.** Re-running the same command once the target already holds the
+accepted digest skips replacement, re-pins and re-runs convergence (`outcome:
+already_current`); that is how an interrupted run finishes. A failure after the swap
+exits `4` with `outcome: needs_recovery`; the recovery text and
+`local_candidate.retry_command` carry the exact command, including `--root` when one
+selected the workspace. The report also lists `admission_roots`, the before and after
+installed digests, and `release_source: local candidate (operator_attested, not a
+signed release)`.
 
 ## Understand the version ledgers
 

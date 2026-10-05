@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use super::converge::{ConvergenceStep, run_reporting_step, run_step};
 use super::environment::UpdateEnvironment;
+use super::local_candidate::LocalCandidateEvidence;
 
 /// Exit code for an update that installed the new executable but could not
 /// finish converging workspace state. Distinct from a plain failure: the
@@ -71,6 +72,11 @@ pub struct UpdateReport {
     /// Workspace root selected for convergence, when one was found.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
+    /// Generation authorities admission was taken on, in lock order.
+    pub admission_roots: Vec<PathBuf>,
+    /// Provenance of an operator-built candidate; absent for a release.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_candidate: Option<LocalCandidateEvidence>,
     /// What the operator must do to finish, when the run did not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
@@ -251,17 +257,30 @@ fn recovery_text(report: &UpdateReport, failed: &[&str], root_argument: Option<&
             |root| format!("`orbit --root {} {args}`", root.display()),
         )
     };
-    let retry = command("update");
+    // A local candidate is retried with its own exact invocation: the plain
+    // command would resolve a published release instead.
+    let (installed, retry) = match &report.local_candidate {
+        Some(local) => (
+            format!(
+                "the local candidate {} (orbit {})",
+                local.executable_sha256.value, report.target_version
+            ),
+            format!("`{}`", local.retry_command),
+        ),
+        None => (
+            format!("orbit {}", report.target_version),
+            command("update"),
+        ),
+    };
     let direct = failed
         .iter()
         .map(|args| command(args))
         .collect::<Vec<_>>()
         .join(" and ");
     let mut text = format!(
-        "orbit {} is installed, but {direct} did not finish. \
+        "{installed} is installed, but {direct} did not finish. \
          Re-run {retry} from this workspace to retry — every step is idempotent — \
-         or run {direct} directly and read its diagnostics.",
-        report.target_version,
+         or run {direct} directly and read its diagnostics."
     );
     if let Some(backup) = &report.backup_path {
         text.push_str(&format!(

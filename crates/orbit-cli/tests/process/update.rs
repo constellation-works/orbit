@@ -7,7 +7,7 @@
 //! Routing, `--check`, and admission are exercised below. Integrity — checksums,
 //! signatures, archive shape, staged version checks, downgrade, the install
 //! lock, and a stale writer — is exercised through the same binary in the
-//! `integrity` module.
+//! `integrity` module, and operator-built candidates in `local_candidate`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,8 @@ use tempfile::tempdir;
 // directory named after the test file, so the path is explicit.
 #[cfg(unix)]
 mod integrity;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod local_candidate;
 
 fn orbit(cwd: &Path, home: &Path, mirror: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");

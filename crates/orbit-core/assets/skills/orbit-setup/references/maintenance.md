@@ -151,7 +151,8 @@ stores and may create coordination lock files. It is an observation, not a
 reservation. `orbit update` reacquires and holds admission through
 replacement, then pins the candidate in every locked authority through
 convergence. External installers must quiesce clients; a standalone preflight
-is not race-free. `orbit update --check` checks releases, not running-client
+is not race-free, so preflight plus a raw copy is never a way to deploy a
+local build — use `--local-candidate` (below). `orbit update --check` checks releases, not running-client
 compatibility.
 
 Participating CLI/MCP processes pin their executable generation for their entire
@@ -176,6 +177,34 @@ restart alone does not prove an unmanaged backend exited. No shadow stores or
 ad-hoc MCP servers are part of this contract. Additive-newer compatibility permits
 some unaudited CLI reads; MCP tool calls, including workspace discovery, require
 durable audit writes and cannot use that read-only fallback.
+
+## Deploying a local build pinned to a source commit
+
+To ship an unreleased fix, build a clean checkout of the full commit SHA and run
+the **candidate's** updater so an older installed build is bootstrapped:
+
+```sh
+C=target/release/orbit   # cargo build --release --locked -p orbit-cli at "$SHA"
+"$C" update --local-candidate "$C" --source-commit "$SHA" --write-candidate-manifest m.json
+"$C" update --local-candidate "$C" --candidate-manifest m.json --source-commit "$SHA" \
+  --install-target ~/.orbit/bin/orbit --json
+```
+
+Trust is reported literally as `operator_attested` with `signed_release: false`:
+Orbit computes the digest from the accepted bytes and the target from the
+executable header, but the source commit is the operator's attestation. Release
+signature verification is unchanged and never satisfied by a local candidate;
+each platform builds its own candidate from the same commit.
+
+`--install-target` must be the managed `orbit` executable (not a symlink, owned
+by the invoking user); package-manager or unknown installs are refused. The
+update runs the normal admission, staging, backup, swap and convergence: the
+staged copy is what installs even if the candidate path changes, an equal
+version with a different digest replaces, and live MCP/dashboard/clock/drain
+clients make it refuse before anything changes — quiesce them, retry, then
+reconnect. Rerunning the same command is idempotent and finishes partial
+convergence; `needs_recovery` (exit 4) carries the exact retry command in
+`local_candidate.retry_command`. See the upgrades runbook for the full procedure.
 
 ## Database and layout upgrades
 
