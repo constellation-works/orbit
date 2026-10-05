@@ -16,6 +16,7 @@ mod git_repo;
 #[path = "../support/isolated_cli_fixture.rs"]
 mod isolated_cli_fixture;
 
+mod github_broker_sandbox;
 mod github_capability_preflight;
 mod plugin_broker_sandbox;
 mod plugin_child_cli_surface;

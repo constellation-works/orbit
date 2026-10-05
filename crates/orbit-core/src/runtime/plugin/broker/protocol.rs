@@ -23,9 +23,10 @@ pub(crate) const BUSY: &str = "plugin_broker_busy";
 pub(crate) const REQUEST_TOO_LARGE: &str = "plugin_broker_request_too_large";
 /// The request body is not a version-1 request object.
 pub(crate) const INVALID_REQUEST: &str = "plugin_broker_invalid_request";
-/// The run does not authorize this call: the tool is not a plugin tool, its
-/// activity policy or the plugin's grants refuse it, or the request names a
-/// cwd or workspace outside the run.
+/// The run does not authorize this call: the tool is neither a plugin tool
+/// nor one of the broker's read-only `github.*` built-ins, its activity policy
+/// or the plugin's grants refuse it, or the request names a cwd or workspace
+/// outside the run.
 const REFUSED: &str = "plugin_broker_refused";
 /// The tool's input does not satisfy its schema.
 const INVALID_INPUT: &str = "plugin_broker_invalid_input";

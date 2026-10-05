@@ -7,8 +7,8 @@ status: Draft
 tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
-related_artifacts: [ORB-13038, ORB-13008, ORB-13009, F2026-09-230]
-last_updated: 2026-09-27
+related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, F2026-09-230]
+last_updated: 2026-10-04
 last_validated: 2026-09-26
 ---
 
@@ -19,6 +19,8 @@ sandboxed agent step gets a per-run socket with kernel peer authentication. With
 `ORBIT_PLUGIN_BROKER` set, nested CLI and MCP plugin calls forward to it after checking the
 server UID. The broker executes authenticated requests for exec-backed plugin tools through
 the audited dispatch, under the run's own record and the §5 profile (§4.4, "As implemented").
+It also runs the read-only `github.*` tools on the host, so they authenticate with the host's
+`gh` while the sandbox keeps `~/.config/gh` masked (§3).
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
@@ -139,6 +141,17 @@ The nested `orbit` sends it to the broker, and the broker is the only party that
 plugin's secrets or spawns its backend. Built-in `orbit.*` tools are unchanged and still run in
 the nested `orbit`.
 
+**Host-credentialed reads.** The one exception among built-ins is a closed list of read-only
+GitHub tools: `github.auth.status`, `github.pr.list`, `github.run.list`, `github.run.view` and
+`github.run.logs`. Each runs `gh`, which needs the host account's `~/.config/gh`, and every
+agent sandbox masks that directory (policy-sandbox [2_design.md](../policy-sandbox/2_design.md)
+§7.1). With `ORBIT_PLUGIN_BROKER` set, the nested `orbit` forwards these five like a plugin
+tool, and the broker runs them on the host with its own `gh` credentials, in the run's
+worktree. Their output is the tool's own bounded, redacted projection; no token, config or
+credential enters the sandbox. Forwarding a `GH_TOKEN` into the sandbox was rejected: the
+agent and every command it runs could read it, and it would bypass the tools' redaction.
+Nothing that changes GitHub is on the list, and no other built-in is ever brokered.
+
 **Where the broker lives.** It runs in the `orbit job run-pipeline-worker` process that
 executes the agent step. `run_cli_backend`
 (`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs`) spawns the sandboxed
@@ -158,7 +171,7 @@ behind `orbit-core`, not `orbit-engine`, so the listener reaches dispatch throug
 existing host seam (`RuntimeHost`) and not through a new crate dependency.
 
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
-registration is a plugin backend. That covers `orbit tool run <ns>.<verb>`, its
+registration is a plugin backend, plus the five host-credentialed reads above. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
 schemas and `--help` still come from the nested `orbit`. Those need only the plugin rows,
 install trees and grant witnesses, which stay readable. Calls that are not made from inside an
@@ -295,8 +308,8 @@ service side regardless.
   `dry_run` to false. Anything else is `plugin_broker_invalid_request`.
 - The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
   the run's worktree, it names a workspace other than the run's, it asks for a dry run (the
-  nested `orbit` answers those itself), or it names a tool that is not a plugin tool. The
-  run's policy applies fail-closed: an activity whose allowlist names nothing admits no
+  nested `orbit` answers those itself), or it names a tool that is neither a plugin tool nor
+  one of the five read-only `github.*` tools (§3). The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
   brokered call, where an in-process call with no activity would be unrestricted.
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
@@ -306,6 +319,10 @@ service side regardless.
   contexts in two invocations cannot share a child. Within a pool, the existing workspace
   and allowed-tools session keys still separate callers, and CLI and MCP calls reuse the
   matching child.
+- A `github.*` read runs the built-in tool in the host process with the run's worktree as
+  its workspace, so `gh` resolves the repository from the agent's checkout and reads the
+  host's own config. It goes through the same audited dispatch, activity allowlist and
+  `cwd` check as a plugin call; only the backend differs.
 - One audit row per call, with `brokered: true`, `peer_pid`, the resolved `cwd` as the
   working directory (the directory the check resolved to, which is also where the backend
   runs, so repointing the link the caller named changes nothing; an ancestor of the
@@ -332,6 +349,12 @@ service side regardless.
   identity despite spoofed environment variables, then verifies teardown. It reports a
   skip where Bubblewrap cannot create a namespace. The existing engine sandbox harness
   separately covers provider exit, timeout and broker-start failure.
+- `crates/orbit-cli/tests/tool/github_broker_sandbox.rs` compiles the agent sandbox the way a
+  launch does (credential and plugin masks, the host's execution-env policy) around a
+  stand-in `gh` that needs the host's config. A direct `gh` fails inside it, `orbit tool run
+  github.run.list` returns what the unsandboxed host call returns, the agent sees neither
+  `~/.config/gh` nor a GitHub token, and the call leaves exactly one row, the broker's. It
+  skips where Bubblewrap cannot create a namespace.
 
 ## 5. Confinement of a brokered backend
 
@@ -446,7 +469,9 @@ anything:
 - With `ORBIT_PLUGIN_BROKER` set, plugin tool calls go to the broker.
 - Without it (the agent unset it, or a wrapper removed it), plugin tool calls are refused with
   `plugin_broker_unavailable`. The nested `orbit` never falls back to in-process execution:
-  the mask hides the backend's state, and the secret store reads as empty.
+  the mask hides the backend's state, and the secret store reads as empty. The five
+  `github.*` reads are refused the same way, as `capability_denied` naming the masked
+  `~/.config/gh` and the missing broker, instead of running `gh` into its login prompt.
 - The secret store never treats a sentinel directory or a permission error as "no secrets
   set". Today `PluginSecretStore::read` maps only `NotFound` to an empty file. The masked
   directory must refuse, not read as an empty directory, because an empty `context.secrets`
@@ -538,5 +563,6 @@ The mask ships last, only once every call it would break has a broker to go to:
   split out to this design.
 - [ORB-13009] — the host secret store and per-call delivery the broker reuses.
 - [ORB-13236], [ORB-13237], [ORB-13238], [ORB-13239] — the implementation slices in §8.
+- [ORB-14017] — the host-credentialed `github.*` reads (§3).
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

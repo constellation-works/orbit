@@ -3,7 +3,7 @@ summary: "Policy & Sandboxing — Decisions"
 type: design
 title: "Policy & Sandboxing — Decisions"
 owner: claude
-last_updated: 2026-09-30
+last_updated: 2026-10-04
 status: Draft
 feature: policy-sandbox
 doc_role: decisions
@@ -428,7 +428,7 @@ The macOS profile denies reads of `~/.ssh`, `~/.aws`, `~/.config/gh`, keychains,
 One platform-neutral list in `orbit-exec` is the single source of truth. The SBPL compiler emits each entry as a read deny, the brokered plugin backend reads it as exclusions, and the Linux plan masks each existing entry after every other mount: `--tmpfs` for a directory, `--ro-bind /dev/null` for a file. Absent paths are skipped. A masked path that is reachable through a second mount, or that contains a path the plan grants, refuses the plan instead of starting with the mask incomplete.
 
 ### Consequences
-- A Linux worker can no longer read the operator's SSH keys, cloud credentials, `gh` token or cargo publish token; SSH-authenticated `git` and authenticated `gh` do not work inside a confined worker, as on macOS.
+- A Linux worker can no longer read the operator's SSH keys, cloud credentials, `gh` token or cargo publish token; SSH-authenticated `git` and a `gh` the worker runs itself do not work inside a confined worker, as on macOS. The read-only `github.*` tools (`github.auth.status`, `github.pr.list`, `github.run.list`, `github.run.view`, `github.run.logs`) are forwarded to the run's plugin broker, which runs `gh` on the host with the host's credentials; no credential enters the sandbox ([plugins/2_agent_call_broker.md](../plugins/2_agent_call_broker.md) §3) [ORB-14017].
 - Adding a credential location is a one-line change that both platforms pick up.
 - Cost: a host that aliases a credential directory (for example a second bind mount of `$HOME`) fails dispatch with a named path until the alias is removed or the executor sandbox is explicitly turned off.
 - Reads outside this list stay delegated; general read-allowlist parity on Linux is still undecided.
@@ -469,5 +469,6 @@ This deliberately retires the narrower child read guarantee from ORB-11514. Curr
 - [ORB-10833] — retire the remaining unregistered `fs.*` builtins and their private policy helpers.
 - [ORB-11376] — protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery.
 - [ORB-13689] — remove the extra `proc.spawn` read sandbox on Linux and macOS and inherit the enclosing worker boundary.
+- [ORB-14017] — run the read-only `github.*` tools of a confined worker on the host through the run's plugin broker.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

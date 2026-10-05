@@ -1,6 +1,7 @@
 //! The host side of a run's plugin broker: execute one authenticated request
-//! through the audited dispatch, under the run's authority
-//! (`docs/design/plugins/2_agent_call_broker.md` §4.3–§4.4, §5).
+//! — a plugin tool, or one of the read-only `github.*` built-ins that need the
+//! host's `gh` credentials — through the audited dispatch, under the run's
+//! authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
 //! identity, filesystem profile and program policy — comes from the
@@ -21,7 +22,9 @@ use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin::broker::{BrokerDispatch, BrokerRequest, EntryPoint};
+use crate::runtime::plugin::broker::{
+    BrokerDispatch, BrokerRequest, EntryPoint, is_host_credentialed_read,
+};
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
 use super::audit::{AuditContext, brokered_agent_identity, brokered_role_label};
@@ -188,10 +191,15 @@ impl BrokerDispatch for RunDispatch {
                 |input| {
                     checked?;
                     // A built-in tool is answered by the nested `orbit`
-                    // itself; the broker exists to run plugin backends.
-                    if self.runtime.tool_registry().plugin_binding(&tool).is_none() {
+                    // itself; the broker exists to run plugin backends and
+                    // the closed set of reads that need the host's `gh`
+                    // credentials.
+                    if self.runtime.tool_registry().plugin_binding(&tool).is_none()
+                        && !is_host_credentialed_read(&tool)
+                    {
                         return Err(OrbitError::PolicyDenied(format!(
-                            "the plugin broker runs plugin tools only; '{tool}' is not one"
+                            "the plugin broker runs plugin tools and the read-only github.* \
+                             tools only; '{tool}' is neither"
                         )));
                     }
                     self.runtime.ensure_tool_agent_facing(&tool)?;
