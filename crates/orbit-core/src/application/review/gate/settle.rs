@@ -12,7 +12,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
-    REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
+    CommitIdentity, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
     REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate, ReviewerIdentity,
 };
 use serde_json::{Value, json};
@@ -268,7 +268,8 @@ fn settle(
         None => judgement.commit_repairs(runtime, context, &reviewer, &attempt)?,
     };
 
-    judgement.reconcile_verdict(repair.as_ref());
+    let validation_scope = validation_scope(context, &reviewed.commits, repair.as_ref())?;
+    judgement.reconcile_verdict(repair.as_ref(), &validation_scope);
     let now = Utc::now();
 
     let settled = match recorded {
@@ -325,7 +326,10 @@ fn settle(
         assurance: judgement.verdict.assurance(),
         findings: judgement.findings.clone(),
         validation: judgement.validation.clone(),
+        required_validation_commands: judgement.required_validation_commands.clone(),
         validation_complete: judgement.validation_complete,
+        retained_obligations: judgement.retained_obligations.clone(),
+        validation_scope,
         reviewer,
         consumed: settled.consumed_for(&reviewed.head, &judgement.task_meaning_digest, now),
         budget: settled.budget,
@@ -336,6 +340,31 @@ fn settle(
     store.review_certificate_record(&context.workspace_id, &certificate)?;
     publish_certificate(runtime, context, &certificate)?;
     settled_outcome(runtime, context, certificate)
+}
+
+/// What validation sources are judged against: every bundle task's
+/// selectors, as widened for reviewer repairs, plus a `file:` selector for
+/// every path the implementation and repair commits changed.
+fn validation_scope(
+    context: &GateContext,
+    implementation: &[CommitIdentity],
+    repair: Option<&CommitIdentity>,
+) -> Result<Vec<String>, OrbitError> {
+    let mut scope = context
+        .tasks
+        .iter()
+        .flat_map(|task| task.context_files.iter().cloned())
+        .collect::<Vec<_>>();
+    for commit in implementation.iter().chain(repair) {
+        scope.extend(
+            committed_paths(&context.workspace_path, &commit.commit)?
+                .into_iter()
+                .map(|path| format!("file:{path}")),
+        );
+    }
+    scope.sort();
+    scope.dedup();
+    Ok(scope)
 }
 
 fn reconcile_settled(

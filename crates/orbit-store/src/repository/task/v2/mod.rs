@@ -60,6 +60,7 @@ mod tests;
 use acceptance::{parse_acceptance, render_acceptance};
 pub(crate) use artifact_paths::normalize_v2_artifact_path;
 use artifact_paths::resolve_v2_artifact_file_path;
+pub(crate) use artifacts::review_report_history;
 use envelope_cache::EnvelopeCache;
 use relations::{relations_from_create_params, replace_relations};
 use sequencing::{next_event_id, next_sequence};

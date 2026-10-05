@@ -112,6 +112,12 @@ pub struct ReviewAdmission {
     pub crew_source: String,
     /// Captured review limit.
     pub budget: ReviewBudget,
+    /// The workspace owner's required candidate checks captured with this
+    /// run. `None` identifies a legacy admission that cannot establish the
+    /// host validation contract; an empty list is an explicit no-check
+    /// contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_validation_commands: Option<Vec<String>>,
     /// When the snapshot was captured.
     pub captured_at: DateTime<Utc>,
 }
@@ -273,9 +279,12 @@ pub enum ValidationRole {
     /// older evidence keeps its conservative meaning.
     #[default]
     Required,
-    /// A negative control that must fail on the candidate: the superseded
+    /// A deliberate negative control that must fail: the superseded
     /// assertion, the pre-fix reproduction, the counterfactual. The failure
-    /// is the positive evidence, and a pass contradicts the claim.
+    /// is the positive evidence, and a pass contradicts the claim. The record
+    /// names its [`NegativeControl`] kind and the in-scope `sources` it
+    /// exercises; an unrelated failure is a [`Self::Diagnostic`], never a
+    /// control.
     ExpectedFailure,
     /// An action outside the authorized scope, deliberately not performed.
     /// It supplies no coverage and imposes no requirement.
@@ -286,6 +295,12 @@ pub enum ValidationRole {
     /// It never erases the observation and never substitutes for that later
     /// check.
     Superseded,
+    /// A nonrequired observation of the final candidate kept as observed,
+    /// such as a workspace-wide suite whose failures lie outside the task's
+    /// scope. It supplies no coverage and imposes no requirement. A failed
+    /// diagnostic names the `sources` of its failures, every one outside the
+    /// candidate's scope; it never stands in for a check the task requires.
+    Diagnostic,
 }
 
 impl ValidationRole {
@@ -296,7 +311,39 @@ impl ValidationRole {
             ValidationRole::ExpectedFailure => "expected_failure",
             ValidationRole::Excluded => "excluded",
             ValidationRole::Superseded => "superseded",
+            ValidationRole::Diagnostic => "diagnostic",
         }
+    }
+}
+
+/// What kind of deliberate negative control an `expected_failure` record is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NegativeControl {
+    /// The reproduction run on the pre-fix tree: the base, or the candidate
+    /// with the fix reverted. The same check may pass on the candidate.
+    PreFix,
+    /// An assertion the change deliberately retires, run on the candidate.
+    SupersededAssertion,
+    /// A deliberately broken input or mutation the candidate's checks must
+    /// reject, run on the candidate.
+    Counterfactual,
+}
+
+impl NegativeControl {
+    /// Stable label for projections and escalation reasons.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NegativeControl::PreFix => "pre_fix",
+            NegativeControl::SupersededAssertion => "superseded_assertion",
+            NegativeControl::Counterfactual => "counterfactual",
+        }
+    }
+
+    /// Whether the control runs on the final candidate itself, so the same
+    /// check cannot also pass there.
+    pub fn runs_on_candidate(self) -> bool {
+        !matches!(self, NegativeControl::PreFix)
     }
 }
 
@@ -319,6 +366,126 @@ pub struct ReviewValidation {
     /// command. Empty or whitespace-only values match nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
+    /// The kind of negative control an `expected_failure` record is; absent
+    /// for every other role and in evidence written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<NegativeControl>,
+    /// Repository-relative paths (or `file:`/`dir:` selectors) the outcome is
+    /// about: the code a negative control exercises, or where a diagnostic's
+    /// failures lie. Settlement and coverage judge them against the
+    /// candidate's scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+}
+
+/// A required-check record an earlier revision of an attempt's report made,
+/// kept so a replacement report cannot silently drop the obligation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetainedObligation {
+    /// SHA-256 of the report revision that recorded it.
+    pub report_sha256: String,
+    /// When the host accepted that revision.
+    pub observed_at: DateTime<Utc>,
+    pub validation: ReviewValidation,
+}
+
+/// Task artifact the artifact store keeps beside [`REVIEW_REPORT_ARTIFACT`]:
+/// every accepted report revision's verdict and validation records. Only the
+/// store writes it, in the same manifest write that replaces the report.
+pub const REVIEW_REPORT_HISTORY_ARTIFACT: &str = "review-report-history.json";
+
+/// Version of [`ReviewReportHistory`].
+pub const REVIEW_REPORT_HISTORY_VERSION: u32 = 1;
+
+/// How many report revisions one task's history keeps.
+pub const REVIEW_REPORT_HISTORY_LIMIT: usize = 64;
+
+/// One report revision the host accepted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewReportRevision {
+    pub attempt_id: String,
+    /// SHA-256 of the report bytes; the bytes stay in the immutable blob.
+    pub sha256: String,
+    pub observed_at: DateTime<Utc>,
+    pub recorded_by: String,
+    pub verdict: ReviewVerdict,
+    #[serde(default)]
+    pub validation: Vec<ReviewValidation>,
+}
+
+/// The report revisions of one task, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewReportHistory {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub revisions: Vec<ReviewReportRevision>,
+}
+
+impl Default for ReviewReportHistory {
+    fn default() -> Self {
+        Self {
+            schema_version: REVIEW_REPORT_HISTORY_VERSION,
+            revisions: Vec::new(),
+        }
+    }
+}
+
+impl ReviewReportHistory {
+    /// Read a stored history; another version or malformed content is an
+    /// error, never an empty history.
+    pub fn parse(content: &[u8]) -> Result<Self, String> {
+        let history: Self = serde_json::from_slice(content)
+            .map_err(|error| format!("{REVIEW_REPORT_HISTORY_ARTIFACT} is unreadable: {error}"))?;
+        if history.schema_version != REVIEW_REPORT_HISTORY_VERSION {
+            return Err(format!(
+                "{REVIEW_REPORT_HISTORY_ARTIFACT} has schema_version {}; this build reads \
+                 version {REVIEW_REPORT_HISTORY_VERSION}",
+                history.schema_version
+            ));
+        }
+        Ok(history)
+    }
+
+    /// Append `revision`. Re-recording a revision of the same attempt with
+    /// the same bytes changes nothing and returns `false`, so a retried put
+    /// after a lost response is idempotent. At the limit the oldest revision
+    /// of another attempt makes room; a single attempt that fills the
+    /// history is refused rather than losing its own obligations.
+    pub fn record(&mut self, revision: ReviewReportRevision) -> Result<bool, String> {
+        if self
+            .revisions
+            .iter()
+            .any(|kept| kept.attempt_id == revision.attempt_id && kept.sha256 == revision.sha256)
+        {
+            return Ok(false);
+        }
+        if self.revisions.len() >= REVIEW_REPORT_HISTORY_LIMIT {
+            let Some(oldest_other) = self
+                .revisions
+                .iter()
+                .position(|kept| kept.attempt_id != revision.attempt_id)
+            else {
+                return Err(format!(
+                    "attempt {} already recorded {REVIEW_REPORT_HISTORY_LIMIT} report revisions; \
+                     settle it or admit a fresh review",
+                    revision.attempt_id
+                ));
+            };
+            self.revisions.remove(oldest_other);
+        }
+        self.revisions.push(revision);
+        Ok(true)
+    }
+
+    /// Revisions recorded for `attempt_id`, oldest first.
+    pub fn for_attempt<'a>(
+        &'a self,
+        attempt_id: &'a str,
+    ) -> impl Iterator<Item = &'a ReviewReportRevision> + 'a {
+        self.revisions
+            .iter()
+            .filter(move |revision| revision.attempt_id == attempt_id)
+    }
 }
 
 /// How a finding was closed, if at all.
@@ -419,6 +586,11 @@ fn locate_report_error(report: &Value, error: serde_json::Error) -> String {
                             check::<ValidationRole>(&format!("{path}.role"), Some(role))
                         })
                     })
+                    .or_else(|| {
+                        record.get("control").and_then(|control| {
+                            check::<NegativeControl>(&format!("{path}.control"), Some(control))
+                        })
+                    })
                     .or_else(|| check::<ReviewValidation>(&path, Some(record)));
             if let Some(located) = located {
                 return located;
@@ -474,10 +646,17 @@ fn normalize_report(report: &mut Value) {
                     ("skipped", "not_run"),
                 ],
             );
-            if record.get("role").is_some_and(Value::is_null) {
-                record.remove("role");
+            for optional in ["role", "control", "sources"] {
+                if record.get(optional).is_some_and(Value::is_null) {
+                    record.remove(optional);
+                }
             }
             normalize_label_field(record, "role", &[]);
+            normalize_label_field(record, "control", &[]);
+            if let Some(Value::String(source)) = record.get("sources") {
+                let sources = Value::Array(vec![Value::String(source.clone())]);
+                record.insert("sources".to_string(), sources);
+            }
         }
     }
 }
@@ -563,6 +742,9 @@ pub struct ReviewManifest {
     /// Task-meaning digests per task, plus the combined digest the
     /// certificate binds to.
     pub task_digests: BTreeMap<String, String>,
+    /// Owner-captured checks that the report must establish as required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_validation_commands: Option<Vec<String>>,
     pub task_meaning_digest: String,
     pub repository: String,
     pub base: SourceRevision,
@@ -622,8 +804,25 @@ pub struct ReviewCertificate {
     pub assurance: Option<ReviewAssurance>,
     pub findings: Vec<ReviewFinding>,
     pub validation: Vec<ReviewValidation>,
-    /// Whether every validation record passed on the final candidate.
+    /// Owner-captured host checks this certificate must establish. `None`
+    /// denotes a legacy certificate without an authoritative check snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_validation_commands: Option<Vec<String>>,
+    /// Whether the records establish the final candidate: every required
+    /// check passed, every other record is consistent with its role, and no
+    /// obligation an earlier report revision recorded was dropped. Failed
+    /// diagnostics stay failed and are not part of what this asserts.
     pub validation_complete: bool,
+    /// Required-check records earlier revisions of the attempt's report made
+    /// that the final report does not repeat verbatim. Absent on
+    /// certificates issued before report revisions were retained.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_obligations: Vec<RetainedObligation>,
+    /// The scope validation sources were judged against: every task selector
+    /// plus a `file:` selector for every path the candidate changed from its
+    /// base. Absent on certificates issued before scope-bound roles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validation_scope: Vec<String>,
     pub reviewer: ReviewerIdentity,
     pub consumed: ReviewConsumption,
     pub budget: ReviewBudget,
@@ -681,6 +880,9 @@ pub struct ReviewLanding {
 pub enum ReviewInvalidation {
     VerdictNotPassed,
     ValidationIncomplete,
+    /// The certificate predates the captured owner check contract and must
+    /// be replaced by a fresh review under a current delivery admission.
+    ValidationContractMissing,
     TaskMeaningChanged,
     CandidateChanged,
     BaseChanged,
@@ -695,6 +897,7 @@ impl ReviewInvalidation {
         match self {
             ReviewInvalidation::VerdictNotPassed => "verdict_not_passed",
             ReviewInvalidation::ValidationIncomplete => "validation_incomplete",
+            ReviewInvalidation::ValidationContractMissing => "validation_contract_missing",
             ReviewInvalidation::TaskMeaningChanged => "task_meaning_changed",
             ReviewInvalidation::CandidateChanged => "candidate_changed",
             ReviewInvalidation::BaseChanged => "base_changed",

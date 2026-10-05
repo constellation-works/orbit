@@ -220,8 +220,8 @@ fn fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation
     assert!(fixes.contains(&head) && fixes.contains("Appended the trailing note"));
 }
 
-/// [ORB-13989] No findings: `accept` adds no reviewer commit and asks the
-/// PR steps for no revalidation and no "Review fixes" section.
+/// [ORB-13989] No findings: `accept` adds no reviewer commit, while the PR
+/// still carries the raw validation evidence from the certificate.
 #[test]
 fn no_findings_accepts_without_a_reviewer_commit() {
     let gated = gated_fixture(BEFORE_PR);
@@ -236,7 +236,12 @@ fn no_findings_accepts_without_a_reviewer_commit() {
     let settled = gated.settle(&admission).expect("accept");
     assert_eq!(settled["verdict"], "accept");
     assert_eq!(settled["reviewer_fixed"], false);
-    assert_eq!(settled["review_fixes"], "");
+    assert!(
+        settled["review_fixes"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("## Review validation")
+    );
     assert_eq!(
         settled["reviewed_head_sha"],
         gated.implementation_sha.as_str()

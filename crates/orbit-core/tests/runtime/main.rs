@@ -18,6 +18,7 @@ mod rebase_recovery_attempts;
 mod relation_auto_close;
 mod retired_stubs;
 mod review_gate_audit;
+mod review_report_revisions;
 mod sandbox_off;
 mod session_events;
 mod step_recovery;

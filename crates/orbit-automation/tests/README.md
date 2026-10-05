@@ -37,6 +37,11 @@ to spend a certificate whose `validation_complete` flag those records do not
 support. The table covers missing, ambiguous (one-sided or cross-namespace
 identity), invalid (blank or mismatched identity) and non-passing replacements.
 Same-command reruns and shared check identities serve as the accepting controls.
+It also covers an unrelated workspace failure filed as a scope-checked
+`diagnostic`, a failed required check relabeled as a control or diagnostic, a
+required check an earlier report revision recorded and the final records drop
+or relabel, and the deliberate controls and resolved obligations that remain
+coverage.
 
 Focused commands:
 

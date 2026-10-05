@@ -55,9 +55,10 @@ orbit config get operation.review_crew   # the owner's before-PR reviewer crew
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `7`, and equivalent crew and toolchain resolution. Review policy
+protocol schema `8`, and equivalent crew and toolchain resolution. Review policy
 is the owner's: admission captures the owner's `review.before_pr` and, when it
-is on, its `operation.review_crew` and review budget into the claim. With it
+is on, its `operation.review_crew`, review budget, and
+`workflow.required_validation_commands` into the claim. With it
 on, the owner must ship through PRs (the before-PR review runs only on that
 route; admission refuses otherwise) and set `operation.review_crew`, and every
 follower must resolve that crew; `orbit run auto --pull` refuses before
@@ -67,8 +68,12 @@ leaf, so a follower need not change it. Hosts may run different operating system
 each follower declares its OS, and a task tagged `os:linux`, `os:macos` or
 `os:windows` is claimed only by a host of a named OS; it waits in the backlog,
 named, until one pulls it. Empty
-`workflow.required_validation_commands` means no required check: a claimed
-leaf runs nothing and the owner accepts its handoff without validation logs.
+`workflow.required_validation_commands` means no host-required validation check:
+a claimed leaf runs no such check, and its review certificate records the
+captured empty list. When configured, the owner requires the reviewer to report
+each captured command as passing evidence, then independently verifies the
+owner's exact-run and exact-head handoff logs against the same command list.
+List skew or missing evidence fails closed.
 A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
 ignored: `orbit doctor` warns; delete the files. Deny a caller by removing its
 key from `~/.ssh/authorized_keys`.
@@ -125,7 +130,7 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require the same protocol revision (currently 7).
+exact paths. Both peers require the same protocol revision (currently 8).
 
 
 ## Start a follower's drain
@@ -205,7 +210,7 @@ destination refuses them. They need an identified caller (`agent` or
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 7,
+  "caller_schema": 8,
   "caller_before_pr": false
 }'
 ```

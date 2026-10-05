@@ -12,7 +12,6 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_config::OperationPolicy;
 use orbit_types::workflow::{
     REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, ReviewAdmission, ReviewTiming,
 };
@@ -58,7 +57,7 @@ pub(crate) fn install_review_admission(
 
     let admission = match inherited {
         Some(admission) => admission,
-        None => snapshot(runtime.operation_policy()),
+        None => snapshot(runtime),
     };
     if job_name == LOCAL_ROUTE_JOB && admission.timing == ReviewTiming::BeforePr {
         return Err(OrbitError::InvalidInput(
@@ -115,7 +114,8 @@ pub(crate) fn local_route_before_pr_conflict(source: &str) -> String {
 
 /// Build the snapshot from the workspace's resolved review settings, keeping
 /// each field's provenance so diagnostics can explain where it came from.
-pub(crate) fn snapshot(policy: &OperationPolicy) -> ReviewAdmission {
+pub(crate) fn snapshot(runtime: &OrbitRuntime) -> ReviewAdmission {
+    let policy = runtime.operation_policy();
     ReviewAdmission {
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: policy.version,
@@ -128,6 +128,9 @@ pub(crate) fn snapshot(policy: &OperationPolicy) -> ReviewAdmission {
         crew: policy.review_crew.value.clone(),
         crew_source: policy.review_crew.source.label().to_string(),
         budget: policy.review_budget(),
+        required_validation_commands: Some(
+            runtime.workflow_required_validation_commands().to_vec(),
+        ),
         captured_at: Utc::now(),
     }
 }

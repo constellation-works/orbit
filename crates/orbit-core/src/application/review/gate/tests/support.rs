@@ -171,6 +171,8 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
             role: ValidationRole::Required,
             note: None,
             check: None,
+            control: None,
+            sources: Vec::new(),
         }],
         escalation: (verdict == ReviewVerdict::Reject)
             .then(|| "decide whether the note is required".to_string()),

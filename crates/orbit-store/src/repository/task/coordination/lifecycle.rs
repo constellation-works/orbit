@@ -10,12 +10,13 @@ use orbit_types::task::{
     ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION,
     TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TaskCommentRowV2, TaskStatus,
 };
+use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use serde::{Deserialize, Serialize};
 
 use super::{COORDINATION_LOCK_LABEL, TaskCommitBoundary, TaskCommitIntent};
 use crate::contracts::*;
 use crate::driver::file::task_bundle::truncate_jsonl_file;
-use crate::repository::task::v2::normalize_v2_artifact_path;
+use crate::repository::task::v2::{normalize_v2_artifact_path, review_report_history};
 use crate::repository::task::v2_bundle::{TaskBundleV2, TaskDocumentV2};
 
 const CLAIM: &str = "distributed-execution-claim-v1";
@@ -682,9 +683,24 @@ impl TaskCommitBoundary {
                 .into_iter()
                 .map(|f| (f.path.clone(), f))
                 .collect();
-            let mut stored = Vec::with_capacity(evidence.artifacts.len());
+            // A claimed reviewer's report reaches the owner here, not through
+            // an ordinary update; retain its revision the same way [ORB-14192].
+            if evidence.artifacts.iter().any(|artifact| {
+                normalize_v2_artifact_path(&artifact.path).ok().as_deref()
+                    == Some(REVIEW_REPORT_HISTORY_ARTIFACT)
+            }) {
+                return Err(invalid("review report history is reserved"));
+            }
+            let history = review_report_history(
+                &self.bundle_store.bundle_path(&intent.task_id)?,
+                &files,
+                &evidence.artifacts,
+                actor,
+                Utc::now(),
+            )?;
+            let mut stored = Vec::with_capacity(evidence.artifacts.len() + 1);
             let mut seen_in_request = BTreeSet::new();
-            for artifact in &evidence.artifacts {
+            for artifact in evidence.artifacts.iter().chain(&history) {
                 // Same canonical contract as an ordinary artifact write, resolved
                 // before the journal decision. `validate_relative_artifact_path`
                 // accepts `notes/`, `a//b`, and surrounding whitespace because

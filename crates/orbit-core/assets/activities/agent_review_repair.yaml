@@ -92,6 +92,11 @@ spec:
        or CI result is not evidence; verify claims against code. Then review
        quality: correctness, error paths, tests, docs, and repository
        standards from the workspace AGENTS.md.
+       Treat the manifest's `required_validation_commands` as the captured
+       host contract. Each listed command must have a passing `required`
+       validation record for the final candidate. If the field is absent,
+       stop with an incomplete report and explain that a fresh delivery run is
+       needed; do not infer the list from this activity or current config.
        Enforce repository standards for `CHANGELOG.md`: non-release tasks must
        never add or edit its entries (AGENTS.md and RELEASING.md). Unless the
        pinned manifest or injected task identifies an authorized
@@ -114,7 +119,7 @@ spec:
        redesign, non-release `CHANGELOG.md` edits, and anything you are
        unsure about stay open findings: there is no second review round, so
        an open finding rejects the candidate and blocks the task.
-    4. Run the repository's required validation on the final worktree state
+    4. Run the manifest's required host commands and the repository's required validation on the final worktree state
        (for this repository at least `make ci-fast` and `make ci-lint`, plus the
        focused tests for the change). Record every command you ran or could not
        run with outcome `passed`, `failed`, `denied` (the runner refused it), or
@@ -127,9 +132,16 @@ spec:
 
        - `required`: the final candidate must pass it. Any other outcome, an
          unavailable runner included, blocks the pass.
-       - `expected_failure`: a negative control that must fail, such as the
-         superseded assertion or the pre-fix reproduction. Its `failed` outcome
-         is positive evidence; a `passed` outcome contradicts the claim.
+       - `expected_failure`: a deliberate negative control that must fail.
+         Set `control` to `pre_fix` (the reproduction on the base, or with the
+         fix reverted), `superseded_assertion` (an assertion the change retires,
+         run on the candidate) or `counterfactual` (a deliberate mutation the
+         candidate's checks must reject, run on the candidate), and list in
+         `sources` the code it exercises, all of it within the task's
+         selectors or the paths the candidate changes. Its `failed` outcome is
+         positive evidence; a `passed` outcome contradicts the claim, and a
+         control run on the candidate cannot share its check with a required
+         pass. An unrelated failure is never a control.
        - `excluded`: an action outside the authorized scope that you
          deliberately did not perform, such as a live deployment. Record it as
          `not_run` (or `denied`); it supplies no coverage and creates no
@@ -142,6 +154,20 @@ spec:
          the command or environment was corrected. A record without a `check`
          is matched by its command alone. An unrelated later pass (for example
          a formatting check after a failed test run) does not replace it.
+       - `diagnostic`: an observation of the final candidate the task does not
+         require, such as a workspace-wide suite run beyond the task's checks.
+         Record its real outcome (`passed` or `failed`); it supplies no
+         coverage. A failed diagnostic lists in `sources` the files its
+         failures lie in, every one outside the task's selectors and the paths
+         the candidate changes; a failure inside them is the task's own and
+         must be `required`. It cannot share its check with a required pass.
+
+       A record you once filed `required` stays an obligation for this
+       attempt: the host keeps every report revision you attach, and a later
+       revision must still record the same check as `required` (rerun) or
+       `superseded` (followed by its required replacement), or as `excluded`
+       when it never ran. Dropping it or relabeling it `diagnostic` or
+       `expected_failure` settles `incomplete`.
 
        At least one `required` record must pass, or the review establishes
        nothing about the candidate.
@@ -188,8 +214,12 @@ spec:
             "properties":{
               "command":{"type":"string"},
               "outcome":{"enum":["passed","failed","denied","not_run"]},
-              "role":{"enum":["required","expected_failure","excluded","superseded"]},
+              "role":{"enum":["required","expected_failure","excluded","superseded","diagnostic"]},
               "check":{"type":"string","description":"identity shared with the replacing required check"},
+              "control":{"enum":["pre_fix","superseded_assertion","counterfactual"],
+                         "description":"required for expected_failure"},
+              "sources":{"type":"array","items":{"type":"string"},
+                         "description":"repository-relative paths the outcome is about; required for expected_failure and a failed diagnostic"},
               "note":{"type":"string","description":"required unless role is required"}}}},
           "escalation":{"type":"string","description":"the decision needed, when not a pass"}}}
 

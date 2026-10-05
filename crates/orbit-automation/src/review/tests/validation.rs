@@ -1,6 +1,6 @@
 //! What a reviewer's validation records establish [ORB-11528].
 
-use crate::review::{ValidationDefect, validation_evidence};
+use crate::review::{ValidationContext, ValidationDefect, validation_evidence};
 use orbit_types::workflow::{ReviewValidation, ValidationOutcome, ValidationRole};
 
 fn record(
@@ -15,6 +15,8 @@ fn record(
         role,
         note: note.map(Into::into),
         check: None,
+        control: None,
+        sources: Vec::new(),
     }
 }
 
@@ -51,7 +53,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         ),
     ];
     assert_eq!(
-        validation_evidence(&missing_identity),
+        validation_evidence(&missing_identity, &ValidationContext::default()),
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test --package orbit-core".into(),
         }),
@@ -67,7 +69,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         ),
     ];
     assert_eq!(
-        validation_evidence(&one_sided),
+        validation_evidence(&one_sided, &ValidationContext::default()),
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test --package orbit-core".into(),
         }),
@@ -93,7 +95,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
             ),
         ];
         assert_eq!(
-            validation_evidence(&invalid_identity),
+            validation_evidence(&invalid_identity, &ValidationContext::default()),
             Err(ValidationDefect::SupersededWithoutReplacement {
                 command: "cargo test".into(),
             }),
@@ -121,7 +123,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         ),
     ];
     assert_eq!(
-        validation_evidence(&related_failed),
+        validation_evidence(&related_failed, &ValidationContext::default()),
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test --package orbit-core".into(),
         }),
@@ -145,7 +147,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         ),
     ];
     assert_eq!(
-        validation_evidence(&mismatched),
+        validation_evidence(&mismatched, &ValidationContext::default()),
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test".into(),
         }),

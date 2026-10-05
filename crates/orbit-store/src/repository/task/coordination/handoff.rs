@@ -112,6 +112,12 @@ impl TaskCommitBoundary {
             }
             return Ok(());
         };
+        if contract.required_validation_commands.is_none() {
+            return Err(review_refused(
+                R::ReviewContractMismatch,
+                "the captured review contract predates its required-check list; dispatch a fresh claim under the current host contract",
+            ));
+        }
         let evidence = match (handoff.review.policy, handoff.review.before_pr()) {
             (ReviewTiming::BeforePr, Some(evidence)) => evidence,
             _ => {
@@ -207,6 +213,12 @@ impl TaskCommitBoundary {
                     "certificate contract version {} is not the captured version {}",
                     certificate.schema_version, contract.contract_version
                 ),
+            ));
+        }
+        if certificate.required_validation_commands != contract.required_validation_commands {
+            return Err(review_refused(
+                R::ReviewContractMismatch,
+                "certificate required checks differ from the owner's captured review contract",
             ));
         }
         let reviewer_commit_matches = match &evidence.reviewer_commit {
@@ -435,6 +447,15 @@ impl TaskCommitBoundary {
             ));
         }
         let ship = self.claim_ship(state)?;
+        if let Some(review) = &ship.review
+            && review.required_validation_commands.as_deref()
+                != Some(observation.required_commands.as_slice())
+        {
+            return Err(review_refused(
+                HandoffReviewRefusal::ReviewContractMismatch,
+                "owner required validation changed after claim admission; dispatch a fresh claim under the current host contract",
+            ));
+        }
         if handoff.footprint_widening != observation.footprint_widening {
             return Err(invalid(&format!(
                 "footprint widening differs from owner-observed diff: requested={:?}, observed={:?}",

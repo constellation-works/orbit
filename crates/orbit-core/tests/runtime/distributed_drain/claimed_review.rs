@@ -15,8 +15,9 @@ use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::handoff::HandoffReviewEvidence;
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
-    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewFinding, ReviewReport,
-    ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
+    ReviewAdmission, ReviewFinding, ReviewReport, ReviewReportHistory, ReviewValidation,
+    ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 
 /// A crew every runtime's default registry resolves.
@@ -178,6 +179,8 @@ impl ReviewedLeaf {
                 role: ValidationRole::Required,
                 note: None,
                 check: None,
+                control: None,
+                sources: Vec::new(),
             }],
             escalation: (verdict == ReviewVerdict::Reject)
                 .then(|| "decide whether the stub may ship".into()),
@@ -302,6 +305,17 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
     assert!(
         comments_of(&leaf.pair.owner_task(&leaf.task)).contains(&attempt_id),
         "the verdict comment is on the owner's task"
+    );
+    let history = leaf
+        .owner_artifact(REVIEW_REPORT_HISTORY_ARTIFACT)
+        .expect("the report history is on the owner's task");
+    assert_eq!(
+        ReviewReportHistory::parse(&history)
+            .unwrap()
+            .for_attempt(&attempt_id)
+            .count(),
+        1,
+        "the owner retained the reviewer's one report revision"
     );
     let ledger = leaf
         .bound
