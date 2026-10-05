@@ -14,7 +14,8 @@
 //! utilities and domain types live in the same crate.
 //!
 //! Callers pick the layer they need:
-//! - [`redact_sensitive_env_text`] — scrub live env-var values from a string
+//! - [`redact_sensitive_env_text`] — scrub live env-var values from a string,
+//!   including the JSON-string and Rust `Debug` encodings of those values
 //! - [`PatternRedactor`] — regex pattern scrubbing (HTTP / argv / JSON / SSH diagnostics)
 //! - [`redact_all`] — env + default patterns in one pass (use when you don't
 //!   know what shape the input has and want maximum coverage)
@@ -54,6 +55,12 @@ static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
 /// Only values that pass `is_redactable_value` are substituted, so the small
 /// compatibility set of ordinary words held by a sensitive-named variable is
 /// left untouched.
+///
+/// Each eligible value is also matched in its JSON-string body
+/// (`serde_json::to_string` without the surrounding quotes) and its Rust
+/// `Debug` body (`format!("{:?}", value)` without the surrounding quotes)
+/// when that encoding differs from the raw text. Audit blobs and tracing
+/// `?` fields contain those encodings, not the live value.
 pub fn redact_sensitive_env_text(raw: &str) -> String {
     let mut redacted = raw.to_string();
     // `redact_all` runs this for every string field of every tracing event, so
@@ -546,11 +553,48 @@ fn home_dir_string() -> Option<String> {
 fn collect_sensitive_env_values() -> Vec<String> {
     let mut values = std::env::vars()
         .filter(|(name, value)| is_sensitive_env_name(name) && is_redactable_value(value))
-        .map(|(_, value)| value)
+        .flat_map(|(_, value)| sensitive_value_forms(value))
         .collect::<Vec<_>>();
+    // Longest first so a raw value that sits inside its own encoding cannot
+    // split that longer match before it is replaced.
     values.sort_by_key(|value| std::cmp::Reverse(value.len()));
     values.dedup();
     values
+}
+
+/// Live value, plus the JSON-string and Rust `Debug` bodies when they differ.
+///
+/// `serde_json` and `Debug` turn newlines, quotes, and backslashes into
+/// escape sequences. A blob or tracing field serialized before redaction no
+/// longer contains the raw value, so those bodies have to be substitutes too.
+/// Identical encodings are stored once.
+fn sensitive_value_forms(value: String) -> Vec<String> {
+    let mut forms = Vec::with_capacity(3);
+    for encoded in [json_string_body(&value), debug_string_body(&value)]
+        .into_iter()
+        .flatten()
+    {
+        if encoded != value && !forms.contains(&encoded) {
+            forms.push(encoded);
+        }
+    }
+    forms.push(value);
+    forms
+}
+
+fn json_string_body(value: &str) -> Option<String> {
+    let encoded = serde_json::to_string(value).ok()?;
+    quoted_body(&encoded).map(str::to_string)
+}
+
+fn debug_string_body(value: &str) -> Option<String> {
+    quoted_body(&format!("{value:?}")).map(str::to_string)
+}
+
+/// Body of a quoted string encoding. The surrounding quotes are syntax, not
+/// part of the value inside a serialized blob or debug field.
+fn quoted_body(encoded: &str) -> Option<&str> {
+    encoded.strip_prefix('"')?.strip_suffix('"')
 }
 
 fn cached_sensitive_env_values() -> &'static [String] {

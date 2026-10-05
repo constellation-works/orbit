@@ -3,7 +3,7 @@ summary: "Auditability — Design"
 type: design
 title: "Auditability — Design"
 owner: codex
-last_updated: 2026-09-29
+last_updated: 2026-10-04
 last_validated: 2026-09-19
 status: Draft
 feature: auditability
@@ -112,7 +112,7 @@ Loop events reference hashes for request bodies, response bodies, tool inputs, a
 
 `crates/orbit-common/src/storage/blob_store.rs` writes content-addressed blobs under `{root}/{hash_prefix}/{hash}`. The hash is computed after redaction, and existing blob paths are reused.
 
-`crates/orbit-common/src/security/redaction.rs` centralizes sensitive live environment value scrubbing plus regex-based HTTP/argv/SSH patterns for authorization headers, API keys, bearer tokens, JSON API-key fields, high-confidence provider token shapes, SSH public-key fingerprints and comments, and hosts in canonical OpenSSH diagnostic sentences. CLI audit errors, blob bytes, selected pipeline outputs/errors, artifact write tools, and the default tracing subscriber all redact before persistence or terminal/JSONL output. Artifact tool coverage, the current pattern-family inventory, and refuse-vs-mask rules live in [specs/artifact-redaction.md](./specs/artifact-redaction.md). The smoke example `crates/orbit-agent/examples/redaction_smoke.rs` verifies stored blob bytes omit the raw secret and contain a marker. [ORB-10591]
+`crates/orbit-common/src/security/redaction.rs` centralizes sensitive live environment value scrubbing plus regex-based HTTP/argv/SSH patterns for authorization headers, API keys, bearer tokens, JSON API-key fields, high-confidence provider token shapes, SSH public-key fingerprints and comments, and hosts in canonical OpenSSH diagnostic sentences. Env-value matching includes the raw text and, when they differ, the JSON-string and Rust `Debug` bodies, so a serialized audit blob or a tracing `?` field does not keep a multi-line key or a quoted password. CLI audit errors, blob bytes, selected pipeline outputs/errors, artifact write tools, and the default tracing subscriber all redact before persistence or terminal/JSONL output. Artifact tool coverage, the current pattern-family inventory, and refuse-vs-mask rules live in [specs/artifact-redaction.md](./specs/artifact-redaction.md). The smoke example `crates/orbit-agent/examples/redaction_smoke.rs` verifies stored blob bytes omit the raw secret and contain a marker. [ORB-10591]
 
 Dashboard log previews added by [T20260508-14] are derived views over the `v2_audit_events` SQLite store and `.orbit/state/audit/blobs`; they do not duplicate full transcripts into a separate transcript store. Preview responses are byte- and line-capped, apply defensive read-time redaction with the shared redactor, and preserve existing write-time redaction markers. The focused diagnostics error feed is also derived, combining global ERROR tracing rows with structured `ERROR <target>:` lines found in agent stderr blobs. No `.orbit/state/diagnostics/errors/` store exists in this design; retention remains bounded by the existing v2 audit, blob, and global log retention roots.
 
