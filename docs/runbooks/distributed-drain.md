@@ -652,9 +652,18 @@ request. Agents cannot submit or dispose one.
   request's head, which a squash landing does not keep. The disposition also
   refuses when the provider's answer (head, landed commit, task, claim or
   handoff) changes before or while the check runs; inspect and submit a new
-  request key. A record written before the landed commit was bound (schema
-  3 or earlier) keeps its evidence but cannot be disposed or authorize
-  completion; submit a new request key to reconcile the same head again.
+  request key. A legacy all-pass `accepted` record can still authorize
+  completion after the reconciliation consumer confirms its existing checks
+  for task meaning, execution, handoff, pull request, merged head and binding
+  integrity; schema 3 or earlier does not disqualify that outcome. The legacy
+  restriction applies to baseline dispositions: a record written before the
+  landed commit was bound (schema 3 or earlier) keeps its original validation
+  and failed evidence, but cannot record a disposition or authorize
+  `accepted_with_disposition`. Submit a new request key to reconcile the same
+  head with an authenticated landed binding before recording a baseline
+  disposition. Validation remains incomplete after a disposition, and the
+  remediation must still contain the landed delivery and pass the required
+  command.
 
 On the dashboard, **approve** on a review task that has a handed-off claim
 sends **Approve handoff** for the exact candidate. A plain status write would
