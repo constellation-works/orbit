@@ -603,6 +603,68 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
     );
 }
 
+/// A handoff whose failed step is the implementation, or any step before
+/// `commit`, is unfinished. Requeue applies that candidate and runs the
+/// implementer even when owner validation would pass, and when no command
+/// is configured. A failure at `commit` still resumes as validated.
+#[test]
+fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
+    isolated(
+        "an_implementation_failure_handoff_is_requeued_for_the_implementer",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            // Passing checks are the case that used to skip the implementer.
+            preserved
+                .host
+                .set_required_commands(&["test -s feature.txt"]);
+            let (setup, resumed) = preserved
+                .resume_failed_step("implement_bundle", "jrun-implement-bundle")
+                .expect("implement_bundle handoff");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "implementation");
+            assert_eq!(resumed["repair"]["failed_step_id"], "implement_bundle");
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
+                "feature\n",
+                "the implementer starts from the partial candidate"
+            );
+            assert_resume_recorded(&preserved, "resumed_repaired");
+
+            // Empty required commands used to return `resumed_validated`
+            // without running anything. The nested implement step and the
+            // steps before it share the boundary.
+            preserved.host.set_required_commands(&[]);
+            for (step, run_id) in [
+                ("implement_one", "jrun-implement-one"),
+                ("review_preflight", "jrun-review-preflight"),
+                ("worktree", "jrun-worktree"),
+                ("resume_candidate", "jrun-resume-candidate"),
+            ] {
+                let (_setup, resumed) = preserved
+                    .resume_failed_step(step, run_id)
+                    .unwrap_or_else(|error| panic!("{step}: {error}"));
+                assert_eq!(resumed["outcome"], "resumed_repaired", "{step}: {resumed}");
+                assert_eq!(resumed["implement"], true, "{step}");
+                assert_eq!(resumed["repair"]["trigger"], "implementation", "{step}");
+                assert_eq!(resumed["repair"]["failed_step_id"], step, "{step}");
+            }
+
+            // `commit` is the first step that preserved a finished implementation.
+            preserved
+                .host
+                .set_required_commands(&["test -s feature.txt"]);
+            let (_setup, committed) = preserved
+                .resume_failed_step("commit", "jrun-commit")
+                .expect("commit handoff");
+            assert_eq!(committed["outcome"], "resumed_validated", "{committed}");
+            assert_eq!(committed["implement"], false);
+            assert_resume_recorded(&preserved, "resumed_validated");
+        },
+    );
+}
+
 /// A spec change since the candidate's run, or an operator discard recorded
 /// since that run began, forces a fresh implementation with the reason, and
 /// leaves the checkout untouched. A discard older than the run does not.
@@ -675,6 +737,7 @@ struct PreservedCandidate {
     fixture: Fixture,
     host: LifecycleHost,
     candidate: String,
+    branch: String,
 }
 
 impl PreservedCandidate {
@@ -695,46 +758,76 @@ impl PreservedCandidate {
             JobRunState::Failed,
             json!({ "task_ids": [RESUME_TASK] }),
         ));
-        host.preserve(
+        let preserved = Self {
+            fixture,
+            host,
+            candidate,
+            branch: checkout.branch,
+        };
+        preserved.preserve_step("validate");
+        preserved.host.set_status(RESUME_TASK, TaskStatus::Backlog);
+        preserved
+    }
+
+    /// Point the failed run's handoff at `failed_step_id` and requeue.
+    ///
+    /// The task is linked back to the failed run first: each setup stamps
+    /// its own run id, and resume reads the link from before that stamp.
+    fn resume_failed_step(
+        &self,
+        failed_step_id: &str,
+        run_id: &str,
+    ) -> Result<(Value, Value), OrbitError> {
+        self.preserve_step(failed_step_id);
+        self.host.link_run(RESUME_TASK, FAILED_RUN);
+        let setup = self.next_setup_for(run_id);
+        let resumed = self.resume_for(&setup, run_id)?;
+        Ok((setup, resumed))
+    }
+
+    fn preserve_step(&self, failed_step_id: &str) {
+        self.host.preserve(
             FAILED_RUN,
-            "validate",
+            failed_step_id,
             json!({
                 "phase": "failure_handoff",
                 "decision": "blocked_failure_pr",
                 "task_id": RESUME_TASK,
                 "handoff_run_id": FAILED_RUN,
-                "branch": checkout.branch,
-                "head_sha": candidate,
-                "task_spec_digest": host.get_task(RESUME_TASK).unwrap().spec_digest(),
+                "branch": self.branch,
+                "head_sha": self.candidate,
+                "task_spec_digest": self.host.get_task(RESUME_TASK).unwrap().spec_digest(),
             }),
         );
-        host.set_status(RESUME_TASK, TaskStatus::Backlog);
-        Self {
-            fixture,
-            host,
-            candidate,
-        }
     }
 
     /// The requeued task's next run sets up its checkout, linked to the
     /// failed run.
     fn next_setup(&self) -> Value {
+        self.next_setup_for(NEXT_RUN)
+    }
+
+    fn next_setup_for(&self, run_id: &str) -> Value {
         let setup = action(
             &self.host,
             "worktree_setup",
-            &setup_input(&[RESUME_TASK], NEXT_RUN),
+            &setup_input(&[RESUME_TASK], run_id),
         )
-        .expect("the next run's setup");
+        .unwrap_or_else(|error| panic!("the next run's setup ({run_id}): {error}"));
         assert_eq!(setup["prior_job_run_id"], FAILED_RUN);
         setup
     }
 
     fn resume(&self, setup: &Value) -> Result<Value, OrbitError> {
+        self.resume_for(setup, NEXT_RUN)
+    }
+
+    fn resume_for(&self, setup: &Value, run_id: &str) -> Result<Value, OrbitError> {
         action(
             &self.host,
             "candidate_resume",
             &json!({
-                "job_run_id": NEXT_RUN,
+                "job_run_id": run_id,
                 "task_ids": [RESUME_TASK],
                 "workspace_path": setup["workspace_path"],
                 "base_sha": setup["base_sha"],
@@ -1719,6 +1812,10 @@ impl LifecycleHost {
 
     fn set_status(&self, id: &str, status: TaskStatus) {
         self.tasks.lock().unwrap().get_mut(id).unwrap().status = status;
+    }
+
+    fn link_run(&self, id: &str, run_id: &str) {
+        self.tasks.lock().unwrap().get_mut(id).unwrap().job_run_id = Some(run_id.to_string());
     }
 
     fn add_run(&self, run: JobRun) {

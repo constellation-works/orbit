@@ -27,8 +27,8 @@ spec:
         type: boolean
       # Set by `candidate_resume` when the checkout already holds this
       # task's preserved candidate that needs repair: `trigger`
-      # (`conflict`, `validation` or `review`), `output`, and
-      # `conflicting_paths` or the failing `command`.
+      # (`implementation`, `conflict`, `validation` or `review`), `output`,
+      # and `failed_step_id`, `conflicting_paths` or the failing `command`.
       resume_candidate:
         type: [object, "null"]
   output_schema_json:
@@ -122,8 +122,11 @@ spec:
 
     - When `input.resume_candidate` is set, the checkout already holds this
       task's candidate from an earlier failed run, applied onto the current
-      base as uncommitted changes. Repair it; do not re-implement it. Fix
-      what `trigger` names: `conflict` (resolve the conflict markers in
+      base as uncommitted changes. Continue from that diff; do not discard
+      it and start over. Finish what `trigger` names: `implementation` (the
+      earlier run failed at `failed_step_id` before `commit`, so the diff is
+      a partial implementation — complete the task from it; a compiling
+      subset is not done), `conflict` (resolve the conflict markers in
       `conflicting_paths` against the new base), `validation` (the `output`
       of the failing `command`) or `review` (the findings in the review
       settlement comment). Then rerun the checks and say in the summary that

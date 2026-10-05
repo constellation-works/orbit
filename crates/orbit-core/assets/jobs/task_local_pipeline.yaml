@@ -66,10 +66,13 @@ spec:
 
     # ORB-13985: a task whose last failed run preserved a candidate resumes
     # it rather than re-implementing: the candidate is squash-merged onto
-    # this base and owner validation runs on it. A pass skips
-    # `implement_bundle`; a conflict, failing validation or review refusal
-    # hands the implementer the applied candidate and that output to repair.
-    # A discarded candidate, a changed spec or a bundle implements fresh.
+    # this base. A candidate that failed at `commit` or later runs owner
+    # validation; a pass skips `implement_bundle`. A conflict, failing
+    # validation or review refusal hands the implementer the applied
+    # candidate and that output to repair. A candidate preserved from
+    # `implement_bundle` or any step before `commit` is unfinished
+    # (ORB-14024): the implementer always runs on it. A discarded candidate,
+    # a changed spec or a bundle implements fresh.
     - id: resume_candidate
       target: activity:candidate_resume
       default_input:

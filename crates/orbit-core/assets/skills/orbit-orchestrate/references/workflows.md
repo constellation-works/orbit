@@ -81,23 +81,26 @@ the contract.
 
 When a `task_pr_pipeline` run fails after implementation, its failure handoff
 keeps the candidate on the task's `orbit/<task>-…` branch (usually behind a
-`[BLOCKED]` PR) and records it on the run. When the task is requeued, the next
-`task_pr_pipeline` or `task_local_pipeline` run resumes that candidate instead
-of re-implementing it. Its `resume_candidate` step squash-applies the candidate
-onto the new base as uncommitted changes, then:
+`[BLOCKED]` PR) and records it on the run. The same handoff also preserves a
+candidate when the implementation step itself fails. When the task is requeued,
+the next `task_pr_pipeline` or `task_local_pipeline` run resumes that candidate
+instead of discarding it. Its `resume_candidate` step squash-applies the
+candidate onto the new base as uncommitted changes, then:
 
 | Outcome | When | Implementation step |
 |---|---|---|
-| `resumed_validated` | The candidate applies cleanly and `workflow.required_validation_commands` pass on it. | Skipped. The candidate goes straight to commit, validation, review and delivery. |
-| `resumed_repaired` | The candidate conflicts with the new base, a required command fails, or the before-PR review refused it. | Starts from the applied candidate, with the conflict paths, the failing command and output, or the review findings as `resume_candidate`. |
-| `resumed_unjudged` | A required command's tool is missing, so validation could not judge the candidate. | Skipped. The pipeline's own `validate` step reports the environment failure. |
+| `resumed_validated` | The failed step is `commit` or later, the candidate applies cleanly, and `workflow.required_validation_commands` pass on it. | Skipped. The candidate goes straight to commit, validation, review and delivery. |
+| `resumed_repaired` | The failed step is the implementation or any step before `commit`, or the candidate conflicts with the new base, a required command fails, or the before-PR review refused it. | Starts from the applied candidate. An unfinished implementation carries trigger `implementation` and the failed step; otherwise the conflict paths, the failing command and output, or the review findings. |
+| `resumed_unjudged` | The failed step is `commit` or later, and a required command's tool is missing, so validation could not judge the candidate. | Skipped. The pipeline's own `validate` step reports the environment failure. |
 | `fresh` | No candidate was preserved, an operator discarded it, the task's description, acceptance criteria or selectors changed since that run, the run is a bundle, or the commit is unreachable. | Implements from scratch. The reason is recorded. |
 
 Whenever a candidate was found, the outcome, the source run, branch and SHA
 are written to the task's history as a `candidate_resume` event and returned
-in the step's output. Required validation runs twice on a resumed candidate:
-once to decide the outcome, and again in the pipeline's `validate` step on the
-committed, synchronized head that is delivered.
+in the step's output. Required validation runs twice on a candidate resumed as
+`resumed_validated`: once to decide the outcome, and again in the pipeline's
+`validate` step on the committed, synchronized head that is delivered. It does
+not run at resume time for an unfinished implementation; that candidate goes
+to the implementer first.
 
 To throw a candidate away, run
 `orbit task update <task-id> --discard-candidate --status backlog`. This
