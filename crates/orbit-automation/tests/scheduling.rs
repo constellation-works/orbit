@@ -42,6 +42,9 @@ use orbit_types::workflow::{
     MissedRunPolicy,
 };
 
+#[path = "scheduling/failed_members.rs"]
+mod failed_members;
+
 fn at(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
         .unwrap()

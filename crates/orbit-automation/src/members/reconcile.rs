@@ -1,6 +1,6 @@
 //! Settle the in-flight member attempt against Core's outcome.
 
-use super::admission::retire_attempt;
+use super::admission::{fit_failed, retire_attempt};
 use super::evaluate::member_state;
 use super::{MemberAdmission, MemberHost, MemberOutcome};
 use crate::AutomationError;
@@ -50,7 +50,7 @@ pub(super) fn reconcile(
                         .withheld
                         .insert(member.key.clone(), "input_stale_or_deadline_expired".into());
                 }
-                retire_attempt(members, expired);
+                retire_attempt(host, members, expired)?;
             }
 
             return commit(store, &state, next, None);
@@ -97,7 +97,7 @@ pub(super) fn reconcile(
                         .insert(member.key.clone(), "input_stale_or_deadline_expired".into());
                 }
             }
-            retire_attempt(members, shrunk);
+            retire_attempt(host, members, shrunk)?;
         }
 
         return commit(store, &state, next, None);
@@ -190,6 +190,7 @@ pub(super) fn reconcile(
                 members.withheld.insert(member.key.clone(), reason);
                 members.failed.insert(member.key, settled.clone());
             }
+            fit_failed(host, members, &settled)?;
 
             commit(store, &state, next, receipt.as_ref())
         }
@@ -220,7 +221,7 @@ pub(super) fn reconcile(
                 .is_some_and(|active| active.exhausted)
                 && let Some(exhausted) = members.active.take()
             {
-                retire_attempt(members, exhausted);
+                retire_attempt(host, members, exhausted)?;
             }
 
             commit(store, &state, next, None)
