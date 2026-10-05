@@ -1,9 +1,11 @@
-//! The owner's landing of an owner-local claimed candidate [ORB-13894].
+//! The owner's landing of a claimed candidate.
 //!
 //! A fast-forward has no provider identity, so the owner's delivery consumers
 //! can attribute it only from a direct landing intent retained before the
 //! branch moves. The landing names the accepted handoff and its task in that
-//! intent; a candidate that cannot fast-forward lands nothing and records none.
+//! intent; a candidate that cannot fast-forward lands nothing and records none
+//! [ORB-13894]. PR reconciliation resolves external uncertainty before stopping
+//! a mismatched delivery, so subsequent attempts see the settled state.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,7 +19,7 @@ use orbit_engine::{
 };
 use orbit_types::workflow::automation::DirectLandingRequest;
 use orbit_types::workflow::handoff::HandoffDelivery;
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::tempdir;
 
 const TASK_ID: &str = "T1";
@@ -95,7 +97,7 @@ fn owner_checkout(repo: &Path) -> LandingHost {
     }
 }
 
-fn land(host: &LandingHost) -> Result<serde_json::Value, OrbitError> {
+fn land(host: &impl RuntimeHost) -> Result<Value, OrbitError> {
     execute_deterministic_action(
         host,
         "handoff_land",
@@ -153,6 +155,137 @@ fn a_candidate_that_cannot_fast_forward_records_no_landing_intent() {
         host.steps.lock().unwrap().last(),
         Some(&HandoffLandingStep::Stop)
     );
+}
+
+/// Model the owner's journal guards at the RuntimeHost boundary: Stop needs a
+/// resolved intent, and a settled attempt cannot accept more landing writes.
+struct ReconciliationHost {
+    context: Mutex<HandoffLandingContext>,
+    updates: Mutex<Vec<HandoffLandingUpdate>>,
+    status: Value,
+}
+
+impl RuntimeHost for ReconciliationHost {
+    fn handoff_landing_context(
+        &self,
+        _handoff_id: &str,
+    ) -> Result<HandoffLandingContext, OrbitError> {
+        Ok(self.context.lock().unwrap().clone())
+    }
+
+    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+        let mut updates = self.updates.lock().unwrap();
+        if updates
+            .last()
+            .is_some_and(|u| u.step == HandoffLandingStep::Stop)
+        {
+            return Err(OrbitError::InvalidInput(
+                "landing attempt is already settled".into(),
+            ));
+        }
+        let mut context = self.context.lock().unwrap();
+        match &update.step {
+            HandoffLandingStep::ResolveIntent { intent_id, .. } => {
+                assert_eq!(context.unresolved_merge_intent.as_ref(), Some(intent_id));
+                context.unresolved_merge_intent = None;
+            }
+            HandoffLandingStep::Stop => {
+                assert!(
+                    context.unresolved_merge_intent.is_none(),
+                    "Stop must follow intent resolution"
+                );
+            }
+            other => panic!("a mismatched reconciled PR must not reach {other:?}"),
+        }
+        updates.push(update.clone());
+        Ok(())
+    }
+
+    fn run_private_vcs_operation(
+        &self,
+        operation: &str,
+        _input: Value,
+    ) -> Result<Value, OrbitError> {
+        assert_eq!(
+            operation, "pr.status",
+            "reconciliation must not send another merge"
+        );
+        Ok(json!({"pull_request": self.status}))
+    }
+}
+
+#[test]
+fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
+    for (field, replacement) in [
+        ("headRefName", "another-branch"),
+        ("baseRefName", "another-base"),
+        ("headRefOid", "another-commit"),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let mut context = owner_checkout(sandbox.path()).context;
+        context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+        let intent_id = "handoff-1:42".to_string();
+        // A lost merge reply leaves this intent for the next attempt to read.
+        context.unresolved_merge_intent = Some(intent_id.clone());
+        let mut status = json!({
+            "state": "MERGED",
+            "headRefName": context.candidate.source_branch,
+            "baseRefName": context.candidate.base_branch,
+            "headRefOid": context.candidate.candidate.commit,
+            "mergeCommit": {"oid": "provider-merge"},
+        });
+        status[field] = json!(replacement);
+        let host = ReconciliationHost {
+            context: Mutex::new(context),
+            updates: Mutex::default(),
+            status,
+        };
+
+        let error = land(&host).expect_err("a foreign merged identity cannot complete the handoff");
+        let updates = host.updates.lock().unwrap().clone();
+        assert_eq!(
+            updates.len(),
+            2,
+            "one resolved intent and one durable Stop for {field}"
+        );
+        assert_eq!(
+            updates[0].step,
+            HandoffLandingStep::ResolveIntent {
+                intent_id,
+                merged: true
+            }
+        );
+        assert_eq!(updates[1].step, HandoffLandingStep::Stop);
+        let reason: String = serde_json::from_str(&updates[1].evidence).unwrap();
+        assert!(
+            reason.contains("delivery_evidence_stale")
+                && reason.contains(field)
+                && reason.contains(replacement),
+            "the Stop must retain the observed identity mismatch: {reason}"
+        );
+        assert!(
+            matches!(error, OrbitError::Execution(ref message) if message == &format!("handoff_land: {reason}"))
+        );
+        let resolved: Value = serde_json::from_str(&updates[0].evidence).unwrap();
+        assert_eq!(resolved["provider_state"], host.status);
+        assert_eq!(resolved["delivery_error"], reason);
+        assert!(
+            host.handoff_landing_context("handoff-1")
+                .unwrap()
+                .unresolved_merge_intent
+                .is_none()
+        );
+
+        let retry = land(&host).expect_err("a later attempt sees the settled Stop");
+        assert!(
+            matches!(retry, OrbitError::InvalidInput(ref message) if message == "landing attempt is already settled")
+        );
+        assert_eq!(
+            *host.updates.lock().unwrap(),
+            updates,
+            "retry retains the original Stop evidence"
+        );
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
