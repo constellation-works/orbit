@@ -21,7 +21,7 @@ use orbit_types::desktop::{
     DesktopTaskRequest,
 };
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{ExecutorSandboxKind, REVIEW_RECONCILIATION_JOB};
+use orbit_types::workflow::{ExecutorSandboxKind, REVIEW_RECONCILIATION_JOB, ReviewReconciliation};
 
 const PR_URL: &str = "https://github.com/owner/repository/pull/42";
 const RECONCILE: &str = "orbit.task.reconcile_review";
@@ -139,11 +139,20 @@ fn rev(repo: &Path, spec: &str) -> String {
     git(repo, &["rev-parse", spec]).trim().to_string()
 }
 
+/// How pull request #42 lands on the landing branch.
+#[derive(Clone, Copy)]
+enum Landing {
+    /// A merge commit whose second parent is the head.
+    Merge,
+    /// One squash commit that keeps none of the head's history.
+    Squash,
+}
+
 /// A follower delivery the owner accepted as pull request #42, whose owner
 /// checkout holds the head that pull request merged at: one commit on the
-/// handed-off branch, merged into the landing branch with a merge commit.
-/// The owner requires `commands`, reviews on its `sol` crew, and has the
-/// shipped reconciliation job seeded.
+/// handed-off branch, landed on the landing branch as `merge` (a merge
+/// commit unless the fixture squashes it). The owner requires `commands`,
+/// reviews on its `sol` crew, and has the shipped reconciliation job seeded.
 struct Delivery {
     pair: Pair,
     owner: OrbitRuntime,
@@ -176,6 +185,12 @@ fn owner_config(commands: &[&str], review_crew: &str, crews: &[&str]) -> String 
 
 impl Delivery {
     fn handed_off(commands: &[&str]) -> Self {
+        Self::landed(commands, Landing::Merge, None)
+    }
+
+    /// The delivery landed as `landing`; `pre_merge` is one file a commit on
+    /// the landing branch adds after the head branched and before it lands.
+    fn landed(commands: &[&str], landing_kind: Landing, pre_merge: Option<(&str, &str)>) -> Self {
         provider_answers_only_pr_42();
         let config = owner_config(commands, "sol", &["sol"]);
         let pair = Pair::with_owner_config(&config, &[None]);
@@ -207,17 +222,39 @@ impl Delivery {
         );
         let head = rev(&repo, "HEAD");
         git(&repo, &["checkout", "-q", &landing]);
-        git(
-            &repo,
-            &[
-                "merge",
-                "-q",
-                "--no-ff",
-                "-m",
-                "Merge pull request #42",
-                &branch,
-            ],
-        );
+        if let Some((path, content)) = pre_merge {
+            std::fs::write(repo.join(path), content).unwrap();
+            git(&repo, &["add", path]);
+            git(
+                &repo,
+                &[
+                    "commit",
+                    "-q",
+                    "-m",
+                    "Fix the landing branch before #42 lands",
+                ],
+            );
+        }
+        match landing_kind {
+            Landing::Merge => git(
+                &repo,
+                &[
+                    "merge",
+                    "-q",
+                    "--no-ff",
+                    "-m",
+                    "Merge pull request #42",
+                    &branch,
+                ],
+            ),
+            Landing::Squash => {
+                git(&repo, &["merge", "-q", "--squash", &branch]);
+                git(
+                    &repo,
+                    &["commit", "-q", "-m", "Pull request #42 (squashed)"],
+                )
+            }
+        };
         let merge = rev(&repo, "HEAD");
 
         orbit_core::bootstrap::init::init_workspace_at_root(
@@ -466,6 +503,84 @@ impl Delivery {
         let snapshot = self.snapshot(McpCapability::Operator);
         assert!(!snapshot.actions.complete.enabled, "{:?}", snapshot.actions);
         snapshot.actions.complete.reason.unwrap_or_default()
+    }
+
+    fn completes(&self) -> bool {
+        self.snapshot(McpCapability::Operator)
+            .actions
+            .complete
+            .enabled
+    }
+
+    /// The operator's baseline disposition of `command` on `reconciliation`.
+    fn dispose(
+        &self,
+        reconciliation: &str,
+        command: &str,
+        remediation: &str,
+    ) -> Result<Value, OrbitError> {
+        self.reconcile(json!({
+            "action": "accept_baseline",
+            "reconciliation_id": reconciliation,
+            "command": command,
+            "remediation_commit": remediation,
+            "reason": "the landing branch already failed this check",
+        }))
+    }
+
+    /// Land one commit on the landing branch writing `content` to `path`.
+    fn land(&self, path: &str, content: &str, message: &str) -> String {
+        std::fs::write(self.repo.join(path), content).unwrap();
+        git(&self.repo, &["add", path]);
+        git(&self.repo, &["commit", "-q", "-m", message]);
+        rev(&self.repo, "HEAD")
+    }
+
+    fn stored(&self, reconciliation: &str) -> ReviewReconciliation {
+        self.owner
+            .review_store()
+            .unwrap()
+            .review_reconciliation(&self.owner.workspace_id().unwrap(), reconciliation)
+            .unwrap()
+            .expect("retained reconciliation")
+    }
+
+    /// Rewrite the stored record into the shape a schema-3 owner persisted:
+    /// no landed commit in the binding or the disposition evidence, with the
+    /// binding digest that owner computed. The store's own update path
+    /// refuses this, so the fixture writes the row directly.
+    fn retain_as_legacy(&self, reconciliation: &str) -> ReviewReconciliation {
+        let mut record = self.stored(reconciliation);
+        record.schema_version = 3;
+        record.binding.pull_request.landed = None;
+        for disposition in &mut record.dispositions {
+            disposition.landed_commit = None;
+        }
+        for check in &mut record.remediation_checks {
+            check.landed_commit = None;
+        }
+        record.binding_digest = sha256_hex(&serde_json::to_vec(&record.binding).unwrap());
+        let refused = self
+            .owner
+            .review_store()
+            .unwrap()
+            .review_reconciliation_update(&self.owner.workspace_id().unwrap(), &record)
+            .expect_err("the store never rewrites a binding or schema");
+        assert!(refused.to_string().contains("immutable"), "{refused}");
+        let database = self.owner.global_root().join("orbit.db");
+        let changed = rusqlite::Connection::open(database)
+            .unwrap()
+            .execute(
+                "UPDATE review_reconciliations SET record_json=?1 WHERE workspace_id=?2 AND reconciliation_id=?3",
+                rusqlite::params![
+                    serde_json::to_string(&record).unwrap(),
+                    self.owner.workspace_id().unwrap(),
+                    reconciliation
+                ],
+            )
+            .unwrap();
+        assert_eq!(changed, 1, "the review store lives in the global database");
+        self.stored(reconciliation)
     }
 }
 
@@ -1053,6 +1168,353 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
             .unwrap()
             .is_none()
     );
+}
+
+/// A baseline remediation must contain the delivery that landed. A fix that
+/// landed on the landing branch before the pull request merged passes the
+/// same required command on its own, while the merged code still fails it
+/// for a reason the delivery introduced; the disposition refuses it before
+/// running anything, and accepts a remediation landed on top of the merge.
+#[test]
+fn a_baseline_remediation_must_contain_the_landed_delivery() {
+    if !isolated(
+        module_path!(),
+        "a_baseline_remediation_must_contain_the_landed_delivery",
+    ) {
+        return;
+    }
+    // Test A: the landing branch lacks NOTICE. Test B: the delivery's hand
+    // fix is a regression. One required command runs both.
+    std::fs::create_dir_all(home().join("bin")).unwrap();
+    let command_path = home().join("bin/suite.sh");
+    std::fs::write(
+        &command_path,
+        "#!/bin/sh\ntest -f NOTICE || exit 1\n! grep -q fixed_by_hand src/f0.rs\n",
+    )
+    .unwrap();
+    executable(&command_path);
+    let command = command_path.to_string_lossy().into_owned();
+    let delivery = Delivery::landed(&[&command], Landing::Merge, Some(("NOTICE", "notice\n")));
+    delivery.recover();
+    delivery.merged();
+    delivery.reviewer_reports("accept", json!([]));
+    let submitted = delivery.submit("masked");
+    let reconciliation = submitted["reconciliation_id"].as_str().unwrap().to_string();
+    let settled = delivery.run(&submitted);
+    assert_eq!(settled["outcome"], "awaiting_disposition", "{settled:#}");
+    let record = &settled["record"];
+    assert_eq!(record["schema_version"], 4);
+    assert_eq!(
+        record["binding"]["pull_request"]["landed"]["commit"],
+        delivery.merge.as_str(),
+        "the provider's merge commit is bound into the reconciliation"
+    );
+    let original = record["validation"].clone();
+    let original_stored = delivery.stored(&reconciliation).validation;
+    assert_eq!(original["complete"], false);
+    assert_eq!(original["commands"][0]["head"]["passed"], false);
+    assert_eq!(original["commands"][0]["baseline"]["passed"], false);
+
+    // The landing-branch fix landed before the merge: it is on the landing
+    // branch, not in the head, and the required command passes there alone.
+    let pre_merge = rev(&delivery.repo, &format!("{}^1", delivery.merge));
+    let alone = delivery.pair._root.path().join("pre-merge");
+    git(
+        &delivery.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            alone.to_str().unwrap(),
+            &pre_merge,
+        ],
+    );
+    let passes_alone = std::process::Command::new(&command_path)
+        .current_dir(&alone)
+        .status()
+        .unwrap();
+    git(
+        &delivery.repo,
+        &["worktree", "remove", "--force", alone.to_str().unwrap()],
+    );
+    assert!(
+        passes_alone.success(),
+        "the pre-merge fix passes on its own"
+    );
+
+    let refused = delivery
+        .dispose(&reconciliation, &command, &pre_merge)
+        .expect_err("a remediation without the landed delivery cannot dispose");
+    assert!(
+        matches!(refused, OrbitError::InvalidInput(_)),
+        "{refused:?}"
+    );
+    let refused = refused.to_string();
+    assert!(
+        refused.contains(&format!("does not contain commit {}", delivery.merge))
+            && refused.contains("land the fix on"),
+        "{refused}"
+    );
+    let untouched = delivery.stored(&reconciliation);
+    assert!(
+        untouched.remediation_checks.is_empty(),
+        "the command never ran at the pre-merge fix"
+    );
+    assert!(untouched.dispositions.is_empty());
+    assert_eq!(untouched.validation, original_stored);
+    assert!(!delivery.completes());
+
+    // A remediation landed on top of the merge fixes test B as well.
+    let remediation = delivery.land(
+        "src/f0.rs",
+        "fn work() { repaired() }\n",
+        "Repair the hand fix",
+    );
+
+    // An infrastructure failure while preparing the remediation run keeps its
+    // error class, and its message carries neither the private HOME nor a
+    // credential.
+    let hooks = home().join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let token = format!("ghp_{}", "C".repeat(36));
+    std::fs::write(
+        hooks.join("post-checkout"),
+        format!(
+            "#!/bin/sh\necho \"cannot populate {}/cache with token {token}\" >&2\nexit 7\n",
+            home().display()
+        ),
+    )
+    .unwrap();
+    executable(&hooks.join("post-checkout"));
+    git(
+        &delivery.repo,
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+    let failed = delivery
+        .dispose(&reconciliation, &command, &remediation)
+        .expect_err("the remediation checkout cannot be prepared");
+    git(&delivery.repo, &["config", "--unset", "core.hooksPath"]);
+    assert!(
+        matches!(failed, OrbitError::Execution(_)),
+        "an infrastructure failure is not an input refusal: {failed:?}"
+    );
+    let failed = failed.to_string();
+    assert!(failed.contains("cannot populate ~/cache"), "{failed}");
+    assert!(
+        !failed.contains(home().to_string_lossy().as_ref()),
+        "{failed}"
+    );
+    assert!(!failed.contains(&token), "{failed}");
+    let still_waiting = delivery.stored(&reconciliation);
+    assert!(still_waiting.dispositions.is_empty());
+    assert!(still_waiting.remediation_checks.is_empty());
+
+    let disposed = delivery
+        .dispose(&reconciliation, &command, &remediation)
+        .expect("a remediation containing the landed delivery disposes");
+    assert_eq!(
+        disposed["outcome"], "accepted_with_disposition",
+        "{disposed:#}"
+    );
+    let record = &disposed["record"];
+    assert_eq!(record["validation"], original, "original failures stay");
+    let disposition = &record["dispositions"][0];
+    assert_eq!(disposition["remediation_commit"], remediation.as_str());
+    assert_eq!(disposition["landed_commit"], delivery.merge.as_str());
+    assert_eq!(
+        disposition["failure_log_sha256"],
+        original["commands"][0]["head"]["log"]["sha256"]
+    );
+    assert_eq!(
+        record["remediation_checks"][0]["landed_commit"],
+        delivery.merge.as_str()
+    );
+    assert!(delivery.completes());
+    let again = delivery
+        .dispose(&reconciliation, &command, &remediation)
+        .expect("an identical disposition replays");
+    assert_eq!(again["replayed"], true);
+    assert_eq!(again["record"]["dispositions"].as_array().unwrap().len(), 1);
+
+    // A record persisted before the landed commit was bound keeps its
+    // evidence, never grants completion and is never disposed again; a new
+    // request key reconciles the same head with the landed commit bound.
+    let legacy = delivery.retain_as_legacy(&reconciliation);
+    assert_eq!(legacy.dispositions.len(), 1);
+    let refusal = delivery.completion_refusal();
+    assert!(
+        refusal.contains(&reconciliation) && refusal.contains("submit a new request key"),
+        "{refusal}"
+    );
+    let legacy_refusal = delivery
+        .dispose(&reconciliation, &command, &remediation)
+        .expect_err("a legacy record cannot be disposed");
+    assert!(
+        matches!(legacy_refusal, OrbitError::InvalidInput(_)),
+        "{legacy_refusal:?}"
+    );
+    assert!(
+        legacy_refusal
+            .to_string()
+            .contains("predates binding the pull request's landed commit"),
+        "{legacy_refusal}"
+    );
+    assert_eq!(delivery.stored(&reconciliation), legacy);
+
+    let fresh = delivery.submit("masked-landed");
+    let fresh_id = fresh["reconciliation_id"].as_str().unwrap().to_string();
+    assert_ne!(fresh_id, reconciliation);
+    let fresh_settled = delivery.run(&fresh);
+    assert_eq!(
+        fresh_settled["outcome"], "awaiting_disposition",
+        "{fresh_settled:#}"
+    );
+    let fresh_disposed = delivery
+        .dispose(&fresh_id, &command, &remediation)
+        .expect("the fresh reconciliation disposes");
+    assert_eq!(fresh_disposed["outcome"], "accepted_with_disposition");
+    assert_eq!(fresh_disposed["record"]["validation"]["complete"], false);
+    assert!(delivery.completes());
+    assert_eq!(delivery.stored(&reconciliation), legacy);
+    let execution = &fresh_disposed["record"]["binding"]["execution"];
+    assert_eq!(execution["run_id"], delivery.leaf.as_str());
+    assert_eq!(execution["machine_id"], FOLLOWER);
+    assert_eq!(execution["claim_id"], delivery.claim_id.as_str());
+    assert_eq!(execution["handoff_id"], delivery.handoff_id.as_str());
+}
+
+/// A squash landing keeps none of the head's history: the remediation must
+/// contain the squash commit the provider reports, never the head. Provider
+/// facts that change before or while the remediation runs refuse the
+/// disposition, and completion binds the same landed commit.
+#[test]
+fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
+    if !isolated(
+        module_path!(),
+        "a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit",
+    ) {
+        return;
+    }
+    // The command can swap the provider's answer while it runs.
+    std::fs::create_dir_all(home().join("bin")).unwrap();
+    let command_path = home().join("bin/notice.sh");
+    let swap = home().join("swap-provider");
+    let swapped = home().join("pr.swapped.json");
+    std::fs::write(
+        &command_path,
+        format!(
+            "#!/bin/sh\nif [ -f '{swap}' ]; then cp '{swapped}' '{answer}'; fi\ntest -f NOTICE\n",
+            swap = swap.display(),
+            swapped = swapped.display(),
+            answer = home().join("pr.json").display(),
+        ),
+    )
+    .unwrap();
+    executable(&command_path);
+    let command = command_path.to_string_lossy().into_owned();
+    let delivery = Delivery::landed(&[&command], Landing::Squash, None);
+    let squash = delivery.merge.clone();
+    assert_eq!(
+        git(
+            &delivery.repo,
+            &["rev-list", "--parents", "-n", "1", &squash]
+        )
+        .split_whitespace()
+        .count(),
+        2,
+        "a squash commit has one parent"
+    );
+    delivery.recover();
+    delivery.merged();
+    delivery.reviewer_reports("accept", json!([]));
+    let submitted = delivery.submit("squash");
+    let reconciliation = submitted["reconciliation_id"].as_str().unwrap().to_string();
+    let settled = delivery.run(&submitted);
+    assert_eq!(settled["outcome"], "awaiting_disposition", "{settled:#}");
+    assert_eq!(
+        settled["record"]["binding"]["pull_request"]["landed"]["commit"],
+        squash.as_str()
+    );
+    let original = settled["record"]["validation"].clone();
+
+    let remediation = delivery.land("NOTICE", "notice\n", "Add NOTICE");
+    let head_in_remediation = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&delivery.repo)
+        .args(["merge-base", "--is-ancestor", &delivery.head, &remediation])
+        .status()
+        .unwrap();
+    assert!(
+        !head_in_remediation.success(),
+        "the squash remediation does not contain the pull request's head"
+    );
+
+    // The provider reports another landed commit before the run: refused
+    // before the command runs.
+    pull_request_is(
+        "MERGED",
+        &delivery.head,
+        &delivery.landing,
+        Some(&remediation),
+    );
+    let moved = delivery
+        .dispose(&reconciliation, &command, &remediation)
+        .expect_err("a changed landed commit refuses before running");
+    assert!(moved.to_string().contains("delivery changed"), "{moved}");
+    assert!(
+        delivery
+            .stored(&reconciliation)
+            .remediation_checks
+            .is_empty()
+    );
+    assert!(!delivery.completes());
+
+    // The provider's answer changes while the command runs: the check is kept
+    // as evidence, but no disposition is recorded.
+    std::fs::rename(home().join("pr.json"), &swapped).unwrap();
+    delivery.merged();
+    std::fs::write(&swap, "").unwrap();
+    let during = delivery
+        .dispose(&reconciliation, &command, &remediation)
+        .expect_err("a landed commit that changed during the run refuses");
+    assert!(during.to_string().contains("delivery changed"), "{during}");
+    std::fs::remove_file(&swap).unwrap();
+    let checked = delivery.stored(&reconciliation);
+    assert_eq!(checked.remediation_checks.len(), 1);
+    assert!(checked.remediation_checks[0].run.passed);
+    assert_eq!(
+        checked.remediation_checks[0].landed_commit.as_deref(),
+        Some(squash.as_str())
+    );
+    assert!(checked.dispositions.is_empty());
+
+    // With the provider's answer restored, the passing check is reused.
+    delivery.merged();
+    let disposed = delivery
+        .dispose(&reconciliation, &command, &remediation)
+        .expect("a remediation containing the squash commit disposes");
+    assert_eq!(
+        disposed["outcome"], "accepted_with_disposition",
+        "{disposed:#}"
+    );
+    let record = &disposed["record"];
+    assert_eq!(record["validation"], original);
+    assert_eq!(record["validation"]["complete"], false);
+    assert_eq!(record["remediation_checks"].as_array().unwrap().len(), 1);
+    assert_eq!(record["dispositions"][0]["landed_commit"], squash.as_str());
+    assert!(delivery.completes());
+
+    // Completion binds the landed commit as the provider reports it now.
+    pull_request_is(
+        "MERGED",
+        &delivery.head,
+        &delivery.landing,
+        Some(&remediation),
+    );
+    assert!(!delivery.completes());
+    delivery.merged();
+    assert!(delivery.completes());
 }
 
 /// A command that fails as code at the merged head but cannot be judged at

@@ -104,7 +104,7 @@ pub(crate) fn prepare(
             runtime,
             admitted,
             "the delivery changed between submission and this run (task meaning, claim, \
-             handoff, pull request or merged head)",
+             handoff, pull request, merged head or landed commit)",
             "inspect it with `orbit task reconcile-review inspect` and submit a new request key \
              for the current head",
         )?;

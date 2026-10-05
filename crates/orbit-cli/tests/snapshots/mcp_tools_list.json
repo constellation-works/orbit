@@ -1263,7 +1263,7 @@
         },
         "remediation_commit": {
           "type": "string",
-          "description": "accept_baseline: landed commit on the landing branch that remediates that failure"
+          "description": "accept_baseline: commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates that failure"
         },
         "reason": {
           "type": "string",

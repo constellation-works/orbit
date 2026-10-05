@@ -116,11 +116,14 @@ impl Store {
                 ))
             })?;
             if current.binding_digest != record.binding_digest
+                || current.binding != record.binding
+                || current.schema_version != record.schema_version
                 || current.request_key != record.request_key
                 || current.contract != record.contract
             {
                 return Err(OrbitError::InvalidInput(
-                    "a review reconciliation's binding, contract and request key are immutable"
+                    "a review reconciliation's binding, schema, contract and request key are \
+                     immutable"
                         .into(),
                 ));
             }

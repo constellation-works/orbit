@@ -24,8 +24,9 @@ pub const REVIEW_RECONCILIATION_JOB: &str = "task_review_reconciliation_pipeline
 /// strips it, so a run carrying it was admitted by the governed submission.
 pub const REVIEW_RECONCILIATION_ADMISSION_KEY: &str = "review_reconciliation_admission";
 
-/// Persisted record schema version.
-pub const REVIEW_RECONCILIATION_SCHEMA_VERSION: u32 = 3;
+/// Persisted record schema version. Version 4 binds the provider's landed
+/// commit; an older record cannot authorize a baseline disposition.
+pub const REVIEW_RECONCILIATION_SCHEMA_VERSION: u32 = 4;
 
 /// One operator's admission of one reconciliation attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +86,12 @@ pub struct ReconciledPullRequest {
     /// The merge base of that head with the landing branch: the baseline a
     /// failing command is reproduced on.
     pub base: SourceRevision,
+    /// The commit the provider reports the pull request landed as: its merge
+    /// commit, squash commit or last rebased commit. A baseline remediation
+    /// must contain it. Absent only on a record that predates binding it,
+    /// which can never authorize a baseline disposition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<SourceRevision>,
 }
 
 /// Everything a reconciliation is about. Any change between observation and
@@ -249,6 +256,10 @@ pub struct BaselineDisposition {
     pub baseline_log_sha256: String,
     /// Landed commit that remediates the baseline failure.
     pub remediation_commit: String,
+    /// The bound landed delivery the remediation commit contains. A
+    /// disposition without it cannot authorize completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed_commit: Option<String>,
     /// Passing execution of the same required command at the remediation
     /// commit. Older dispositions do not establish that the failure was
     /// actually fixed, so they cannot authorize completion.
@@ -267,6 +278,10 @@ pub struct BaselineRemediationCheck {
     pub command: String,
     pub head_commit: String,
     pub remediation_commit: String,
+    /// The bound landed delivery the remediation commit contained when it was
+    /// tested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed_commit: Option<String>,
     pub run: ReconciledCommandRun,
     pub actor: String,
     pub provenance: String,
@@ -325,9 +340,12 @@ impl ReviewReconciliation {
             Some(ReconciliationOutcome::AcceptedWithDisposition)
                 if self.schema_version == REVIEW_RECONCILIATION_SCHEMA_VERSION =>
             {
-                let Some(validation) = &self.validation else {
+                let (Some(validation), Some(landed)) =
+                    (&self.validation, &self.binding.pull_request.landed)
+                else {
                     return false;
                 };
+                let landed = Some(landed.commit.as_str());
                 let baseline: Vec<_> = validation
                     .commands
                     .iter()
@@ -339,6 +357,7 @@ impl ReviewReconciliation {
                             disposition.command == command.command
                                 && disposition.head_commit
                                     == self.binding.pull_request.merged_head.commit
+                                && disposition.landed_commit.as_deref() == landed
                                 && disposition.failure_log_sha256 == command.head.log.sha256
                                 && disposition.baseline_log_sha256
                                     == command
@@ -352,6 +371,7 @@ impl ReviewReconciliation {
                                             && check.head_commit == disposition.head_commit
                                             && check.remediation_commit
                                                 == disposition.remediation_commit
+                                            && check.landed_commit.as_deref() == landed
                                             && check.run.passed
                                             && check.run.exit_code == Some(0)
                                             && check.run.failure_kind.is_none()

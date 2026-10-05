@@ -229,49 +229,66 @@ fn redact_path_prefix(text: &str, prefix: &str) -> String {
 /// un-redacted. Idempotent: `redact_all` placeholders never re-match the secret
 /// patterns.
 pub fn redact_all_error(error: OrbitError) -> OrbitError {
+    redact_error_with(error, redact_all)
+}
+
+/// [`redact_all`] then [`redact_home_dir`]: the display form for text an
+/// operator-facing surface may echo, free of secrets and the private `$HOME`.
+pub fn redact_all_and_home(text: &str) -> String {
+    redact_home_dir(&redact_all(text))
+}
+
+/// [`redact_all_error`] that also replaces the private `$HOME` with `~`,
+/// keeping the error's variant.
+pub fn redact_all_and_home_error(error: OrbitError) -> OrbitError {
+    redact_error_with(error, redact_all_and_home)
+}
+
+/// Apply `redact` to every string payload of `error`, keeping its variant.
+fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitError {
     match error {
-        OrbitError::PolicyDenied(m) => OrbitError::PolicyDenied(redact_all(&m)),
+        OrbitError::PolicyDenied(m) => OrbitError::PolicyDenied(redact(&m)),
         OrbitError::NotFound { kind, id } => OrbitError::NotFound {
             kind,
-            id: redact_all(&id),
+            id: redact(&id),
         },
-        OrbitError::CapabilityDenied(m) => OrbitError::CapabilityDenied(redact_all(&m)),
-        OrbitError::UnknownSelector(m) => OrbitError::UnknownSelector(redact_all(&m)),
-        OrbitError::AmbiguousCaller(m) => OrbitError::AmbiguousCaller(redact_all(&m)),
-        OrbitError::UnauthorizedCaller(m) => OrbitError::UnauthorizedCaller(redact_all(&m)),
-        OrbitError::AmbiguousDestination(m) => OrbitError::AmbiguousDestination(redact_all(&m)),
-        OrbitError::UnreachableDestination(m) => OrbitError::UnreachableDestination(redact_all(&m)),
-        OrbitError::StaleRoute(m) => OrbitError::StaleRoute(redact_all(&m)),
-        OrbitError::UnhealthyCheckout(m) => OrbitError::UnhealthyCheckout(redact_all(&m)),
-        OrbitError::ToolNotOnThisHost(m) => OrbitError::ToolNotOnThisHost(redact_all(&m)),
+        OrbitError::CapabilityDenied(m) => OrbitError::CapabilityDenied(redact(&m)),
+        OrbitError::UnknownSelector(m) => OrbitError::UnknownSelector(redact(&m)),
+        OrbitError::AmbiguousCaller(m) => OrbitError::AmbiguousCaller(redact(&m)),
+        OrbitError::UnauthorizedCaller(m) => OrbitError::UnauthorizedCaller(redact(&m)),
+        OrbitError::AmbiguousDestination(m) => OrbitError::AmbiguousDestination(redact(&m)),
+        OrbitError::UnreachableDestination(m) => OrbitError::UnreachableDestination(redact(&m)),
+        OrbitError::StaleRoute(m) => OrbitError::StaleRoute(redact(&m)),
+        OrbitError::UnhealthyCheckout(m) => OrbitError::UnhealthyCheckout(redact(&m)),
+        OrbitError::ToolNotOnThisHost(m) => OrbitError::ToolNotOnThisHost(redact(&m)),
         OrbitError::PluginDisabledInWorkspace { plugin, workspace } => {
             OrbitError::PluginDisabledInWorkspace {
-                plugin: redact_all(&plugin),
-                workspace: redact_all(&workspace),
+                plugin: redact(&plugin),
+                workspace: redact(&workspace),
             }
         }
         OrbitError::PluginDisabledOnHost { plugin } => OrbitError::PluginDisabledOnHost {
-            plugin: redact_all(&plugin),
+            plugin: redact(&plugin),
         },
-        OrbitError::CapabilityRefused(m) => OrbitError::CapabilityRefused(redact_all(&m)),
+        OrbitError::CapabilityRefused(m) => OrbitError::CapabilityRefused(redact(&m)),
         OrbitError::PluginBuildConsentRequired(m) => {
-            OrbitError::PluginBuildConsentRequired(redact_all(&m))
+            OrbitError::PluginBuildConsentRequired(redact(&m))
         }
         OrbitError::PluginBuildConsentUnavailable(m) => {
-            OrbitError::PluginBuildConsentUnavailable(redact_all(&m))
+            OrbitError::PluginBuildConsentUnavailable(redact(&m))
         }
         OrbitError::PluginBuildFetchUnsupported(m) => {
-            OrbitError::PluginBuildFetchUnsupported(redact_all(&m))
+            OrbitError::PluginBuildFetchUnsupported(redact(&m))
         }
-        OrbitError::AdrInvalidTransition(m) => OrbitError::AdrInvalidTransition(redact_all(&m)),
+        OrbitError::AdrInvalidTransition(m) => OrbitError::AdrInvalidTransition(redact(&m)),
         OrbitError::RemoteArtifactUnavailable {
             kind,
             id,
             artifact_origin,
         } => OrbitError::RemoteArtifactUnavailable {
             kind,
-            id: redact_all(&id),
-            artifact_origin: redact_artifact_origin(artifact_origin, redact_all),
+            id: redact(&id),
+            artifact_origin: redact_artifact_origin(artifact_origin, redact),
         },
         OrbitError::ArtifactNotLocal {
             kind,
@@ -279,64 +296,62 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             artifact_origin,
         } => OrbitError::ArtifactNotLocal {
             kind,
-            id: redact_all(&id),
-            artifact_origin: redact_artifact_origin(artifact_origin, redact_all),
+            id: redact(&id),
+            artifact_origin: redact_artifact_origin(artifact_origin, redact),
         },
         OrbitError::FrictionNotLocal(details) => {
-            OrbitError::FrictionNotLocal(redact_friction_not_local(*details, redact_all))
+            OrbitError::FrictionNotLocal(redact_friction_not_local(*details, redact))
         }
-        OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact_all(&m)),
+        OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact(&m)),
         OrbitError::SensitiveInput { field, reason } => OrbitError::SensitiveInput {
-            field: redact_all(&field),
-            reason: redact_all(&reason),
+            field: redact(&field),
+            reason: redact(&reason),
         },
         OrbitError::InvalidInputDiagnostic {
             message,
             did_you_mean,
         } => OrbitError::InvalidInputDiagnostic {
-            message: redact_all(&message),
+            message: redact(&message),
             did_you_mean: did_you_mean
                 .into_iter()
-                .map(|suggestion| redact_all(&suggestion))
+                .map(|suggestion| redact(&suggestion))
                 .collect(),
         },
-        OrbitError::SkillValidation(m) => OrbitError::SkillValidation(redact_all(&m)),
-        OrbitError::JobValidation(m) => OrbitError::JobValidation(redact_all(&m)),
-        OrbitError::AgentProtocolViolation(m) => OrbitError::AgentProtocolViolation(redact_all(&m)),
-        OrbitError::UnsupportedAgentProvider(m) => {
-            OrbitError::UnsupportedAgentProvider(redact_all(&m))
-        }
-        OrbitError::OwnerUnavailable(m) => OrbitError::OwnerUnavailable(redact_all(&m)),
-        OrbitError::OwnerNegotiation(m) => OrbitError::OwnerNegotiation(redact_all(&m)),
+        OrbitError::SkillValidation(m) => OrbitError::SkillValidation(redact(&m)),
+        OrbitError::JobValidation(m) => OrbitError::JobValidation(redact(&m)),
+        OrbitError::AgentProtocolViolation(m) => OrbitError::AgentProtocolViolation(redact(&m)),
+        OrbitError::UnsupportedAgentProvider(m) => OrbitError::UnsupportedAgentProvider(redact(&m)),
+        OrbitError::OwnerUnavailable(m) => OrbitError::OwnerUnavailable(redact(&m)),
+        OrbitError::OwnerNegotiation(m) => OrbitError::OwnerNegotiation(redact(&m)),
         OrbitError::OutcomeUnknown {
             mcp_call_id,
             message,
         } => OrbitError::OutcomeUnknown {
-            mcp_call_id: redact_all(&mcp_call_id),
-            message: redact_all(&message),
+            mcp_call_id: redact(&mcp_call_id),
+            message: redact(&message),
         },
         OrbitError::RemoteTool {
             code,
             message,
             payload,
         } => OrbitError::RemoteTool {
-            code: redact_all(&code),
-            message: redact_all(&message),
-            payload: redact_json_with(payload, redact_all),
+            code: redact(&code),
+            message: redact(&message),
+            payload: redact_json_with(payload, redact),
         },
-        OrbitError::Execution(m) => OrbitError::Execution(redact_all(&m)),
+        OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
         OrbitError::ProcessTimeout { timeout_ms, detail } => OrbitError::ProcessTimeout {
             timeout_ms,
-            detail: redact_all(&detail),
+            detail: redact(&detail),
         },
         OrbitError::WorkerContainmentUnavailable { reason } => {
             OrbitError::WorkerContainmentUnavailable {
-                reason: redact_all(&reason),
+                reason: redact(&reason),
             }
         }
-        OrbitError::RecoverableVcsConflict(conflict) => OrbitError::RecoverableVcsConflict(
-            redact_recoverable_vcs_conflict(*conflict, redact_all),
-        ),
+        OrbitError::RecoverableVcsConflict(conflict) => {
+            OrbitError::RecoverableVcsConflict(redact_recoverable_vcs_conflict(*conflict, redact))
+        }
         OrbitError::RunCancellationIncomplete {
             pid,
             pgid,
@@ -357,54 +372,54 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             path,
             reason,
         } => OrbitError::TaskBundleCorrupt {
-            task_id: redact_all(&task_id),
-            path: redact_all(&path),
-            reason: redact_all(&reason),
+            task_id: redact(&task_id),
+            path: redact(&path),
+            reason: redact(&reason),
         },
         OrbitError::FileLockTimeout(timeout) => {
-            OrbitError::FileLockTimeout(redact_file_lock_timeout(*timeout, redact_all))
+            OrbitError::FileLockTimeout(redact_file_lock_timeout(*timeout, redact))
         }
-        OrbitError::Store(m) => OrbitError::Store(redact_all(&m)),
+        OrbitError::Store(m) => OrbitError::Store(redact(&m)),
         OrbitError::SqliteContention(contention) => {
-            OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact_all))
+            OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact))
         }
-        OrbitError::TaskStatusTransition(m) => OrbitError::TaskStatusTransition(redact_all(&m)),
-        OrbitError::DependencyNotDelivered(diagnostic) => OrbitError::DependencyNotDelivered(
-            redact_dependency_not_delivered(*diagnostic, redact_all),
-        ),
+        OrbitError::TaskStatusTransition(m) => OrbitError::TaskStatusTransition(redact(&m)),
+        OrbitError::DependencyNotDelivered(diagnostic) => {
+            OrbitError::DependencyNotDelivered(redact_dependency_not_delivered(*diagnostic, redact))
+        }
         OrbitError::ShipRunInFlight { task_id, run_id } => OrbitError::ShipRunInFlight {
-            task_id: redact_all(&task_id),
-            run_id: redact_all(&run_id),
+            task_id: redact(&task_id),
+            run_id: redact(&run_id),
         },
         OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun {
-                task_id: redact_all(&task_id),
-                run_id: redact_all(&run_id),
+                task_id: redact(&task_id),
+                run_id: redact(&run_id),
             }
         }
         OrbitError::TaskRevisionConflict { task_id } => OrbitError::TaskRevisionConflict {
-            task_id: redact_all(&task_id),
+            task_id: redact(&task_id),
         },
         OrbitError::DesktopWriteAccepted { task_id, reason } => OrbitError::DesktopWriteAccepted {
-            task_id: redact_all(&task_id),
-            reason: redact_all(&reason),
+            task_id: redact(&task_id),
+            reason: redact(&reason),
         },
         OrbitError::ResumeRunInFlight {
             source_run_id,
             run_id,
         } => OrbitError::ResumeRunInFlight {
-            source_run_id: redact_all(&source_run_id),
-            run_id: redact_all(&run_id),
+            source_run_id: redact(&source_run_id),
+            run_id: redact(&run_id),
         },
         OrbitError::WorkspaceClaimHeld(claim) => {
-            OrbitError::WorkspaceClaimHeld(redact_workspace_claim_held(*claim, redact_all))
+            OrbitError::WorkspaceClaimHeld(redact_workspace_claim_held(*claim, redact))
         }
-        OrbitError::JobRunStateTransition(m) => OrbitError::JobRunStateTransition(redact_all(&m)),
-        OrbitError::JobRunStartConflict(m) => OrbitError::JobRunStartConflict(redact_all(&m)),
-        OrbitError::JobRunControlConflict(m) => OrbitError::JobRunControlConflict(redact_all(&m)),
-        OrbitError::Io(m) => OrbitError::Io(redact_all(&m)),
-        OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact_all(&m)),
-        OrbitError::Migration(m) => OrbitError::Migration(redact_all(&m)),
+        OrbitError::JobRunStateTransition(m) => OrbitError::JobRunStateTransition(redact(&m)),
+        OrbitError::JobRunStartConflict(m) => OrbitError::JobRunStartConflict(redact(&m)),
+        OrbitError::JobRunControlConflict(m) => OrbitError::JobRunControlConflict(redact(&m)),
+        OrbitError::Io(m) => OrbitError::Io(redact(&m)),
+        OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact(&m)),
+        OrbitError::Migration(m) => OrbitError::Migration(redact(&m)),
     }
 }
 

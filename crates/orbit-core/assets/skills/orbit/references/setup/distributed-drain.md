@@ -295,7 +295,12 @@ cannot submit or dispose a reconciliation.
 `accept-baseline` reruns the same required check at the named landed
 remediation commit in a detached checkout and records its output. It refuses
 the disposition unless that check passes; merged-head validation stays
-recorded as incomplete.
+recorded as incomplete. The remediation must contain the commit the provider
+reports the pull request landed as (merge, squash or rebased commit), never
+just the head, which a squash landing does not keep. A fix that landed before
+the merge is refused before anything runs: land the fix on top of the landed
+commit and name that commit. If the provider's answer changed, or the record
+predates binding the landed commit, submit a new request key.
 
 ## Leftover epic and review state
 

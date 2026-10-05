@@ -27,7 +27,7 @@ impl Tool for OrbitTaskReconcileReviewTool {
                 param("request_key", "string", false, "submit: operator-chosen key; resubmitting it replays the same reconciliation"),
                 param("reconciliation_id", "string", false, "status, accept_baseline: the reconciliation to act on"),
                 param("command", "string", false, "accept_baseline: the required command whose failure reproduced at the base"),
-                param("remediation_commit", "string", false, "accept_baseline: landed commit on the landing branch that remediates that failure"),
+                param("remediation_commit", "string", false, "accept_baseline: commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates that failure"),
                 param("reason", "string", false, "accept_baseline: why the baseline failure is accepted"),
             ],
         }
