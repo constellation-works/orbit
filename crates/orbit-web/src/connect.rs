@@ -76,8 +76,9 @@ pub struct ConnectArgs {
     #[arg(long, value_name = "SELECTOR")]
     pub workspace: Option<String>,
 
-    /// Serve every workspace registered on the remote host, not just its
-    /// default one — passes `--global` through to the remote `orbit web serve`.
+    /// Deprecated, no-op: remote dashboards always serve every registered
+    /// workspace. Forwarded when spawning a dashboard for compatibility with
+    /// older remote binaries.
     #[arg(long)]
     pub global: bool,
 

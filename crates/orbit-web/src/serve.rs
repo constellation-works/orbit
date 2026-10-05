@@ -1,5 +1,5 @@
 use std::future::{Future, IntoFuture};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +27,7 @@ pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;
 #[derive(Args, Clone)]
 #[command(about = "Run the Orbit dashboard")]
 pub struct ServeArgs {
-    /// Host or IP to bind to. Defaults to loopback for safety.
+    /// IP to bind to: 127.0.0.1 or ::1.
     #[arg(long, default_value = "127.0.0.1")]
     pub host: IpAddr,
 
@@ -41,10 +41,9 @@ pub struct ServeArgs {
 
     // ORB-10029: source provenance for the global-only dashboard mode.
     /// Deprecated, no-op: `orbit web serve` always serves every registered
-    /// workspace now (global mode is the only mode). Kept so
-    /// the flag keeps parsing for existing scripts, and because `orbit web
-    /// connect` unconditionally forwards it to the remote `orbit web serve`
-    /// — removing it would break tunnels against an old/new binary mix.
+    /// workspace now (global mode is the only mode). Kept for existing scripts
+    /// and `orbit web connect --global`, which forwards it when spawning a
+    /// remote dashboard for compatibility with older binaries.
     #[arg(long)]
     pub global: bool,
 
@@ -432,7 +431,9 @@ pub(crate) async fn drain_with_grace_period(
     }
 }
 
-/// Reject binding the dashboard to anything other than a loopback address.
+/// Reject binds other than the loopback IPs approved by the Host gate:
+/// `127.0.0.1` and `::1`. Other loopback addresses would start a dashboard
+/// whose announced URL cannot pass the request-level Host check.
 ///
 /// SECURITY (ORB-00360): the dashboard has no authentication of its own.
 /// Request-level checks in [`api::require_localhost_origin`] mitigate browser
@@ -444,11 +445,12 @@ pub(crate) async fn drain_with_grace_period(
 /// access, bind loopback and front the dashboard with an authenticated
 /// tunnel/reverse proxy (e.g. `ssh -L`).
 pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitError> {
-    if host.is_loopback() {
+    if host == IpAddr::V4(Ipv4Addr::LOCALHOST) || host == IpAddr::V6(Ipv6Addr::LOCALHOST) {
         return Ok(());
     }
     Err(OrbitError::InvalidInput(format!(
-        "refusing to bind dashboard to non-loopback address {host}: the \
+        "refusing to bind dashboard to unsupported address {host}: only \
+         127.0.0.1 and ::1 are approved by the Host check. The \
          dashboard is unauthenticated and the Origin check is not an \
          access-control boundary. Bind a loopback address (127.0.0.1 or ::1) \
          and use an authenticated tunnel/reverse proxy (e.g. \

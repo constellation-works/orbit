@@ -1,0 +1,41 @@
+Run the Orbit dashboard
+
+Usage: orbit web serve [OPTIONS]
+
+Options:
+      --host <HOST>
+          IP to bind to: 127.0.0.1 or ::1
+          
+          [default: 127.0.0.1]
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --port <PORT>
+          Port to bind to
+          
+          [default: 7878]
+
+      --no-open
+          Do not attempt to open the dashboard URL in a browser on startup
+
+      --global
+          Deprecated, no-op: `orbit web serve` always serves every registered workspace now (global mode is the only mode). Kept for existing scripts and `orbit web connect --global`, which forwards it when spawning a remote dashboard for compatibility with older binaries
+
+      --workspace <SELECTOR>
+          Preselect this workspace in the dashboard, by registered name, logical ID (`ws_*`), or local checkout path. Defaults to the workspace containing the current directory. Distinct from `--root`, which chooses which registry is served
+
+      --operator
+          Grant operator capability for the dashboard's governed controls — Operations, and the owner's handoff approve/revoke/recover actions — without a TTY or ORBIT_OPERATOR. `orbit web connect` passes this by default
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -38,7 +38,7 @@ Startup:
 1. orbit-registry loads the registry under the resolved Orbit root: <--root>/workspaces.json when the flag is given, the machine-global ~/.orbit/workspaces.json otherwise. orbit-cmd global_root_for owns that resolution for every command, Web included.
 2. Local workspace checkouts become dashboard entries. Invalid paths remain visible as inactive entries and are not opened.
 3. With --workspace, the workspace it names becomes the default; the selector is a registered name or ws_* ID first and a checkout path when it is path-shaped, and an unmatched value opens aggregate mode rather than falling back to cwd. Without --workspace, the workspace containing cwd becomes the default when one matches.
-4. Orbit Web refuses a non-loopback bind before opening the listener.
+4. Orbit Web accepts only `127.0.0.1` and `::1` binds before opening the listener, matching the IP addresses approved by the request Host gate. Other addresses in `127.0.0.0/8` are refused so the announced dashboard URL can pass that gate.
 
 ### Request state
 
@@ -78,11 +78,11 @@ The Web-owned tunnel then follows an attach-first lifecycle:
 
 In spawn mode, the forced PTY makes connection teardown deliver SIGHUP to the remote serve process started by this session. In attach mode there is no remote command, so teardown closes only the forward and leaves the pre-existing dashboard running.
 
-connect's --workspace is POSIX-quoted and forwarded to the remote serve as --workspace, only in spawn mode. It is not forwarded as --root: on the remote that would choose a registry rather than preselect a workspace. connect rejects a top-level --root outright, since it reads no local Orbit data directory. --global is also forwarded only in spawn mode and remains useful only for older remote binaries. Attach mode sends no remote command, so no option can change an existing server.
+connect's --workspace is POSIX-quoted and forwarded to the remote serve as --workspace, only in spawn mode. It is not forwarded as --root: on the remote that would choose a registry rather than preselect a workspace. connect rejects a top-level --root outright, since it reads no local Orbit data directory. --global is a deprecated no-op for current remote dashboards; when supplied, it is forwarded only in spawn mode for compatibility with older remote binaries. Attach mode sends no remote command, so no option can change an existing server.
 
 ## 4. Security
 
-The dashboard is an unauthenticated read/write HTTP application. check_bindable_host permits only loopback addresses. The Origin middleware reduces browser cross-site request risk but is forgeable by non-browser clients and is not authentication.
+The dashboard is an unauthenticated read/write HTTP application. check_bindable_host permits only `127.0.0.1` and `::1`. The request Host gate permits those IPs and `localhost`. The Origin middleware reduces browser cross-site request risk but is forgeable by non-browser clients and is not authentication.
 
 Remote confidentiality, server identity, and user authentication are delegated to SSH. The local forward is explicitly loopback-bound, but access to that port is still access to the remote dashboard's authority; connect adds no token, ACL, or Orbit session.
 
