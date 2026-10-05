@@ -216,12 +216,38 @@ fn validate_output_path(value: &str, field: &str) -> Result<(), PluginManifestEr
     Ok(())
 }
 
-/// Replace [`BUILD_DIR_TEMPLATE`] in each argument. Validation has refused
-/// every other reference, so nothing else is substituted.
+/// Replace [`BUILD_DIR_TEMPLATE`] in each argument, including whitespace-padded
+/// references such as `{{ build_dir }}`. Validation has refused every other
+/// reference, so nothing else is substituted.
 pub fn render_build_argv(argv: &[String], build_dir: &str) -> Vec<String> {
     argv.iter()
-        .map(|arg| arg.replace(BUILD_DIR_TEMPLATE, build_dir))
+        .map(|arg| render_build_arg(arg, build_dir))
         .collect()
+}
+
+fn render_build_arg(text: &str, build_dir: &str) -> String {
+    if !text.contains("{{") {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let reference = after[..end].trim();
+        if reference == "build_dir" {
+            out.push_str(build_dir);
+        } else {
+            out.push_str(&rest[start..start + 2 + end + 2]);
+        }
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Render an argv vector for a terminal-facing build plan or audit row.
