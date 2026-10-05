@@ -352,8 +352,46 @@ fn baselined_delivery_consumer(
         .auto_task_show("fixture-delivery-consumer")
         .unwrap()
         .unwrap();
+    // A configured origin is observed by fetching it. Publish the branch first
+    // so the baseline is that remote head rather than a fetch failure.
+    publish_origin_if_configured(fixture);
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     (runtime, definition)
+}
+
+/// Mirror `origin` at a bare repo beside the fixture and push `HEAD` there.
+///
+/// The origin URL is left as configured. Fetch and push follow
+/// `url.<bare>.insteadOf`, which is how a GitHub identity stays intact while
+/// the objects live on disk.
+pub(crate) fn publish_origin_if_configured(fixture: &Fixture) {
+    let remotes = git(fixture, &["remote"]);
+    if !remotes.split_whitespace().any(|name| name == "origin") {
+        return;
+    }
+    let url = git(fixture, &["config", "--get", "remote.origin.url"]);
+    let bare = fixture.repo.with_file_name("origin.git");
+    let bare_path = bare.display().to_string();
+    if !bare.join("HEAD").exists() {
+        git(fixture, &["init", "--bare", "-q", &bare_path]);
+    }
+    let branch = git(fixture, &["branch", "--show-current"]);
+    git(
+        fixture,
+        &[
+            "--git-dir",
+            &bare_path,
+            "symbolic-ref",
+            "HEAD",
+            &format!("refs/heads/{branch}"),
+        ],
+    );
+    let key = format!("url.{bare_path}.insteadOf");
+    git(fixture, &["config", &key, &url]);
+    git(
+        fixture,
+        &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+    );
 }
 
 #[test]
@@ -822,6 +860,7 @@ fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
     )
     .unwrap();
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    publish_origin_if_configured(&fixture);
     let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))

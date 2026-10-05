@@ -160,6 +160,19 @@ replay moves the same unresolved reason to that replacement without inventing a
 provider identity. This exception applies only to the mapped pre-existing debt;
 every inserted canonical commit still requires ordinary provider proof.
 
+When the checkout has an `origin` remote, each observation pass fetches only
+the configured branch (`git fetch --no-tags --no-recurse-submodules`,
+non-interactive, refspec `+refs/heads/<branch>:refs/remotes/origin/<branch>`,
+within the source command deadline) and pins the head from that remote-tracking
+ref. The fetch does not touch the worktree, index, or local branch, so a pull
+request merged on the remote is observed even when nobody has fast-forwarded
+the checkout. A failed fetch defers as `source_fetch_failed` and does not fall
+back to `refs/heads/<branch>`. That reason retries rather than stalling the
+consumer; `orbit doctor` reports when the observed cursor trails, or has
+diverged from, the remote-tracking head. A repository with no remote still
+resolves `refs/heads/<branch>`. The ancestry check runs against the same head
+the pass just resolved, so a force-push still defers as `history_diverged`.
+
 Batch input contains batch/consumer/epoch IDs, ordered delivery IDs and evidence
 digests, exact `from_exclusive`/`through_inclusive` revisions and trees, full
 commit membership, required examination class, exclusion certificates, effective

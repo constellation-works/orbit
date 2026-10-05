@@ -1,6 +1,10 @@
 //! Bounded source facts from Git and provider-owned PR identities.
 
 use orbit_automation::{AutomationError, delivery::digest};
+use orbit_common::fs::git::{
+    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, should_retry_git_ref_cas,
+    with_git_fetch_lock,
+};
 use orbit_types::workflow::automation::recovery::{HistoryMapping, HistoryReplayRecord, refusal};
 use orbit_types::workflow::automation::*;
 use serde_json::Value;
@@ -11,6 +15,16 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+
+/// Overall budget for every git and provider command one source pass runs.
+const SOURCE_DEADLINE: Duration = Duration::from_secs(30);
+/// Budget for one local git or provider command. A fetch uses the time left
+/// on [`SOURCE_DEADLINE`] instead: two seconds is not a network fetch.
+const COMMAND_BUDGET: Duration = Duration::from_secs(2);
+
+/// A delivery pass could not fetch `origin/<branch>`. Observation is not
+/// advanced and the local branch is not consulted in its place.
+pub(crate) const SOURCE_FETCH_FAILED: &str = "source_fetch_failed";
 
 pub(crate) struct Source<'a> {
     root: &'a Path,
@@ -31,7 +45,17 @@ impl<'a> Source<'a> {
     /// its stderr, so an operator reading a sweep row or `auto-task show`
     /// learns which ref git could not resolve instead of a bare token.
     fn command(&self, program: &str, args: &[&str]) -> Result<String, AutomationError> {
-        if self.started.elapsed() > Duration::from_secs(30) {
+        self.command_with(program, args, &[], COMMAND_BUDGET)
+    }
+
+    fn command_with(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+        budget: Duration,
+    ) -> Result<String, AutomationError> {
+        if self.started.elapsed() > SOURCE_DEADLINE {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }
 
@@ -51,6 +75,9 @@ impl<'a> Source<'a> {
         let mut command = Command::new(program);
         for arg in args {
             command.arg(arg);
+        }
+        for (key, value) in env {
+            command.env(key, value);
         }
 
         let mut child = command
@@ -83,8 +110,8 @@ impl<'a> Source<'a> {
                 break;
             }
 
-            let over_budget = start.elapsed() > Duration::from_secs(2)
-                || self.started.elapsed() > Duration::from_secs(30)
+            let over_budget = start.elapsed() > budget
+                || self.started.elapsed() > SOURCE_DEADLINE
                 || file
                     .metadata()
                     .map(|meta| meta.len() > 1_048_576)
@@ -140,25 +167,218 @@ impl<'a> Source<'a> {
     /// executor worktree HEAD. The failure names the ref and git's own text:
     /// a branch that does not exist is a definition error an operator has to
     /// fix, and the reason has to say so wherever it is surfaced.
+    ///
+    /// This reads `refs/heads` only. Delivery observation uses [`Self::head`],
+    /// which follows `origin` when that remote exists.
     pub(crate) fn verify_branch(&self, branch: &str) -> Result<SourceRevision, AutomationError> {
         self.git(&["check-ref-format", "--branch", branch])?;
         self.revision(&format!("refs/heads/{branch}"))
     }
 
-    pub(crate) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
+    /// The local branch head. Member preparation and a direct-landing intent
+    /// are about the checkout's branch, so they must not fetch.
+    pub(crate) fn local_head(
+        &self,
+        branch: &str,
+    ) -> Result<(String, SourceRevision), AutomationError> {
         let head = self.verify_branch(branch)?;
         let repository = self.repository()?;
-
         Ok((repository, head))
+    }
+
+    /// The head a delivery consumer observes.
+    ///
+    /// When `origin` is configured, the pass fetches that one branch into
+    /// `refs/remotes/origin/<branch>` and resolves the fetched object. The
+    /// worktree, index and local branch stay untouched. A failed fetch defers
+    /// as [`SOURCE_FETCH_FAILED`] and does not fall back to the local ref.
+    /// With no remote, the head is `refs/heads/<branch>`.
+    pub(crate) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
+        self.git(&["check-ref-format", "--branch", branch])?;
+        let head = if self.origin_url()?.is_some() {
+            self.fetch_origin_branch(branch)?;
+            self.revision(&format!("refs/remotes/origin/{branch}"))
+                .map_err(fetch_failure_from)?
+        } else {
+            self.revision(&format!("refs/heads/{branch}"))?
+        };
+        let repository = self.repository()?;
+        Ok((repository, head))
+    }
+
+    /// `remote.origin.url` when the repository has one.
+    ///
+    /// A missing key is "no remote". A deadline or any other source failure
+    /// propagates, so a timed-out config read is not treated as a `git:`
+    /// identity.
+    fn origin_url(&self) -> Result<Option<String>, AutomationError> {
+        match self.git(&["config", "--get", "remote.origin.url"]) {
+            Ok(url) if !url.is_empty() => Ok(Some(url)),
+            Ok(_) => Ok(None),
+            Err(AutomationError::Deferred(reason)) if is_evidence_unavailable(&reason) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Fetch `origin/<branch>` into the remote-tracking ref and nothing else.
+    ///
+    /// The refspec is forced (`+`) so a non-fast-forward still lands and the
+    /// ancestry check can report `history_diverged`. The fetch uses whatever
+    /// remains of the source deadline, not the two-second local-command budget.
+    fn fetch_origin_branch(&self, branch: &str) -> Result<(), AutomationError> {
+        let budget = match SOURCE_DEADLINE.checked_sub(self.started.elapsed()) {
+            Some(budget) if !budget.is_zero() => budget,
+            _ => return Err(AutomationError::Deferred("source_deadline".into())),
+        };
+        let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+        let root = self.root.to_path_buf();
+        match with_git_fetch_lock(&root, || self.fetch_origin_branch_locked(&spec, budget)) {
+            Ok(()) => Ok(()),
+            Err(FetchLockError::Io(error)) => Err(fetch_failure(&error.to_string())),
+            Err(FetchLockError::Deferred(error)) => Err(error),
+        }
+    }
+
+    fn fetch_origin_branch_locked(
+        &self,
+        spec: &str,
+        budget: Duration,
+    ) -> Result<(), FetchLockError> {
+        let args = [
+            "fetch",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "origin",
+            spec,
+        ];
+        let mut last_error = AutomationError::Deferred(SOURCE_FETCH_FAILED.into());
+        for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
+            match self.command_with("git", &args, &[("GIT_TERMINAL_PROMPT", "0")], budget) {
+                Ok(_) => return Ok(()),
+                Err(error) => {
+                    let text = match &error {
+                        AutomationError::Deferred(reason) => reason.clone(),
+                        other => other.to_string(),
+                    };
+                    let retry = should_retry_git_ref_cas(attempt, &text);
+                    last_error = error;
+                    if retry {
+                        tracing::warn!(
+                            attempt,
+                            spec,
+                            "retrying delivery source fetch after git ref update contention"
+                        );
+                        std::thread::sleep(git_fetch_cas_retry_delay());
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        Err(FetchLockError::Deferred(fetch_failure_from(last_error)))
+    }
+
+    /// How far `observed` trails `refs/remotes/origin/<branch>`, without fetching.
+    ///
+    /// `None` when the repository has no origin. A missing remote-tracking ref
+    /// is [`RemoteObservation::unfetched`], not an error, so doctor can name it.
+    pub(crate) fn remote_observation(
+        &self,
+        branch: &str,
+        observed: Option<&str>,
+    ) -> Result<Option<RemoteObservation>, AutomationError> {
+        if self.origin_url()?.is_none() {
+            return Ok(None);
+        }
+        let remote = match self.revision(&format!("refs/remotes/origin/{branch}")) {
+            Ok(revision) => revision.commit,
+            Err(AutomationError::Deferred(reason)) if is_evidence_unavailable(&reason) => {
+                return Ok(Some(RemoteObservation {
+                    observed: observed.map(str::to_owned),
+                    remote_head: None,
+                    behind: None,
+                    diverged: false,
+                    unfetched: true,
+                    oldest_unobserved_epoch: None,
+                }));
+            }
+            Err(error) => return Err(error),
+        };
+        let Some(observed) = observed else {
+            return Ok(Some(RemoteObservation {
+                observed: None,
+                remote_head: Some(remote),
+                behind: None,
+                diverged: false,
+                unfetched: false,
+                oldest_unobserved_epoch: None,
+            }));
+        };
+        if observed == remote {
+            return Ok(Some(RemoteObservation {
+                observed: Some(observed.to_owned()),
+                remote_head: Some(remote),
+                behind: Some(0),
+                diverged: false,
+                unfetched: false,
+                oldest_unobserved_epoch: None,
+            }));
+        }
+        if !self.is_ancestor(observed, &remote)? {
+            return Ok(Some(RemoteObservation {
+                observed: Some(observed.to_owned()),
+                remote_head: Some(remote),
+                behind: None,
+                diverged: true,
+                unfetched: false,
+                oldest_unobserved_epoch: None,
+            }));
+        }
+
+        let range = format!("{observed}..{remote}");
+        let behind = self
+            .git(&["rev-list", "--first-parent", "--count", &range])?
+            .parse::<u64>()
+            .map_err(|_| AutomationError::Deferred("source_count_invalid".into()))?;
+        let oldest = self.git(&[
+            "rev-list",
+            "--first-parent",
+            "--reverse",
+            "--max-count=1",
+            &range,
+        ])?;
+        let oldest_unobserved_epoch = if oldest.is_empty() {
+            None
+        } else {
+            self.git(&["show", "-s", "--format=%ct", &oldest])?
+                .parse::<i64>()
+                .ok()
+        };
+        Ok(Some(RemoteObservation {
+            observed: Some(observed.to_owned()),
+            remote_head: Some(remote),
+            behind: Some(behind),
+            diverged: false,
+            unfetched: false,
+            oldest_unobserved_epoch,
+        }))
+    }
+
+    /// `true` when `older` is an ancestor of `newer`. A missing object is
+    /// divergence, not success. A source deadline propagates.
+    fn is_ancestor(&self, older: &str, newer: &str) -> Result<bool, AutomationError> {
+        match self.git(&["merge-base", "--is-ancestor", older, newer]) {
+            Ok(_) => Ok(true),
+            Err(AutomationError::Deferred(reason)) if is_evidence_unavailable(&reason) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// The stable repository identity shared by delivery observation and
     /// review certificates: a GitHub remote gives the provider-visible name;
     /// anything else is identified by a digest of its remote or git dir.
     pub(crate) fn repository(&self) -> Result<String, AutomationError> {
-        let remote = self
-            .git(&["config", "--get", "remote.origin.url"])
-            .unwrap_or_default();
+        let remote = self.origin_url()?.unwrap_or_default();
 
         let normalized = remote.trim_end_matches(".git");
         let repository = if let Some(github) = normalized
@@ -706,6 +926,59 @@ impl<'a> Source<'a> {
         }
 
         Ok(())
+    }
+}
+
+/// Read-only comparison of a consumer's observed commit with the
+/// remote-tracking head. Doctor uses this and does not fetch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteObservation {
+    pub observed: Option<String>,
+    pub remote_head: Option<String>,
+    pub behind: Option<u64>,
+    pub diverged: bool,
+    pub unfetched: bool,
+    /// Committer time, unix seconds, of the oldest first-parent commit the
+    /// observed cursor has not reached. Present only when `behind` is positive.
+    pub oldest_unobserved_epoch: Option<i64>,
+}
+
+/// [`with_git_fetch_lock`] requires `From<io::Error>`. Automation errors have
+/// no such conversion, so the locked fetch carries both.
+enum FetchLockError {
+    Io(std::io::Error),
+    Deferred(AutomationError),
+}
+
+impl From<std::io::Error> for FetchLockError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+fn is_evidence_unavailable(reason: &str) -> bool {
+    reason.starts_with("evidence_unavailable:")
+}
+
+fn fetch_failure(detail: &str) -> AutomationError {
+    let detail = detail.trim();
+    if detail.is_empty() || detail == SOURCE_FETCH_FAILED {
+        return AutomationError::Deferred(SOURCE_FETCH_FAILED.into());
+    }
+    if let Some(rest) = detail.strip_prefix("source_fetch_failed:") {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return AutomationError::Deferred(SOURCE_FETCH_FAILED.into());
+        }
+        return AutomationError::Deferred(format!("{SOURCE_FETCH_FAILED}: {rest}"));
+    }
+    AutomationError::Deferred(format!("{SOURCE_FETCH_FAILED}: {detail}"))
+}
+
+fn fetch_failure_from(error: AutomationError) -> AutomationError {
+    match error {
+        AutomationError::Deferred(reason) => fetch_failure(&reason),
+        other => fetch_failure(&other.to_string()),
     }
 }
 

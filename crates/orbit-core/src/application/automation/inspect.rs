@@ -227,7 +227,10 @@ pub fn wedged_delivery_consumers(
 }
 
 /// The reason evaluation would defer with when `branch` does not resolve,
-/// or `None` when it does. Only a local ref lookup: no history, no provider.
+/// or `None` when it does. Only a local ref lookup: no fetch, no history,
+/// no provider. The delivery tick fetches `origin/<branch>` when a remote
+/// exists; this read stays on `refs/heads`, and health compares the cursor
+/// with the remote-tracking ref without fetching.
 pub(super) fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<String> {
     source.verify_branch(branch).err().map(|error| match error {
         AutomationError::Deferred(reason) => reason,
@@ -370,8 +373,11 @@ fn inspect(
         match &state {
             // A baseline needs the configured branch to resolve. Reporting the
             // same failure the tick defers with here is what tells an operator
-            // why `awaiting_baseline` never ends; it reads one local ref and
-            // still fetches no history or provider evidence.
+            // why `awaiting_baseline` never ends. This read stays on the local
+            // ref: the tick fetches `origin/<branch>` when a remote exists,
+            // and health compares the cursor with that remote-tracking ref
+            // without fetching. Inspection fetches no history or provider
+            // evidence.
             None => branch_unavailable(&Source::new(&runtime.paths().repo_root), &trigger.branch)
                 .unwrap_or_else(|| "awaiting_baseline".into()),
             Some(state) => scheduling_reason(state, trigger, admission_deferred, now).into(),
@@ -405,8 +411,10 @@ fn adoption_refusals(
     trigger: &DeliveryTrigger,
 ) -> Result<Vec<String>, OrbitError> {
     let repository = if state.branch == trigger.branch {
+        // Adoption is judged from the checkout, and `auto-task show` must not
+        // fetch. A branch that does not resolve keeps the recorded repository.
         Source::new(&runtime.paths().repo_root)
-            .head(&trigger.branch)
+            .local_head(&trigger.branch)
             .map(|(repository, _)| repository)
             .unwrap_or_else(|_| state.repository.clone())
     } else {

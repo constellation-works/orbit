@@ -94,6 +94,7 @@ fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
         .expect("consumer");
     owner.auto_task_toggle(CONSUMER, true).unwrap();
     let definition = owner.auto_task_show(CONSUMER).unwrap().unwrap();
+    publish_origin(repo);
     let baseline = evaluate_auto_task(owner, &definition, false, Utc::now()).expect("baseline");
     assert!(baseline.state.is_some(), "{baseline:#?}");
 
@@ -157,6 +158,7 @@ fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
         std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    publish_origin(repo);
     let diagnostic = evaluate_auto_task(owner, &definition, false, Utc::now()).unwrap();
     let state = diagnostic
         .state

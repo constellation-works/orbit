@@ -87,9 +87,14 @@ template, exactly like any other auto-task, with one exception: while
 instead [ORB-13896]. The crew is applied at mint time and is not part of the
 consumer's epoch. While this consumer is enabled, `orbit doctor` also fails its
 `review` row when the consumer is missing, unowned, wedged, stalled, held for
-an operator or on a branch or crew that does not resolve; the same row, `orbit
-config show` and the drain probe report whether it is on and when its next
-batch is due. See the [review gate](../review-gate/2_design.md).
+an operator, on a branch or crew that does not resolve, or when its observed
+commit trails `refs/remotes/origin/<branch>` by at least the batch's
+`max_wait_minutes` (or that remote history has diverged, or the remote-tracking
+ref is missing after a cursor exists). The row names the observed commit and
+the remote-tracking head. It does not fetch; the observation pass is what
+updates that ref. The same row, `orbit config show` and the drain probe report
+whether it is on and when its next batch is due. See the
+[review gate](../review-gate/2_design.md).
 
 The coverage a new delivery trigger may select is `landed_code_review_v1`.
 `integrated_qa_v1` is retired. Persisted batches, coverage evidence, automation
@@ -449,9 +454,17 @@ Deferred reasons are classified rather than treated alike.
 `history_diverged`, `repository_changed`, `provider_identity_missing` and
 `state_missing` are *stuck*: they read identically on every future tick, so they
 stall the consumer instead of retrying. Everything else — `source_backpressure`,
-`concurrent_evaluation`, `source_deadline`, `source_budget`, a superseded claim —
-keeps the silent retry and writes nothing, because marking a transient deferral
-would put a fenced state write on the path of the pass that is making progress.
+`concurrent_evaluation`, `source_deadline`, `source_budget`, `source_fetch_failed`,
+a superseded claim — keeps the silent retry and writes nothing, because marking
+a transient deferral would put a fenced state write on the path of the pass
+that is making progress. `source_fetch_failed` is that retry: the pass does not
+fall back to the local branch, and it does not advance the cursor. A later
+doctor read still sees the remote-tracking ref from the last successful fetch,
+so a cursor that has fallen behind past `max_wait_minutes` is not reported `ok`.
+A fetch that keeps failing while that ref is missing, or still matches the
+cursor, is visible on each tick as `source_fetch_failed`; doctor does not
+contact the network to rediscover it.
+
 A recorded stall that outlives `automation.stall_window_minutes` (default 60) is
 logged once at `warn` and filed once as friction; before that window it is
 recorded but quiet. A stall clears itself only when the orphaned revision is

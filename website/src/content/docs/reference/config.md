@@ -218,8 +218,10 @@ Notes:
   one run, whatever `machine.worker_containment_strict` says.
 - After-landing review is not a config key. Turn it on with
   `orbit auto-task toggle delivery-code-review on`; it reviews landed
-  deliveries in batches. `orbit config show` and `orbit doctor` report both
-  review switches.
+  deliveries in batches, observing `origin/<branch>` when that remote exists.
+  `orbit config show` and `orbit doctor` report both review switches, and
+  doctor is not ok while the observed commit trails the remote-tracking head
+  past the batch's maximum wait.
 - `operation.review_policy` and `operation.review_minutes` are deprecated and
   still load with a warning: `before-pr` becomes `review.before_pr = true`,
   `after-landing` turns on the `delivery-code-review` auto-task until you

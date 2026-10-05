@@ -447,8 +447,10 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
 /// while every other surface looks healthy, so that is an error, not a
 /// warning: before-PR review without a resolvable crew, or an after-landing
 /// consumer that is missing, owned by another machine, wedged, stalled, held
-/// for an operator, watching a branch that does not resolve, or naming a crew
-/// that does not.
+/// for an operator, watching a branch that does not resolve, naming a crew
+/// that does not, or trailing `origin/<branch>` past the batch's
+/// `max_wait_minutes`. The trail is the remote-tracking ref already in the
+/// checkout; this check does not fetch.
 pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "review";
     let switches =
