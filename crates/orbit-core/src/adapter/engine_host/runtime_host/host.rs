@@ -728,6 +728,12 @@ impl RuntimeHost for OrbitRuntime {
         )
     }
 
+    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(self
+            .read_pipeline_worker_log(run_id)?
+            .and_then(|snapshot| snapshot.content))
+    }
+
     fn admit_final_recovery(
         &self,
         run_id: &str,

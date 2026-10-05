@@ -33,6 +33,7 @@ enum Reply {
     Ok(Value),
     Fail,
     Permanent,
+    Diagnostic(String),
 }
 
 struct RecoveryHost {
@@ -41,6 +42,7 @@ struct RecoveryHost {
     admission: FinalRecoveryAdmission,
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
     applications: Mutex<Vec<FinalRecoveryApplication>>,
+    logs: HashMap<String, String>,
 }
 
 impl RecoveryHost {
@@ -56,6 +58,7 @@ impl RecoveryHost {
             admission: FinalRecoveryAdmission::Admitted,
             admissions: Mutex::new(Vec::new()),
             applications: Mutex::new(Vec::new()),
+            logs: HashMap::from([(RUN_ID.to_string(), "this run's failure log".to_string())]),
         }
     }
 
@@ -120,6 +123,10 @@ impl RuntimeHost for RecoveryHost {
                 action: action.to_string(),
                 message: format!("{action} failed"),
             }),
+            Some(Reply::Diagnostic(message)) => Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message,
+            }),
             Some(Reply::Permanent) => Err(DispatchError::CliInvocationPermanent(format!(
                 "{action}: sandbox unavailable"
             ))),
@@ -130,6 +137,10 @@ impl RuntimeHost for RecoveryHost {
             })),
             None => Ok(json!({ "action": action })),
         }
+    }
+
+    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(self.logs.get(run_id).cloned())
     }
 
     fn admit_final_recovery(
@@ -217,10 +228,38 @@ struct Run {
 }
 
 fn run(job: &JobV2, host: &RecoveryHost, resume: Option<&PipelineState>) -> Run {
+    run_with_evidence(job, host, resume, Vec::new())
+}
+
+fn run_with_evidence(
+    job: &JobV2,
+    host: &RecoveryHost,
+    resume: Option<&PipelineState>,
+    prior_events: Vec<(&str, V2AuditEventKind)>,
+) -> Run {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
+    let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
+    let mut own_events = Vec::new();
+    for (run_id, event) in prior_events {
+        if run_id == RUN_ID {
+            own_events.push(event);
+            continue;
+        }
+        let sink = Arc::new(V2SqliteSink::for_audit_root(
+            store.clone(),
+            "ws_final_recovery",
+            run_id,
+            "test-agent",
+            None,
+            audit_root.path(),
+        ));
+        let writer =
+            V2AuditWriter::new(run_id, "test-agent", inner.clone()).with_envelope_sink(sink);
+        writer.emit(event).expect("persist prior event");
+    }
     let envelope = Arc::new(V2SqliteSink::for_audit_root(
-        Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink")),
+        store,
         "ws_final_recovery",
         RUN_ID,
         "test-agent",
@@ -229,6 +268,9 @@ fn run(job: &JobV2, host: &RecoveryHost, resume: Option<&PipelineState>) -> Run 
     ));
     let writer =
         Arc::new(V2AuditWriter::new(RUN_ID, "test-agent", inner).with_envelope_sink(envelope));
+    for event in own_events {
+        writer.emit(event).expect("persist own prior event");
+    }
     let result = execute_job_with_resume(
         job,
         json!({ "task_ids": ["T-1"] }),
@@ -317,6 +359,8 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
     assert_eq!(input["base_ref"], "main");
     assert_eq!(input["crew_config_key"], "workflow.final_recovery_crews");
     assert_eq!(input["step_ids"], json!(["setup", "work", "deliver"]));
+    assert_eq!(input["step_recovery_attempts"], json!([]));
+    assert_eq!(input["log_tail"], "this run's failure log");
 }
 
 #[test]
@@ -400,6 +444,22 @@ fn step_recovery_runs_first_and_final_recovery_only_once_it_is_spent() {
         host.actions(),
         ["setup", "work", "step_fix", "work", "decide", "handoff"]
     );
+    let input = &host.inputs("decide")[0];
+    let attempts = input["step_recovery_attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0]["activity"], "step_fix");
+    assert_eq!(attempts[0]["phase"], "recovery");
+    assert_eq!(attempts[0]["outcome"], "success");
+    assert_eq!(attempts[0]["output"]["action"], "step_fix");
+    assert_eq!(attempts[1]["phase"], "post_recovery");
+    assert_eq!(attempts[1]["outcome"], "error");
+    assert!(
+        attempts[1]["error_message"]
+            .as_str()
+            .unwrap()
+            .contains("work failed")
+    );
+    assert_eq!(input["log_tail"], "this run's failure log");
 }
 
 #[test]
@@ -560,4 +620,161 @@ fn a_failure_before_the_worktree_exists_skips_final_recovery() {
     assert_eq!(host.count("decide"), 0);
     assert!(host.admissions.lock().unwrap().is_empty());
     assert_eq!(host.count("handoff"), 1);
+}
+
+#[test]
+fn failed_recovery_dispatch_is_injected_before_final_recovery() {
+    let host = RecoveryHost::new([
+        ("work", vec![Reply::Fail]),
+        ("step_fix", vec![Reply::Fail]),
+        ("decide", vec![escalate()]),
+    ]);
+    let run = run(&pipeline(true), &host, None);
+    assert!(run.result.is_err());
+    let input = &host.inputs("decide")[0];
+    let attempts = input["step_recovery_attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0]["activity"], "step_fix");
+    assert_eq!(attempts[0]["outcome"], "failed");
+    assert_eq!(attempts[0]["failure_phase"], "dispatch");
+    assert!(
+        attempts[0]["error_message"]
+            .as_str()
+            .unwrap()
+            .contains("step_fix failed")
+    );
+    assert_eq!(attempts[0]["output"], Value::Null);
+    assert_eq!(input["log_tail"], "this run's failure log");
+}
+
+#[test]
+fn final_recovery_injects_only_its_runs_bounded_evidence_in_order() {
+    let oversized = format!("start:{}:end", "界".repeat(100_000));
+    let mut host = RecoveryHost::new([
+        (
+            "work",
+            vec![Reply::Fail, Reply::Diagnostic(oversized.clone())],
+        ),
+        ("step_fix", vec![Reply::Ok(json!({"diagnosis": oversized}))]),
+        ("decide", vec![escalate()]),
+    ]);
+    host.logs.insert(
+        RUN_ID.to_string(),
+        format!("{}own-log-end", "界".repeat(100_000)),
+    );
+    host.logs
+        .insert("other-run".to_string(), "foreign-log".to_string());
+    let event = |activity: &str| V2AuditEventKind::StepPostRecoveryAttempt {
+        step_id: "prior-step".to_string(),
+        recovery_activity: activity.to_string(),
+        outcome: "error".to_string(),
+        error_message: Some("prior failure".to_string()),
+        output: None,
+    };
+    let run = run_with_evidence(
+        &pipeline(true),
+        &host,
+        None,
+        vec![
+            ("other-run", event("foreign-recovery")),
+            (RUN_ID, event("older-recovery")),
+        ],
+    );
+    assert!(run.result.is_err());
+    let input = &host.inputs("decide")[0];
+    let attempts = input["step_recovery_attempts"].as_array().unwrap();
+    assert_eq!(
+        attempts.len(),
+        3,
+        "include every own recovery record and no foreign record"
+    );
+    assert_eq!(attempts[0]["activity"], "older-recovery");
+    assert_eq!(attempts[1]["activity"], "step_fix");
+    assert_eq!(attempts[2]["phase"], "post_recovery");
+    assert!(
+        attempts
+            .windows(2)
+            .all(|pair| pair[0]["attempted_at"].as_str() <= pair[1]["attempted_at"].as_str())
+    );
+    let output = attempts[1]["output"]["diagnosis"].as_str().unwrap();
+    assert!(
+        output.len() <= 8 * 1024,
+        "oversized output leaf stays within the existing recovery bound"
+    );
+    assert!(output.starts_with("start:") && output.ends_with(":end"));
+    let error = attempts[2]["error_message"].as_str().unwrap();
+    assert!(
+        error.len() <= 64 * 1024,
+        "oversized diagnostic stays within the existing recovery input bound"
+    );
+    assert!(
+        serde_json::to_vec(&input["step_recovery_attempts"])
+            .unwrap()
+            .len()
+            <= 64 * 1024,
+        "the entire attempt collection must fit the existing recovery input bound"
+    );
+    let log = input["log_tail"].as_str().unwrap();
+    assert!(
+        log.len() <= 64 * 1024,
+        "the host cannot supply an unbounded log to final recovery"
+    );
+    assert!(log.ends_with("own-log-end"));
+    assert!(!log.contains("foreign-log"));
+}
+
+#[test]
+fn final_recovery_escalates_instead_of_dropping_records_that_cannot_fit() {
+    let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
+    let events = (0..500)
+        .map(|_| {
+            (
+                RUN_ID,
+                V2AuditEventKind::StepPostRecoveryAttempt {
+                    step_id: "prior-step".to_string(),
+                    recovery_activity: "older-recovery".to_string(),
+                    outcome: "error".to_string(),
+                    error_message: Some("failed ".repeat(100)),
+                    output: None,
+                },
+            )
+        })
+        .collect();
+    let run = run_with_evidence(&pipeline(false), &host, None, events);
+    assert!(run.result.is_err());
+    assert_eq!(
+        host.count("decide"),
+        0,
+        "never dispatch an unbounded or incomplete attempt array"
+    );
+    let applications = host.applications();
+    let FinalRecoveryDecision::Escalate { diagnosis, .. } = &applications[0].decision else {
+        panic!("oversized audit evidence must escalate");
+    };
+    assert!(
+        diagnosis.contains("step-recovery evidence exceeds"),
+        "{diagnosis}"
+    );
+    assert_eq!(host.count("handoff"), 1);
+}
+
+#[test]
+fn final_recovery_keeps_post_recovery_output_when_a_later_step_fails() {
+    let host = RecoveryHost::new([
+        (
+            "work",
+            vec![Reply::Fail, Reply::Ok(json!({"repaired": true}))],
+        ),
+        ("deliver", vec![Reply::Fail]),
+        ("decide", vec![escalate()]),
+    ]);
+    let run = run(&pipeline(true), &host, None);
+    assert!(run.result.is_err());
+    let input = &host.inputs("decide")[0];
+    assert_eq!(input["failed_step_id"], "deliver");
+    let attempts = input["step_recovery_attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[1]["phase"], "post_recovery");
+    assert_eq!(attempts[1]["outcome"], "success");
+    assert_eq!(attempts[1]["output"], json!({"repaired": true}));
 }

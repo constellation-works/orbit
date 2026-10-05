@@ -91,6 +91,10 @@ impl RuntimeHost for FailingPipeline<'_> {
             .checkpoint_step(run_id, index, step_id, output, compound)
     }
 
+    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        RuntimeHost::final_recovery_log_tail(&self.fixture.runtime, run_id)
+    }
+
     fn admit_final_recovery(
         &self,
         run_id: &str,

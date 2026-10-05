@@ -433,9 +433,19 @@ fn shipped_final_recovery_activity_offers_exactly_the_typed_decisions() {
     assert!(spec.require_response_envelope, "the decision is consumed");
     let denied = spec.tool_disallow_list.unwrap_or_default();
     for tool in [
-        "orbit.task.update",
         "orbit.workflow.run.resume",
+        "orbit.workflow.run.show",
+        "orbit.workflow.run.list",
+        "orbit.workflow.ship",
+        "orbit.task.add",
+        "orbit.task.update",
+        "orbit.task.artifact.put",
+        "orbit.agent.invoke",
         "orbit.pipeline.invoke",
+        "orbit.command.exec",
+        "orbit.auto_task.add",
+        "orbit.auto_task.mint",
+        "orbit.auto_task.update",
     ] {
         assert!(
             denied.iter().any(|entry| entry == tool),

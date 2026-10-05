@@ -1019,6 +1019,14 @@ pub trait RuntimeHost: Send + Sync {
         Ok(())
     }
 
+    /// Read only this run's bounded, redacted worker log tail for final
+    /// recovery. `None` means the run has no worker log; read failures must
+    /// remain distinguishable from an empty log. This host capability is
+    /// internal and grants no agent-facing run observation tool.
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Err(unsupported_runtime_capability("final_recovery_log_tail"))
+    }
+
     /// [ORB-13907] Admit a job's final recovery for a failed run, once.
     ///
     /// A host with run storage records the admission in the run's state

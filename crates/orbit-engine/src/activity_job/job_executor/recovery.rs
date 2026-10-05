@@ -118,6 +118,12 @@ fn post_recovery_attempt(
             recovery_activity: recovery.name.clone(),
             outcome: outcome.to_string(),
             error_message: error_message.clone(),
+            output: reattempt.as_ref().ok().map(|outcome| {
+                bounded_recovery_input(
+                    &ctx.run_id,
+                    orbit_common::security::redaction::redact_all_json(outcome.output.clone()),
+                )
+            }),
         },
     );
 
@@ -191,12 +197,28 @@ pub(super) fn attempt_recovery_activity(
         Err(error) => Err(("authorization", error.to_string())),
     };
 
-    let (recovery_succeeded, failure_phase, error_message) = match result {
-        Ok(()) => (true, None, None),
+    let (recovery_succeeded, failure_phase, error_message, output) = match result {
+        Ok(dispatch) => {
+            let error_message = (!dispatch.success).then(|| {
+                redacted_recovery_diagnostic(dispatch.message.as_deref().unwrap_or(
+                    "recovery activity returned an unsuccessful outcome without a diagnostic",
+                ))
+            });
+            (
+                dispatch.success,
+                (!dispatch.success).then(|| "activity".to_string()),
+                error_message,
+                Some(bounded_recovery_input(
+                    &ctx.run_id,
+                    orbit_common::security::redaction::redact_all_json(dispatch.output),
+                )),
+            )
+        }
         Err((phase, message)) => (
             false,
             Some(phase.to_string()),
             Some(redacted_recovery_diagnostic(&message)),
+            None,
         ),
     };
     emit_job_event_lossy(
@@ -208,6 +230,7 @@ pub(super) fn attempt_recovery_activity(
             recovery_succeeded,
             failure_phase,
             error_message,
+            output,
         },
     );
     recovery_succeeded
@@ -220,7 +243,7 @@ fn dispatch_recovery(
     failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
-) -> Result<(), (&'static str, String)> {
+) -> Result<super::super::dispatcher::DispatchOutcome, (&'static str, String)> {
     let mut input = serde_json::json!({
         "failed_step_id": step.id,
         "activity_name": step_activity_name(step),
@@ -297,15 +320,7 @@ fn dispatch_recovery(
     match dispatch {
         Ok(dispatch) => {
             persist_dispatch_invocation(ctx, &recovery.name, &input, &dispatch);
-            if dispatch.success {
-                Ok(())
-            } else {
-                let message = dispatch.message.unwrap_or_else(|| {
-                    "recovery activity returned an unsuccessful outcome without a diagnostic"
-                        .to_string()
-                });
-                Err(("activity", message))
-            }
+            Ok(dispatch)
         }
         Err(error) => Err(("dispatch", error.to_string())),
     }
@@ -353,8 +368,9 @@ fn bind_recovery_context(
     Ok(())
 }
 
-/// Keep the head and tail of an oversized recovery field and name where the
-/// whole text is, mirroring `elide_note_error`'s contract for run notes.
+/// Keep the head and tail of an oversized recovery field with an explicit
+/// truncation marker. The marker does not instruct an agent to use an
+/// operator-only run observer.
 ///
 /// This is not lossy for the operator: the untruncated error is already durable
 /// in the run's step record, and a worktree-integrity diagnostic additionally
@@ -366,8 +382,8 @@ pub(super) fn bounded_recovery_text(field: &str, run_id: &str, text: &str, limit
         return text.to_string();
     }
     let marker = format!(
-        "\n… [truncated: {field} is {} B; the middle is omitted. Full text: \
-         `orbit run show {run_id} --json`, field .run.steps[].error_message] …\n",
+        "\n… [truncated: {field} is {} B; the middle is omitted to bound recovery \
+         input for run {run_id}] …\n",
         text.len()
     );
     // `limit` is measured in KiB and the marker is a single short line, so the
