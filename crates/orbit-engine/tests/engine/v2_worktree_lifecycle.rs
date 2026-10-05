@@ -399,6 +399,94 @@ fn replica_worktree_gc_fences_unreachable_owners_by_route() {
     );
 }
 
+/// [ORB-14099] One recorded run whose `input.run_id` sanitizes to an empty
+/// string must not abort the sweep. A scoped call still classifies the run
+/// it names, and an unscoped call classifies every other worktree while the
+/// bad runs show up as failed report entries.
+#[test]
+fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
+    isolated(
+        "worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            let setup = |run_id: &str, task_id: &str, status: TaskStatus| {
+                host.add_task(task_id, TaskStatus::Backlog);
+                let input = setup_input(&[task_id], run_id);
+                let setup = action(&host, "worktree_setup", &input).expect("worktree setup");
+                host.set_status(task_id, status);
+                host.add_run(job_run(run_id, JobRunState::Success, input));
+                Checkout::from_setup(&setup)
+            };
+            let kept = setup("jrun-gc-kept", "T-GC-KEPT", TaskStatus::InProgress);
+            let reaped = setup("jrun-gc-reaped", "T-GC-REAPED", TaskStatus::Done);
+            // Setup rejects these tokens. The runs are recorded anyway, which
+            // is the state that used to poison every later sweep.
+            for (run_id, task_id, token) in [
+                ("jrun-gc-dot", "T-GC-DOT", "."),
+                ("jrun-gc-marks", "T-GC-MARKS", "???"),
+            ] {
+                let mut input = setup_input(&[task_id], run_id);
+                input["run_id"] = json!(token);
+                host.add_run(job_run(run_id, JobRunState::Failed, input));
+            }
+
+            let scoped = action(
+                &host,
+                "worktree_gc",
+                &json!({"target_run_id": "jrun-gc-kept"}),
+            )
+            .expect("a malformed sibling run must not fail a scoped sweep");
+            let scoped_reports = scoped["reports"].as_array().expect("scoped reports");
+            assert_eq!(scoped_reports.len(), 1, "{scoped:#}");
+            assert_eq!(scoped_reports[0]["run_id"], "jrun-gc-kept", "{scoped:#}");
+            assert_eq!(
+                scoped_reports[0]["action"], "skipped:task_status_ineligible",
+                "{scoped:#}"
+            );
+            assert!(
+                kept.path.exists(),
+                "the scoped sweep retains in-progress work"
+            );
+
+            let result = action(&host, "worktree_gc", &json!({})).expect("worktree gc");
+            let reports = result["reports"].as_array().expect("gc reports");
+            let report = |run_id: &str| {
+                reports
+                    .iter()
+                    .find(|report| report["run_id"] == run_id)
+                    .unwrap_or_else(|| panic!("{run_id}: no gc report in {result:#}"))
+            };
+            assert_eq!(
+                report("jrun-gc-kept")["action"],
+                "skipped:task_status_ineligible",
+                "{:#}",
+                report("jrun-gc-kept")
+            );
+            assert!(kept.path.exists(), "in-progress work stays");
+            assert_eq!(
+                report("jrun-gc-reaped")["action"],
+                "removed",
+                "{:#}",
+                report("jrun-gc-reaped")
+            );
+            assert!(
+                !reaped.path.exists(),
+                "a settled checkout is still reclaimed"
+            );
+            for run_id in ["jrun-gc-dot", "jrun-gc-marks"] {
+                let bad = report(run_id);
+                let action = bad["action"].as_str().expect("action");
+                assert!(
+                    action.starts_with("failed:")
+                        && action.contains("sanitizes to an empty string"),
+                    "ORB-14099: a run id that cannot name a directory is a failed entry, not a sweep abort: {bad:#}"
+                );
+            }
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // worktree_setup: stale-checkout refusal
 // ---------------------------------------------------------------------------

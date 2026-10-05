@@ -85,16 +85,40 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     options: &WorktreeGcOptions,
 ) -> Result<WorktreeGcResult, OrbitError> {
     let mut known_paths = BTreeMap::<PathBuf, Vec<&JobRun>>::new();
+    // Path derivation runs before the run-id filter, so one record whose
+    // token cannot name a directory used to abort every sweep — including
+    // one scoped to an unrelated run — until that record was pruned
+    // [ORB-14099]. Index the runs that resolve, so a shared path is still
+    // ambiguous when another resolvable run occupies it, and report an
+    // in-scope failure instead of returning it.
+    let mut reports = Vec::new();
     for run in runs {
-        for path in expected_paths(repo_root, run)? {
-            known_paths.entry(path).or_default().push(run);
+        match expected_paths(repo_root, run) {
+            Ok(paths) => {
+                for path in paths {
+                    known_paths.entry(path).or_default().push(run);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    run_id = %run.run_id,
+                    %error,
+                    "worktree GC could not derive a worktree path for a run; continuing the sweep"
+                );
+                if options
+                    .run_id
+                    .as_deref()
+                    .is_none_or(|wanted| wanted == run.run_id)
+                {
+                    reports.push(unresolvable_run_report(run, &error));
+                }
+            }
         }
     }
 
     let registered = registered_worktree_paths(repo_root)?;
     let lookups = SweepTaskLookups::new(task_host);
 
-    let mut reports = Vec::new();
     for (path, matching_runs) in &known_paths {
         let selected_runs = matching_runs
             .iter()
@@ -516,6 +540,24 @@ pub fn run_worktree_has_build_output(repo_root: &Path, run: &JobRun) -> bool {
                 .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
         })
     })
+}
+
+/// A run whose stored token cannot name a directory. Setup never created one
+/// for it, so the report has no path; the sweep continues and the entry stays
+/// visible until the record is pruned.
+fn unresolvable_run_report(run: &JobRun, error: &OrbitError) -> WorktreeGcReport {
+    let task_ids = attributed_task_ids(run);
+    WorktreeGcReport {
+        path: PathBuf::new(),
+        run_id: Some(run.run_id.clone()),
+        run_state: Some(run.state),
+        task_id: (!task_ids.is_empty()).then(|| task_ids.join(",")),
+        task_status: None,
+        pr_status: None,
+        action: format!("failed:{error}"),
+        bytes_reclaimed: 0,
+        detail: None,
+    }
 }
 
 /// Every directory this run could have left behind.
