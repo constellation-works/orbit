@@ -661,12 +661,33 @@ function renderFilterSummary(context) {
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";
 }
 
+// `os:` tags route a task to a host of that OS, so they read apart from the
+// labels around them.
+function isOsTag(tag) {
+  return typeof tag === "string" && tag.toLowerCase().startsWith("os:");
+}
+
 function buildTagRow(tags) {
   const wrap = el("div", { class: "detail-tag-row" });
   for (const tag of tags) {
-    wrap.appendChild(el("span", { class: "chip", text: tag }));
+    wrap.appendChild(isOsTag(tag)
+      ? el("span", { class: "chip os-chip", text: tag, title: `Admitted only on a host running ${tag.slice(3)}` })
+      : el("span", { class: "chip", text: tag }));
   }
   return wrap;
+}
+
+// The task row's OS chips, from the parsed requirement the server attaches;
+// a tag outside the namespace reads as the wait it causes.
+function buildOsBadges(task) {
+  const requirement = task.os_requirement;
+  if (!requirement || typeof requirement !== "object") return [];
+  const invalid = Array.isArray(requirement.invalid) ? requirement.invalid : [];
+  const anyOf = Array.isArray(requirement.any_of) ? requirement.any_of : [];
+  return [
+    ...anyOf.map((os) => el("span", { class: "os-badge mono", text: `os:${os}`, title: `Runs on ${requirement.describe || os}` })),
+    ...invalid.map((tag) => el("span", { class: "os-badge os-badge-invalid mono", text: tag, title: "Unsupported OS tag: no host runs this task until it is retagged" })),
+  ];
 }
 
 function buildExternalRefs(refs) {
@@ -2900,14 +2921,18 @@ export function renderTasks(tasks, context) {
     for (const t of group) {
       const rowKey = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
         const idSpan = makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" });
-        const titleCell = aggregate && t.workspace_name
+        const osBadges = buildOsBadges(t);
+        const titleCell = (aggregate && t.workspace_name) || osBadges.length > 0
           ? el("span", { class: "title" }, [
-              el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` }),
+              ...(aggregate && t.workspace_name
+                ? [el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })]
+                : []),
+              ...osBadges,
               t.title,
             ])
           : el("span", { class: "title", text: t.title });

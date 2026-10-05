@@ -107,6 +107,11 @@ pub(in crate::adapter::tool_host) fn control(
                 started["validation_env_warning"] = json!(warning);
                 warnings.push(warning);
             }
+            // Backlog this host's OS cannot start waits for a host of its
+            // own; named so the window does not read as an empty backlog.
+            if let Some(warning) = runtime.host_os_backlog_warning() {
+                warnings.push(warning);
+            }
             if !warnings.is_empty() {
                 started["warning"] = json!(warnings.join("\n"));
             }

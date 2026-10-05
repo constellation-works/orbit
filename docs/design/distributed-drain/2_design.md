@@ -95,7 +95,14 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   (`application/task/context_repair.rs`, via `orbit task lint --restore-pruned`) or reported for
   operator repair, never guessed.
 
-**Eligibility.** Pull has no platform filter in v1. It has one crew filter [ORB-13941]: each
+**Eligibility.** Pull filters on the executor's host OS and its crews. The OS filter
+[ORB-14005]: each request carries the executor's OS (`AdmissionRequest::os`, protocol revision
+4), and the owner skips a ready candidate whose `os:` tags (`os:linux`, `os:macos`,
+`os:windows`; several mean any one) name no OS the executor runs, recording it in the receipt's
+`os_unavailable`. The tags are parsed once, by `orbit_types::task::TaskOsRequirement`, which the
+owner's local drain, ship discovery and `orbit run ship` read too, so a task no current host can
+run stays in the backlog with the wait named rather than being claimed and failed. The crew
+filter [ORB-13941]: each
 request carries the executor's crew capability (`AdmissionRequest::crews`), and the owner skips a
 ready candidate whose crew the executor cannot run — its own `task.crew`, or the executor's
 `default_crew` for a task naming none — recording it in the receipt's `crew_unavailable`

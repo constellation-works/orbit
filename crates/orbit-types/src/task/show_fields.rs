@@ -11,14 +11,14 @@
 
 use serde_json::{Value, json};
 
-use crate::task::{Task, TaskStatus};
+use crate::task::{Task, TaskOsRequirement, TaskStatus};
 
 /// String-literal CSV of [`TASK_SHOW_PROJECTION_FIELDS`], for `concat!` in
 /// clap help and other const contexts.
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, orchestrator, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -54,6 +54,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "resolved_crew",
     "crew_model",
     "crew_unresolved",
+    "os_requirement",
     "orchestrator",
     "created_at",
     "updated_at",
@@ -142,6 +143,20 @@ pub fn refuses_implementer_writes(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Done | TaskStatus::Archived)
 }
 
+/// The `os_requirement` enrichment: the host operating systems the task's
+/// `os:` tags admit, parsed. `None` for a task without an `os:` tag, which
+/// any host runs; the unprojected readout then omits the key.
+pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
+    let requirement = TaskOsRequirement::from_tags(&task.tags);
+    (!requirement.is_unrestricted()).then(|| {
+        json!({
+            "any_of": requirement.any_of,
+            "invalid": requirement.invalid,
+            "describe": requirement.describe_hosts(),
+        })
+    })
+}
+
 /// JSON for a Task-local (non-sidecar) projection field.
 ///
 /// Returns `None` for sidecar names, cross-task fields (`dependencies`,
@@ -174,6 +189,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "job_run_id" => Some(json!(task.job_run_id)),
         "job_run_machine" => Some(json!(task.job_run_machine)),
         "crew" => Some(json!(task.crew)),
+        "os_requirement" => Some(task_os_requirement_json(task).unwrap_or(Value::Null)),
         "orchestrator" => Some(json!(task.orchestrator)),
         "created_at" => Some(json!(task.created_at.to_rfc3339())),
         "updated_at" => Some(json!(task.updated_at.to_rfc3339())),

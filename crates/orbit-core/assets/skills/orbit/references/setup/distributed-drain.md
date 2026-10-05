@@ -49,8 +49,11 @@ orbit config get operation.review_policy
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `3`, equivalent crew and toolchain resolution, and
-`operation.review_policy = none`. Empty
+protocol schema `4`, equivalent crew and toolchain resolution, and
+`operation.review_policy = none`. Hosts may run different operating systems:
+each follower declares its OS, and a task tagged `os:linux`, `os:macos` or
+`os:windows` is claimed only by a host of a named OS; it waits in the backlog,
+named, until one pulls it. Empty
 `workflow.required_validation_commands` means no required check: a claimed
 leaf runs nothing and the owner accepts its handoff without validation logs.
 A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
@@ -109,7 +112,8 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require protocol revision 3.
+exact paths. Both peers require the same protocol revision (currently 4;
+widening arrived in 3).
 
 
 ## Start a follower's drain

@@ -121,8 +121,14 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             let blocked_by = blocking_task_ids(&task["blocking_task_ids"])
                 .map(|ids| format!(" blocked-by={ids}"))
                 .unwrap_or_default();
+            // A host-OS wait is named, so the line says which host it needs.
+            let host = (reason == "host_os_mismatch")
+                .then(|| task["detail"].as_str())
+                .flatten()
+                .map(|detail| format!(": {detail}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "{task_id}: {} ({reason}){crew}{blocked_by}",
+                "{task_id}: {} ({reason}){crew}{blocked_by}{host}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }

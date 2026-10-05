@@ -1875,6 +1875,34 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
   return list;
 }
 
+// A task whose `os:` tags this host's OS does not satisfy waits for a host of
+// its own (a pull-drain follower on that OS, say). Readiness names the wait,
+// and the card lists it so an idle drain does not read as an empty backlog.
+function autoDrainHostWaits(payload) {
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  return tasks.filter((task) => task.eligible !== true && autoDrainReason(task) === "host_os_mismatch");
+}
+
+function autoDrainHostWaitList(tasks, workspace) {
+  const list = el("ul", { class: "drain-blocked drain-host-waits" });
+  list.setAttribute("aria-label", "Tasks waiting for a host of another OS");
+  for (const task of tasks.slice(0, AUTO_DRAIN_BLOCKED_ROWS)) {
+    const taskId = autoDrainTaskId(task);
+    list.appendChild(el("li", { class: "drain-blocked-row" }, [
+      el("div", { class: "drain-blocked-line" }, [
+        el("span", { class: "drain-blocked-who mono" }, [
+          taskId ? taskLink(taskId, workspace?.id) : el("span", { text: "task not supplied" }),
+          el("span", { class: "drain-muted", text: ` ${typeof task.detail === "string" && task.detail ? task.detail : "waits for a host of another OS"}` }),
+        ]),
+      ]),
+    ]));
+  }
+  if (tasks.length > AUTO_DRAIN_BLOCKED_ROWS) {
+    list.appendChild(el("li", { class: "drain-blocked-more mono", text: `+${tasks.length - AUTO_DRAIN_BLOCKED_ROWS} more` }));
+  }
+  return list;
+}
+
 // Sustained host pressure holds every new admission until it clears, so the
 // card names the resource, value, threshold and since-when instead of leaving
 // an idle drain to read as an empty backlog.
@@ -1917,6 +1945,8 @@ function renderAutoDrain(payload) {
     ]),
   );
   if (blocked.length > 0) body.appendChild(autoDrainBlockedList(blocked, payload.capacity?.occupancy, selectedWorkspace()));
+  const hostWaits = autoDrainHostWaits(payload);
+  if (hostWaits.length > 0) body.appendChild(autoDrainHostWaitList(hostWaits, selectedWorkspace()));
   const durationLabel = el("span", { class: "drain-field-label", text: "Window length" });
   // The concurrency field and the Start button are built apart but depend on
   // each other; they meet here.

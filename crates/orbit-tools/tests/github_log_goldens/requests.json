@@ -344,5 +344,47 @@
     "op": "pr_list",
     "input": {},
     "raw": null
+  },
+  {
+    "name": "run_jobs_request_reads_each_failed_jobs_runner_labels",
+    "op": "run_jobs",
+    "input": {
+      "run": "123"
+    },
+    "raw": {
+      "total_count": 3,
+      "jobs": [
+        {
+          "id": 911,
+          "name": "macOS Sandbox",
+          "labels": [
+            "macos-latest"
+          ],
+          "runner_name": "GitHub Actions 7"
+        },
+        {
+          "id": 912,
+          "name": "Check / Clippy / Test",
+          "labels": [
+            "self-hosted",
+            " Linux ",
+            "X64"
+          ]
+        },
+        {
+          "id": 913,
+          "name": "Queued",
+          "labels": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "run_jobs_request_rejects_a_non_numeric_run",
+    "op": "run_jobs",
+    "input": {
+      "run": "123/../../secrets"
+    },
+    "raw": null
   }
 ]

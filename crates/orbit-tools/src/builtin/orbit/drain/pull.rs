@@ -68,6 +68,17 @@ impl Tool for OrbitTaskPullTool {
                      run is skipped and stays in the backlog. Omitted: every crew is admissible.",
                 )
             },
+            ToolParam {
+                required: false,
+                ..param(
+                    "os",
+                    "string",
+                    "The executor's host OS: `linux`, `macos` or `windows`. A task tagged \
+                     `os:<name>` is admitted only to an executor whose OS it names, and is \
+                     otherwise skipped and stays in the backlog. Omitted: only tasks without \
+                     an `os:` tag are admissible.",
+                )
+            },
         ];
         ToolSchema {
             name: "orbit.task.pull".to_string(),

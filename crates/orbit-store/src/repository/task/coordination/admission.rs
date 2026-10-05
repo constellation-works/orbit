@@ -283,6 +283,7 @@ impl TaskCommitBoundary {
             invalid_candidates: Vec::new(),
             deferred_conflicts: Vec::new(),
             crew_unavailable: Vec::new(),
+            os_unavailable: Vec::new(),
             queue_depth: tasks
                 .iter()
                 .filter(|task| {
@@ -315,6 +316,23 @@ impl TaskCommitBoundary {
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {
                     task_id: task.id.clone(),
                     reason: format!("live local delivery run {run_id} is carrying it"),
+                });
+                continue;
+            }
+            // A task whose `os:` tags the executor's OS does not satisfy stays
+            // for a host that does, rather than being claimed and failed. The
+            // tags are read at each admission, so a retag applies to the next.
+            if let Some(wait) = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
+                .unsatisfied_reason(request.os)
+            {
+                receipt.os_unavailable.push(AdmissionDiagnostic {
+                    task_id: task.id.clone(),
+                    reason: format!(
+                        "{wait}; the executor runs {}",
+                        request
+                            .os
+                            .map_or("an undeclared OS", orbit_types::task::HostOs::as_str)
+                    ),
                 });
                 continue;
             }

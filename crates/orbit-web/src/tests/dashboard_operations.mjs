@@ -163,6 +163,14 @@ await fetchAndRenderOperations();
 assert(drainText().includes('Blocked by running5') && drainText().includes('+2 more'), 'blocked list is capped at three lines');
 readinessTasks.splice(-3);
 
+// A task whose `os:` tags this host cannot run names the host it waits for,
+// apart from the lock-blocked list, so the drain does not read as idle.
+readinessTasks.push({ task_id: 'ORB-40', status: 'backlog', eligible: false, reason: 'host_os_mismatch', detail: 'waits for a macos host (os:macos)' });
+await fetchAndRenderOperations();
+assert(drainText().includes('ORB-40 waits for a macos host (os:macos)'), `an OS wait is named on the card: ${drainText()}`);
+assert(drainText().includes('Blocked by running2'), 'an OS wait is not counted as blocked by a running task');
+readinessTasks.splice(-1);
+
 // Duration, stepper and completion drive the Start label and the submitted body.
 drainButton('2h').click();
 assert(drainButton('Start 2h window'), 'the Start label carries the chosen duration');

@@ -83,6 +83,30 @@ filesystem projections. Reuse existing tags. Use `feature`, `bug`, `refactor` or
 `unassessed`. See [task fields](task-fields.md) for dependency/relationship semantics,
 duplicate handling and additional tool grants.
 
+## Host OS routing
+
+Tag a task `os:linux`, `os:macos` or `os:windows` when only a host running that
+OS can do it: a `sandbox-exec` failure needs macOS, a systemd change needs Linux.
+No `os:` tag means any host; several mean any one of them. The namespace is
+reserved: `task.add` and `task.update` reject any other `os:*` value (`os:mac`,
+`os:osx`), so check the spelling the error names. Matching ignores case.
+
+Admission reads the tags every time it considers a task. A local drain, ship
+discovery and `orbit run ship` start the task only on a host of a named OS, and
+an owner hands a pull-drain claim only to a follower of one. Elsewhere the
+task stays in `backlog` with the wait named (`waits for a macos host
+(os:macos)`) in readiness, `orbit run show` and the dashboard Drain card.
+
+To route a task an auto-task or a sweep already minted, retag it with
+`orbit.task.update`, sending the full tag list (it replaces the stored one):
+
+```bash
+orbit tool run orbit.task.update --input '{"id": "<task-id>",
+  "tags": ["<existing tags>", "os:macos"], "workspace": "<selector>", "model": "<agent-family>"}'
+```
+
+The next admission honours it. A task already running or claimed is not moved.
+
 ## Modification footprint
 
 `context_files` declares intended creation, modification and deletion targets

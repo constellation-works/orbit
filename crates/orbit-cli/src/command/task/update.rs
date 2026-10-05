@@ -24,6 +24,8 @@ pub struct TaskUpdateArgs {
     #[arg(long, alias = "dependency", action = ArgAction::Append, value_delimiter = ',')]
     pub dependencies: Vec<String>,
     /// Replacement task tags. Repeat or comma-separate for multiple tags.
+    /// `os:linux`, `os:macos` or `os:windows` limits which host OS may run the
+    /// task from its next admission; any other `os:` value is rejected.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',')]
     pub tags: Vec<String>,
     /// New task plan (empty string clears)

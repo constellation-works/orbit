@@ -57,6 +57,10 @@ impl TaskV2Store {
                 "task actor must not be empty".to_string(),
             ));
         }
+        // The one choke point every creation path reaches — CLI, MCP,
+        // dashboard, auto-task mint, import — so the reserved `os:` namespace
+        // cannot be bypassed by any of them.
+        validate_os_tags(&normalize_task_tags(params.tags.clone()))?;
         if let Some(boundary) = &self.coordination {
             boundary.guard_ordinary_footprint(params.status, &params.context_files)?;
         }

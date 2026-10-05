@@ -25,7 +25,11 @@ spec:
     fallback. Current failures may include already-failed jobs from an
     in-flight workflow when that evidence is complete; a pending check is
     never present in the snapshot as a current failure and must not be filed. Each surviving cluster is filed at `status: proposed` with the
-    collected evidence rendered inline in the description, so the implementing
+    collected evidence rendered inline in the description, tagged `os:macos`
+    or `os:linux` from the failing jobs' runner labels (or the workflow's
+    literal `runs-on` when the snapshot carries none) so only a host that can
+    reproduce it admits it, and left untagged for a Windows or unrecognised
+    runner, so the implementing
     agent never needs a GitHub credential; no `required_tools` are attached and
     the task can later ship through the ordinary pull-request route only after
     task-pilot validation and explicit CI-sweep admission. Filing itself never
@@ -152,6 +156,19 @@ spec:
               type: array
               items:
                 type: string
+            runner_os:
+              type: array
+              description: >
+                Per run, the failing job's runner OS evidence: `os` (or null),
+                `source` (`job_labels`, `workflow_runs_on` or `unknown`) and
+                the `labels` it was read from.
+            os_tags:
+              type: array
+              items:
+                type: string
+              description: >
+                The `os:` tags filed on the task: `os:macos`/`os:linux` when
+                every run's runner is macOS or Linux, none otherwise.
       pilot_candidates:
         type: array
         description: >

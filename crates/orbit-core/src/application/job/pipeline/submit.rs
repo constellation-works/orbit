@@ -233,6 +233,19 @@ impl OrbitRuntime {
                 task_id,
                 crate::application::workflow::SHIP_WORKFLOW_ALIAS,
             )?;
+            // A task whose `os:` tags this host cannot satisfy is never started
+            // here; it would only fail on a platform it cannot run on.
+            if let Some(wait) = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
+                .unsatisfied_reason(self.host_os())
+            {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "explicit ship task '{task_id}' {wait}, and this host runs {}; ship it on \
+                     a host of that OS (a pull-drain follower on one claims it from the \
+                     backlog) or change its `os:` tags",
+                    self.host_os()
+                        .map_or(std::env::consts::OS, orbit_types::task::HostOs::as_str)
+                )));
+            }
             if let Some(allowlist) = allowlist.as_ref() {
                 // [ORB-12606] Report against the crew admission will draw, not
                 // the default chain: a crew-less task whose complexity pool

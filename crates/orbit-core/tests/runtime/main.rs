@@ -1,5 +1,5 @@
 //! The composed runtime through its public surface: dispatch admission, the
-//! distributed drain, final recovery, relation auto-close, PR closure on
+//! distributed drain, `os:` tag routing, final recovery, relation auto-close, PR closure on
 //! terminal decisions and the sandbox opt-out.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
@@ -16,6 +16,7 @@ mod relation_auto_close;
 mod review_gate_audit;
 mod sandbox_off;
 
+mod host_os_routing;
 mod host_resources;
 
 mod task_pilot;

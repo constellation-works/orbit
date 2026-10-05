@@ -112,7 +112,9 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.tags {
-                bundle.envelope.tags = normalize_task_tags(value.clone());
+                let tags = normalize_task_tags(value.clone());
+                validate_os_tags(&tags)?;
+                bundle.envelope.tags = tags;
                 envelope_changed = true;
             }
             if let Some(value) = &fields.context_files {

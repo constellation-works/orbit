@@ -122,6 +122,7 @@ fn admission(
             authorization_reference: None,
         },
         crews: None,
+        os: None,
     };
     let record = jobs
         .allocate_pull_request(&destination, &request, 10)
@@ -157,6 +158,7 @@ fn admission(
         invalid_candidates: vec![],
         deferred_conflicts: vec![],
         crew_unavailable: vec![],
+        os_unavailable: vec![],
         queue_depth: 0,
     };
     owner.claims.lock().unwrap().insert(claim_id);

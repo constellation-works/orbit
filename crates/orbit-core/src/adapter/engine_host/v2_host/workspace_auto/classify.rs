@@ -211,6 +211,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
                     task_id: deferred.task_id.clone(),
                     reason: None,
                     blocked_by: deferred.blocking_task_ids(),
+                    detail: None,
                 })
                 .collect(),
             excluded: waiting_excluded(&snapshot.excluded),
@@ -272,6 +273,7 @@ fn waiting_excluded(excluded: &[BacklogTaskExclusion]) -> Vec<DrainWaitingTask> 
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect(),
+            detail: entry.detail.clone(),
         })
         .collect()
 }

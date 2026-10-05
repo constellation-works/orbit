@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskReferenceIndex, TaskStatus,
-    has_epic_tag, inherited_only_epic_roots, task_dependencies_ready_with_index,
+    EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskOsRequirement,
+    TaskReferenceIndex, TaskStatus, has_epic_tag, inherited_only_epic_roots,
+    task_dependencies_ready_with_index,
 };
 use orbit_types::workflow::ShipMode;
 use serde::Serialize;
@@ -55,6 +56,10 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// it is — never silently re-crewed — and the remaining eligible work
     /// keeps filling the drain's slots.
     CrewNotAllowed,
+    /// The task's `os:` tags name no OS this host runs. It stays in `backlog`
+    /// for a host that does — a follower pulling from this owner, say — and
+    /// `detail` names the wait (`waits for a macos host (os:macos)`).
+    HostOsMismatch,
     GroupMemberConflict,
     /// An `epic`-tagged root that declared no `context_files` of its own while
     /// its descendants did. Admission no longer inherits their surface, so the
@@ -208,6 +213,10 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                     crew: None,
                     detail: None,
                 });
+                continue;
+            }
+            if let Some(exclusion) = host_os_exclusion(runtime, &task) {
+                excluded.push(exclusion);
                 continue;
             }
             if claimed_tasks.contains(&task.id) {
@@ -448,6 +457,15 @@ fn backlog_snapshot_in_mode(
         });
         false
     });
+    // A task this host's OS cannot run is left for a host that can. Read every
+    // pass, so a retagged backlog task is honoured at its next admission.
+    backlog.retain(|task| {
+        let Some(exclusion) = host_os_exclusion(runtime, task) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an
     // operator can act on — reassign it, or run a drain that permits its crew
@@ -541,6 +559,22 @@ fn backlog_snapshot_in_mode(
         admissible_leaves,
         excluded,
         lock_holders,
+    })
+}
+
+/// The exclusion for a task whose `os:` tags this host does not satisfy.
+///
+/// Shared by automatic selection and the explicit ship override, so a drain,
+/// ship discovery and a gate carrying a named task withhold the same tasks and
+/// name the same wait.
+fn host_os_exclusion(runtime: &OrbitRuntime, task: &Task) -> Option<BacklogTaskExclusion> {
+    let reason = TaskOsRequirement::from_tags(&task.tags).unsatisfied_reason(runtime.host_os())?;
+    Some(BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::HostOsMismatch,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(reason),
     })
 }
 

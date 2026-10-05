@@ -102,6 +102,7 @@ impl PullPeer for Peer {
                 invalid_candidates: vec![],
                 deferred_conflicts: vec![],
                 crew_unavailable: vec![],
+                os_unavailable: vec![],
                 queue_depth: 0,
             })
             .clone();
@@ -238,6 +239,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
                 authorization_reference: None,
             },
             crews: None,
+            os: None,
         },
     )
 }

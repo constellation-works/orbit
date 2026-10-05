@@ -70,6 +70,7 @@ pub(super) struct WaitingTask {
     pub(super) task_id: String,
     pub(super) reason: Option<String>,
     pub(super) blocked_by: Vec<String>,
+    pub(super) detail: Option<String>,
 }
 
 impl DrainLeafSummary {
@@ -93,6 +94,7 @@ impl DrainLeafSummary {
                         "task_id": task.task_id,
                         "reason": task.reason,
                         "blocked_by": task.blocked_by,
+                        "detail": task.detail,
                     })
                 })
                 .collect::<Vec<_>>()
@@ -233,6 +235,13 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     if !task.blocked_by.is_empty() {
         line.push_str(&format!(" blocked-by={}", task.blocked_by.join(",")));
     }
+    // A host-OS wait names the host it waits for; other details (long repair
+    // instructions) stay in `--json`.
+    if task.reason.as_deref() == Some("host_os_mismatch")
+        && let Some(detail) = &task.detail
+    {
+        line.push_str(&format!(" ({detail})"));
+    }
     line
 }
 
@@ -308,6 +317,7 @@ fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
                 task_id: task.task_id.clone(),
                 reason: task.reason.clone(),
                 blocked_by: task.blocked_by.clone(),
+                detail: task.detail.clone(),
             })
             .collect()
     };

@@ -54,6 +54,10 @@ pub struct OrbitRuntime {
     /// owner so every task-record writer shares one fail-closed gate.
     coordination_write_owner: Option<Arc<str>>,
     automation_machine_identity: Option<Arc<str>>,
+    /// The operating system admission matches a task's `os:` tags against.
+    /// This binary's own by default; a fixture composes another so one process
+    /// can stand in for a host of each OS.
+    host_os: Option<orbit_types::task::HostOs>,
     /// Supplied by the same registry-owning composition layer, for reads that
     /// span more than one workspace. Absent on a standalone runtime, which
     /// then answers only for its own checkout [ORB-11027].
@@ -217,6 +221,7 @@ impl OrbitRuntime {
             drain_owner_transport: None,
             coordination_write_owner: None,
             automation_machine_identity: None,
+            host_os: orbit_types::task::HostOs::current(),
             workspace_catalog: None,
             host_signals: default_host_signal_probe(),
             task_pr_forge: default_task_pr_forge(),
@@ -273,6 +278,7 @@ impl OrbitRuntime {
             drain_owner_transport: None,
             coordination_write_owner: None,
             automation_machine_identity: None,
+            host_os: orbit_types::task::HostOs::current(),
             workspace_catalog: None,
             // An in-memory runtime is not bound to a host lifecycle.
             host_signals: Arc::new(FixedHostSignals::none()),
@@ -387,6 +393,21 @@ impl OrbitRuntime {
 
     pub(crate) fn workspace_catalog(&self) -> Option<&Arc<dyn catalog::WorkspaceCatalog>> {
         self.workspace_catalog.as_ref()
+    }
+
+    /// Admit tasks as a host running `os` would (`None`: an OS outside the
+    /// `os:` namespace, which runs only untagged tasks). A fixture composes
+    /// two runtimes in one process and gives each the OS it stands in for.
+    pub fn with_host_os(mut self, os: Option<orbit_types::task::HostOs>) -> Self {
+        self.host_os = os;
+        self
+    }
+
+    /// The operating system this runtime admits tasks for: what local
+    /// admission checks a task's `os:` tags against, and what a pull drain
+    /// declares to its owner.
+    pub fn host_os(&self) -> Option<orbit_types::task::HostOs> {
+        self.host_os
     }
 
     /// Replace the host-signal probe, so a fixture can present a scheduled

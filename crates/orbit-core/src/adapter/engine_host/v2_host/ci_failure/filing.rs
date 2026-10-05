@@ -52,6 +52,7 @@ use super::evidence::{
 };
 use super::grouping::cluster_failures;
 use super::repair_assessment;
+use super::runner_os;
 
 /// Wire contract with `collect_ci_evidence` (`orbit-engine`'s
 /// `executor::automation::ci`), also stated in both activity assets' schemas.
@@ -499,15 +500,21 @@ where
             continue;
         }
 
+        // The failing job's runner routes the repair to a host that can
+        // reproduce it; Windows and unknown runners leave it untagged.
+        let runners = cluster.runner_os(&runtime.paths().repo_root);
+        let os_tags = runner_os::os_tags(&runners);
+        let mut tags = vec![
+            CI_FAILURE_TAG.to_string(),
+            format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", cluster.failure_key),
+            "github-actions".to_string(),
+        ];
+        tags.extend(os_tags.iter().cloned());
         let task_id = add_task(TaskAddParams {
             title: cluster.title(),
-            description: cluster.description(evidence),
+            description: cluster.description(evidence, &runners),
             acceptance_criteria: cluster.acceptance_criteria(),
-            tags: vec![
-                CI_FAILURE_TAG.to_string(),
-                format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", cluster.failure_key),
-                "github-actions".to_string(),
-            ],
+            tags,
             // Deliberately empty: the evidence is already in the description,
             // so the task ships on the ordinary agent baseline.
             required_tools: Vec::new(),
@@ -537,7 +544,9 @@ where
             )
         })?;
         filed_keys.insert(cluster.failure_key.clone());
-        let filing = cluster.filing_entry(&task_id);
+        let mut filing = cluster.filing_entry(&task_id);
+        filing["runner_os"] = json!(runners);
+        filing["os_tags"] = json!(os_tags);
         pilot_candidate_ids.insert(task_id);
         pilot_candidates.push(filing.clone());
         filed.push(filing);

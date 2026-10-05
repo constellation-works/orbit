@@ -145,6 +145,10 @@
 .detail-tag-row .chip {
   cursor: default;
 }
+.detail-tag-row .chip.os-chip {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .external-ref-line {
   font-family: var(--font-mono);
   font-size: 12px;

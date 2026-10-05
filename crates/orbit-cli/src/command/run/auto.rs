@@ -221,7 +221,7 @@ impl Execute for AutoCommand {
         workflow_dispatch_payload_with_notices(
             AUTO_WORKFLOW,
             &[run],
-            submission_warnings(runtime),
+            owner_drain_warnings(runtime),
             runtime.required_validation_note().into_iter().collect(),
         )
     }
@@ -235,6 +235,15 @@ fn submission_warnings(runtime: &OrbitRuntime) -> Vec<String> {
         .into_iter()
         .chain(runtime.validation_env_preflight_warning())
         .collect()
+}
+
+/// A local drain's warnings, plus the backlog tasks this host's OS cannot
+/// start: they stay waiting for a host of theirs, named here so the drain
+/// does not read as idle over an empty backlog.
+fn owner_drain_warnings(runtime: &OrbitRuntime) -> Vec<String> {
+    let mut warnings = submission_warnings(runtime);
+    warnings.extend(runtime.host_os_backlog_warning());
+    warnings
 }
 
 /// [ORB-13901] The drain starts either way and holds its own waves while the
