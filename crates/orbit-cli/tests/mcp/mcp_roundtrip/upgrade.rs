@@ -832,7 +832,7 @@ fn running_digest(workspace: &McpWorkspace, pid: u32) -> Option<String> {
 
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
+fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
     let workspace = McpWorkspace::init();
     let install = workspace.home.join("installation");
     std::fs::create_dir_all(&install).expect("installation");
@@ -864,6 +864,33 @@ fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
         running_digest(&workspace, pid).as_deref(),
         Some(old_digest.as_str())
     );
+
+    // Well-formed JSON that rmcp cannot decode receives an id-less error.
+    // None of these ids may pin the session forever, including batch input
+    // (the stdio transport accepts individual messages only).
+    for invalid in [
+        json!({"jsonrpc":"2.0", "id":1001, "method":"tools/call", "params":"x"}),
+        json!({"jsonrpc":"1.0", "id":1002, "method":"ping"}),
+        json!([{"jsonrpc":"2.0", "id":1003, "method":"ping"}]),
+    ] {
+        client.send(&invalid);
+        let reply: Value = serde_json::from_str(
+            &client
+                .lines
+                .recv_timeout(RESPONSE_TIMEOUT)
+                .expect("rejection"),
+        )
+        .expect("JSON rejection");
+        assert!(reply.get("id").is_none(), "{reply}");
+        assert_eq!(reply["error"]["code"], -32600, "{reply}");
+    }
+    // The compatibility path silently drops an undecodable non-standard
+    // notification even when the sender included an id. A subsequent ping
+    // proves the transport consumed it before the replacement is installed.
+    client
+        .send(&json!({"jsonrpc":"2.0", "id":1004, "method":"notifications/custom", "params":"x"}));
+    let ping = client.request("ping", Value::Null);
+    assert_eq!(ping["result"], json!({}), "{ping}");
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
