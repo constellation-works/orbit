@@ -21,8 +21,8 @@ use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, JobOutcome, RuntimeHost, V2AuditWriter, execute_job_with_resume,
-    resolve_job_catalog_refs_for_execution,
+    FinalRecoveryApplied, JobOutcome, RuntimeHost, V2AuditWriter, V2SqliteSink,
+    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::FinalRecoveryDecision;
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
@@ -165,7 +165,13 @@ fn reject_blocks_the_task_after_final_recovery() {
         !matches!(&result, Ok(outcome) if outcome.success),
         "a rejected candidate must not deliver: {result:?}"
     );
-    for step in ["candidate_validate", "git_push", "pr_open", "pr_complete"] {
+    for step in [
+        "candidate_validate",
+        "git_push",
+        "pr_open",
+        "pr_promote",
+        "pr_complete",
+    ] {
         let after_review = host
             .actions()
             .iter()
@@ -181,7 +187,24 @@ fn reject_blocks_the_task_after_final_recovery() {
     let admissions = host.final_recovery_admissions();
     assert_eq!(admissions.len(), 1, "final recovery is eligible");
     assert_eq!(admissions[0].failed_step_id, "review_gate_settle");
-    assert_eq!(host.inputs("final_recovery").len(), 1);
+    let recovery_inputs = host.inputs("final_recovery");
+    assert_eq!(recovery_inputs.len(), 1, "final recovery dispatches once");
+    assert_eq!(recovery_inputs[0]["task_id"], "T-1");
+    assert_eq!(recovery_inputs[0]["run_id"], RUN_ID);
+    assert_eq!(recovery_inputs[0]["failed_step_id"], "review_gate_settle");
+    assert_eq!(recovery_inputs[0]["activity_name"], "review_gate_settle");
+    assert_eq!(recovery_inputs[0]["workspace_path"], WORKSPACE);
+    assert_eq!(recovery_inputs[0]["log_tail"], "");
+    assert_eq!(recovery_inputs[0]["step_recovery_attempts"], json!([]));
+    assert_eq!(host.log_tail_run_ids(), [RUN_ID]);
+
+    let actions = host.actions();
+    let review_settled = position(&actions, "review_gate_settle");
+    assert_eq!(
+        &actions[review_settled + 1..review_settled + 3],
+        ["final_recovery", "pr_failure_handoff"],
+        "recovery escalates before failure handoff: {actions:?}"
+    );
 
     let handoff = host.inputs("pr_failure_handoff");
     assert_eq!(handoff.len(), 1);
@@ -191,6 +214,26 @@ fn reject_blocks_the_task_after_final_recovery() {
         message.contains("review_gate_blocked"),
         "the handoff carries the gate's refusal: {message}"
     );
+}
+
+#[test]
+fn reject_supplies_fixture_log_tail_to_final_recovery() {
+    let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes)
+        .with_log_tail("fixture-owned recovery evidence");
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        !matches!(&result, Ok(outcome) if outcome.success),
+        "a rejected candidate must not deliver: {result:?}"
+    );
+    let recovery_inputs = host.inputs("final_recovery");
+    assert_eq!(recovery_inputs.len(), 1, "final recovery dispatches once");
+    assert_eq!(recovery_inputs[0]["run_id"], RUN_ID);
+    assert_eq!(
+        recovery_inputs[0]["log_tail"],
+        "fixture-owned recovery evidence"
+    );
+    assert_eq!(host.log_tail_run_ids(), [RUN_ID]);
 }
 
 const STUB_PREFIX: &str = "test_stub_";
@@ -229,8 +272,19 @@ pub(super) fn position(actions: &[String], action: &str) -> usize {
 
 pub(super) fn run_shipped_pipeline(host: &ScriptedHost) -> Result<JobOutcome, DispatchError> {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
-    let sink = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
-    let writer = Arc::new(V2AuditWriter::new(RUN_ID, "review-fixes-agent", sink));
+    let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
+    let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
+    let envelope = Arc::new(V2SqliteSink::for_audit_root(
+        store,
+        "ws_review_fixes",
+        RUN_ID,
+        "review-fixes-agent",
+        None,
+        audit_root.path(),
+    ));
+    let writer = Arc::new(
+        V2AuditWriter::new(RUN_ID, "review-fixes-agent", inner).with_envelope_sink(envelope),
+    );
     execute_job_with_resume(
         &shipped_pipeline(),
         json!({
@@ -305,6 +359,8 @@ pub(super) struct ScriptedHost {
     head: Mutex<String>,
     calls: Mutex<Vec<(String, Value)>>,
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
+    log_tail: Option<String>,
+    log_tail_run_ids: Mutex<Vec<String>>,
 }
 
 impl ScriptedHost {
@@ -322,7 +378,14 @@ impl ScriptedHost {
             head: Mutex::new("candidate".to_string()),
             calls: Mutex::default(),
             admissions: Mutex::default(),
+            log_tail: None,
+            log_tail_run_ids: Mutex::default(),
         }
+    }
+
+    pub(super) fn with_log_tail(mut self, log_tail: impl Into<String>) -> Self {
+        self.log_tail = Some(log_tail.into());
+        self
     }
 
     /// `candidate_resume` answers `resume` instead.
@@ -347,6 +410,13 @@ impl ScriptedHost {
 
     fn final_recovery_admissions(&self) -> Vec<FinalRecoveryAdmissionRequest> {
         self.admissions.lock().expect("admissions").clone()
+    }
+
+    fn log_tail_run_ids(&self) -> Vec<String> {
+        self.log_tail_run_ids
+            .lock()
+            .expect("log tail lookups")
+            .clone()
     }
 
     fn settle(&self, input: &Value) -> Result<Value, DispatchError> {
@@ -491,6 +561,14 @@ impl RuntimeHost for ScriptedHost {
             .expect("admissions")
             .push(request.clone());
         Ok(FinalRecoveryAdmission::Admitted)
+    }
+
+    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        self.log_tail_run_ids
+            .lock()
+            .expect("log tail lookups")
+            .push(run_id.to_string());
+        Ok((run_id == RUN_ID).then(|| self.log_tail.clone()).flatten())
     }
 
     fn apply_final_recovery(
