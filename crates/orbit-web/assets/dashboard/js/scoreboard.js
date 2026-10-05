@@ -1,7 +1,7 @@
 // Orbit dashboard scoreboard-domain rendering.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, syncNodes, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 // ORB-00337/ORB-10872: selector writes the shared dashboard window; app.js
@@ -14,6 +14,74 @@ function wireScoreboardWindowSelector() {
 }
 
 const $ = (id) => document.getElementById(id);
+
+const SCOREBOARD_CHROME = [
+  "scoreboard-narrative",
+  "scoreboard-agent-strip",
+  "scoreboard-insights",
+  "scoreboard-orchestration",
+];
+const SCOREBOARD_COUNTS = [
+  "scoreboard-meta",
+  "scoreboard-count",
+  "scoreboard-insights-count",
+  "scoreboard-orchestration-count",
+];
+
+function clearScoreboardChrome() {
+  for (const id of SCOREBOARD_CHROME) {
+    const node = $(id);
+    if (node) syncNodes(node, []);
+  }
+  for (const id of SCOREBOARD_COUNTS) {
+    const node = $(id);
+    if (node) node.textContent = "—";
+  }
+}
+
+// Aggregate view has no per-workspace scoreboard. Placeholder every surface
+// renderScoreboard fills, not only the matrix, so a previous workspace's
+// cost, token, insight, and agent-strip numbers cannot stay on screen.
+export function placeholdScoreboardAggregate() {
+  renderPanelPlaceholder("scoreboard-body");
+  for (const id of SCOREBOARD_CHROME) renderPanelPlaceholder(id);
+  for (const id of SCOREBOARD_COUNTS) {
+    const node = $(id);
+    if (node) node.textContent = "—";
+  }
+}
+
+let scoreboardRequestScope = null;
+
+export function fetchAndRenderScoreboard() {
+  if (isAggregateView()) {
+    placeholdScoreboardAggregate();
+    return Promise.resolve();
+  }
+  const selectedWindow = getWindow();
+  const revision = getWorkspaceRevision();
+  const path = `/api/scoreboard?window=${encodeURIComponent(selectedWindow)}`;
+  const scope = `${revision}\0${path}`;
+  if (scoreboardRequestScope !== scope) {
+    scoreboardRequestScope = scope;
+    clearScoreboardChrome();
+  }
+  return requestPanel("scoreboard-body", path, () => fetchJson(path), (summary) => {
+    if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow) return;
+    if (!payloadHonorsWindow(summary, selectedWindow)) {
+      console.error(
+        `scoreboard payload window ${summary && summary.window} rejected under ${selectedWindow} selection`,
+      );
+      return;
+    }
+    renderScoreboard(summary);
+  }, "scoreboard-count");
+}
+
+onWorkspaceChange(() => {
+  scoreboardRequestScope = null;
+  clearScoreboardChrome();
+});
 
 const compactCountFormatter = new Intl.NumberFormat("en-US", {
   notation: "compact",

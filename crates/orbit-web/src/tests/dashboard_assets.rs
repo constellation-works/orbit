@@ -58,6 +58,24 @@ fn host_resource_chips_execute_topbar_aggregate_pressure_unknown_and_recovery_st
 }
 
 #[test]
+fn dashboard_drops_superseded_audit_policy_and_scoreboard_responses() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "src/tests/dashboard_panel_race.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard panel race fixture");
+    assert!(
+        result.status.success(),
+        "dashboard panel race behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
 fn settings_system_view_executes_render_provenance_override_edit_and_refused_write() {
     let result = std::process::Command::new("node")
         .args([
