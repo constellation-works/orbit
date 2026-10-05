@@ -782,6 +782,31 @@ fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
         "no local delivery run starts beside the claim"
     );
     assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "claimed");
+
+    // Replay is a fresh admission too, including older singular task input.
+    for input in [json!({"task_ids": [task]}), json!({"task_id": task})] {
+        let source = owner_jobs
+            .insert_job_run("replay_fixture", 1, Utc::now(), Some(input), None)
+            .unwrap();
+        let before = owner.list_job_runs(Default::default()).unwrap();
+        let foreground = owner.replay_job_run(&source.run_id).unwrap_err();
+        let detached = owner
+            .submit_replay_run(
+                &source.run_id,
+                None,
+                None,
+                orbit_types::workflow::JobRunTrigger::dashboard(),
+            )
+            .unwrap_err();
+        for error in [foreground, detached] {
+            assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error:?}");
+        }
+        assert_eq!(
+            owner.list_job_runs(Default::default()).unwrap(),
+            before,
+            "a replay cannot admit beside the live claim"
+        );
+    }
 }
 
 /// Ask `owner`'s probe, as the routed follower does, whether a pull with

@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::SYSTEM_AUDIT_IDENTITY;
+use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
 
 #[derive(Debug, Clone)]
@@ -84,22 +85,69 @@ impl OrbitRuntime {
     /// surface, including agent steps. Use `submit_resume_run`
     /// to continue from the failed step instead.
     pub fn replay_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
+        self.replay_job_run_with_claim(source_run_id, None)
+    }
+
+    /// Foreground replay with the operator's workspace claim token.
+    pub fn replay_job_run_with_claim(
+        &self,
+        source_run_id: &str,
+        claim_token: Option<&str>,
+    ) -> Result<V2JobRunResult, OrbitError> {
+        let (source, mut input) = self.admit_job_run_replay(source_run_id, claim_token)?;
+        crate::application::review::install_review_admission(
+            self,
+            &source.job_id,
+            &mut input,
+            None,
+            false,
+        )?;
+        let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
+        self.run_job_v2_from_yaml_with_retry_source(&job_path, input, Some(source.run_id), 1, None)
+    }
+
+    /// Persist a whole-run replay and submit it to a detached worker.
+    /// Uses today's catalog and admission policy, with no source checkpoints.
+    pub fn submit_replay_run(
+        &self,
+        source_run_id: &str,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let (source, input) = self.admit_job_run_replay(source_run_id, claim_token)?;
+        self.submit_persisted_pipeline_run(PipelineSubmission {
+            replay_source_run_id: Some(&source.run_id),
+            trigger,
+            ..PipelineSubmission::catalog(&source.job_id, input, actor)
+        })
+    }
+
+    fn admit_job_run_replay(
+        &self,
+        source_run_id: &str,
+        claim_token: Option<&str>,
+    ) -> Result<(JobRun, Value), OrbitError> {
+        self.require_workspace_claim("orbit.job.replay", claim_token)?;
         let source = self.show_job_run(source_run_id)?;
         let mut input = source.input.clone().unwrap_or_else(|| json!({}));
-        // [ORB-11354] A replay re-runs a historical input under no new
-        // admission, so the source's trusted-host admission does not travel
-        // with it. Stripping rather than refusing keeps replay usable for the
-        // rest of the run's input; the activity then fails closed on the
-        // missing admission, which is the honest outcome.
+        let task_ids: Vec<String> = super::resume::task_ids_from_input(&input)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        self.drain_entry_admission(
+            crate::application::distributed::DrainEntryPoint::Replay,
+            &task_ids,
+            false,
+        )?
+        .into_result()?;
+        // Historical authority never travels into a new invocation. Trusted
+        // host execution fails closed; review is captured from current policy.
         strip_trusted_host_admission(&mut input);
-        let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
-        self.run_job_v2_from_yaml_with_retry_source(
-            &job_path,
-            input,
-            Some(source.run_id.clone()),
-            1,
-            None,
-        )
+        if let Some(object) = input.as_object_mut() {
+            object.remove(orbit_types::workflow::REVIEW_ADMISSION_KEY);
+        }
+        Ok((source, input))
     }
 
     /// [ORB-10002] Resume an interrupted (or failed / timed-out) job run from

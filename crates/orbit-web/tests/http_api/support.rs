@@ -161,14 +161,18 @@ impl Fixture {
     }
 
     pub(super) fn server(&self, operator: bool) -> Server {
-        self.server_impl(operator, false)
+        self.server_impl(operator, false, false)
+    }
+
+    pub(super) fn replay_server(&self) -> Server {
+        self.server_impl(true, false, true)
     }
 
     pub(super) fn resource_server(&self) -> Server {
-        self.server_impl(false, true)
+        self.server_impl(false, true, false)
     }
 
-    fn server_impl(&self, operator: bool, resources: bool) -> Server {
+    fn server_impl(&self, operator: bool, resources: bool, replay_worker: bool) -> Server {
         orbit_common::test_env::assert_child_test_exists("server_child");
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -181,6 +185,10 @@ impl Fixture {
             .args(["--ignored", "--exact", "server_child", "--nocapture"])
             .env(FIXTURE_ROOT, self.temp.path())
             .env("ORBIT_HTTP_PORT", port.to_string())
+            .env(
+                "ORBIT_HTTP_REPLAY_WORKER",
+                if replay_worker { "1" } else { "0" },
+            )
             .env(
                 "ORBIT_HTTP_RESOURCE_FIXTURE",
                 if resources { "1" } else { "0" },
@@ -225,10 +233,14 @@ impl Fixture {
     }
 
     pub(super) fn job(&self, name: &str) {
+        self.sleep_job(name, 0);
+    }
+
+    pub(super) fn sleep_job(&self, name: &str, seconds: u32) {
         let dir = self.global.join("resources/jobs");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.yaml")), format!(
-            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {{}}\n"
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: {seconds}\n      spec:\n        type: deterministic\n        action: sleep\n        config: {{}}\n"
         )).unwrap();
     }
 
@@ -274,6 +286,10 @@ pub(super) struct Server {
 }
 
 impl Server {
+    pub(super) fn pid(&self) -> u32 {
+        self.process.0.id()
+    }
+
     pub(super) fn request(&self, method: &str, path: &str) -> RequestBuilder {
         self.client
             .request(method.parse().unwrap(), format!("{}{path}", self.origin))
@@ -301,8 +317,20 @@ pub(super) fn json_ok(response: Response) -> Value {
 
 pub(super) fn serve_fixture() {
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));
-    // Any accidentally unguarded submission still launches only this harmless stub.
-    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    // Ordinary fixtures launch a harmless stub; replay fixtures execute only
+    // their disposable sleep job through the real worker.
+    if std::env::var("ORBIT_HTTP_REPLAY_WORKER").as_deref() == Ok("1") {
+        orbit_common::test_env::assert_child_test_exists("replay_worker_child");
+        orbit_core::test_support::install_substitute_pipeline_worker([
+            "sh".to_string(), "-c".to_string(),
+            "export ORBIT_HTTP_REPLAY_RUN=\"$1\" ORBIT_HTTP_FIXTURE_ROOT=\"$2\"; exec \"$3\" --ignored --exact replay_worker_child --nocapture".to_string(),
+            "replay-worker".to_string(), "{run_id}".to_string(),
+            root.to_string_lossy().into_owned(),
+            std::env::current_exe().unwrap().to_string_lossy().into_owned(),
+        ]);
+    } else {
+        orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    }
     let args = orbit_web::ServeArgs {
         host: "127.0.0.1".parse().unwrap(),
         port: std::env::var("ORBIT_HTTP_PORT").unwrap().parse().unwrap(),
@@ -355,6 +383,24 @@ pub(super) fn serve_fixture() {
     } else {
         orbit_web::serve_from_env(args, Some(&root.join("global"))).unwrap();
     }
+}
+
+pub(super) fn execute_replay_worker() {
+    let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).unwrap());
+    let global = root.join("global");
+    let registry = orbit_registry::workspace_registry::load_registry_from(
+        &orbit_registry::workspace_registry::registry_path_for(&global),
+    )
+    .unwrap();
+    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+        &global,
+        &registry.workspaces[0],
+        &registry.checkouts[0],
+    )
+    .unwrap();
+    runtime
+        .execute_pipeline_run_worker(&std::env::var("ORBIT_HTTP_REPLAY_RUN").unwrap())
+        .unwrap();
 }
 
 pub(super) fn write_json(path: &Path, value: Value) {

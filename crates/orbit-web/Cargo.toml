@@ -34,6 +34,7 @@ url.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+orbit-store = { path = "../orbit-store" }
 reqwest.workspace = true
 # Substitute pipeline worker for tests that submit runs [ORB-12902].
 orbit-core = { path = "../orbit-core", features = ["test-support"] }

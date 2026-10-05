@@ -19,7 +19,6 @@ const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("POST", "/job-runs/:id/resume"),
     ("POST", "/workflows/ship"),
     ("POST", "/runs/:id/cancel"),
-    ("POST", "/runs/:id/replay"),
     ("POST", "/metrics/invocations"),
 ];
 
@@ -43,6 +42,7 @@ fn registered_paths() -> impl Iterator<Item = &'static str> {
 
 fn body(path: &str) -> Value {
     match path {
+        "/runs/:id/replay" => json!({}),
         "/config/keys/:key" => json!({"value":"agent-main","init":"fresh"}),
         "/config/crews/:name" => json!({"fields":{}}),
         "/routines/clock" => json!({

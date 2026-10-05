@@ -12,6 +12,8 @@ pub(crate) struct PipelineSubmission<'a> {
     pub(crate) definition: SubmittedDefinition<'a>,
     pub(crate) input: Value,
     pub(crate) resume: Option<&'a ResumePlan>,
+    /// Whole-run replay lineage, without inheriting resume checkpoints.
+    pub(crate) replay_source_run_id: Option<&'a str>,
     pub(crate) actor: Option<&'a str>,
     pub(crate) action_key: Option<&'a str>,
     /// Caller retry key admitted atomically with the run [ORB-13560].
@@ -66,6 +68,7 @@ impl<'a> PipelineSubmission<'a> {
             definition: SubmittedDefinition::Catalog,
             input,
             resume: None,
+            replay_source_run_id: None,
             actor,
             action_key: None,
             retry_key: None,

@@ -476,12 +476,68 @@ fn a_held_workspace_claim_gates_dispatch_to_its_holder() {
         matches!(resume, OrbitError::WorkspaceClaimHeld(_)),
         "resume takes the same gate: {resume:?}"
     );
+    for stranger in [None, Some("wrong-token")] {
+        let foreground = runtime
+            .replay_job_run_with_claim("missing", stranger)
+            .unwrap_err();
+        let detached = runtime
+            .submit_replay_run("missing", None, stranger, JobRunTrigger::dashboard())
+            .unwrap_err();
+        for error in [foreground, detached] {
+            assert!(
+                matches!(error, OrbitError::WorkspaceClaimHeld(_)),
+                "{error:?}"
+            );
+        }
+    }
+    assert!(matches!(
+        runtime.replay_job_run("missing").unwrap_err(),
+        OrbitError::WorkspaceClaimHeld(_)
+    ));
+    assert!(matches!(
+        runtime
+            .replay_job_run_with_claim("missing", Some(token))
+            .unwrap_err(),
+        OrbitError::NotFound { .. }
+    ));
+    assert!(matches!(
+        runtime
+            .submit_replay_run("missing", None, Some(token), JobRunTrigger::dashboard())
+            .unwrap_err(),
+        OrbitError::NotFound { .. }
+    ));
 
     let holder = ship(&runtime, Some(token));
     assert!(
         matches!(holder, OrbitError::NotFound { .. }),
         "the holder passes the gate, got {holder:?}"
     );
+}
+
+#[test]
+fn a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run() {
+    if !isolated("a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run") {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    let source = running_run(
+        &runtime,
+        "replay_fixture",
+        json!({"task_ids": ["some-task"]}),
+    );
+    let replica = runtime.with_coordination_write_owner(Some("owner-machine".into()));
+    let before = replica.list_job_runs(Default::default()).unwrap();
+    let foreground = replica.replay_job_run(&source).unwrap_err();
+    let detached = replica
+        .submit_replay_run(&source, None, None, JobRunTrigger::dashboard())
+        .unwrap_err();
+    for error in [foreground, detached] {
+        assert!(
+            matches!(error, OrbitError::CapabilityRefused(_)),
+            "{error:?}"
+        );
+    }
+    assert_eq!(replica.list_job_runs(Default::default()).unwrap(), before);
 }
 
 /// An expired claim stops gating dispatch with no release.

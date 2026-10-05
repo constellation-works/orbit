@@ -5,7 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_STOP,
+    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_STOP, DASHBOARD_JOB_RUN,
 };
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_common::security::redaction::redact_all;
@@ -447,13 +447,61 @@ pub(super) async fn cancel_run_action(
     }
 }
 
-pub(super) async fn replay_run_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReplayBody {
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
+pub(super) async fn replay_run_action(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+    Query(query): Query<OperationsQuery>,
+    OptionalJson(body): OptionalJson<ReplayBody>,
+) -> Response {
+    if let Err(response) = explicit_workspace(&query) {
+        return response.into_response();
+    }
+    if let Err(denial) = authorized_caller(&DASHBOARD_JOB_RUN, state.operator_session()) {
+        return authorization_denied(denial);
+    }
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    match blocking("replay run", move || runtime.replay_job_run(&id)).await {
-        Ok(result) => Json(json!({ "run_id": result.run_id })).into_response(),
+    let completion_authority =
+        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session());
+    match blocking("replay run", move || {
+        let source = runtime.show_job_run(&id)?;
+        if source
+            .input
+            .as_ref()
+            .and_then(|input| input.get("completion"))
+            .and_then(Value::as_str)
+            == Some("done")
+            && let Err(denial) = completion_authority
+        {
+            return Ok(Err(denial));
+        }
+        runtime
+            .submit_replay_run(
+                &id,
+                Some("dashboard"),
+                body.claim_token.as_deref(),
+                JobRunTrigger::dashboard(),
+            )
+            .map(Ok)
+    })
+    .await
+    {
+        Ok(Ok(result)) => Json(json!({
+            "run_id": result.run_id,
+            "state": if result.queued { "queued" } else { "submitted" },
+        }))
+        .into_response(),
+        Ok(Err(denial)) => authorization_denied(denial),
         Err(response) => *response,
     }
 }
