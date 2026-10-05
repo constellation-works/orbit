@@ -50,8 +50,49 @@ cd "$repo_root"
 scratch_root="${ORBIT_SCRATCH_DIR:-$repo_root/.orbit/tmp}"
 mkdir -p "$scratch_root" || fail "cannot prepare scratch $scratch_root for Rust $toolchain"
 scratch_root="$(cd "$scratch_root" && pwd -P)"
+config="$repo_root/.github/codeql/codeql-config.yml"
+[[ -f "$config" ]] || fail "missing CodeQL configuration $config"
+
+# CodeQL enumerates every .rs file under the source root, so scratch inside the
+# checkout (this run's rust-src and builds, earlier runs) must be excluded. The
+# whole scratch tree is excluded, which is only safe if it holds no tracked source.
+scratch_ignore=
+if [[ "$scratch_root" == "$repo_root" ]]; then
+  fail "scratch $scratch_root is the checkout itself; choose a scratch directory that holds no tracked source"
+elif [[ "$scratch_root" == "$repo_root"/* ]]; then
+  scratch_rel="${scratch_root#"$repo_root"/}"
+  [[ "$scratch_rel" =~ ^[[:alnum:]\ ._/@+-]+$ ]] \
+    || fail "scratch $scratch_root contains characters that cannot be excluded from extraction exactly"
+  tracked="$(git -C "$repo_root" ls-files -- ":(literal)$scratch_rel")" \
+    || fail "cannot verify that scratch $scratch_root holds no tracked source"
+  [[ -z "$tracked" ]] || fail "scratch $scratch_root holds tracked checkout files; choose a scratch directory that holds no tracked source"
+  scratch_ignore="$scratch_rel/**"
+fi
+
+# The run-scoped configuration is the repository one plus the scratch exclusion
+# as the first paths-ignore entry; any other paths-ignore layout is refused.
+effective_config="$(awk -v ignore="$scratch_ignore" '
+  function add(indent) { if (ignore != "") print indent "- \"" ignore "\"" }
+  pending && /^[[:space:]]*(#.*)?$/ { print; next }
+  pending {
+    if ($0 !~ /^[[:space:]]*-([[:space:]]|$)/) { bad = 1; exit }
+    match($0, /^[[:space:]]*/); add(substr($0, 1, RLENGTH)); pending = 0
+  }
+  /^paths-ignore:/ {
+    if (seen || $0 !~ /^paths-ignore:[[:space:]]*(#.*)?$/) { bad = 1; exit }
+    seen = 1; pending = 1
+  }
+  { print }
+  END {
+    if (bad || pending) exit 1
+    if (!seen && ignore != "") { print "paths-ignore:"; add("  ") }
+  }' "$config")" \
+  || fail "cannot add the scratch exclusion to $config; paths-ignore must be one top-level block list"
+
 run_dir="$(mktemp -d "$scratch_root/codeql-rust-local.XXXXXX")" || fail "cannot create run scratch for Rust $toolchain"
 echo "codeql-rust-local: run directory: $run_dir" >&2
+
+printf '%s\n' "$effective_config" >"$run_dir/codeql-config.yml"
 
 export RUSTUP_HOME="$run_dir/rustup"
 export CARGO_HOME="$run_dir/cargo"
@@ -73,7 +114,7 @@ common=("--common-caches=$run_dir/codeql-cache" "--logdir=$run_dir/codeql-logs")
 database="$run_dir/database"
 create_status=0
 codeql database create "$database" --language=rust --build-mode=none \
-  "--source-root=$repo_root" "--codescanning-config=$repo_root/.github/codeql/codeql-config.yml" \
+  "--source-root=$repo_root" "--codescanning-config=$run_dir/codeql-config.yml" \
   "--ram=$ram" "${common[@]}" >"$run_dir/extraction.log" 2>&1 || create_status=$?
 
 # Extractor warnings may only be in database/log, not the console stream.
