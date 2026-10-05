@@ -37,6 +37,14 @@ let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
 // hold a permit for nothing); this flag tells the visibility handler to reopen
 // it from `logStreamOffset` instead of before there is an offset to resume.
 let logStreamWanted = false;
+// The stream stays closed until a snapshot succeeds. Opening it at offset 0
+// after a failed snapshot would replay history that the next snapshot also
+// renders. Retries share the stream's backoff, and the same disconnected
+// status, until that cursor exists.
+let logSnapshotReady = false;
+let logSnapshotRetryTimer = null;
+let logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
+let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
 // ORB-10972: the log lives in the Tasks tab's right dock, which has two modes
@@ -439,36 +447,76 @@ function renderLogEvent(ev, isFresh) {
   return row;
 }
 
+function clearLogSnapshotRetry() {
+  if (logSnapshotRetryTimer !== null) {
+    clearTimeout(logSnapshotRetryTimer);
+    logSnapshotRetryTimer = null;
+  }
+}
+
+function scheduleLogSnapshotRetry() {
+  clearLogSnapshotRetry();
+  if (document.hidden || logSnapshotReady) return;
+  const delay = logSnapshotRetryMs;
+  logSnapshotRetryMs = Math.min(logSnapshotRetryMs * 2, LOG_STREAM_RETRY_MAX_MS);
+  logSnapshotRetryTimer = setTimeout(() => {
+    logSnapshotRetryTimer = null;
+    loadLogSnapshot();
+  }, delay);
+}
+
+// Returns false when the dock is absent. That is not a server failure, so the
+// caller must not mark the snapshot ready and must not open a stream.
+function applyLogSnapshot(payload) {
+  const inner = $("logInner");
+  if (!inner) return false;
+  inner.innerHTML = "";
+  logRows = [];
+  const events = payload && Array.isArray(payload.events) ? payload.events : [];
+  if (
+    payload &&
+    typeof payload.offset === "number" &&
+    Number.isFinite(payload.offset) &&
+    payload.offset >= 0
+  ) {
+    logStreamOffset = payload.offset;
+  }
+  events.slice().reverse().forEach(ev => {
+    const row = renderLogEvent(ev, false);
+    inner.appendChild(row);
+    logRows.push(row);
+  });
+  applyLogFilters();
+  if (events.length > 0) updateLogStatusBar(events[events.length - 1]);
+  connectLogStream();
+  return true;
+}
+
+function loadLogSnapshot() {
+  if (document.hidden || logSnapshotReady) return;
+  const attempt = ++logSnapshotAttempt;
+  fetchJson("/api/log?limit=50").then((payload) => {
+    if (attempt !== logSnapshotAttempt || logSnapshotReady) return;
+    if (!applyLogSnapshot(payload)) return;
+    logSnapshotReady = true;
+    logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
+    clearLogSnapshotRetry();
+  }).catch((error) => {
+    if (attempt !== logSnapshotAttempt || logSnapshotReady) return;
+    console.error(error);
+    setLogStreamConnected(false);
+    scheduleLogSnapshotRetry();
+  });
+}
+
 export function initLogTail() {
   wireLogVisibility();
   wireLogPanelResize();
   wireDockSplitter();
   wireLogWrapToggle();
   fitLogPanelToViewport();
-  fetchJson("/api/log?limit=50").then((payload) => {
-    const inner = $("logInner");
-    if (!inner) return;
-    inner.innerHTML = "";
-    logRows = [];
-    const events = payload && Array.isArray(payload.events) ? payload.events : [];
-    if (
-      payload &&
-      typeof payload.offset === "number" &&
-      Number.isFinite(payload.offset) &&
-      payload.offset >= 0
-    ) {
-      logStreamOffset = payload.offset;
-    }
-    events.slice().reverse().forEach(ev => {
-      const row = renderLogEvent(ev, false);
-      inner.appendChild(row);
-      logRows.push(row);
-    });
-    applyLogFilters();
-    if (events.length > 0) updateLogStatusBar(events[events.length - 1]);
-    connectLogStream();
-  }).catch(console.error);
-  
+  loadLogSnapshot();
+
   const followBtn = $("log-follow-tail");
   if (followBtn) {
     followBtn.addEventListener("click", () => {
@@ -646,7 +694,15 @@ function closeLogStream() {
 
 function handleLogVisibilityChange() {
   if (document.hidden) {
+    // Invalidate an in-flight snapshot so a late failure cannot arm a retry
+    // while this tab is hidden. A late success is discarded with it; becoming
+    // visible loads a fresh cursor before any stream opens.
+    logSnapshotAttempt += 1;
+    clearLogSnapshotRetry();
     closeLogStream();
+  } else if (!logSnapshotReady) {
+    logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
+    loadLogSnapshot();
   } else if (logStreamWanted && !logStream) {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     connectLogStream();

@@ -222,19 +222,118 @@ try {
   // follow handler and SSE consumer, fed by a fixture stream.
   await page.evaluate(async () => {
     const fixtureFetch = globalThis.fetch;
-    globalThis.fetch = (url, options) => new URL(url, location.href).pathname === '/api/log'
-      ? Promise.resolve({ ok: true, status: 200, json: async () => ({ events: [], offset: 0 }) })
-      : fixtureFetch(url, options);
+    // The first snapshot fails (dashboard restart / 5xx). Later attempts
+    // succeed only after the test releases the server, so the retry and the
+    // disconnected state are observable before any EventSource exists.
+    let logSnapshotAttempts = 0;
+    let releaseSnapshot = false;
+    globalThis.logSnapshotAttempts = () => logSnapshotAttempts;
+    globalThis.releaseLogSnapshot = () => { releaseSnapshot = true; };
+    globalThis.fetch = (url, options) => {
+      const pathname = new URL(url, location.href).pathname;
+      if (pathname !== '/api/log') return fixtureFetch(url, options);
+      logSnapshotAttempts += 1;
+      if (!releaseSnapshot) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          text: async () => JSON.stringify({ error: 'log snapshot unavailable' }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          events: [{
+            ts: '2026-09-27T12:00:00Z',
+            level: 'info',
+            code: 'OK',
+            source: 'orbit.log',
+            message_html: 'snapshot recovered',
+          }],
+          offset: 42,
+        }),
+      });
+    };
     globalThis.EventSource = class FixtureStream {
       static CLOSED = 2;
-      constructor() { globalThis.logFixtureStream = this; this.readyState = 1; }
+      constructor(url) {
+        globalThis.logFixtureStream = this;
+        globalThis.logFixtureUrl = String(url);
+        this.readyState = 1;
+        queueMicrotask(() => {
+          if (this.readyState === FixtureStream.CLOSED) return;
+          if (typeof this.onopen === 'function') this.onopen();
+        });
+      }
       close() { this.readyState = FixtureStream.CLOSED; }
     };
     const { initLogTail, setDockMode } = await import('/js/log-tail.js');
     initLogTail();
     setDockMode('log');
   });
-  await page.waitForFunction(() => globalThis.logFixtureStream?.onmessage);
+  await page.waitForFunction(() => {
+    const bar = document.getElementById('log-statusbar');
+    const box = bar ? bar.getBoundingClientRect() : { width: 0, height: 0 };
+    const label = bar?.querySelector('.sb-label')?.textContent;
+    return box.width > 0 && box.height > 0
+      && bar.classList.contains('disconnected')
+      && document.getElementById('side-dock')?.classList.contains('disconnected')
+      && label === 'log stream unavailable, retrying'
+      && globalThis.logSnapshotAttempts() >= 1
+      && !globalThis.logFixtureStream;
+  });
+  // Hiding the tab must cancel the snapshot backoff. A background tab neither
+  // retries nor opens a stream; showing it resumes, and only the recovered
+  // snapshot may open the EventSource.
+  const attemptsAtFailure = await page.evaluate(() => {
+    let hidden = true;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    document.dispatchEvent(new Event('visibilitychange'));
+    globalThis.__setLogHidden = (value) => { hidden = value; };
+    return globalThis.logSnapshotAttempts();
+  });
+  await page.waitForTimeout(1300);
+  const whileHidden = await page.evaluate(() => ({
+    attempts: globalThis.logSnapshotAttempts(),
+    stream: Boolean(globalThis.logFixtureStream),
+  }));
+  if (whileHidden.attempts !== attemptsAtFailure || whileHidden.stream) {
+    throw new Error(`hidden tab retried the snapshot or opened a stream: ${JSON.stringify(whileHidden)} after ${attemptsAtFailure}`);
+  }
+  await page.evaluate(() => {
+    globalThis.__setLogHidden(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.hidden;
+    globalThis.releaseLogSnapshot();
+  });
+  await page.waitForFunction(() => {
+    const bar = document.getElementById('log-statusbar');
+    const dock = document.getElementById('side-dock');
+    const stream = globalThis.logFixtureStream;
+    return stream
+      && stream.readyState === 1
+      && typeof stream.onmessage === 'function'
+      && bar
+      && !bar.classList.contains('disconnected')
+      && dock
+      && !dock.classList.contains('disconnected')
+      && bar.getAttribute('aria-label') === 'Latest log line';
+  }, undefined, { timeout: 20000 });
+  const recovered = await page.evaluate(() => ({
+    attempts: globalThis.logSnapshotAttempts(),
+    url: globalThis.logFixtureUrl,
+    text: document.getElementById('logInner')?.textContent || '',
+  }));
+  if (recovered.attempts <= attemptsAtFailure) {
+    throw new Error(`snapshot was not retried after the first failure: ${recovered.attempts} (at failure ${attemptsAtFailure})`);
+  }
+  if (!String(recovered.url).includes('from=42')) {
+    throw new Error(`stream did not resume from the recovered snapshot offset: ${recovered.url}`);
+  }
+  if (!recovered.text.includes('snapshot recovered')) {
+    throw new Error(`recovered snapshot was not rendered: ${recovered.text}`);
+  }
   const logToolbarCheck = async (label, viewport, dockWidth, paused) => {
     await page.setViewportSize(viewport);
     // The dashboard re-applies the saved dock width (or clears --dock-w when
