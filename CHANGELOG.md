@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.27.0
+
+### Breaking Changes
+
+- **Review config split**: before-PR review is `review.before_pr`; after-landing review is the `delivery-code-review` auto-task's `enabled` flag and now covers follower landings. `operation.review_policy` and `review_minutes` still load with a warning, and `review.minutes` now limits one candidate's review. ([ORB-13992], [ORB-13894])
+- **`delivery-qa` auto-task removed**: it is no longer seeded, and the `integrated_qa_v1` coverage is refused for new or updated schedules. Existing copies still load. QA is covered by `qa-sweep` and `qa-full-sweep`. ([ORB-13993])
+
+### Highlights
+
+- **Final recovery for blocked tasks**: a task that ends up `blocked` after its step recovery is used up now gets one last recovery agent, drawn from `workflow.final_recovery_crews` (default `sol:100, opus:20`). That agent can repair, requeue or resume the task instead of leaving it for an operator; `[]` turns it off. ([ORB-13898])
+- **Before-PR reviewer fixes what it finds**: the reviewer commits its fixes as a second commit on the candidate instead of sending the task back for rework. Each candidate gets one review, limited by `review.minutes`. ([ORB-13989])
+- **Re-runs resume from a preserved candidate**: re-running a task that has a `[BLOCKED]` candidate rebases and re-validates that candidate instead of implementing it again. ([ORB-13985])
+- **Host resource throttle**: Orbit samples CPU, memory and disk, shows them as KPI chips and in a Settings › System tab on the dashboard, and holds drain and ship admissions while the host is under pressure. It is on by default, with warnings over the CLI and MCP. ([ORB-11415])
+- **Agent invocations you can wait on**: `orbit run agent --wait` returns the agent's structured answer (summary, findings, next steps), `orbit run logs --follow` streams output, and `orbit_workflow_run_show` reports progress while it runs. ([ORB-13899])
+- **Orbit closes its own PRs**: when a task lands, is rejected or is archived, Orbit closes the task's open delivery and `[BLOCKED]` PRs that it authored, keeping the PR that landed open. Human PRs are never touched. Turn it off with `pr.close_on_terminal = false`. ([ORB-13984])
+
 ## 0.26.0
 
 ### Breaking Changes
