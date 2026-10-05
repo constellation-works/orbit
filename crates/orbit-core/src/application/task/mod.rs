@@ -13,6 +13,7 @@ mod lint;
 mod listing;
 mod params;
 mod paths;
+mod pr_closure;
 mod query;
 mod records;
 mod transitions;

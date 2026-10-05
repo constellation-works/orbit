@@ -52,6 +52,14 @@ struct TaskUpdateContext {
     calling_run_id: Option<String>,
 }
 
+/// A locked write's result plus what the after-lock side effects need: the
+/// status it replaced and the status note it recorded.
+struct LockedTaskUpdate {
+    task: Task,
+    previous_status: TaskStatus,
+    status_note: Option<String>,
+}
+
 pub(super) struct ValidatedTaskFieldEdits {
     pub(super) params: TaskUpdateParams,
     /// Set when this write cleared the crew and the pools chose a replacement;
@@ -243,7 +251,7 @@ impl OrbitRuntime {
         // body must run exactly once and consumes its inputs; `take()` makes
         // both facts explicit rather than forcing the params to be cloneable.
         let mut inputs = Some((params, context));
-        let mut updated: Option<Task> = None;
+        let mut updated: Option<LockedTaskUpdate> = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let (params, context) = inputs.take().ok_or_else(|| {
                 OrbitError::Execution("task update body was invoked more than once".to_string())
@@ -251,7 +259,11 @@ impl OrbitRuntime {
             updated = Some(self.update_task_locked(id, params, context)?);
             Ok(())
         })?;
-        let updated = updated.ok_or_else(|| {
+        let LockedTaskUpdate {
+            task: updated,
+            previous_status,
+            status_note,
+        } = updated.ok_or_else(|| {
             OrbitError::Execution("task update body did not run under the task lock".to_string())
         })?;
 
@@ -260,6 +272,8 @@ impl OrbitRuntime {
         if updated.status == TaskStatus::Done {
             self.record_resolves_side_effects(&updated)?;
         }
+        // So does the forge round trip that closes the task's PRs.
+        self.close_task_prs_after_transition(previous_status, &updated, status_note.as_deref());
         Ok(updated)
     }
 
@@ -268,7 +282,7 @@ impl OrbitRuntime {
         id: &str,
         mut params: TaskUpdateParams,
         context: TaskUpdateContext,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<LockedTaskUpdate, OrbitError> {
         let TaskUpdateContext {
             status_note,
             actor_override,
@@ -402,6 +416,7 @@ impl OrbitRuntime {
             && requested_status.is_some())
         .then(|| FORCED_STATUS_EVENT.to_string());
         let previous_status = task.status;
+        let written_note = status_note.clone();
         let updated = self.with_mutation(|| {
             let updated = self.stores().task_records().update(
                 id,
@@ -432,7 +447,11 @@ impl OrbitRuntime {
             Ok((updated.clone(), event))
         })?;
 
-        Ok(updated)
+        Ok(LockedTaskUpdate {
+            task: updated,
+            previous_status,
+            status_note: written_note,
+        })
     }
 
     /// Apply the validation and canonicalization shared by ordinary updates

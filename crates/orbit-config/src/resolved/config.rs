@@ -20,15 +20,21 @@ use crate::persistence::PersistenceConfig;
 use crate::raw::RawRuntimeConfig;
 use crate::registry::ConfigSnapshot;
 
-/// PR-rendering settings owned by configuration.
+/// PR rendering and lifecycle settings owned by configuration.
 ///
 /// Kept as config-owned data rather than an execution-engine type: this crate
 /// has no engine dependency, so the composition layer that builds a runtime
 /// performs the translation.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrSettings {
     /// URL template used to link a task ID in PR descriptions.
     pub task_url_template: Option<String>,
+    /// Close a task's open Orbit-authored PRs when it reaches done, rejected
+    /// or archived (`pr.close_on_terminal`, default `true`).
+    pub close_on_terminal: bool,
+    /// Normalized forge logins whose PRs count as Orbit-authored; empty means
+    /// the forge CLI's authenticated login (`pr.delivery_authors`).
+    pub delivery_authors: Vec<String>,
 }
 
 /// Every setting a runtime consumer needs, admitted and defaulted.
@@ -105,6 +111,8 @@ impl ResolvedConfig {
             persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
+                close_on_terminal: snapshot.pr_close_on_terminal,
+                delivery_authors: snapshot.pr_delivery_authors.clone(),
             },
             scoring_enabled: snapshot.scoring_enabled,
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
@@ -248,6 +256,8 @@ impl ResolvedConfig {
             persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
+                close_on_terminal: snapshot.pr_close_on_terminal,
+                delivery_authors: snapshot.pr_delivery_authors.clone(),
             },
             scoring_enabled: snapshot.scoring_enabled,
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,

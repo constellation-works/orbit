@@ -200,6 +200,8 @@ impl OrbitRuntime {
 
         if result.status == TaskStatus::Done {
             self.record_resolves_side_effects(&result)?;
+            // Approval to done only ever leaves `review`.
+            self.close_task_prs_after_transition(TaskStatus::Review, &result, note.as_deref());
         }
 
         Ok(result)
@@ -804,10 +806,12 @@ impl OrbitRuntime {
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
 
         let mut result = None;
+        let mut previous_status = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
+            previous_status = Some(task.status);
             result = Some(match task.status {
                 TaskStatus::Proposed => self.with_mutation(|| {
                 let task = self.stores().task_records().update(
@@ -902,6 +906,9 @@ impl OrbitRuntime {
         let result = result.ok_or_else(|| {
             OrbitError::Execution("task reject body did not run under the task lock".to_string())
         })?;
+        if let Some(previous_status) = previous_status {
+            self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
+        }
 
         Ok(result)
     }

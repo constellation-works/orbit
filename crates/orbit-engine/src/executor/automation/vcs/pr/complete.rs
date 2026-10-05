@@ -110,6 +110,13 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
                     .unwrap_or(&context.batch_id),
                 checkpoint,
             )?;
+            // Name the covering commit in the done transition, so the landing
+            // is readable from task history (and from the comment that closes
+            // the task's stale PRs).
+            delivery_fragment = checkpoint
+                .pointer("/already_landed/covering_commit")
+                .and_then(Value::as_str)
+                .map(|commit| format!("already landed as {commit}"));
             json!({ "merged": false, "reason": checkpoint["decision"], "evidence": checkpoint })
         } else {
             ensure_all_tasks_no_diff_expected(&context.tasks)?;

@@ -174,6 +174,8 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let mut applied = None;
         let mut replayed = false;
+        // The status and note this run wrote, for the after-lock PR closure.
+        let mut transition = None;
         self.stores()
             .tasks()
             .with_task_write_lock(&request.task_id, &mut || {
@@ -194,6 +196,7 @@ impl OrbitRuntime {
                     ensure_completion_run_stopped(self, &task, None, Some(&request.run_id))?;
                 }
                 self.write_plan(&task, &plan)?;
+                transition = Some((task.status, plan.note.clone()));
                 applied = Some(plan.outcome);
                 Ok(())
             })?;
@@ -212,6 +215,13 @@ impl OrbitRuntime {
             )
         {
             self.record_resolves_side_effects(&self.get_task(&request.task_id)?)?;
+        }
+        if let Some((previous_status, note)) = transition {
+            self.close_task_prs_after_transition(
+                previous_status,
+                &self.get_task(&request.task_id)?,
+                Some(&note),
+            );
         }
         Ok(outcome)
     }

@@ -315,6 +315,7 @@ pub(crate) fn build_context_from_roots(
             scoring_enabled,
             automation_stall_window_minutes,
             pr_config,
+            runtime_config.pr.clone(),
             workflow_base_branch,
             workflow_auto_ship,
             runtime_config.resource_throttle.clone(),

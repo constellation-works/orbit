@@ -144,6 +144,19 @@ pub enum OrbitEvent {
         relation: String,
         reason: String,
     },
+    /// A task's terminal decision closed one of its Orbit-authored PRs.
+    TaskPullRequestClosed {
+        task_id: String,
+        pr_number: u64,
+    },
+    /// Closing a task's Orbit-authored PRs failed at the forge. A warning:
+    /// the terminal transition itself already succeeded. `pr_number` is
+    /// absent when the failure preceded any single PR (the PR lookup).
+    TaskPullRequestCloseFailed {
+        task_id: String,
+        pr_number: Option<u64>,
+        reason: String,
+    },
     TaskStarted {
         id: String,
         started_by: String,
