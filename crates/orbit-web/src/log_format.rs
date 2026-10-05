@@ -6,6 +6,7 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::string::FromUtf8Error;
 
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
@@ -171,6 +172,7 @@ pub(crate) fn read_recent_matching_events(
 
 /// Newest matching JSONL events from a seekable reader, scanning backwards.
 ///
+/// Malformed JSON and non-UTF-8 lines are skipped; I/O errors propagate.
 /// `block_size` is the read window. Callers use [`TAIL_READ_BLOCK`].
 fn read_recent_matching_events_from<R: Read + Seek>(
     reader: R,
@@ -185,7 +187,19 @@ fn read_recent_matching_events_from<R: Read + Seek>(
     // only as matching records are found rather than preallocating from it.
     let mut newest_first = Vec::new();
     for line in ReverseLines::with_block_size(reader, block_size)? {
-        if let Some(event) = parse_matching_event(&line?, filters) {
+        let line = match line {
+            Ok(line) => line,
+            // Only skip decoding failures, not an InvalidData from the reader.
+            Err(err)
+                if err
+                    .get_ref()
+                    .is_some_and(|cause| cause.is::<FromUtf8Error>()) =>
+            {
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+        if let Some(event) = parse_matching_event(&line, filters) {
             newest_first.push(event);
             if newest_first.len() == limit {
                 break;
