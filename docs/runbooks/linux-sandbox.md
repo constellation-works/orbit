@@ -7,9 +7,11 @@ paths:
   - "crates/orbit-cli/src/command/init/**"
   - "crates/orbit-exec/src/**"
   - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/**"
+  - "crates/orbit-cmd/src/update/bundled_bwrap.rs"
+  - "scripts/build-bundled-bwrap.sh"
 related_features: [policy-sandbox, executors]
 related_artifacts: []
-last_validated: 2026-10-03
+last_validated: 2026-10-04
 ---
 
 # Linux sandbox onboarding and diagnostics
@@ -24,10 +26,11 @@ with the binary already installed and names both ways forward: run `orbit init` 
 intended account, or reinstall with `ORBIT_SKIP_HOST_PREREQUISITES=1` (below) in an
 image build or container that runs as root.
 
-Preparation first runs Orbit's exact `/usr/bin/bwrap` namespace-and-mount probe as that
-account and checks `--bind-fd`. A ready host causes no package or profile writes. When
-required, Orbit uses the distribution's package manager and, on Ubuntu 24.04, only the
-packaged `bwrap-userns-restrict` AppArmor rule. Administrator authentication is requested
+Preparation first runs Orbit's exact namespace-and-mount probe as that account and checks
+`--bind-fd`. A ready host causes no package or profile writes. When required, Orbit uses
+the distribution's package manager and, on Ubuntu 24.04, only the packaged
+`bwrap-userns-restrict` AppArmor rule. When the host still has no Bubblewrap, or only one
+without `--bind-fd`, Orbit installs its signed [bundled Bubblewrap](#bundled-bubblewrap). Administrator authentication is requested
 only during explicit interactive installation/onboarding. `orbit init --non-interactive`
 requires root or existing/passwordless `sudo` authority and never waits for a password.
 Package/profile failures are retryable with `orbit init --host-prerequisites-only` after
@@ -58,7 +61,10 @@ ask for `sudo` or change the machine running the tests.
 
 `orbit doctor providers --json` reports each executor's configured `sandbox` separately
 from `sandbox_ready` and `sandbox_readiness_detail` for `linux-bwrap`. Readiness is a fresh
-capability check for the invoking user, not an inference from the executor setting.
+capability check for the invoking user, not an inference from the executor setting. When a
+Bubblewrap passed the check, `sandbox_wrapper` says which one (`host` or `bundled`), with
+`sandbox_wrapper_path` and `sandbox_wrapper_version`; the table's `BWRAP` column shows the
+same, for example `host 0.11.1` or `bundled 0.12.0`.
 
 ## Distribution matrix
 
@@ -66,6 +72,8 @@ These are the **automatic preparation code paths**, based on distribution packag
 inventories. Native package/profile/onboarding and sandboxed-subprocess validation is
 **not yet available** for any row; this change does not claim a validated supported row.
 The final probe refuses a package that lacks `--bind-fd` or cannot create the namespace.
+Every row falls back to the bundled Bubblewrap when the package path leaves no Bubblewrap
+with `--bind-fd`.
 
 | Distribution/version | Package path | Security-policy handling | Native integration |
 |---|---|---|---|
@@ -74,7 +82,7 @@ The final probe refuses a package that lacks `--bind-fd` or cannot create the na
 | Fedora 43–45 | `dnf5` or `dnf`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
 | RHEL, Rocky, AlmaLinux, CentOS 10 | `dnf5` or `dnf`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
 | Arch rolling | `pacman`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
-| Ubuntu 22.04, Debian 12, Enterprise Linux 9, other versions | No automatic package changes | Explicit unsupported result if preparation is needed | Not run |
+| Ubuntu 22.04, Debian 12, Enterprise Linux 9, other versions | No package changes; bundled Bubblewrap when `bwrap` is missing or lacks `--bind-fd` | Preserve existing host policy; explicit unsupported result for any other probe failure | Not run |
 
 Package availability references: [Ubuntu Noble bubblewrap](https://packages.ubuntu.com/noble/bubblewrap),
 [Debian Trixie bubblewrap](https://packages.debian.org/trixie/bubblewrap),
@@ -83,10 +91,68 @@ Package availability references: [Ubuntu Noble bubblewrap](https://packages.ubun
 and [Arch bubblewrap](https://archlinux.org/packages/extra/x86_64/bubblewrap/).
 Package listings alone do not establish namespace policy or an unprivileged probe pass.
 
+## Bundled Bubblewrap
+
+Some supported hosts package a Bubblewrap older than 0.8.0, which lacks `--bind-fd`
+(Ubuntu 22.04 ships 0.6.1), or none at all. Each Orbit release therefore publishes a
+static Bubblewrap built from a pinned upstream release for x86_64 and aarch64. It is a
+fallback only: the host's `/usr/bin/bwrap` is used whenever it advertises `--bind-fd`, and
+nothing is bundled onto such a host.
+
+**When it is installed.** `orbit init` (and the shell installer, which runs it) installs
+the bundled binary only when the probe reports that `/usr/bin/bwrap` is missing or lacks
+`--bind-fd`, after the distribution package path, if any, has been tried. Namespace
+denial by the kernel or an enclosing container never triggers it, and Ubuntu 24.04's
+AppArmor handling is unchanged. The bundled binary is never setuid; it needs the same
+unprivileged user namespaces as the packaged one.
+
+**Trust model.** The bundled binary lives at one fixed, root-owned path:
+`/usr/local/libexec/orbit/bwrap`, mode `0755`, owned by `root:root`, under root-owned
+directories that neither group nor others can write. Executors run only that path or
+`/usr/bin/bwrap`, never a `PATH` lookup or any other location. Immediately before every
+spawn Orbit re-checks the bundled path with `lstat`: a regular file (not a symlink), owned
+by root, not group- or other-writable, not setuid or setgid, and executable, with every
+ancestor directory a real directory owned by root and not group- or other-writable. A
+sandboxed agent runs as the unprivileged invoking user, so it can neither rewrite the
+binary nor rename anything over it, whatever paths its write policy binds. A user-owned
+copy verified by digest before each spawn was rejected: the check and the `exec` would
+race against the same user who owns the file.
+
+**Verification before install.** `orbit init` fetches `orbit-checksums.txt` and its
+signature from the release that matches the running Orbit version, verifies the signature
+against the same release-signing trust set as `install.sh` and `orbit update`, and checks
+`orbit-bwrap-<arch>-linux` against the signed digest. An unsigned manifest, a missing
+entry or a digest mismatch stops before `sudo`. Only then does it run, with administrator
+authority, `install -d -o root -g root -m 0755 /usr/local/libexec/orbit` and
+`install -o root -g root -m 0755 <staged> /usr/local/libexec/orbit/bwrap`, and it re-hashes
+the installed file, removing it if it differs from the signed digest. The shell installer
+with a custom `ORBIT_INSTALL_BASE_URL` mirrors that release for this step;
+`ORBIT_UPDATE_RELEASE_DIR` and `ORBIT_INSTALL_REPO` select the source as for `orbit update`.
+
+**Updates.** When the bundled binary is installed, `orbit update` finishes by running the
+new version's `orbit init --host-prerequisites-only --non-interactive`, which replaces a
+bundled binary whose version differs from the new release's pin. Without passwordless
+`sudo` that step reports a failure and its recovery command; the previous bundled binary
+stays in place and keeps working while it still passes the probe. To remove the bundled
+binary, delete `/usr/local/libexec/orbit/bwrap` as root; Orbit then uses the host's
+Bubblewrap if it qualifies and otherwise reports the sandbox not ready.
+
+**Licence and sources.** Bubblewrap is LGPL-2.0-or-later and the build links libcap
+statically. Each release publishes, alongside the binaries and listed in the signed
+`orbit-checksums.txt`, the exact upstream source tarballs (`bubblewrap-<version>.tar.xz`,
+`libcap-<version>.tar.xz`), the build recipe `orbit-bwrap-build.sh`
+([`scripts/build-bundled-bwrap.sh`](../../scripts/build-bundled-bwrap.sh)), a
+`.buildinfo` per architecture recording the pinned inputs and toolchain, and
+`orbit-bwrap-NOTICE.txt` with the licence texts. The release workflow builds them natively
+on each architecture in a digest-pinned Alpine image. To bump Bubblewrap, change
+`BWRAP_VERSION` and its SHA-256 in the script together with `BUNDLED_BWRAP_VERSION` in
+`crates/orbit-exec/src/linux_sandbox/wrapper.rs`.
+
 ## Why the probe fails closed
 
-Linux executors use `linux-bwrap`, which resolves only `/usr/bin/bwrap` and fails closed
-when its capabilities are unavailable. Ubuntu 24.04 can restrict unprivileged user
+Linux executors use `linux-bwrap`, which runs only `/usr/bin/bwrap` or the root-owned
+bundled `/usr/local/libexec/orbit/bwrap` and fails closed when neither has the required
+capabilities. Ubuntu 24.04 can restrict unprivileged user
 namespaces through AppArmor; the narrow packaged rule can grant Bubblewrap the needed
 namespace access without changing the global restriction. Existing custom profile files
 or loaded profiles that still fail the probe are preserved and reported as conflicts.
@@ -149,10 +215,11 @@ cause, then run `orbit init --host-prerequisites-only` and recheck doctor. Do no
 `kernel.apparmor_restrict_unprivileged_userns` globally or enable
 `allow_fallback`; both weaken or bypass the fail-closed boundary.
 
-Other distributions need the same two conditions: an executable `/usr/bin/bwrap` and
-permission for an unprivileged user to create user namespaces and mounts. Non-Linux hosts
-are unaffected: macOS uses `sandbox-exec`, and platforms without a shipped OS-level backend
-rely on in-process filesystem guards only.
+Other distributions need the same two conditions: a Bubblewrap with `--bind-fd` (the
+host's `/usr/bin/bwrap` or the bundled one) and permission for an unprivileged user to
+create user namespaces and mounts. Non-Linux hosts are unaffected: macOS uses
+`sandbox-exec`, and platforms without a shipped OS-level backend rely on in-process
+filesystem guards only.
 
 ## Explicitly disable worker sandboxing
 

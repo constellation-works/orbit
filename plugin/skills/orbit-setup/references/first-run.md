@@ -47,7 +47,8 @@ installation; ask only for missing choices or required host permissions.
 
 Only when agent execution is requested, verify an authenticated supported agent CLI on the execution
 host. PR mode also needs an authenticated `gh` client. On Linux, `/usr/bin/bwrap`
-must pass its namespace/mount probe; Ubuntu's AppArmor restrictions may require
+(or Orbit's bundled Bubblewrap, where the host's lacks `--bind-fd`) must pass
+its namespace/mount probe; Ubuntu's AppArmor restrictions may require
 the packaged narrow Bubblewrap profile. Complete the [Linux sandbox setup](linux-sandbox.md)
 before dispatch. Do not disable host protection or enable sandbox fallback to hide
 a failed probe.

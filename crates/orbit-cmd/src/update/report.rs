@@ -122,12 +122,47 @@ pub(super) fn finish(
 /// names the binary this update just installed.
 const CLOCK_STEP: &[&str] = &["clock", "repair"];
 
+/// Host preparation run by the replacement executable, which re-installs the
+/// bundled Bubblewrap when it is older than the one the new release pins.
+const BUNDLED_BWRAP_STEP: &[&str] = &["init", "--host-prerequisites-only", "--non-interactive"];
+
 /// Migrate `.orbit/` state, reconcile managed assets, then repoint the host
-/// clock unit — in that order.
+/// clock unit — in that order — and refresh the bundled Bubblewrap when this
+/// host uses one.
 fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
     let mut steps = workspace_steps(environment, executable);
     steps.push(clock_step(environment, executable, &steps));
+    steps.extend(bundled_bwrap_step(environment, executable));
     steps
+}
+
+/// The bundled Bubblewrap is part of the Orbit release, so it moves with
+/// Orbit. Only a host that already has one installed runs this step: the
+/// distribution's own Bubblewrap is not Orbit's to change during an update.
+/// Like the clock step it is host-wide, and like `orbit init` it never
+/// prompts — a host without passwordless sudo reports the step as failed with
+/// the command to run by hand.
+fn bundled_bwrap_step(
+    environment: &UpdateEnvironment,
+    executable: &Path,
+) -> Option<ConvergenceStep> {
+    if !environment.bundled_bwrap_installed {
+        return None;
+    }
+    let cwd = match environment.workspace.as_ref() {
+        Some(workspace) => workspace.cwd.clone(),
+        None => match std::env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                return Some(ConvergenceStep::skipped(
+                    &BUNDLED_BWRAP_STEP.join(" "),
+                    &format!("could not resolve the current directory: {error}"),
+                ));
+            }
+        },
+    };
+    // Host preparation refuses `--root`: it touches no workspace.
+    Some(run_step(executable, &cwd, None, BUNDLED_BWRAP_STEP))
 }
 
 fn workspace_steps(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
@@ -205,7 +240,12 @@ fn clock_step(
 }
 
 fn recovery_text(report: &UpdateReport, failed: &[&str], root_argument: Option<&Path>) -> String {
+    let bundled_bwrap_step = BUNDLED_BWRAP_STEP.join(" ");
     let command = |args: &str| {
+        if args == bundled_bwrap_step {
+            // Host preparation takes no root, and by hand it may prompt for sudo.
+            return "`orbit init --host-prerequisites-only`".to_string();
+        }
         root_argument.map_or_else(
             || format!("`orbit {args}`"),
             |root| format!("`orbit --root {} {args}`", root.display()),

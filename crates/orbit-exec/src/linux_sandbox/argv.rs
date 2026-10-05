@@ -217,7 +217,7 @@ pub(super) fn compile_plan_with_credentials(
     };
 
     Ok(LinuxBwrapPlan {
-        wrapper: TRUSTED_BWRAP_PATH.to_string(),
+        wrapper: bwrap_program_for_audit().to_string(),
         args: out,
         dropped_grants,
         mount_sources: Vec::new(),

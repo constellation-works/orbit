@@ -18,6 +18,7 @@ mod probe;
 mod rules;
 mod spawn;
 mod types;
+mod wrapper;
 mod write_grants;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,6 +43,7 @@ pub use types::{
     LinuxBwrapMountAuthority, LinuxBwrapMountEvidence, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
     LinuxBwrapSpawnRequest,
 };
+pub use wrapper::{BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapSource, HOST_BWRAP_PATH};
 pub use write_grants::{
     UnsatisfiedWriteGrant, WriteAnchorKind, linux_bwrap_write_grant_diagnostic,
     linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
@@ -68,7 +70,6 @@ use mounts::{
     append_cargo_download_cache_mounts, append_stable_toolchain_mounts, cargo_home_dir,
     cwd_is_writable_root, profile_grants_write, push_mount,
 };
-use probe::TRUSTED_BWRAP_PATH;
 use rules::{
     GlobMatches, canonical_existing, exact_or_subtree_root, expand_each_rule, expand_rules,
     is_exact_or_subtree, is_narrow_reallow, mount_paths_for_rule, overlaps_writable_root,
@@ -77,6 +78,7 @@ use rules::{
 #[cfg(all(test, target_os = "linux"))]
 use spawn::inherit_mount_sources;
 use spawn::prepare_mount_source;
+use wrapper::trusted_wrapper;
 use write_grants::{CompiledModifyRules, compile_rule_regex, render_glob_path};
 
 #[cfg(test)]

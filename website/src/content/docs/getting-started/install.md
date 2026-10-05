@@ -82,11 +82,14 @@ pull requests.
 
 Orbit runs each agent in an OS-level sandbox: `sandbox-exec` on macOS, which
 needs no setup, and Bubblewrap on Linux, which fails closed without a trusted
-`/usr/bin/bwrap`.
+Bubblewrap that supports `--bind-fd`.
 
 On Linux, `orbit init` prepares the sandbox. It probes Bubblewrap as your
 account and, only if that fails, installs it through the distribution's
-package manager, asking for your password. On Ubuntu 24.04 it also loads the
+package manager, asking for your password. Where the distribution's Bubblewrap
+is missing or too old for Orbit, as on Ubuntu 22.04, it installs the signed
+Bubblewrap published with each Orbit release to `/usr/local/libexec/orbit/bwrap`
+instead. On Ubuntu 24.04 it also loads the
 packaged AppArmor rule. Run `orbit init` as the account that will run Orbit,
 not through `sudo`.
 

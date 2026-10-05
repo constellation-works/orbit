@@ -52,13 +52,11 @@ pub fn spawn_under_linux_bwrap(request: LinuxBwrapSpawnRequest<'_>) -> Result<Ch
         stdout,
         stderr,
     } = request;
-    if plan.wrapper != TRUSTED_BWRAP_PATH {
-        return Err(OrbitError::Execution(format!(
-            "refusing untrusted Bubblewrap wrapper `{}`",
-            plan.wrapper
-        )));
-    }
-    let mut command = Command::new(TRUSTED_BWRAP_PATH);
+    // Only the host or bundled path is ever executed, and the bundled one is
+    // ownership-checked here rather than at probe time so a binary replaced
+    // since the probe is refused before it runs.
+    let wrapper = trusted_wrapper(&plan.wrapper)?;
+    let mut command = Command::new(&wrapper);
     command
         // `env` is the complete child environment the caller composed from the
         // `[execution.env]` allowlist; the sandbox adds nothing ambient of its
@@ -81,7 +79,8 @@ pub fn spawn_under_linux_bwrap(request: LinuxBwrapSpawnRequest<'_>) -> Result<Ch
     }
     command.spawn().map_err(|error| {
         OrbitError::Execution(format!(
-            "failed to spawn trusted Bubblewrap `{TRUSTED_BWRAP_PATH}`: {error}"
+            "failed to spawn trusted Bubblewrap `{}`: {error}",
+            wrapper.display()
         ))
     })
 }

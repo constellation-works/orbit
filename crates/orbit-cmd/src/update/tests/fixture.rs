@@ -166,6 +166,35 @@ impl Fixture {
         .expect("write latest");
     }
 
+    /// Publish arbitrary assets under one manifest, signed correctly or not.
+    pub fn publish_assets(&self, version: &str, assets: &[(&str, &[u8])], sign_correctly: bool) {
+        let directory = self.mirror.join(format!("v{version}"));
+        std::fs::create_dir_all(&directory).expect("release directory");
+        let mut manifest = String::new();
+        for (name, bytes) in assets {
+            std::fs::write(directory.join(name), bytes).expect("write asset");
+            let digest = orbit_common::security::release::sha256_hex(bytes);
+            manifest.push_str(&format!("{digest}  {name}\n"));
+        }
+        std::fs::write(directory.join(RELEASE_CHECKSUMS_FILENAME), &manifest)
+            .expect("write manifest");
+        let signed = if sign_correctly {
+            manifest
+        } else {
+            format!("{manifest}# not what was published\n")
+        };
+        std::fs::write(
+            directory.join(RELEASE_CHECKSUMS_SIGNATURE_FILENAME),
+            sign(signed.as_bytes()),
+        )
+        .expect("write signature");
+    }
+
+    /// A source reading this fixture's release mirror.
+    pub fn source(&self) -> DirectoryReleaseSource {
+        DirectoryReleaseSource::new(self.mirror.clone())
+    }
+
     /// Corrupt a published archive after its manifest was signed.
     pub fn tamper_with_archive(&self, version: &str) {
         let asset = crate::update::channel::release_archive_name(TEST_TARGET);
@@ -206,6 +235,7 @@ impl Fixture {
                 root: cwd.join(".orbit"),
                 cwd,
             }),
+            bundled_bwrap_installed: false,
         }
     }
 

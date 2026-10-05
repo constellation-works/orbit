@@ -22,6 +22,7 @@
 //! which are the same idempotent operations the operator would run by hand.
 
 mod admission;
+pub mod bundled_bwrap;
 pub mod channel;
 pub mod converge;
 mod environment;

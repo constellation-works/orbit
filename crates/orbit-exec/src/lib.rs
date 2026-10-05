@@ -79,7 +79,8 @@ pub use linux_landlock::{
 #[cfg(target_os = "linux")]
 pub use linux_sandbox::probe_bwrap_fresh_for_user;
 pub use linux_sandbox::{
-    BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
+    BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource, HOST_BWRAP_PATH,
+    LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
     LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest,
     UnsatisfiedWriteGrant, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
     compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority, existing_glob_matches,

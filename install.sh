@@ -246,6 +246,14 @@ resolve_target() {
   esac
 }
 
+# The bundled Bubblewrap published for this Linux architecture, if any.
+resolve_bwrap_asset() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64 | amd64) printf 'orbit-bwrap-x86_64-linux' ;;
+    aarch64 | arm64) printf 'orbit-bwrap-aarch64-linux' ;;
+  esac
+}
+
 need_cmd awk
 need_cmd date
 need_cmd install
@@ -315,6 +323,22 @@ case "$TARGET" in
       prepare_flags=""
     else
       prepare_flags="--non-interactive"
+    fi
+    # When the host's Bubblewrap is missing or lacks --bind-fd, preparation
+    # installs the signed bundled one from the release Orbit was installed
+    # from. A custom base URL is mirrored for it here; the binary re-verifies
+    # the manifest signature and digest itself before installing anything.
+    if [ -n "${ORBIT_INSTALL_BASE_URL:-}" ] && [ -z "${ORBIT_UPDATE_RELEASE_DIR:-}" ]; then
+      BWRAP_ASSET="$(resolve_bwrap_asset)"
+      INSTALLED_VERSION="$("${INSTALL_DIR}/${BINARY_NAME}" --version | awk '{ print $NF }')"
+      MIRROR_DIR="${TMP_DIR}/release-mirror/v${INSTALLED_VERSION#v}"
+      mkdir -p "$MIRROR_DIR"
+      cp "$CHECKSUM_PATH" "$SIGNATURE_PATH" "$MIRROR_DIR/"
+      if [ -n "$BWRAP_ASSET" ] && awk -v asset="$BWRAP_ASSET" '$2 == asset { found = 1 } END { exit !found }' "$CHECKSUM_PATH"; then
+        download "${BASE_URL}/${BWRAP_ASSET}" "${MIRROR_DIR}/${BWRAP_ASSET}"
+      fi
+      ORBIT_UPDATE_RELEASE_DIR="${TMP_DIR}/release-mirror"
+      export ORBIT_UPDATE_RELEASE_DIR
     fi
     # A failed preparation still fails the install, but the binary is already
     # in place, so say how to finish instead of leaving only the raw error.

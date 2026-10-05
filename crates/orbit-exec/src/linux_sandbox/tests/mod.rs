@@ -21,3 +21,4 @@ fn profile(modify: Vec<String>) -> ResolvedFsProfile {
 mod credentials;
 mod descriptor;
 mod mask;
+mod wrapper;
