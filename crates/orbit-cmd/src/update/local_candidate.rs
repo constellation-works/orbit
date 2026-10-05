@@ -655,15 +655,6 @@ fn retry_command(
     expected_commit: &str,
 ) -> String {
     let mut words = Vec::new();
-    if let Some(install_dir) = environment.executable.parent() {
-        // Reproduce the managed-channel selection even when this update was
-        // invoked with a one-command ORBIT_INSTALL_DIR override. The recovery
-        // command is meant to work when copied into a later shell too.
-        words.push(format!(
-            "ORBIT_INSTALL_DIR={}",
-            shell_word(&install_dir.display().to_string())
-        ));
-    }
     words.push(environment.executable.display().to_string());
     if let Some(root) = environment
         .workspace
@@ -686,11 +677,19 @@ fn retry_command(
     if request.allow_downgrade {
         words.push("--allow-downgrade".to_string());
     }
-    words
-        .iter()
-        .map(|word| shell_word(word))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut command = Vec::new();
+    if let Some(install_dir) = environment.executable.parent() {
+        // Reproduce the managed-channel selection even when this update was
+        // invoked with a one-command ORBIT_INSTALL_DIR override. The recovery
+        // command is meant to work when copied into a later shell too. Keep
+        // the assignment syntax unquoted while quoting its value as one word.
+        command.push(format!(
+            "ORBIT_INSTALL_DIR={}",
+            shell_word(&install_dir.display().to_string())
+        ));
+    }
+    command.extend(words.iter().map(|word| shell_word(word)));
+    command.join(" ")
 }
 
 /// Quote `word` for a POSIX shell when it holds anything beyond a safe set.
