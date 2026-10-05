@@ -49,6 +49,11 @@ jq -r 'select(.level=="ERROR")
 `RUST_LOG` controls the tracing filter for any Orbit process. For example,
 `RUST_LOG=debug orbit task list` uses standard `EnvFilter` syntax.
 
+The dashboard log snapshot (`/api/log`) and Errors tab
+(`/api/diagnostics/errors`) skip malformed JSON and non-UTF-8 lines, continuing
+to show valid records on either side. File access and read errors still fail the
+request.
+
 ## Rotation and retention
 
 Rotation is size-based and checked once at process start. When the active file exceeds the

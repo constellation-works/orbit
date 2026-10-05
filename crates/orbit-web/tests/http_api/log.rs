@@ -65,6 +65,61 @@ fn assert_step(value: &Value, step: &str) {
 }
 
 #[test]
+fn snapshots_and_diagnostics_skip_non_utf8_log_records() {
+    isolated(
+        "log::snapshots_and_diagnostics_skip_non_utf8_log_records",
+        || {
+            let fixture = Fixture::new();
+            let record = |timestamp: &str, level: &str, step: &str| {
+                format!(
+                    "{}\n",
+                    json!({
+                        "timestamp": timestamp, "level": level, "target": "orbit.job.step_started",
+                        "fields": {"job_run_id": "http-log-fixture", "step_id": step},
+                    })
+                )
+            };
+            let mut bytes = record("2026-10-03T01:00:00Z", "ERROR", "older-error").into_bytes();
+            bytes.extend_from_slice(b"malformed JSON\n");
+            // A truncated multibyte character inside an otherwise valid JSON record.
+            bytes.extend_from_slice(
+                b"{\"level\":\"ERROR\",\"fields\":{\"message\":\"torn-\xe2\x82\"}}\n",
+            );
+            bytes.extend_from_slice(record("2026-10-03T01:01:00Z", "INFO", "info").as_bytes());
+            bytes.extend_from_slice(
+                record("2026-10-03T01:02:00Z", "ERROR", "newer-error").as_bytes(),
+            );
+            fs::write(fixture.path("process.log"), &bytes).unwrap();
+            let server = fixture.server(false);
+
+            let response = server.get("/api/log?limit=3");
+            assert_eq!(response.status().as_u16(), 200);
+            let snapshot = json_ok(response);
+            assert_eq!(snapshot["events"].as_array().unwrap().len(), 3);
+            for (event, step) in snapshot["events"].as_array().unwrap().iter().zip([
+                "older-error",
+                "info",
+                "newer-error",
+            ]) {
+                assert_step(event, step);
+            }
+            assert_eq!(snapshot["offset"], bytes.len() as u64);
+
+            let response = server.get("/api/diagnostics/errors?limit=2");
+            assert_eq!(response.status().as_u16(), 200);
+            let errors = json_ok(response);
+            assert_eq!(errors.as_array().unwrap().len(), 2);
+            assert_eq!(errors[0]["step"], "newer-error");
+            assert_eq!(errors[1]["step"], "older-error");
+            for error in errors.as_array().unwrap() {
+                assert_eq!(error["source"], "process");
+                assert_eq!(error["job_run"], "http-log-fixture");
+            }
+        },
+    );
+}
+
+#[test]
 fn sse_replays_snapshot_gap_and_last_event_id_without_duplicates() {
     isolated(
         "log::sse_replays_snapshot_gap_and_last_event_id_without_duplicates",
