@@ -18,6 +18,7 @@ use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 use super::*;
 
 mod import;
+mod inspect;
 mod publish;
 
 fn open_registry(global: &Path) -> TaskRegistryStore {

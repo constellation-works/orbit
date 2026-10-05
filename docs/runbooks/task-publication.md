@@ -216,7 +216,9 @@ orbit --workspace <local-consumer-workspace> task publication inspect \
 The result labels every record with publication time, generation, workspace, source identity,
 authority, publication ID, commit, freshness, completeness, and `render_authority: snapshot`.
 It is not live owner state. Pairing mismatch, unsupported schema, corrupt JSONL, changed bundle
-or attachment bytes, or invalid Git lineage returns no trusted task projection.
+or attachment bytes, invalid Git lineage, or a symlink or other non-regular entry at the
+envelope or under `tasks/` returns no trusted task projection. The link is refused before its
+target is read.
 
 Restore the global `config.toml` (including its `[machine]` table) plus `workspaces.json` authority evidence first.
 V1 has no authority-transfer command: the selected recovery workspace must be an owner checkout
