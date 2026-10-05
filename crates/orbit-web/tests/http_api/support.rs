@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
-use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
+use orbit_types::workspace::{
+    Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
+};
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde_json::{Value, json};
 use wait_timeout::ChildExt;
@@ -96,6 +98,15 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> Self {
+        Self::with_owner(None)
+    }
+
+    /// A replica checkout of a workspace `owner_machine_id` owns.
+    pub(super) fn replica_of(owner_machine_id: &str) -> Self {
+        Self::with_owner(Some(owner_machine_id))
+    }
+
+    fn with_owner(remote_owner: Option<&str>) -> Self {
         assert!(
             std::env::var_os(CHILD_TEST).is_some(),
             "mutable fixture must be isolated"
@@ -120,12 +131,18 @@ impl Fixture {
         .unwrap();
         let id = "ws_http_fixture".to_string();
         let machine = orbit_registry::machine_identity::load_machine_identity(&global).unwrap();
+        let owner_machine_id = remote_owner.map_or(machine.id, str::to_owned);
+        let mut checkout = WorkspaceCheckout::owner(id.clone(), repo, work.clone());
+        if remote_owner.is_some() {
+            checkout.role = Some(WorkspaceCheckoutRole::Replica);
+            checkout.owner_machine_id = Some(owner_machine_id.clone());
+        }
         let now = Utc::now();
         let registry = WorkspaceRegistry {
             workspaces: vec![Workspace {
                 id: id.clone(),
                 name: "fixture".into(),
-                owner_machine_id: Some(machine.id),
+                owner_machine_id: Some(owner_machine_id),
                 git_remote: None,
                 ship_mode: None,
                 base_branch: "agent-main".into(),
@@ -133,7 +150,7 @@ impl Fixture {
                 created_at: now,
                 updated_at: now,
             }],
-            checkouts: vec![WorkspaceCheckout::owner(id, repo, work.clone())],
+            checkouts: vec![checkout],
             ..Default::default()
         };
         orbit_registry::workspace_registry::save_registry_to(

@@ -20,8 +20,11 @@ Three things must all be true for a routine to fire:
 3. The routine is not paused on this host.
 
 The workspace itself opts in by being registered: the tick loads definitions
-from every registered, active **owner** checkout on the host. Replica checkouts
-are skipped, and there is no config key to set.
+from every registered, active checkout on the host, and there is no config key
+to set. A **replica** checkout fires only its `worktree-gc` routine, which
+reclaims that host's claimed-leaf worktrees after asking the owner whether each
+task settled. Its other routines and auto-tasks are owner work: they are listed
+as `owner-only` with the owner machine named and never fire there.
 
 ## Turning the scheduler on
 

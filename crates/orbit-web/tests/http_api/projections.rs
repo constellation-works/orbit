@@ -8,7 +8,7 @@ use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
-use super::support::{Fixture, isolated, json_ok, write_json};
+use super::support::{Fixture, error_code, isolated, json_ok, write_json};
 
 fn seed_cli_failure(fixture: &Fixture, id: &str, ts: DateTime<Utc>, blob_ref: &str) {
     fixture
@@ -405,6 +405,74 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
                 fs::read_to_string(cursor).unwrap(),
                 "{broken",
                 "GET must preserve corrupt evidence"
+            );
+        },
+    );
+}
+
+/// [ORB-14173] On a replica the dashboard lists the worktree GC routine as
+/// toggleable and the owner's work apart with the owner named; toggling the
+/// owner's routine is refused without a write.
+#[test]
+fn replica_routines_project_only_worktree_gc_as_toggleable() {
+    isolated(
+        "projections::replica_routines_project_only_worktree_gc_as_toggleable",
+        || {
+            let fixture = Fixture::replica_of("hm_fixture_remote");
+            fixture.job("worktree_gc_pipeline");
+            fixture.job("workspace_ship_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            for (name, job) in [
+                ("replica-gc", "worktree_gc_pipeline"),
+                ("replica-ship", "workspace_ship_pipeline"),
+            ] {
+                fs::write(
+                    routines.join(format!("{name}.yaml")),
+                    format!(
+                        "schemaVersion: 1\nname: {name}\nenabled: false\ntrigger: {{cron: '* * * * *'}}\ntarget: job:{job}\n"
+                    ),
+                )
+                .unwrap();
+            }
+            let ship_path = routines.join("replica-ship.yaml");
+            let ship_before = fs::read(&ship_path).unwrap();
+            let server = fixture.server(true);
+            let report = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+            let scheduled = report["routines"].as_array().unwrap();
+            assert_eq!(scheduled.len(), 1, "{report}");
+            assert_eq!(scheduled[0]["name"], "replica-gc", "{report}");
+            let owner_only = report["owner_only"].as_array().unwrap();
+            assert_eq!(owner_only.len(), 1, "{report}");
+            assert_eq!(owner_only[0]["name"], "replica-ship");
+            assert_eq!(owner_only[0]["owner_machine"], "hm_fixture_remote");
+
+            let toggle = |name: &str, target: &str| {
+                server.send(
+                    "POST",
+                    "/api/routines/toggle?workspace=ws_http_fixture",
+                    json!({"name":name,"source":"fixture","target":target,
+                        "machine_name":"http-fixture","expected_enabled":false,"enabled":true}),
+                )
+            };
+            let refused = error_code(
+                toggle("replica-ship", "job:workspace_ship_pipeline"),
+                409,
+                "owner_authority",
+            );
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("hm_fixture_remote")),
+                "{refused}"
+            );
+            assert_eq!(fs::read(&ship_path).unwrap(), ship_before);
+            let enabled = json_ok(toggle("replica-gc", "job:worktree_gc_pipeline"));
+            assert_eq!(enabled["changed"], true, "{enabled}");
+            assert!(
+                fs::read_to_string(routines.join("replica-gc.yaml"))
+                    .unwrap()
+                    .contains("enabled: true")
             );
         },
     );

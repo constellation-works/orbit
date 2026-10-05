@@ -18,6 +18,15 @@ impl RoutinePauseArgs {
         // A pause is persisted by name, so a misspelt name would otherwise be
         // recorded and reported as success while pausing nothing.
         let report = routine_statuses(global_root)?;
+        // A replica's owner-only routine never fires here, so a pause would
+        // be recorded and reported while changing nothing.
+        if let Some(owned) = report
+            .owner_only
+            .iter()
+            .find(|owned| owned.routine.definition.name == self.name)
+        {
+            return Err(OrbitError::CapabilityRefused(owned.reason.clone()));
+        }
         let known = report
             .statuses
             .iter()

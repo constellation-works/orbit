@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use super::RoutineMachineIdentity;
-use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_routines};
+use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_host_routines};
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use crate::application::job::run_owner_liveness;
@@ -239,7 +239,10 @@ pub(crate) fn run_sweep_at_with_providers_at(
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
     let no_workspace_loaded = no_workspace_loaded_row(&discovered);
 
-    let mut collection = collect_routines(&discovered.entries);
+    // [ORB-14173] Replica checkouts contribute only their host-local
+    // worktree GC routines; the rest are reported as owner work below.
+    let host = collect_host_routines(&discovered);
+    let mut collection = host.collection;
     load_errors.append(&mut collection.errors);
 
     // [ORB-13892] A follower's recorded pull settlements are retried here,
@@ -296,6 +299,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
         runtimes: discovered
             .entries
             .iter()
+            .chain(&discovered.replicas)
             .map(|(_, runtime)| (runtime.shared_root(), runtime))
             .collect(),
         shown_runs: RefCell::new(HashMap::new()),
@@ -314,8 +318,19 @@ pub(crate) fn run_sweep_at_with_providers_at(
         run_id: None,
         batch: Vec::new(),
     }));
+    reports.extend(host.owner_only.iter().map(|owned| RoutineSweepReport {
+        routine: owned.routine.definition.name.clone(),
+        source: owned.routine.source_workspace.clone(),
+        origin: owned.routine.origin.as_str(),
+        action: "skipped",
+        reason: Some(format!("owner_only_in_replica: {}", owned.reason)),
+        slot: None,
+        run_id: None,
+        batch: Vec::new(),
+    }));
     // Auto-tasks run second so their task-store writes cannot delay routine
-    // dispatch. The phase is bounded by this pass's discovered workspaces and
+    // dispatch. Only owner checkouts mint: a replica holds no task store of
+    // its own. The phase is bounded by this pass's discovered workspaces and
     // each scheduler's finite definition collection. A workspace-level error
     // becomes one row and never prevents the remaining workspaces from running.
     let mut auto_task_reports = Vec::new();
@@ -433,7 +448,10 @@ fn deliver_recorded_pull_settlements(workspace: &Workspace, runtime: &OrbitRunti
 
 /// One fail-loud row when discovery found workspaces but opened none.
 fn no_workspace_loaded_row(discovered: &super::loader::DiscoveredWorkspaces) -> Option<String> {
-    if !discovered.entries.is_empty() || discovered.errors.is_empty() {
+    if !discovered.entries.is_empty()
+        || !discovered.replicas.is_empty()
+        || discovered.errors.is_empty()
+    {
         return None;
     }
     let first = &discovered.errors[0];

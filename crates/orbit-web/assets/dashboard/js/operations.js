@@ -435,10 +435,11 @@ function inactivePluginToggle(hiddenCount) {
   return el("p", { class: "operation-control-note operation-inactive-note" }, [button]);
 }
 
-// Listed on request only, outside every count, timeline and next-fire
-// summary: the row is the name, what it would run, and the skip reason.
-function inactivePluginGroup(entries, noun) {
-  const group = operationGroup("", "Plugin off", entries.length, `seeded by a plugin that is switched off here · never ${noun}`);
+// Definitions that never fire here — plugin-parked (listed on request only) or
+// a replica's owner-only routines — sit outside every count, timeline and
+// next-fire summary: the row is the name, what it would run, and the reason.
+function inactivePluginGroup(entries, noun, title = "Plugin off", summary = `seeded by a plugin that is switched off here · never ${noun}`) {
+  const group = operationGroup("", title, entries.length, summary);
   group.className += " inactive-plugin-group";
   for (const entry of entries) {
     group.appendChild(el("article", { class: "operation-card operation-row inactive-plugin-card" }, [
@@ -446,7 +447,7 @@ function inactivePluginGroup(entries, noun) {
         operationCell("Definition", [
           el("div", { class: "operation-identity" }, [
             el("strong", { text: entry.name }),
-            el("span", { class: "operation-state inactive", text: "inactive" }),
+            el("span", { class: "operation-state inactive", text: entry.state || "inactive" }),
           ]),
           entry.detail ? el("span", { class: "operation-cell-sub mono", text: entry.detail }) : null,
         ], "operation-cell-identity"),
@@ -632,12 +633,16 @@ function renderOperations(payload) {
   const inactive = workspace
     ? (payload.retired || []).filter((routine) => routine.plugin_inactive && routine.source === workspace)
     : [];
+  // A replica schedules only worktree GC; its owner schedules the rest.
+  const ownerOnly = workspace
+    ? (payload.owner_only || []).filter((routine) => routine.source === workspace)
+    : [];
   const body = $("routines-body");
   body.textContent = "";
   if (!workspace) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: `All-workspace mode is read-only. Select one workspace; this machine is already resolved as ${payload.machine_name}.` }));
   }
-  if (routines.length === 0 && inactive.length === 0) {
+  if (routines.length === 0 && inactive.length === 0 && ownerOnly.length === 0) {
     body.appendChild(el("div", { class: "empty-state", text: workspace ? "No routines are defined by this workspace." : "Select a workspace to list its routines." }));
   } else if (routines.length) {
     body.appendChild(routineTimeline(routines));
@@ -659,6 +664,12 @@ function renderOperations(payload) {
   }
   if (inactive.length) {
     body.appendChild(inactivePluginGroup(inactive.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason })), "fires"));
+  }
+  if (ownerOnly.length) {
+    body.appendChild(inactivePluginGroup(
+      ownerOnly.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason, state: "owner-only" })),
+      "fires", "Owner only", "this replica schedules only worktree GC · enable these on the owner machine",
+    ));
   }
   if (workspace) {
     const toggle = inactivePluginToggle(payload.inactive_plugin_counts?.[workspace] || 0);

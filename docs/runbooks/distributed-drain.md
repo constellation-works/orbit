@@ -789,6 +789,34 @@ A replica sweep reports destination-authority refusal before it reads a
 backlog. Scheduled invocation still confers no completion authority. Do not
 enable a dark routine to "turn on" distributed drain.
 
+## Replica worktree GC
+
+On the owner, delivery removes a task worktree once the run lands, and the
+owner's `worktree-gc-<workspace>` routine is the hourly backstop. A follower's
+claimed-leaf worktrees live in its replica checkout, which no owner process
+touches, so the replica schedules its own GC on its host clock. That routine is
+the only one a replica fires. Its ship sweep, task pilot, CI and Dependabot
+sweeps and its auto-tasks stay owner work: `orbit routine list` shows them as
+`owner-only` with the owner machine named, a toggle or pause is refused, and
+the sweep reports them `skipped` with an `owner_only_in_replica:` reason.
+
+Enable the replica's GC on the follower as an operator, with
+`orbit_routine_control` (`action: toggle`) or the dashboard's Operations
+routines panel. You can also set `enabled: true` in the replica checkout's
+`.orbit/routines/worktree_gc.yaml`. Then confirm it is armed:
+
+```bash
+orbit routine list --workspace <replica-workspace>
+orbit clock status
+```
+
+The GC asks the owner, through the run's claim route or the replica's
+registered workspace, whether each task is settled. It reclaims a worktree only
+when the claim is settled or the owner reports the task settled. A worktree
+whose owner is unreachable or unrouted stays, reported as
+`skipped:owner_unreachable` or `skipped:no_owner_route` in the run's `reap`
+output.
+
 ## Scheduled host shutdown or reboot
 
 When the host has a shutdown or reboot pending (for example

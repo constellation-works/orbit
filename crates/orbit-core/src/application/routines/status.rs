@@ -11,12 +11,15 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::contracts::RoutineFireRecord;
 use orbit_types::workflow::RoutineTarget;
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
 
 use super::RoutineMachineIdentity;
 use super::due::{next_occurrence, parse_cron};
 use super::loader::{
-    LoadedRoutine, RetiredRoutine, RoutineLoadError, RoutineWorkspaceProvider, collect_routines,
+    DiscoveredWorkspaces, LoadedRoutine, OwnerOnlyRoutine, RetiredRoutine, RoutineLoadError,
+    RoutineWorkspaceProvider, collect_host_routines,
 };
+use crate::OrbitRuntime;
 
 /// Operator-facing schedule readiness. Theoretical next-slot math may still be
 /// present; this state says whether that time is armed.
@@ -127,6 +130,9 @@ pub struct RoutineStatusReport {
     pub retired: Vec<RetiredRoutine>,
     /// Fail-closed load failures (these routines are absent).
     pub load_errors: Vec<RoutineLoadError>,
+    /// Definitions in a replica checkout that only the owner schedules:
+    /// listed with the owner-authority reason, never toggled or fired here.
+    pub owner_only: Vec<OwnerOnlyRoutine>,
 }
 
 impl RoutineStatusReport {
@@ -159,7 +165,8 @@ pub fn routine_statuses_with_providers(
 
     let discovered = workspace_provider.discover_workspaces(global_root)?;
     let mut load_errors = discovered.errors.clone();
-    let mut collection = collect_routines(&discovered.entries);
+    let host = collect_host_routines(&discovered);
+    let mut collection = host.collection;
     load_errors.append(&mut collection.errors);
 
     let pauses = store.routine_pauses()?;
@@ -193,7 +200,93 @@ pub fn routine_statuses_with_providers(
         statuses,
         retired: collection.retired,
         load_errors,
+        owner_only: host.owner_only,
     })
+}
+
+/// A selected checkout is the entire discovery scope: never another store by
+/// cwd, never a client-supplied path.
+struct SelectedCheckout<'a>(&'a OrbitRuntime);
+
+impl RoutineWorkspaceProvider for SelectedCheckout<'_> {
+    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
+        let runtime = self.0;
+        let workspace = Workspace {
+            id: runtime.workspace_id()?,
+            name: runtime.workspace_label(),
+            owner_machine_id: runtime
+                .workspace_runtime_binding()
+                .and_then(|binding| binding.owner_machine_id.clone()),
+            git_remote: None,
+            ship_mode: None,
+            base_branch: runtime.workspace_base_branch().into(),
+            status: WorkspaceStatus::Active,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        Ok(DiscoveredWorkspaces::single_checkout(
+            workspace,
+            runtime.clone(),
+        ))
+    }
+}
+
+/// Routine status for one selected checkout, with the same replica rule the
+/// host sweep applies.
+pub(crate) fn checkout_routine_statuses(
+    runtime: &OrbitRuntime,
+) -> Result<RoutineStatusReport, OrbitError> {
+    routine_statuses_with_providers(
+        &runtime.global_root(),
+        RoutineMachineIdentity {
+            machine_id: runtime
+                .automation_machine_identity()
+                .unwrap_or("local")
+                .into(),
+            machine_name: "Selected host".into(),
+        },
+        &SelectedCheckout(runtime),
+        Utc::now(),
+    )
+}
+
+/// Toggle one routine definition in a selected checkout [ORB-14173].
+///
+/// An owner checkout keeps the general coordination-write guard. A replica
+/// checkout may change only the replica-local definitions it schedules for
+/// itself; a definition its owner schedules is refused with the owner named,
+/// and a claimed worker never toggles anything.
+pub(crate) fn toggle_checkout_routine(
+    runtime: &OrbitRuntime,
+    name: &str,
+    target: &str,
+    expected_enabled: bool,
+    enabled: bool,
+) -> Result<RoutineToggleOutcome, OrbitError> {
+    let replica =
+        runtime.worker_invocation().is_none() && runtime.coordination_write_owner().is_some();
+    if !replica {
+        runtime.ensure_coordination_task_write_permitted()?;
+    }
+    let report = checkout_routine_statuses(runtime)?;
+    if let Some(owned) = report
+        .owner_only
+        .iter()
+        .find(|owned| owned.routine.definition.name == name)
+    {
+        return Err(OrbitError::CapabilityRefused(owned.reason.clone()));
+    }
+    let status = report
+        .statuses
+        .iter()
+        .find(|status| status.routine.definition.name == name)
+        .ok_or_else(|| OrbitError::InvalidInput("routine unavailable in this workspace".into()))?;
+    if status.routine.definition.target.as_ref_string() != target {
+        return Ok(RoutineToggleOutcome::TargetConflict {
+            actual_target: status.routine.definition.target.clone(),
+        });
+    }
+    set_routine_enabled(&status.routine, expected_enabled, enabled)
 }
 
 /// The routine's next scheduled occurrence, rendered host-local.
