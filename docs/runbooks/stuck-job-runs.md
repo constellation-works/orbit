@@ -301,7 +301,11 @@ lineage and the same PR. The restoration records `resume_review_restored`, the
 source and resumed run IDs, and the blocking run in task history. Repeating the
 resume while the task is already in review adds no restoration event.
 
-Early implementation retries still restore `in-progress`. Missing stage evidence,
+Early implementation retries still restore `in-progress`. A block the same
+lineage wrote through its failure handoff (`pr_failure_handoff`,
+`pr_conflict_blocked`, `validation_environment_blocked`,
+`review_gate_escalation`) is readmitted the same way, including back to
+`review` when the checkpoint rules above hold. Missing stage evidence,
 an unrelated or superseding attempt, a manual block, and withdrawn or terminal
 states cannot gain review through this repair. A merged PR alone is not review
 authority: normal candidate, merge and task-completion guards still run after

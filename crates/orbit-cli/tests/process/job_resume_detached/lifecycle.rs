@@ -143,6 +143,39 @@ impl Delivery {
         self.runtime.write_run_state(&self.run, &state).unwrap();
     }
 
+    /// The early-implementation shape: promotion is not a reused checkpoint,
+    /// so a lineage block readmits `in-progress` rather than restoring review.
+    fn skip_promotion(&self) {
+        let mut state = self.runtime.read_run_state(&self.run).unwrap().unwrap();
+        state.step_states.insert(2, JobRunState::Skipped);
+        state.step_outputs.remove(&2);
+        self.runtime.write_run_state(&self.run, &state).unwrap();
+        let path = self
+            .cli
+            .home
+            .join(".orbit/resources/jobs")
+            .join(format!("{JOB}.yaml"));
+        let mut job: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        job["spec"]["steps"][2]["when"] = json!("false");
+        fs::write(path, job.to_string()).unwrap();
+    }
+
+    /// A system failure-handoff block. `note` must carry the producer's `: run=<id>,` field.
+    fn block_handoff(&self, event: &str, note: &str) {
+        self.runtime
+            .apply_task_automation_update(
+                &self.task,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Blocked),
+                    status_event: Some(event.to_string()),
+                    status_note: Some(note.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(self.status(), TaskStatus::Blocked);
+    }
+
     fn block(&self, run: &str) {
         self.runtime
             .apply_final_recovery(
@@ -498,4 +531,114 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
             "{case}"
         );
     }
+}
+
+/// Note shapes written by `executor::automation::vcs::failure`. The assertion
+/// is the resume outcome, not the wording.
+fn failure_handoff_note(event: &str, run: &str) -> String {
+    match event {
+        "validation_environment_blocked" => format!(
+            "required validation lacked a tool in its environment: run={run}, \
+             failed_step=validate, candidate=abc, branch=orbit/candidate; the candidate was \
+             not judged and no PR was opened"
+        ),
+        "pr_failure_handoff" => format!(
+            "failure handoff published PR #7: run={run}, failed_step=validate, \
+             original_base=base, target_base=agent-main, conflicts=none reported"
+        ),
+        "pr_conflict_blocked" => format!(
+            "failure handoff published PR #7: run={run}, failed_step=sync_base, \
+             original_base=base, target_base=agent-main, conflicts=src/lib.rs"
+        ),
+        "review_gate_escalation" => format!(
+            "before-PR review gate stopped delivery: run={run}, failed_step=review_gate, \
+             candidate=abc, branch=orbit/candidate; no PR was opened"
+        ),
+        _ => unreachable!("handoff note is only built for the four failure events"),
+    }
+}
+
+fn latest_status_event(fx: &Delivery) -> orbit_types::task::TaskHistoryEntry {
+    fx.runtime
+        .get_task_history(&fx.task)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|entry| entry.to_status.is_some())
+        .unwrap()
+}
+
+/// A lineage-owned failure-handoff block is resume provenance. The same event
+/// naming a run outside the lineage, or a note that does not name a run, stays
+/// blocked. After promotion, the handoff restores review instead of readmitting
+/// implementation.
+#[test]
+fn resume_readmits_lineage_failure_handoff_blocks() {
+    if !isolated("resume_readmits_lineage_failure_handoff_blocks") {
+        return;
+    }
+    let forge_root = tempfile::tempdir().unwrap();
+    forge(forge_root.path(), false);
+
+    for event in [
+        "validation_environment_blocked",
+        "pr_failure_handoff",
+        "pr_conflict_blocked",
+        "review_gate_escalation",
+    ] {
+        let fx = Delivery::new();
+        fx.skip_promotion();
+        fx.block_handoff(event, &failure_handoff_note(event, &fx.run));
+        fx.fail(&fx.run);
+        fx.resume(&fx.run, "failed");
+        assert_eq!(fx.status(), TaskStatus::InProgress, "{event}");
+        let restored = latest_status_event(&fx);
+        assert_eq!(restored.event, "resume_readmitted", "{event}");
+        assert_eq!(restored.from_status, Some(TaskStatus::Blocked), "{event}");
+        assert_eq!(restored.to_status, Some(TaskStatus::InProgress), "{event}");
+    }
+
+    let fx = Delivery::new();
+    fx.skip_promotion();
+    fx.block_handoff(
+        "pr_failure_handoff",
+        &failure_handoff_note("pr_failure_handoff", "jrun-outside-lineage"),
+    );
+    fx.fail(&fx.run);
+    let before = fx.runtime.get_task(&fx.task).unwrap();
+    fx.resume(&fx.run, "failed");
+    assert_eq!(
+        fx.runtime.get_task(&fx.task).unwrap(),
+        before,
+        "a handoff that names a run outside the lineage stays blocked"
+    );
+
+    let fx = Delivery::new();
+    fx.skip_promotion();
+    fx.block_handoff(
+        "validation_environment_blocked",
+        "required validation lacked a tool in its environment: failed_step=validate",
+    );
+    fx.fail(&fx.run);
+    let before = fx.runtime.get_task(&fx.task).unwrap();
+    fx.resume(&fx.run, "failed");
+    assert_eq!(
+        fx.runtime.get_task(&fx.task).unwrap(),
+        before,
+        "a handoff note that does not name its run stays blocked"
+    );
+
+    let fx = Delivery::new();
+    fx.promote();
+    fx.block_handoff(
+        "pr_failure_handoff",
+        &failure_handoff_note("pr_failure_handoff", &fx.run),
+    );
+    fx.fail(&fx.run);
+    fx.resume(&fx.run, "failed");
+    assert_eq!(fx.status(), TaskStatus::Review);
+    let restored = latest_status_event(&fx);
+    assert_eq!(restored.event, "resume_review_restored");
+    assert_eq!(restored.from_status, Some(TaskStatus::Blocked));
+    assert_eq!(restored.to_status, Some(TaskStatus::Review));
 }
