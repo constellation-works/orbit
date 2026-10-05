@@ -798,7 +798,9 @@ touches, so the replica schedules its own GC on its host clock. That routine is
 the only one a replica fires. Its ship sweep, task pilot, CI and Dependabot
 sweeps and its auto-tasks stay owner work: `orbit routine list` shows them as
 `owner-only` with the owner machine named, a toggle or pause is refused, and
-the sweep reports them `skipped` with an `owner_only_in_replica:` reason.
+the sweep reports them `skipped` with an `owner_only_in_replica:` reason. The
+auto-task panel marks toggle and manual mint unavailable and names the owner;
+replica task minting remains refused.
 
 Enable the replica's GC on the follower as an operator, with
 `orbit_routine_control` (`action: toggle`) or the dashboard's Operations

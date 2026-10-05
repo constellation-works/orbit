@@ -478,6 +478,95 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
     );
 }
 
+/// [ORB-14173] Replica auto-task controls must match the scheduler's owner-only
+/// boundary: the dashboard names the owner and neither toggle nor manual mint
+/// mutates replica control-plane state.
+#[test]
+fn replica_auto_task_controls_explain_owner_authority_and_refuse_mutations() {
+    isolated(
+        "projections::replica_auto_task_controls_explain_owner_authority_and_refuse_mutations",
+        || {
+            let fixture = Fixture::replica_of("hm_fixture_remote");
+            fixture
+                .runtime
+                .auto_task_add(AutoTaskAddParams {
+                    name: "qa-sweep".into(),
+                    description: "Replica control boundary fixture".into(),
+                    schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+                    template: AutoTaskTemplate {
+                        title: "Should remain unminted".into(),
+                        description: "An auto-task may not issue work from a replica.".into(),
+                        acceptance_criteria: vec!["No task is minted.".into()],
+                        task_type: TaskType::Chore,
+                        tags: vec![],
+                        required_tools: vec![],
+                        priority: TaskPriority::Medium,
+                        complexity: None,
+                        crew: None,
+                        status: TaskStatus::Backlog,
+                    },
+                    dedupe: DedupePolicy::SkipIfOpen,
+                })
+                .unwrap();
+            let definition_path = fixture.work.join("auto_tasks/qa-sweep.yaml");
+            let definition_before = fs::read(&definition_path).unwrap();
+            let server = fixture.server(true);
+
+            let listed = json_ok(server.get("/api/auto-tasks?workspace=ws_http_fixture"));
+            assert_eq!(listed["controls_authorized"], false, "{listed}");
+            for action in ["auto_task_toggle", "auto_task_mint"] {
+                let capability = &listed["capabilities"][action];
+                assert_eq!(capability["authorized"], false, "{action}: {listed}");
+                assert!(
+                    capability["reason"]
+                        .as_str()
+                        .is_some_and(|reason| reason.contains("hm_fixture_remote")),
+                    "{action} refusal names the owner: {listed}"
+                );
+            }
+
+            let refused_toggle = error_code(
+                server.send(
+                    "POST",
+                    "/api/auto-tasks/toggle?workspace=ws_http_fixture",
+                    json!({"name":"qa-sweep","expected_enabled":true,"enabled":false}),
+                ),
+                403,
+                "capability_refused",
+            );
+            assert!(
+                refused_toggle["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("hm_fixture_remote")),
+                "{refused_toggle}"
+            );
+            let refused_mint = error_code(
+                server.send(
+                    "POST",
+                    "/api/auto-tasks/mint?workspace=ws_http_fixture",
+                    json!({"name":"qa-sweep","acknowledge_unconditional":true}),
+                ),
+                403,
+                "capability_refused",
+            );
+            assert!(
+                refused_mint["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("hm_fixture_remote")),
+                "{refused_mint}"
+            );
+            assert_eq!(fs::read(&definition_path).unwrap(), definition_before);
+            assert!(
+                fixture
+                    .runtime
+                    .list_tasks_by_tags(&["auto-task:qa-sweep".into()])
+                    .unwrap()
+                    .is_empty()
+            );
+        },
+    );
+}
+
 #[path = "../../../orbit-store/tests/fixtures/policy_denials.rs"]
 mod policy_denials_fixture;
 

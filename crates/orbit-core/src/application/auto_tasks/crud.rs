@@ -267,6 +267,7 @@ impl OrbitRuntime {
         expected: bool,
         enabled: bool,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         self.try_edit_auto_task(name, |definition| {
             if definition.enabled != expected {
                 return Err(OrbitError::InvalidInput(
@@ -301,6 +302,7 @@ impl OrbitRuntime {
     /// Escaped lookups fail the same way, before a task is created: mint loads
     /// the definition only through [`Self::auto_task_show`].
     pub fn auto_task_mint(&self, name: &str) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         // Fail closed before admission. This copy is not mint authority: a
         // concurrent delete can remove the file before the lock is held.
         let preloaded = self.require_auto_task(name)?;
