@@ -11,8 +11,9 @@
 //! itself, without buffering beyond one partial line, and passes complete
 //! lines to the MCP service. It tracks which requests are outstanding from
 //! the lines it forwards and the responses the service flushes. The session
-//! is idle when every forwarded line has been consumed and every request has
-//! been answered.
+//! is idle when every forwarded line has been consumed and every request the
+//! transport accepts has been answered. Rejected or dropped input never adds
+//! a pending request, since its error may not echo the original id.
 //!
 //! At that point it stops reading, stops the service, and returns
 //! [`StdioExit::HandOver`] with the client's original `initialize` request
@@ -34,7 +35,9 @@ use base64::Engine as _;
 use orbit_common::OrbitError;
 use orbit_common::fs::generation;
 use rmcp::ServiceExt;
-use rmcp::model::{InitializeRequestParams, Meta};
+use rmcp::model::{
+    ClientJsonRpcMessage, ClientNotification, ClientRequest, InitializeRequestParams, Meta,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -142,26 +145,35 @@ struct Tracker {
 
 impl Tracker {
     fn forwarded(&mut self, line: &[u8]) {
-        let Ok(message) = serde_json::from_slice::<Value>(line) else {
+        // Match rmcp's incoming message type, including its BOM tolerance.
+        // A raw method/id pair is insufficient: decoding failures receive an
+        // id-less error or are dropped by the transport's compatibility path.
+        let line = line.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(line);
+        let Ok(message) = serde_json::from_slice::<ClientJsonRpcMessage>(line) else {
             return;
         };
-        for message in messages(message) {
-            let Some(method) = message.get("method").and_then(Value::as_str) else {
-                continue;
-            };
-            if method == "notifications/cancelled" {
-                if let Some(id) = message.pointer("/params/requestId") {
-                    self.pending.remove(&id.to_string());
+        match message {
+            ClientJsonRpcMessage::Request(request) => {
+                let Ok(id) = serde_json::to_string(&request.id) else {
+                    return;
+                };
+                if matches!(request.request, ClientRequest::InitializeRequest(_)) {
+                    self.initialize = serde_json::from_slice::<Value>(line)
+                        .ok()
+                        .and_then(|message| message.get("params").cloned());
                 }
-                continue;
+                self.pending.insert(id);
             }
-            let Some(id) = message.get("id") else {
-                continue;
-            };
-            if method == "initialize" {
-                self.initialize = message.get("params").cloned();
+            ClientJsonRpcMessage::Notification(notification) => {
+                if let ClientNotification::CancelledNotification(cancelled) =
+                    notification.notification
+                    && let Some(id) = cancelled.params.request_id
+                    && let Ok(id) = serde_json::to_string(&id)
+                {
+                    self.pending.remove(&id);
+                }
             }
-            self.pending.insert(id.to_string());
+            _ => {}
         }
     }
 

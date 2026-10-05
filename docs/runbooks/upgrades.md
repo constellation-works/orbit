@@ -166,6 +166,8 @@ the installed binary for its `update --contract` and, when it speaks
 - `orbit mcp serve` hands over once no request is in flight. The pid, stdio pipes and
   MCP session survive — the client does not re-initialize — because the new image
   receives the initialize parameters and any unread input (`mcp-stdio-v1`).
+  Only requests accepted by the MCP transport count as in flight; malformed or
+  dropped messages cannot prevent handover when their errors omit the request id.
 - The dashboard drains, then execs the new image on the same address without
   reopening a browser.
 - A drain coordinator (`drain-adopt-v1`) execs between admission passes and **adopts**
