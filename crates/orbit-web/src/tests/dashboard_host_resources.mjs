@@ -72,6 +72,7 @@ const context = vm.createContext({
   URLSearchParams, window: { location: { search: '?workspace=all', hash: '' } }, document, console,
   Date: { now: () => now },
   setInterval: (callback, delay) => timers.set(delay, callback),
+  setTimeout, clearTimeout, AbortController,
   fetch: async url => { urls.push(url); return nextResponse; },
 });
 const common = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/common.js', import.meta.url), 'utf8'), { context });

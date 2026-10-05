@@ -51,16 +51,31 @@ export function onHostResources(listener) {
   return () => listeners.delete(listener);
 }
 
+/// The serving host, with no workspace or window query. Bounded like
+/// `fetchJson`: a stalled snapshot (hung mount, half-open connection) rejects
+/// instead of pending for the rest of the page's life.
+export async function fetchHostResourcePayload() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch('/api/host/resources', { signal: controller.signal });
+    if (!response.ok) throw new Error(`Host resource API: HTTP ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Request timed out after 30 seconds');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 let sequence = 0;
 let lastPayload = null;
 let receivedAt = 0;
 export async function fetchAndRenderHostResources() {
   const current = ++sequence;
   try {
-    // Deliberately bypass workspace/window URL augmentation.
-    const response = await fetch('/api/host/resources');
-    if (!response.ok) throw new Error(`Host resource API: HTTP ${response.status}`);
-    const payload = await response.json();
+    const payload = await fetchHostResourcePayload();
     if (current === sequence) {
       lastPayload = payload;
       receivedAt = Date.now();
