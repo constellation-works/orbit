@@ -778,6 +778,8 @@ struct Delivery {
     owner: Coordinated,
     claim: ExecutionClaim,
     handoff: TaskHandoff,
+    /// The owner's `workflow.required_validation_commands`.
+    required: Vec<String>,
 }
 
 impl Delivery {
@@ -786,6 +788,12 @@ impl Delivery {
     }
 
     fn admit_in(ship: AdmissionShipContract, selectors: &[&str]) -> Self {
+        Self::admit_requiring(ship, selectors, &["build", "test"])
+    }
+
+    /// An admitted claim whose owner requires `required`, handed off with one
+    /// passing log per required command.
+    fn admit_requiring(ship: AdmissionShipContract, selectors: &[&str], required: &[&str]) -> Self {
         let root = TempDir::new().unwrap();
         let owner = Coordinated::open(root.path());
         owner.create_task_in("typed handoff", selectors);
@@ -810,12 +818,13 @@ impl Delivery {
                 },
             )
             .expect("bind");
-        let handoff = handoff_with_logs(&owner, &claim);
+        let handoff = handoff_with_logs(&owner, &claim, required);
         Self {
             _root: root,
             owner,
             claim,
             handoff,
+            required: required.iter().map(ToString::to_string).collect(),
         }
     }
 
@@ -823,7 +832,7 @@ impl Delivery {
         HandoffObservation {
             footprint_widening: self.handoff.footprint_widening.clone(),
             candidate: self.handoff.candidate.clone(),
-            required_commands: vec!["build".into(), "test".into()],
+            required_commands: self.required.clone(),
             owner_completion_authority: policy.map(str::to_string),
         }
     }
@@ -908,9 +917,13 @@ fn done_ship() -> AdmissionShipContract {
     ship
 }
 
-/// The worker's handoff over a pinned candidate, with its `build` and `test`
-/// validation logs persisted on the owner as claim evidence.
-fn handoff_with_logs(owner: &Coordinated, claim: &ExecutionClaim) -> TaskHandoff {
+/// The worker's handoff over a pinned candidate, with one validation log per
+/// command in `commands` persisted on the owner as claim evidence.
+fn handoff_with_logs(
+    owner: &Coordinated,
+    claim: &ExecutionClaim,
+    commands: &[&str],
+) -> TaskHandoff {
     let mut handoff = TaskHandoff {
         schema_version: 1,
         workspace_id: PARTITION_ID.into(),
@@ -941,7 +954,7 @@ fn handoff_with_logs(owner: &Coordinated, claim: &ExecutionClaim) -> TaskHandoff
         validation: vec![],
         footprint_widening: vec![],
     };
-    let artifacts = ["build", "test"]
+    let artifacts = commands
         .iter()
         .map(|command| {
             let log = HandoffValidationLog {
@@ -972,6 +985,9 @@ fn handoff_with_logs(owner: &Coordinated, claim: &ExecutionClaim) -> TaskHandoff
             sha256: format!("{:x}", Sha256::digest(&artifact.content)),
         })
         .collect();
+    if artifacts.is_empty() {
+        return handoff;
+    }
     let worker = ClaimInvocation::trusted_worker(
         claim.task_id.clone(),
         claim.claim_id.clone(),
@@ -1047,6 +1063,62 @@ fn handoff_authorization_follows_the_owner_policy_at_admission() {
     let review = Delivery::admit(owner_request("first").ship);
     review.accept(Some(OWNER_POLICY)).expect("handoff");
     assert!(review.owner.landing_starts().is_empty());
+}
+
+/// An owner whose `workflow.required_validation_commands` is empty requires
+/// no check: it accepts a handoff carrying no validation logs, authorizes it
+/// under its completion policy and lets it land. The handoff's other checks
+/// still hold — a candidate the owner observes differently is refused, and an
+/// owner that does require commands refuses the same log-free handoff.
+#[test]
+fn an_owner_requiring_no_commands_accepts_and_lands_a_handoff_without_logs() {
+    if !isolated("an_owner_requiring_no_commands_accepts_and_lands_a_handoff_without_logs") {
+        return;
+    }
+    let delivery = Delivery::admit_requiring(done_ship(), &["src/lib.rs"], &[]);
+    assert!(delivery.handoff.validation.is_empty());
+
+    let mut moved = delivery.observation(Some(OWNER_POLICY));
+    moved.candidate.candidate.commit = "e".repeat(40);
+    let moved = delivery
+        .owner
+        .backends
+        .commit_boundary
+        .mutate_execution_claim(
+            Some(&delivery.worker().with_handoff_observation(moved)),
+            "moved",
+            &ClaimMutation::AcceptHandoff(delivery.handoff.clone()),
+        )
+        .expect_err("candidate integrity still gates a handoff with no required commands");
+    assert!(moved.to_string().contains("candidate"), "{moved}");
+
+    delivery
+        .accept(Some(OWNER_POLICY))
+        .expect("no required command is no gate");
+    assert_eq!(
+        delivery.owner.task_status(&delivery.claim.task_id),
+        TaskStatus::Review
+    );
+    let starts = delivery.owner.landing_starts();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(starts[0].state, LandingStartState::Pending);
+    delivery
+        .merge_intent(Some(OWNER_POLICY))
+        .expect("landing rechecks the same empty requirement");
+
+    let mut requiring = Delivery::admit_requiring(done_ship(), &["src/lib.rs"], &[]);
+    requiring.required = vec!["build".into()];
+    let refused = requiring
+        .accept(Some(OWNER_POLICY))
+        .expect_err("a required command needs its log");
+    assert!(
+        refused.to_string().contains("required validation missing"),
+        "{refused}"
+    );
+    assert_eq!(
+        requiring.owner.task_status(&requiring.claim.task_id),
+        TaskStatus::InProgress
+    );
 }
 
 /// Validation evidence replaced in owner storage after acceptance blocks an

@@ -312,17 +312,12 @@ impl crate::OrbitRuntime {
                 )));
             }
         }
-        let required_commands = self.workflow_required_validation_commands().to_vec();
-        if required_commands.is_empty() {
-            return Err(refused(
-                "this owner declares no required validation commands \
-                 (`workflow.required_validation_commands`), so no handoff can be accepted",
-            ));
-        }
+        // An empty list is no required check: the handoff is accepted with no
+        // validation logs, the way the owner's own delivery runs none.
         Ok(HandoffObservation {
             footprint_widening,
             candidate,
-            required_commands,
+            required_commands: self.workflow_required_validation_commands().to_vec(),
             owner_completion_authority: self.owner_completion_authority(),
         })
     }

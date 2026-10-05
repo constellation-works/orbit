@@ -113,10 +113,10 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
     assert_eq!(blocked, 1, "{after:#}");
 }
 
-/// The refusal an owner without `workflow.required_validation_commands`
-/// answers every handoff with.
-const NO_VALIDATION_COMMANDS: &str = "this owner declares no required validation commands \
-     (`workflow.required_validation_commands`), so no handoff can be accepted";
+/// The refusal an owner answers a handoff with when its footprint widens onto
+/// a path the owner's policy protects, until an operator changes that policy.
+const PROTECTED_PATH_WIDENING: &str =
+    "footprint widening refused protected path: .orbit/config.toml";
 
 impl Pair {
     /// Let `leaf`'s settlement backoff elapse, as the clock passing it would.
@@ -154,7 +154,7 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     pair.leaf_hands_off(&leaf);
-    *pair.wire.refuse_settle.lock().unwrap() = Some(NO_VALIDATION_COMMANDS.into());
+    *pair.wire.refuse_settle.lock().unwrap() = Some(PROTECTED_PATH_WIDENING.into());
     let pulls = pair.wire.calls("orbit.task.pull").len();
 
     for _ in 0..5 {
@@ -191,7 +191,7 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
         .unwrap();
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(
-        refused[0].reason.contains("required validation commands"),
+        refused[0].reason.contains("refused protected path"),
         "{refused:?}"
     );
     assert!(!refused[0].remedy.is_empty());
@@ -252,7 +252,7 @@ fn an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backof
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     pair.leaf_hands_off(&leaf);
-    *pair.wire.refuse_settle.lock().unwrap() = Some(NO_VALIDATION_COMMANDS.into());
+    *pair.wire.refuse_settle.lock().unwrap() = Some(PROTECTED_PATH_WIDENING.into());
     pair.pass(&drain);
     assert_eq!(pair.wire.calls("orbit.drain.claim.settle").len(), 1);
 

@@ -75,14 +75,11 @@ impl TaskCommitBoundary {
         handoff: &TaskHandoff,
         required: &[String],
     ) -> Result<(), OrbitError> {
+        // An empty requirement list is no required check; any log the
+        // handoff still carries must pin this claim's candidate all the same.
         let commands: BTreeSet<_> = required.iter().map(String::as_str).collect();
-        if commands.is_empty()
-            || commands.iter().any(|c| c.trim().is_empty())
-            || commands.len() != required.len()
-        {
-            return Err(invalid(
-                "owner validation requirements missing or duplicated",
-            ));
+        if commands.iter().any(|c| c.trim().is_empty()) || commands.len() != required.len() {
+            return Err(invalid("owner validation requirements blank or duplicated"));
         }
         let mut passed = BTreeSet::new();
         for reference in &handoff.validation {

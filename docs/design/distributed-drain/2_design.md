@@ -140,7 +140,9 @@ no origin or PR credentials.
   `workflow.required_validation_commands` on that exact candidate and checks the same Git state
   after each command. Passing logs are attached to the owner's task through the routed
   coordination transport only after all commands pass without changing the candidate. Git-ignored
-  build output is allowed. An empty owner requirement list fails closed on both sides. Commands
+  build output is allowed. An empty requirement list is no required check: `claim_validate` runs
+  nothing and records `skipped_no_required_commands`, and the owner accepts the handoff with no
+  validation logs, as `candidate_validate` does on the owner's own delivery path. Commands
   run in the executor's own resolved toolchain environment (`workflow.validation_env`); one that
   fails for lack of a tool is a typed `validation_environment` failure, which no step or final
   recovery repairs ([ORB-13987]).
@@ -300,8 +302,8 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified
 selector from federated discovery. Submission (`application::distributed::follower`) refuses unless
 the checkout is a replica whose owner is the selector's machine and whose logical workspace is the
-selector's, the owner answers the probe as that machine and would admit this executor, and the
-host declares required validation commands. It persists the resolved `PullDestination` (owner
+selector's, and the owner answers the probe as that machine and would admit this executor. An
+empty `workflow.required_validation_commands` is noted, not refused. It persists the resolved `PullDestination` (owner
 machine, the owner's workspace id as its probe reports it, selector, execution machine) in the
 `workspace_pull_pipeline` run input. A renamed or unavailable destination never falls back to a
 local coordination store. Each `pull_refill` iteration re-probes before allocating, so a changed

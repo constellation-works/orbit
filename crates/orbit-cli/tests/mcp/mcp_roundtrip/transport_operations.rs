@@ -507,6 +507,51 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
     );
 }
 
+/// An operator who starts a drain through MCP with no
+/// `workflow.required_validation_commands` gets a note, not a refusal: an
+/// empty list means no required check, and the drain runs.
+#[test]
+fn stdio_drain_start_notes_that_no_required_validation_runs() {
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let jobs = workspace.home.join(".orbit/resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::write(
+        jobs.join("workspace_auto_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: workspace_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
+    )
+    .unwrap();
+    let mut client = workspace.serve_with_args(&["--operator"]);
+
+    let started = client.call_tool_ok(
+        "orbit_workflow_auto",
+        json!({"workspace":selector,"action":"start","for_seconds":60}),
+    );
+
+    assert!(
+        started["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("workflow.required_validation_commands")),
+        "the start names the empty key it read: {started}"
+    );
+    let run_id = started["run_id"].as_str().expect("the drain starts");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let run = client.call_tool_ok(
+            "orbit_workflow_run_show",
+            json!({"workspace":selector,"id":run_id}),
+        );
+        if run["state"] == "success" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline && run["state"] != "failed",
+            "the drain runs to completion: {run}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// [ORB-13987] With login-shell resolution disabled and no configured PATH,
 /// required validation runs with whatever PATH launched the worker. The MCP
 /// drain status and the CLI doctor both say so before a drain is started;

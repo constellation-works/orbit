@@ -8,7 +8,9 @@ spec:
     Independently resolve the candidate and its base from the executor's
     worktree, refuse a candidate that does not descend from that base, run the
     commands this owner requires on that exact candidate, and attach one
-    captured log per command to the owner's copy of the task. Task, claim,
+    captured log per command to the owner's copy of the task. An empty
+    requirement list runs nothing and records `skipped_no_required_commands`
+    with no validation references. Task, claim,
     execution machine and bound run come from the trusted worker binding; a
     step input that disagrees is refused rather than preferred.
   input_schema_json:
@@ -39,6 +41,12 @@ spec:
     type: object
     required: [candidate, validation]
     properties:
+      decision:
+        type: string
+        enum: [passed, skipped_no_required_commands]
+      note:
+        type: string
+        description: Why no command ran, when the requirement list is empty.
       candidate:
         type: object
         description: >

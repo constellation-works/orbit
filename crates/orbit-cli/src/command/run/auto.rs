@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::command::{CommandOut, Execute, Payload};
 use crate::parse::parse_duration_seconds;
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_warning};
+use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_notices};
 
 pub(super) const AUTO_WORKFLOW: &str = "auto";
 
@@ -159,7 +159,7 @@ impl Execute for AutoCommand {
                 },
                 orbit_types::workflow::JobRunTrigger::cli(),
             )?;
-            return workflow_dispatch_payload_with_warning(
+            return workflow_dispatch_payload_with_notices(
                 AUTO_WORKFLOW,
                 &[WorkflowDispatchResult {
                     workflow_alias: AUTO_WORKFLOW,
@@ -175,6 +175,7 @@ impl Execute for AutoCommand {
                     error_message: None,
                 }],
                 submission_warnings(runtime),
+                runtime.required_validation_note().into_iter().collect(),
             );
         }
         let complexity_crews = orbit_config::ComplexityCrewPools {
@@ -217,7 +218,12 @@ impl Execute for AutoCommand {
             error_code: None,
             error_message: None,
         };
-        workflow_dispatch_payload_with_warning(AUTO_WORKFLOW, &[run], submission_warnings(runtime))
+        workflow_dispatch_payload_with_notices(
+            AUTO_WORKFLOW,
+            &[run],
+            submission_warnings(runtime),
+            runtime.required_validation_note().into_iter().collect(),
+        )
     }
 }
 

@@ -405,8 +405,8 @@ process binding.
 
 The owner declares what a claim must pass in
 `workflow.required_validation_commands`. Both endpoints read it, and an empty
-list is fail-closed: the executor refuses before running anything and the claim
-journal refuses the handoff. Each command runs on the exact candidate in the
+list is no required check: the executor runs nothing and records that, and the
+claim journal accepts a handoff with no validation logs. Each command runs on the exact candidate in the
 executor's worktree, and its captured log is attached to the owner's copy of
 the task as a digest-pinned artifact. The typed handoff is written as the
 claim's durable pending settlement before any owner call, so a disconnect

@@ -508,7 +508,8 @@ claim-scoped handoff approval instead of the refused status write.
 - The per-candidate operator approval remains the path whenever the key is `review`, and for any
   handoff accepted without the policy.
 - Cost: an owner with `done` merges every validated follower delivery without a human seeing it
-  first. The only gate is the owner's required validation commands. A handoff authorized by the
+  first. The only gate is the owner's required validation commands, and an empty list is no
+  gate. A handoff authorized by the
   policy and then fenced by withdrawing it cannot be re-approved by an operator (one
   authorization per handoff); restore the key, or revoke and recover the claim.
 

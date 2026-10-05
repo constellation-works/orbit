@@ -18,7 +18,8 @@ spec:
     With `ownership_base_sha`, every path the candidate changed since that
     commit is first attributed to the delivered tasks; a path no selector owns
     widens a task's selectors with review provenance rather than failing. An
-    empty requirement list is a no-op.
+    empty requirement list runs nothing and records
+    `skipped_no_required_commands`.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, completed_task_ids]
@@ -50,6 +51,9 @@ spec:
       decision:
         type: string
         enum: [passed, skipped_no_required_commands]
+      note:
+        type: string
+        description: Why no command ran, when the requirement list is empty.
       commands:
         type: array
         items:

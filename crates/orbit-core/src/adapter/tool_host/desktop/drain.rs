@@ -110,6 +110,10 @@ pub(in crate::adapter::tool_host) fn control(
             if !warnings.is_empty() {
                 started["warning"] = json!(warnings.join("\n"));
             }
+            // Informational, not a refusal: an empty list is no required check.
+            if let Some(note) = runtime.required_validation_note() {
+                started["note"] = json!(note);
+            }
             started
         }
         "stop" => {

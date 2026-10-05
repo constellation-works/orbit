@@ -34,14 +34,15 @@ use std::time::Duration;
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError, process::run_bounded_capped, test_env};
 use orbit_engine::{
-    ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost, TaskActivityUpdate,
-    TaskAutomationUpdate, execute_deterministic_action, review_gate,
+    ClaimExecutionContext, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
+    TaskActivityUpdate, TaskAutomationUpdate, execute_deterministic_action, review_gate,
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment,
     TaskPriority, TaskStatus, TaskType,
 };
+use orbit_types::workflow::handoff::{HandoffDelivery, TaskHandoff};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -693,6 +694,87 @@ fn required_validation_without_commands_is_a_no_op() {
     );
 }
 
+/// A claimed leaf on an owner that requires no command runs none and still
+/// hands off: `claim_validate` pins the candidate and records the no-op, and
+/// `claim_handoff` records a handoff with no validation logs whose summary
+/// does not claim a check passed.
+#[test]
+fn claimed_validation_without_commands_is_a_recorded_no_op() {
+    isolated(
+        "claimed_validation_without_commands_is_a_recorded_no_op",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+
+            let validated =
+                action(&host, "claim_validate", &input).expect("no requirement is no gate");
+
+            assert_eq!(validated["decision"], "skipped_no_required_commands");
+            assert!(validated["note"].is_string(), "{validated}");
+            assert_eq!(validated["commands"], json!([]));
+            assert_eq!(validated["validation"], json!([]));
+            assert_eq!(validated["tested_head"], fx.candidate.as_str());
+            assert!(host.claim_logs.lock().unwrap().is_empty());
+
+            let mut handoff_input = input.clone();
+            handoff_input["candidate"] = validated["candidate"].clone();
+            handoff_input["validation"] = validated["validation"].clone();
+            let handed = action(&host, "claim_handoff", &handoff_input)
+                .expect("a handoff needs no logs the owner does not require");
+
+            assert_eq!(handed["handed_off"], true);
+            assert_eq!(handed["merged"], false);
+            let handoffs = host.handoffs.lock().unwrap();
+            assert_eq!(handoffs.len(), 1);
+            assert!(handoffs[0].validation.is_empty());
+            assert_eq!(handoffs[0].candidate.candidate.commit, fx.candidate);
+            assert_eq!(
+                handoffs[0].candidate.delivery,
+                HandoffDelivery::LocalCandidate
+            );
+            assert!(
+                !handoffs[0].execution_summary.contains("validation passed"),
+                "a handoff that ran no check must not report one passing: {}",
+                handoffs[0].execution_summary
+            );
+        },
+    );
+}
+
+/// The same leaf on an owner that does require a command still refuses a
+/// handoff that carries none of its logs.
+#[test]
+fn claimed_handoff_without_logs_is_refused_when_commands_are_required() {
+    isolated(
+        "claimed_handoff_without_logs_is_refused_when_commands_are_required",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            host.require_commands(&["true"]);
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            let validated = action(&host, "claim_validate", &input).expect("validate");
+            assert_eq!(validated["decision"], "passed");
+            assert_eq!(host.claim_logs.lock().unwrap().len(), 1);
+
+            input["candidate"] = validated["candidate"].clone();
+            input["validation"] = json!([]);
+            let refused = action(&host, "claim_handoff", &input)
+                .expect_err("required validation must travel with the handoff");
+            assert!(matches!(refused, OrbitError::PolicyDenied(_)), "{refused}");
+            assert!(host.handoffs.lock().unwrap().is_empty());
+        },
+    );
+}
+
 /// A completion-stage failure — here the re-review of a rebased head — closes
 /// every review attempt the run admitted, so none stays open, and keeps the
 /// published PR and the task in review. A bundle's handoff, which refuses to
@@ -1115,6 +1197,10 @@ struct DeliveryHost {
     validation_env: Mutex<Option<ValidationEnvironment>>,
     /// Selector widenings requested, as (task, step, activity, paths).
     widenings: Mutex<Vec<Widening>>,
+    /// Claimed-leaf validation logs attached to the owner, by path.
+    claim_logs: Mutex<Vec<String>>,
+    /// Claimed-leaf handoffs recorded as pending settlements.
+    handoffs: Mutex<Vec<TaskHandoff>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -1132,6 +1218,8 @@ impl DeliveryHost {
             releases: Mutex::default(),
             validation_env: Mutex::default(),
             widenings: Mutex::default(),
+            claim_logs: Mutex::default(),
+            handoffs: Mutex::default(),
         }
     }
 
@@ -1312,6 +1400,33 @@ impl RuntimeHost for DeliveryHost {
 
     fn required_validation_commands(&self) -> Vec<String> {
         self.required_commands.lock().unwrap().clone()
+    }
+
+    /// One owner-local claim on the fixture's candidate branch, requiring
+    /// whatever this host requires.
+    fn claim_execution_context(&self) -> Result<ClaimExecutionContext, OrbitError> {
+        Ok(ClaimExecutionContext {
+            footprint: vec!["file:src/feature.txt".to_string()],
+            workspace_id: "ws_owner".to_string(),
+            task_id: TASK_ID.to_string(),
+            claim_id: "claim-landing".to_string(),
+            machine_id: "hm_follower".to_string(),
+            run_id: RUN_ID.to_string(),
+            ship_mode: "local".to_string(),
+            base_branch: BASE.to_string(),
+            landing_branch: BASE.to_string(),
+            required_commands: self.required_validation_commands(),
+        })
+    }
+
+    fn attach_claim_validation_log(&self, path: &str, _content: Vec<u8>) -> Result<(), OrbitError> {
+        self.claim_logs.lock().unwrap().push(path.to_string());
+        Ok(())
+    }
+
+    fn record_claim_handoff(&self, handoff: &TaskHandoff) -> Result<(), OrbitError> {
+        self.handoffs.lock().unwrap().push(handoff.clone());
+        Ok(())
     }
 
     fn validation_subprocess_environment(&self) -> ValidationEnvironment {
