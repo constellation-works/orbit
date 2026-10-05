@@ -70,5 +70,10 @@ spec:
           steps never re-resolve the moving ref. A successful setup guarantees
           the checkout HEAD equals this id; setup never publishes it against
           unexplained reused history.
+      prior_job_run_id:
+        type: [string, "null"]
+        description: >
+          For a single-task run, the run the task was linked to before this
+          one, where `candidate_resume` looks for a preserved candidate.
   action: worktree_setup
   config: {}

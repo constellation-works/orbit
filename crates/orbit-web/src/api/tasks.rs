@@ -682,6 +682,7 @@ pub(super) async fn update_task_action(
         context_files: body.context_files,
         upsert_artifacts: Vec::new(),
         trusted_artifact_origin: None,
+        discard_candidate: false,
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {

@@ -168,6 +168,10 @@ pub struct TaskUpdateParams {
     pub orchestrator: Option<Option<String>>,
     pub context_files: Option<Vec<String>>,
     pub upsert_artifacts: Vec<TaskArtifact>,
+    /// Discard the candidate the task's last failed run preserved, so its
+    /// next run implements fresh instead of resuming it [ORB-13985].
+    /// Recorded as a task history event; refused while a run owns the task.
+    pub discard_candidate: bool,
 }
 
 impl From<TaskUpdateParams> for TaskRecordUpdateParams {

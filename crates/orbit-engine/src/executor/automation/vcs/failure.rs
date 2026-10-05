@@ -309,7 +309,17 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pr_url": pr_url,
         "pr_created": pr_created,
         "task_status": "blocked",
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
+}
+
+/// The spec digest a later run compares before resuming this candidate
+/// [ORB-13985], read after this handoff's own selector widening.
+fn recorded_spec_digest<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+) -> Result<String, OrbitError> {
+    Ok(host.get_task(task_id)?.spec_digest())
 }
 
 /// Keep a candidate whose required validation could not run because a tool
@@ -385,6 +395,7 @@ fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>(
         "candidate_preserved": true,
         "pr_created": false,
         "task_status": "blocked",
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
 }
 
@@ -505,6 +516,7 @@ fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         "push": pushed,
         "pr_created": false,
         "task_status": "blocked",
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
 }
 

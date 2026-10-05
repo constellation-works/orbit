@@ -25,6 +25,12 @@ spec:
       # whether or not this is set: a claimed leaf's worker binding is enough.
       claimed:
         type: boolean
+      # Set by `candidate_resume` when the checkout already holds this
+      # task's preserved candidate that needs repair: `trigger`
+      # (`conflict`, `validation` or `review`), `output`, and
+      # `conflicting_paths` or the failing `command`.
+      resume_candidate:
+        type: [object, "null"]
   output_schema_json:
     type: object
     properties:
@@ -103,6 +109,17 @@ spec:
        Record starting HEAD and full `git status --short` as the baseline
        distinguishing run-owned output from pre-existing edits; preserve those
        edits. Inspect materials, consumers, and evidence before changes.
+
+    Resumed candidate
+
+    - When `input.resume_candidate` is set, the checkout already holds this
+      task's candidate from an earlier failed run, applied onto the current
+      base as uncommitted changes. Repair it; do not re-implement it. Fix
+      what `trigger` names: `conflict` (resolve the conflict markers in
+      `conflicting_paths` against the new base), `validation` (the `output`
+      of the failing `command`) or `review` (the findings in the review
+      settlement comment). Then rerun the checks and say in the summary that
+      you repaired a resumed candidate.
 
     Scope and implementation
 

@@ -72,6 +72,23 @@ impl Display for Task {
 }
 
 impl Task {
+    /// Digest of what a candidate implementation answers to: the description,
+    /// acceptance criteria and context selectors (order-insensitive). A
+    /// preserved candidate is resumed only while this is unchanged
+    /// [ORB-13985].
+    pub fn spec_digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut selectors = self.context_files.iter().collect::<Vec<_>>();
+        selectors.sort();
+        selectors.dedup();
+        let spec = serde_json::json!({
+            "description": self.description,
+            "acceptance_criteria": self.acceptance_criteria,
+            "context_files": selectors,
+        });
+        format!("{:x}", Sha256::digest(spec.to_string().as_bytes()))
+    }
+
     /// The task an envelope and its body documents describe.
     ///
     /// Passing empty bodies yields the metadata-only view: `description`,

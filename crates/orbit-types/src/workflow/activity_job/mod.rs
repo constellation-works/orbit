@@ -58,6 +58,7 @@ macro_rules! deterministic_action_catalog {
                 ValidateBundles => "validate_bundles",
             }
             engine {
+                CandidateResume => "candidate_resume",
                 CandidateValidate => "candidate_validate",
                 ClaimHandoff => "claim_handoff",
                 ClaimValidate => "claim_validate",

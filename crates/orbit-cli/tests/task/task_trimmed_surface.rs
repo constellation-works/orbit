@@ -141,6 +141,59 @@ fn update_status_performs_approve_and_reject_transitions() {
     assert_eq!(task["status"], json!("rejected"));
 }
 
+/// [ORB-13985] `--discard-candidate` records the operator's discard in task
+/// history, alongside a requeue, so the next run implements fresh; it is
+/// refused while a run is still working on the task.
+#[test]
+fn update_discard_candidate_records_the_discard_unless_a_run_is_active() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Discard a candidate");
+    workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--plan",
+            "1) do it",
+            "--status",
+            "in-progress",
+        ],
+        "start",
+    );
+
+    let refused = workspace.run_raw(&["task", "update", &id, "--discard-candidate"]);
+    assert!(
+        !refused.status.success(),
+        "an active run's candidate is not the operator's to discard"
+    );
+    let refusal = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert!(refusal.contains("in-progress"), "{refusal}");
+    let discards = |task: &Value| {
+        task["history"]
+            .as_array()
+            .expect("task history")
+            .iter()
+            .filter(|entry| entry["event"] == json!("candidate_discarded"))
+            .count()
+    };
+    let current = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(discards(&current), 0, "a refused discard records nothing");
+
+    workspace.run(&["task", "update", &id, "--status", "blocked"], "block");
+    let requeued = workspace.task_json(&[
+        "task",
+        "update",
+        &id,
+        "--status",
+        "backlog",
+        "--discard-candidate",
+        "--json",
+    ]);
+    assert_eq!(requeued["status"], json!("backlog"));
+    assert_eq!(discards(&requeued), 1);
+}
+
 #[test]
 fn task_update_complexity_roundtrips_through_a_real_task_record() {
     let workspace = TestWorkspace::new();

@@ -5,6 +5,10 @@ use super::*;
 /// QA validation tasks file follow-up Orbit tasks).
 pub const NO_DIFF_EXPECTED_TAG: &str = "no-diff-expected";
 
+/// Task history event an operator records to discard the candidate the task's
+/// last failed run preserved; the next run implements fresh [ORB-13985].
+pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
+
 /// Operator-facing projection for a valid task reference whose prefix is not
 /// represented in this machine's coordination registry.
 pub const TASK_REFERENCE_NOT_VERIFIABLE_HERE: &str = "not verifiable here";

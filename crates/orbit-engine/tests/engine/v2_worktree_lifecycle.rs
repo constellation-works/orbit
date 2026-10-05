@@ -5,7 +5,8 @@
 //! Task-worktree lifecycle through the engine's deterministic actions.
 //!
 //! Each test drives the shipped actions over a real fixture repository:
-//! `worktree_setup` creates the run's checkout, `pr_prepare` / `git_rebase`
+//! `worktree_setup` creates the run's checkout, `candidate_resume` applies a
+//! requeued task's preserved candidate onto it, `pr_prepare` / `git_rebase`
 //! carry its candidate onto an advanced base, the `pr_conflict_recovery`
 //! leaf finishes a stopped rebase through a substitute provider CLI, and
 //! `worktree_gc` decides which checkouts a finished run may give back.
@@ -34,10 +35,11 @@ use orbit_engine::{
     V2DispatchInput, WorktreeGcTaskLookup, dispatch_v2_activity, execute_deterministic_action,
 };
 use orbit_types::task::{
-    ContextWideningStep, ExternalRef, Task, TaskPriority, TaskStatus, TaskType,
+    CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskHistoryEntry,
+    TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{FailureActivityCheckpoint, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -459,6 +461,316 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
             assert_eq!(host.admitted().len(), 2);
         },
     );
+}
+
+// ---------------------------------------------------------------------------
+// candidate_resume: a requeued task resumes its preserved candidate
+// ---------------------------------------------------------------------------
+
+/// A clean candidate that passes owner validation on the advanced base is
+/// delivered as is: no implementation step, and the run's own commit step
+/// commits exactly the candidate's change on the new base.
+#[test]
+fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
+    isolated(
+        "a_validated_candidate_is_resumed_on_the_new_base_without_implementation",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            preserved.host.set_required_commands(&[
+                "test -f feature.txt && read line < base.txt && test \"$line\" = v2",
+            ]);
+            let setup = preserved.next_setup();
+            assert_eq!(setup["base_sha"], base.as_str());
+
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            assert_eq!(resumed["implement"], false);
+            assert_eq!(resumed["source_run_id"], FAILED_RUN);
+            assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
+            assert_eq!(resumed["repair"], Value::Null);
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+            assert_eq!(
+                git(&checkout.path, &["status", "--porcelain"]),
+                "?? feature.txt",
+                "the candidate is applied as uncommitted work"
+            );
+            assert_resume_recorded(&preserved, "resumed_validated");
+
+            let committed = action(
+                &preserved.host,
+                "git_commit",
+                &json!({
+                    "job_run_id": NEXT_RUN,
+                    "scope": "all",
+                    "workspace_path": checkout.path,
+                    "base_ref": setup["base_ref"],
+                    "base_sha": setup["base_sha"],
+                }),
+            )
+            .expect("the run's commit step delivers the candidate");
+            let head = committed["commit_sha"].as_str().unwrap();
+            assert_eq!(
+                git(&checkout.path, &["rev-parse", &format!("{head}^")]),
+                base
+            );
+            assert_eq!(
+                git(&checkout.path, &["show", &format!("{head}:feature.txt")]),
+                "feature"
+            );
+        },
+    );
+}
+
+/// A candidate that conflicts with the advanced base is handed to the
+/// implementer as uncommitted work with the conflict markers and paths;
+/// validation does not run on a conflicted tree.
+#[test]
+fn a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict() {
+    isolated(
+        "a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict",
+        || {
+            let preserved = PreservedCandidate::new("base.txt", "candidate\n");
+            let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            preserved.host.set_required_commands(&["exit 99"]);
+            let setup = preserved.next_setup();
+
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "conflict");
+            assert_eq!(resumed["repair"]["conflicting_paths"], json!(["base.txt"]));
+            assert!(
+                resumed["repair"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("base.txt"),
+                "{resumed}"
+            );
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+            let conflicted = fs::read_to_string(checkout.path.join("base.txt")).unwrap();
+            assert!(
+                conflicted.contains("<<<<<<<")
+                    && conflicted.contains("candidate")
+                    && conflicted.contains("v2"),
+                "the implementer starts from both sides: {conflicted}"
+            );
+            assert!(
+                git(&checkout.path, &["diff", "--name-only", "--diff-filter=U"]).is_empty(),
+                "no merge state is left behind"
+            );
+            assert_resume_recorded(&preserved, "resumed_repaired");
+        },
+    );
+}
+
+/// A clean candidate that fails owner validation is handed to the
+/// implementer with the failing command and its output.
+#[test]
+fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output() {
+    isolated(
+        "a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            let command = "echo 'feature.txt is wrong' >&2; exit 3";
+            preserved.host.set_required_commands(&[command]);
+            let setup = preserved.next_setup();
+
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "validation");
+            assert_eq!(resumed["repair"]["command"], command);
+            assert_eq!(resumed["repair"]["exit_code"], 3);
+            assert!(
+                resumed["repair"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("feature.txt is wrong"),
+                "{resumed}"
+            );
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
+                "feature\n",
+                "the implementer starts from the candidate"
+            );
+            assert_resume_recorded(&preserved, "resumed_repaired");
+        },
+    );
+}
+
+/// A spec change since the candidate's run, or an operator discard recorded
+/// since that run began, forces a fresh implementation with the reason, and
+/// leaves the checkout untouched. A discard older than the run does not.
+#[test]
+fn a_changed_spec_or_an_operator_discard_implements_fresh() {
+    isolated(
+        "a_changed_spec_or_an_operator_discard_implements_fresh",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            let setup = preserved.next_setup();
+            let checkout = Checkout::from_setup(&setup);
+            let untouched = || {
+                assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+                assert!(git(&checkout.path, &["status", "--porcelain"]).is_empty());
+            };
+
+            preserved
+                .host
+                .set_description(RESUME_TASK, "A re-scoped task.");
+            let changed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(changed["outcome"], "fresh", "{changed}");
+            assert_eq!(changed["implement"], true);
+            assert!(
+                changed["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("changed since"),
+                "{changed}"
+            );
+            assert_eq!(changed["source_sha"], preserved.candidate.as_str());
+            untouched();
+            assert_resume_recorded(&preserved, "fresh");
+
+            preserved.host.set_description(RESUME_TASK, "");
+            preserved.host.clear_history(RESUME_TASK);
+            preserved
+                .host
+                .record_history(RESUME_TASK, discard_entry(Utc::now()));
+            let discarded = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(discarded["outcome"], "fresh", "{discarded}");
+            assert!(
+                discarded["reason"].as_str().unwrap().contains("discarded"),
+                "{discarded}"
+            );
+            untouched();
+            assert_resume_recorded(&preserved, "fresh");
+
+            preserved.host.clear_history(RESUME_TASK);
+            preserved.host.record_history(
+                RESUME_TASK,
+                discard_entry(Utc::now() - chrono::Duration::hours(1)),
+            );
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(
+                resumed["outcome"], "resumed_validated",
+                "a discard from before the candidate's run does not apply: {resumed}"
+            );
+        },
+    );
+}
+
+const RESUME_TASK: &str = "T-RESUME";
+const FAILED_RUN: &str = "jrun-failed";
+const NEXT_RUN: &str = "jrun-next";
+
+/// A task whose run `FAILED_RUN` committed a candidate and failed after
+/// implementation, with the failure handoff's preservation record.
+struct PreservedCandidate {
+    fixture: Fixture,
+    host: LifecycleHost,
+    candidate: String,
+}
+
+impl PreservedCandidate {
+    fn new(file: &str, contents: &str) -> Self {
+        let fixture = Fixture::new();
+        let host = LifecycleHost::new(&fixture.repo);
+        host.add_task(RESUME_TASK, TaskStatus::Backlog);
+        let setup = action(
+            &host,
+            "worktree_setup",
+            &setup_input(&[RESUME_TASK], FAILED_RUN),
+        )
+        .expect("the failed run's setup");
+        let checkout = Checkout::from_setup(&setup);
+        let candidate = commit_file(&checkout.path, file, contents);
+        host.add_run(job_run(
+            FAILED_RUN,
+            JobRunState::Failed,
+            json!({ "task_ids": [RESUME_TASK] }),
+        ));
+        host.preserve(
+            FAILED_RUN,
+            "validate",
+            json!({
+                "phase": "failure_handoff",
+                "decision": "blocked_failure_pr",
+                "task_id": RESUME_TASK,
+                "handoff_run_id": FAILED_RUN,
+                "branch": checkout.branch,
+                "head_sha": candidate,
+                "task_spec_digest": host.get_task(RESUME_TASK).unwrap().spec_digest(),
+            }),
+        );
+        host.set_status(RESUME_TASK, TaskStatus::Backlog);
+        Self {
+            fixture,
+            host,
+            candidate,
+        }
+    }
+
+    /// The requeued task's next run sets up its checkout, linked to the
+    /// failed run.
+    fn next_setup(&self) -> Value {
+        let setup = action(
+            &self.host,
+            "worktree_setup",
+            &setup_input(&[RESUME_TASK], NEXT_RUN),
+        )
+        .expect("the next run's setup");
+        assert_eq!(setup["prior_job_run_id"], FAILED_RUN);
+        setup
+    }
+
+    fn resume(&self, setup: &Value) -> Result<Value, OrbitError> {
+        action(
+            &self.host,
+            "candidate_resume",
+            &json!({
+                "job_run_id": NEXT_RUN,
+                "task_ids": [RESUME_TASK],
+                "workspace_path": setup["workspace_path"],
+                "base_sha": setup["base_sha"],
+                "prior_job_run_id": setup["prior_job_run_id"],
+            }),
+        )
+    }
+}
+
+/// The task history names the outcome, the source run and the candidate SHA.
+fn assert_resume_recorded(preserved: &PreservedCandidate, outcome: &str) {
+    let history = preserved.host.history(RESUME_TASK);
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == "candidate_resume")
+        .unwrap_or_else(|| panic!("no candidate_resume event in {history:?}"));
+    let note = entry.note.as_deref().unwrap_or_default();
+    for expected in [
+        format!("{outcome}:"),
+        format!("source_run={FAILED_RUN}"),
+        format!("source_sha={}", preserved.candidate),
+    ] {
+        assert!(note.contains(&expected), "{expected} in {note}");
+    }
+}
+
+fn discard_entry(at: chrono::DateTime<Utc>) -> TaskHistoryEntry {
+    TaskHistoryEntry {
+        at,
+        by: "human:operator".to_string(),
+        event: CANDIDATE_DISCARDED_EVENT.to_string(),
+        note: None,
+        from_status: None,
+        to_status: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1369,6 +1681,12 @@ struct LifecycleHost {
     lookup_scopes: Mutex<BTreeMap<String, String>>,
     /// Selector widenings requested, as (task, step, activity, paths).
     widenings: Mutex<Vec<Widening>>,
+    /// Durable run state by run id.
+    run_states: Mutex<BTreeMap<String, PipelineState>>,
+    /// Task history events by task id.
+    history: Mutex<BTreeMap<String, Vec<TaskHistoryEntry>>>,
+    /// `workflow.required_validation_commands`.
+    required_commands: Mutex<Vec<String>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -1439,6 +1757,55 @@ impl LifecycleHost {
     fn widenings(&self) -> Vec<Widening> {
         self.widenings.lock().unwrap().clone()
     }
+
+    fn set_description(&self, id: &str, description: &str) {
+        self.tasks.lock().unwrap().get_mut(id).unwrap().description = description.to_string();
+    }
+
+    fn set_required_commands(&self, commands: &[&str]) {
+        *self.required_commands.lock().unwrap() =
+            commands.iter().map(ToString::to_string).collect();
+    }
+
+    /// Record `output` as `run_id`'s failure-activity checkpoint.
+    fn preserve(&self, run_id: &str, failed_step_id: &str, output: Value) {
+        let mut state = PipelineState::new(
+            run_id.to_string(),
+            "task_pr_pipeline".to_string(),
+            json!({}),
+        );
+        state.failure_activity_checkpoint = Some(FailureActivityCheckpoint {
+            activity_name: "pr_failure_handoff".to_string(),
+            failed_step_id: failed_step_id.to_string(),
+            output,
+        });
+        self.run_states
+            .lock()
+            .unwrap()
+            .insert(run_id.to_string(), state);
+    }
+
+    fn record_history(&self, task_id: &str, entry: TaskHistoryEntry) {
+        self.history
+            .lock()
+            .unwrap()
+            .entry(task_id.to_string())
+            .or_default()
+            .push(entry);
+    }
+
+    fn clear_history(&self, task_id: &str) {
+        self.history.lock().unwrap().remove(task_id);
+    }
+
+    fn history(&self, task_id: &str) -> Vec<TaskHistoryEntry> {
+        self.history
+            .lock()
+            .unwrap()
+            .get(task_id)
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 impl RuntimeHost for LifecycleHost {
@@ -1484,7 +1851,43 @@ impl RuntimeHost for LifecycleHost {
         if let Some(status) = update.status {
             task.status = status;
         }
+        drop(tasks);
+        if let Some(event) = update.status_event {
+            self.record_history(
+                task_id,
+                TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".to_string(),
+                    event,
+                    note: update.status_note,
+                    from_status: None,
+                    to_status: None,
+                },
+            );
+        }
         Ok(())
+    }
+
+    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        Ok(self.history(task_id))
+    }
+
+    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        Ok(self
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|run| run.run_id == run_id)
+            .cloned())
+    }
+
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        Ok(self.run_states.lock().unwrap().get(run_id).cloned())
+    }
+
+    fn required_validation_commands(&self) -> Vec<String> {
+        self.required_commands.lock().unwrap().clone()
     }
 
     fn repo_root(&self) -> Result<String, OrbitError> {

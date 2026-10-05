@@ -128,6 +128,17 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
 
     let workspace_path_str = worktree_path.to_string_lossy().to_string();
 
+    // ORB-13985: the run a single task was last linked to, read before this
+    // run stamps its own id; `candidate_resume` looks there for a candidate
+    // that run's failure handoff preserved.
+    let prior_job_run_id = match task_ids.as_slice() {
+        [task_id] => host
+            .get_task(task_id)?
+            .job_run_id
+            .filter(|prior| prior != &job_run_id),
+        _ => None,
+    };
+
     for task_id in task_ids {
         host.admit_task_for_workflow(task_id, "worktree_setup")?;
         host.apply_task_automation_update(
@@ -139,13 +150,15 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         )?;
     }
 
-    Ok(worktree_setup_output(
+    let mut output = worktree_setup_output(
         &job_run_id,
         workspace_path_str,
         branch_name,
         start_point,
         base_sha,
-    ))
+    );
+    output["prior_job_run_id"] = json!(prior_job_run_id);
+    Ok(output)
 }
 
 // pub(crate) widened for tests/ layout migration (ORB-00240); test reaches via

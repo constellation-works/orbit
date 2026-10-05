@@ -90,7 +90,23 @@ spec:
         base_sync: "{{ input.base_sync }}"
         preflight: true
 
+    # ORB-13985: a task whose last failed run preserved a candidate resumes
+    # it rather than re-implementing: the candidate is squash-merged onto
+    # this base and owner validation runs on it. A pass skips
+    # `implement_bundle`; a conflict, failing validation or review refusal
+    # hands the implementer the applied candidate and that output to repair.
+    # A discarded candidate, a changed spec or a bundle implements fresh.
+    - id: resume_candidate
+      target: activity:candidate_resume
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+        prior_job_run_id: "{{ steps.worktree.output.prior_job_run_id }}"
+
     - id: implement_bundle
+      when: "{{ steps.resume_candidate.output.implement }} == true"
       loop:
         items: "{{ input.task_ids }}"
         max_iterations: 256
@@ -102,6 +118,7 @@ spec:
               task_id: "{{ item }}"
               workspace_path: "{{ steps.worktree.output.workspace_path }}"
               repo_root: "{{ steps.worktree.output.workspace_path }}"
+              resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
       recovery_activity: step_failure_recovery

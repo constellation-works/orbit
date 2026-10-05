@@ -44,6 +44,7 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
         [
             "worktree_setup",
             "review_gate_admit",
+            "candidate_resume",
             "agent_implement",
             "git_commit",
             "pr_prepare",
@@ -200,6 +201,7 @@ const REVIEW_FIXES: &str = "## Review fixes\n\n- `F1` [high] Missing guard — a
 /// Every activity the shipped PR pipeline dispatches, as scripted stand-ins.
 const ACTIVITIES: &[&str] = &[
     "worktree_setup",
+    "candidate_resume",
     "agent_implement",
     "step_failure_recovery",
     "git_commit",
@@ -218,14 +220,14 @@ const ACTIVITIES: &[&str] = &[
     "final_recovery",
 ];
 
-fn position(actions: &[String], action: &str) -> usize {
+pub(super) fn position(actions: &[String], action: &str) -> usize {
     actions
         .iter()
         .position(|candidate| candidate == action)
         .unwrap_or_else(|| panic!("{action} never ran: {actions:?}"))
 }
 
-fn run_shipped_pipeline(host: &ScriptedHost) -> Result<JobOutcome, DispatchError> {
+pub(super) fn run_shipped_pipeline(host: &ScriptedHost) -> Result<JobOutcome, DispatchError> {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let sink = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
     let writer = Arc::new(V2AuditWriter::new(RUN_ID, "review-fixes-agent", sink));
@@ -278,7 +280,7 @@ fn shipped_pipeline() -> orbit_types::workflow::JobV2 {
 
 /// What the scripted gate settles the admitted attempt as.
 #[derive(Clone, Copy)]
-enum Settlement {
+pub(super) enum Settlement {
     Accept,
     /// The reviewer committed fixes over the implementation head.
     AcceptWithFixes,
@@ -288,38 +290,53 @@ enum Settlement {
 
 /// Whether owner revalidation of a reviewer commit passes.
 #[derive(Clone, Copy, PartialEq)]
-enum Revalidation {
+pub(super) enum Revalidation {
     Passes,
     Fails,
 }
 
 /// Plays the shipped pipeline's activities, keeping the candidate head a
 /// reviewer commit advances.
-struct ScriptedHost {
+pub(super) struct ScriptedHost {
     settlement: Settlement,
     revalidation: Revalidation,
+    /// What `candidate_resume` decides; by default, a fresh implementation.
+    resume: Value,
     head: Mutex<String>,
     calls: Mutex<Vec<(String, Value)>>,
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
 }
 
 impl ScriptedHost {
-    fn new(settlement: Settlement, revalidation: Revalidation) -> Self {
+    pub(super) fn new(settlement: Settlement, revalidation: Revalidation) -> Self {
         Self {
             settlement,
             revalidation,
+            resume: json!({
+                "phase": "candidate_resume",
+                "outcome": "fresh",
+                "implement": true,
+                "reason": "no earlier run is linked to the task",
+                "repair": null,
+            }),
             head: Mutex::new("candidate".to_string()),
             calls: Mutex::default(),
             admissions: Mutex::default(),
         }
     }
 
-    fn actions(&self) -> Vec<String> {
+    /// `candidate_resume` answers `resume` instead.
+    pub(super) fn resuming(mut self, resume: Value) -> Self {
+        self.resume = resume;
+        self
+    }
+
+    pub(super) fn actions(&self) -> Vec<String> {
         let calls = self.calls.lock().expect("call log");
         calls.iter().map(|(action, _)| action.clone()).collect()
     }
 
-    fn inputs(&self, action: &str) -> Vec<Value> {
+    pub(super) fn inputs(&self, action: &str) -> Vec<Value> {
         let calls = self.calls.lock().expect("call log");
         calls
             .iter()
@@ -397,7 +414,9 @@ impl RuntimeHost for ScriptedHost {
                 "workspace_path": WORKSPACE,
                 "base_ref": "origin/main",
                 "base_sha": "base-sha",
+                "prior_job_run_id": null,
             }),
+            "candidate_resume" => self.resume.clone(),
             "agent_implement" => json!({ "summary": "implemented" }),
             "git_commit" => json!({ "skipped_no_diff_expected": false }),
             "pr_prepare" | "git_rebase" => json!({
