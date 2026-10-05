@@ -140,10 +140,10 @@ pub(crate) fn review_gate_admit(
             REVIEW_AUDIT,
             Some(&context.run_id),
             Some("system"),
-            if outcome.is_ok() {
-                AuditEventStatus::Success
-            } else {
-                AuditEventStatus::Failure
+            match &outcome {
+                Ok(_) => AuditEventStatus::Success,
+                Err(OrbitError::CapabilityDenied(_)) => AuditEventStatus::Denied,
+                Err(_) => AuditEventStatus::Failure,
             },
             audit_args,
             outcome.as_ref().err().map(ToString::to_string),

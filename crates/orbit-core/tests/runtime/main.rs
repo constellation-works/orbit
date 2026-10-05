@@ -13,6 +13,7 @@ mod dispatch_admission;
 mod distributed_drain;
 mod final_recovery;
 mod relation_auto_close;
+mod review_gate_audit;
 mod sandbox_off;
 
 mod host_resources;

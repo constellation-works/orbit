@@ -446,8 +446,15 @@ task detail view carry a `review` block: verdict, assurance, reviewer
 implementation and reviewer commits, findings, validation, consumed and
 remaining budget, landings, and stale-gate reasons. Auto-task inspection and
 the automation panel show `excluded` landings with their certificate. Audit
-rows `review.gate` cover preflight, admit, settle, and landing. Reset decisions
-are retained atomically in the lineage ledger alongside the normal
+rows `review.gate` cover preflight, admit, settle, release, and landing. A
+completed settlement or landing check records `success`, even when its verdict
+blocks delivery or its landing is uncovered; read `outcome.verdict` and
+`outcome.escalation` for settlement, and `covered` and `reason` for landing.
+Admission capability refusals, including exhausted budgets, record `denied`
+with an error message. Gate execution errors record `failure` with an error
+message. Audit status measures the call, not review acceptance or coverage;
+certificates and landing records remain the authority for those outcomes.
+Reset decisions are retained atomically in the lineage ledger alongside the normal
 `orbit.task.review_reset` dispatch audit. Task artifacts
 `review-manifest.json`, `review-report.json`, and `review-gate.json` are the
 durable evidence.
