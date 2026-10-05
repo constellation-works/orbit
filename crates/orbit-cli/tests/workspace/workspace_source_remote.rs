@@ -199,6 +199,73 @@ fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() 
 }
 
 #[test]
+fn force_init_recovers_identity_with_an_unchanged_non_portable_origin() {
+    for origin in [
+        "/local/source.git",
+        "file:///local/source.git",
+        "https://operator:supersecret@github.com/example/orbit.git",
+    ] {
+        let home = tempdir().expect("home");
+        let repo = tempdir().expect("repo");
+        init_git_repo(repo.path(), origin);
+        initialize_workspace(repo.path(), home.path(), "non-portable-origin-owner");
+        let registry_path = home.path().join(".orbit/workspaces.json");
+        let initial_registry = read_json(&registry_path);
+        assert_eq!(initial_registry["workspaces"][0]["git_remote"], origin);
+        let identity_path = repo.path().join(".orbit/config.yaml");
+        let initial_identity: Value =
+            serde_yaml::from_slice(&fs::read(&identity_path).expect("identity"))
+                .expect("parse identity");
+
+        for corrupt in [false, true] {
+            if corrupt {
+                fs::write(&identity_path, "workspace_id: [\n").expect("corrupt identity");
+            } else {
+                fs::remove_file(&identity_path).expect("remove identity");
+            }
+            orbit(repo.path(), home.path())
+                .args([
+                    "workspace",
+                    "init",
+                    "--name",
+                    "orbit",
+                    "--force",
+                    "--base-branch",
+                    "recovered-branch",
+                    "--ship-mode",
+                    "local",
+                ])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("supersecret").not())
+                .stderr(predicate::str::contains("supersecret").not());
+            let recovered_identity: Value =
+                serde_yaml::from_slice(&fs::read(&identity_path).expect("recovered identity"))
+                    .expect("parse recovered identity");
+            assert_eq!(recovered_identity, initial_identity);
+            let reconciled_registry = read_json(&registry_path);
+            let mut expected_workspace = initial_registry["workspaces"][0].clone();
+            expected_workspace["base_branch"] = Value::String("recovered-branch".to_string());
+            expected_workspace["ship_mode"] = Value::String("local".to_string());
+            expected_workspace["updated_at"] =
+                reconciled_registry["workspaces"][0]["updated_at"].clone();
+            assert_eq!(reconciled_registry["workspaces"][0], expected_workspace);
+            assert_eq!(
+                reconciled_registry["checkouts"],
+                initial_registry["checkouts"]
+            );
+            assert_eq!(
+                reconciled_registry["publication_bindings"],
+                initial_registry["publication_bindings"]
+            );
+        }
+
+        run_git(repo.path(), &["remote", "set-url", "origin", NEW_REMOTE]);
+        assert_force_init_refused_without_writes(repo.path(), home.path(), "source-remote rebind");
+    }
+}
+
+#[test]
 fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
@@ -221,7 +288,15 @@ fn force_init_rejects_invalid_origins_before_first_binding_and_on_retry() {
             ("https://github.com", "Git remote"),
         ] {
             run_git(repo.path(), &["remote", "set-url", "origin", origin]);
-            assert_force_init_refused_without_writes(repo.path(), home.path(), error);
+            assert_force_init_refused_without_writes(
+                repo.path(),
+                home.path(),
+                if already_bound {
+                    "source-remote rebind"
+                } else {
+                    error
+                },
+            );
         }
     }
 }
