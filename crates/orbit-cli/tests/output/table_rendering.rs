@@ -242,7 +242,7 @@ impl TestWorkspace {
         let home = temp.path().join("home");
         let work = home.join("work");
         fs::create_dir_all(&home).expect("create home");
-        fs::create_dir_all(work.join(".git")).expect("create work repo");
+        crate::git_repo::init(&work);
 
         let workspace = Self {
             _temp: temp,

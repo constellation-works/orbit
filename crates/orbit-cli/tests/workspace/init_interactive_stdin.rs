@@ -38,8 +38,8 @@ impl IsolatedHome {
         let work = temp.path().join("work");
         let empty_path = temp.path().join("empty-path");
         fs::create_dir_all(&home).expect("create home");
-        fs::create_dir_all(&work).expect("create work");
         fs::create_dir_all(&empty_path).expect("create empty PATH");
+        crate::git_repo::init(&work);
         Self {
             _temp: temp,
             home,

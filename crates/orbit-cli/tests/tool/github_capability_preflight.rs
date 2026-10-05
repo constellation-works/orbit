@@ -36,6 +36,9 @@ impl Lane {
         for dir in [&home, &work, &path] {
             std::fs::create_dir_all(dir).expect("create fixture dir");
         }
+        // The lane's cwd is `work`. Without its own repository, discovery
+        // climbs out of a managed TMPDIR into the enclosing checkout.
+        crate::git_repo::init(&work);
         Self {
             _temp: temp,
             home,

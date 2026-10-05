@@ -50,7 +50,7 @@ impl Sentinel {
         std::fs::write(parent.join(".orbit/sentinel"), "must remain unchanged\n")
             .expect("write hostile parent sentinel");
         std::fs::create_dir_all(&home).expect("create sentinel home");
-        std::fs::create_dir_all(work.join(".git")).expect("create sentinel work repo");
+        crate::git_repo::init(&work);
 
         let mut command = isolated_orbit(&work, &home);
         run_ok(
@@ -153,7 +153,7 @@ impl Fixture {
         let home = temp.path().join("home");
         let work = home.join("work");
         std::fs::create_dir_all(&home).expect("create fixture home");
-        std::fs::create_dir_all(work.join(".git")).expect("create fixture work repo");
+        crate::git_repo::init(&work);
 
         let fixture = Self {
             _temp: temp,
@@ -229,7 +229,7 @@ fn an_unscrubbed_child_routes_its_write_into_the_ambient_authority() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     std::fs::create_dir_all(&home).expect("create home");
-    std::fs::create_dir_all(&work).expect("create work");
+    crate::git_repo::init(&work);
 
     // The pre-ORB-11300 fixture shape: pin `HOME`, drop `ORBIT_ROOT`, and
     // leave everything else inherited.

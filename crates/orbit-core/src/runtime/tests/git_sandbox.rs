@@ -1,3 +1,15 @@
+/// Pathname sockets have to fit in `sockaddr_un.sun_path`. A managed run's
+/// `TMPDIR` is already longer than that limit, so these fixtures relocate
+/// to a short directory instead of using the process temp dir. This is the
+/// socket path, not a fallback that hides ancestor-config discovery.
+fn short_socket_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("ogs")
+        .rand_bytes(4)
+        .tempdir_in("/tmp")
+        .expect("short directory for a Unix socket path")
+}
+
 #[test]
 fn metadata_aliases_and_invalid_pointers_fail_closed() {
     use std::fs;
@@ -14,7 +26,7 @@ fn metadata_aliases_and_invalid_pointers_fail_closed() {
         "special-pointer",
         "invalid-common-pointer",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = short_socket_dir();
         let workspace = temp.path().join("workspace");
         let git_dir = workspace.join(".git");
         fs::create_dir_all(&workspace).unwrap();
@@ -78,7 +90,7 @@ fn git_scan_revalidation_denies_unsafe_replacements() {
         "replaced-ancestor",
         "missing-root",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = short_socket_dir();
         let root = temp.path().canonicalize().unwrap();
         let workspace = root.join("workspace");
         let git_dir = workspace.join(".git");

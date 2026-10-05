@@ -249,7 +249,9 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
     let moved_repo = temp.path().join("moved-repo");
     fs::rename(&repo, &moved_repo).expect("make registered checkout missing");
     let unrelated = temp.path().join("unrelated");
-    fs::create_dir(&unrelated).expect("unrelated cwd");
+    // Not the registered checkout. It is still its own repository so a
+    // TMPDIR nested in a checkout cannot make this cwd load that config.
+    crate::git_repo::init(&unrelated);
     let before = fs::read(global.join("workspaces.json")).expect("registry before failure");
     let mut command = cargo_bin_cmd!("orbit");
     command
