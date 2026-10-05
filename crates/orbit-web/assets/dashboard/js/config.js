@@ -98,6 +98,9 @@ export async function fetchAndRenderConfig() {
 // closing an editor), which removes the control that was just used. Handing
 // focus to its rebuilt counterpart keeps a keyboard user where they were.
 function render(payload) {
+  // A refresh that withdraws operator authority ends the edit session. Leaving
+  // it set would hide the editor and still freeze the host poll that waits on it.
+  if (!editable(payload)) editing = null;
   const body = $("config-body");
   if (!body) return;
   const restoreBody = captureFocus(body);
@@ -412,7 +415,7 @@ function matchesFilter(row) {
 function keyRow(row, payload) {
   const node = el("div", { class: `config-row state-${row.state}` });
   node.dataset.key = row.key;
-  if (editing && editing.kind === "key" && editing.key === row.key) {
+  if (editable(payload) && editing && editing.kind === "key" && editing.key === row.key) {
     node.classList.add("editing");
     node.appendChild(keyEditor(row, payload, node));
     return node;
@@ -436,7 +439,7 @@ function keyCells(row, payload, node) {
         el("span", { class: "config-shadow", text: shadow.note }),
       ),
     ]),
-    editButton(() => startEdit({ kind: "key", key: row.key }), "Edit this key"),
+    editable(payload) ? editButton(() => startEdit({ kind: "key", key: row.key }), "Edit this key") : null,
   ]);
   if (editable(payload)) {
     cells.classList.add("clickable");
@@ -479,9 +482,11 @@ function displayValue(value) {
 /// An edit session. `draft` holds what the operator typed, field by field, so
 /// every re-render — a background refresh, a save in flight, a refused write —
 /// rebuilds the editor from the draft rather than the last server payload. The
-/// session is bound to the workspace it was opened in; only a successful save,
-/// Cancel, Reload, or a workspace or sub-tab switch ends it.
+/// session is bound to the workspace it was opened in. A successful save,
+/// Cancel, Reload, a workspace or sub-tab switch, or a payload that withdraws
+/// operator authority ends it.
 function startEdit(next) {
+  if (!editable(lastPayload)) return;
   editing = { ...next, error: null, pending: false, draft: {}, workspace: getWorkspace() };
   if (lastPayload) render(lastPayload);
   // The control that opened the editor is gone; land in the editor's first field.
@@ -876,7 +881,7 @@ function systemVerdict(host, verdict, rows, payload) {
 
 /// The open editor for `row`, or null; it sits under the row it belongs to.
 function openEditor(row, payload) {
-  if (!row || !editing || editing.kind !== "key" || editing.key !== row.key) return null;
+  if (!editable(payload) || !row || !editing || editing.kind !== "key" || editing.key !== row.key) return null;
   const node = el("div", { class: "config-row editing" });
   node.dataset.key = row.key;
   node.appendChild(keyEditor(row, payload, node));
