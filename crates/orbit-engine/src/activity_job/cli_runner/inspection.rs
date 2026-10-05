@@ -11,12 +11,17 @@
 //! count bounds leftovers even when no retry follows a crash. These are
 //! standalone repositories: no shared index, alternates, registered worktree,
 //! branch, or global worktree-prune operation is involved.
+//!
+//! A bad pin, profile, slot owner, missing commit, or a checkout that changed
+//! during the read-only run is a permanent CLI failure: repeating the provider
+//! call fails the same way. A leased-out pool and git or filesystem IO stay
+//! retryable.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use orbit_common::fs::git::run_git;
+use orbit_common::fs::git::{GitCommandOutput, run_git};
 use orbit_common::fs::io::atomic_write_text;
 use serde_json::Value;
 
@@ -46,9 +51,9 @@ impl SourceInspection {
         if value.is_null() || value.as_str() == Some("") {
             if let Some(source) = source {
                 let output = run_git(source, &["rev-parse", "--is-inside-work-tree"])
-                    .map_err(|error| failure(error.to_string()))?;
+                    .map_err(|error| retryable(error.to_string()))?;
                 if output.success && output.stdout.trim() == "true" {
-                    return Err(failure(
+                    return Err(permanent(
                         "a Git workspace requires a pinned inspection_revision",
                     ));
                 }
@@ -57,31 +62,28 @@ impl SourceInspection {
         }
         let revision = value
             .as_str()
-            .ok_or_else(|| failure("inspection_revision must be a commit id"))?;
+            .ok_or_else(|| permanent("inspection_revision must be a commit id"))?;
         if !matches!(revision.len(), 40 | 64) || !revision.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(failure("inspection_revision must be a full commit id"));
+            return Err(permanent("inspection_revision must be a full commit id"));
         }
         if let Some(source_revision) = input.get("source_revision").and_then(Value::as_str)
             && source_revision != revision
         {
-            return Err(failure(
+            return Err(permanent(
                 "inspection_revision differs from the prepared source_revision",
             ));
         }
         if fs_profile != Some("reviewer") {
-            return Err(failure(
+            return Err(permanent(
                 "source inspection requires the reviewer filesystem profile",
             ));
         }
-        let source = source.ok_or_else(|| failure("source inspection requires a workspace"))?;
+        let source = source.ok_or_else(|| permanent("source inspection requires a workspace"))?;
         Self::create(source, revision).map(Some)
     }
 
     fn create(source: &Path, revision: &str) -> Result<Self, DispatchError> {
-        git(
-            source,
-            &["cat-file", "-e", &format!("{revision}^{{commit}}")],
-        )?;
+        require_commit(source, revision)?;
         let common = git(
             source,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -114,12 +116,14 @@ impl SourceInspection {
             reject_symlink(&marker).map_err(io_failure)?;
             if marker.exists() {
                 if fs::read_to_string(&marker).map_err(io_failure)? != OWNER {
-                    return Err(failure("inspection slot has an unrecognized owner"));
+                    return Err(permanent("inspection slot has an unrecognized owner"));
                 }
                 remove_checkout(&root).map_err(io_failure)?;
             } else {
                 if root.symlink_metadata().is_ok() {
-                    return Err(failure("refusing to remove an unowned inspection checkout"));
+                    return Err(permanent(
+                        "refusing to remove an unowned inspection checkout",
+                    ));
                 }
                 // Atomic: a crash mid-write must not leave an empty marker that
                 // every later lease would reject as an unrecognized owner.
@@ -166,7 +170,7 @@ impl SourceInspection {
             inspection.verify()?;
             return Ok(inspection);
         }
-        Err(failure(
+        Err(retryable(
             "all source inspection slots are leased; retry after a pilot finishes",
         ))
     }
@@ -192,7 +196,7 @@ impl SourceInspection {
             .trim()
             .is_empty()
         {
-            return Err(failure(
+            return Err(permanent(
                 "source inspection checkout changed during read-only execution",
             ));
         }
@@ -281,9 +285,9 @@ pub fn is_source_inspection_checkout(common: &Path, checkout: &Path) -> bool {
 /// write deny already covers the pool for any concurrent activity that can
 /// write the repository root.
 fn prepare_pool(common: &Path) -> Result<PathBuf, DispatchError> {
-    let repo_root = common
-        .parent()
-        .ok_or_else(|| failure("source repository has no directory containing its Git metadata"))?;
+    let repo_root = common.parent().ok_or_else(|| {
+        permanent("source repository has no directory containing its Git metadata")
+    })?;
     let mut pool = repo_root.to_path_buf();
     for component in [".orbit", "state", POOL_DIR] {
         pool.push(component);
@@ -374,11 +378,9 @@ fn reject_symlink(path: &Path) -> io::Result<()> {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, DispatchError> {
-    let mut argv = vec!["-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0"];
-    argv.extend_from_slice(args);
-    let output = run_git(root, &argv).map_err(|error| failure(error.to_string()))?;
+    let output = git_output(root, args)?;
     if !output.success {
-        return Err(failure(format!(
+        return Err(retryable(format!(
             "git {}: {}",
             args.join(" "),
             output.stderr.trim()
@@ -387,10 +389,64 @@ fn git(root: &Path, args: &[&str]) -> Result<String, DispatchError> {
     Ok(output.stdout)
 }
 
-fn failure(message: impl std::fmt::Display) -> DispatchError {
+/// Confirm `revision` names a commit. A name that does not resolve is
+/// permanent. Opening the repository or reading its objects can fail
+/// transiently, and those errors stay retryable.
+fn require_commit(source: &Path, revision: &str) -> Result<(), DispatchError> {
+    let spec = format!("{revision}^{{commit}}");
+    let output = git_output(source, &["rev-parse", "--verify", "-q", &spec])?;
+    if output.success {
+        return Ok(());
+    }
+    if missing_commit(&output) {
+        let stderr = output.stderr.trim();
+        return Err(permanent(if stderr.is_empty() {
+            format!("inspection revision {revision} does not name a commit")
+        } else {
+            format!("inspection revision {revision} does not name a commit: {stderr}")
+        }));
+    }
+    Err(retryable(format!(
+        "git rev-parse --verify -q {spec}: {}",
+        output.stderr.trim()
+    )))
+}
+
+/// `rev-parse --verify -q <rev>^{commit}` fails with empty stderr when the
+/// name is absent. A type mismatch names the object. Repository-level
+/// failures write a fatal line and are not a missing commit.
+fn missing_commit(output: &GitCommandOutput) -> bool {
+    let stderr = output.stderr.trim();
+    if stderr.is_empty() {
+        return true;
+    }
+    let stderr = stderr.to_ascii_lowercase();
+    if stderr.contains("not a git repository")
+        || stderr.contains("permission denied")
+        || stderr.contains("resource temporarily unavailable")
+        || stderr.contains("input/output error")
+        || stderr.contains("unable to access")
+        || stderr.contains(".lock")
+    {
+        return false;
+    }
+    stderr.contains("expected commit type") || stderr.contains("not a valid object name")
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Result<GitCommandOutput, DispatchError> {
+    let mut argv = vec!["-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0"];
+    argv.extend_from_slice(args);
+    run_git(root, &argv).map_err(|error| retryable(error.to_string()))
+}
+
+fn permanent(message: impl std::fmt::Display) -> DispatchError {
+    DispatchError::CliInvocationPermanent(format!("source inspection: {message}"))
+}
+
+fn retryable(message: impl std::fmt::Display) -> DispatchError {
     DispatchError::CliInvocationFailed(format!("source inspection: {message}"))
 }
 
 fn io_failure(error: io::Error) -> DispatchError {
-    failure(error)
+    retryable(error)
 }
