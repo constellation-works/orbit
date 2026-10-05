@@ -40,14 +40,15 @@ pub struct PluginDoctorResult {
 /// finding an active plugin carries (an unsandboxed backend).
 pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, OrbitError> {
     let summaries = list_plugins(runtime)?;
-    let invalid_pin_file = read_pin_file(&runtime.paths().local_dir)
-        .err()
-        .map(|error| PluginDoctorResult {
-            intentional: false,
-            plugin: "pin file".to_string(),
-            status: PluginStatus::Inactive,
-            message: error.to_string(),
-        });
+    let invalid_pin_file =
+        read_pin_file(&runtime.shared_root())
+            .err()
+            .map(|error| PluginDoctorResult {
+                intentional: false,
+                plugin: "pin file".to_string(),
+                status: PluginStatus::Inactive,
+                message: error.to_string(),
+            });
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     let archive_drift = archive_digest_drift_rows(runtime, &summaries)?;
     let builds = build_rows(runtime, &summaries)?;

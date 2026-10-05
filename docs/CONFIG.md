@@ -576,6 +576,8 @@ For a workspace registered for local-only delivery with effective `review.before
 
 Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`). Enable state and grants are host-local. A checkout keeps only its pin file, which git ignores with the rest of `.orbit/`, and `orbit plugin sync` installs what the pins name. The full operator guide is the orbit-setup [plugins reference](../crates/orbit-core/assets/skills/orbit-setup/references/plugins.md), and the manifest spec is the [plugin standard](design/plugins/1_scope.md).
 
+Linked Git worktrees share the main checkout's `.orbit/plugins.yaml`. Runtime plugin loading, `orbit plugin sync` and `orbit plugin doctor` all read that shared file; a worktree-local `.orbit/plugins.yaml` is ignored.
+
 ```yaml
 # .orbit/plugins.yaml — per-checkout, gitignored
 schemaVersion: 1
