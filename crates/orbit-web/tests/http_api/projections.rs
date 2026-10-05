@@ -486,7 +486,7 @@ fn replica_auto_task_controls_explain_owner_authority_and_refuse_mutations() {
     isolated(
         "projections::replica_auto_task_controls_explain_owner_authority_and_refuse_mutations",
         || {
-            let fixture = Fixture::replica_of("hm_fixture_remote");
+            let fixture = Fixture::new();
             fixture
                 .runtime
                 .auto_task_add(AutoTaskAddParams {
@@ -508,6 +508,7 @@ fn replica_auto_task_controls_explain_owner_authority_and_refuse_mutations() {
                     dedupe: DedupePolicy::SkipIfOpen,
                 })
                 .unwrap();
+            let fixture = fixture.into_replica("hm_fixture_remote");
             let definition_path = fixture.work.join("auto_tasks/qa-sweep.yaml");
             let definition_before = fs::read(&definition_path).unwrap();
             let server = fixture.server(true);
