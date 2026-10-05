@@ -57,6 +57,13 @@ pub(super) fn merge_job_input(default_input: Option<&Value>, input: &Value) -> V
     }
 }
 
+/// Render `fan_out.items` or `loop.items`.
+///
+/// A JSON array is the item list. Any other valid JSON value fails the step:
+/// `template::render` turns `null`, numbers, and bools into text and objects
+/// into JSON text, and splitting that text on commas would dispatch workers
+/// for fragments. `label` is the field name in the `JobExecution` error.
+/// Text that is not JSON stays a bare comma- or whitespace-separated list.
 pub(super) fn render_items_expression(
     expression: &str,
     tctx: &TemplateContext,
@@ -64,13 +71,33 @@ pub(super) fn render_items_expression(
 ) -> Result<Vec<Value>, DispatchError> {
     let rendered = template::render(expression, tctx)
         .map_err(|err| DispatchError::JobExecution(format!("{label} render: {err}")))?;
-    Ok(serde_json::from_str(&rendered).unwrap_or_else(|_| {
-        rendered
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|segment| !segment.is_empty())
-            .map(|segment| Value::String(segment.to_string()))
-            .collect()
-    }))
+    match serde_json::from_str::<Value>(&rendered) {
+        Ok(Value::Array(items)) => Ok(items),
+        Ok(other) => Err(DispatchError::JobExecution(format!(
+            "{label} rendered JSON {}, expected a JSON array or a comma-separated list",
+            json_kind(&other)
+        ))),
+        Err(_) => Ok(split_bare_items(&rendered)),
+    }
+}
+
+fn split_bare_items(rendered: &str) -> Vec<Value> {
+    rendered
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| Value::String(segment.to_string()))
+        .collect()
+}
+
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 /// Recursive template render: resolves `{{ ... }}` tokens in any string
