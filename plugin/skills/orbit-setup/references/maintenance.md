@@ -141,11 +141,17 @@ a read-only `~/.orbit` sandbox stays unblocked). When an override names
 something other than the host-global root, the host-global root is locked
 *as well*: the replaced executable is the running host binary, which no root
 override moves, and clients started without an override pin the host-global
-root. A root override therefore isolates state, not host-binary replacement —
-a live client on either authority refuses the upgrade, and so does an
-authority whose `.generation.lock` this process cannot write (a read-only
-`~/.orbit`, say): the update could never record the candidate there, so it is
-refused before anything is staged rather than after the binary is replaced.
+root. The initialized workspace that convergence would use is locked too
+when it is a different directory — the initialized override, or, when that
+override is only an uninitialized generation root, the workspace discovered
+from the working directory. `--preflight` probes that uninitialized root without
+requiring `orbit workspace init`; `orbit update` itself still refuses it
+before convergence. Spellings of the same directory are one authority. A root
+override therefore isolates state, not host-binary replacement — a live client
+on any of those authorities refuses the upgrade, and so does an authority
+whose `.generation.lock` this process cannot write (a read-only `~/.orbit`,
+say): the update could never record the candidate there, so it is refused
+before anything is staged rather than after the binary is replaced.
 `orbit update` admits against that same set for the invocation; a green
 preflight is not evidence for an update that would resolve different roots. It opens no runtime or
 stores and may create coordination lock files. It is an observation, not a

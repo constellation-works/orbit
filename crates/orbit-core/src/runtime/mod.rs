@@ -57,8 +57,9 @@ pub(crate) use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
 pub use resolve::{
-    ResolvedOrbitRoots, WorkspaceRootHint, resolve_bootstrap_roots_with_hint,
-    resolve_initialize_roots_with_hint, try_resolve_initialized_roots_with_hint,
+    ResolvedOrbitRoots, WorkspaceRootHint, initialized_explicit_workspace_root,
+    resolve_bootstrap_roots_with_hint, resolve_initialize_roots_with_hint,
+    try_resolve_initialized_cwd_roots_with_hint, try_resolve_initialized_roots_with_hint,
 };
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].

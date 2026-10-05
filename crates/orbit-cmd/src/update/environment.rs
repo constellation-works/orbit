@@ -58,6 +58,10 @@ pub struct UpdateWorkspace {
 
 impl UpdateEnvironment {
     /// Resolve the initialized workspace this process's convergence steps use.
+    ///
+    /// An explicit `--root` or `ORBIT_ROOT` must already be an initialized
+    /// workspace. `--preflight` uses [`Self::workspace_for_preflight`] so it
+    /// can probe an uninitialized generation root without this requirement.
     pub fn workspace_for_process(
         root_override: Option<&Path>,
     ) -> Result<Option<UpdateWorkspace>, OrbitError> {
@@ -70,6 +74,27 @@ impl UpdateEnvironment {
             root_argument: root_was_explicit.then(|| roots.shared_root.clone()),
             root: roots.shared_root,
         }))
+    }
+
+    /// Workspace whose convergence `--preflight` should admit, if any.
+    ///
+    /// An explicit `--root` or `ORBIT_ROOT` is a generation authority even when
+    /// it is not an initialized workspace. In that case this returns the
+    /// initialized workspace discovered from the working directory, rather than
+    /// the strict resolver's "not a workspace" error. When the explicit path
+    /// is initialized, the result matches [`Self::workspace_for_process`].
+    /// Malformed roots and broken workspace configs still fail.
+    pub fn workspace_for_preflight(
+        root_override: Option<&Path>,
+    ) -> Result<Option<UpdateWorkspace>, OrbitError> {
+        let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
+        let Some(explicit) = explicit_root_specification(root_override) else {
+            return Self::workspace_for_process(None);
+        };
+        match RegisteredRuntimeFactory::try_initialized_explicit_root(&cwd, &explicit)? {
+            Some(_) => Self::workspace_for_process(root_override),
+            None => cwd_convergence_workspace(&cwd),
+        }
     }
 
     /// Read this process's own installation, platform, and workspace.
@@ -139,4 +164,29 @@ impl UpdateEnvironment {
                 .is_ok(),
         })
     }
+}
+
+/// `--root` when present, otherwise a non-empty `ORBIT_ROOT`.
+///
+/// Matches the explicit-root precedence in `try_resolve_initialized_roots`:
+/// the flag wins, and the environment value is returned untrimmed so path
+/// resolution sees the same string the strict resolver does.
+fn explicit_root_specification(root_override: Option<&Path>) -> Option<String> {
+    if let Some(root) = root_override {
+        return Some(root.to_string_lossy().into_owned());
+    }
+    match std::env::var("ORBIT_ROOT") {
+        Ok(explicit) if !explicit.trim().is_empty() => Some(explicit),
+        _ => None,
+    }
+}
+
+/// Initialized workspace selected from `cwd`, ignoring an explicit generation root.
+fn cwd_convergence_workspace(cwd: &Path) -> Result<Option<UpdateWorkspace>, OrbitError> {
+    let roots = RegisteredRuntimeFactory::try_resolve_initialized_cwd_roots(cwd)?;
+    Ok(roots.map(|roots| UpdateWorkspace {
+        cwd: cwd.to_path_buf(),
+        root_argument: None,
+        root: roots.shared_root,
+    }))
 }

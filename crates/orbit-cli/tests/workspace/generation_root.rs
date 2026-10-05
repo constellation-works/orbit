@@ -364,3 +364,253 @@ fn init_with_root_ignores_a_foreign_pin_on_home_orbit() {
     let home_record = fs::read_to_string(home_orbit.join(".generation.lock")).expect("home pin");
     assert_eq!(home_record, format!("1:{FOREIGN_DIGEST}\n"));
 }
+
+struct PreflightTrees {
+    _temp: tempfile::TempDir,
+    home: PathBuf,
+    work: PathBuf,
+    scratch: PathBuf,
+    home_orbit: PathBuf,
+    workspace_orbit: PathBuf,
+    /// Workspace path the child reports. Process cwd is physical, so a fixture
+    /// created through macOS `/var` (a symlink to `/private/var`) is discovered
+    /// as `/private/var/.../work/.orbit`. Override and home paths stay as given.
+    discovered_workspace_orbit: PathBuf,
+}
+
+impl PreflightTrees {
+    fn new(initialize_workspace: bool) -> Self {
+        let temp = tempdir().expect("fixture tempdir");
+        let home = temp.path().join("home");
+        let work = temp.path().join("work");
+        let scratch = temp.path().join("scratch");
+        fs::create_dir_all(&home).expect("create home");
+        fs::create_dir_all(&work).expect("create work");
+        fs::create_dir_all(&scratch).expect("create scratch");
+        let home_orbit = home.join(".orbit");
+        fs::create_dir_all(&home_orbit).expect("create home orbit");
+        let workspace_orbit = work.join(".orbit");
+        if initialize_workspace {
+            fs::create_dir_all(&workspace_orbit).expect("create workspace orbit");
+            // No `root` key: discovery must keep this directory rather than
+            // redirecting at a configured path.
+            fs::write(workspace_orbit.join("config.toml"), "# fixture workspace\n")
+                .expect("workspace config");
+        }
+        let discovered_workspace_orbit = fs::canonicalize(&work)
+            .unwrap_or_else(|error| panic!("canonicalize work {}: {error}", work.display()))
+            .join(".orbit");
+        Self {
+            _temp: temp,
+            home,
+            work,
+            scratch,
+            home_orbit,
+            workspace_orbit,
+            discovered_workspace_orbit,
+        }
+    }
+}
+
+fn preflight_output(
+    trees: &PreflightTrees,
+    root_flag: Option<&Path>,
+    orbit_root: Option<&Path>,
+) -> std::process::Output {
+    let mut command = orbit(&trees.work, &trees.home);
+    if let Some(root) = orbit_root {
+        command.env("ORBIT_ROOT", root);
+    } else {
+        command.env_remove("ORBIT_ROOT");
+    }
+    let mut args = Vec::new();
+    if let Some(root) = root_flag {
+        args.push("--root".to_string());
+        args.push(root.to_string_lossy().into_owned());
+    }
+    args.extend([
+        "update".to_string(),
+        "--preflight".to_string(),
+        "--json".to_string(),
+    ]);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    command.args(arg_refs).output().expect("run preflight")
+}
+
+fn assert_admitted_roots(output: &std::process::Output, expected: &[&Path]) {
+    assert!(
+        output.status.success(),
+        "preflight failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("preflight JSON");
+    assert_eq!(report["admitted"], true);
+    assert_eq!(report["reservation"], false);
+    assert_eq!(report["contract"], "executable-generation-v1");
+    let roots: Vec<Value> = expected
+        .iter()
+        .map(|path| Value::String(path.to_string_lossy().into_owned()))
+        .collect();
+    assert_eq!(report["admission_roots"], Value::Array(roots.clone()));
+    assert_eq!(report["global_root"], roots[0]);
+}
+
+/// An uninitialized `--root` is still a generation authority. Preflight also
+/// admits the host-global root and the initialized workspace discovered from
+/// the working directory, and reports that nothing was reserved.
+#[test]
+fn preflight_with_root_admits_uninitialized_override_cwd_and_host_global() {
+    let trees = PreflightTrees::new(true);
+    let output = preflight_output(&trees, Some(&trees.scratch), None);
+    assert_admitted_roots(
+        &output,
+        &[
+            trees.scratch.as_path(),
+            trees.home_orbit.as_path(),
+            trees.discovered_workspace_orbit.as_path(),
+        ],
+    );
+    assert!(
+        !trees.scratch.join("config.toml").exists(),
+        "preflight must not initialize the explicit generation root"
+    );
+}
+
+/// `ORBIT_ROOT` is the same explicit generation root as `--root`.
+#[test]
+fn preflight_with_orbit_root_admits_uninitialized_override_cwd_and_host_global() {
+    let trees = PreflightTrees::new(true);
+    let output = preflight_output(&trees, None, Some(&trees.scratch));
+    assert_admitted_roots(
+        &output,
+        &[
+            trees.scratch.as_path(),
+            trees.home_orbit.as_path(),
+            trees.discovered_workspace_orbit.as_path(),
+        ],
+    );
+}
+
+/// A live client in the discovered workspace refuses the probe for both
+/// spellings of an uninitialized override. The override does not drop that
+/// authority.
+#[test]
+fn preflight_refuses_a_live_cwd_client_for_root_and_orbit_root() {
+    let trees = PreflightTrees::new(true);
+    let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("digest");
+    let _holder =
+        GenerationGuard::acquire(&trees.workspace_orbit, &digest).expect("live workspace pin");
+
+    for output in [
+        preflight_output(&trees, Some(&trees.scratch), None),
+        preflight_output(&trees, None, Some(&trees.scratch)),
+    ] {
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Orbit clients or commands are still running"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&trees.discovered_workspace_orbit.display().to_string()),
+            "the refusal must name the cwd workspace authority: {stderr}"
+        );
+    }
+}
+
+/// An initialized `--root` selects that workspace for convergence. A different
+/// cwd workspace is not an extra authority, matching the updater.
+#[test]
+fn preflight_with_initialized_root_does_not_add_a_different_cwd_workspace() {
+    let trees = PreflightTrees::new(true);
+    let other = trees._temp.path().join("other");
+    let other_orbit = other.join(".orbit");
+    fs::create_dir_all(&other_orbit).expect("other workspace");
+    fs::write(other_orbit.join("config.toml"), "# other workspace\n").expect("other config");
+
+    let output = preflight_output(&trees, Some(&other_orbit), None);
+    assert_admitted_roots(
+        &output,
+        &[other_orbit.as_path(), trees.home_orbit.as_path()],
+    );
+}
+
+/// Two spellings of one authority stay one entry: a symlink to the host-global
+/// root plus that root itself. The distinct cwd workspace is still admitted.
+#[cfg(unix)]
+#[test]
+fn preflight_deduplicates_a_host_global_alias_and_keeps_the_cwd_workspace() {
+    let trees = PreflightTrees::new(true);
+    let alias = trees._temp.path().join("host-alias");
+    std::os::unix::fs::symlink(&trees.home_orbit, &alias).expect("symlink host-global root");
+
+    let output = preflight_output(&trees, Some(&alias), None);
+    assert_admitted_roots(
+        &output,
+        &[alias.as_path(), trees.discovered_workspace_orbit.as_path()],
+    );
+}
+
+/// A workspace config that cannot be read is not turned into "no workspace".
+#[test]
+fn preflight_reports_a_broken_cwd_workspace_config() {
+    let trees = PreflightTrees::new(true);
+    fs::write(trees.workspace_orbit.join("config.toml"), "root = [\n").expect("break config");
+
+    let output = preflight_output(&trees, Some(&trees.scratch), None);
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid runtime config"),
+        "unrelated resolver errors must surface: {stderr}"
+    );
+    assert!(
+        !stderr.contains("is not an Orbit workspace"),
+        "the uninitialized generation root must not replace the config error: {stderr}"
+    );
+}
+
+/// `orbit update` still refuses an explicit root that is not a workspace.
+/// Preflight's probe does not relax convergence.
+#[test]
+fn update_with_uninitialized_root_still_requires_a_workspace() {
+    let trees = PreflightTrees::new(false);
+    for (label, mut command) in [
+        ("--root", {
+            let mut command = orbit(&trees.work, &trees.home);
+            command.args([
+                "--root",
+                trees.scratch.to_str().expect("utf-8 scratch"),
+                "update",
+                "--check",
+                "--json",
+            ]);
+            command
+        }),
+        ("ORBIT_ROOT", {
+            let mut command = orbit(&trees.work, &trees.home);
+            command
+                .env("ORBIT_ROOT", &trees.scratch)
+                .args(["update", "--check", "--json"]);
+            command
+        }),
+    ] {
+        let output = command.output().expect("run update --check");
+        assert!(
+            !output.status.success(),
+            "{label} update should refuse an uninitialized root\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("is not an Orbit workspace"),
+            "{label} stderr: {stderr}"
+        );
+        assert!(
+            !trees.scratch.join("config.toml").exists(),
+            "{label} must not initialize the explicit root"
+        );
+    }
+}
