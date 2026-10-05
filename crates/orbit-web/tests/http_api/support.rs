@@ -106,6 +106,39 @@ impl Fixture {
         Self::with_owner(Some(owner_machine_id))
     }
 
+    /// Reopens an owner-prepared checkout with replica authority for HTTP tests.
+    pub(super) fn into_replica(self, owner_machine_id: &str) -> Self {
+        let Self {
+            temp,
+            global,
+            work,
+            runtime,
+        } = self;
+        drop(runtime);
+
+        let registry_path = orbit_registry::workspace_registry::registry_path_for(&global);
+        let mut registry =
+            orbit_registry::workspace_registry::load_registry_from(&registry_path).unwrap();
+        registry.workspaces[0].owner_machine_id = Some(owner_machine_id.to_owned());
+        registry.checkouts[0].role = Some(WorkspaceCheckoutRole::Replica);
+        registry.checkouts[0].owner_machine_id = Some(owner_machine_id.to_owned());
+        orbit_registry::workspace_registry::save_registry_to(&registry, &registry_path).unwrap();
+        let runtime =
+            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+                &global,
+                &registry.workspaces[0],
+                &registry.checkouts[0],
+            )
+            .expect("reopened disposable replica runtime");
+
+        Self {
+            temp,
+            global,
+            work,
+            runtime,
+        }
+    }
+
     fn with_owner(remote_owner: Option<&str>) -> Self {
         assert!(
             std::env::var_os(CHILD_TEST).is_some(),
