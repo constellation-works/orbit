@@ -551,6 +551,120 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
     );
 }
 
+/// `origin/main` and `main` name one local landing branch. Setup's pre-check
+/// and `merge_batch_worktree_into_base` both inspect the linked checkout that
+/// holds it, including when the primary checkout is a different dirty tree.
+#[test]
+fn local_landing_precheck_uses_the_normalized_base_checkout() {
+    isolated(
+        "local_landing_precheck_uses_the_normalized_base_checkout",
+        || {
+            let fixture = Fixture::new();
+            git(&fixture.repo, &["branch", "main"]);
+            let requested = fixture.root.path().join("landing");
+            git(
+                &fixture.repo,
+                &["worktree", "add", path_str(&requested), "main"],
+            );
+            let landing = checkout_holding(&fixture.repo, "main");
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-LAND", TaskStatus::Backlog);
+            let checkouts_before = registered_worktrees(&fixture.repo);
+
+            fs::write(landing.join("dirty.txt"), "uncommitted landing work\n").unwrap();
+            for (field, spelling) in [
+                ("base", "main"),
+                ("base", "origin/main"),
+                ("base_branch", "origin/main"),
+            ] {
+                let error = action(
+                    &host,
+                    "worktree_setup",
+                    &landing_input(field, spelling, "jrun-land-refuse"),
+                )
+                .expect_err("a dirty landing checkout is refused before admission");
+                assert_landing_checkout_refusal(&error, &landing, spelling);
+            }
+            assert!(
+                host.admitted().is_empty(),
+                "a refused pre-check admits no task"
+            );
+            assert_eq!(
+                registered_worktrees(&fixture.repo),
+                checkouts_before,
+                "a refused pre-check creates no worktree"
+            );
+
+            fs::remove_file(landing.join("dirty.txt")).unwrap();
+            fs::write(fixture.repo.join("unrelated.txt"), "primary dirt\n").unwrap();
+            let mut workspace = None;
+            for (spelling, run_id) in [
+                ("main", "jrun-land-main"),
+                ("origin/main", "jrun-land-origin"),
+            ] {
+                let output = action(
+                    &host,
+                    "worktree_setup",
+                    &landing_input("base", spelling, run_id),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "base spelling {spelling} must admit when only the primary checkout is dirty: {error}"
+                    )
+                });
+                workspace = Some((
+                    run_id,
+                    PathBuf::from(output["workspace_path"].as_str().expect("workspace_path")),
+                ));
+            }
+            let (run_id, workspace) = workspace.expect("admitted checkout");
+            assert_eq!(
+                git(&fixture.repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+                BASE,
+                "setup leaves the primary checkout on its own branch"
+            );
+
+            fs::write(landing.join("dirty.txt"), "uncommitted landing work\n").unwrap();
+            for spelling in ["main", "origin/main"] {
+                let error = action(
+                    &host,
+                    "git_merge",
+                    &merge_input(run_id, spelling, &workspace),
+                )
+                .expect_err("merge refuses the same dirty landing checkout");
+                assert_landing_checkout_refusal(&error, &landing, spelling);
+            }
+
+            fs::remove_file(landing.join("dirty.txt")).unwrap();
+            for spelling in ["main", "origin/main"] {
+                let merged = action(
+                    &host,
+                    "git_merge",
+                    &merge_input(run_id, spelling, &workspace),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "base spelling {spelling} must merge into the clean linked checkout while the primary stays dirty: {error}"
+                    )
+                });
+                assert_eq!(merged["base"], "main");
+            }
+            assert_eq!(
+                git(&landing, &["rev-parse", "--abbrev-ref", "HEAD"]),
+                "main"
+            );
+            assert_eq!(
+                git(&fixture.repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+                BASE
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("unrelated.txt")).unwrap(),
+                "primary dirt\n"
+            );
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // candidate_resume: a requeued task resumes its preserved candidate
 // ---------------------------------------------------------------------------
@@ -2690,6 +2804,69 @@ impl RuntimeHost for LifecycleHost {
             ..orbit_tools::ToolContext::default()
         }
     }
+}
+
+fn assert_landing_checkout_refusal(error: &OrbitError, landing: &Path, spelling: &str) {
+    let message = error.to_string();
+    assert!(
+        matches!(error, OrbitError::Execution(_)),
+        "base spelling {spelling} should refuse at the landing checkout, got {error:?}"
+    );
+    assert!(
+        message.contains("base branch checkout"),
+        "base spelling {spelling} names the landing-checkout check: {message}"
+    );
+    assert!(
+        message.contains(&landing.display().to_string()),
+        "base spelling {spelling} inspects the checkout holding main ({}): {message}",
+        landing.display()
+    );
+    assert!(
+        message.contains("dirty.txt"),
+        "base spelling {spelling} reports that checkout's dirty path: {message}"
+    );
+    assert!(
+        !message.contains("unrelated.txt"),
+        "base spelling {spelling} leaves the unrelated primary checkout out of the refusal: {message}"
+    );
+}
+
+fn checkout_holding(repo: &Path, branch: &str) -> PathBuf {
+    let listing = git(repo, &["worktree", "list", "--porcelain"]);
+    let expected = format!("refs/heads/{branch}");
+    let mut current = None;
+    for line in listing.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current = Some(PathBuf::from(path));
+        } else if line.strip_prefix("branch ") == Some(expected.as_str()) {
+            return current.unwrap_or_else(|| panic!("worktree path missing for {branch}"));
+        }
+    }
+    panic!("no checkout holds {branch}:\n{listing}");
+}
+
+/// The dispatcher injects `run_id` beside the pipeline's `job_run_id`
+/// before `git_merge` runs. Both name this run.
+fn merge_input(run_id: &str, spelling: &str, workspace: &Path) -> Value {
+    json!({
+        "run_id": run_id,
+        "job_run_id": run_id,
+        "base": spelling,
+        "base_sync": "local",
+        "strategy": "fast_forward",
+        "workspace_path": workspace,
+    })
+}
+
+fn landing_input(field: &str, spelling: &str, run_id: &str) -> Value {
+    json!({
+        "task_ids": ["T-LAND"],
+        "run_id": run_id,
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+        "landing_mode": "local",
+        field: spelling,
+    })
 }
 
 fn assert_stale_refusal(error: &OrbitError, branch: &str, tip: &str, base: &str) {
