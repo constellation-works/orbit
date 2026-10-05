@@ -1,4 +1,5 @@
-// The same full-app scenarios run in the Node harness and a real browser.
+// Full-app scenarios run in Chromium via dashboard_loading_browser.mjs,
+// the required dashboard-browser scenario in the QA sweep inventory.
 const node = id => document.getElementById(id);
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };

@@ -1,7 +1,7 @@
 // Usage: node dashboard_distributed_browser.mjs /absolute/path/to/playwright/index.mjs /evidence/directory
 //
-// ORB-12516 in a real browser. The Node DOM harness proves the logic; this
-// proves the shipped markup, styles and modules actually render it — that the
+// ORB-12516 in Chromium: the required dashboard-distributed-browser QA scenario.
+// This runs the behavior assertions and checks the shipped markup and styles: the
 // claim panel fits the detail column without forcing the page sideways, that
 // its controls are reachable and operable from the keyboard, and that an
 // operator decision travels from a real click to a real request.

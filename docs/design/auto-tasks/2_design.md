@@ -412,12 +412,12 @@ server-side idempotency promise for manual mint. A failed readback preserves
 the successful action result and task link, so a refresh failure does not
 invite another mint.
 
-Validation uses the shipped modules in the existing Node harness
-(`cargo test -p orbit-web --lib operations_actions_preserve`). The same fixture
-runs in Chromium with `node crates/orbit-web/src/tests/dashboard_operations_browser.mjs
+Validation uses the shipped modules in Chromium through the required
+`dashboard-operations-browser` scenario in `scripts/qa-full-sweep-inventory.json`.
+Run it directly with `node crates/orbit-web/src/tests/dashboard_operations_browser.mjs
 /absolute/path/to/playwright/index.mjs /evidence/directory` (on one shell line).
-The optional runner serves isolated markup, styles and mocked API responses,
-checks behavior, and captures routine/auto-task panels at 1440px and 390px;
+The runner serves isolated markup, styles and mocked API responses,
+checks behavior, and captures Operations panels at 1440px, 672px, 390px and 375px;
 Rust API tests separately exercise the canonical handlers and persisted state.
 
 ## 6. Concerns & Honest Limitations
