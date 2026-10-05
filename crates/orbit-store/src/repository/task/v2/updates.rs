@@ -100,6 +100,11 @@ impl TaskV2Store {
         }
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
+            let original_envelope = bundle.envelope.clone();
+            let original_description = bundle.description.clone();
+            let original_acceptance = bundle.acceptance.clone();
+            let original_plan = bundle.plan.clone();
+            let original_execution_summary = bundle.execution_summary.clone();
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let updated_at = Utc::now();
             let mut envelope_changed = false;
@@ -275,6 +280,61 @@ impl TaskV2Store {
                     by: fields.actor.clone(),
                     event_type: "renamed".to_string(),
                     note,
+                    from_status: None,
+                    to_status: None,
+                };
+                self.bundle_store.append_event(id, &event)?;
+                bundle.events.push(event);
+            }
+
+            // Drain approval snapshots use task history to distinguish a real
+            // operator edit from the creation-grant row that merely re-seals
+            // unchanged intent. Record content and scope changes alongside
+            // the document write so the grant row cannot hide them.
+            let mut prior_unrecorded_envelope = original_envelope.clone();
+            prior_unrecorded_envelope.title = bundle.envelope.title.clone();
+            prior_unrecorded_envelope.crew = bundle.envelope.crew.clone();
+            if fields.source_task_id.is_some() && fields.relations.is_none() {
+                prior_unrecorded_envelope
+                    .relations
+                    .retain(|relation| relation.relation_type != TaskRelationType::RegressionFrom);
+                prior_unrecorded_envelope.relations.extend(
+                    bundle
+                        .envelope
+                        .relations
+                        .iter()
+                        .filter(|relation| {
+                            relation.relation_type == TaskRelationType::RegressionFrom
+                        })
+                        .cloned(),
+                );
+            }
+            let envelope_fields_changed = prior_unrecorded_envelope != bundle.envelope;
+            let documents_changed = fields
+                .description
+                .as_ref()
+                .is_some_and(|value| value != &original_description)
+                || fields
+                    .acceptance_criteria
+                    .as_ref()
+                    .is_some_and(|value| render_acceptance(value) != original_acceptance)
+                || fields
+                    .plan
+                    .as_ref()
+                    .is_some_and(|value| value != &original_plan)
+                || fields
+                    .execution_summary
+                    .as_ref()
+                    .is_some_and(|value| value != &original_execution_summary);
+            let context_creation_changed = !fields.context_creation.is_empty();
+            if envelope_fields_changed || documents_changed || context_creation_changed {
+                let event = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: next_event_id(&bundle.events),
+                    at: Utc::now(),
+                    by: fields.actor.clone(),
+                    event_type: "updated".to_string(),
+                    note: Some("task fields updated".to_string()),
                     from_status: None,
                     to_status: None,
                 };

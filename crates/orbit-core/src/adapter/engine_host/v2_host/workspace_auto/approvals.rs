@@ -8,14 +8,15 @@
 //! pilot held is not piloted again until it changes: its hold marker stays
 //! the newest entry in its history, and a pilot this drain already ran that
 //! left no decision behind (a failed or stale pilot) is not retried until the
-//! task changes either.
+//! task changes either. Creation-grant rows are not changes here: every write
+//! to a task holding a grant appends one after its own entry to re-seal it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, TaskStatus};
 use orbit_types::workflow::{DrainApprovalReport, DrainWaitingTask, PipelineState};
 use serde_json::{Value, json};
 
@@ -91,7 +92,10 @@ pub(super) fn approval_snapshot(
             continue;
         }
         let history = runtime.get_task_history(&task.id)?;
-        let latest = history.last();
+        let latest = history
+            .iter()
+            .rev()
+            .find(|entry| entry.event != CONTEXT_CREATION_AUTHORIZED_EVENT);
         if let Some(classification) = latest
             .filter(|entry| entry.event == "task_pilot_applied")
             .and_then(|entry| entry.note.as_deref())

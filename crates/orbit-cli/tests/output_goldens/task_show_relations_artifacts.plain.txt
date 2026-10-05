@@ -15,5 +15,6 @@ Artifacts:
 Created By: claude
 History:
   [<TIMESTAMP>] claude: created
+  [<TIMESTAMP>] claude: updated (task fields updated)
 Created: <TIMESTAMP>
 Updated: <TIMESTAMP>
