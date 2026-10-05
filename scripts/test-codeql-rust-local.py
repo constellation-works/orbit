@@ -235,6 +235,29 @@ class LocalCodeqlTests(unittest.TestCase):
                 self.assert_isolated()
                 self.assertEqual(sorted(earlier.rglob("*")), residue)
 
+    def test_earlier_run_under_unmarked_matching_ancestor_is_never_extracted(self):
+        # A scratch ancestor can itself look like a run directory without
+        # being one. Discovery must keep walking until it finds the marked run.
+        earlier = self.repo / "work/codeql-rust-local.abcdef"
+        self.use_scratch(earlier)
+        self.assertEqual(self.run_script("fixture.qls").returncode, 0)
+        prior = next(earlier.glob("codeql-rust-local.??????"))
+        registry = prior / "cargo/registry/src/index-1/serde-1.0.0/src/lib.rs"
+        registry.parent.mkdir(parents=True)
+        registry.write_text("pub fn serde() {}\n")
+        residue = sorted(earlier.rglob("*"))
+
+        for scratch in (None, self.repo / "work/second scratch"):
+            with self.subTest(scratch=scratch):
+                self.calls_file.write_text("")
+                self.use_scratch(scratch)
+                result = self.run_script("fixture.qls")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                create = next(call for call in self.calls() if call["args"][:2] == ["database", "create"])
+                self.assertEqual(create["sources"], SELECTED)
+                self.assert_isolated()
+                self.assertEqual(sorted(earlier.rglob("*")), residue)
+
     def test_unexcludable_earlier_run_directory_refuses_before_preparation(self):
         for label, parent, track in (("tracked", "crates/core/src", True), ("glob", "work/scratch[1]", False)):
             with self.subTest(label):

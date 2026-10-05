@@ -73,8 +73,10 @@ fi
 # Earlier runs may have used another scratch inside the checkout. Their run
 # directories, recognized by name and the configuration each run writes first,
 # are excluded wherever they are; .orbit/ and target/ are already excluded.
+# Check the marker before pruning: an unrelated scratch ancestor can have a
+# matching name and still contain a marked run directory that must be found.
 found="$(find . \( -path ./.git -o -path ./.orbit -o -path ./target ${scratch_rel:+-o -path "./$scratch_rel"} \) -prune \
-  -o -type d -name 'codeql-rust-local.??????' -print -prune | LC_ALL=C sort)" \
+  -o \( -type d -name 'codeql-rust-local.??????' -exec test -f '{}/codeql-config.yml' \; -print -prune \) | LC_ALL=C sort)" \
   || fail "cannot search $repo_root for earlier run directories to exclude from extraction"
 while IFS= read -r prior; do
   prior_rel="${prior#./}"
