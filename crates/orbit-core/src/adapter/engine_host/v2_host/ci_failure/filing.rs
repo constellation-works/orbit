@@ -32,7 +32,9 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{
+    TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -600,12 +602,10 @@ fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
 }
 
 fn task_branch_owner(failure: &Value) -> Option<String> {
-    let branch = failure["head_branch"]
-        .as_str()?
-        .strip_prefix("orbit/ORB-")?;
-    let number = branch.split('-').next()?;
-    (!number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| format!("ORB-{number}"))
+    let branch = failure["head_branch"].as_str()?.strip_prefix("orbit/")?;
+    let mut parts = branch.splitn(3, '-');
+    let owner = format!("{}-{}", parts.next()?, parts.next()?);
+    is_valid_orb_task_id(&owner).then_some(owner)
 }
 
 /// Immutable, content-addressed receipts survive retries without duplicate
