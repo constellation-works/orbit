@@ -153,6 +153,36 @@ impl Workspace {
         );
     }
 
+    fn edit_description(&self, task: &Task) {
+        self.edit(
+            task,
+            TaskUpdateParams {
+                description: Some(format!("{} The description changed.", task.description)),
+                ..Default::default()
+            },
+        );
+    }
+
+    fn edit_plan(&self, task: &Task) {
+        self.edit(
+            task,
+            TaskUpdateParams {
+                plan: Some(format!("{} Verify the updated plan.", task.plan)),
+                ..Default::default()
+            },
+        );
+    }
+
+    fn edit_context(&self, task: &Task) {
+        self.edit(
+            task,
+            TaskUpdateParams {
+                context_files: Some(vec![NEW_FILE.to_string()]),
+                ..Default::default()
+            },
+        );
+    }
+
     fn last_event(&self, task: &Task) -> String {
         self.runtime
             .get_task_history(&task.id)
@@ -599,6 +629,34 @@ fn a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes
         json!([creating.id, ordinary.id]),
         "{next}"
     );
+
+    // Each public document/scope edit must release a fresh hold even though
+    // the task's creation grant is re-sealed by the same write.
+    let hold_creation_again = || {
+        let selection = workspace.select(&drain);
+        assert!(selected(&selection, &creating), "{selection}");
+        let task_ids = json!([creating.id.clone()]);
+        let pilot = workspace.pilot_child(&drain, &task_ids);
+        let applied = workspace
+            .pilot(&drain, &pilot, vec![duplicate(&creating)])
+            .unwrap();
+        assert_eq!(applied["status"], "succeeded", "{applied}");
+        let held = workspace.select(&drain);
+        assert!(!selected(&held, &creating), "{held}");
+        assert_eq!(held_reason(&held, &creating), Some("duplicate"));
+    };
+
+    hold_creation_again();
+    workspace.edit_description(&creating);
+    assert!(selected(&workspace.select(&drain), &creating));
+
+    hold_creation_again();
+    workspace.edit_plan(&creating);
+    assert!(selected(&workspace.select(&drain), &creating));
+
+    hold_creation_again();
+    workspace.edit_context(&creating);
+    assert!(selected(&workspace.select(&drain), &creating));
 }
 
 #[test]
@@ -642,4 +700,37 @@ fn an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_ch
         json!([creating.id, ordinary.id]),
         "{next}"
     );
+
+    // A failed pilot remains unresolved until each real document/scope edit
+    // records a semantic history entry beyond the seal-only grant row.
+    let fail_creation_pilot = || {
+        let selection = workspace.select(&drain);
+        assert!(selected(&selection, &creating), "{selection}");
+        let pilot = workspace.pilot_child(&drain, &json!([creating.id.clone()]));
+        workspace.pilot_failed(&pilot);
+        let unresolved = workspace.select(&drain);
+        assert!(!selected(&unresolved, &creating), "{unresolved}");
+        assert_eq!(
+            held_reason(&unresolved, &creating),
+            Some("pilot_unresolved")
+        );
+    };
+
+    fail_creation_pilot();
+    workspace.edit_description(&creating);
+    assert!(selected(&workspace.select(&drain), &creating));
+
+    fail_creation_pilot();
+    workspace.edit_plan(&creating);
+    assert!(selected(&workspace.select(&drain), &creating));
+
+    fail_creation_pilot();
+    workspace.edit_context(&creating);
+    assert!(selected(&workspace.select(&drain), &creating));
+}
+
+fn selected(selection: &Value, task: &Task) -> bool {
+    selection["task_ids"]
+        .as_array()
+        .is_some_and(|task_ids| task_ids.contains(&json!(task.id)))
 }
