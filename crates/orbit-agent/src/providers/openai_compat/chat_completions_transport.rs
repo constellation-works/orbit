@@ -147,9 +147,17 @@ impl LoopTransport for OpenAiCompatTransport {
         let content = map_incoming_message(choice.message);
         let usage = turn_usage_from_wire(parsed.usage);
 
+        let mut stop_reason = map_stop_reason(choice.finish_reason.as_deref());
+        if content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+        {
+            stop_reason = StopReason::ToolUse;
+        }
+
         Ok(TurnResponse {
             content,
-            stop_reason: map_stop_reason(choice.finish_reason.as_deref()),
+            stop_reason,
             usage,
             raw_request_body: body_bytes,
             raw_response_body: response_bytes,
