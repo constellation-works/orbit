@@ -114,7 +114,7 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require the same protocol revision (currently 4;
+exact paths. Both peers require the same protocol revision (currently 5;
 widening arrived in 3).
 
 
