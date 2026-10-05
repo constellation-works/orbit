@@ -39,19 +39,23 @@ pub(crate) fn record_direct_landing_intent(
         .map(str::to_owned)
         .collect::<Vec<_>>();
 
-    let run = runtime.show_job_run(&request.run_id)?;
-    let task_ids: Vec<String> = run
-        .input
-        .as_ref()
-        .and_then(|input| input.get("task_ids"))
-        .and_then(serde_json::Value::as_array)
-        .map(|ids| {
-            ids.iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
+    let task_ids: Vec<String> = if request.task_ids.is_empty() {
+        runtime
+            .show_job_run(&request.run_id)?
+            .input
+            .as_ref()
+            .and_then(|input| input.get("task_ids"))
+            .and_then(serde_json::Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        request.task_ids.clone()
+    };
     let unattributed = task_ids
         .is_empty()
         .then(|| UNATTRIBUTED_NO_LANDING_TASK.into());
@@ -59,10 +63,18 @@ pub(crate) fn record_direct_landing_intent(
     let evidence_digest =
         digest(&serde_json::to_vec(request).map_err(|e| OrbitError::InvalidInput(e.to_string()))?);
 
+    let (identity, evidence_reference) = match &request.handoff_id {
+        Some(handoff_id) => (handoff_id, format!("handoff:{handoff_id}:local-landing")),
+        None => (
+            &request.run_id,
+            format!("run:{}:direct-landing", request.run_id),
+        ),
+    };
+
     runtime
         .automation_store()?
         .automation_record_delivery_intent(&Delivery {
-            key: format!("direct:{repository}:{}:{}", request.branch, request.run_id),
+            key: format!("direct:{repository}:{}:{identity}", request.branch),
             repository,
             branch: request.branch.clone(),
             before,
@@ -70,7 +82,7 @@ pub(crate) fn record_direct_landing_intent(
             commits,
             task_ids,
             unattributed,
-            evidence_reference: format!("run:{}:direct-landing", request.run_id),
+            evidence_reference,
             evidence_digest,
             landed_at: chrono::Utc::now(),
         })

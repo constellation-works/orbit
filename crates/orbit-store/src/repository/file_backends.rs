@@ -33,6 +33,15 @@ impl TaskStoreBackend for TaskV2Store {
         self.claim_boundary()?.landing_start_requests()
     }
 
+    fn accepted_handoffs(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.accepted_handoffs(),
+            None => Ok(Vec::new()),
+        }
+    }
+
     fn landing_attempts(
         &self,
     ) -> Result<Vec<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {

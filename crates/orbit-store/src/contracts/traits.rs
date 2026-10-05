@@ -51,6 +51,15 @@ pub trait TaskStoreBackend: Send + Sync {
         Err(OrbitError::Store("handoff outbox unavailable".into()))
     }
 
+    /// Every handoff this owner accepted. A store without a claim journal has
+    /// accepted none, which is an answer rather than a failure: delivery
+    /// attribution reads it on every workspace.
+    fn accepted_handoffs(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
+        Ok(Vec::new())
+    }
+
     /// The owner's landing attempts, one per handoff. Read-only inspection.
     fn landing_attempts(
         &self,

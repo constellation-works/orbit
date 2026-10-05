@@ -439,6 +439,16 @@ pub struct DirectLandingRequest {
     pub branch: String,
     pub before_commit: String,
     pub after_commit: String,
+    /// The tasks this landing delivers, when the landing step reads them from
+    /// owner state: a handoff landing names its accepted handoff's task. Empty
+    /// means the run's own input names them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_ids: Vec<String>,
+    /// The accepted handoff a landing job lands. It identifies the delivery in
+    /// place of the run, so a retried attempt re-records the same intent
+    /// rather than a second one over the same commits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_id: Option<String>,
 }
 
 /// Provider association retained while a complete PR landing span is unresolved.

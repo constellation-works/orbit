@@ -484,7 +484,9 @@ and landing branch, execution summary and validation artifact references.
   value it captured at submission ([V1 review policy is
   none](./4_decisions.md#v1-review-policy-is-none), narrowed to the before-PR switch by
   [ORB-13992]). After-landing review is the owner's `delivery-code-review` auto-task and never
-  affects admission. Review evidence is the typed
+  affects admission. Its `deliveries_landed` batches list a landed follower PR under the claimed
+  task, which the owner reads from the handoff it accepted for that repository, landing branch and
+  PR number [ORB-13894]. Review evidence is the typed
   `{ policy: none, disposition: not_required }`, with no reviewed SHA, verdict or review artifact;
   the PR pipeline's `gate: not_required` is adapted into it. Task status `review` means a delivery
   handoff awaiting completion authority, not that a review occurred.
@@ -544,7 +546,8 @@ verifies the validated base is reachable from `origin/<landing branch>`, fetched
 per attempt so a commit landed from another machine is not misread as missing. Changed identity, a
 conflict, unsatisfied protection or an exhausted check budget records a durable stop and leaves the
 task in `review`. Owner-local candidates fast-forward the local landing branch and are verified
-from the ref; no-diff delivery verifies its covering commit on the landing ref with no external
+from the ref; before the branch moves, the owner retains a direct landing intent naming the
+handoff's task, so delivery consumers attribute the fast-forward. No-diff delivery verifies its covering commit on the landing ref with no external
 call. Every completion re-runs authorization, candidate and validation checks inside the
 `review → done` transaction, and the activity's observation must equal the accepted candidate.
 
@@ -877,5 +880,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-13755] — scoped the claimed delivery gate to the attempt being delivered.
 - [ORB-13756] — let claimed runs deliver new files inside their frozen footprint.
 - [ORB-13992] — narrowed review admission to the captured `review.before_pr`; after-landing review never refuses a pull.
+- [ORB-13894] — attributed handoff landings to their owner tasks in `deliveries_landed` batches.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

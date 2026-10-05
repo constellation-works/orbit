@@ -26,6 +26,18 @@ impl TaskCommitBoundary {
         })
     }
 
+    /// Every handoff this owner accepted, one per claim. Read-only; delivery
+    /// attribution matches a landed pull request against these to name the
+    /// task it delivered.
+    pub fn accepted_handoffs(&self) -> Result<Vec<AcceptedHandoff>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.coordination_rows(HANDOFF)?
+                .iter()
+                .map(|r| decode(&r.payload_json))
+                .collect()
+        })
+    }
+
     pub fn accepted_handoff(&self, claim_id: &str) -> Result<AcceptedHandoff, OrbitError> {
         self.find_accepted_handoff(claim_id)?
             .ok_or_else(|| invalid("typed handoff unavailable"))

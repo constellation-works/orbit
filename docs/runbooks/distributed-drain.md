@@ -91,6 +91,8 @@ refusal, not a silent downgrade. A workspace that still ships through its
 **legacy** leaf with before-PR review is not ready for distributed pull.
 After-landing review (the `delivery-code-review` auto-task) never affects
 admission: the owner reviews landed deliveries whatever host implemented them.
+A follower's landed PR reaches the owner's review batch under the claimed
+task's id, which the owner reads from the handoff it accepted.
 
 Match toolchains and required validation commands the same way you would for
 a second owner-local executor. Crews may differ: a follower only receives
