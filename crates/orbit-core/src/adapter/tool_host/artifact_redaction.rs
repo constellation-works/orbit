@@ -118,13 +118,16 @@ pub(super) fn finish_tool_response(
     runtime: &OrbitRuntime,
     action: OrbitBuiltinAction,
     response: &mut Value,
-    report: &ArtifactRedactionReport,
+    report: &mut ArtifactRedactionReport,
     persisted_task_id: Option<&str>,
     agent: Option<&str>,
     model: Option<&str>,
 ) -> Result<(), OrbitError> {
     if !is_covered_mutating_action(action) {
         return Ok(());
+    }
+    if action == OrbitBuiltinAction::TaskReconcileReview {
+        sanitize_response_value(response, "response", report);
     }
     if let Some(object) = response.as_object_mut() {
         object.insert(
@@ -254,7 +257,10 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_objects: &[],
         },
         OrbitBuiltinAction::TaskReconcileReview => ActionPolicy {
-            free_text_fields: &["reason", "command"],
+            // `command` selects an already-authorized stored command. Preserve
+            // it byte-for-byte for exact evidence matching, then redact only
+            // serialized reports at the response boundary.
+            free_text_fields: &["reason"],
             free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
         },
         OrbitBuiltinAction::TaskReviewReset => ActionPolicy {
@@ -563,6 +569,45 @@ fn pattern_redaction_classes(before: &str, after: &str) -> BTreeSet<&'static str
         (after.matches(marker).count() > before.matches(marker).count()).then_some(class)
     })
     .collect()
+}
+
+fn sanitize_response_value(value: &mut Value, path: &str, report: &mut ArtifactRedactionReport) {
+    match value {
+        Value::String(raw) => {
+            let env_scrubbed = redact_sensitive_env_text(raw);
+            let pattern_scrubbed = redact_all(&env_scrubbed);
+            let sanitized = redact_home_dir(&pattern_scrubbed);
+            let mut kinds = BTreeSet::new();
+            let mut classes = BTreeSet::new();
+            if env_scrubbed != *raw {
+                kinds.insert(ArtifactRedactionKind::Env);
+                classes.insert("sensitive_environment_value");
+            }
+            if pattern_scrubbed != env_scrubbed {
+                kinds.insert(ArtifactRedactionKind::Pattern);
+                classes.extend(pattern_redaction_classes(&env_scrubbed, &pattern_scrubbed));
+            }
+            if sanitized != pattern_scrubbed {
+                kinds.insert(ArtifactRedactionKind::HomeDir);
+                classes.insert("home_directory");
+            }
+            if sanitized != *raw {
+                *raw = sanitized;
+                report.push(path.to_string(), kinds, classes);
+            }
+        }
+        Value::Array(values) => {
+            for (index, value) in values.iter_mut().enumerate() {
+                sanitize_response_value(value, &format!("{path}[{index}]"), report);
+            }
+        }
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                sanitize_response_value(value, &format!("{path}.{key}"), report);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 fn emit_audit_events(

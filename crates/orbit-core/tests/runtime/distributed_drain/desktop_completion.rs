@@ -778,16 +778,19 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     ) {
         return;
     }
-    let command = "test -f NOTICE";
-    let delivery = Delivery::handed_off(&[command]);
-    delivery.retain_protocol7_handoff(command);
+    std::fs::create_dir_all(home().join("bin")).unwrap();
+    let command_path = home().join("bin/verify.sh");
+    std::fs::write(&command_path, "#!/bin/sh\ntest -f NOTICE\n").unwrap();
+    executable(&command_path);
+    let command = command_path.to_string_lossy().into_owned();
+    let delivery = Delivery::handed_off(&[&command]);
+    delivery.retain_protocol7_handoff(&command);
     delivery.recover();
     delivery.merged();
     let inspected = delivery
         .reconcile(json!({"action": "inspect"}))
         .expect("the retained protocol-7 handoff is readable through public inspect");
     assert_eq!(inspected["eligible"], true, "{inspected:#}");
-    assert_eq!(inspected["contract"]["accepted_commands"], json!([command]));
     delivery.reviewer_reports("accept", json!([]));
     let submitted = delivery.submit("baseline");
     let settled = delivery.run(&submitted);
@@ -797,19 +800,42 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     assert_eq!(recorded["complete"], false);
     assert_eq!(recorded["commands"][0]["head"]["passed"], false);
     assert_eq!(recorded["commands"][0]["baseline"]["passed"], false);
+    assert_eq!(
+        recorded["commands"][0]["command"], "~/bin/verify.sh",
+        "public reconciliation reports redact the private HOME path"
+    );
+    let head_log = delivery
+        .owner
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({
+                "id": delivery.task,
+                "path": recorded["commands"][0]["head"]["log"]["path"],
+            }),
+        )
+        .expect("read the redacted reconciliation validation report");
+    let head_log = head_log["content"]
+        .as_str()
+        .expect("text validation report");
+    assert!(
+        !head_log.contains(home().to_string_lossy().as_ref()),
+        "{head_log}"
+    );
+    assert!(head_log.contains("~/bin/verify.sh"), "{head_log}");
     let refusal = delivery.completion_refusal();
     assert!(
         refusal.contains("orbit task reconcile-review accept-baseline"),
         "{refusal}"
     );
 
+    let reason_secret = format!("ghp_{}", "A".repeat(36));
     let dispose = |remediation: &str| {
         delivery.reconcile(json!({
             "action": "accept_baseline",
             "reconciliation_id": reconciliation,
-            "command": command,
+            "command": command.as_str(),
             "remediation_commit": remediation,
-            "reason": "NOTICE was missing on the landing branch before this delivery.",
+            "reason": format!("NOTICE was missing on the landing branch; token={reason_secret}"),
         }))
     };
     // The merged head itself remediates nothing.
@@ -852,13 +878,48 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     git(&delivery.repo, &["add", "NOTICE"]);
     git(&delivery.repo, &["commit", "-q", "-m", "Add NOTICE"]);
     let remediation = rev(&delivery.repo, "HEAD");
+    let fake_secret = format!("ghp_{}", "B".repeat(36));
+    let invalid_selector = format!("{command} --token={fake_secret}");
+    let refusal = delivery
+        .reconcile(json!({
+            "action": "accept_baseline",
+            "reconciliation_id": reconciliation,
+            "command": invalid_selector,
+            "remediation_commit": remediation,
+            "reason": "unknown selector",
+        }))
+        .expect_err("an unrecognized command selector cannot widen the disposition");
+    let refusal = refusal.to_string();
+    assert!(refusal.contains("is not a baseline failure"), "{refusal}");
+    assert!(
+        !refusal.contains(home().to_string_lossy().as_ref()),
+        "{refusal}"
+    );
+    assert!(!refusal.contains(&fake_secret), "{refusal}");
+    let still_waiting = delivery.status(&reconciliation);
+    assert_eq!(still_waiting["outcome"], "awaiting_disposition");
+    assert_eq!(still_waiting["record"]["validation"]["complete"], false);
+
     let disposed = dispose(&remediation).expect("disposition");
     assert_eq!(
         disposed["outcome"], "accepted_with_disposition",
         "{disposed:#}"
     );
+    assert_eq!(
+        inspected["contract"]["accepted_commands"],
+        json!(["~/bin/verify.sh"]),
+        "public reconciliation reports redact the private HOME path"
+    );
     assert_eq!(disposed["record"]["validation"]["complete"], false);
     let disposition = &disposed["record"]["dispositions"][0];
+    assert_eq!(disposition["command"], "~/bin/verify.sh");
+    assert!(!disposition["reason"].as_str().unwrap().contains("ghp_"));
+    assert!(
+        disposition["reason"]
+            .as_str()
+            .unwrap()
+            .contains("[REDACTED_SECRET]")
+    );
     assert_eq!(disposition["remediation_commit"], remediation.as_str());
     assert_eq!(disposition["head_commit"], delivery.head.as_str());
     assert!(disposition["remediation_check"]["sha256"].is_string());
@@ -868,6 +929,26 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     );
     let again = dispose(&remediation).expect("an identical disposition replays");
     assert_eq!(again["record"]["dispositions"].as_array().unwrap().len(), 1);
+
+    let stored = delivery
+        .owner
+        .review_store()
+        .unwrap()
+        .review_reconciliation(&delivery.owner.workspace_id().unwrap(), &reconciliation)
+        .unwrap()
+        .expect("retained reconciliation");
+    assert_eq!(stored.contract.required_commands, vec![command.clone()]);
+    assert_eq!(stored.dispositions[0].command, command);
+    let task_comments = comments_of(&delivery.pair.owner_task(&delivery.task));
+    assert!(
+        !task_comments.contains(home().to_string_lossy().as_ref()),
+        "{task_comments}"
+    );
+    assert!(!task_comments.contains(&reason_secret), "{task_comments}");
+    assert!(
+        task_comments.contains("[REDACTED_SECRET]"),
+        "{task_comments}"
+    );
 
     let snapshot = delivery.snapshot(McpCapability::Operator);
     assert!(snapshot.actions.complete.enabled, "{:?}", snapshot.actions);
