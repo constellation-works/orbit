@@ -620,6 +620,10 @@ fn probe_overriding_user_namespace_refusal() -> Option<BwrapProbeOutcome> {
         available: true,
         trusted_path: bwrap_program_for_audit().to_string(),
         detail: "test seam: compile the post-run guard without a user namespace".to_string(),
+        // The seam does not execute Bubblewrap, so it has no selected source
+        // or version. Dispatch reads availability and the trusted path only.
+        source: None,
+        version: None,
     })
 }
 

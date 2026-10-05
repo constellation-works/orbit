@@ -247,8 +247,8 @@ fn inspection_mutation_keeps_provider_output_and_finish_event() {
     )
     .expect_err("mutated inspection checkout fails the step");
 
-    let DispatchError::CliInvocationFailed(message) = &error else {
-        panic!("inspection failure stays retryable: {error}");
+    let DispatchError::CliInvocationPermanent(message) = &error else {
+        panic!("a mutated read-only inspection checkout is permanent: {error}");
     };
     assert!(
         message.contains("source inspection checkout changed during read-only execution"),

@@ -2,6 +2,8 @@
 
 // Everything but `stdout_preview` drives `#!/bin/sh` fake agents.
 #[cfg(unix)]
+mod inspection;
+#[cfg(unix)]
 mod launcher;
 #[cfg(unix)]
 mod orchestrator_env;
