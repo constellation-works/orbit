@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import fcntl
+import math
 import os
 from pathlib import Path
 import sys
@@ -15,6 +16,8 @@ DEFAULT_BUILD_SLOTS = 2
 DEFAULT_CARGO_JOBS = 4
 MAX_BUILD_SLOTS = 128
 MAX_CARGO_JOBS = 1024
+DEFAULT_WAIT_REPORT_INTERVAL_SECONDS = 45.0
+TEST_WAIT_REPORT_INTERVAL_ENV = "_ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS"
 
 
 def fail(message: str, status: int = 64) -> NoReturn:
@@ -130,6 +133,27 @@ def lock_directory() -> Path:
     return directory
 
 
+def wait_report_interval() -> float:
+    """Use a short interval only when the process test explicitly requests it."""
+    value = os.environ.get(TEST_WAIT_REPORT_INTERVAL_ENV)
+    if value is not None:
+        try:
+            interval = float(value)
+        except ValueError:
+            interval = 0.0
+        if math.isfinite(interval) and interval > 0:
+            return interval
+    return DEFAULT_WAIT_REPORT_INTERVAL_SECONDS
+
+
+def report_wait(message: str) -> None:
+    try:
+        print(f"build-budget: {message}", file=sys.stderr, flush=True)
+    except OSError:
+        # Diagnostics must not prevent admission or change the wrapped command's status.
+        pass
+
+
 def acquire_slot(directory: Path, slots: int) -> tuple[int, int]:
     descriptors: list[tuple[int, int]] = []
     try:
@@ -138,6 +162,10 @@ def acquire_slot(directory: Path, slots: int) -> tuple[int, int]:
             descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
             descriptors.append((slot, descriptor))
 
+        wait_started = time.monotonic()
+        report_interval = wait_report_interval()
+        waiting = False
+        next_report = 0.0
         while True:
             for slot, descriptor in descriptors:
                 try:
@@ -148,7 +176,22 @@ def acquire_slot(directory: Path, slots: int) -> tuple[int, int]:
                 for other_slot, other_descriptor in descriptors:
                     if other_slot != slot:
                         os.close(other_descriptor)
+                if waiting:
+                    elapsed = time.monotonic() - wait_started
+                    report_wait(f"acquired slot {slot} after {elapsed:.1f}s")
                 return slot, descriptor
+
+            now = time.monotonic()
+            if not waiting:
+                report_wait(
+                    f"waiting for admission (slots={slots}, budget_dir={directory})"
+                )
+                waiting = True
+                next_report = now + report_interval
+            elif now >= next_report:
+                elapsed = now - wait_started
+                report_wait(f"still waiting for admission (elapsed {elapsed:.1f}s)")
+                next_report = now + report_interval
 
             time.sleep(0.05)
     except BaseException:

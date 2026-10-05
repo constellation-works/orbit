@@ -4,7 +4,7 @@ summary: Run Cargo builds within Orbit's host-wide cross-worktree admission and 
 tags: [operations, performance, rust]
 paths: ["Makefile", "scripts/build-budget.py"]
 related_artifacts: [ORB-11754, ORB-11760]
-last_validated: 2026-09-30
+last_validated: 2026-10-05
 ---
 
 # Bound Concurrent Orbit Repository Builds
@@ -79,6 +79,14 @@ Each slot is a kernel `flock`. The wrapper replaces itself with the admitted com
 retaining the lock descriptor, so normal completion, command failure, cancellation, and
 process termination release the slot. An inherited internal marker prevents nested Make
 or wrapper entry points from reacquiring a slot and deadlocking.
+
+If every slot is occupied, stderr reports `build-budget: waiting for admission` with the
+configured slot count and budget directory. While the command remains queued, periodic
+`build-budget: still waiting for admission` lines show elapsed time; after a slot opens,
+`build-budget: acquired slot` reports the slot and total wait. These messages confirm the
+wrapper is waiting for admission before Cargo starts. A long-running build has already
+acquired a slot and will not produce these wait messages, so use its process and build logs
+to diagnose a possible hung compile or test.
 
 ## Verification
 
