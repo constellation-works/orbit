@@ -350,20 +350,26 @@ define_config_settings! {
     },
     workflow_validation_env_login_shell: bool => bool {
         key: "workflow.validation_env.login_shell", value_type: "bool",
-        description: "Resolve required-validation and local_shell PATH (plus toolchain locators such as CARGO_HOME) from the owner user's login shell instead of whatever launched the worker (default true); false keeps the launcher's PATH.",
+        description: "Resolve required-validation and local_shell PATH (plus allowlisted toolchain locators such as CARGO_HOME) from the owner's shell via `-i -l -c`, falling back to `-l -c` on failure (default true); false never probes the shell. Each probe is bounded to 10 seconds and the outcome is cached for two minutes.",
         section: ConfigSection::Delivery, order: 61,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    workflow_validation_env_interactive: bool => bool {
+        key: "workflow.validation_env.interactive", value_type: "bool",
+        description: "Try an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found (default true). Startup failure, nonzero exit, timeout or a missing marker falls back to `-l -c`, recording the mode and reason. False probes only `-l -c`; ignored when login_shell is false. Only allowlisted toolchain variables cross.",
+        section: ConfigSection::Delivery, order: 62,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
     workflow_validation_env_path: Vec<String> => Vec<String> {
         key: "workflow.validation_env.path", value_type: "array<string>",
         description: "PATH entries for required validation and local_shell steps, combined with the resolved PATH per `workflow.validation_env.path_mode`; a leading `~/` expands to HOME. Empty adds nothing.",
-        section: ConfigSection::Delivery, order: 62,
+        section: ConfigSection::Delivery, order: 63,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_validation_env_path_mode: String => String {
         key: "workflow.validation_env.path_mode", value_type: "string",
         description: "How `workflow.validation_env.path` combines with the resolved PATH: `prepend` (default) puts it first, `replace` makes it the whole PATH.",
-        section: ConfigSection::Delivery, order: 63,
+        section: ConfigSection::Delivery, order: 64,
         resolve: |raw: Option<String>| resolve_validation_path_mode(raw),
     },
     workflow_xhard_complexity_crews: Vec<String> => Vec<String> {

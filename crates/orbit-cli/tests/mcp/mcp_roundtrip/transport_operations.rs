@@ -554,7 +554,9 @@ fn stdio_drain_start_notes_that_no_required_validation_runs() {
 /// [ORB-13987] With login-shell resolution disabled and no configured PATH,
 /// required validation runs with whatever PATH launched the worker. The MCP
 /// drain status and the CLI doctor both say so before a drain is started;
-/// without required commands there is nothing to warn about.
+/// without required commands there is nothing to warn about. Doctor also
+/// reports configured tool shadowing, the selected startup mode, and the
+/// reason a broken interactive rc falls back to login-only resolution.
 #[test]
 fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
     let workspace = McpWorkspace::init();
@@ -613,11 +615,98 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         "the warning names the disabled resolution, the fallback and its PATH: {warning}"
     );
     assert_eq!(row["status"], "warning", "{row}");
-    assert_eq!(row["message"], warning, "doctor reports the same warning");
+    assert!(
+        row["message"].as_str().unwrap().contains(warning),
+        "doctor includes the same warning: {row}"
+    );
     assert!(
         row["remediation"]
             .as_str()
             .is_some_and(|fix| fix.contains("workflow.validation_env.path")),
         "{row}"
+    );
+
+    // The validation PATH is separate from the fixture command's PATH, so
+    // these stubs affect only doctor resolution, never workspace setup.
+    let first = workspace.home.join("validation-first");
+    let later = workspace.home.join("validation-later");
+    for tool in ["python3", "git", "make"] {
+        plant_agent_cli_stub(&first, tool);
+        plant_agent_cli_stub(&later, tool);
+    }
+    configure("workflow.validation_env.path_mode", "replace");
+    configure(
+        "workflow.validation_env.path",
+        &json!([first, later]).to_string(),
+    );
+    let (_, row) = observe();
+    assert_eq!(row["status"], "warning", "shadowing is advisory: {row}");
+    let message = row["message"].as_str().unwrap();
+    assert!(message.contains("probe mode: disabled"), "{message}");
+    assert!(
+        message.contains(&format!("PATH={}:{}", first.display(), later.display())),
+        "{message}"
+    );
+    for tool in ["python3", "git", "make"] {
+        assert!(
+            message.contains(&format!(
+                "{tool} resolves to {}",
+                first.join(tool).display()
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("{tool}: {} shadows", first.join(tool).display())),
+            "{message}"
+        );
+        assert!(
+            message.contains(&later.join(tool).display().to_string()),
+            "{message}"
+        );
+    }
+
+    configure("workflow.validation_env.login_shell", "true");
+    configure("workflow.validation_env.interactive", "false");
+    let (_, row) = observe();
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("probe mode: login;"),
+        "the setting reaches the runtime resolver: {row}"
+    );
+    configure("workflow.validation_env.interactive", "true");
+    let (_, row) = observe();
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("probe mode: interactive_login;"),
+        "{row}"
+    );
+
+    // Fixture rc files affect only the probe, with no dependency on the
+    // operator's dotfiles. Cover the common account shells on Linux/macOS.
+    for profile in [".bash_profile", ".profile"] {
+        std::fs::write(workspace.home.join(profile), ". \"$HOME/.bashrc\"\n").unwrap();
+    }
+    for rc in [".bashrc", ".zshrc"] {
+        std::fs::write(workspace.home.join(rc), "case $- in *i*) exit 42 ;; esac\n").unwrap();
+    }
+    let fish = workspace.home.join(".config/fish");
+    std::fs::create_dir_all(&fish).unwrap();
+    std::fs::write(
+        fish.join("config.fish"),
+        "if status is-interactive\nexit 42\nend\n",
+    )
+    .unwrap();
+    let (_, row) = observe();
+    assert_eq!(row["status"], "warning", "fallback is advisory: {row}");
+    let message = row["message"].as_str().unwrap();
+    assert!(
+        message.contains("probe mode: login;")
+            && message.contains("interactive fallback reason:")
+            && message.contains("exited with status 42"),
+        "{message}"
     );
 }

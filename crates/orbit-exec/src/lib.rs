@@ -103,6 +103,6 @@ pub use runner::{
 pub use sandbox::{NoSandbox, Sandbox};
 pub use validation_env::{
     LOGIN_SHELL_CACHE_TTL, LOGIN_SHELL_TIMEOUT, LOGIN_SHELL_TOOLCHAIN_VARS, LoginShell,
-    LoginShellEnv, ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment,
+    LoginShellEnv, LoginShellMode, ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment,
     ValidationPathMode, program_on_path,
 };

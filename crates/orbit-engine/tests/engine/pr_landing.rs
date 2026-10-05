@@ -463,6 +463,14 @@ fn validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain() {
 
             assert_eq!(validated["decision"], "passed");
             assert_eq!(validated["validation_env"]["source"], "login_shell");
+            assert_eq!(
+                validated["validation_env"]["probe_mode"],
+                "interactive_login"
+            );
+            assert_eq!(
+                validated["validation_env"]["fallback_reason"],
+                serde_json::Value::Null
+            );
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
             assert_eq!(log["output"], "lint-ok");
             assert_eq!(log["validation_env"]["source"], "login_shell");
@@ -565,7 +573,8 @@ fn login_shell_toolchain(sandbox: &Path) -> (Vec<(String, String)>, PathBuf, Pat
     fs::write(
         &shell,
         format!(
-            "#!/bin/sh\n[ \"$1\" = -l ] && [ \"$2\" = -c ] || exit 64\n\
+            "#!/bin/sh\n[ \"$1\" = -i ] && shift\n\
+             [ \"$1\" = -l ] && [ \"$2\" = -c ] || exit 64\n\
              echo 'Welcome back'\nPATH=\"{}:$PATH\"; export PATH\neval \"$3\"\n",
             tools.display()
         ),
