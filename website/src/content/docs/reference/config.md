@@ -181,11 +181,11 @@ crew or the workspace default.
 | `workflow.task_pilot_freshness.source_sensitivity` | string | `ignore` | Whether a branch-head move makes an accepted task-pilot assessment stale: `ignore`, `context_files` (only when the move changed a path the task's selectors name), or `any`. |
 | `workflow.resource_throttle.enabled` | bool | `true` | Start no new task while host CPU, memory, or disk pressure stays high. Disabled, pressure is still reported. |
 | `workflow.resource_throttle.cpu_high_percent` | integer | `90` | CPU high-water mark. |
-| `workflow.resource_throttle.cpu_resume_percent` | integer | `75` | Resume below this CPU percentage. |
+| `workflow.resource_throttle.cpu_resume_percent` | integer | `85` | Resume below this CPU percentage. |
 | `workflow.resource_throttle.memory_high_percent` | integer | `90` | Memory high-water mark. |
-| `workflow.resource_throttle.memory_resume_percent` | integer | `80` | Resume below this memory percentage. |
-| `workflow.resource_throttle.disk_high_percent` | integer | `85` | Disk high-water mark, per observed filesystem. |
-| `workflow.resource_throttle.disk_resume_percent` | integer | `80` | Resume below this disk percentage. |
+| `workflow.resource_throttle.memory_resume_percent` | integer | `85` | Resume below this memory percentage. |
+| `workflow.resource_throttle.disk_high_percent` | integer | `90` | Disk high-water mark, per observed filesystem. |
+| `workflow.resource_throttle.disk_resume_percent` | integer | `85` | Resume below this disk percentage. |
 | `machine.name` | string | Set by `orbit init` | Global only. This machine's display name, and the one `[machine]` value you can change. |
 | `machine.worker_containment` | bool | `true` | Global only. Run each detached pipeline worker in its own systemd user scope, bounded by the `machine.worker_*` limits. Needs Linux with a user manager; otherwise workers run uncontained. |
 | `machine.worker_containment_strict` | bool | `false` | Global only. Refuse to launch a detached worker when no systemd user scope is available. Requires `machine.worker_containment = true`. |
