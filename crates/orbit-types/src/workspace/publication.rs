@@ -255,16 +255,20 @@ fn parse_url_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {
 }
 
 fn parse_scp_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {
-    let Some((user_host, path)) = remote.split_once(':') else {
+    // Userinfo can contain a password separator. Find the host/path separator
+    // after it, while leaving at-signs in repository paths alone.
+    let (username, host_path) = match remote.split_once('@') {
+        Some((username, host_path)) if !username.contains('/') && host_path.contains(':') => {
+            (username, host_path)
+        }
+        _ => ("", remote),
+    };
+    let Some((host, path)) = host_path.split_once(':') else {
         return Err(invalid_git_url(remote));
     };
-    if user_host.contains('/') || path.is_empty() || path.starts_with('/') {
+    if host.contains('/') || path.is_empty() || path.starts_with('/') {
         return Err(invalid_git_url(remote));
     }
-    let (username, host) = match user_host.split_once('@') {
-        Some((username, host)) => (username, host),
-        None => ("", user_host),
-    };
     if host.is_empty() || host.contains('@') {
         return Err(invalid_git_url(remote));
     }
@@ -374,12 +378,14 @@ fn redact_raw_url_userinfo(remote: &str) -> Option<String> {
 }
 
 fn redact_scp_userinfo(remote: &str) -> Option<String> {
-    let (user_host, path) = remote.split_once(':')?;
-    let (username, host) = user_host.split_once('@')?;
-    if !username.contains(':') && username != "***" {
+    let (username, host_path) = remote.split_once('@')?;
+    if username.contains('/')
+        || !host_path.contains(':')
+        || (!username.contains(':') && username != "***")
+    {
         return None;
     }
-    Some(format!("***@{host}:{path}"))
+    Some(format!("***@{host_path}"))
 }
 
 fn invalid_git_url(remote: &str) -> WorkspaceError {
