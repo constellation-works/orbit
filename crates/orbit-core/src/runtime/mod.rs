@@ -12,7 +12,9 @@
 //! `mutation`, and `tool_exec` sub-modules provide the high-level operations
 //! exposed to command handlers; `plugin` and `workspace` own host plugins and
 //! the workspace binding, catalog, and claim; `host_signal` probes host
-//! lifecycle signals, such as a scheduled reboot, that hold new admissions.
+//! lifecycle signals, such as a scheduled reboot, that hold new admissions;
+//! `task_pr_forge` is the forge a task's terminal decision closes its
+//! Orbit-authored PRs through.
 
 mod activity_catalog;
 pub(crate) mod assets;
@@ -36,6 +38,7 @@ pub(crate) mod recovery_authority;
 mod resolve;
 pub(crate) mod run_input;
 pub(crate) mod task;
+pub mod task_pr_forge;
 pub use task::{InfraBlockedTask, StaleTaskReservation};
 pub(crate) mod tool_exec;
 pub(crate) mod upgrade_handover;

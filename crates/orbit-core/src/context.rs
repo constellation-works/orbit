@@ -367,6 +367,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// evaluator escalates it (`[automation] stall_window_minutes`).
     automation_stall_window_minutes: u32,
     pr_config: PrConfig,
+    /// Config-owned `[pr]` settings; the PR closure on a task's terminal
+    /// decision reads `close_on_terminal` and `delivery_authors` from here.
+    pr_settings: orbit_config::PrSettings,
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     workflow_base_branch: String,
     /// Opt-in for unattended ship dispatch
@@ -409,6 +412,7 @@ impl OrbitRuntimeSettings {
         scoring_enabled: bool,
         automation_stall_window_minutes: u32,
         pr_config: PrConfig,
+        pr_settings: orbit_config::PrSettings,
         workflow_base_branch: String,
         workflow_auto_ship: bool,
         resource_throttle: orbit_config::ResourceThrottleSettings,
@@ -431,6 +435,7 @@ impl OrbitRuntimeSettings {
             scoring_enabled,
             automation_stall_window_minutes,
             pr_config,
+            pr_settings,
             workflow_base_branch,
             workflow_auto_ship,
             resource_throttle,
@@ -463,6 +468,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn pr_config(&self) -> &PrConfig {
         &self.pr_config
+    }
+
+    pub(crate) fn pr_settings(&self) -> &orbit_config::PrSettings {
+        &self.pr_settings
     }
 
     pub(crate) fn workflow_base_branch(&self) -> &str {

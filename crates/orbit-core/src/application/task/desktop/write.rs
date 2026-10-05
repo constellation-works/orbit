@@ -161,6 +161,8 @@ impl OrbitRuntime {
             None
         };
         let mut outcome = None;
+        // The status a desktop write replaced, when it changed one.
+        let mut previous_status = None;
         self.stores().tasks().with_task_write_lock(&id, &mut || {
             let key = format!("desktop_request={} ", request.request_id);
             let receipt = format!("{key}digest={digest}");
@@ -288,12 +290,21 @@ impl OrbitRuntime {
                     };
                 Ok((result, event))
             })?);
+            if status.is_some() {
+                previous_status = Some(task.status);
+            }
             Ok(())
         })?;
         if outcome == Some(AtomicTaskMutationOutcome::Stale) {
             return Err(OrbitError::TaskRevisionConflict {
                 task_id: id.clone(),
             });
+        }
+        if outcome == Some(AtomicTaskMutationOutcome::Applied)
+            && let Some(previous_status) = previous_status
+            && let Ok(task) = self.get_task(&id)
+        {
+            self.close_task_prs_after_transition(previous_status, &task, None);
         }
         self.desktop_write_result(
             &id,

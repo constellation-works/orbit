@@ -103,7 +103,7 @@ pub use registry::{
     describe as describe_config_key,
 };
 pub use resolved::{
-    CodexExecutionPolicy, ExecutionEnvPolicy, ResolvedConfig, disabled_crew_message,
+    CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, ResolvedConfig, disabled_crew_message,
 };
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};

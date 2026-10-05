@@ -42,6 +42,11 @@ pub use crate::builtin::github::run::list::{build_exec_request as run_list_reque
 pub use crate::builtin::github::run::view::{
     build_exec_request as run_view_request, project_run_view,
 };
+pub use crate::builtin::github::task_prs::{
+    authenticated_login as authenticated_login_request,
+    close_pull_request as close_pull_request_request,
+    open_pull_requests as open_pull_requests_request,
+};
 pub use crate::builtin::github::{
     CheckoutEvidence, StreamedLog, StreamedLogCollector, parse_gh_json, strip_ansi_sequences,
 };

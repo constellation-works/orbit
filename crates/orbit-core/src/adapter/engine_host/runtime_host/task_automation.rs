@@ -1,7 +1,9 @@
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskStatus, push_external_ref_if_missing};
+use orbit_types::task::{
+    GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, push_external_ref_if_missing,
+};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams as StoreTaskUpdateParams;
@@ -24,8 +26,17 @@ pub(super) fn apply_locked_task_automation_update(
     task_id: &str,
     update: TaskAutomationUpdate,
 ) -> Result<(), OrbitError> {
+    // The landing a done transition names: its status note, else the PR this
+    // update records (a batch merge passes only the merged PR's ref).
+    let landing_note = update.status_note.clone().or_else(|| {
+        update
+            .external_refs
+            .iter()
+            .find(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
+            .map(|reference| format!("pull request #{}", reference.id))
+    });
     let mut update = Some(update);
-    let mut updated: Option<Task> = None;
+    let mut updated: Option<(Task, TaskStatus)> = None;
     runtime
         .stores()
         .tasks()
@@ -40,7 +51,7 @@ pub(super) fn apply_locked_task_automation_update(
             )?);
             Ok(())
         })?;
-    let task = updated.ok_or_else(|| {
+    let (task, previous_status) = updated.ok_or_else(|| {
         OrbitError::Execution(
             "task automation update body did not run under the task lock".to_string(),
         )
@@ -48,14 +59,16 @@ pub(super) fn apply_locked_task_automation_update(
     if task.status == TaskStatus::Done {
         runtime.record_resolves_side_effects(&task)?;
     }
+    runtime.close_task_prs_after_transition(previous_status, &task, landing_note.as_deref());
     Ok(())
 }
 
+/// Returns the written task and the status it replaced.
 fn apply_task_automation_update_under_lock(
     runtime: &OrbitRuntime,
     task_id: &str,
     update: TaskAutomationUpdate,
-) -> Result<Task, OrbitError> {
+) -> Result<(Task, TaskStatus), OrbitError> {
     let existing_task = runtime.get_task(task_id)?;
     if update.status == Some(TaskStatus::InProgress)
         && crate::application::task::in_progress_transition_requires_plan(existing_task.status)
@@ -131,7 +144,7 @@ fn apply_task_automation_update_under_lock(
             },
         )?;
         Ok((
-            task.clone(),
+            (task.clone(), existing_task.status),
             OrbitEvent::TaskUpdated {
                 id: task_id.to_string(),
             },

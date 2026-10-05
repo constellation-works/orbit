@@ -23,6 +23,7 @@ use super::host_resource::{
 use super::host_signal::{
     FixedHostSignals, HostSignalProbe, ScheduledShutdown, default_host_signal_probe,
 };
+use super::task_pr_forge::{NoTaskPrForge, TaskPrForge, default_task_pr_forge};
 use super::workspace::binding::WorkspaceRuntimeBinding;
 use super::workspace::catalog;
 use super::{builder, event_bus, worker_coordination};
@@ -60,6 +61,9 @@ pub struct OrbitRuntime {
     /// Host lifecycle signals unattended admission consults before starting
     /// new work [ORB-12968]. The platform probe by default; tests inject one.
     host_signals: Arc<dyn HostSignalProbe>,
+    /// Forge that closes a task's Orbit-authored PRs on its terminal
+    /// decision. `gh` by default; tests inject a fake.
+    task_pr_forge: Arc<dyn TaskPrForge>,
     host_resources: Arc<HostResourceMonitor>,
     pub event_log: event_bus::EventLog,
     /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
@@ -215,6 +219,7 @@ impl OrbitRuntime {
             automation_machine_identity: None,
             workspace_catalog: None,
             host_signals: default_host_signal_probe(),
+            task_pr_forge: default_task_pr_forge(),
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(layout_report),
             _temp_dir: None,
@@ -271,6 +276,8 @@ impl OrbitRuntime {
             workspace_catalog: None,
             // An in-memory runtime is not bound to a host lifecycle.
             host_signals: Arc::new(FixedHostSignals::none()),
+            // Nor is it bound to a repository whose PRs it could close.
+            task_pr_forge: Arc::new(NoTaskPrForge),
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
             _temp_dir: Some(Arc::new(temp_dir)),
@@ -387,6 +394,17 @@ impl OrbitRuntime {
     pub fn with_host_signal_probe(mut self, probe: Arc<dyn HostSignalProbe>) -> Self {
         self.host_signals = probe;
         self
+    }
+
+    /// Replace the forge a terminal task decision closes PRs through, so a
+    /// fixture can observe closures without a real repository.
+    pub fn with_task_pr_forge(mut self, forge: Arc<dyn TaskPrForge>) -> Self {
+        self.task_pr_forge = forge;
+        self
+    }
+
+    pub(crate) fn task_pr_forge(&self) -> &dyn TaskPrForge {
+        self.task_pr_forge.as_ref()
     }
 
     /// The host shutdown or reboot currently pending, if any. While one is,

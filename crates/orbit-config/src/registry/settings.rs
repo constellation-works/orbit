@@ -192,6 +192,18 @@ define_config_settings! {
         section: ConfigSection::Housekeeping, order: 80,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
+    pr_close_on_terminal: bool => bool {
+        key: "pr.close_on_terminal", value_type: "bool",
+        description: "Close a task's open Orbit-authored pull requests (delivery and [BLOCKED] PRs) when the task lands (done), is rejected or is archived, with a comment naming the landing or the decision. Branches are kept; a forge error is a warning, never a failure (default true).",
+        section: ConfigSection::Delivery, order: 140,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    pr_delivery_authors: Vec<String> => Vec<String> {
+        key: "pr.delivery_authors", value_type: "array<string>",
+        description: "Forge logins whose pull requests count as Orbit-authored for pr.close_on_terminal. Empty (default) means the login the forge CLI is authenticated as on this machine.",
+        section: ConfigSection::Delivery, order: 141,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(normalize_logins(raw.unwrap_or_default())),
+    },
     pr_task_url_template: Option<String> => String {
         key: "pr.task_url_template", value_type: "string",
         description: "URL template used to link a task ID in PR descriptions.",
@@ -658,6 +670,19 @@ pub(crate) fn read_optional<T: DeserializeOwned>(
             redact_home_dir(&config_path.display().to_string())
         ))
     })
+}
+
+/// Trim forge logins, drop blanks and duplicates, and keep a stable order.
+/// Forge logins are case-insensitive, so they are compared lowercased.
+fn normalize_logins(raw: Vec<String>) -> Vec<String> {
+    let mut logins = raw
+        .iter()
+        .map(|login| login.trim().to_ascii_lowercase())
+        .filter(|login| !login.is_empty())
+        .collect::<Vec<_>>();
+    logins.sort();
+    logins.dedup();
+    logins
 }
 
 /// Admit a positive minute budget, defaulting when unset. A day is the

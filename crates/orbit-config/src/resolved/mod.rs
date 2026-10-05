@@ -18,7 +18,7 @@ mod config;
 mod crew;
 mod execution_env;
 
-pub use config::ResolvedConfig;
+pub use config::{PrSettings, ResolvedConfig};
 pub use crew::disabled_crew_message;
 pub use execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 

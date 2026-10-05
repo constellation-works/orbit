@@ -23,5 +23,6 @@ pub mod logs;
 pub mod pr_list;
 pub mod repo;
 pub mod run;
+pub mod task_prs;
 
 pub(crate) mod landing;

@@ -64,6 +64,8 @@ assuming a value.
 | `runtime.log_max_file_mb` | Roll the active log past N MiB. Must not exceed the total budget. |
 | `scoring.enabled` | Record scoreboard metrics for task runs. |
 | `pr.task_url_template` | URL template linking a task ID in PR descriptions. |
+| `pr.close_on_terminal` | Close a task's open Orbit-authored delivery and `[BLOCKED]` PRs when it lands, is rejected or is archived (default `true`). Branches are kept; a forge error is only a warning. |
+| `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for that closure. Empty uses the `gh` login on this machine. |
 
 Use `orbit config keys` to distinguish fixed registry keys from settings
 authored as TOML. Read-only identity keys are listed and refused by
