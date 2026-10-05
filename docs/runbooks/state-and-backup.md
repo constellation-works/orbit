@@ -200,11 +200,20 @@ Use the existing registered workspace name with `--name`. This records only a mi
 source identity; it preserves the workspace ID, owner, task partition, and publication
 bindings while refreshing the usual initialization defaults. Repeating the command
 preserves the source identity, including the task-store fingerprint recorded when
-publication was bound. Equivalent URL spellings also keep the registered URL
+publication was bound. Equivalent portable URL spellings also keep the registered URL
 so that publication fingerprints remain unchanged. An absent origin leaves the registered
 identity intact. First binding refuses credentials, invalid or local remotes, replica
 checkouts, and a different declared owner before initialization writes. `workspace sync`
 does not bind a missing source identity.
+
+When the detected origin exactly matches the registered remote, reconciliation
+preserves it without applying first-binding portability or owner checks. This includes
+registrations that already contain a local path, `file://` URL, or credentials:
+`--force` can still refresh initialization defaults and recover a missing or malformed
+checkout identity. This compatibility does not make those remotes valid for publication
+or permit a source-identity change. If no source identity is registered, a refused first
+binding stops initialization before identity recovery or other initialization writes;
+use a portable origin and the declared owner's checkout before retrying.
 
 An already registered source identity cannot be changed through `workspace init --force`.
 If the checkout's origin names a different repository, use the explicit audited rebind
