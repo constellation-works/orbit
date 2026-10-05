@@ -5,10 +5,11 @@ tags: [operations, review-gate, distributed-drain, sandbox, plugin-broker]
 paths:
   - "crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/brokered.rs"
+  - "crates/orbit-core/src/adapter/tool_host/worker_tools.rs"
   - "crates/orbit-cli/src/command/mcp/claimed_review.rs"
   - "crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs"
 related_features: [review-gate, distributed-drain, plugins, policy-sandbox]
-related_artifacts: [ORB-14194, ORB-14171]
+related_artifacts: [ORB-14194, ORB-14221, ORB-14171]
 last_validated: 2026-10-05
 ---
 
@@ -41,9 +42,18 @@ never from the request. It carries a call only when all of these hold:
 The coordinator also checks the content. It accepts a manifest only if the
 owner's copy names the running attempt. It accepts a report only if the
 report parses, is at most 1 MiB and names that attempt. The coordinator then
-sends the call to the owner over the follower's own SSH route, and the
-owner's claim fence still decides the write. A replayed report follows
-`artifact.put`'s normal semantics: the same bytes replace the same artifact.
+sends the call to the owner over the follower's own SSH route.
+
+The owner's claim fence decides both calls. The owner answers the manifest
+read, and takes the report write, only while the claim is still active: running
+or handed off, bound to this leaf on this follower, and still the task's
+current claim. If the claim was released, failed, revoked or superseded, the
+owner refuses the call with `stale_claim` and changes nothing. This holds
+even while the follower's ledger still shows the reviewer running. A claim
+that has outlived its reservation is not revoked by that alone. It ends when
+an operator recovers it, and from then on the owner refuses its calls. A
+replayed report follows `artifact.put`'s normal semantics: the same bytes
+replace the same artifact.
 The coordinator never writes a review certificate. Every other tool and path
 is refused.
 
@@ -62,6 +72,7 @@ attaching a report by hand, or disabling before-PR review.
 | Error the reviewer sees | Cause | Recovery |
 | --- | --- | --- |
 | `review_attempt_stale` | The reviewer finished or ran past its deadline, or its attempt was settled or replaced | Preserve the call and run evidence. Do not replay it. After the normal run reaches terminal settlement, verify there is no live owner, diagnose the cause, and use the existing authorized backlog recovery to start a fresh attempt. |
+| `stale_claim` | The owner no longer holds the claim as active: it was released, failed, revoked by recovery, or superseded by a later pull, or it is bound to another run | Preserve the refusal, the claim's owner state (`ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'` on the owner) and the follower's ledger. Do not replay the call. The claim's lifecycle already ended, so the review cannot finish in this run. Let the run settle. Then follow the [distributed drain runbook](./distributed-drain.md) for that claim state. |
 | `review_manifest_stale` | The owner holds another attempt's manifest | Preserve the call and run evidence. Do not replay it. After terminal settlement and cause diagnosis, use the existing authorized recovery to start a fresh attempt. |
 | `claimed_review_bridge_refused` | Another activity, task, path, request field, report attempt, or a malformed report | Preserve the refusal and inspect the bound task, run, claim and review attempt. Correct the diagnosed prompt or binary cause before any normally authorized fresh run. |
 | `plugin_broker_unavailable`, "could not reach this run's coordinator" | The coordinator could not provide a usable response; the owner may or may not have received the request | Treat the outcome as unknown. Preserve both runs, the claim and ledger state, and use the existing idempotent/reconciliation path. Do not manufacture another claim or report. |

@@ -96,7 +96,8 @@ Identify the failed step from `orbit run show`, then act:
   calls and nothing else. The refusal names the cause:
   `review_attempt_stale` (the reviewer ran past its attempt or the attempt
   was settled), `review_manifest_stale` (the owner holds another attempt's
-  manifest), `claimed_review_bridge_refused` (another activity, task, path or
+  manifest), `stale_claim` (the owner released, failed, revoked or superseded
+  the claim), `claimed_review_bridge_refused` (another activity, task, path or
   field), or "could not reach this run's coordinator" (no usable response).
   Preserve the exact call and inspect the task, run, claim and review ledger
   before recovery. Do not replay a stale, expired, settled or cancelled

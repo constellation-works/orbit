@@ -9,7 +9,9 @@
 //! over that route; the follower's review ledger holds the admitted attempt
 //! with its reviewer running. Inside the sandbox the built `orbit` serves the
 //! reviewer through both the CLI and MCP, exactly as a provider calls it,
-//! and SSH runs only in the unconfined broker.
+//! and SSH runs only in the unconfined broker. Last, the owner revokes the
+//! claim and a later pull supersedes it while the follower's ledger still
+//! records the reviewer running: the owner refuses the bridged calls.
 //!
 //! Linux confines the reviewer with Bubblewrap and macOS with `sandbox-exec`;
 //! everything else is the same fixture.
@@ -33,6 +35,7 @@ use orbit_engine::{PluginBrokerHandle, PluginBrokerRun, RuntimeHost};
 use orbit_mcp::federated::{Destination, FederatedMcpHost, SshDestinationProbe};
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::ResolvedFsProfile;
+use orbit_types::task::TaskStatus;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
@@ -780,6 +783,94 @@ fn sandbox_fixture() {
         report,
         "refused calls change nothing on the owner"
     );
+
+    // Phase 3: the reviewer runs again by the follower's ledger, but the
+    // owner revokes the claim, as an operator recovers one that outlived its
+    // reservation, and then a later pull supersedes it. The owner refuses
+    // the bridged read and write as stale and nothing on it changes.
+    store
+        .review_record_invocation(
+            &workspace,
+            &ReviewInvocationRecord {
+                lineage_key: LINEAGE,
+                attempt_id: &attempt_id,
+                run_id: LEAF,
+                event: ReviewerInvocationEvent::Started {
+                    timeout_seconds: 1800,
+                },
+                now: Utc::now(),
+            },
+        )
+        .expect("reviewer restarted");
+    owner_runtime
+        .recover_claim_as_operator(
+            claim["claim_id"].as_str().expect("claim id"),
+            "running",
+            TaskStatus::Backlog,
+            "operator",
+            "The claim outlived its reservation.",
+            "claimed-review-revocation",
+        )
+        .expect("the owner revokes the claim");
+    let owner_evidence = || {
+        let artifacts = owner_runtime
+            .get_task_artifacts(&task)
+            .expect("owner artifacts")
+            .into_iter()
+            .map(|artifact| (artifact.path, artifact.content))
+            .collect::<Vec<_>>();
+        let certificate = owner_runtime
+            .review_store()
+            .expect("owner review store")
+            .review_certificate(&owner_workspace, &attempt_id)
+            .expect("owner certificate read");
+        (artifacts, certificate.is_some())
+    };
+    let before = owner_evidence();
+    let stale = |run_id: &str| {
+        let broker = runner
+            .start_plugin_broker(&broker_run(run_id, REVIEWER, &task, &workspace, &caller))
+            .expect("start broker")
+            .expect("Unix broker");
+        let report = Confined::spawn(
+            &runner,
+            &follower,
+            &profile,
+            &provider,
+            &["stale", &task, scratch.to_str().unwrap()],
+            &[broker.as_ref()],
+            &[],
+        )
+        .finish();
+        refused(&report["cli_get"], "stale_claim");
+        refused(&report["cli_put"], "stale_claim");
+        mcp_refused(&report["mcp_get"], "stale_claim");
+        mcp_refused(&report["mcp_put"], "stale_claim");
+    };
+    stale("leaf-review-revoked");
+    let readmitted = drain(
+        "orbit.task.pull",
+        json!({"request_id": "claimed-review-readmission",
+               "caller_version": probe["binary_version"],
+               "caller_schema": probe["protocol_schema"], "caller_before_pr": false,
+               "run_context": {"run_id": "follower-drain-2", "job_name": "workspace_pull_pipeline"},
+               "ship": probe["ship"]}),
+    );
+    let next = readmitted["receipt"]["claim"].clone();
+    assert_eq!(next["task_id"], task.as_str(), "{readmitted}");
+    assert_ne!(next["claim_id"], claim["claim_id"], "{readmitted}");
+    let rebound = drain(
+        "orbit.drain.claim.bind",
+        json!({"claim_id": next["claim_id"], "run_id": "leaf-review-2", "ship": probe["ship"]}),
+    );
+    assert_eq!(rebound["phase"], "running", "{rebound}");
+    stale("leaf-review-superseded");
+    assert_eq!(
+        owner_evidence(),
+        before,
+        "stale-claim refusals change nothing on the owner"
+    );
+    assert!(!before.1, "the bridge never records a certificate");
 }
 
 /// A refused MCP call: an error answer that names `cause`.
@@ -1115,6 +1206,14 @@ if mode == 'running':
         'source_path': raw('orbit.task.artifact.put', {'id': task, 'path': REPORT,
             'source_path': '/etc/passwd'}),
     }
+elif mode == 'stale':
+    scratch = sys.argv[4]
+    get = {'id': task, 'path': MANIFEST}
+    put = {'id': task, 'path': REPORT, 'source_path': os.path.join(scratch, 'report.json')}
+    report['cli_get'] = tool('orbit.task.artifact.get', get)
+    report['cli_put'] = tool('orbit.task.artifact.put', put)
+    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact_get', get),
+                                                ('orbit_task_artifact_put', put)])
 else:
     get = {'id': task, 'path': MANIFEST}
     report['finished'] = tool('orbit.task.artifact.get', get)

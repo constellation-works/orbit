@@ -168,9 +168,13 @@ those records, never from the request. A read must be the pinned manifest and th
 owner returns must be the running attempt's; a write must be a report that parses against the
 review contract and names that attempt. The nested `orbit` reads the report source inside the
 sandbox under `artifact.put`'s own confinement and no-follow open, and sends only its bytes;
-the broker never opens a path the agent names. The owner's claim transaction still fences the
-write. No other coordination tool is forwarded, and a worker whose owner is local, or that runs
-unsandboxed, keeps its existing route.
+the broker never opens a path the agent names. The owner fences both calls on the claim. It
+answers the read and takes the write only while the claim could still take this worker's update:
+the claim must be running or handed off, bound to this leaf, and still the task's current claim.
+A released, failed, revoked or superseded claim is refused as `stale_claim`, and so is a claim
+bound to another run. The refusal changes nothing on the owner, and it applies even while the
+follower's ledger still shows the reviewer running. No other coordination tool is forwarded,
+and a worker whose owner is local, or that runs unsandboxed, keeps its existing route.
 
 **Where the broker lives.** It runs in the `orbit job run-pipeline-worker` process that
 executes the agent step. `run_cli_backend`

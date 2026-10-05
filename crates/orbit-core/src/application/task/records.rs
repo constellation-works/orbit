@@ -193,6 +193,15 @@ impl crate::OrbitRuntime {
             .mutate_execution_claim(context, mutation_id, mutation)
     }
 
+    /// Refuse a worker whose claim could no longer take its own update: the
+    /// read-side fence that matches [`Self::mutate_execution_claim`]'s.
+    pub(crate) fn verify_worker_claim(
+        &self,
+        context: &orbit_store::contracts::ClaimInvocation,
+    ) -> Result<(), OrbitError> {
+        self.stores().tasks().verify_worker_claim(context)
+    }
+
     pub fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
