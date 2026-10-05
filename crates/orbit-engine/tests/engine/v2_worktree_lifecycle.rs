@@ -1677,6 +1677,55 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
     );
 }
 
+/// [ORB-14085] An operator edit to the primary between two dispatches of one
+/// run is not provider drift: the second dispatch must capture a fresh "before"
+/// instead of replaying the clean snapshot of the first. Unstaged edits and new
+/// untracked files change neither HEAD nor the index mtime, so no cache key can
+/// notice them.
+#[cfg(unix)]
+#[test]
+fn primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift() {
+    isolated(
+        "primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-REDISPATCH", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-REDISPATCH"], "jrun-redispatch"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+
+            let provider = fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                "#!/bin/sh\nset -eu\ncat > /dev/null\nprintf 'candidate\\n' > candidate.txt\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}'\n",
+            );
+            let host = host.with_provider(&provider);
+
+            let first =
+                dispatch_linked_provider(&host, "jrun-redispatch", "T-REDISPATCH", &checkout.path)
+                    .expect("first dispatch");
+            assert!(first.success, "{:?}", first.message);
+
+            fs::write(fixture.repo.join("README.md"), "operator edit\n").unwrap();
+            fs::write(fixture.repo.join("operator-notes.txt"), "scratch\n").unwrap();
+
+            let second =
+                dispatch_linked_provider(&host, "jrun-redispatch", "T-REDISPATCH", &checkout.path)
+                    .expect("a primary dirtied between dispatches is not provider drift");
+            assert!(second.success, "{:?}", second.message);
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("README.md")).unwrap(),
+                "operator edit\n"
+            );
+        },
+    );
+}
+
 /// [ORB-14084] `git status --untracked-files=all` lists a nested repository as
 /// one directory, and `git hash-object` cannot hash it. Both checkouts must
 /// still fingerprint — committed repos by HEAD, an unborn repo as

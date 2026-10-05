@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -55,7 +55,7 @@ pub(super) const DIFF_IDENTITY_FLAGS: [&str; 8] = [
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct PrimaryBeforeCacheKey {
+struct PrimaryBeforeKey {
     run_id: String,
     root: PathBuf,
     head: String,
@@ -64,23 +64,21 @@ struct PrimaryBeforeCacheKey {
 
 type PrimaryBeforeCell = OnceLock<Result<GitWorktreeFingerprint, DispatchError>>;
 
-#[derive(Default)]
-struct PrimaryBeforeCache {
-    entries: BTreeMap<PrimaryBeforeCacheKey, Arc<PrimaryBeforeCell>>,
-    recent_runs: VecDeque<String>,
-}
+// Agent fan-out invokes this module concurrently. Per-key OnceLocks make
+// overlapping captures share one snapshot, and each entry is removed as soon as
+// its capture finishes. Nothing outlives the capture: `GIT_OPTIONAL_LOCKS=0`
+// keeps `git status` from refreshing the index, so unstaged edits and new
+// untracked files change neither HEAD nor the index mtime, and a retained
+// snapshot would hand a later dispatch a stale "before". A failed capture is
+// dropped the same way, so the next dispatch retries.
+static PRIMARY_BEFORE_IN_FLIGHT: LazyLock<
+    Mutex<BTreeMap<PrimaryBeforeKey, Arc<PrimaryBeforeCell>>>,
+> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
-const PRIMARY_BEFORE_CACHE_RUN_LIMIT: usize = 128;
-
-// Agent fan-out invokes this module concurrently. Per-key OnceLocks ensure a
-// shared primary snapshot is produced once, while the run LRU bounds daemon
-// memory after completed runs no longer have an explicit owner here.
-static PRIMARY_BEFORE_CACHE: LazyLock<Mutex<PrimaryBeforeCache>> =
-    LazyLock::new(|| Mutex::new(PrimaryBeforeCache::default()));
-
-/// Reuse a primary checkout's pre-provider snapshot within one run while HEAD
-/// and the index mtime remain stable. If the index cannot be identified, fall
-/// back to an uncached fingerprint rather than weakening invalidation.
+/// Capture a primary checkout's pre-provider snapshot, sharing the result with
+/// captures of the same run, HEAD and index that overlap in time. A capture that
+/// starts after another finished always reads Git again. If the index cannot be
+/// identified, fall back to an unshared fingerprint.
 pub(crate) fn cached_primary_before_fingerprint(
     run_id: &str,
     root: &Path,
@@ -89,36 +87,31 @@ pub(crate) fn cached_primary_before_fingerprint(
     let Some(index_mtime) = git_index_mtime(root) else {
         return git_fingerprint_with_head(root, head);
     };
-    let key = PrimaryBeforeCacheKey {
+    let key = PrimaryBeforeKey {
         run_id: run_id.to_string(),
         root: root.to_path_buf(),
         head: head.clone(),
         index_mtime,
     };
     let cell = {
-        let mut cache = match PRIMARY_BEFORE_CACHE.lock() {
-            Ok(cache) => cache,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if let Some(position) = cache.recent_runs.iter().position(|cached| cached == run_id) {
-            cache.recent_runs.remove(position);
-        }
-        cache.recent_runs.push_back(run_id.to_string());
-        if let Some(cell) = cache.entries.get(&key) {
-            Arc::clone(cell)
-        } else {
-            while cache.recent_runs.len() > PRIMARY_BEFORE_CACHE_RUN_LIMIT {
-                if let Some(expired) = cache.recent_runs.pop_front() {
-                    cache.entries.retain(|key, _| key.run_id != expired);
-                }
-            }
-            let cell = Arc::new(OnceLock::new());
-            cache.entries.insert(key, Arc::clone(&cell));
-            cell
-        }
+        let mut in_flight = PRIMARY_BEFORE_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(in_flight.entry(key.clone()).or_default())
     };
-    cell.get_or_init(|| git_fingerprint_with_head(root, head))
-        .clone()
+    let outcome = cell
+        .get_or_init(|| git_fingerprint_with_head(root, head))
+        .clone();
+    let mut in_flight = PRIMARY_BEFORE_IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if in_flight
+        .get(&key)
+        .is_some_and(|current| Arc::ptr_eq(current, &cell))
+    {
+        in_flight.remove(&key);
+    }
+    outcome
 }
 
 fn git_index_mtime(root: &Path) -> Option<SystemTime> {
