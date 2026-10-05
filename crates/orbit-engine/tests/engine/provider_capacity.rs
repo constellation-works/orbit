@@ -22,8 +22,8 @@ use orbit_engine::{
 };
 use orbit_store::Store;
 use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, JobV2, OnDenial, Provider, V2AuditEvent,
-    V2AuditEventKind,
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobV2, JobV2StepBody, OnDenial,
+    Provider, V2AuditEvent, V2AuditEventKind,
 };
 use orbit_types::workflow::{is_provider_capacity_exhausted, is_provider_unavailable};
 use serde_json::{Value, json};
@@ -153,6 +153,13 @@ impl RuntimeHost for CapacityHost {
             .lock()
             .unwrap()
             .push((action.to_string(), input.clone()));
+        if action == "test_stub_candidate_validate" {
+            return Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: "required validation 'make test' did not pass on candidate head"
+                    .to_string(),
+            });
+        }
         Ok(match action {
             "setup" => json!({ "workspace_path": self.worktree, "base_ref": "main" }),
             _ => json!({ "action": action }),
@@ -514,4 +521,41 @@ fn other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt() 
             "case {index}"
         );
     }
+}
+
+/// A required validation failure remains a candidate defect, so it still
+/// spends step recovery and reruns validation on the repaired candidate.
+#[test]
+fn a_required_validation_failure_still_reaches_step_recovery_and_post_recovery_attempt() {
+    let worktree = tempfile::tempdir().unwrap();
+    let fake = FakeProvider::new("codex", "", "", 0, "");
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let mut job = implementation_job(agent_spec(Provider::Codex));
+    let JobV2StepBody::Target(target) = &mut job.steps[1].body else {
+        panic!("the inline validation fixture is a target step");
+    };
+    target.spec = ActivityV2Spec::Deterministic(DeterministicSpec {
+        action: "test_stub_candidate_validate".to_string(),
+        config: json!({ "commands": ["make test"] }),
+    });
+    job.final_recovery_activity = None;
+    job.resolved_final_recovery_activity = None;
+
+    let run = run_job(&job, &host, "validation-recovery-run");
+    let message = failure_message(&run.outcome);
+
+    assert!(
+        message.contains("required validation 'make test' did not pass"),
+        "the validation failure remains the terminal failure: {message}"
+    );
+    assert_eq!(host.calls("test_stub_candidate_validate").len(), 2);
+    assert_eq!(host.calls("step_fix").len(), 1);
+    assert_eq!(
+        count(&run.events, |kind| matches!(
+            kind,
+            V2AuditEventKind::StepPostRecoveryAttempt { .. }
+        )),
+        1,
+        "validation runs once before and once after recovery"
+    );
 }
