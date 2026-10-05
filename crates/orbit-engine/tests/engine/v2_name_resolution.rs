@@ -38,8 +38,9 @@ use orbit_engine::{
 };
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, JobKind, JobV2, JobV2Step, JobV2StepBody, LoopBlock, Provider,
-    TargetRef, validate_job_retired_sessions,
+    ActivityV2, ActivityV2Spec, FanInSpec, FanOutBlock, JobKind, JobV2, JobV2Step, JobV2StepBody,
+    JoinMode, LoopBlock, ParallelBlock, Provider, TargetRef, TargetStep,
+    validate_job_retired_sessions,
 };
 use serde_json::Value;
 
@@ -76,6 +77,292 @@ fn every_shipped_job_resolves_and_passes_execution_validation()
     }
     assert!(validated > 0, "no shipped jobs found");
     Ok(())
+}
+
+/// Conditions cannot read an output whose producer can be skipped independently
+/// of the reader, including fan-in aliases and inherited guards.
+#[test]
+fn validate_job_checks_output_producer_guards() {
+    let flag = "{{ input.flag }} == true";
+    let alias_reader = || validation_target("reader", Some("{{ steps.results.output }} != []"));
+    let guarded_fan = || validation_fan("fan", Some(flag), "results");
+    let plain_fan = || validation_fan("fan", None, "results");
+    let break_expr = "{{ steps.results.output }} != []";
+    let mut guarded_worker = plain_fan();
+    if let JobV2StepBody::FanOut { fan_out, .. } = &mut guarded_worker.body {
+        fan_out.worker.when = Some(flag.to_string());
+    }
+
+    for (case, steps, diagnostic_names) in [
+        (
+            "guarded step output",
+            vec![
+                validation_target("maybe_run", Some(flag)),
+                validation_target("reader", Some("{{ steps.maybe_run.output.done }} == true")),
+            ],
+            vec!["reader", "maybe_run"],
+        ),
+        (
+            "guarded fan-in alias in when",
+            vec![guarded_fan(), alias_reader()],
+            vec!["reader", "fan", "results"],
+        ),
+        (
+            "guarded fan-in alias in break_when",
+            vec![
+                guarded_fan(),
+                validation_loop("reader", None, vec![], Some(break_expr)),
+            ],
+            vec!["reader", "fan", "results"],
+        ),
+        (
+            "fan-in alias inherits a parallel guard",
+            vec![
+                validation_parallel("outer", Some(flag), vec![plain_fan()]),
+                alias_reader(),
+            ],
+            vec!["reader", "fan", "outer", "results"],
+        ),
+        (
+            "shared loop guard covers when and break_when",
+            vec![validation_loop(
+                "outer",
+                Some(flag),
+                vec![plain_fan(), alias_reader()],
+                Some(break_expr),
+            )],
+            vec![],
+        ),
+        (
+            "shared guard cannot cover the fan's own guard",
+            vec![validation_loop(
+                "outer",
+                Some(flag),
+                vec![guarded_fan(), alias_reader()],
+                None,
+            )],
+            vec!["reader", "fan", "results"],
+        ),
+        (
+            "container when runs before the fan-in alias exists",
+            vec![validation_loop(
+                "reader",
+                Some(break_expr),
+                vec![plain_fan()],
+                None,
+            )],
+            vec!["reader", "fan", "results"],
+        ),
+        (
+            "unguarded fan-in alias",
+            vec![plain_fan(), alias_reader()],
+            vec![],
+        ),
+        (
+            "guarded worker does not guard collection",
+            vec![guarded_worker, alias_reader()],
+            vec![],
+        ),
+        (
+            "collect alias may equal its own step id",
+            vec![validation_fan("results", None, "results"), alias_reader()],
+            vec![],
+        ),
+        (
+            "same-id collect alias retains its guard",
+            vec![
+                validation_fan("results", Some(flag), "results"),
+                alias_reader(),
+            ],
+            vec!["reader", "results"],
+        ),
+        (
+            "later step id cannot overwrite collect alias guards",
+            vec![
+                guarded_fan(),
+                alias_reader(),
+                validation_target("results", None),
+            ],
+            vec!["reader", "fan", "results"],
+        ),
+        (
+            "later collect alias cannot overwrite step id guards",
+            vec![
+                validation_target("results", Some(flag)),
+                alias_reader(),
+                plain_fan(),
+            ],
+            vec!["reader", "results"],
+        ),
+        (
+            "later collect alias cannot overwrite earlier alias guards",
+            vec![
+                guarded_fan(),
+                alias_reader(),
+                validation_fan("later", None, "results"),
+            ],
+            vec!["reader", "fan", "results"],
+        ),
+    ] {
+        let mut job = synthetic_job_using_ref("noop");
+        job.steps = steps;
+        if diagnostic_names.is_empty() {
+            validate_job(&job).unwrap_or_else(|error| panic!("{case}: {error}"));
+        } else {
+            let error = validate_job(&job).expect_err(case);
+            let DispatchError::JobValidation(message) = error else {
+                panic!("{case}: expected JobValidation, got {error:?}");
+            };
+            for name in diagnostic_names {
+                assert!(
+                    message.contains(name),
+                    "{case}: diagnostic must name {name}: {message}"
+                );
+            }
+        }
+    }
+}
+
+/// Step IDs remain unique across the entire tree, independently of guards or
+/// output aliases, so a later declaration cannot erase an earlier guard chain.
+#[test]
+fn validate_job_rejects_duplicate_step_ids_across_nested_bodies() {
+    let duplicate = || validation_target("duplicate", None);
+    for (case, steps) in [
+        ("top-level", vec![duplicate(), duplicate()]),
+        (
+            "guard overwrite regression",
+            vec![
+                validation_target("duplicate", Some("{{ input.flag }} == true")),
+                validation_target("reader", Some("{{ steps.duplicate.output }} == true")),
+                duplicate(),
+            ],
+        ),
+        (
+            "parallel branches",
+            vec![validation_parallel(
+                "parallel",
+                None,
+                vec![duplicate(), duplicate()],
+            )],
+        ),
+        (
+            "loop body versus top-level",
+            vec![
+                validation_loop("loop", None, vec![duplicate()], None),
+                duplicate(),
+            ],
+        ),
+        (
+            "fan-out worker versus top-level",
+            vec![
+                validation_fan("fan", None, "results"),
+                validation_target("fan_worker", None),
+            ],
+        ),
+        (
+            "parent versus nested child",
+            vec![validation_loop("duplicate", None, vec![duplicate()], None)],
+        ),
+    ] {
+        let mut job = synthetic_job_using_ref("noop");
+        job.steps = steps;
+        let error = validate_job(&job).expect_err(case);
+        let DispatchError::JobValidation(message) = error else {
+            panic!("{case}: expected JobValidation, got {error:?}");
+        };
+        let id = if case == "fan-out worker versus top-level" {
+            "fan_worker"
+        } else {
+            "duplicate"
+        };
+        assert!(
+            message.contains(id),
+            "{case}: diagnostic must name duplicate id {id}: {message}"
+        );
+        assert!(
+            message.contains("duplicate step id"),
+            "{case}: reject the duplicate before checking guards: {message}"
+        );
+    }
+}
+
+fn validation_step(id: &str, when: Option<&str>, body: JobV2StepBody) -> JobV2Step {
+    JobV2Step {
+        id: id.to_string(),
+        when: when.map(str::to_string),
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        body,
+    }
+}
+
+fn validation_target(id: &str, when: Option<&str>) -> JobV2Step {
+    validation_step(
+        id,
+        when,
+        JobV2StepBody::Target(TargetStep {
+            spec: stub_deterministic_activity("noop").spec,
+            activity_name: None,
+            input_schema_json: None,
+            fs_profile: None,
+            default_input: None,
+            timeout_seconds: 0,
+            session: None,
+        }),
+    )
+}
+
+fn validation_fan(id: &str, when: Option<&str>, collect: &str) -> JobV2Step {
+    validation_step(
+        id,
+        when,
+        JobV2StepBody::FanOut {
+            fan_out: FanOutBlock {
+                items: "{{ input.items }}".to_string(),
+                max_workers: 1,
+                worker: Box::new(validation_target(&format!("{id}_worker"), None)),
+            },
+            fan_in: FanInSpec {
+                join: JoinMode::All,
+                collect: Some(collect.to_string()),
+            },
+        },
+    )
+}
+
+fn validation_loop(
+    id: &str,
+    when: Option<&str>,
+    steps: Vec<JobV2Step>,
+    break_when: Option<&str>,
+) -> JobV2Step {
+    validation_step(
+        id,
+        when,
+        JobV2StepBody::Loop {
+            loop_: LoopBlock {
+                items: None,
+                max_iterations: 1,
+                break_when: break_when.map(str::to_string),
+                steps,
+            },
+        },
+    )
+}
+
+fn validation_parallel(id: &str, when: Option<&str>, branches: Vec<JobV2Step>) -> JobV2Step {
+    validation_step(
+        id,
+        when,
+        JobV2StepBody::Parallel {
+            parallel: ParallelBlock {
+                join: JoinMode::All,
+                branches,
+            },
+        },
+    )
 }
 
 fn scenario_a_catalog_loads_new_activities() -> Result<(), Box<dyn std::error::Error>> {
