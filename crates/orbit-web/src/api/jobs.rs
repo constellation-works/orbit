@@ -21,6 +21,13 @@ use super::routines::{
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
 
+/// Failure outcomes shared by the dashboard tile and run-list filters.
+pub(super) const FAILED_RUN_STATES: [JobRunState; 3] = [
+    JobRunState::Failed,
+    JobRunState::Timeout,
+    JobRunState::Interrupted,
+];
+
 /// Submit a catalog job in the selected workspace.
 /// Delivery pipelines need task input and are deliberately unavailable through
 /// this no-input action. The UI directs operators to Ship or Drain for those.
@@ -179,23 +186,24 @@ fn list_job_runs_for_state(
             Some(limit),
         ))
     };
-    match state {
-        JobRunListState::All => list(None, false),
-        JobRunListState::Failed => list(Some(JobRunState::Failed), false),
-        JobRunListState::Concrete(run_state) => list(Some(run_state), false),
-        JobRunListState::Terminal => list(None, true),
-        JobRunListState::Active => {
-            let mut runs = list(Some(JobRunState::Pending), false)?;
-            runs.extend(list(Some(JobRunState::Running), false)?);
-            runs.sort_by(|left, right| {
-                job_run_timestamp(right)
-                    .cmp(&job_run_timestamp(left))
-                    .then_with(|| left.run_id.cmp(&right.run_id))
-            });
-            runs.truncate(limit);
-            Ok(runs)
-        }
+    let states: &[JobRunState] = match state {
+        JobRunListState::All => return list(None, false),
+        JobRunListState::Concrete(run_state) => return list(Some(run_state), false),
+        JobRunListState::Terminal => return list(None, true),
+        JobRunListState::Failed => &FAILED_RUN_STATES,
+        JobRunListState::Active => &[JobRunState::Pending, JobRunState::Running],
+    };
+    let mut runs = Vec::new();
+    for &run_state in states {
+        runs.extend(list(Some(run_state), false)?);
     }
+    runs.sort_by(|left, right| {
+        job_run_timestamp(right)
+            .cmp(&job_run_timestamp(left))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+    runs.truncate(limit);
+    Ok(runs)
 }
 
 fn count_job_runs_for_state(
@@ -206,17 +214,18 @@ fn count_job_runs_for_state(
     let count = |run_state, terminal_only| {
         runtime.count_job_runs(job_run_list_params(query, run_state, terminal_only, None))
     };
-    match state {
-        JobRunListState::All => count(None, false),
-        JobRunListState::Failed => count(Some(JobRunState::Failed), false),
-        JobRunListState::Concrete(run_state) => count(Some(run_state), false),
-        JobRunListState::Terminal => count(None, true),
-        JobRunListState::Active => {
-            let pending = count(Some(JobRunState::Pending), false)?;
-            let running = count(Some(JobRunState::Running), false)?;
-            Ok(pending.saturating_add(running))
-        }
+    let states: &[JobRunState] = match state {
+        JobRunListState::All => return count(None, false),
+        JobRunListState::Concrete(run_state) => return count(Some(run_state), false),
+        JobRunListState::Terminal => return count(None, true),
+        JobRunListState::Failed => &FAILED_RUN_STATES,
+        JobRunListState::Active => &[JobRunState::Pending, JobRunState::Running],
+    };
+    let mut total = 0_u64;
+    for &run_state in states {
+        total = total.saturating_add(count(Some(run_state), false)?);
     }
+    Ok(total)
 }
 
 fn job_run_list_params(

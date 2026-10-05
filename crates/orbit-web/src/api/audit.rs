@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 use super::denials::{collect_denial_rows, denials_by_reason_summary, denials_by_tool_summary};
 use super::incidents::{ROLLUP_SCAN_LIMIT, failure_category_summaries};
+use super::jobs::FAILED_RUN_STATES;
 use super::{
     AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, HISTORY_DEFAULT_LIMIT,
     HISTORY_MAX_LIMIT, bad_request, blocking, bounded_limit, map_runtime_error, server_error,
@@ -718,19 +719,15 @@ fn count_failed_runs(
     since: DateTime<Utc>,
 ) -> Result<i64, orbit_core::OrbitError> {
     let mut total: u64 = 0;
-    for state in [
-        JobRunState::Failed,
-        JobRunState::Timeout,
-        JobRunState::Interrupted,
-    ] {
-        total += runtime.count_job_runs(JobRunListParams {
+    for state in FAILED_RUN_STATES {
+        total = total.saturating_add(runtime.count_job_runs(JobRunListParams {
             job_id: None,
             state: Some(state),
             terminal_only: false,
             since: Some(since),
             limit: None,
             ..Default::default()
-        })?;
+        })?);
     }
     Ok(i64::try_from(total).unwrap_or(i64::MAX))
 }

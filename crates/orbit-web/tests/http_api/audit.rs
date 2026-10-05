@@ -2,11 +2,98 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::{
-    AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery, OrbitError,
+    AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery, JobRunState,
+    OrbitError,
 };
 use serde_json::json;
 
 use super::support::{Fixture, isolated, json_ok};
+
+#[test]
+fn failed_runs_tile_matches_filtered_terminal_runs() {
+    isolated(
+        "audit::failed_runs_tile_matches_filtered_terminal_runs",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            for (index, (id, state)) in [
+                ("success", JobRunState::Success),
+                ("failed", JobRunState::Failed),
+                ("timeout", JobRunState::Timeout),
+                ("cancelled", JobRunState::Cancelled),
+                ("interrupted", JobRunState::Interrupted),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut run = fixture.seed_run(id, "terminal", state);
+                let timestamp = now - Duration::seconds(5 - index as i64);
+                run.created_at = timestamp;
+                run.started_at = Some(timestamp);
+                run.finished_at = Some(timestamp);
+                fixture.save_run(&run);
+            }
+            // A known job with no runs, so the job filter is an empty match
+            // rather than an unknown-job refusal.
+            fixture.job("other");
+
+            let server = fixture.server(false);
+            let summary =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            let filtered = json_ok(
+                server
+                    .request("GET", "/api/job-runs")
+                    .query(&[
+                        ("workspace", "ws_http_fixture"),
+                        ("state", "failed"),
+                        ("since", summary["since"].as_str().unwrap()),
+                    ])
+                    .send()
+                    .unwrap(),
+            );
+            assert_eq!(summary["failed_runs"], 3);
+            assert_eq!(summary["failed_runs"], filtered["total"]);
+            let ids = |page: &serde_json::Value| {
+                page["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|run| run["run_id"].as_str().unwrap().to_string())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&filtered), ["interrupted", "timeout", "failed"]);
+            assert_eq!(filtered["truncated"], false);
+            let bounded = json_ok(server.get(
+                "/api/job-runs?state=failed&limit=2&job_id=terminal&workspace=ws_http_fixture",
+            ));
+            assert_eq!(bounded["total"], 3);
+            assert_eq!(bounded["truncated"], true);
+            assert_eq!(ids(&bounded), ["interrupted", "timeout"]);
+            let aggregate = json_ok(server.get("/api/job-runs/all?state=failed&limit=2"));
+            assert_eq!(ids(&aggregate), ids(&bounded));
+            let all_failures = json_ok(server.get("/api/job-runs/all?state=failed"));
+            assert_eq!(ids(&all_failures), ids(&filtered));
+            let unrelated = json_ok(
+                server.get("/api/job-runs?state=failed&job_id=other&workspace=ws_http_fixture"),
+            );
+            assert_eq!(unrelated["total"], 0);
+            assert!(ids(&unrelated).is_empty());
+            let future = (now + Duration::hours(1)).to_rfc3339();
+            let future_page = json_ok(
+                server
+                    .request(
+                        "GET",
+                        "/api/job-runs?state=failed&workspace=ws_http_fixture",
+                    )
+                    .query(&[("since", future)])
+                    .send()
+                    .unwrap(),
+            );
+            assert_eq!(future_page["total"], 0);
+            assert!(ids(&future_page).is_empty());
+        },
+    );
+}
 
 fn row(id: &str, tool: Option<&str>, status: AuditEventStatus) -> AuditEventInsertParams {
     AuditEventInsertParams {
