@@ -122,7 +122,21 @@ impl Execute for ToolRunArgs {
         // `orbit.task.show` is bootstrapped via RuntimeNeed::TaskOwner so an
         // id-only call is not cwd-bound [ORB-10961]. An explicit `workspace`
         // in the tool input is still a fail-closed filter through this bind.
-        let bound = RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input)?;
+        // A remote claimed reviewer confirms `workspace` against the
+        // immutable worker binding in Core's narrow bridge. Resolving that
+        // owner selector as a local checkout here would either fail before
+        // the bridge or replace the worker runtime with owner state.
+        let claimed_review_artifact = matches!(
+            self.name.as_str(),
+            "orbit.task.artifact.get" | "orbit.task.artifact.put"
+        ) && runtime
+            .worker_invocation()
+            .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id);
+        let bound = if claimed_review_artifact {
+            None
+        } else {
+            RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input)?
+        };
         let runtime = bound.as_ref().unwrap_or(runtime);
 
         if self.dry_run {

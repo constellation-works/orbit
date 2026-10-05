@@ -351,6 +351,22 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
     (cli, requested, legacy)
 }
 
+/// Whether the public tool CLI is asking for one of the two claimed-review
+/// artifacts. The tool name only selects the bootstrap path; the worker's
+/// protected invocation record supplies and limits its authority.
+fn claimed_review_artifact_tool(command: &command::Commands) -> bool {
+    let command::Commands::Tool(tool) = command else {
+        return false;
+    };
+    let command::tool::ToolSubcommand::Run(args) = &tool.command else {
+        return false;
+    };
+    matches!(
+        args.name.as_str(),
+        "orbit.task.artifact.get" | "orbit.task.artifact.put"
+    )
+}
+
 fn main() {
     // This is the production entry point for CLI, MCP, sweep clock, and the
     // dashboard (`orbit web serve`). Test harnesses never execute this main.
@@ -483,63 +499,93 @@ fn main() {
         }
     };
 
-    let bootstrapped = match &runtime_need {
-        RuntimeNeed::Forbidden => {
-            // A runtime-forbidden command has no store to authorize or audit
-            // against. None is governed; `Commands::operation` is exhaustive, so
-            // a future one that is would have to resolve this first.
-            debug_assert!(
-                governed.is_none(),
-                "a governed operation must be able to reach the authorization chokepoint"
-            );
-            let result = dispatch(
-                cli.command,
-                DispatchContext::without_runtime(
+    // A claimed reviewer addresses the owner's task by ID, but the follower's
+    // task registry intentionally has no local copy. Bootstrap this one
+    // artifact tool in the worker's bound checkout so Core can carry it over
+    // the authenticated run broker. The worker binding is restored from the
+    // host's protected invocation record; request fields never select this
+    // path. ToolRunArgs validates any explicit selector against that binding.
+    let claimed_review_artifact = claimed_review_artifact_tool(&cli.command);
+    let claimed_review_worker = if claimed_review_artifact && workspace_selector.is_none() {
+        let global_root = match orbit_core::runtime::resolve_global_root() {
+            Ok(root) => root,
+            Err(error) => {
+                print_error(&error, &sink, json_error_preference);
+                std::process::exit(1);
+            }
+        };
+        match orbit_core::OrbitRuntime::current_worker_invocation(&global_root) {
+            Ok(binding) => binding
+                .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id),
+            Err(error) => {
+                print_error(&error, &sink, json_error_preference);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        false
+    };
+    let bootstrapped = if claimed_review_worker {
+        RegisteredRuntimeFactory::initialize_with_overrides(root_override.as_deref(), None)
+    } else {
+        match &runtime_need {
+            RuntimeNeed::Forbidden => {
+                // A runtime-forbidden command has no store to authorize or audit
+                // against. None is governed; `Commands::operation` is exhaustive, so
+                // a future one that is would have to resolve this first.
+                debug_assert!(
+                    governed.is_none(),
+                    "a governed operation must be able to reach the authorization chokepoint"
+                );
+                let result = dispatch(
+                    cli.command,
+                    DispatchContext::without_runtime(
+                        root_override.as_deref(),
+                        workspace_selector.as_deref(),
+                    ),
+                );
+                finish_command(result, &sink, suppress_errors, json_error_preference);
+                return;
+            }
+            RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+            ),
+            RuntimeNeed::SelectedWorkspace { selector } => {
+                RegisteredRuntimeFactory::initialize_with_overrides(
+                    root_override.as_deref(),
+                    Some(selector),
+                )
+            }
+            RuntimeNeed::PipelineWorker => {
+                RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                )
+            }
+            RuntimeNeed::ReadOnly => match task_owner_id.as_deref() {
+                Some(task_id) => orbit_cmd::task_owner::initialize_for_task_show(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                    task_id,
+                ),
+                None => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
                     root_override.as_deref(),
                     workspace_selector.as_deref(),
                 ),
-            );
-            finish_command(result, &sink, suppress_errors, json_error_preference);
-            return;
-        }
-        RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
-            root_override.as_deref(),
-            workspace_selector.as_deref(),
-        ),
-        RuntimeNeed::SelectedWorkspace { selector } => {
-            RegisteredRuntimeFactory::initialize_with_overrides(
-                root_override.as_deref(),
-                Some(selector),
-            )
-        }
-        RuntimeNeed::PipelineWorker => {
-            RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
-                root_override.as_deref(),
-                workspace_selector.as_deref(),
-            )
-        }
-        RuntimeNeed::ReadOnly => match task_owner_id.as_deref() {
-            Some(task_id) => orbit_cmd::task_owner::initialize_for_task_show(
+            },
+            RuntimeNeed::PluginReadOnly => {
+                RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                )
+            }
+            RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
                 root_override.as_deref(),
                 workspace_selector.as_deref(),
                 task_id,
             ),
-            None => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
-                root_override.as_deref(),
-                workspace_selector.as_deref(),
-            ),
-        },
-        RuntimeNeed::PluginReadOnly => {
-            RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
-                root_override.as_deref(),
-                workspace_selector.as_deref(),
-            )
         }
-        RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
-            root_override.as_deref(),
-            workspace_selector.as_deref(),
-            task_id,
-        ),
     };
 
     let runtime = match bootstrapped {

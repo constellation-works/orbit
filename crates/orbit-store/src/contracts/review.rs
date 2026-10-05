@@ -86,6 +86,14 @@ pub trait ReviewStoreBackend: Send + Sync {
         lineage_key: &str,
     ) -> Result<Option<ReviewLedger>, OrbitError>;
 
+    /// The ledgers whose attempt `run_id` still holds — open under it, or
+    /// with its reviewer running. A read: nothing is released or charged.
+    fn review_ledgers_held_by(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<ReviewLedger>, OrbitError>;
+
     /// Reserve a reviewer start. An open attempt for the same candidate and
     /// task meaning is resumed rather than charged again; a different
     /// candidate releases the open attempt as incomplete, charging its

@@ -7,7 +7,7 @@ status: Draft
 tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
-related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, F2026-09-230]
+related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
 last_updated: 2026-10-04
 last_validated: 2026-09-26
 ---
@@ -20,7 +20,9 @@ sandboxed agent step gets a per-run socket with kernel peer authentication. With
 server UID. The broker executes authenticated requests for exec-backed plugin tools through
 the audited dispatch, under the run's own record and the §5 profile (§4.4, "As implemented").
 It also runs the read-only `github.*` tools on the host, so they authenticate with the host's
-`gh` while the sandbox keeps `~/.config/gh` masked (§3).
+`gh` while the sandbox keeps `~/.config/gh` masked (§3), and it carries a claimed before-PR
+reviewer's manifest read and report write to the claim's remote owner, so SSH runs outside the
+sandbox that masks `~/.ssh` (§3, "Claimed-review artifacts").
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
@@ -150,7 +152,25 @@ tool, and the broker runs them on the host with its own `gh` credentials, in the
 worktree. Their output is the tool's own bounded, redacted projection; no token, config or
 credential enters the sandbox. Forwarding a `GH_TOKEN` into the sandbox was rejected: the
 agent and every command it runs could read it, and it would bypass the tools' redaction.
-Nothing that changes GitHub is on the list, and no other built-in is ever brokered.
+Nothing that changes GitHub is on the list.
+
+**Claimed-review artifacts.** The only other built-ins the broker carries are a claimed
+before-PR reviewer's `orbit.task.artifact.get` of `review-manifest.json` and
+`orbit.task.artifact.put` of `review-report.json`. A claimed leaf's task lives on its owner,
+another machine reached over SSH, and every agent sandbox masks `~/.ssh` (policy-sandbox
+[2_design.md](../policy-sandbox/2_design.md) §7.1), so the reviewer's own SSH route can only fail
+host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested `orbit` of a worker whose
+claim names a remote owner sends exactly these two calls to the broker. The broker carries
+them only for the reviewer activity (`agent_review_repair`) of the run bound to the claim, and
+only while the review ledger shows one open attempt, admitted by that leaf, whose reviewer is
+running in this run before its deadline. It takes the task, claim, owner and attempt from
+those records, never from the request. A read must be the pinned manifest and the manifest the
+owner returns must be the running attempt's; a write must be a report that parses against the
+review contract and names that attempt. The nested `orbit` reads the report source inside the
+sandbox under `artifact.put`'s own confinement and no-follow open, and sends only its bytes;
+the broker never opens a path the agent names. The owner's claim transaction still fences the
+write. No other coordination tool is forwarded, and a worker whose owner is local, or that runs
+unsandboxed, keeps its existing route.
 
 **Where the broker lives.** It runs in the `orbit job run-pipeline-worker` process that
 executes the agent step. `run_cli_backend`
@@ -171,7 +191,8 @@ behind `orbit-core`, not `orbit-engine`, so the listener reaches dispatch throug
 existing host seam (`RuntimeHost`) and not through a new crate dependency.
 
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
-registration is a plugin backend, plus the five host-credentialed reads above. That covers `orbit tool run <ns>.<verb>`, its
+registration is a plugin backend, plus the five host-credentialed reads and the claimed
+reviewer's two artifact calls above. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
 schemas and `--help` still come from the nested `orbit`. Those need only the plugin rows,
 install trees and grant witnesses, which stay readable. Calls that are not made from inside an
@@ -349,6 +370,26 @@ service side regardless.
   identity despite spoofed environment variables, then verifies teardown. It reports a
   skip where Bubblewrap cannot create a namespace. The existing engine sandbox harness
   separately covers provider exit, timeout and broker-start failure.
+- A claimed reviewer's artifact call
+  (`crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs`) passes the same `cwd`,
+  allowlist or deny-policy and agent-facing checks, then derives its scope from the runtime's
+  worker binding, the run record and the review ledger, refuses any request field beyond `id`,
+  `path`, `model` and (for a write) `content_base64`, and routes through the runtime's owner
+  coordinator, the route the step runner itself uses for the claim. Refusals carry
+  `claimed_review_bridge_refused` and, for an attempt that is no longer running or a manifest
+  for another attempt, `review_attempt_stale` or `review_manifest_stale`. The nested `orbit`
+  sends the report as base64 so a full 1 MiB artifact fits the request frame. The broker writes
+  the one audit row (brokered, peer PID, the run's task and activity); the owner's row names the
+  follower as caller over `ssh-mcp`.
+- `crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs` drives a reviewer inside the
+  real agent sandbox (Bubblewrap on Linux, `sandbox-exec` on macOS) through both the CLI and
+  MCP against a real owner home reached by an `ssh` stand-in that needs `~/.ssh/known_hosts`,
+  with the claim from a real probe, pull and bind. It checks that direct SSH fails inside the
+  sandbox, that the manifest and report cross with exact bytes, that a lost answer is retried,
+  and that stale, forged, cross-task and out-of-workspace requests, another activity and a
+  stopped broker are refused. It skips where the platform sandbox cannot start.
+  `dispatch/tests/claimed_review.rs` covers the broker's scope and refusals over the real
+  socket on any Unix host.
 - `crates/orbit-cli/tests/tool/github_broker_sandbox.rs` compiles the agent sandbox the way a
   launch does (credential and plugin masks, the host's execution-env policy) around a
   stand-in `gh` that needs the host's config. A direct `gh` fails inside it, `orbit tool run
@@ -478,7 +519,9 @@ anything:
   `plugin_broker_unavailable`. The nested `orbit` never falls back to in-process execution:
   the mask hides the backend's state, and the secret store reads as empty. The five
   `github.*` reads are refused the same way, as `capability_denied` naming the masked
-  `~/.config/gh` and the missing broker, instead of running `gh` into its login prompt.
+  `~/.config/gh` and the missing broker, instead of running `gh` into its login prompt. A
+  claimed reviewer's artifact call with a remote owner is refused as `capability_denied`
+  naming the masked `~/.ssh` and the missing broker, instead of attempting SSH.
 - The secret store never treats a sentinel directory or a permission error as "no secrets
   set". Today `PluginSecretStore::read` maps only `NotFound` to an empty file. The masked
   directory must refuse, not read as an empty directory, because an empty `context.secrets`
@@ -525,6 +568,8 @@ anything:
 | The broker is at its concurrency limit | `plugin_broker_busy`, `retryable: true`. |
 | Peer authentication fails | The connection is closed with no reply. The client reports `plugin_broker_unavailable` and the host logs the refusal. |
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
+| A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
+| A claimed reviewer's artifact call cannot reach the broker | `plugin_broker_unavailable`, naming this run's coordinator as stopped; the reviewer must not route around the sandbox. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |
 
 A call the broker accepts but cannot run is answered with the codes in §4.4 ("As
@@ -571,5 +616,6 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-13009] — the host secret store and per-call delivery the broker reuses.
 - [ORB-13236], [ORB-13237], [ORB-13238], [ORB-13239] — the implementation slices in §8.
 - [ORB-14017] — the host-credentialed `github.*` reads (§3).
+- [ORB-14194] — the claimed-review artifact route (§3).
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

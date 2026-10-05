@@ -23,7 +23,10 @@ use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
 use serde_json::Value;
 
-pub(crate) use client::{forward_call, refuse_unbrokered_call, refuse_unbrokered_host_read};
+pub(crate) use client::{
+    ForwardCallError, forward_call, forward_call_with_status, refuse_unbrokered_call,
+    refuse_unbrokered_host_read,
+};
 pub(crate) use peer::PeerAnchor;
 pub(crate) use protocol::{BrokerRequest, EntryPoint};
 pub(crate) use socket::sweep_orphaned;
@@ -35,7 +38,7 @@ use socket::RunSocketDir;
 /// read-only `github.*` discovery surface. Each runs `gh` with the host
 /// account's credentials, which every agent sandbox masks, so a confined
 /// agent can reach them only through the host. The list is closed: nothing
-/// that changes GitHub, and no other built-in, is ever brokered.
+/// that changes GitHub is ever brokered.
 const HOST_CREDENTIALED_READS: [&str; 5] = [
     "github.auth.status",
     "github.pr.list",
@@ -47,6 +50,19 @@ const HOST_CREDENTIALED_READS: [&str; 5] = [
 /// Whether `tool` is a built-in read the broker runs on the host.
 pub(crate) fn is_host_credentialed_read(tool: &str) -> bool {
     HOST_CREDENTIALED_READS.contains(&tool)
+}
+
+/// The other built-ins a broker runs (design §3): a claimed before-PR
+/// reviewer's manifest read and report write. The owner of a claimed task is
+/// another machine, reached over SSH, whose credentials every agent sandbox
+/// masks. The broker answers them only for that reviewer, scoped by its own
+/// records to the claimed task and the attempt whose reviewer is running.
+const CLAIMED_REVIEW_ARTIFACT_TOOLS: [&str; 2] =
+    ["orbit.task.artifact.get", "orbit.task.artifact.put"];
+
+/// Whether `tool` is a claimed reviewer's artifact call the broker carries.
+pub(crate) fn is_claimed_review_artifact(tool: &str) -> bool {
+    CLAIMED_REVIEW_ARTIFACT_TOOLS.contains(&tool)
 }
 
 /// Executes one authenticated request for the run a broker serves.

@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-10-04
 ---
 
@@ -398,6 +398,15 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   leaf; an agent that reports an unreachable owner store is a prompt or
   binary mismatch, not a transport problem (check the follower's binary is
   current).
+- The before-PR reviewer of a claimed leaf is the one agent that reads and
+  writes owner artifacts: `review-manifest.json` and `review-report.json`.
+  Its nested `orbit` hands exactly those two calls, from the CLI or MCP, to
+  the run's coordinator (the step runner's broker, outside the sandbox),
+  which checks them against the claim and the running review attempt and
+  carries them to the owner over this follower's SSH route. Anything else is
+  refused without reaching the owner. Refusals and their recovery are in the
+  [claimed-review artifacts runbook](./claimed-review-artifacts.md); none is
+  fixed by loosening the sandbox.
 - An owner that refuses a request is checked against its receipt first: a
   committed claim is carried forward, and only a request the owner holds no
   receipt for is closed (`Refused`) and its slot returned.
@@ -1002,7 +1011,11 @@ owner's `orbit.drain.claims` shows it `running` on the follower's machine,
 the follower's `orbit run show <leaf-run-id>` shows the claimed PR leaf and its `Claim:` line, and
 after handoff the owner task is in `review` with the PR attached and nothing
 merged. With before-PR review on, the owner task also carries
-`review-gate.json` and the reviewer's verdict comment.
+`review-gate.json` and the reviewer's verdict comment, and the follower's
+audit holds one brokered `orbit.task.artifact.get` and one
+`orbit.task.artifact.put` for the leaf (the smoke procedure in the
+[claimed-review artifacts runbook](./claimed-review-artifacts.md) reads
+them).
 
 ## Rollback
 

@@ -19,9 +19,7 @@ use serde_json::Value;
 use super::ExecCtx;
 use crate::activity_job::cli_runner::DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS;
 use crate::context::ReviewerInvocationRequest;
-
-/// The catalog activity a before-PR reviewer runs as.
-const REVIEWER_ACTIVITY: &str = "agent_review_repair";
+use crate::review_gate::REVIEWER_ACTIVITY;
 
 /// A reviewer invocation in flight, reported finished on [`Self::finish`].
 pub(super) struct ReviewerInvocation {

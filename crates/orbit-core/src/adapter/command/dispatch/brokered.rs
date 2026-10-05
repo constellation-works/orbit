@@ -1,7 +1,8 @@
 //! The host side of a run's plugin broker: execute one authenticated request
-//! — a plugin tool, or one of the read-only `github.*` built-ins that need the
-//! host's `gh` credentials — through the audited dispatch, under the run's
-//! authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
+//! — a plugin tool, one of the read-only `github.*` built-ins that need the
+//! host's `gh` credentials, or a claimed reviewer's manifest read or report
+//! write that needs the claim's owner route — through the audited dispatch,
+//! under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
 //! identity, filesystem profile and program policy — comes from the
@@ -28,6 +29,7 @@ use crate::runtime::plugin::broker::{
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
 use super::audit::{AuditContext, brokered_agent_identity, brokered_role_label};
+use super::claimed_review::is_claimed_review_artifact;
 use super::execute::{BrokeredAudit, ToolEntryPoint};
 
 /// Executes a broker's requests for the one run it serves.
@@ -190,6 +192,25 @@ impl BrokerDispatch for RunDispatch {
                 audit,
                 |input| {
                     checked?;
+                    // The claimed reviewer's manifest read and report write
+                    // reach the owner over the claim's route, which the
+                    // sandbox cannot open; the broker carries exactly those.
+                    if is_claimed_review_artifact(&tool) {
+                        self.runtime.ensure_tool_agent_facing(&tool)?;
+                        self.refuse_outside_activity_policy(&tool)?;
+                        if let Some(policy) = &run.tool_deny_policy
+                            && policy.denies(&tool)
+                        {
+                            return Err(OrbitError::PolicyDenied(policy.denial_message(&tool)));
+                        }
+                        return super::claimed_review::execute_brokered(
+                            &self.runtime,
+                            run,
+                            &tool,
+                            input,
+                            session_context,
+                        );
+                    }
                     // A built-in tool is answered by the nested `orbit`
                     // itself; the broker exists to run plugin backends and
                     // the closed set of reads that need the host's `gh`
@@ -198,8 +219,9 @@ impl BrokerDispatch for RunDispatch {
                         && !is_host_credentialed_read(&tool)
                     {
                         return Err(OrbitError::PolicyDenied(format!(
-                            "the plugin broker runs plugin tools and the read-only github.* \
-                             tools only; '{tool}' is neither"
+                            "the plugin broker runs plugin tools, the read-only github.* tools \
+                             and a claimed reviewer's artifact calls only; '{tool}' is none of \
+                             these"
                         )));
                     }
                     self.runtime.ensure_tool_agent_facing(&tool)?;

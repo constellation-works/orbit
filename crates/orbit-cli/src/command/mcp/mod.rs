@@ -6,6 +6,8 @@
 //! JSON schemas, and `orbit mcp listen` serves that same surface on a TCP
 //! socket for deployments that need one.
 
+#[cfg(unix)]
+mod claimed_review;
 mod command;
 mod listen;
 mod server;

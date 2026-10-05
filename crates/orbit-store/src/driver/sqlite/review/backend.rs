@@ -74,6 +74,14 @@ impl ReviewStoreBackend for Store {
         self.with_read_connection(|conn| read_ledger(conn, workspace_id, lineage_key))
     }
 
+    fn review_ledgers_held_by(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<ReviewLedger>, OrbitError> {
+        self.with_read_connection(|conn| ledgers_held_by(conn, workspace_id, run_id))
+    }
+
     fn review_reserve(
         &self,
         workspace_id: &str,
