@@ -295,9 +295,11 @@ fails before Orbit commits, pushes, or updates the task.
 When a completion attempt was blocked after promotion, resume restores `review`
 only when its reused host promotion checkpoint names the task and its latest
 status history proves that this source run or an ancestor blocked it from
-`review`. The checkpoint must precede unfinished PR completion, the submitted
-run must carry `completion: done`, and the task must still belong to that retry
-lineage and the same PR. The restoration records `resume_review_restored`, the
+`review`. The checkpoint must be in the reused successful prefix; it remains
+valid when a later non-completion step fails or the scan reaches the end of the
+job. This includes re-review steps after PR completion. The submitted run must
+carry `completion: done`, and the task must still belong to that retry lineage
+and the same PR. The restoration records `resume_review_restored`, the
 source and resumed run IDs, and the blocking run in task history. Repeating the
 resume while the task is already in review adds no restoration event.
 

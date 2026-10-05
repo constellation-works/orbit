@@ -363,7 +363,6 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
         "early",
         "missing_review",
         "missing_checkpoint",
-        "missing_completion",
         "no_authority",
         "unrelated",
         "superseding",
@@ -412,19 +411,6 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
                     json!({"phase":"promote","performed_task_ids":[fx.task],"pr_number":"42"});
                 state.record_step(2, JobRunState::Success, Some(output.clone()), None);
                 state.record_pipeline_output("promote_tasks", output);
-            }
-            "missing_completion" => {
-                // Remove completion from the catalog definition: a promotion
-                // checkpoint alone is not a completion-tail retry.
-                let path = fx
-                    .cli
-                    .home
-                    .join(".orbit/resources/jobs")
-                    .join(format!("{JOB}.yaml"));
-                let mut job: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-                job["spec"]["steps"][4]["spec"]["action"] = json!("sleep");
-                job["spec"]["steps"][4]["default_input"]["seconds"] = json!(0);
-                fs::write(path, job.to_string()).unwrap();
             }
             "no_authority" => {
                 fx.db
@@ -498,12 +484,7 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
         }
         fx.runtime.write_run_state(&fx.run, &state).unwrap();
         let before = fx.runtime.get_task(&fx.task).unwrap();
-        let expected = if case == "missing_completion" {
-            "success"
-        } else {
-            "failed"
-        };
-        fx.resume(&fx.run, expected);
+        fx.resume(&fx.run, "failed");
         let after = fx.runtime.get_task(&fx.task).unwrap();
         if case == "early" {
             assert_eq!(after.status, TaskStatus::InProgress);
@@ -566,6 +547,133 @@ fn latest_status_event(fx: &Delivery) -> orbit_types::task::TaskHistoryEntry {
         .rev()
         .find(|entry| entry.to_status.is_some())
         .unwrap()
+}
+
+/// Promotion remains reused when a later non-completion step fails or the
+/// scan exhausts the job. Neither skipped promotion nor an operator block
+/// grants restoration authority.
+#[test]
+fn resume_preserves_promotion_across_non_completion_tails() {
+    if !isolated("resume_preserves_promotion_across_non_completion_tails") {
+        return;
+    }
+    let forge_root = tempfile::tempdir().unwrap();
+    forge(forge_root.path(), false);
+    for case in [
+        "failed_tail",
+        "post_completion_tail",
+        "finished_scan",
+        "early",
+        "manual_block",
+    ] {
+        let fx = Delivery::new();
+        if case == "early" {
+            fx.skip_promotion();
+        } else {
+            fx.promote();
+        }
+        if case == "manual_block" {
+            fx.runtime
+                .run_tool(
+                    "orbit.task.update",
+                    json!({
+                        "id": fx.task, "status": "blocked", "model": "codex",
+                        "note": "Operator holds this delivery."
+                    }),
+                )
+                .unwrap();
+        } else {
+            fx.block_handoff(
+                "review_gate_escalation",
+                &failure_handoff_note("review_gate_escalation", &fx.run),
+            );
+        }
+        fx.fail(&fx.run);
+
+        // Model a re-review tail after promotion. It must fail if executed;
+        // the finished-scan case instead reuses its successful checkpoint.
+        let path = fx
+            .cli
+            .home
+            .join(".orbit/resources/jobs")
+            .join(format!("{JOB}.yaml"));
+        let mut job: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let tail = json!({
+            "id": "re_review_tail",
+            "default_input": {"result": {"status": "failed", "run_id": "tail-sentinel"}},
+            "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}
+        });
+        let mut state = fx.runtime.read_run_state(&fx.run).unwrap().unwrap();
+        let tail_index = if case == "post_completion_tail" {
+            // Successful PR completion may request re-review while leaving
+            // the task in review, as the shipped workflow does after a rebase.
+            let output = json!({"re_review_required": true});
+            state.record_step(4, JobRunState::Success, Some(output.clone()), None);
+            state.record_pipeline_output("complete_pr", output);
+            job["spec"]["steps"].as_array_mut().unwrap().push(tail);
+            5
+        } else {
+            job["spec"]["steps"][4] = tail;
+            4
+        };
+        fs::write(path, job.to_string()).unwrap();
+        if case == "finished_scan" {
+            let output = json!({"status": "success"});
+            state.record_step(tail_index, JobRunState::Success, Some(output.clone()), None);
+            state.record_pipeline_output("re_review_tail", output);
+        } else {
+            state.record_step(tail_index, JobRunState::Failed, None, None);
+        }
+        fx.runtime.write_run_state(&fx.run, &state).unwrap();
+        let original_history = fx.runtime.get_task_history(&fx.task).unwrap();
+        let before = fx.runtime.get_task(&fx.task).unwrap();
+        fx.resume(
+            &fx.run,
+            if case == "finished_scan" {
+                "success"
+            } else {
+                "failed"
+            },
+        );
+        let history = fx.runtime.get_task_history(&fx.task).unwrap();
+        assert_eq!(
+            &history[..original_history.len()],
+            original_history.as_slice(),
+            "{case}"
+        );
+        assert_eq!(
+            fx.runtime.read_run_state(&fx.run).unwrap().unwrap(),
+            state,
+            "{case}"
+        );
+        if case == "manual_block" {
+            assert_eq!(fx.runtime.get_task(&fx.task).unwrap(), before);
+            assert_eq!(history, original_history, "operator block stays untouched");
+        } else {
+            let expected = if case == "early" {
+                TaskStatus::InProgress
+            } else {
+                TaskStatus::Review
+            };
+            assert_eq!(
+                fx.status(),
+                expected,
+                "ORB-14047: {case} must retain its reused delivery stage"
+            );
+            let restored = latest_status_event(&fx);
+            assert_eq!(
+                restored.event,
+                if case == "early" {
+                    "resume_readmitted"
+                } else {
+                    "resume_review_restored"
+                },
+                "{case}"
+            );
+            assert_eq!(restored.from_status, Some(TaskStatus::Blocked), "{case}");
+            assert_eq!(restored.to_status, Some(expected), "{case}");
+        }
+    }
 }
 
 /// A lineage-owned failure-handoff block is resume provenance. The same event
