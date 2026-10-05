@@ -77,6 +77,10 @@ credentials, claim tokens, checkout paths, SSH command lines, or
 credential-bearing URLs. Authentication uses the operator's existing Git/SSH credential
 configuration.
 
+Both URL-form and scp-style remotes reject embedded passwords. A remote such as
+`user:password@host:owner/repo.git` is credential-bearing; diagnostics mask its
+userinfo as `***@host:owner/repo.git`. Ordinary SSH usernames remain supported.
+
 `source_repository_fingerprint` uses the registry's portable remote identity,
 not a local path. The fingerprint may need an explicit rebind when the source
 repository moves or changes canonical remote; it must never drift silently.
