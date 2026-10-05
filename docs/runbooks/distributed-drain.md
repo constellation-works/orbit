@@ -96,7 +96,20 @@ owner's task names, and uses its own `workflow.default_crew` only when the
 task names no crew. Each drain declares the crews its host can run (see step
 8), and the owner skips a task whose crew is not among them, leaving it in
 the backlog for the owner or another follower. Use the same crew names on
-both sides: crews are matched by name. Empty
+both sides: crews are matched by name.
+
+Hosts may run different operating systems. A task tagged `os:linux`,
+`os:macos` or `os:windows` runs only on a host of a named OS (several tags mean
+any one of them; no tag means any host). Each pull request declares the
+follower's OS, and the owner admits a tagged task only to a follower whose OS
+it names; the owner's own drain applies the same rule to itself. A task no
+current host can run stays in the backlog, never claimed, with the wait named
+(`waits for a macos host (os:macos)`) in the owner's readiness, `orbit run
+show`, the Drain card, and the follower's idle receipt (`os_unavailable`). So
+an `os:macos` repair filed on a Linux owner waits for a macOS follower instead
+of blocking the owner's worker. Retag with `orbit.task.update` to reroute a
+backlog task; running or claimed work is not moved. Owner and followers must
+deploy the same protocol revision (the OS field is revision 4). Empty
 `workflow.required_validation_commands` means no required check, as on an
 owner's own delivery: a claimed leaf runs nothing and records that, and the
 owner accepts its handoff without validation logs. Every other handoff check
@@ -210,7 +223,8 @@ claim, in-progress/review selector or reservation names the path. Acceptance
 records exact file selectors, a `context_files_widened` history entry and the
 enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
-exact paths. Both peers require protocol revision 3.
+exact paths. Both peers require the same protocol revision (currently 4;
+widening arrived in 3).
 
 
 ### 5. Establish SSH owner access (no destination callers file)
@@ -334,7 +348,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   launch it. The preflight starts no provider and checks no login; a provider
   with no signed-in user is caught by its first claimed leaf (below). The
   result is kept for the drain's window. Every pull request declares the
-  runnable crews, and the owner admits only tasks this host can run. If no
+  runnable crews and this host's OS, and the owner admits only tasks this host
+  can run. If no
   crew is runnable, the drain requests nothing and reports
   `no_runnable_crew`. After you install a CLI or sign a provider in, start a
   new drain to pick it up.

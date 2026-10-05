@@ -102,6 +102,9 @@ pub(crate) fn task_to_json_with_sidecars(
         "history".to_string(),
         serde_json::to_value(&history).map_err(|e| OrbitError::Io(e.to_string()))?,
     );
+    if let Some(requirement) = orbit_types::task::task_os_requirement_json(task) {
+        object.insert("os_requirement".to_string(), requirement);
+    }
     let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
     object.insert(
         "artifacts".to_string(),

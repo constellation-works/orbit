@@ -323,11 +323,22 @@ impl FailureCluster {
         ]
     }
 
+    /// Each run's runner OS evidence, in run order (see
+    /// [`super::runner_os::failure_runner_os`]).
+    pub(super) fn runner_os(&self, repo_root: &std::path::Path) -> Vec<Value> {
+        self.runs
+            .iter()
+            .map(|run| super::runner_os::failure_runner_os(run, repo_root))
+            .collect()
+    }
+
     /// Render the evidence a remediation agent needs, inline.
     ///
     /// This is the whole point of the sweep: the agent that picks this task up
     /// cannot reach GitHub, so anything absent here is unavailable to it.
-    pub(super) fn description(&self, evidence: &Value) -> String {
+    /// `runners` is [`Self::runner_os`], the evidence behind the task's `os:`
+    /// tags.
+    pub(super) fn description(&self, evidence: &Value, runners: &[Value]) -> String {
         let mut out = String::new();
         out.push_str(
             "This task was filed automatically from a host-side sweep of this repository's \
@@ -356,6 +367,7 @@ impl FailureCluster {
             "- Commit the runner actually checked out: `{}`\n",
             display(&self.tested_commit)
         ));
+        out.push_str(&runner_os_line(runners));
         if let Some(cause) = &self.compiler_cause {
             out.push_str(&format!(
                 "- Compiler cause identity: `{}`\n",
@@ -557,6 +569,47 @@ impl FailureCluster {
 
 /// The job whose own log supplied this failure's excerpt, if the run-scoped
 /// read produced nothing and collection fell back per job.
+/// The `Runner OS` line: what each distinct runner was, where that came
+/// from, and the `os:` tags it gives the task.
+fn runner_os_line(runners: &[Value]) -> String {
+    let observed = runners
+        .iter()
+        .map(|runner| {
+            let os = runner["os"].as_str().unwrap_or("unknown");
+            let labels = runner["labels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|label| format!("`{}`", display(label)))
+                .collect::<Vec<_>>();
+            match runner["source"].as_str() {
+                Some("job_labels") => format!("`{os}` (runner labels {})", labels.join(", ")),
+                Some("workflow_runs_on") => {
+                    format!("`{os}` (workflow `runs-on` {})", labels.join(", "))
+                }
+                _ => "unknown (no runner labels and no literal workflow `runs-on`)".to_string(),
+            }
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("; ");
+    let tags = super::runner_os::os_tags(runners);
+    let routing = if tags.is_empty() {
+        "not routed to an OS: any host may take it".to_string()
+    } else {
+        format!(
+            "tagged {} so only a host of that OS admits it",
+            tags.iter()
+                .map(|tag| format!("`{tag}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    format!("- Runner OS: {observed}; {routing}\n")
+}
+
 pub(super) fn job_log_source(failure: &Value) -> Option<String> {
     if value_string(failure, "log_source") != "job_api_log" {
         return None;

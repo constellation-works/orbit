@@ -315,6 +315,13 @@ pub fn explain_workspace_auto_readiness(
                         // than leaving the reason to be interpreted.
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
+                    BacklogTaskExclusionReason::HostOsMismatch => {
+                        // Retagging, or a host of the named OS, clears it; the
+                        // detail names which.
+                        object.insert("reason".to_string(), Value::String("host_os_mismatch".to_string()));
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                        object.insert("host_os".to_string(), json!(runtime.host_os()));
+                    }
                     BacklogTaskExclusionReason::CrewNotAllowed => {
                         object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
                         object.insert("crew".to_string(), json!(excluded.crew));

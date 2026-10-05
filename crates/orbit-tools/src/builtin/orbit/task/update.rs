@@ -46,7 +46,7 @@ impl Tool for OrbitTaskUpdateTool {
             },
             ToolParam {
                 name: "tags".to_string(),
-                description: "Replacement task tags as a string or array of strings".to_string(),
+                description: "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected".to_string(),
                 param_type: "string_list".to_string(),
                 required: false,
             },

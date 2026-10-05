@@ -147,12 +147,17 @@ pub struct DrainWorkerLimit {
 pub struct DrainWaitingTask {
     pub task_id: String,
     /// Why the drain could not admit it (`context_lock_conflict`,
-    /// `crew_not_allowed`, ...); absent for a plain lock deferral.
+    /// `crew_not_allowed`, `host_os_mismatch`, ...); absent for a plain lock
+    /// deferral.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The tasks holding what it needs, when known.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_by: Vec<String>,
+    /// What clears the wait, when the reason alone does not say: the host OS
+    /// a `host_os_mismatch` task waits for, say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// What a drain's most recent admission pass left waiting.

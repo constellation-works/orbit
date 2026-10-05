@@ -327,6 +327,7 @@ impl crate::OrbitRuntime {
             },
             ship: ship.clone(),
             crews: None,
+            os: None,
         };
         orbit_store::admission_refusal(&identity, &request, owner_binary_version())
             .map(|refusal| refusal.as_str().to_string())

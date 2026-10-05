@@ -127,6 +127,18 @@ clusters failures by a normalized error signature that prefers a concrete test
 or panic identity over ANSI styling, generic runner/cargo/nextest trailers, and
 assertion payload help text; the raw excerpt stays in the description.
 
+The sweep routes each repair to a host that can reproduce it. Collection reads
+each failed job's runner labels from the GitHub jobs API; when a snapshot has
+none, filing falls back to the workflow's literal `runs-on` in the checkout.
+`macos-*` tags the task `os:macos` and `ubuntu-*`/`linux` tags it `os:linux`;
+a Windows or unrecognised runner, or a cluster mixing one in, adds no `os:`
+tag, because no Windows host exists and an unclaimable task would be worse
+than one any host may take. The `Runner OS:` description line and the filing's
+`runner_os` entries record the evidence. A Linux owner then leaves an
+`os:macos` repair in its backlog for a macOS pull-drain follower instead of
+blocking on it. To reroute any task, retag it with `orbit.task.update` (see
+[task authoring](../../orbit/references/task-authoring.md#host-os-routing)).
+
 CI evidence schema 2 binds each failure row to one failed job: both log scopes
 select that job, and checkout provenance carries its job ID. A separate
 `diagnostic_unit` retains a complete runner command from its `Run` group through

@@ -149,6 +149,42 @@ impl OrbitRuntime {
         list_task_metadata_in(self.stores().tasks())
     }
 
+    /// Each backlog task whose `os:` tags this host's OS does not satisfy,
+    /// with the wait: `ORB-12 waits for a macos host (os:macos)`.
+    ///
+    /// A drain start reports these, so a drain that starts nothing on this
+    /// host does not read as an empty backlog.
+    pub fn host_os_backlog_waits(&self) -> Result<Vec<String>, OrbitError> {
+        let host = self.host_os();
+        Ok(self
+            .list_task_metadata()?
+            .into_iter()
+            .filter(|task| task.status == orbit_types::task::TaskStatus::Backlog)
+            .filter_map(|task| {
+                orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
+                    .unsatisfied_reason(host)
+                    .map(|wait| format!("{} {wait}", task.id))
+            })
+            .collect())
+    }
+
+    /// [`Self::host_os_backlog_waits`] as one drain-start warning, or `None`
+    /// when this host can start every backlog task (or the backlog cannot be
+    /// read, which the drain itself reports).
+    pub fn host_os_backlog_warning(&self) -> Option<String> {
+        let waits = self.host_os_backlog_waits().ok()?;
+        (!waits.is_empty()).then(|| {
+            format!(
+                "{} backlog task(s) need a host of another OS and will not start on this {} \
+                 host: {}",
+                waits.len(),
+                self.host_os()
+                    .map_or(std::env::consts::OS, orbit_types::task::HostOs::as_str),
+                waits.join("; ")
+            )
+        })
+    }
+
     /// Returns the coordination registry's global status projection for
     /// dependency readiness while leaving task listing workspace-scoped.
     pub fn task_status_index(

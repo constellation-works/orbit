@@ -3,7 +3,8 @@ use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus, is_valid_orb_task_id,
-    normalize_task_dependencies, normalize_task_tags, validate_task_dependencies_with,
+    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    validate_task_dependencies_with,
 };
 
 use super::TaskRecordUpdateParams;
@@ -519,7 +520,9 @@ impl OrbitRuntime {
             params.dependencies = Some(normalized_dependencies);
         }
         if let Some(tags) = params.tags.take() {
-            params.tags = Some(normalize_task_tags(tags));
+            let tags = normalize_task_tags(tags);
+            validate_os_tags(&tags)?;
+            params.tags = Some(tags);
         }
         // [ORB-12717] Clearing the crew is "no crew supplied", so the pools
         // decide again for the complexity this write leaves the task with —

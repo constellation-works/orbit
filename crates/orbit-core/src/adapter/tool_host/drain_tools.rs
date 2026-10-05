@@ -86,6 +86,7 @@ pub(super) fn pull(
             "run_context",
             "ship",
             "crews",
+            "os",
             "workspace",
             "agent",
             "model",
@@ -101,6 +102,7 @@ pub(super) fn pull(
             "run_context",
             "ship",
             "crews",
+            "os",
         ],
     )?;
     let response = runtime.serve_task_pull(session, &request)?;

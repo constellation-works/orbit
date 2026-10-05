@@ -186,8 +186,10 @@ pub struct AdmissionShipContract {
 /// It versions the distributed-drain protocol alone, not the scoreboard's
 /// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
 /// Increment it whenever a new request field would be rejected by an older
-/// endpoint, even if optional. Revision 2 adds executor crew capabilities; revision 3 adds handoff footprint widening.
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 3;
+/// endpoint, even if optional. Revision 2 adds executor crew capabilities;
+/// revision 3 adds handoff footprint widening; revision 4 adds the executor's
+/// host OS.
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 4;
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without
@@ -300,6 +302,11 @@ pub struct AdmissionRequest {
     /// admissible, as before [ORB-13941].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crews: Option<AdmissionCrewCapability>,
+    /// The executor's host OS, matched against each candidate's `os:` tags.
+    /// Absent from an executor on an OS outside the `os:` namespace: only
+    /// tasks without an `os:` tag are admitted to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<orbit_types::task::HostOs>,
 }
 
 impl AdmissionRequest {
@@ -374,6 +381,10 @@ pub struct AdmissionReceipt {
     /// Ready candidates skipped because the executor cannot run their crew.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crew_unavailable: Vec<AdmissionDiagnostic>,
+    /// Ready candidates skipped because their `os:` tags name no OS the
+    /// executor runs. They stay in the backlog for a host that does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub os_unavailable: Vec<AdmissionDiagnostic>,
     pub queue_depth: usize,
 }
 

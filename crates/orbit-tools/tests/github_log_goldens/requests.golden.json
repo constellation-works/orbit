@@ -505,5 +505,29 @@
       "url": null,
       "updated_at": null
     }
+  },
+  "run_jobs_request_reads_each_failed_jobs_runner_labels": {
+    "argv": [
+      "api",
+      "--method",
+      "GET",
+      "repos/{owner}/{repo}/actions/runs/123/jobs",
+      "-F",
+      "per_page=100"
+    ],
+    "cwd": null,
+    "projected": {
+      "911": [
+        "macos-latest"
+      ],
+      "912": [
+        "self-hosted",
+        "Linux",
+        "X64"
+      ]
+    }
+  },
+  "run_jobs_request_rejects_a_non_numeric_run": {
+    "error": "invalid input: invalid `run`: \"123/../../secrets\"; must be a numeric GitHub identifier"
   }
 }

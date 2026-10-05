@@ -154,6 +154,7 @@ impl crate::OrbitRuntime {
             },
             ship: ship.clone(),
             crews: None,
+            os: None,
         };
         let identity = trusted_identity(&machine_id, session);
         let refusal = orbit_store::admission_refusal(&identity, &request, owner_binary_version());

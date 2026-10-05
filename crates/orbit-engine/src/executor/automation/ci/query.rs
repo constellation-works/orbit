@@ -203,6 +203,34 @@ impl HostCiQueries {
     }
 }
 
+impl HostCiQueries {
+    /// Attach each failed job's runner labels from the jobs API, the evidence
+    /// a filed repair's `os:` tag comes from. Best effort: the labels only
+    /// route the repair, so a failed read is recorded on the view and the
+    /// failure is still filed, untagged.
+    fn with_runner_labels(&self, mut view: Value, run_id: &str) -> Value {
+        let labels = github_cli::run_jobs_request(&json!({"run": run_id}))
+            .and_then(|request| self.run_gh(request, "gh api run jobs"))
+            .and_then(|stdout| github_cli::parse_gh_json(&stdout, "gh api run jobs"))
+            .map(|listing| github_cli::project_job_labels(&listing));
+        let labels = match labels {
+            Ok(labels) => labels,
+            Err(error) => {
+                view["runner_labels_error"] = json!(redact_all(&error.to_string()));
+                return view;
+            }
+        };
+        for jobs in ["jobs", "failed_jobs"] {
+            for job in view[jobs].as_array_mut().into_iter().flatten() {
+                if let Some(job_labels) = job["job_id"].as_u64().and_then(|id| labels.get(&id)) {
+                    job["runner_labels"] = json!(job_labels);
+                }
+            }
+        }
+        view
+    }
+}
+
 impl CiQueries for HostCiQueries {
     fn auth_status(&self) -> AuthStatus {
         let mut request = match github_cli::auth_status_request(&Value::Null) {
@@ -289,7 +317,7 @@ impl CiQueries for HostCiQueries {
                 "gh run view returned a different or missing run identity".to_string(),
             ));
         }
-        Ok(view)
+        Ok(self.with_runner_labels(view, run_id))
     }
 
     fn run_logs(

@@ -27,7 +27,9 @@ task that fails.
   distributed-drain protocol revision as the owner, uses
   `operation.review_policy = none`, and declares the same
   `workflow.required_validation_commands`. Crews may differ: a replica only
-  receives tasks whose crew it can run.
+  receives tasks whose crew it can run. Operating systems may differ too: a
+  task tagged `os:macos` (or `os:linux`, `os:windows`) only goes to a machine
+  running that OS, and waits in the owner's backlog until one asks for work.
 - **SSH is the access control.** Anyone who can `ssh` to the owner owns it. To
   shut a replica out, remove its key from the owner's `authorized_keys`.
 - **Landing stays on the owner.** Approve each handoff on the owner's

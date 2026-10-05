@@ -25,7 +25,9 @@ pub struct TaskAddArgs {
     /// Dependency task IDs. Repeat or comma-separate for multiple dependencies.
     #[arg(long, alias = "dependency", action = ArgAction::Append, value_delimiter = ',')]
     pub dependencies: Vec<String>,
-    /// Task tags. Repeat or comma-separate for multiple tags.
+    /// Task tags. Repeat or comma-separate for multiple tags. `os:linux`,
+    /// `os:macos` or `os:windows` limits which host OS may run the task; any
+    /// other `os:` value is rejected.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',')]
     pub tags: Vec<String>,
     /// Exact canonical tool names the task adds to its agent activity baseline.

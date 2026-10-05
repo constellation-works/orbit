@@ -303,3 +303,113 @@ fn ci_failure_branch_routing_retains_owner_evidence_and_only_files_landing_check
         "missing owners remain retryable rather than minting repairs"
     );
 }
+
+/// The sweep routes each repair to a host that can reproduce it [ORB-14005]:
+/// a failing job's runner labels tag it `os:macos` or `os:linux`, a workflow's
+/// literal `runs-on` stands in when the snapshot carries no labels, and a
+/// Windows or unrecognised runner leaves it untagged. The evidence is recorded
+/// on the filing and in the description.
+#[test]
+fn ci_failure_sweep_tags_repairs_with_the_failing_runner_os() {
+    if !isolated("ci_failure_sweep_tags_repairs_with_the_failing_runner_os") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let workflows = root.path().join("repo/.github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(
+        workflows.join("ci-macos.yml"),
+        "name: macOS CI\non: push\njobs:\n  sandbox:\n    name: Sandbox\n    runs-on: macos-14\n    steps:\n      - run: make test\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+
+    let checkout = "3".repeat(40);
+    // name, the job's runner labels (null: none), the workflow whose literal
+    // `runs-on` stands in, the expected `os:` tag, and the evidence source.
+    let cases = json!([
+        {"name": "macos", "labels": ["macos-latest"], "tag": "os:macos", "source": "job_labels"},
+        {"name": "ubuntu", "labels": ["ubuntu-24.04"], "tag": "os:linux", "source": "job_labels"},
+        {"name": "windows", "labels": ["windows-latest"], "source": "job_labels"},
+        {"name": "self-hosted", "labels": ["self-hosted", "gpu"], "source": "job_labels"},
+        {"name": "runs-on", "workflow": "macOS CI", "tag": "os:macos", "source": "workflow_runs_on"},
+        {"name": "unknown", "source": "unknown"},
+    ]);
+    let cases = cases.as_array().unwrap();
+    let runs = cases
+        .iter()
+        .enumerate()
+        .map(|(index, case)| {
+            let mut run = failure(
+                &format!(
+                    "error: {} runner regression",
+                    case["name"].as_str().unwrap()
+                ),
+                index,
+                &checkout,
+            );
+            if !case["labels"].is_null() {
+                run["failed_jobs"][0]["runner_labels"] = case["labels"].clone();
+            }
+            if !case["workflow"].is_null() {
+                run["workflow"] = case["workflow"].clone();
+                run["failed_jobs"][0]["name"] = json!("Sandbox");
+            }
+            run
+        })
+        .collect::<Vec<_>>();
+    let output = runtime
+        .run_deterministic(
+            "file_ci_failure_tasks",
+            &json!({}),
+            &json!({"max_tasks": 10, "ci_evidence": {
+                "schema_version": 2, "collected": true, "outcome_hint": "current_failures",
+                "capability": {"available": true, "authenticated": true},
+                "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
+                "latest_runs": runs.clone(), "current_failures": runs, "stale_or_superseded": [],
+                "in_flight": [], "retryable_errors": [], "collected_at": "2026-10-04T08:00:00Z"
+            }}),
+            ToolContext::default(),
+        )
+        .expect("file CI failures");
+    let filed = output["filed"].as_array().unwrap();
+    assert_eq!(filed.len(), cases.len(), "{output}");
+
+    for (index, case) in cases.iter().enumerate() {
+        let name = &case["name"];
+        let entry = filed
+            .iter()
+            .find(|entry| entry["run_ids"] == json!([10 + index]))
+            .unwrap_or_else(|| panic!("{name} was filed: {output}"));
+        let task = runtime
+            .get_task(entry["task_id"].as_str().unwrap())
+            .unwrap();
+        let os_tags = task
+            .tags
+            .iter()
+            .filter(|tag| tag.starts_with("os:"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            os_tags,
+            case["tag"]
+                .as_str()
+                .map(|tag| vec![tag.to_string()])
+                .unwrap_or_default(),
+            "{name}: {:?}",
+            task.tags
+        );
+        assert_eq!(
+            entry["runner_os"][0]["source"], case["source"],
+            "{name}: {entry}"
+        );
+        assert!(
+            task.description.contains("- Runner OS: "),
+            "{name}: the description records the runner evidence"
+        );
+    }
+}

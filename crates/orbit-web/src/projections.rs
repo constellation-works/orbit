@@ -144,7 +144,7 @@ fn job_v2_step_to_json(step: &JobV2Step) -> Value {
 }
 
 pub(crate) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStatus>) -> Value {
-    json!({
+    let mut value = json!({
         "id": task.id,
         "parent_id": task.parent_id(),
         "title": task.title,
@@ -179,7 +179,13 @@ pub(crate) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),
         "updated_at": task.updated_at.to_rfc3339(),
-    })
+    });
+    // The parsed `os:` tags, so the dashboard names the host a task waits
+    // for without re-parsing tag strings.
+    if let Some(requirement) = orbit_types::task::task_os_requirement_json(task) {
+        value["os_requirement"] = requirement;
+    }
+    value
 }
 
 pub(crate) fn task_to_json_with_sidecars(

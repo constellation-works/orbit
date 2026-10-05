@@ -5,6 +5,7 @@ mod context_widening;
 mod epic;
 mod error;
 mod model;
+mod os_requirement;
 mod plan;
 mod show_fields;
 pub use error::TaskError;
@@ -48,9 +49,11 @@ pub use model::{
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies,
     validate_task_dependencies_with,
 };
+pub use os_requirement::{HostOs, OS_TAG_PREFIX, TaskOsRequirement, validate_os_tags};
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_DERIVED_RESPONSE_FIELDS, TASK_SHOW_PROJECTION_FIELDS,
     TASK_SHOW_PROJECTION_FIELDS_CSV, TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field,
-    refuses_implementer_writes, task_show_record_field_json, unknown_task_show_field_message,
+    refuses_implementer_writes, task_os_requirement_json, task_show_record_field_json,
+    unknown_task_show_field_message,
 };

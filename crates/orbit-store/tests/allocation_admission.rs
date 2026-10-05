@@ -366,6 +366,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
             authorization_reference: None,
         },
         crews: None,
+        os: None,
     }
 }
 
@@ -701,6 +702,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
             authorization_reference: None,
         },
         crews: None,
+        os: None,
     }
 }
 

@@ -10,7 +10,9 @@
 //! Each request declares the crews this window can run [ORB-13941]: the
 //! provider preflight taken on the window's first pass, minus every crew a
 //! claimed leaf has since found unusable. The owner skips a task whose crew is
-//! not among them, so a follower never burns a claim it cannot run.
+//! not among them, so a follower never burns a claim it cannot run. It also
+//! declares this host's OS, and the owner skips a task whose `os:` tags that
+//! OS does not satisfy.
 //!
 //! The drain outlives its window. `unsettled` counts admissions that still hold
 //! a slot, and the job loop runs until the window has closed *and* that count
@@ -210,6 +212,7 @@ pub(crate) fn pull_refill(
                         },
                         ship: ship.clone(),
                         crews: Some(capability),
+                        os: runtime.host_os(),
                     }))
                 };
                 let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);

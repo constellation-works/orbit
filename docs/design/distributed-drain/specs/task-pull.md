@@ -83,11 +83,13 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `caller_review_policy` | enum | Executor's effective review policy; only `none` is supported |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 | `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
+| `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
 
 The caller persists the request before sending it. One drain run uses many request IDs. There is
 no count, slot declaration, or caller scan bound. The crew capability is part of the immutable
-request, so a replay is judged by the capability it was first sent with. Protocol revision
-2 adds this field: revision 1 owners reject it even though it is optional. Before persisting a
+request, so a replay is judged by the capability it was first sent with, and so is the
+declared OS. Protocol revision 2 adds `crews` and revision 4 adds `os`: an older owner rejects
+the new field even though it is optional. Before persisting a
 new request, the follower compares the probe's `protocol_schema` with its own revision and
 reports `protocol_mismatch` naming both revisions. Binary-version equality is insufficient
 because wire changes can land between releases. Completion authorization is resolved
@@ -130,6 +132,10 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
    status and reservations alone would hand it out a second time [ORB-13918]. Skip a candidate
    whose crew the request's `crews` says the executor cannot run and record it in
    `crew_unavailable` [ORB-13941]. A malformed capability (a blank crew name) is `invalid_input`.
+   Before the crew check, skip a candidate whose `os:` tags name no OS the request's `os`
+   declares, and record it in `os_unavailable` with the wait (`waits for a macos host
+   (os:macos); the executor runs linux`). An `os:*` tag outside the reserved namespace, which
+   task writes reject but an older stored task may carry, is satisfied by no executor.
 4. For the first valid non-conflicting task, allocate an immutable claim ID. Reserve its own
    canonical non-pruned footprint with an explicit default TTL of 14,400 seconds (four hours),
    record its execution machine and drain context, transition `backlog → in-progress`, append a
@@ -185,6 +191,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `ship` | Owner-resolved mode, base/landing branches, `review_policy: none`, completion policy and optional durable authorization reference |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
+| `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
 | `invalid_candidates[]` | Invalid dependency or lock-surface exclusions with reasons |
 | `idle` | No claim created by this request |
 | `queue_depth` | Remaining ready entries at original admission, diagnostic only |

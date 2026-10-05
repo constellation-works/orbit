@@ -1,4 +1,7 @@
-//! Pull admission: cancel-state reads, owner negotiation, the failure breaker, the crew window, host throttling and local/claim exclusion.
+//! Pull admission: cancel-state reads, owner negotiation, the failure breaker, the crew window, `os:` tag routing, host throttling and local/claim exclusion.
+
+use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
+use orbit_types::task::HostOs;
 
 use super::*;
 
@@ -115,8 +118,8 @@ fn unreadable_cancel_state_fails_visibly_without_admission() {
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
 }
 
-/// Revision 1 owners reject additive fields despite equal binary versions.
-/// Negotiation must stop the newer follower before it sends `crews`.
+/// Older owners reject additive fields (`crews`, `os`) despite equal binary
+/// versions. Negotiation must stop the newer follower before it sends them.
 #[test]
 fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     if !isolated(
@@ -132,7 +135,9 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     let refusal = pass["refusal"].as_str().unwrap();
     assert!(refusal.starts_with("protocol_mismatch:"), "{pass}");
     assert!(
-        refusal.contains("caller revision 3; owner revision 1"),
+        refusal.contains(&format!(
+            "caller revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}; owner revision 1"
+        )),
         "{pass}"
     );
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
@@ -153,19 +158,17 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
         )
         .unwrap();
     assert_eq!(probe["refusal"], "protocol_mismatch");
-    assert!(
-        probe["diagnostics"]
-            .to_string()
-            .contains("caller revision 1; owner revision 3")
-    );
+    assert!(probe["diagnostics"].to_string().contains(&format!(
+        "caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
+    )));
     let request = json!({"request_id": "old-request", "caller_version": probe["binary_version"],
         "caller_schema": 1, "caller_review_policy": "none", "ship": probe["ship"],
         "run_context": {"run_id": "old-drain", "job_name": "workspace_pull_pipeline"}});
     let failure = pair.wire.call("", "orbit.task.pull", request).unwrap_err();
     assert!(
-        failure
-            .to_string()
-            .contains("protocol_mismatch: caller revision 1; owner revision 3"),
+        failure.to_string().contains(&format!(
+            "protocol_mismatch: caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
+        )),
         "{failure}"
     );
     assert!(pair.owner_claims().is_empty());
@@ -426,6 +429,85 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
             .iter()
             .any(|exclusion| exclusion.crew == "antigravity"),
         "{window:#?}"
+    );
+}
+
+/// The owner hands a follower only tasks whose `os:` tags its declared OS
+/// satisfies [ORB-14005]. A Linux follower takes a task tagged for both OSes
+/// and an untagged one, never the `os:macos` task, which the idle receipt
+/// names and which stays in the owner's backlog until a macOS follower pulls
+/// it.
+#[test]
+fn a_follower_is_handed_only_tasks_its_os_satisfies() {
+    if !isolated(
+        module_path!(),
+        "a_follower_is_handed_only_tasks_its_os_satisfies",
+    ) {
+        return;
+    }
+    let mut pair = Pair::new(3);
+    let (mac, either, anywhere) = (
+        pair.tasks[0].clone(),
+        pair.tasks[1].clone(),
+        pair.tasks[2].clone(),
+    );
+    for (task, tags) in [
+        (&mac, json!(["os:macos"])),
+        (&either, json!(["os:linux", "os:macos"])),
+    ] {
+        pair.wire
+            .owner
+            .run_tool(
+                "orbit.task.update",
+                json!({"id": task, "tags": tags, "model": "codex"}),
+            )
+            .expect("tag owner task");
+    }
+    pair.follower = pair.follower.clone().with_host_os(Some(HostOs::Linux));
+    let drain = pair.start_drain();
+
+    for _ in 0..3 {
+        pair.pass(&drain);
+    }
+    let claimed = |pair: &Pair| {
+        pair.owner_claims()
+            .iter()
+            .map(|claim| claim["claim"]["task_id"].as_str().unwrap().to_string())
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(
+        claimed(&pair),
+        BTreeSet::from([either.clone(), anywhere.clone()])
+    );
+    assert_eq!(pair.owner_status(&mac), "backlog");
+    let pulls = pair.wire.calls("orbit.task.pull");
+    assert!(pulls.iter().all(|pull| pull["os"] == "linux"), "{pulls:?}");
+    let idle = pair
+        .follower_jobs
+        .local_pull_admissions()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .filter(|record| record.phase == LocalPullPhase::Idle)
+        .find_map(|record| record.receipt)
+        .expect("the owner answered idle");
+    assert!(
+        idle.os_unavailable
+            .iter()
+            .any(|skipped| skipped.task_id == mac
+                && skipped
+                    .reason
+                    .contains("waits for a macos host (os:macos); the executor runs linux")),
+        "{idle:#?}"
+    );
+
+    pair.follower = pair.follower.clone().with_host_os(Some(HostOs::Macos));
+    let mac_drain = pair.start_drain();
+    pair.pass(&mac_drain);
+    assert_eq!(claimed(&pair), BTreeSet::from([mac, either, anywhere]));
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").last().unwrap()["os"],
+        "macos"
     );
 }
 

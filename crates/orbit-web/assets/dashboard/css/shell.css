@@ -454,6 +454,22 @@
   vertical-align: middle;
 }
 
+/* An `os:` routing tag: the host a task needs, set apart from plain labels. */
+.os-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.os-badge-invalid {
+  color: var(--fg-dim);
+  border-style: dashed;
+}
+
 
 main {
   display: grid;

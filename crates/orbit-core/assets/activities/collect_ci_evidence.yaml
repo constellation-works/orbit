@@ -14,7 +14,10 @@ spec:
     reports every bound it hit in `truncation` rather than silently returning
     less. Schema version 2 emits one current-failure row per failed job, with
     job_id and log_job_id binding the diagnostic and checkout provenance to
-    that job. Both failed-step and checkout reads explicitly select the job;
+    that job. Each failed job also carries the runner_labels the jobs API
+    reports for it (the runner's `runs-on`), the evidence filing routes the
+    repair's `os:` tag from; a failed labels read is recorded as
+    runner_labels_error and never defers the failure. Both failed-step and checkout reads explicitly select the job;
     a fallback may only supply that same job. The global max_job_log_reads
     budget defaults to 6 (maximum 25), with stable job ordering and a rotating
     overflow slot. Each read retains the existing timeout, excerpt/scan bounds

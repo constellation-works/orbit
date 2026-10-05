@@ -4,7 +4,7 @@ use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     Task, TaskStatus, TaskType, normalize_required_tools, normalize_task_dependencies,
-    normalize_task_tags,
+    normalize_task_tags, validate_os_tags,
 };
 use sha2::{Digest, Sha256};
 
@@ -132,6 +132,7 @@ impl OrbitRuntime {
         params.comment = params.comment.map(|comment| redact_all(&comment));
 
         let normalized_tags = normalize_task_tags(params.tags.clone());
+        validate_os_tags(&normalized_tags)?;
         params.title = title_with_provenance_prefix(&params.title, &normalized_tags);
 
         let (canonical_agent, canonical_model) =

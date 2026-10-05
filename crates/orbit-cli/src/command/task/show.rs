@@ -135,6 +135,15 @@ impl Execute for TaskShowArgs {
             if !task.tags.is_empty() {
                 let _ = writeln!(out, "{} {}", bold("Tags:"), task.tags.join(", "));
             }
+            let os = orbit_types::task::TaskOsRequirement::from_tags(&task.tags);
+            if !os.is_unrestricted() {
+                let runs_on = if os.invalid.is_empty() {
+                    os.describe_hosts()
+                } else {
+                    format!("no host until retagged ({})", os.invalid.join(", "))
+                };
+                let _ = writeln!(out, "{} {runs_on}", bold("Runs on:"));
+            }
             if !task.required_tools.is_empty() {
                 let _ = writeln!(
                     out,
