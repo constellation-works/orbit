@@ -11,8 +11,11 @@ use orbit_engine::{
     RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update,
     blocked_workflow_interruption_update,
 };
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_store::{JobRunStepParams, TaskReservationReleaseReason};
-use orbit_types::task::{Task, TaskComment, TaskStatus};
+use orbit_types::task::{
+    TASK_ENVELOPE_FILE_NAME, TASK_PLAN_FILE_NAME, Task, TaskComment, TaskEnvelopeV2, TaskStatus,
+};
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -370,8 +373,10 @@ fn activity_by_a_human_after_the_block_suppresses_recovery() {
     );
 }
 
-/// A field-only edit records no history and no actor. Neither before nor
-/// after dispatch may an automated decision override it.
+const EDITED_PLAN: &str = "1) fix the fixture by hand 2) requeue";
+
+/// ORB-14228: modern field edits have attributed semantic history. Exercise
+/// the dashboard's human surface rather than relying on the process actor.
 #[test]
 fn a_human_field_edit_after_the_block_is_never_overridden() {
     if !enter_isolated_child(
@@ -380,6 +385,89 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
     ) {
         return;
     }
+    field_edit_after_the_block_is_never_overridden(|runtime, task| {
+        let history = runtime.get_task_history(&task.id).expect("history");
+        let comments = runtime.get_task_comments(&task.id).expect("comments");
+        runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    plan: Some(EDITED_PLAN.to_string()),
+                    ..Default::default()
+                },
+                "human:recovery-operator".to_string(),
+            )
+            .expect("human edits the plan");
+        let updated_history = runtime.get_task_history(&task.id).expect("durable history");
+        assert_eq!(updated_history.len(), history.len() + 1);
+        assert_eq!(&updated_history[..history.len()], history.as_slice());
+        let event = updated_history.last().expect("semantic update event");
+        assert_eq!(event.event, "updated");
+        assert_eq!(event.by, "human:recovery-operator");
+        assert!(event.at > history.last().expect("block history").at);
+        assert_eq!(
+            runtime.get_task_comments(&task.id).expect("comments"),
+            comments
+        );
+        EpisodeDisposition::HumanIntervened {
+            by: event.by.clone(),
+        }
+    });
+}
+
+/// Fault injection in an isolated bundle models a legacy client that wrote
+/// the plan and timestamp without history. The modern API cannot model this.
+#[test]
+fn a_legacy_unattributed_field_edit_after_the_block_is_never_overridden() {
+    if !enter_isolated_child(
+        module_path!(),
+        "a_legacy_unattributed_field_edit_after_the_block_is_never_overridden",
+    ) {
+        return;
+    }
+    field_edit_after_the_block_is_never_overridden(|runtime, task| {
+        assert_isolated_child();
+        let history = runtime.get_task_history(&task.id).expect("history");
+        let comments = runtime.get_task_comments(&task.id).expect("comments");
+        let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root()))
+            .expect("isolated task registry");
+        let bundle = registry
+            .canonical_task_bundle_path(&runtime.workspace_id().expect("workspace"), &task.id)
+            .expect("isolated bundle");
+        let envelope_path = bundle.join(TASK_ENVELOPE_FILE_NAME);
+        let mut envelope: TaskEnvelopeV2 =
+            serde_yaml::from_slice(&std::fs::read(&envelope_path).expect("read envelope"))
+                .expect("parse envelope");
+        // Pass the timestamp slack since every attributed write; record no
+        // event or comment, just as the old field-only writer did.
+        let slack = u64::try_from(ATTRIBUTION_SLACK_MS).expect("non-negative slack");
+        std::thread::sleep(std::time::Duration::from_millis(slack + 100));
+        envelope.updated_at = Utc::now();
+        std::fs::write(bundle.join(TASK_PLAN_FILE_NAME), EDITED_PLAN).expect("legacy plan write");
+        std::fs::write(
+            envelope_path,
+            serde_yaml::to_string(&envelope).expect("serialize envelope"),
+        )
+        .expect("legacy timestamp write");
+        assert_eq!(
+            runtime.get_task_history(&task.id).expect("history"),
+            history
+        );
+        assert_eq!(
+            runtime.get_task_comments(&task.id).expect("comments"),
+            comments
+        );
+        EpisodeDisposition::UnexplainedChange {
+            changed_at: envelope.updated_at,
+        }
+    });
+}
+
+/// Deterministically interleave a field edit on each side of dispatch and
+/// exercise both recovery steps against the changed durable task revision.
+fn field_edit_after_the_block_is_never_overridden(
+    edit_plan: impl Fn(&OrbitRuntime, &Task) -> EpisodeDisposition,
+) {
     let (_root, runtime) = recovery_runtime(r#"["implementer"]"#);
     let edited = in_progress_task(&runtime, "Operator rewrote the plan before dispatch");
     let dispatched = in_progress_task(&runtime, "Operator rewrote the plan after dispatch");
@@ -395,40 +483,9 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
             .expect("blocked task in view")
     };
     assert_eq!(disposition(&edited), EpisodeDisposition::Eligible);
-
-    // Past the slack that an appended comment's own timestamp is allowed.
-    let slack = u64::try_from(ATTRIBUTION_SLACK_MS).expect("non-negative slack");
-    std::thread::sleep(std::time::Duration::from_millis(slack + 100));
-    let edit_plan = |task: &Task| {
-        let history = runtime.get_task_history(&task.id).expect("history").len();
-        let comments = runtime.get_task_comments(&task.id).expect("comments").len();
-        runtime
-            .update_task(
-                &task.id,
-                TaskUpdateParams {
-                    plan: Some("1) fix the fixture by hand 2) requeue".to_string()),
-                    ..Default::default()
-                },
-            )
-            .expect("human edits the plan");
-        assert_eq!(
-            (
-                runtime.get_task_history(&task.id).expect("history").len(),
-                runtime.get_task_comments(&task.id).expect("comments").len(),
-            ),
-            (history, comments),
-            "the edit under test must leave no attributed record"
-        );
-    };
-    edit_plan(&edited);
-    assert!(
-        matches!(
-            disposition(&edited),
-            EpisodeDisposition::UnexplainedChange { .. }
-        ),
-        "{:?}",
-        disposition(&edited)
-    );
+    assert_eq!(disposition(&dispatched), EpisodeDisposition::Eligible);
+    let expected = edit_plan(&runtime, &edited);
+    assert_eq!(disposition(&edited), expected);
 
     let (first, inputs) = tick(&runtime);
     assert_eq!(
@@ -444,7 +501,8 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
     // Once dispatched, the same edit makes both steps of the run stand down.
     let input = BlockedRecoveryInput::from_json(&inputs[0]).expect("run input");
     let run_id = first.dispatched[0].1.clone();
-    edit_plan(&dispatched);
+    let expected = edit_plan(&runtime, &dispatched);
+    assert_eq!(disposition(&dispatched), expected);
     assert!(matches!(
         runtime
             .prepare_blocked_task_recovery(&input, &run_id)
@@ -466,8 +524,10 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
     for task in [&edited, &dispatched] {
         let task = runtime.get_task(&task.id).expect("task");
         assert_eq!(task.status, TaskStatus::Blocked);
-        assert_eq!(task.plan, "1) fix the fixture by hand 2) requeue");
+        assert_eq!(task.plan, EDITED_PLAN);
     }
+    let (held, inputs) = tick(&runtime);
+    assert!(held.dispatched.is_empty() && inputs.is_empty());
 }
 
 #[test]
