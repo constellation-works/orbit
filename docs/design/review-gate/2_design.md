@@ -364,10 +364,14 @@ no hand-edit of SQLite or task state is needed.
 The lineage is charged reviewer process runtime, not wall time. The engine
 reports the start and end of every reviewer dispatch — each retry and the
 post-recovery re-attempt included — and the attempt accumulates what they
-add up to. Retry backoff, `step_failure_recovery`, the gate's own steps, and
-time between a run's end and its resume are never charged. A reviewer whose
-end was never reported (its process died with the run) is charged up to the
-run's end, never past its start plus its own wall-clock bound.
+add up to. The charge recorded at release is a floor, not a freeze: reviewer
+runtime recorded afterwards still counts against `review.minutes` before the
+attempt is settled, and a later start is bounded by what those invocations
+have already spent. Retry backoff, `step_failure_recovery`, the gate's own
+steps, and time between a run's end and its resume are never charged. A
+reviewer whose end was never reported (its process died with the run) is
+charged up to the run's end, never past its start plus its own wall-clock
+bound.
 
 No attempt stays open after its reviewer step fails or its run ends. The
 failure handoff releases every attempt the run admitted that has no verdict —
