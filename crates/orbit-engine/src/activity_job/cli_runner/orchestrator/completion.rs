@@ -6,11 +6,12 @@ use std::time::Duration;
 
 use orbit_agent::{
     ParsedStdout, antigravity_terminal_error_diagnostic, normalize_cli_stdout,
-    project_cli_response, provider_authentication_failure, provider_invocation_diagnostic,
+    project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
+    provider_invocation_diagnostic,
 };
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
-use orbit_types::workflow::PROVIDER_UNAVAILABLE_MARKER;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
+use orbit_types::workflow::{PROVIDER_CAPACITY_MARKER, PROVIDER_UNAVAILABLE_MARKER};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -316,6 +317,21 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                 .is_some_and(provider_authentication_failure)
         {
             Some(format!("{PROVIDER_UNAVAILABLE_MARKER} {diagnostic}"))
+        } else if let Some(capacity) = provider_capacity_error(
+            &provider,
+            stdout.protocol_bytes(),
+            stderr_text.as_ref(),
+            terminal_error.as_deref(),
+        ) {
+            // [ORB-14149] Nor can a repair agent, or an immediate rerun of the
+            // same model, change a provider's capacity. Read only from a
+            // failed exit: a provider that reports capacity mid-turn and then
+            // finishes is not unavailable.
+            Some(format!(
+                "{PROVIDER_CAPACITY_MARKER} {diagnostic}: {provider} provider reported the \
+                 selected model at capacity: {}",
+                bounded_diagnostic(&capacity, redaction)
+            ))
         } else {
             Some(diagnostic)
         }
@@ -491,76 +507,120 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     })
 }
 
+/// Stdout's JSON frames, for the provider-owned failure readers below.
+fn stdout_frames(stdout: &[u8]) -> impl Iterator<Item = Value> + '_ {
+    serde_json::Deserializer::from_slice(stdout)
+        .into_iter::<Value>()
+        .filter_map(Result::ok)
+}
+
+/// The failure a provider wrote in its own control-plane `frame`, never
+/// assistant or tool text, and never an Orbit envelope, which describes the
+/// work rather than the provider.
+fn provider_failure<'a>(provider: &str, frame: &'a Value) -> Option<&'a Value> {
+    if frame.get("schemaVersion").is_some() {
+        return None;
+    }
+    match provider {
+        "claude"
+            if frame.get("is_error").and_then(Value::as_bool) == Some(true)
+                && matches!(
+                    frame.get("type").and_then(Value::as_str),
+                    None | Some("result")
+                ) =>
+        {
+            Some(frame)
+        }
+        "codex"
+            if matches!(
+                frame.get("type").and_then(Value::as_str),
+                Some("error" | "turn.failed")
+            ) =>
+        {
+            Some(frame.get("error").unwrap_or(frame))
+        }
+        "grok" | "gemini"
+            if matches!(
+                frame.get("type").and_then(Value::as_str),
+                None | Some("error")
+            ) =>
+        {
+            frame.get("error")
+        }
+        _ => None,
+    }
+}
+
 /// Read only provider-owned failure frames, never assistant or tool text.
 /// Claude can emit an error result even with exit 0; the wrapper must still
 /// fail the invocation rather than allowing an earlier answer to succeed.
 fn structured_provider_auth_error(provider: &str, stdout: &[u8]) -> Option<String> {
-    serde_json::Deserializer::from_slice(stdout)
-        .into_iter::<Value>()
-        .filter_map(Result::ok)
-        .find_map(|frame| {
-            // Orbit envelopes describe the work, not provider availability.
-            if frame.get("schemaVersion").is_some() {
-                return None;
-            }
-            let failure = match provider {
-                "claude"
-                    if frame.get("is_error").and_then(Value::as_bool) == Some(true)
-                        && matches!(
-                            frame.get("type").and_then(Value::as_str),
-                            None | Some("result")
-                        ) =>
-                {
-                    &frame
-                }
-                "codex"
-                    if matches!(
-                        frame.get("type").and_then(Value::as_str),
-                        Some("error" | "turn.failed")
-                    ) =>
-                {
-                    frame.get("error").unwrap_or(&frame)
-                }
-                "grok" | "gemini"
-                    if matches!(
-                        frame.get("type").and_then(Value::as_str),
-                        None | Some("error")
-                    ) =>
-                {
-                    frame.get("error")?
-                }
-                _ => return None,
-            };
-            let status = [failure, &frame].into_iter().find_map(|fields| {
-                [
-                    "api_error_status",
-                    "status",
-                    "status_code",
-                    "http_status",
-                    "code",
-                ]
+    stdout_frames(stdout).find_map(|frame| {
+        let failure = provider_failure(provider, &frame)?;
+        let status = [failure, &frame].into_iter().find_map(|fields| {
+            [
+                "api_error_status",
+                "status",
+                "status_code",
+                "http_status",
+                "code",
+            ]
+            .iter()
+            .find_map(|key| {
+                let value = fields.get(*key)?;
+                let status = value.as_u64().or_else(|| value.as_str()?.parse().ok())?;
+                matches!(status, 401 | 403).then_some(status)
+            })
+        });
+        let message = failure.as_str().or_else(|| {
+            ["message", "result", "type", "status", "code"]
                 .iter()
-                .find_map(|key| {
-                    let value = fields.get(*key)?;
-                    let status = value.as_u64().or_else(|| value.as_str()?.parse().ok())?;
-                    matches!(status, 401 | 403).then_some(status)
-                })
-            });
-            let message = failure.as_str().or_else(|| {
-                ["message", "result", "type", "status", "code"]
-                    .iter()
-                    .filter_map(|key| failure.get(*key).and_then(Value::as_str))
-                    .find(|text| provider_authentication_failure(text))
-            });
-            if status.is_none() && !message.is_some_and(provider_authentication_failure) {
-                return None;
-            }
-            let status = status
-                .map(|status| format!(" (HTTP {status})"))
-                .unwrap_or_default();
-            Some(format!(
-                "{provider} provider authentication failure{status}: {}",
-                message.unwrap_or("provider credentials were rejected")
-            ))
+                .filter_map(|key| failure.get(*key).and_then(Value::as_str))
+                .find(|text| provider_authentication_failure(text))
+        });
+        if status.is_none() && !message.is_some_and(provider_authentication_failure) {
+            return None;
+        }
+        let status = status
+            .map(|status| format!(" (HTTP {status})"))
+            .unwrap_or_default();
+        Some(format!(
+            "{provider} provider authentication failure{status}: {}",
+            message.unwrap_or("provider credentials were rejected")
+        ))
+    })
+}
+
+/// The capacity text a failed provider wrote about itself: its stderr, its
+/// terminal error, or a provider-owned failure frame on stdout. Codex reports
+/// an exhausted model only as `error` and `turn.failed` frames [ORB-14149].
+fn provider_capacity_error(
+    provider: &str,
+    stdout: &[u8],
+    stderr_text: &str,
+    terminal_error: Option<&str>,
+) -> Option<String> {
+    let frame_text = || {
+        stdout_frames(stdout).find_map(|frame| {
+            let failure = provider_failure(provider, &frame)?;
+            failure
+                .as_str()
+                .into_iter()
+                .chain(
+                    ["message", "result"]
+                        .iter()
+                        .filter_map(|key| failure.get(*key).and_then(Value::as_str)),
+                )
+                .find(|text| provider_capacity_exhausted(text))
+                .map(str::to_string)
         })
+    };
+    let line = |text: &str| {
+        text.lines()
+            .find(|line| provider_capacity_exhausted(line))
+            .map(|line| line.trim().to_string())
+    };
+    line(stderr_text)
+        .or_else(|| terminal_error.and_then(line))
+        .or_else(frame_text)
 }

@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-13908, ORB-13941, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-10-04
 ---
 
@@ -424,9 +424,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   panel). The first line names the runnable crews. Each excluded crew is
   listed with its source and the reason: `preflight` (disabled, executor
   unresolved, or CLI not found) or `provider_unavailable` (a claimed leaf's
-  provider failed, with the task and error). Each iteration's output carries
+  provider could not authenticate or reported its selected model at
+  capacity, with the task and error). Each iteration's output carries
   the same window as `crews`. To use an excluded crew again, fix the provider
-  on this host (for example, sign the CLI in), then start a new drain.
+  on this host (for example, sign the CLI in) or wait for model capacity,
+  then start a new drain.
 - After three consecutive claims settle as failures, the drain stops
   requesting work (`circuit_open` in the iteration output) and only keeps
   settling. Inspect the blocked tasks and their leaf logs, fix the cause,

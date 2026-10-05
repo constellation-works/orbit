@@ -39,10 +39,34 @@ pub const PROVIDER_UNAVAILABLE_ERROR_CODE: &str = "provider_unavailable";
 pub const PROVIDER_UNAVAILABLE_MARKER: &str = "[provider_unavailable]";
 
 /// Whether a step failure says its provider could not be used on this host.
+///
+/// A [provider capacity](PROVIDER_CAPACITY_ERROR_CODE) failure is one kind of
+/// unavailability, so this is true for it too.
 #[must_use]
 pub fn is_provider_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(PROVIDER_UNAVAILABLE_ERROR_CODE)
         || message.is_some_and(|message| message.contains(PROVIDER_UNAVAILABLE_MARKER))
+        || is_provider_capacity_exhausted(error_code, message)
+}
+
+/// Token a provider failure diagnostic carries when the provider itself said
+/// the selected model has no capacity — Codex's `Selected model is at
+/// capacity` — as opposed to the agent failing the work [ORB-14149].
+///
+/// It is a kind of [`PROVIDER_UNAVAILABLE_ERROR_CODE`]: step recovery skips it
+/// and a pull drain releases the claim and excludes the crew for its window.
+/// Final recovery skips it as well, since no decision about the task changes
+/// provider capacity, so the failure handoff keeps the candidate for a resume.
+pub const PROVIDER_CAPACITY_ERROR_CODE: &str = "provider_capacity";
+
+/// The bracketed marker form of [`PROVIDER_CAPACITY_ERROR_CODE`].
+pub const PROVIDER_CAPACITY_MARKER: &str = "[provider_capacity]";
+
+/// Whether a step failure says its provider's selected model was at capacity.
+#[must_use]
+pub fn is_provider_capacity_exhausted(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(PROVIDER_CAPACITY_ERROR_CODE)
+        || message.is_some_and(|message| message.contains(PROVIDER_CAPACITY_MARKER))
 }
 
 /// Token a required-validation failure carries when a command could not find

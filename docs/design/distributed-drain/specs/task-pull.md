@@ -8,7 +8,7 @@ status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908, ORB-14149]
 ---
 
 # Spec: `orbit.task.pull`
@@ -250,7 +250,7 @@ store schema are implementation choices; their atomic behavior is required:
 | Approve handoff | Owner operator only: deduplicate mutation ID, verify current review handoff and exact candidate/base, persist scoped authorization with approver/revocation state, and record landing-start request atomically; agent access cannot approve |
 | Revoke completion authorization | Owner operator only: invalidate pending landing permission atomically; reconcile any uncertain merge intent before reassignment |
 | Fail/cancel | Persist failure evidence, block the task, invalidate execution authority, release only this reservation atomically |
-| Release | Executor gives back unfinished work it did not fail — never launched, stopped on purpose, or its provider was unusable (`provider_unavailable`); revoke the claim, return the task to `backlog`, release only this reservation atomically |
+| Release | Executor gives back unfinished work it did not fail — never launched, stopped on purpose, or its provider was unusable (`provider_unavailable`, including a model at capacity); revoke the claim, return the task to `backlog`, release only this reservation atomically |
 | Deliberate recovery | Reconcile any uncertain landing intent; revoke old claim, invalidate pending handoff, release reservation, and apply an authorized task transition atomically |
 
 `stale_claim` rejects obsolete attempt mutations even when the task has since returned to

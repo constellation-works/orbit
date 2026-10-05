@@ -12,8 +12,9 @@ pub use state::{
     ActivityCrewDraw, ActivityCrewPoolMember, CrewExclusion, CrewExclusionSource,
     DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainWaitingTask,
     DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
-    FinalRecoveryObservedTask, PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER,
-    PipelineState, PullCrewPreflight, ResourcePressure, ResourceThrottle, is_provider_unavailable,
+    FinalRecoveryObservedTask, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER,
+    PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight,
+    ResourcePressure, ResourceThrottle, is_provider_capacity_exhausted, is_provider_unavailable,
 };
 
 #[cfg(test)]

@@ -70,5 +70,5 @@ pub use providers::{
 pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
 pub use types::{
     DeclaredResponseFailure, ParsedStdout, provider_authentication_failure,
-    provider_invocation_diagnostic,
+    provider_capacity_exhausted, provider_invocation_diagnostic,
 };

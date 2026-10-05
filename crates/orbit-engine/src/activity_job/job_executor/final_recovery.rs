@@ -104,6 +104,13 @@ pub(super) fn attempt_final_recovery(
             "required validation lacked a tool in its environment; the candidate was not judged",
         );
     }
+    // [ORB-14149] Nor does any decision give the provider's model capacity;
+    // the candidate stays in the worktree for a resume.
+    if orbit_types::workflow::is_provider_capacity_exhausted(None, Some(error_message)) {
+        return skip(
+            "the provider reported the selected model at capacity; the candidate was not judged",
+        );
+    }
     let Some(task_id) = single_task_id(&ctx.input) else {
         return skip(
             "final recovery decides for exactly one task; this run carries none or several",

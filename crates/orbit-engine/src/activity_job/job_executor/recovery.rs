@@ -69,7 +69,9 @@ pub(super) fn recover_or_return_original(
     max_attempts: u32,
 ) -> Result<StepOutcome, DispatchError> {
     // Signing in requires the operator; a repair agent cannot make this
-    // provider usable. Preserve the marker for claimed-leaf settlement.
+    // provider usable, nor give its selected model capacity, and the
+    // post-recovery attempt would rerun the same model [ORB-14149].
+    // Preserve the marker for claimed-leaf settlement.
     if orbit_types::workflow::is_provider_unavailable(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }

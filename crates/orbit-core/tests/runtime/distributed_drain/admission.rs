@@ -524,15 +524,39 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
     ) {
         return;
     }
+    a_provider_failure_releases_the_claim(
+        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
+         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+        "OAuth token revoked",
+    );
+}
+
+/// [ORB-14149] Likewise a claimed leaf whose provider said its selected model
+/// was at capacity: recovery could not change that and an immediate rerun
+/// would use the same model, so the claim goes back to the owner's backlog.
+#[test]
+fn a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window() {
+    if !isolated(
+        module_path!(),
+        "a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window",
+    ) {
+        return;
+    }
+    a_provider_failure_releases_the_claim(
+        "[provider_capacity] cli subprocess exited with code 1: codex provider reported the \
+         selected model at capacity: Selected model is at capacity. Please try a different model.",
+        "Selected model is at capacity",
+    );
+}
+
+/// The settlement of a claimed `sol` leaf that ended on `diagnostic`, a typed
+/// provider failure whose provider text includes `reason`.
+fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let task = pair.claimed_task(&leaf);
-    pair.leaf_fails_with(
-        &leaf,
-        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
-         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
-    );
+    pair.leaf_fails_with(&leaf, diagnostic);
 
     let pass = pair.pass(&drain);
     assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
@@ -541,10 +565,12 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
     let exclusion = excluded(&pass, "sol");
     assert_eq!(exclusion["source"], "provider_unavailable", "{pass}");
     assert!(
-        exclusion["reason"].as_str().is_some_and(
-            |reason| reason.contains(task.as_str()) && reason.contains("OAuth token revoked")
-        ),
-        "{pass}"
+        exclusion["reason"]
+            .as_str()
+            .is_some_and(|text| text.contains(task.as_str())
+                && text.contains(reason)
+                && !text.contains("[provider_")),
+        "the reason quotes the provider without Orbit's marker: {pass}"
     );
 
     let settles = pair.wire.calls("orbit.drain.claim.settle");

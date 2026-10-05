@@ -10,8 +10,8 @@ use orbit_store::contracts::{
     ProviderUnavailable, PullDestination, SettlementRefusal,
 };
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryDecision, PROVIDER_UNAVAILABLE_MARKER,
-    is_provider_unavailable,
+    FinalRecoveryCheckpoint, FinalRecoveryDecision, PROVIDER_CAPACITY_MARKER,
+    PROVIDER_UNAVAILABLE_MARKER, is_provider_unavailable,
 };
 
 use crate::application::distributed::{
@@ -885,8 +885,9 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// The settlement a terminal leaf implies, by how far its admission got: a
 /// leaf that never launched was cancelled while queued, so nothing ran and
 /// its claim is released back to the owner's backlog; a launched one whose
-/// provider could not be used on this host is released too, typed so the
-/// drain excludes its crew for the window [ORB-13941]; any other launched
+/// provider could not be used on this host — it could not authenticate, or
+/// its selected model was at capacity [ORB-14149] — is released too, typed so
+/// the drain excludes its crew for the window [ORB-13941]; any other launched
 /// leaf ended without the typed handoff success records, and fails.
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
@@ -977,7 +978,9 @@ fn provider_unavailable(
                 .filter(|(code, message)| is_provider_unavailable(Some(code), Some(message)))
                 .map(|(_, message)| message.to_string())
         })?;
-    let message = message.replace(PROVIDER_UNAVAILABLE_MARKER, "");
+    let message = message
+        .replace(PROVIDER_UNAVAILABLE_MARKER, "")
+        .replace(PROVIDER_CAPACITY_MARKER, "");
     let message = message.trim();
     let cut = floor_char_boundary(message, MAX_PROVIDER_REASON_BYTES);
     let crew = run

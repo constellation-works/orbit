@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663, ORB-13941, ORB-13992, ORB-14149]
 ---
 
 # Distributed Drain — Design
@@ -408,6 +408,13 @@ owns delivery:
   Assistant transcripts, tool results, and Orbit work-failure envelopes are not provider evidence.
   A step ending with `provider_unavailable` skips step-failure recovery: signing in requires
   an operator, and a recovery agent cannot repair the provider credentials.
+  A provider that reports its selected model at capacity on a failed exit (Codex's
+  `Selected model is at capacity`, in its stderr, terminal error, or own failure frames) is a
+  kind of unavailability [ORB-14149]: the runner stamps `[provider_capacity]`, which counts as
+  `provider_unavailable` everywhere above, so the leaf releases its claim and the crew is excluded
+  for the window. Neither step recovery nor its post-recovery attempt reruns the same model, and
+  final recovery is skipped too. Capacity reported mid-turn on a turn that then finishes is not
+  provider evidence.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.
