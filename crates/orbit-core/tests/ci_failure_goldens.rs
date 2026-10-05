@@ -304,6 +304,61 @@ fn ci_failure_branch_routing_retains_owner_evidence_and_only_files_landing_check
     );
 }
 
+#[test]
+fn ci_failure_branch_routing_retains_evidence_for_configurable_task_prefixes() {
+    if !isolated("ci_failure_branch_routing_retains_evidence_for_configurable_task_prefixes") {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::bootstrap::task_migration::seed_task_id_start;
+
+    for prefix in ["DE", "ORBA", "ORBX", "ABCDE"] {
+        let root = TempDir::new().unwrap();
+        let global = root.path().join("home/.orbit");
+        let workspace = root.path().join("repo/.orbit");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        seed_task_id_start(&global, Some(prefix), 1).unwrap();
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+        let owner = runtime
+            .add_task(TaskAddParams {
+                title: "Task branch owner".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(orbit_types::task::task_id_prefix(&owner.id), Some(prefix));
+
+        let mut pr = failure("error: task branch regression", 0, &"3".repeat(40));
+        pr["event"] = json!("pull_request");
+        pr["head_branch"] = json!(format!("orbit/{}-ddb04571", owner.id));
+        pr["ref_kind"] = json!("pull_request");
+
+        let first = file(&runtime, vec![pr.clone()]);
+        assert_eq!(first["filed_count"], 0, "{prefix}: {first}");
+        assert_eq!(first["pilot_candidate_count"], 0);
+        assert_eq!(first["excluded_branch_failures"], json!([]));
+        assert_eq!(first["attributed"].as_array().unwrap().len(), 1);
+        assert_eq!(first["attributed"][0]["task_id"], owner.id);
+        let path = first["attributed"][0]["artifact"].as_str().unwrap();
+        let artifact = runtime.get_task_artifact(&owner.id, path).unwrap().unwrap();
+        let retained: Value = serde_json::from_slice(&artifact.content).unwrap();
+        assert_eq!(retained["failure"], pr);
+        assert_eq!(runtime.get_task(&owner.id).unwrap().status, owner.status);
+
+        // Replaying in the collector's branch partition retains the same receipt.
+        let repeated = runtime.run_deterministic("file_ci_failure_tasks", &json!({}), &json!({
+            "ci_evidence": {
+                "schema_version": 2, "collected": true,
+                "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
+                "current_failures": [], "branch_failures": [pr],
+            }
+        }), ToolContext::default()).unwrap();
+        assert_eq!(repeated["attributed"], first["attributed"]);
+        assert_eq!(repeated["excluded_branch_failures"], json!([]));
+        assert_eq!(runtime.get_task_artifacts(&owner.id).unwrap().len(), 1);
+    }
+}
+
 /// The sweep routes each repair to a host that can reproduce it [ORB-14005]:
 /// a failing job's runner labels tag it `os:macos` or `os:linux`, a workflow's
 /// literal `runs-on` stands in when the snapshot carries no labels, and a
