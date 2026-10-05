@@ -308,7 +308,7 @@ fn validate_job_checks_quorum_bounds() {
     };
     let mut nested_worker = validation_fan("outer_fan", None, "outer_results");
     if let JobV2StepBody::FanOut { fan_out, .. } = &mut nested_worker.body {
-        fan_out.worker = Box::new(parallel(0, 2));
+        *fan_out.worker = parallel(0, 2);
     }
 
     for (case, step, valid, diagnostic_step) in [
