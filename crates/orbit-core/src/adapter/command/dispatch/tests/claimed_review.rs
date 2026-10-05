@@ -178,6 +178,10 @@ impl Fixture {
     }
 
     fn reviewer(&self, event: ReviewerInvocationEvent) {
+        self.reviewer_at(event, Utc::now());
+    }
+
+    fn reviewer_at(&self, event: ReviewerInvocationEvent, now: chrono::DateTime<Utc>) {
         self.runtime
             .review_store()
             .unwrap()
@@ -188,7 +192,7 @@ impl Fixture {
                     attempt_id: &self.attempt_id,
                     run_id: LEAF,
                     event,
-                    now: Utc::now(),
+                    now,
                 },
             )
             .unwrap();
@@ -487,6 +491,39 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
             .filter(|row| row.brokered)
             .all(|row| row.status != AuditEventStatus::Success),
         "every refusal is audited as one: {rows:?}"
+    );
+}
+
+/// A reviewer whose recorded deadline has passed is no longer running, even
+/// though no `Finished` event was recorded for it: a hung or killed reviewer
+/// leaves exactly that ledger behind.
+#[test]
+fn a_reviewer_past_its_deadline_without_finishing_reaches_nothing() {
+    let fixture = Fixture::new();
+    let broker = fixture.serve("agent_review_repair");
+    fixture.reviewer_at(
+        ReviewerInvocationEvent::Started {
+            timeout_seconds: 1800,
+        },
+        Utc::now() - chrono::Duration::hours(1),
+    );
+    let (source, _) = fixture.report("report.json", &fixture.attempt_id);
+    for (name, input) in [
+        (GET, json!({"id": TASK, "path": REVIEW_MANIFEST_ARTIFACT})),
+        (
+            PUT,
+            json!({"id": TASK, "path": REVIEW_REPORT_ARTIFACT, "source_path": source}),
+        ),
+    ] {
+        let refused = fixture.forwarded(&broker, name, input).unwrap_err();
+        assert!(
+            refused.contains("review_attempt_stale"),
+            "{name}: {refused}"
+        );
+    }
+    assert!(
+        fixture.owner.calls.lock().unwrap().is_empty(),
+        "an expired reviewer's calls never reach the owner"
     );
 }
 

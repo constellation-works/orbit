@@ -9,7 +9,10 @@
 //! over that route; the follower's review ledger holds the admitted attempt
 //! with its reviewer running. Inside the sandbox the built `orbit` serves the
 //! reviewer through both the CLI and MCP, exactly as a provider calls it,
-//! and SSH runs only in the unconfined broker.
+//! and SSH runs only in the unconfined broker. Last, the claim's reservation
+//! elapses and the reviewer still reads and writes, until the owner recovers
+//! the claim and a later pull supersedes it: while the follower's ledger still
+//! records the reviewer running, the owner refuses the bridged calls.
 //!
 //! Linux confines the reviewer with Bubblewrap and macOS with `sandbox-exec`;
 //! everything else is the same fixture.
@@ -33,6 +36,7 @@ use orbit_engine::{PluginBrokerHandle, PluginBrokerRun, RuntimeHost};
 use orbit_mcp::federated::{Destination, FederatedMcpHost, SshDestinationProbe};
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::ResolvedFsProfile;
+use orbit_types::task::TaskStatus;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
@@ -780,6 +784,173 @@ fn sandbox_fixture() {
         report,
         "refused calls change nothing on the owner"
     );
+
+    // Phase 3: the reviewer runs again by the follower's ledger and the
+    // claim's reservation window really closes. An elapsed reservation ends
+    // nothing, so the live claim still reads and writes; then the owner
+    // recovers the claim and a later pull supersedes it, and the owner
+    // refuses the bridged read and write as stale with nothing changed.
+    store
+        .review_record_invocation(
+            &workspace,
+            &ReviewInvocationRecord {
+                lineage_key: LINEAGE,
+                attempt_id: &attempt_id,
+                run_id: LEAF,
+                event: ReviewerInvocationEvent::Started {
+                    timeout_seconds: 1800,
+                },
+                now: Utc::now(),
+            },
+        )
+        .expect("reviewer restarted");
+    let bridged = |run_id: &str| {
+        let broker = runner
+            .start_plugin_broker(&broker_run(run_id, REVIEWER, &task, &workspace, &caller))
+            .expect("start broker")
+            .expect("Unix broker");
+        Confined::spawn(
+            &runner,
+            &follower,
+            &profile,
+            &provider,
+            &["calls", &task, scratch.to_str().unwrap()],
+            &[broker.as_ref()],
+            &[],
+        )
+        .finish()
+    };
+    let elapsed = elapse_reservation(
+        &owner_runtime,
+        claim["claim_id"].as_str().expect("claim id"),
+    );
+    assert_eq!(elapsed["phase"], "running", "{elapsed}");
+    let live = bridged("leaf-review-elapsed");
+    for read in [&live["cli_get"]["output"], &live["mcp_get"]] {
+        assert_eq!(
+            read["content"].as_str().map(str::as_bytes),
+            Some(manifest_bytes.as_slice()),
+            "an elapsed reservation leaves the claim reading: {live}"
+        );
+    }
+    assert_eq!(live["cli_put"]["code"], 0, "{live}");
+    assert!(
+        live["mcp_put"].get("error").is_none() && live["mcp_put"]["id"] == task.as_str(),
+        "an elapsed reservation leaves the claim writing: {live}"
+    );
+    owner_runtime
+        .recover_claim_as_operator(
+            claim["claim_id"].as_str().expect("claim id"),
+            "running",
+            TaskStatus::Backlog,
+            "operator",
+            "The claim outlived its reservation.",
+            "claimed-review-revocation",
+        )
+        .expect("the owner revokes the claim");
+    let owner_evidence = || {
+        let artifacts = owner_runtime
+            .get_task_artifacts(&task)
+            .expect("owner artifacts")
+            .into_iter()
+            .map(|artifact| (artifact.path, artifact.content))
+            .collect::<Vec<_>>();
+        let certificate = owner_runtime
+            .review_store()
+            .expect("owner review store")
+            .review_certificate(&owner_workspace, &attempt_id)
+            .expect("owner certificate read");
+        (artifacts, certificate.is_some())
+    };
+    let before = owner_evidence();
+    let stale = |run_id: &str| {
+        let report = bridged(run_id);
+        refused(&report["cli_get"], "stale_claim");
+        refused(&report["cli_put"], "stale_claim");
+        mcp_refused(&report["mcp_get"], "stale_claim");
+        mcp_refused(&report["mcp_put"], "stale_claim");
+    };
+    stale("leaf-review-revoked");
+    let readmitted = drain(
+        "orbit.task.pull",
+        json!({"request_id": "claimed-review-readmission",
+               "caller_version": probe["binary_version"],
+               "caller_schema": probe["protocol_schema"], "caller_before_pr": false,
+               "run_context": {"run_id": "follower-drain-2", "job_name": "workspace_pull_pipeline"},
+               "ship": probe["ship"]}),
+    );
+    let next = readmitted["receipt"]["claim"].clone();
+    assert_eq!(next["task_id"], task.as_str(), "{readmitted}");
+    assert_ne!(next["claim_id"], claim["claim_id"], "{readmitted}");
+    let rebound = drain(
+        "orbit.drain.claim.bind",
+        json!({"claim_id": next["claim_id"], "run_id": "leaf-review-2", "ship": probe["ship"]}),
+    );
+    assert_eq!(rebound["phase"], "running", "{rebound}");
+    stale("leaf-review-superseded");
+    assert_eq!(
+        owner_evidence(),
+        before,
+        "stale-claim refusals change nothing on the owner"
+    );
+    assert!(!before.1, "the bridge never records a certificate");
+}
+
+/// Let the owner's reservation for `claim_id` run out: its window is moved,
+/// in the owner's own store, to one that closed a minute ago. Returns the
+/// claim as the owner's console, read at the real clock, then reports it.
+fn elapse_reservation(owner: &OrbitRuntime, claim_id: &str) -> Value {
+    let console = || {
+        owner.distributed_claim_console().expect("owner console")["claims"]
+            .as_array()
+            .expect("claims")
+            .iter()
+            .find(|claim| claim["claim_id"] == claim_id)
+            .cloned()
+            .expect("the claim")
+    };
+    let current = console();
+    let reservation_id = current["reservation"]["id"].as_str().expect("reservation");
+    let window = current["reservation"]["expires_at"]
+        .as_str()
+        .expect("window");
+    let expires_at = Utc::now() - chrono::Duration::minutes(1);
+    let shift = chrono::DateTime::parse_from_rfc3339(window)
+        .expect("window time")
+        .signed_duration_since(expires_at);
+    let expired = expires_at.to_rfc3339();
+    let workspace_id = owner.workspace_id().expect("owner workspace");
+    let connection =
+        rusqlite::Connection::open(owner.global_root().join("orbit.db")).expect("owner store");
+    let created: String = connection
+        .query_row(
+            "SELECT created_at FROM task_reservations WHERE reservation_id=?1",
+            rusqlite::params![reservation_id],
+            |row| row.get(0),
+        )
+        .expect("the claim's reservation row");
+    let created = (chrono::DateTime::parse_from_rfc3339(&created).expect("created time") - shift)
+        .to_rfc3339();
+    let moved = connection
+        .execute(
+            "UPDATE task_reservations SET created_at=?1, expires_at=?2 WHERE reservation_id=?3",
+            rusqlite::params![created, expired, reservation_id],
+        )
+        .expect("move the reservation");
+    assert_eq!(moved, 1, "the claim's reservation row");
+    // The claim and its admission keep their own copy of the window.
+    let copies = connection
+        .execute(
+            "UPDATE task_coordination_rows SET payload_json=replace(payload_json, ?1, ?2)
+             WHERE workspace_id=?3 AND instr(payload_json, ?1) > 0",
+            rusqlite::params![window, expired, workspace_id],
+        )
+        .expect("move the claim's window");
+    assert!(copies >= 1, "the claim records its reservation window");
+    let elapsed = console();
+    assert_eq!(elapsed["reservation"]["expires_at"], expired.as_str());
+    assert_eq!(elapsed["reservation"]["expired"], true, "{elapsed}");
+    elapsed
 }
 
 /// A refused MCP call: an error answer that names `cause`.
@@ -1115,6 +1286,14 @@ if mode == 'running':
         'source_path': raw('orbit.task.artifact.put', {'id': task, 'path': REPORT,
             'source_path': '/etc/passwd'}),
     }
+elif mode == 'calls':
+    scratch = sys.argv[4]
+    get = {'id': task, 'path': MANIFEST}
+    put = {'id': task, 'path': REPORT, 'source_path': os.path.join(scratch, 'report.json')}
+    report['cli_get'] = tool('orbit.task.artifact.get', get)
+    report['cli_put'] = tool('orbit.task.artifact.put', put)
+    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact_get', get),
+                                                ('orbit_task_artifact_put', put)])
 else:
     get = {'id': task, 'path': MANIFEST}
     report['finished'] = tool('orbit.task.artifact.get', get)
