@@ -981,7 +981,7 @@ The executor emits `StepJoin` with per-branch outcomes. If the join policy fails
 
 ### 8.4 `fan_out` / `fan_in`
 
-`fan_out.items` is template-rendered into an array of at most 256 entries (each item gets its own scoped thread, so a larger list fails the step rather than exhausting OS threads). Workers run concurrently behind a counting semaphore, so `max_workers` is a true concurrency bound, not just metadata. `fan_in.collect` can persist the ordered worker outputs under a separate pipeline key in addition to the step id itself.
+`fan_out.items` is template-rendered into an array of at most 256 entries (each item gets its own scoped thread, so a larger list fails the step rather than exhausting OS threads). Rendered text that parses as a JSON array is that list. Valid JSON of any other kind — `null`, an object, a number, a bool, or a string — fails the step with `JobExecution` naming `fan_out.items` before any worker runs; splitting that text on commas would dispatch fragments such as `{"a":1` and `"b":2}`. Text that is not JSON, such as a bare `A, B` list, still splits on commas and whitespace into string items. Workers run concurrently behind a counting semaphore, so `max_workers` is a true concurrency bound, not just metadata. `fan_in.collect` can persist the ordered worker outputs under a separate pipeline key in addition to the step id itself.
 
 Collection does not itself interpret a successful activity call whose payload
 reports a failed child run. A parent that waits on child workflows must pass
@@ -999,6 +999,8 @@ A loop runs either:
 
 - once per rendered `items` entry
 - or up to `max_iterations` when `items` is absent
+
+`loop.items` uses the same rendering rules as `fan_out.items`. Non-array JSON fails the step with `JobExecution` naming `loop.items` before the first iteration.
 
 The body runs before `break_when`, so steps can populate fields the break expression reads. If `items` exceeds `max_iterations`, execution fails structurally instead of truncating.
 
@@ -1133,8 +1135,9 @@ Executor invariants are tested at the crate boundary, following
 `crates/orbit-engine/tests/engine/v2_runtime.rs` runs job assets with `parallel:`,
 `fan_out:` and `loop:` blocks through `execute_job_with_resume`. It pins the
 `JoinMode` decision for branches and fan-in workers, spawn-index output
-ordering under the `max_workers` cap, and loop exit on break, failure or an
-exhausted iteration budget.
+ordering under the `max_workers` cap, loop exit on break, failure or an
+exhausted iteration budget, and rejection of non-array JSON in `fan_out.items`
+and `loop.items` while a bare comma-separated list and a JSON array still run.
 
 The unit tests under
 `crates/orbit-engine/src/activity_job/job_executor/tests/` are the admitted

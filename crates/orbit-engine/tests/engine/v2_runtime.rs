@@ -513,6 +513,88 @@ fn loop_iterates_until_break_failure_or_budget() {
     );
 }
 
+/// An items expression that renders valid JSON must be an array. `null`, an
+/// object, a number, a bool, or a JSON string fails the step with
+/// `JobExecution` naming `fan_out.items` or `loop.items`, and no worker runs.
+/// A JSON array still parses, including one that holds an object, and a bare
+/// `A, B` string still splits on the comma.
+#[test]
+fn items_expression_rejects_non_array_json() {
+    let rejected = [
+        ("null", Value::Null),
+        ("object", json!({"a": 1, "b": 2})),
+        ("number", json!(0)),
+        ("bool", json!(false)),
+        ("string", json!("\"quoted\"")),
+    ];
+    for (case, list) in rejected {
+        for (construct, field, job) in [
+            ("fan_out", "fan_out.items", echo_fan_out_job()),
+            ("loop", "loop.items", echo_loop_job()),
+        ] {
+            let run = run_graph_job(&job, json!({ "list": list.clone() }));
+            match &run.result {
+                Err(DispatchError::JobExecution(message)) => {
+                    assert!(
+                        message.contains(field),
+                        "{construct} {case}: error names {field}: {message}"
+                    );
+                }
+                other => panic!("{construct} {case}: expected JobExecution, got {other:?}"),
+            }
+            assert!(
+                run.host.calls().is_empty(),
+                "{construct} {case}: no worker runs for non-array JSON"
+            );
+        }
+    }
+
+    let accepted = [
+        ("bare list", json!("A, B"), vec![json!("A"), json!("B")]),
+        (
+            "json array",
+            json!(["A", "B"]),
+            vec![json!("A"), json!("B")],
+        ),
+        (
+            "json array of mixed values",
+            json!(["A", {"k": 1}]),
+            vec![json!("A"), json!({"k": 1})],
+        ),
+        ("empty array", json!([]), Vec::new()),
+    ];
+    for (case, list, items) in accepted {
+        let fan_out = run_graph_job(&echo_fan_out_job(), json!({ "list": list.clone() }));
+        assert!(fan_out.succeeded(), "fan_out {case}: {:?}", fan_out.result);
+        let collected = fan_out.outcome().pipeline["scatter"]
+            .as_array()
+            .expect("fan_out collects an array");
+        let values: Vec<Value> = collected
+            .iter()
+            .map(|output| output["value"].clone())
+            .collect();
+        assert_eq!(values, items, "fan_out {case}: workers run in item order");
+        assert_eq!(
+            fan_out.host.calls().len(),
+            items.len(),
+            "fan_out {case}: one call per item"
+        );
+
+        let loop_run = run_graph_job(&echo_loop_job(), json!({ "list": list }));
+        assert!(loop_run.succeeded(), "loop {case}: {:?}", loop_run.result);
+        let loop_values: Vec<Value> = loop_run
+            .host
+            .calls()
+            .iter()
+            .map(|input| input["value"].clone())
+            .collect();
+        assert_eq!(
+            loop_values, items,
+            "loop {case}: iterations run in item order"
+        );
+    }
+}
+
 /// One kind character per branch, worker or iteration: `+` succeeds, `-`
 /// fails, `!` panics.
 fn probe_input(kind: char, index: usize) -> Value {
@@ -530,6 +612,33 @@ fn probe_step(id: &str, default_input: Value) -> Value {
         "default_input": default_input,
         "spec": { "type": "deterministic", "action": "probe", "config": {} },
     })
+}
+
+fn echo_item_step(id: &str) -> Value {
+    probe_step(id, json!({ "value": "{{ item }}" }))
+}
+
+fn echo_fan_out_job() -> orbit_types::workflow::JobV2 {
+    job_asset(json!([{
+        "id": "scatter",
+        "fan_out": {
+            "items": "{{ input.list }}",
+            "max_workers": 2,
+            "worker": echo_item_step("worker"),
+        },
+        "fan_in": { "join": {"mode": "all"} },
+    }]))
+}
+
+fn echo_loop_job() -> orbit_types::workflow::JobV2 {
+    job_asset(json!([{
+        "id": "spin",
+        "loop": {
+            "items": "{{ input.list }}",
+            "max_iterations": 8,
+            "steps": [echo_item_step("body")],
+        },
+    }]))
 }
 
 fn fan_out_step(max_workers: u32, join: Value) -> Value {
