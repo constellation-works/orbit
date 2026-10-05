@@ -368,11 +368,27 @@ pub(super) fn validate_step(step: &JobV2Step) -> Result<(), DispatchError> {
 
     match &step.body {
         JobV2StepBody::Parallel { parallel } => {
+            if let JoinMode::Quorum { n } = &parallel.join
+                && (*n == 0 || *n as usize > parallel.branches.len())
+            {
+                return Err(DispatchError::JobValidation(format!(
+                    "step `{}` parallel quorum n={n} must be at least 1 and at most \
+                     the branch count ({})",
+                    step.id,
+                    parallel.branches.len()
+                )));
+            }
             for branch in &parallel.branches {
                 validate_step(branch)?;
             }
         }
-        JobV2StepBody::FanOut { fan_out, .. } => {
+        JobV2StepBody::FanOut { fan_out, fan_in } => {
+            if matches!(fan_in.join, JoinMode::Quorum { n: 0 }) {
+                return Err(DispatchError::JobValidation(format!(
+                    "step `{}` fan-in quorum n=0 must be at least 1",
+                    step.id
+                )));
+            }
             validate_step(&fan_out.worker)?;
         }
         JobV2StepBody::Loop { loop_ } => {

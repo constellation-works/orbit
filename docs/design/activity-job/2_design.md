@@ -983,6 +983,8 @@ Parallel branches run under `std::thread::scope`. Join policy is:
 - `any`
 - `quorum { n }`
 
+Before any step runs, `validate_job` rejects a parallel quorum unless `1 <= n <= branches.len()`, naming the owning step. An empty parallel block therefore cannot use a quorum join.
+
 The executor emits `StepJoin` with per-branch outcomes. If the join policy fails and any branch produced a structural error, the first error is surfaced instead of only `success: false`.
 
 ### 8.4 `fan_out` / `fan_in`
@@ -998,6 +1000,8 @@ failed, stale, cancelled, interrupted, or timed-out pilot visible as a failed
 sweep, while a genuinely empty candidate list remains a successful no-op.
 
 Workers use isolated pipeline/session maps. The validator rejects any worker template with `session:` because concurrent workers would otherwise share one mutable `Session`.
+
+`validate_job` also rejects a `fan_in` quorum with `n == 0`, naming the owning fan-out step. Positive fan-in quorums are accepted at validation because the item count is rendered at runtime; `max_workers` limits concurrency, not the total number of workers.
 
 ### 8.5 `loop`
 
