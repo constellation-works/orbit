@@ -174,6 +174,8 @@ the installed binary for its `update --contract` and, when it speaks
   receives the initialize parameters and any unread input (`mcp-stdio-v1`).
   Only requests accepted by the MCP transport count as in flight; malformed or
   dropped messages cannot prevent handover when their errors omit the request id.
+  A buffered partial line larger than 32 KiB defers handover: the current image
+  keeps reading and serving the client, then retries at a later idle boundary.
 - The dashboard drains, then execs the new image on the same address without
   reopening a browser.
 - A drain coordinator (`drain-adopt-v1`) execs between admission passes and **adopts**
