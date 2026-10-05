@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
-use crate::runtime_memo::DIAGNOSTICS_ERRORS_TTL;
+use crate::runtime_memo::{DIAGNOSTICS_ERRORS_TTL, DIAGNOSTICS_FRICTION_TTL};
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
@@ -15,6 +15,7 @@ use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::{InvocationQuery, InvocationRecord, OrbitRuntime, V2AuditEventFilter};
 use serde_json::{Value, json};
 
+use super::runs::{RUN_LOG_PREVIEW_MAX_BYTES, bounded_preview};
 use super::{
     DiagnosticsQuery, HISTORY_DEFAULT_LIMIT, bounded_limit, current_year_month_utc,
     map_runtime_error, month_bounds_utc, validate_year_month,
@@ -203,7 +204,7 @@ pub(super) fn diagnostics_friction_row<'a>(
                 "stderr": event
                     .get("stderr_blob_ref")
                     .and_then(Value::as_str)
-                    .map(|blob_ref| read_blob_text_best_effort(blob_store, blob_ref))
+                    .map(|blob_ref| read_blob_preview_best_effort(blob_store, blob_ref))
                     .unwrap_or_default(),
                 "actor_identity": event.get("agent_identity").cloned().unwrap_or(Value::Null),
             }))
@@ -283,6 +284,19 @@ fn enclosing_step_id_for_event<'a>(
         parent_id = parent.get("parent_event_id").and_then(Value::as_str);
     }
     None
+}
+
+fn read_blob_preview_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
+    // One extra byte distinguishes an exact-cap blob from a truncated one
+    // without loading the rest of the file.
+    let Ok(bytes) = blob_store.read_prefix(blob_ref, RUN_LOG_PREVIEW_MAX_BYTES + 1) else {
+        return String::new();
+    };
+    let mut preview = bounded_preview(&String::from_utf8_lossy(&bytes));
+    if preview.truncated || bytes.len() > RUN_LOG_PREVIEW_MAX_BYTES {
+        preview.text.push_str("\n[truncated]");
+    }
+    preview.text
 }
 
 fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
@@ -530,6 +544,7 @@ fn strip_htmlish(raw: &str) -> String {
 }
 
 pub(super) async fn list_diagnostics_friction(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
@@ -538,20 +553,30 @@ pub(super) async fn list_diagnostics_friction(
         return map_runtime_error(e);
     }
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
-    match super::blocking("diagnostics friction", move || {
-        let mut entries = runtime.read_friction_entries_limited(&month, limit)?;
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
-        entries.truncate(limit);
-        if entries.is_empty() {
-            diagnostics_friction_from_v2_audit(&runtime, &month, limit).map(Value::Array)
-        } else {
-            serde_json::to_value(&entries).map_err(|e| orbit_core::OrbitError::Store(e.to_string()))
-        }
-    })
-    .await
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .diagnostics_friction_memo()
+        .get_or_compute(
+            &runtime,
+            (month.clone(), limit),
+            DIAGNOSTICS_FRICTION_TTL,
+            move || {
+                let mut entries = compute_runtime.read_friction_entries_limited(&month, limit)?;
+                entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
+                entries.truncate(limit);
+                if entries.is_empty() {
+                    diagnostics_friction_from_v2_audit(&compute_runtime, &month, limit)
+                        .map(Value::Array)
+                } else {
+                    serde_json::to_value(&entries)
+                        .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))
+                }
+            },
+        )
+        .await
     {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+        Ok(rows) => Json((*rows).clone()).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 

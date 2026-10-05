@@ -116,6 +116,8 @@ Loop events reference hashes for request bodies, response bodies, tool inputs, a
 
 Dashboard log previews added by [T20260508-14] are derived views over the `v2_audit_events` SQLite store and `.orbit/state/audit/blobs`; they do not duplicate full transcripts into a separate transcript store. Preview responses are byte- and line-capped, apply defensive read-time redaction with the shared redactor, and preserve existing write-time redaction markers. The focused diagnostics error feed is also derived, combining global ERROR tracing rows with structured `ERROR <target>:` lines found in agent stderr blobs. No `.orbit/state/diagnostics/errors/` store exists in this design; retention remains bounded by the existing v2 audit, blob, and global log retention roots.
 
+The audit-derived fallback for `/api/diagnostics/friction` reads only an 8 KiB stderr prefix (plus one byte to detect truncation), then applies the same 8 KiB / 120-line preview bounds and defensive redaction as run logs. Truncated text ends with `[truncated]`; unavailable blobs yield empty stderr. The endpoint caches each workspace-runtime, month and bounded-limit result for 15 seconds with a single-flight gate, retaining the legacy JSONL-first fallback order while collapsing overlapping dashboard polls into one audit scan.
+
 ---
 
 ## 7. Identity and Attribution

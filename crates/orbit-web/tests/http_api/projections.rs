@@ -1,12 +1,142 @@
 use std::fs;
 
 use chrono::{DateTime, Duration, Timelike, Utc};
+use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
+use orbit_core::V2AuditEventInsertParams;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok, write_json};
+
+fn seed_cli_failure(fixture: &Fixture, id: &str, ts: DateTime<Utc>, blob_ref: &str) {
+    fixture
+        .runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: fixture.runtime.workspace_id().unwrap(),
+            event_id: id.into(),
+            source: "v2_envelope".into(),
+            schema_version: 1,
+            event_type: "cli_invocation_finished".into(),
+            ts,
+            run_id: "jrun-friction-fixture".into(),
+            agent_identity: "http-fixture".into(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: json!({
+                "event_id": id,
+                "ts": ts.to_rfc3339(),
+                "body_kind": "cli_invocation_finished",
+                "run_id": "jrun-friction-fixture",
+                "step_id": "implement",
+                "provider": id,
+                "exit_code": 1,
+                "stderr_blob_ref": blob_ref,
+            })
+            .to_string(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn friction_stderr_previews_bound_bytes_and_lines_and_tolerate_missing_blobs() {
+    isolated(
+        "projections::friction_stderr_previews_bound_bytes_and_lines_and_tolerate_missing_blobs",
+        || {
+            let fixture = Fixture::new();
+            let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+            let ts = "2026-04-10T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+            let cases = [
+                (
+                    "oversized",
+                    "x".repeat(1024 * 1024),
+                    format!("{}\n[truncated]", "x".repeat(8192)),
+                ),
+                ("exact-cap", "x".repeat(8192), "x".repeat(8192)),
+                ("short", "short stderr\n".into(), "short stderr\n".into()),
+                (
+                    "many-lines",
+                    "line\n".repeat(121),
+                    format!("{}\n[truncated]", "line\n".repeat(120)),
+                ),
+                (
+                    "unicode",
+                    format!("{}☃tail", "x".repeat(8191)),
+                    format!("{}\n[truncated]", "x".repeat(8191)),
+                ),
+                ("missing", String::new(), String::new()),
+            ];
+            for (id, content, _) in &cases {
+                let blob_ref = if *id == "missing" {
+                    "0".repeat(64)
+                } else {
+                    blobs.write(content.as_bytes()).unwrap()
+                };
+                seed_cli_failure(&fixture, id, ts, &blob_ref);
+            }
+            let server = fixture.server(false);
+            let result =
+                json_ok(server.get(
+                    "/api/diagnostics/friction?month=2026-04&limit=20&workspace=ws_http_fixture",
+                ));
+            let rows = result.as_array().unwrap();
+            assert_eq!(rows.len(), cases.len());
+            for (id, _, expected) in cases {
+                let row = rows.iter().find(|row| row["command"] == id).unwrap();
+                assert_eq!(row["stderr"], expected, "bounded stderr for {id}");
+                assert_eq!(row["step"], "implement");
+                assert_eq!(row["exit_code"], 1);
+            }
+        },
+    );
+}
+
+#[test]
+fn friction_polls_reuse_projection_without_mixing_months_or_limits() {
+    isolated(
+        "projections::friction_polls_reuse_projection_without_mixing_months_or_limits",
+        || {
+            let fixture = Fixture::new();
+            let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+            let blob_ref = blobs.write(b"cached stderr").unwrap();
+            let ts = "2026-04-10T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+            seed_cli_failure(&fixture, "first", ts, &blob_ref);
+            let server = fixture.server(false);
+            let path = "/api/diagnostics/friction?month=2026-04&limit=1&workspace=ws_http_fixture";
+            let first = json_ok(server.get(path));
+            assert_eq!(first.as_array().unwrap().len(), 1);
+            assert_eq!(first[0]["command"], "first");
+
+            // If a second poll rescans the audit store it will return the new
+            // event, rather than the previously computed projection.
+            seed_cli_failure(&fixture, "second", ts + Duration::seconds(1), &blob_ref);
+            assert_eq!(json_ok(server.get(path)), first, "poll must reuse its memo");
+            let two =
+                json_ok(server.get(
+                    "/api/diagnostics/friction?month=2026-04&limit=2&workspace=ws_http_fixture",
+                ));
+            assert_eq!(two.as_array().unwrap().len(), 2);
+            assert_eq!(two[0]["command"], "second");
+            assert_eq!(two[1]["command"], "first");
+            let previous =
+                json_ok(server.get(
+                    "/api/diagnostics/friction?month=2026-03&limit=1&workspace=ws_http_fixture",
+                ));
+            assert!(
+                previous.as_array().unwrap().is_empty(),
+                "month has its own memo"
+            );
+            assert_eq!(
+                server
+                    .get("/api/diagnostics/friction?month=invalid&workspace=ws_http_fixture")
+                    .status()
+                    .as_u16(),
+                400,
+            );
+        },
+    );
+}
 
 #[test]
 fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
