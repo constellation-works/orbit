@@ -839,3 +839,176 @@ fn a_bounded_child_with_deny_tcp_cannot_connect() {
     output.assert_withheld("CONNECTED");
     output.assert_returned("REFUSED");
 }
+
+fn skip_write_boundary() -> bool {
+    if unenforceable() {
+        return true;
+    }
+    let probe = probe_landlock();
+    if probe.abi < WRITE_LANDLOCK_ABI {
+        println!("skipping write-boundary read carve: {}", probe.detail);
+        return true;
+    }
+    false
+}
+
+/// `data/public.txt` beside `data/private/key`, under one write root.
+fn write_root_over_secret(fixture: &Fixture) -> PathBuf {
+    let data = fixture.root().join("data");
+    fs::create_dir_all(data.join("private")).expect("create private dir");
+    fs::write(data.join("public.txt"), "PUBLIC_SENTINEL").expect("write public");
+    fs::write(data.join("private").join("key"), "SECRET_SENTINEL").expect("write secret");
+    data
+}
+
+fn assert_secret_stays_unreadable(fixture: &Fixture, boundary: &LandlockBoundary, data: &Path) {
+    let secret = data.join("private").join("key");
+    spawn_bounded(fixture, boundary, &format!("cat {}", secret.display()))
+        .assert_withheld("SECRET_SENTINEL");
+
+    // A sibling in the same write root still reads and writes.
+    let public = data.join("public.txt");
+    spawn_bounded(
+        fixture,
+        boundary,
+        &format!(
+            "cat {p} && echo MORE >> {p} && cat {p}",
+            p = public.display()
+        ),
+    )
+    .assert_returned("MORE");
+    assert!(
+        fs::read_to_string(&public)
+            .expect("read sibling back")
+            .contains("MORE"),
+        "a permitted write in the carved root must reach the disk"
+    );
+
+    // A name created inside the restricted directory after spawn is not
+    // readable either. The write itself is allowed: a read deny is not a
+    // modify deny, and the ancestor keeps its write rights.
+    let fresh = data.join("private").join("fresh");
+    spawn_bounded(
+        fixture,
+        boundary,
+        &format!(
+            "echo NEW_SECRET > {} && cat {}",
+            fresh.display(),
+            fresh.display()
+        ),
+    )
+    .assert_withheld("NEW_SECRET");
+    assert!(
+        fs::read_to_string(&fresh)
+            .expect("read fresh secret from the parent")
+            .contains("NEW_SECRET"),
+        "the restricted subtree stays writable"
+    );
+}
+
+/// A write-tree grant includes read rights. Those rights must not undo a
+/// read deny that sits beneath the write root.
+#[test]
+fn a_write_root_above_a_read_deny_cannot_read_the_denied_file() {
+    if skip_write_boundary() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let data = write_root_over_secret(&fixture);
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        read_denies: vec![data.join("private")],
+        read_exclusions: Vec::new(),
+        write: vec![data.clone()],
+        write_files: vec![],
+        deny_tcp: false,
+    };
+    assert_secret_stays_unreadable(&fixture, &boundary, &data);
+
+    // The same deny holds for a directory that does not exist until the
+    // child creates it.
+    let later = data.join("later");
+    let boundary = LandlockBoundary {
+        read_denies: vec![later.clone()],
+        ..boundary
+    };
+    let created = later.join("key");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!(
+            "mkdir -p {} && echo LATER_SECRET > {} && cat {}",
+            later.display(),
+            created.display(),
+            created.display()
+        ),
+    )
+    .assert_withheld("LATER_SECRET");
+    assert!(
+        fs::read_to_string(&created)
+            .expect("read later secret from the parent")
+            .contains("LATER_SECRET")
+    );
+}
+
+/// Caller read exclusions are carved the same way. The directory that holds
+/// the excluded path stays writable; the file does not become readable
+/// through the write root.
+#[test]
+fn a_write_root_above_a_caller_read_exclusion_cannot_read_the_excluded_file() {
+    if skip_write_boundary() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let data = write_root_over_secret(&fixture);
+    let exclusion = format!("{}/private/**", data.display());
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        read_denies: Vec::new(),
+        read_exclusions: vec![exclusion],
+        write: vec![data.clone()],
+        write_files: vec![],
+        deny_tcp: false,
+    };
+    assert_secret_stays_unreadable(&fixture, &boundary, &data);
+}
+
+/// A single-file write grant includes read. Naming the denied file itself
+/// must not hand that read back. A write path nested strictly inside a
+/// broader deny is a different case: it stays read-write, the way a
+/// plugin's own state directory stays readable under `state/plugins`.
+#[test]
+fn a_write_file_at_a_read_deny_cannot_read_that_file() {
+    if skip_write_boundary() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let data = write_root_over_secret(&fixture);
+    let secret = data.join("private").join("key");
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        read_denies: vec![secret.clone()],
+        read_exclusions: Vec::new(),
+        write: vec![],
+        write_files: vec![secret.clone()],
+        deny_tcp: false,
+    };
+    spawn_bounded(&fixture, &boundary, &format!("cat {}", secret.display()))
+        .assert_withheld("SECRET_SENTINEL");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!(
+            "echo OVERWRITE > {} && cat {}",
+            secret.display(),
+            secret.display()
+        ),
+    )
+    .assert_withheld("OVERWRITE");
+    assert!(
+        fs::read_to_string(&secret)
+            .expect("read overwritten secret from the parent")
+            .contains("OVERWRITE"),
+        "the named write file stays writable"
+    );
+}

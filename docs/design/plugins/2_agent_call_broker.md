@@ -408,6 +408,13 @@ only at the paths it matches when the ruleset is compiled. The same limit applie
 `modify` exclusion inside a kept write root, and both gaps are logged at spawn. The Bubblewrap
 agent has the same limit for a name created after spawn.
 
+A write root is not dropped for a read exclusion or a credential read deny. When the root is
+at or above one of those paths, Landlock carves it out of the write root's read rights, so the
+subtree stays writable and is not readable. A write root nested inside a broader deny, with
+nothing denied beneath it, stays read-write: that is the plugin's own state directory under
+`state/plugins`. A wildcard read exclusion has the same spawn-time limit under a write root as
+under a read root.
+
 The seatbelt profile replays the caller's `modify` rules in their own order, after the
 plugin's grants. Each exclusion is replayed as written. Each grant is clipped to the roots the
 backend kept, so a root the agent re-allows beneath an exclusion stays writable and nothing
