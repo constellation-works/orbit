@@ -295,7 +295,7 @@ fn group_acceptance_criteria(rule: &str, group: &CodeAlertGroup) -> Vec<String> 
         remediate,
         "Preserve the intended behavior while removing the data flow or unsafe construct identified in the inline alert evidence.".to_string(),
         "Record one disposition for every alert listed in the task description: `fixed`, `already-covered`, or `not-reproducible-in-source`. An `already-covered` disposition must name the covering commit, show that commit is an ancestor of the HEAD you validated, and cite the current source carrying the repair; never present another task's commit as this task's own change.".to_string(),
-        "Run the repository's documented validation and security checks and confirm the identified rule no longer reports at the affected locations. For local Rust CodeQL confirmation, use `scripts/codeql-rust-local.sh` with the identified query or suite as documented in `docs/runbooks/codeql-local.md`; incomplete semantic extraction is not acceptance evidence. Report source-side coverage and hosted alert closure separately: do not record a hosted alert as closed without a hosted rescan.".to_string(),
+        "Run the repository's documented validation and security checks and confirm the identified rule no longer reports at the affected locations. Use the repository's documented local CodeQL procedure for confirmation; a result based on incomplete semantic extraction is not acceptance evidence. Report source-side coverage and hosted alert closure separately: do not record a hosted alert as closed without a hosted rescan.".to_string(),
     ]
 }
 
@@ -338,7 +338,7 @@ fn group_description(request: &CodeGroupTaskRequest<'_>) -> String {
     } else {
         "\nRemediate the shared cause once, confirm every location in the ledger, and run the repository's normal validation.\n"
     });
-    out.push_str("\nFor local Rust CodeQL confirmation, run `scripts/codeql-rust-local.sh` with the identified query or suite; see `docs/runbooks/codeql-local.md` for isolated toolchain preparation, extraction checks, and per-location SARIF verification. A query result from extraction that skipped semantic analysis or macro expansion cannot confirm the repair.\n");
+    out.push_str("\nUse the repository's documented local CodeQL procedure to confirm the repair. A CodeQL result based on incomplete semantic extraction cannot confirm it.\n");
     out
 }
 
