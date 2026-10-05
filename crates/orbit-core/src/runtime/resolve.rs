@@ -424,19 +424,37 @@ fn resolve_explicit_root_path_value(
 }
 
 fn resolve_initialized_root(root: PathBuf) -> Result<PathBuf, OrbitError> {
+    initialized_root_or_child(&root).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "{} is not an Orbit workspace; run `orbit workspace init` first or pass `--root <path/to/.orbit>`",
+            root.display()
+        ))
+    })
+}
+
+/// The initialized workspace an explicit root names, if it names one.
+///
+/// `Ok(None)` means the path is not an initialized Orbit workspace. A
+/// malformed root is still an error. [`try_resolve_initialized_roots`] keeps
+/// its own contract: the same uninitialized explicit path remains a hard error
+/// there, because that caller asked to open the workspace.
+pub fn initialized_explicit_workspace_root(
+    raw: &str,
+    cwd: &Path,
+) -> Result<Option<PathBuf>, OrbitError> {
+    let root = resolve_root_path_value(raw, cwd)?;
+    Ok(initialized_root_or_child(&root))
+}
+
+fn initialized_root_or_child(root: &Path) -> Option<PathBuf> {
     let child_orbit = root.join(".orbit");
     if is_initialized_orbit_root(&child_orbit) {
-        return Ok(child_orbit);
+        return Some(child_orbit);
     }
-
-    if is_initialized_orbit_root(&root) {
-        return Ok(root);
+    if is_initialized_orbit_root(root) {
+        return Some(root.to_path_buf());
     }
-
-    Err(OrbitError::InvalidInput(format!(
-        "{} is not an Orbit workspace; run `orbit workspace init` first or pass `--root <path/to/.orbit>`",
-        root.display()
-    )))
+    None
 }
 
 fn is_initialized_orbit_root(path: &Path) -> bool {
@@ -504,6 +522,20 @@ pub fn try_resolve_initialized_roots_with_hint(
         )));
     }
 
+    try_resolve_initialized_cwd_roots_with_hint(cwd, hint)
+}
+
+/// Discover an initialized workspace from the working directory.
+///
+/// Explicit `--root` and `ORBIT_ROOT` are ignored. Callers that honor those
+/// overrides use [`try_resolve_initialized_roots_with_hint`], which still
+/// requires an explicit root to be initialized. Returns `Ok(None)` when no
+/// initialized workspace is discovered from the worktree, catalog hint, or
+/// walk-up. A broken workspace config is still an error.
+pub fn try_resolve_initialized_cwd_roots_with_hint(
+    cwd: &Path,
+    hint: Option<&WorkspaceRootHint>,
+) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
     if let Some(orbit_dir) = find_main_worktree_orbit_dir(cwd)
         && is_initialized_orbit_root(&orbit_dir)
     {
