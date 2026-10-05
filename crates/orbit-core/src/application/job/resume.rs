@@ -8,10 +8,15 @@
 //!
 //! 1. **Blocked tasks.** A terminal run failure or interruption blocks every
 //!    coupled task (`runtime::task::block_on_run_failure`; `workflow_run_failed`
-//!    or `workflow_run_interrupted`), and `blocked` is not in the
-//!    workflow-admission allowlist. If the resumed run replays
-//!    `worktree_setup`, admission rejects the very task the resume exists to
-//!    recover — a catch-22.
+//!    or `workflow_run_interrupted`). The run's own failure handoff can block
+//!    the task first (`pr_failure_handoff`, `pr_conflict_blocked`,
+//!    `validation_environment_blocked`, `review_gate_escalation`), and
+//!    finalization then leaves that block in place because `blocked` is not
+//!    blockable again. `blocked` is also outside the workflow-admission
+//!    allowlist. If the resumed run replays `worktree_setup`, admission
+//!    rejects the very task the resume exists to recover — a catch-22.
+//!    Resume readmits a block only when that latest system entry attributes
+//!    itself to this lineage. An operator block stays untouched.
 //! 2. **Ownership drift.** When checkpoints *are* reused, `worktree_setup` is
 //!    skipped, so nothing re-claims the task. Downstream delivery steps keep
 //!    consuming the checkpointed `steps.<worktree>.output.job_run_id` as their
@@ -19,9 +24,10 @@
 //!    intervening failed attempt. `load_handoff_context` then fails closed with
 //!    "task ... no longer belongs to job run ...".
 //!
-//! 3. **Delivery stage.** A final-recovery escalation can block a task after
-//!    promotion to review. Reusing that promotion checkpoint must restore
-//!    review, rather than readmitting implementation that completion skips.
+//! 3. **Delivery stage.** A final-recovery escalation, or a failure-handoff
+//!    block attributed to this lineage, can block a task after promotion to
+//!    review. Reusing that promotion checkpoint must restore review, rather
+//!    than readmitting implementation that completion skips.
 //!
 //! These are repaired by reconciling against the run's **explicit retry
 //! lineage** — the source run, its `retry_source_run_id` ancestors, and the
@@ -455,7 +461,14 @@ impl OrbitRuntime {
     }
 }
 
-/// Only system-written workflow blocks carry stage-restoration provenance.
+/// The run a system block attributes itself to, when resume may undo it.
+///
+/// Workflow failure and interruption notes carry `, run_id=<id>,`. Final
+/// recovery carries `run_id=` inside its escalation prefix. The run's own
+/// failure handoff (`pr_failure_handoff`, `pr_conflict_blocked`,
+/// `validation_environment_blocked`, `review_gate_escalation` in
+/// `executor::automation::vcs::failure`) carries `: run=<id>,`. Any other
+/// block, including an operator decision, returns `None` and stays put.
 fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
     if entry.by != SYSTEM_ACTOR_LABEL || entry.to_status != Some(TaskStatus::Blocked) {
         return None;
@@ -469,8 +482,23 @@ fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
             .strip_prefix("final recovery (run_id=")?
             .split_once(") escalated:")
             .map(|(id, _)| id),
+        "pr_failure_handoff"
+        | "pr_conflict_blocked"
+        | "validation_environment_blocked"
+        | "review_gate_escalation" => failure_handoff_run_id(note),
         _ => None,
     }
+}
+
+/// `run=<id>` in a failure-handoff note, bounded by the next comma or semicolon.
+fn failure_handoff_run_id(note: &str) -> Option<&str> {
+    let id = note
+        .split_once(": run=")?
+        .1
+        .split([',', ';'])
+        .next()?
+        .trim();
+    (!id.is_empty()).then_some(id)
 }
 
 /// Resolve host actions, never agent claims or a step name alone. A promotion
