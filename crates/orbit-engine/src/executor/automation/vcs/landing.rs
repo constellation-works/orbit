@@ -147,7 +147,9 @@ impl LandingView {
 ///
 /// Returns the completion outcome when the external state proves the candidate
 /// merged; `None` means the intent is resolved as *not* merged and this run may
-/// attempt a fresh, fully rechecked landing.
+/// attempt a fresh, fully rechecked landing. A merged pull request with a
+/// different identity resolves the external uncertainty before recording Stop;
+/// resolving an intent is not proof that the authorized candidate landed.
 fn reconcile_intent<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
@@ -155,21 +157,31 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
     view: &LandingView,
 ) -> Result<Option<Value>, OrbitError> {
     let candidate = &context.candidate;
+    let mut delivery_error = None;
     let (merged, evidence) = match &candidate.delivery {
         HandoffDelivery::PullRequest { number } => {
             let status = read_pr_status(host, &context.workspace_path, &number.to_string())?;
             match classify_pr_state(&status) {
                 PrMergeState::Merged => {
                     let pin = pin_for(candidate);
-                    let delivered = pin.ensure_delivered(&status, &number.to_string())?;
-                    (
-                        true,
-                        json!({
+                    let evidence = match pin.ensure_delivered(&status, &number.to_string()) {
+                        Ok(delivered) => json!({
                             "reconciled": "pull_request_merged",
                             "pull_request": number,
                             "delivery": delivered.as_json(),
                         }),
-                    )
+                        Err(error) => {
+                            let evidence = json!({
+                                "reconciled": "pull_request_merged",
+                                "pull_request": number,
+                                "provider_state": status,
+                                "delivery_error": error.to_string(),
+                            });
+                            delivery_error = Some(error);
+                            evidence
+                        }
+                    };
+                    (true, evidence)
                 }
                 other => (
                     false,
@@ -226,6 +238,9 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
         None,
         &evidence,
     )?;
+    if let Some(error) = delivery_error {
+        return Err(stop(host, context, &error.to_string())?);
+    }
     if !merged {
         return Ok(None);
     }
