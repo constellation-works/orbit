@@ -120,7 +120,7 @@ impl UpdateCommand {
         let doc = serde_json::to_value(&report)
             .map_err(|error| OrbitError::Execution(format!("serialize update report: {error}")))?;
         let exit_code = report.exit_code();
-        Ok(Payload::detail(doc, format_report(&report))
+        Ok(Payload::detail(doc, format_report(&report, self.check))
             .with_exit_code(exit_code)
             .into())
     }
@@ -135,7 +135,7 @@ fn describe_authorities(roots: &[PathBuf]) -> String {
         .join(" and ")
 }
 
-fn format_report(report: &UpdateReport) -> String {
+fn format_report(report: &UpdateReport, check: bool) -> String {
     let mut text = format!(
         "orbit {} → {}\n  install:  {} ({})\n  platform: {}\n  releases: {}\n",
         report.current_version,
@@ -172,6 +172,9 @@ fn format_report(report: &UpdateReport) -> String {
     }
     text.push('\n');
     match report.outcome {
+        UpdateOutcome::AlreadyCurrent if check => {
+            text.push_str("No newer release is available.\n");
+        }
         UpdateOutcome::AlreadyCurrent => {
             text.push_str("Already on the requested release; workspace state is converged.\n");
         }

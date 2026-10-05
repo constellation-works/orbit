@@ -62,10 +62,10 @@ pub fn run_update(
     };
 
     if request.check {
-        // Read-only: report what an update would do, including for a channel
+        // Read-only: report whether a newer release exists, including for a channel
         // Orbit does not own. Refusing here would make "is there an update?"
         // fail for a reason that has nothing to do with the answer.
-        report.outcome = if target == snapshot {
+        report.outcome = if target <= snapshot {
             UpdateOutcome::AlreadyCurrent
         } else {
             UpdateOutcome::UpdateAvailable

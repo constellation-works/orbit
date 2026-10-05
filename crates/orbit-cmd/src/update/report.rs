@@ -20,9 +20,10 @@ pub const EXIT_UPDATE_AVAILABLE: i32 = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateOutcome {
-    /// The requested version is already installed and state is converged.
+    /// `--check` found no newer release, or the requested version is already
+    /// installed and state is converged after applying an update.
     AlreadyCurrent,
-    /// `--check` found a different version to install.
+    /// `--check` found a newer version to install.
     UpdateAvailable,
     /// The executable and workspace state are both at the target version.
     Updated,

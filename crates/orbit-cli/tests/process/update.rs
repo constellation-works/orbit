@@ -596,6 +596,34 @@ fn check_is_quiet_and_succeeds_when_the_installed_release_is_current() {
 }
 
 #[test]
+fn check_succeeds_without_recommending_an_update_when_the_published_release_is_older() {
+    let home = tempdir().expect("home");
+    let mirror = mirror_publishing("0.0.0");
+    let output = orbit(home.path(), home.path(), mirror.path())
+        .args(["update", "--check", "--json"])
+        .output()
+        .expect("check an older published release");
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("check report");
+    assert_eq!(report["outcome"], "already_current");
+    assert_eq!(report["current_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(report["target_version"], "0.0.0");
+    assert_eq!(report["replaced"], false);
+    assert_eq!(report["steps"], serde_json::json!([]));
+
+    let output = orbit(home.path(), home.path(), mirror.path())
+        .args(["update", "--check"])
+        .output()
+        .expect("render a check of an older published release");
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains("An update is available"), "{text}");
+    assert!(!text.contains("`orbit update`"), "{text}");
+}
+
+#[test]
 fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
