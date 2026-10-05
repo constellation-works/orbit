@@ -1,5 +1,70 @@
 use super::*;
 
+use orbit_types::workflow::{
+    REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewReport, ReviewReportHistory,
+    ReviewReportRevision,
+};
+
+/// The report history to write beside a before-PR review report this update
+/// replaces [ORB-14192]: the held history with the new revision appended.
+///
+/// Both artifact writers call it — an ordinary update and a claimed worker's
+/// evidence committed on the owner. It runs under the task lock and lands in
+/// the same manifest rewrite as the report, so no accepted revision can be replaced before it is retained —
+/// whether or not settlement ran in between — and a crash leaves either both
+/// or neither. A report that does not parse carries no obligations and adds
+/// no revision; settlement refuses it on its own. A held history this build
+/// cannot read refuses the update rather than being overwritten.
+pub(crate) fn review_report_history(
+    bundle_dir: &Path,
+    held: &BTreeMap<String, ArtifactManifestFileV2>,
+    artifacts: &[TaskArtifact],
+    actor: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<Option<TaskArtifact>, OrbitError> {
+    let Some(report) = artifacts.iter().rev().find(|artifact| {
+        normalize_v2_artifact_path(&artifact.path).ok().as_deref() == Some(REVIEW_REPORT_ARTIFACT)
+    }) else {
+        return Ok(None);
+    };
+    let Ok(parsed) = ReviewReport::parse(&report.content) else {
+        return Ok(None);
+    };
+    let mut history = match held.get(REVIEW_REPORT_HISTORY_ARTIFACT) {
+        Some(file) => {
+            let path = resolve_v2_artifact_file_path(bundle_dir, &file.blob)?.ok_or_else(|| {
+                OrbitError::Store(format!(
+                    "{REVIEW_REPORT_HISTORY_ARTIFACT} blob {} is missing",
+                    file.blob
+                ))
+            })?;
+            let content = fs::read(&path).map_err(|err| OrbitError::Io(err.to_string()))?;
+            ReviewReportHistory::parse(&content).map_err(OrbitError::Store)?
+        }
+        None => ReviewReportHistory::default(),
+    };
+    let recorded = history
+        .record(ReviewReportRevision {
+            attempt_id: parsed.attempt_id,
+            sha256: sha256_hex(&report.content),
+            observed_at: now,
+            recorded_by: actor.to_string(),
+            verdict: parsed.verdict,
+            validation: parsed.validation,
+        })
+        .map_err(OrbitError::InvalidInput)?;
+    if !recorded {
+        return Ok(None);
+    }
+    Ok(Some(TaskArtifact {
+        path: REVIEW_REPORT_HISTORY_ARTIFACT.to_string(),
+        media_type: "application/json".to_string(),
+        content: serde_json::to_vec_pretty(&history)
+            .map_err(|err| OrbitError::Store(err.to_string()))?,
+        created_by: None,
+    }))
+}
+
 fn immutable_artifact_blob(path: &str, sha256: &str) -> String {
     // Keep new blobs in the already-durable files directory. The path digest
     // distinguishes equal contents at different logical artifact paths.
@@ -127,6 +192,11 @@ impl TaskV2Store {
                     "automation evidence authority is reserved for the artifact store".into(),
                 ));
             }
+            if artifact.path == REVIEW_REPORT_HISTORY_ARTIFACT {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{REVIEW_REPORT_HISTORY_ARTIFACT} is reserved for the artifact store"
+                )));
+            }
             // Settlement reads these bytes only after the action stops, when
             // nobody can fix them; refusing here hands the submitter the
             // exact error while its run can still re-put the file.
@@ -175,6 +245,12 @@ impl TaskV2Store {
                 .collect::<BTreeMap<_, _>>();
 
             let now = Utc::now();
+            let mut artifacts = artifacts.clone();
+            if let Some(history) =
+                review_report_history(&bundle_dir, &by_path, &artifacts, &fields.actor, now)?
+            {
+                artifacts.push(history);
+            }
             for artifact in &artifacts {
                 let path = normalize_v2_artifact_path(&artifact.path)?;
                 let sha256 = sha256_hex(&artifact.content);

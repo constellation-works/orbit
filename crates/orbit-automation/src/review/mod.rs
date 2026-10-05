@@ -23,7 +23,10 @@ mod validation;
 #[cfg(test)]
 mod tests;
 
-pub use validation::{ValidationDefect, validation_evidence, validation_role_counts};
+pub use validation::{
+    ValidationContext, ValidationDefect, validation_evidence, validation_limitations,
+    validation_role_counts,
+};
 
 /// Contract label folded into every task-meaning digest.
 pub const TASK_MEANING_CONTRACT: &str = "review_task_meaning_v1";
@@ -73,8 +76,9 @@ pub fn combined_task_meaning_digest(
 /// its base.
 ///
 /// The validation rules are re-derived here rather than trusting the
-/// `validation_complete` flag alone, so a certificate whose records do not
-/// support the flag is never spent as coverage.
+/// `validation_complete` flag alone, against the scope and retained
+/// obligations the certificate itself records, so a certificate whose records
+/// do not support the flag is never spent as coverage.
 pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), ReviewInvalidation> {
     if certificate.schema_version != REVIEW_CONTRACT_VERSION {
         return Err(ReviewInvalidation::MappingUnknown);
@@ -82,7 +86,13 @@ pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), Rev
     if !certificate.verdict.passed() || certificate.assurance.is_none() {
         return Err(ReviewInvalidation::VerdictNotPassed);
     }
-    if !certificate.validation_complete || validation_evidence(&certificate.validation).is_err() {
+    let context = ValidationContext {
+        scope: &certificate.validation_scope,
+        obligations: &certificate.retained_obligations,
+    };
+    if !certificate.validation_complete
+        || validation_evidence(&certificate.validation, &context).is_err()
+    {
         return Err(ReviewInvalidation::ValidationIncomplete);
     }
     if certificate.final_candidate.tree == certificate.base.tree {

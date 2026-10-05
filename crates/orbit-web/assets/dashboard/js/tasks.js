@@ -758,6 +758,12 @@ function buildReviewGate(review) {
     `findings: ${Array.isArray(review.findings) ? review.findings.length : 0} · validation: ${Array.isArray(review.validation) ? review.validation.length : 0} record(s), complete: ${review.validation_complete ? "yes" : "no"}`,
     `reviewer runtime: ${consumed.seconds ?? 0}s of ${budget.minutes ?? "?"} min`,
   ];
+  if (Array.isArray(review.validation_limitations) && review.validation_limitations.length) {
+    lines.push(`not established: ${review.validation_limitations.join("; ")}`);
+  }
+  if (Array.isArray(review.retained_obligations) && review.retained_obligations.length) {
+    lines.push(`retained from earlier report revisions: ${review.retained_obligations.map((o) => `${o.validation?.command ?? "?"} ${o.validation?.outcome ?? "?"}`).join(", ")}`);
+  }
   if (review.escalation) lines.push(`escalation: ${review.escalation}`);
   if (Array.isArray(review.landings) && review.landings.length) {
     for (const landing of review.landings) {

@@ -11,6 +11,8 @@
 //! - The owner's commit boundary admits at most one claim per request and per
 //!   task under concurrent pulls, and a handoff is authorized only by the
 //!   policy its claim was admitted under and only over unchanged evidence.
+//! - Claimed evidence stores canonical artifact paths, and racing review
+//!   report revisions are each retained in the store-owned report history.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -36,7 +38,7 @@ use orbit_store::contracts::{
     ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ClaimWorkerUpdate,
     ExecutionClaim, ExecutionClaimPhase, ExecutionLocation, HandoffObservation,
     HandoffReviewObservation, HandoffReviewRefusal, JobRunStoreBackend, PullDestination,
-    TaskCreateParams,
+    TaskArtifactUpdateParams, TaskCreateParams,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
@@ -58,8 +60,9 @@ use orbit_types::workflow::handoff::{
 };
 use orbit_types::workflow::{
     CommitIdentity, JobRunState, PipelineState, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
-    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewTiming, ReviewVerdict,
-    ReviewerIdentity, automation::SourceRevision,
+    REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewBudget, ReviewCertificate,
+    ReviewConsumption, ReviewReportHistory, ReviewTiming, ReviewVerdict, ReviewerIdentity,
+    automation::SourceRevision,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -1835,6 +1838,8 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
         consumed: ReviewConsumption::default(),
         budget: ReviewBudget { minutes: 45 },
         escalation: None,
+        retained_obligations: vec![],
+        validation_scope: vec![],
         selectors_widened: vec![],
         issued_at: Utc::now(),
     }
@@ -2202,4 +2207,100 @@ fn claim_evidence_stores_canonical_artifact_paths() {
         .expect("canonical notes");
     assert_eq!(notes.path, "notes");
     assert_eq!(notes.content, b"final");
+}
+
+fn review_report(verdict: &str) -> TaskArtifact {
+    TaskArtifact {
+        path: REVIEW_REPORT_ARTIFACT.to_string(),
+        content: format!(
+            r#"{{"schema_version":1,"attempt_id":"rvw-1","verdict":"{verdict}","summary":"Checked.","validation":[{{"command":"make ci-fast","outcome":"passed"}}],"escalation":"decide"}}"#
+        )
+        .into_bytes(),
+        media_type: "application/json".to_string(),
+        created_by: None,
+    }
+}
+
+/// Two compositions commit a claimed reviewer's report revisions at the same
+/// instant (a retry racing its replacement): the commit boundary serializes
+/// them, the report history retains both, and no writer may supply the
+/// history itself.
+#[test]
+fn racing_report_writers_each_retain_their_revision() {
+    if !isolated("racing_report_writers_each_retain_their_revision") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let task = owner.create_task("review report");
+    let claim = owner.pull(&owner_request("report")).claim.expect("claim");
+    let worker = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        None,
+    );
+    let other = Coordinated::open(root.path());
+    let put = |store: &Coordinated, artifact: TaskArtifact| {
+        store.backends.task.artifact.upsert_task_artifacts(
+            &task.id,
+            TaskArtifactUpdateParams {
+                origin: None,
+                actor: "codex".to_string(),
+                owner_run_id: None,
+                upsert_artifacts: vec![artifact],
+            },
+        )
+    };
+    let evidence = |store: &Coordinated, id: &str, artifact: TaskArtifact| {
+        store.backends.commit_boundary.mutate_execution_claim(
+            Some(&worker),
+            id,
+            &ClaimMutation::Evidence(ClaimEvidence {
+                artifacts: vec![artifact],
+                ..Default::default()
+            }),
+        )
+    };
+
+    let barrier = Barrier::new(2);
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            barrier.wait();
+            evidence(&owner, "evidence-first", review_report("incomplete"))
+        });
+        let second = scope.spawn(|| {
+            barrier.wait();
+            evidence(&other, "evidence-second", review_report("accept"))
+        });
+        first.join().unwrap().expect("the first revision");
+        second.join().unwrap().expect("the second revision");
+    });
+
+    let history = owner
+        .backends
+        .task
+        .artifact
+        .get_task_artifact(&task.id, REVIEW_REPORT_HISTORY_ARTIFACT)
+        .unwrap()
+        .expect("the store wrote the report history");
+    let history = ReviewReportHistory::parse(&history.content).unwrap();
+    let verdicts = history
+        .for_attempt("rvw-1")
+        .map(|revision| revision.verdict)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        verdicts.len(),
+        2,
+        "both revisions are retained: {verdicts:?}"
+    );
+    assert!(verdicts.contains(&ReviewVerdict::Incomplete));
+    assert!(verdicts.contains(&ReviewVerdict::Accept));
+
+    let forged = text_artifact(REVIEW_REPORT_HISTORY_ARTIFACT, "{}");
+    assert!(invalid_input(put(&owner, forged.clone()).unwrap_err()).contains("reserved"));
+    assert!(
+        invalid_input(evidence(&owner, "evidence-history", forged).unwrap_err())
+            .contains("reserved")
+    );
 }

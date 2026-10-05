@@ -98,8 +98,9 @@ refused. `criteria_evidence` is an array of non-empty strings, one per
 acceptance criterion in order, never objects. Each `validation[]` entry
 flattens `command`, `outcome`, `role` and `log_artifact` as siblings; every
 required command's entry carries `outcome: "passed"` and `role: "required"`.
-The role vocabulary is `required`, `expected_failure`, `excluded` and
-`superseded`; other values such as `acceptance` or `gate` are refused.
+The role vocabulary is `required`, `expected_failure`, `excluded`,
+`superseded` and `diagnostic`; other values such as `acceptance` or `gate` are
+refused.
 If a required check or covering evidence is unavailable, record the blocker;
 do not claim a verified already-landed result.
 

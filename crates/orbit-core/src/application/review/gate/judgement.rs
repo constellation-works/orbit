@@ -4,17 +4,21 @@
 use std::collections::BTreeMap;
 
 use orbit_automation::review::{
-    combined_task_meaning_digest, task_meaning_digest, validation_evidence, validation_role_counts,
+    ValidationContext, combined_task_meaning_digest, task_meaning_digest, validation_evidence,
+    validation_limitations, validation_role_counts,
 };
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
+use orbit_common::security::release::sha256_hex;
 use orbit_engine::review_gate::{
     REVIEW_ATTEMPT_TRAILER, commit_reviewer_repairs, uncommitted_paths,
 };
 use orbit_types::task::{ContextWideningStep, Task, TaskArtifact};
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
-    ReviewAttempt, ReviewCertificate, ReviewReport, ReviewVerdict, ReviewerIdentity,
+    REVIEW_REPORT_HISTORY_ARTIFACT, RetainedObligation, ReviewAttempt, ReviewCertificate,
+    ReviewReport, ReviewReportHistory, ReviewReportRevision, ReviewValidation, ReviewVerdict,
+    ReviewerIdentity, ValidationRole,
 };
 
 use super::super::automation_error;
@@ -29,6 +33,9 @@ pub(super) struct Judgement {
     pub(super) findings: Vec<orbit_types::workflow::ReviewFinding>,
     pub(super) validation: Vec<orbit_types::workflow::ReviewValidation>,
     pub(super) validation_complete: bool,
+    /// Required-check records earlier report revisions of this attempt made
+    /// that the final report does not repeat verbatim.
+    pub(super) retained_obligations: Vec<RetainedObligation>,
     pub(super) escalation: Option<String>,
     summary: String,
     pub(super) task_meaning_digest: String,
@@ -52,17 +59,24 @@ impl Judgement {
             findings: Vec::new(),
             validation: Vec::new(),
             validation_complete: false,
+            retained_obligations: Vec::new(),
             escalation: Some(reason.to_string()),
             summary: String::new(),
             task_meaning_digest: task_meaning_digest.clone(),
             selectors_widened: Vec::new(),
         };
         let mut reports = Vec::new();
+        let mut revisions = Vec::new();
         let mut stale = false;
         for task_id in &context.task_ids {
             let Some(artifact) = runtime.get_task_artifact(task_id, REVIEW_REPORT_ARTIFACT)? else {
                 continue;
             };
+            let history = runtime.get_task_artifact(task_id, REVIEW_REPORT_HISTORY_ARTIFACT)?;
+            match retained_revisions(task_id, history, attempt, &artifact.content) {
+                Ok(kept) => revisions.extend(kept),
+                Err(reason) => return Ok(incomplete(&reason)),
+            }
             let manifest = runtime.get_task_artifact_manifest(task_id)?;
             if manifest
                 .iter()
@@ -103,11 +117,13 @@ impl Judgement {
                 "report_missing: the reviewer persisted no review-report.json"
             }));
         };
+        let retained_obligations = retained_obligations(revisions, &report.validation);
         Ok(Self {
             verdict: report.verdict,
             findings: report.findings,
             validation: report.validation,
             validation_complete: false,
+            retained_obligations,
             escalation: report.escalation,
             summary: report.summary,
             task_meaning_digest,
@@ -280,7 +296,9 @@ impl Judgement {
     }
 
     /// Cross-check the claimed verdict against what actually happened.
-    pub(super) fn reconcile_verdict(&mut self, repair: Option<&CommitIdentity>) {
+    /// `scope` is what validation sources are judged against: every task
+    /// selector plus the candidate's changed paths.
+    pub(super) fn reconcile_verdict(&mut self, repair: Option<&CommitIdentity>, scope: &[String]) {
         let open_findings = open_findings(&self.findings).count();
         match self.verdict {
             ReviewVerdict::Accept if repair.is_some() => self.downgrade(
@@ -300,10 +318,17 @@ impl Judgement {
         }
         // A pass rests on what the records establish, not on their count:
         // a required check must have passed, while a declared negative
-        // control, an excluded action, and a superseded attempt carry their
-        // own consistency rules. Delivery coverage reads the same function.
+        // control, an excluded action, a superseded attempt and a diagnostic
+        // carry their own consistency rules, and no required check an
+        // earlier report revision recorded may be dropped. Delivery coverage
+        // reads the same function over the certificate's own scope and
+        // retained obligations.
         if self.verdict.passed() {
-            match validation_evidence(&self.validation) {
+            let context = ValidationContext {
+                scope,
+                obligations: &self.retained_obligations,
+            };
+            match validation_evidence(&self.validation, &context) {
                 Ok(()) => self.validation_complete = true,
                 Err(defect) => self.downgrade(&defect.reason()),
             }
@@ -358,6 +383,55 @@ fn merge_reports(reports: Vec<ReviewReport>) -> Option<ReviewReport> {
         }
     }
     Some(merged)
+}
+
+/// The report revisions the host retained on `task_id` for this attempt,
+/// other than the current report itself. A history that cannot be read is
+/// an incomplete review, never an empty one.
+fn retained_revisions(
+    task_id: &str,
+    history: Option<TaskArtifact>,
+    attempt: &ReviewAttempt,
+    current: &[u8],
+) -> Result<Vec<ReviewReportRevision>, String> {
+    let Some(history) = history else {
+        return Ok(Vec::new());
+    };
+    let history = ReviewReportHistory::parse(&history.content).map_err(|error| {
+        format!("report_history_unreadable: the report history on {task_id}: {error}")
+    })?;
+    let current = sha256_hex(current);
+    Ok(history
+        .for_attempt(&attempt.attempt_id)
+        .filter(|revision| revision.sha256 != current)
+        .cloned()
+        .collect())
+}
+
+/// The required-check records of earlier revisions, oldest first, minus any
+/// the final report repeats verbatim: those add no information.
+fn retained_obligations(
+    revisions: Vec<ReviewReportRevision>,
+    final_records: &[ReviewValidation],
+) -> Vec<RetainedObligation> {
+    let mut obligations: Vec<RetainedObligation> = Vec::new();
+    for revision in revisions {
+        for validation in revision.validation {
+            if validation.role != ValidationRole::Required
+                || final_records.contains(&validation)
+                || obligations.iter().any(|kept| kept.validation == validation)
+            {
+                continue;
+            }
+            obligations.push(RetainedObligation {
+                report_sha256: revision.sha256.clone(),
+                observed_at: revision.observed_at,
+                validation,
+            });
+        }
+    }
+    obligations.sort_by_key(|obligation| obligation.observed_at);
+    obligations
 }
 
 fn verdict_severity(verdict: ReviewVerdict) -> u8 {
@@ -476,6 +550,8 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
          - Final candidate: `{}`\n\
          - Selectors widened for reviewer-changed paths: {}\n\
          - Validation on final candidate: {} record(s) [{}], complete: {}\n\
+         - Not established by this review: {}\n\
+         - Required checks retained from earlier report revisions: {}\n\
          - Reviewer runtime: {}s of {} min\n\
          - Escalation: {}\n\n\
          {}",
@@ -504,6 +580,8 @@ pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
         certificate.validation.len(),
         validation_roles(&certificate.validation),
         certificate.validation_complete,
+        limitations_line(&certificate.validation),
+        retained_line(certificate),
         certificate.consumed.seconds,
         certificate.budget.minutes,
         certificate.escalation.as_deref().unwrap_or("none"),
@@ -578,9 +656,38 @@ fn finding_change(finding: &orbit_types::workflow::ReviewFinding) -> Option<Stri
     })
 }
 
-/// The PR body's "Review fixes" section: present only when the reviewer
-/// committed fixes, listing each fixed finding and what changed.
+/// The PR body's review sections: "Review fixes" when the reviewer committed
+/// fixes, listing each fixed finding and what changed, and "Review validation
+/// limits" when a diagnostic failed, so the PR never reads as a claim that
+/// the whole workspace passed. `None` when neither applies.
 pub(super) fn review_fixes_section(certificate: &ReviewCertificate) -> Option<String> {
+    let sections = [
+        fixes_section(certificate),
+        limits_section(&certificate.validation),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    (!sections.is_empty()).then(|| sections.join("\n"))
+}
+
+fn limits_section(records: &[ReviewValidation]) -> Option<String> {
+    let limitations = validation_limitations(records);
+    if limitations.is_empty() {
+        return None;
+    }
+    let mut section = String::from(
+        "## Review validation limits\n\nEvery required check passed on the reviewed head. \
+         These diagnostics were observed outside the task's scope, kept as observed, and are \
+         not covered by this review:\n",
+    );
+    for limitation in limitations {
+        section.push_str(&format!("\n- {}", one_line(&limitation)));
+    }
+    Some(section)
+}
+
+fn fixes_section(certificate: &ReviewCertificate) -> Option<String> {
     let commit = certificate.repair_commits.first()?;
     let mut section = format!(
         "## Review fixes\n\nThe before-PR reviewer (crew `{}`) fixed its findings in `{}` \
@@ -610,7 +717,7 @@ fn one_line(text: &str) -> String {
 /// The classification breakdown of a validation set, so a reader sees which
 /// records were required checks and which were controls or exclusions
 /// without opening the certificate.
-fn validation_roles(records: &[orbit_types::workflow::ReviewValidation]) -> String {
+fn validation_roles(records: &[ReviewValidation]) -> String {
     let counts = validation_role_counts(records);
     if counts.is_empty() {
         return "none".to_string();
@@ -618,6 +725,39 @@ fn validation_roles(records: &[orbit_types::workflow::ReviewValidation]) -> Stri
     counts
         .into_iter()
         .map(|(role, count)| format!("{count} {}", role.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The failed diagnostics a certificate does not cover, on one line.
+fn limitations_line(records: &[ReviewValidation]) -> String {
+    let limitations = validation_limitations(records);
+    if limitations.is_empty() {
+        "none".to_string()
+    } else {
+        limitations
+            .iter()
+            .map(|limitation| one_line(limitation))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
+/// Earlier report revisions' required checks, with their observed outcomes.
+fn retained_line(certificate: &ReviewCertificate) -> String {
+    if certificate.retained_obligations.is_empty() {
+        return "none".to_string();
+    }
+    certificate
+        .retained_obligations
+        .iter()
+        .map(|obligation| {
+            format!(
+                "`{}` {}",
+                one_line(&obligation.validation.command),
+                obligation.validation.outcome.as_str()
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }

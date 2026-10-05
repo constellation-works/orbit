@@ -1,17 +1,17 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_updated: 2026-10-05
+last_validated: 2026-10-05
 status: Accepted
 feature: review-gate
 doc_role: design
 type: design
 summary: Shipped review contract — captured timing, the before-PR gate whose reviewer fixes its findings as a second commit, what validation records establish, lineage budgets, managed completion, delivery coverage, surfaces, and rollback.
 tags: [review-gate, review-policy, automation, delivery, operations]
-paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
+paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192]
 ---
 
 # Review Gate — Design [ORB-11333]
@@ -207,6 +207,8 @@ Findings:
 - Final candidate: `<sha>`
 - Selectors widened for reviewer-changed paths: …
 - Validation on final candidate: … record(s) […], complete: …
+- Not established by this review: <failed diagnostics and their sources, or none>
+- Required checks retained from earlier report revisions: <command and outcome, or none>
 - Reviewer runtime: …s of … min
 - Escalation: …
 
@@ -216,7 +218,10 @@ Findings:
 With a reviewer commit, settlement returns `reviewer_fixed: true`,
 `implementation_head_sha` (the head the reviewer examined), and
 `review_fixes`, a `## Review fixes` section listing each fixed finding with
-what changed and naming the reviewer commit. `pr_open` appends that section
+what changed and naming the reviewer commit. When a diagnostic failed (§4),
+`review_fixes` also carries a `## Review validation limits` section naming
+each failed diagnostic and its sources, so the PR never reads as a claim that
+the whole workspace passed. `pr_open` appends whatever `review_fixes` holds
 to the PR body, generated or supplied, before bounding it.
 
 `review_validate` (`candidate_validate`) runs only when `reviewer_fixed` is
@@ -244,6 +249,48 @@ spent.
 | `expected_failure` | A negative control — the superseded assertion, the pre-fix reproduction | `failed`; any other outcome contradicts the claim |
 | `excluded` | An action outside the authorized scope, deliberately not performed | `not_run` or `denied`; actually running it contradicts the exclusion |
 | `superseded` | A diagnostic attempt a later required check replaced | a later record that is `required` and `passed` and names the same check: the same `command` (whitespace ignored), or the same non-empty `check` identity when the command or environment was corrected. A record without `check` is matched by its command, so a missing optional field never downgrades a pass. An unrelated later pass, a corrected command with no shared identity, or a related check that did not pass is not a replacement |
+| `diagnostic` [ORB-14192] | A nonrequired observation of the final candidate, such as a workspace-wide suite beyond the task's checks | `passed` or `failed` as observed (`not_run`/`denied` contradict it: an action never taken is `excluded`). A failed diagnostic lists `sources`, every one outside the candidate's scope, and shares no check with a required pass. It supplies no coverage and creates no requirement |
+
+A negative control is bound to more than its label [ORB-14192]: an
+`expected_failure` record names its `control` kind — `pre_fix` (the
+reproduction on the pre-fix tree), `superseded_assertion` or
+`counterfactual` (both run on the candidate) — and the `sources` it
+exercises, every one inside the candidate's scope. A control run on the
+candidate cannot share its check with a required pass there, while a pre-fix
+reproduction may: the fix is what makes it pass. The scope is every bundle
+task's selectors plus a `file:` selector for every path the implementation and
+reviewer commits change, and the certificate records it as
+`validation_scope`. A source is a repository-relative path or a `file:`/`dir:`
+selector, judged with the shared selector-overlap grammar. A failed required
+check therefore cannot become nonblocking by changing only its role or note:
+as a control its sources must be the task's own, as a diagnostic they must
+not be, and an honest in-scope failure satisfies neither. An unrelated
+failure — ORB-14151's workspace run failing only in engine fixtures the task
+never touched — is a `diagnostic`, not an `expected_failure`: the bounded task
+still passes on its required checks, and nothing imports a workspace-green
+requirement into it.
+
+Report revisions are retained [ORB-14192]. Every time a `review-report.json`
+is attached, the artifact store parses it and appends its attempt, digest,
+verdict and validation records to `review-report-history.json` under the task
+lock, in the same manifest write that replaces the report, so no accepted
+revision can disappear before settlement, across a host restart, or through
+a same-attempt retry; re-attaching identical bytes adds nothing. A claimed
+reviewer's report reaches the owner as claim evidence, and that commit
+appends the revision the same way. Only the store writes that artifact. It holds 64 revisions per task: the oldest
+revision of another attempt makes room, and one attempt that fills it is
+refused rather than losing its own history. Settlement reads every bundle
+task's history for the attempt (an unreadable one is `incomplete`), and every
+`required` record an earlier revision made stays an obligation: the final
+records must name the same check as `required` (and pass) or `superseded`
+(and be replaced), or as `excluded` when the retained record never ran.
+Omitting it, or relabeling it `diagnostic` or `expected_failure`, is
+`validation_incomplete` — ORB-14191's replacement report that silently
+dropped a failed required CodeQL run settles `incomplete`. Retained records
+the final report does not repeat verbatim are kept on the certificate as
+`retained_obligations` with their report digest and observation time. The
+obligations are only what reports recorded; the gate never infers
+requirements from free-form repository instructions.
 
 At least one `required` record must have passed, so a set of controls and
 exclusions alone is never coverage. Every role other than `required` must
@@ -251,8 +298,12 @@ carry a `note`; an unexplained reclassification is refused rather than
 trusted. A record written before this contract carries no role and is read as
 a required check, so older evidence keeps its conservative meaning. The
 certificate keeps every raw observation with its classification — a superseded
-failure is preserved, never erased — and the verdict comment discloses the
-breakdown. A denied required check keeps its own `validation_unavailable`
+or diagnostic failure is preserved, never erased — and the verdict comment,
+task review projection (`validation_limitations`, `retained_obligations`,
+`validation_scope`) and PR body disclose the breakdown and what the review did
+not establish. `validation_complete` means every required check passed and
+every other record is consistent with its role; failed diagnostics stay
+failed and are outside what it asserts. A denied required check keeps its own `validation_unavailable`
 reason: the runner refused, which is neither a defect in the candidate nor
 evidence about it.
 
@@ -260,8 +311,13 @@ The contract version stays 1: a record carrying no role decides exactly as it
 did before, so older role-less evidence is not reinterpreted. A superseded
 attempt now requires the later required pass that names the same check; a
 certificate that treated an unrelated later pass as a replacement becomes
-incomplete when coverage re-reads the records. Candidates already refused
-under the old rule recover through a fresh run, not by editing stored evidence.
+incomplete when coverage re-reads the records. Coverage re-derives the rules
+over the certificate's own `validation_scope` and `retained_obligations`, so
+an `expected_failure` without `control` and in-scope `sources`, or a failed
+diagnostic judged with no recorded scope, is no coverage: certificates issued
+before [ORB-14192] that relied on a note-only expected failure stay uncovered
+and are re-established by a fresh review. Candidates already refused under the
+old rule recover through a fresh run, not by editing stored evidence.
 
 Settlement rechecks the checked-out head against the admitted candidate,
 reads every bundle task's report with its artifact provenance — reports that
@@ -526,5 +582,6 @@ in-flight gate; drain gated runs with a supporting binary before downgrading.
 - [ORB-13989] — the reviewer fixes its findings as a second commit, comments them, and owner validation reruns on that head; retires the rework loop and repair-cycle budget.
 - [ORB-13992] — splits review into the `review.before_pr` switch and the `delivery-code-review` auto-task flag, makes `review.minutes` the wall-clock limit of one review per candidate, and retires `operation.review_policy` and the reviewer-start budget.
 - [ORB-13990] — the reviewer may change any path the repair requires; settlement and revalidation widen selectors with review provenance instead of downgrading or failing.
+- [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

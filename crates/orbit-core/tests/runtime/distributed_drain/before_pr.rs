@@ -222,6 +222,8 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
             role: ValidationRole::Required,
             note: None,
             check: None,
+            control: None,
+            sources: Vec::new(),
         }],
         validation_complete: true,
         reviewer: ReviewerIdentity {
@@ -235,6 +237,8 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         consumed: ReviewConsumption::default(),
         budget: ReviewBudget::default(),
         escalation: None,
+        retained_obligations: vec![],
+        validation_scope: vec![],
         selectors_widened: vec![],
         issued_at: Utc::now(),
     };

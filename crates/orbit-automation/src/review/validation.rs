@@ -12,8 +12,18 @@
 //! Both the gate that issues a certificate and the coverage rules that spend
 //! one read these rules, so a certificate never means one thing when it is
 //! written and another when it is used.
+//!
+//! A classification is bound to evidence beyond its label and note
+//! [ORB-14192]: a negative control names its kind and the in-scope sources it
+//! exercises, a failed diagnostic names out-of-scope sources for its
+//! failures, and a required check an earlier report revision recorded must
+//! still be accounted for. Relabeling a failed required check therefore
+//! contradicts its own sources or its retained history instead of clearing it.
 
-use orbit_types::workflow::{ReviewValidation, ValidationOutcome, ValidationRole};
+use orbit_common::fs::selector::overlaps;
+use orbit_types::workflow::{
+    RetainedObligation, ReviewValidation, ValidationOutcome, ValidationRole,
+};
 
 /// Why a validation set does not establish a validated candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +50,35 @@ pub enum ValidationDefect {
     ClassificationUnexplained {
         command: String,
         role: ValidationRole,
+    },
+    /// A negative control or failed diagnostic without the structured
+    /// evidence its role needs: `missing` names the absent field.
+    ClassificationUnevidenced {
+        command: String,
+        role: ValidationRole,
+        missing: &'static str,
+    },
+    /// A negative control whose source lies outside the candidate's scope:
+    /// an unrelated failure is a diagnostic, not a deliberate control.
+    ControlOutOfScope { command: String, source: String },
+    /// A failed diagnostic whose source lies inside the candidate's scope:
+    /// that failure is the task's own and blocks like a required check.
+    DiagnosticInScope { command: String, source: String },
+    /// A failed diagnostic judged with no recorded scope, so nothing shows
+    /// its failures are unrelated.
+    ScopeUnknown { command: String },
+    /// A record failing on the final candidate shares its check with a
+    /// required record that passed there: one check cannot do both.
+    CheckContradicted {
+        command: String,
+        role: ValidationRole,
+    },
+    /// A required check an earlier report revision of the attempt recorded
+    /// that the final records neither rerun nor legitimately resolve.
+    ObligationDropped {
+        command: String,
+        outcome: ValidationOutcome,
+        role: Option<ValidationRole>,
     },
 }
 
@@ -83,22 +122,82 @@ impl ValidationDefect {
                 "validation_unexplained: `{command}` is recorded as {} with no note explaining it",
                 role.as_str()
             ),
+            ValidationDefect::ClassificationUnevidenced {
+                command,
+                role,
+                missing,
+            } => format!(
+                "validation_unevidenced: `{command}` is recorded as {} without `{missing}`; a \
+                 certificate issued before this evidence was required is re-established by a \
+                 fresh review",
+                role.as_str()
+            ),
+            ValidationDefect::ControlOutOfScope { command, source } => format!(
+                "validation_contradicted: negative control `{command}` names `{source}`, outside \
+                 the candidate's scope; record an unrelated failure as diagnostic"
+            ),
+            ValidationDefect::DiagnosticInScope { command, source } => format!(
+                "validation_incomplete: diagnostic `{command}` failed in `{source}`, inside the \
+                 candidate's scope, so it is a required failure"
+            ),
+            ValidationDefect::ScopeUnknown { command } => format!(
+                "validation_incomplete: failed diagnostic `{command}` has no recorded candidate \
+                 scope to show its failures are unrelated"
+            ),
+            ValidationDefect::CheckContradicted { command, role } => format!(
+                "validation_contradicted: `{command}` is recorded as a failing {} and as a \
+                 required check that passed on the same final candidate",
+                role.as_str()
+            ),
+            ValidationDefect::ObligationDropped {
+                command,
+                outcome,
+                role,
+            } => format!(
+                "validation_incomplete: required check `{command}` was recorded {} by an earlier \
+                 report revision of this attempt and the final report {}",
+                outcome.as_str(),
+                match role {
+                    Some(role) => format!("reclassifies it as {}", role.as_str()),
+                    None => "omits it".to_string(),
+                }
+            ),
         }
     }
+}
+
+/// What the records are judged against beyond themselves.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValidationContext<'a> {
+    /// Task selectors plus a `file:` selector for every path the candidate
+    /// changed from its base.
+    pub scope: &'a [String],
+    /// Required-check records earlier report revisions of the attempt made.
+    pub obligations: &'a [RetainedObligation],
 }
 
 /// Read a reviewer's validation records as evidence about the final
 /// candidate.
 ///
 /// Every required check must have passed and at least one must exist; a
-/// declared negative control must have failed; an excluded action must have
-/// stayed unperformed; a superseded attempt must be followed by the required
-/// check that replaced it — the same command, or the same non-empty `check`
-/// identity, whichever the two records share. Every classification other than `required` must explain itself,
-/// so an unexplained reclassification is refused rather than trusted. Records
-/// carrying no classification are required checks, which keeps evidence
-/// written before this contract conservative.
-pub fn validation_evidence(records: &[ReviewValidation]) -> Result<(), ValidationDefect> {
+/// declared negative control must have failed, name its kind and sources in
+/// the candidate's scope, and, when it runs on the candidate, not share its
+/// check with a required pass; an excluded action must have stayed
+/// unperformed; a superseded attempt must be followed by the required check
+/// that replaced it — the same command, or the same non-empty `check`
+/// identity, whichever the two records share; a diagnostic must be an
+/// observation that ran, and a failed one must name sources all outside the
+/// scope and not share its check with a required pass. Every classification
+/// other than `required` must explain itself, so an unexplained
+/// reclassification is refused rather than trusted. Every retained
+/// obligation must still be accounted for by a record of the same check that
+/// is `required`, `superseded`, or — when the retained record never ran —
+/// `excluded`. Records carrying no classification are required checks, which
+/// keeps evidence written before this contract conservative.
+pub fn validation_evidence(
+    records: &[ReviewValidation],
+    context: &ValidationContext<'_>,
+) -> Result<(), ValidationDefect> {
     let mut required_passed = false;
 
     for (index, record) in records.iter().enumerate() {
@@ -118,9 +217,7 @@ pub fn validation_evidence(records: &[ReviewValidation]) -> Result<(), Validatio
                 }
                 required_passed = true;
             }
-            ValidationRole::ExpectedFailure if record.outcome != ValidationOutcome::Failed => {
-                return Err(contradiction(record));
-            }
+            ValidationRole::ExpectedFailure => negative_control(record, records, context)?,
             ValidationRole::Excluded
                 if !matches!(
                     record.outcome,
@@ -136,7 +233,22 @@ pub fn validation_evidence(records: &[ReviewValidation]) -> Result<(), Validatio
                     command: record.command.clone(),
                 });
             }
+            ValidationRole::Diagnostic => diagnostic(record, records, context)?,
             _ => {}
+        }
+    }
+
+    for obligation in context.obligations {
+        let obligation = &obligation.validation;
+        if !obligation_resolved(obligation, records) {
+            return Err(ValidationDefect::ObligationDropped {
+                command: obligation.command.clone(),
+                outcome: obligation.outcome,
+                role: records
+                    .iter()
+                    .find(|record| same_check(obligation, record))
+                    .map(|record| record.role),
+            });
         }
     }
 
@@ -147,6 +259,102 @@ pub fn validation_evidence(records: &[ReviewValidation]) -> Result<(), Validatio
     }
 }
 
+/// A negative control: it failed, names its kind and the code it exercises,
+/// that code is the candidate's own, and a control run on the candidate does
+/// not share its check with a required pass there.
+fn negative_control(
+    record: &ReviewValidation,
+    records: &[ReviewValidation],
+    context: &ValidationContext<'_>,
+) -> Result<(), ValidationDefect> {
+    if record.outcome != ValidationOutcome::Failed {
+        return Err(contradiction(record));
+    }
+    let Some(control) = record.control else {
+        return Err(unevidenced(record, "control"));
+    };
+    let sources = sources(record);
+    if sources.is_empty() {
+        return Err(unevidenced(record, "sources"));
+    }
+    if let Some(source) = sources
+        .iter()
+        .find(|source| !in_scope(source, context.scope))
+    {
+        return Err(ValidationDefect::ControlOutOfScope {
+            command: record.command.clone(),
+            source: (*source).to_string(),
+        });
+    }
+    if control.runs_on_candidate() && passes_as_required(record, records) {
+        return Err(ValidationDefect::CheckContradicted {
+            command: record.command.clone(),
+            role: record.role,
+        });
+    }
+    Ok(())
+}
+
+/// A diagnostic is an observation that ran. A failed one names where its
+/// failures lie, every place outside the candidate's scope, and does not
+/// share its check with a required pass on the same candidate.
+fn diagnostic(
+    record: &ReviewValidation,
+    records: &[ReviewValidation],
+    context: &ValidationContext<'_>,
+) -> Result<(), ValidationDefect> {
+    match record.outcome {
+        ValidationOutcome::Passed => Ok(()),
+        ValidationOutcome::Failed => {
+            let sources = sources(record);
+            if sources.is_empty() {
+                return Err(unevidenced(record, "sources"));
+            }
+            if context.scope.is_empty() {
+                return Err(ValidationDefect::ScopeUnknown {
+                    command: record.command.clone(),
+                });
+            }
+            if let Some(source) = sources
+                .iter()
+                .find(|source| in_scope(source, context.scope))
+            {
+                return Err(ValidationDefect::DiagnosticInScope {
+                    command: record.command.clone(),
+                    source: (*source).to_string(),
+                });
+            }
+            if passes_as_required(record, records) {
+                return Err(ValidationDefect::CheckContradicted {
+                    command: record.command.clone(),
+                    role: record.role,
+                });
+            }
+            Ok(())
+        }
+        ValidationOutcome::Denied | ValidationOutcome::NotRun => Err(contradiction(record)),
+    }
+}
+
+/// Whether the final records still account for a retained required check:
+/// the same check is recorded `required` (it must then pass) or `superseded`
+/// (it must then be replaced by a required pass), or it is `excluded` and the
+/// retained record never ran either. A diagnostic, a negative control, or no
+/// record at all leaves the obligation dropped.
+fn obligation_resolved(obligation: &ReviewValidation, records: &[ReviewValidation]) -> bool {
+    records
+        .iter()
+        .filter(|record| same_check(obligation, record))
+        .any(|record| match record.role {
+            ValidationRole::Required | ValidationRole::Superseded => true,
+            ValidationRole::Excluded => matches!(
+                obligation.outcome,
+                ValidationOutcome::NotRun | ValidationOutcome::Denied
+            ),
+            ValidationRole::ExpectedFailure | ValidationRole::Diagnostic => false,
+        })
+}
+
 /// How many records carry each classification, for readable disclosure.
 pub fn validation_role_counts(records: &[ReviewValidation]) -> Vec<(ValidationRole, usize)> {
     [
@@ -154,6 +362,7 @@ pub fn validation_role_counts(records: &[ReviewValidation]) -> Vec<(ValidationRo
         ValidationRole::ExpectedFailure,
         ValidationRole::Excluded,
         ValidationRole::Superseded,
+        ValidationRole::Diagnostic,
     ]
     .into_iter()
     .filter_map(|role| {
@@ -161,6 +370,76 @@ pub fn validation_role_counts(records: &[ReviewValidation]) -> Vec<(ValidationRo
         (count > 0).then_some((role, count))
     })
     .collect()
+}
+
+/// What a set of records does not establish about the candidate, for
+/// disclosure beside `validation_complete`: each failed diagnostic, with
+/// where its failures lie.
+pub fn validation_limitations(records: &[ReviewValidation]) -> Vec<String> {
+    records
+        .iter()
+        .filter(|record| {
+            record.role == ValidationRole::Diagnostic && record.outcome != ValidationOutcome::Passed
+        })
+        .map(|record| {
+            let sources = sources(record);
+            if sources.is_empty() {
+                format!(
+                    "diagnostic `{}` {}",
+                    record.command,
+                    record.outcome.as_str()
+                )
+            } else {
+                format!(
+                    "diagnostic `{}` {} in {}",
+                    record.command,
+                    record.outcome.as_str(),
+                    sources.join(", ")
+                )
+            }
+        })
+        .collect()
+}
+
+fn unevidenced(record: &ReviewValidation, missing: &'static str) -> ValidationDefect {
+    ValidationDefect::ClassificationUnevidenced {
+        command: record.command.clone(),
+        role: record.role,
+        missing,
+    }
+}
+
+/// The record's non-empty sources, trimmed.
+fn sources(record: &ReviewValidation) -> Vec<&str> {
+    record
+        .sources
+        .iter()
+        .map(|source| source.trim())
+        .filter(|source| !source.is_empty())
+        .collect()
+}
+
+/// Whether `source` overlaps any scope selector. A bare path reads as the
+/// `file:` selector of that path.
+fn in_scope(source: &str, scope: &[String]) -> bool {
+    let source = if ["file:", "dir:", "symbol:"]
+        .iter()
+        .any(|kind| source.starts_with(kind))
+    {
+        source.to_string()
+    } else {
+        format!("file:{}", source.trim_start_matches("./"))
+    };
+    scope.iter().any(|selector| overlaps(selector, &source))
+}
+
+/// Whether a required record of the same check passed.
+fn passes_as_required(record: &ReviewValidation, records: &[ReviewValidation]) -> bool {
+    records.iter().any(|other| {
+        other.role == ValidationRole::Required
+            && other.outcome == ValidationOutcome::Passed
+            && same_check(record, other)
+    })
 }
 
 fn contradiction(record: &ReviewValidation) -> ValidationDefect {

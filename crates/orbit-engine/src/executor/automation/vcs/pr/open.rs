@@ -210,9 +210,11 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
     Ok((number, viewed_url.or_else(|| Some(url.to_string())), true))
 }
 
-/// Append the settled review's "Review fixes" section [ORB-13989] to the PR
-/// body, generated or supplied, so the reviewer commit is explained where it
-/// is published. Without reviewer fixes the body is unchanged.
+/// Append the settled review's sections — "Review fixes" [ORB-13989] and
+/// "Review validation limits" [ORB-14192] — to the PR body, generated or
+/// supplied, so the reviewer commit and what the review did not establish
+/// are explained where it is published. Without either the body is
+/// unchanged.
 fn with_review_fixes(body: String, input: &Value) -> String {
     match input_string_field(input, "review_fixes")
         .map(|section| section.trim().to_string())

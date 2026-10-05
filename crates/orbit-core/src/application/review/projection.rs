@@ -5,6 +5,7 @@
 //! records. A task without a certificate simply has no review projection.
 
 use chrono::Utc;
+use orbit_automation::review::validation_limitations;
 use orbit_common::OrbitError;
 use orbit_types::task::{ArtifactManifestFileV2, Task};
 use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
@@ -67,6 +68,9 @@ pub fn task_review_projection(
         "findings": certificate.findings,
         "validation": certificate.validation,
         "validation_complete": certificate.validation_complete,
+        "validation_limitations": validation_limitations(&certificate.validation),
+        "retained_obligations": certificate.retained_obligations,
+        "validation_scope": certificate.validation_scope,
         "task_meaning_digest": certificate.task_meaning_digest,
         "budget": certificate.budget,
         "consumed": certificate.consumed,

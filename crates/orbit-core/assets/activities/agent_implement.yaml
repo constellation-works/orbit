@@ -228,7 +228,7 @@ spec:
         per acceptance criterion in order (never objects). Each required
         command's validation[] entry has outcome "passed" and role
         "required"; the role vocabulary is required, expected_failure,
-        excluded, superseded.
+        excluded, superseded, diagnostic.
         After required checks pass, for a genuine no-op, attach `no-diff.json`
         and validation logs via `orbit.task.artifact.put`, using the schema in
         the Orbit task-execution reference (schema_version 1, task_id, run_id,

@@ -15,16 +15,18 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-struct Fixture {
-    _root: TempDir,
-    runtime: OrbitRuntime,
-    repo: PathBuf,
-    task_id: String,
-    input: Value,
+/// A before-PR gated task over a one-commit candidate, shared with the
+/// report-revision regressions.
+pub(super) struct Fixture {
+    pub(super) _root: TempDir,
+    pub(super) runtime: OrbitRuntime,
+    pub(super) repo: PathBuf,
+    pub(super) task_id: String,
+    pub(super) input: Value,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let root = TempDir::new().unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");
@@ -119,7 +121,7 @@ impl Fixture {
         }
     }
 
-    fn admit(&mut self) {
+    pub(super) fn admit(&mut self) {
         self.input["admission"] = self
             .runtime
             .run_deterministic(
@@ -132,19 +134,35 @@ impl Fixture {
     }
 
     fn report(&self, verdict: &str) {
-        let path = self.repo.join(".orbit/tmp").join(REVIEW_REPORT_ARTIFACT);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, json!({
+        self.put_report(&json!({
             "schema_version": REVIEW_CONTRACT_VERSION,
             "attempt_id": self.input["admission"]["attempt_id"],
             "verdict": verdict, "summary": "Checked candidate.",
             "findings": [],
             "validation": [{"command": "fixture check", "outcome": "passed", "role": "required"}],
             "escalation": if verdict == "accept" { None } else { Some("Reviewer cannot accept candidate.") },
-        }).to_string()).unwrap();
+        }));
+    }
+
+    /// Attach `report` the way the reviewer does: through the public
+    /// `orbit.task.artifact.put` tool from a scratch file.
+    pub(super) fn put_report(&self, report: &Value) {
+        let path = self.repo.join(".orbit/tmp").join(REVIEW_REPORT_ARTIFACT);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, report.to_string()).unwrap();
         self.runtime.run_tool("orbit.task.artifact.put", json!({
             "id": self.task_id, "model": "codex", "path": REVIEW_REPORT_ARTIFACT, "source_path": path,
         })).unwrap();
+    }
+
+    /// Run the deterministic settlement for the admitted attempt.
+    pub(super) fn settle(&self) -> Result<Value, orbit_engine::DispatchError> {
+        self.runtime.run_deterministic(
+            "review_gate_settle",
+            &json!({}),
+            &self.input,
+            Default::default(),
+        )
     }
 
     fn rows(&self) -> Vec<AuditEvent> {
