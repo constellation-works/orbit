@@ -136,6 +136,13 @@ pub(crate) fn execute(
             binding
                 .validate_arguments(input)
                 .map_err(OrbitError::InvalidInput)?;
+            // Artifact attachments can reach the mutation receipt path, which
+            // intentionally reconciles a lost reply before rechecking claim
+            // authority. Check the current claim first so a stale replay cannot
+            // turn an old successful report upload into a new apparent success.
+            if input.get("artifacts").is_some() {
+                require_active_claim(runtime, session)?;
+            }
             if input
                 .get("id")
                 .is_some_and(|id| id.as_str() != Some(&binding.task_id))

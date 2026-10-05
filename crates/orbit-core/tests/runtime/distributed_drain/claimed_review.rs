@@ -590,30 +590,37 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
             "{case}: {read}"
         );
 
-        settle(&leaf);
-        let before = leaf.owner_evidence(&attempt_id);
-        let refused = leaf
-            .read_manifest()
-            .expect_err("a settled claim reads nothing");
-        assert!(refused.contains("stale_claim"), "{case}: {refused}");
         let source = leaf.pair.follower_repo.join(".orbit/tmp/report.json");
         std::fs::create_dir_all(source.parent().unwrap()).unwrap();
         std::fs::write(
             &source,
             serde_json::to_vec(&json!({
                 "schema_version": REVIEW_CONTRACT_VERSION, "attempt_id": attempt_id,
-                "verdict": "incomplete", "summary": "Too late.", "findings": [],
+                "verdict": "incomplete", "summary": "Fixture report.", "findings": [],
                 "validation": [], "escalation": "fixture only",
             }))
             .unwrap(),
         )
         .unwrap();
+        let put = json!({
+            "id": leaf.task, "path": REVIEW_REPORT_ARTIFACT, "source_path": source,
+        });
+        leaf.bound
+            .run_tool("orbit.task.artifact.put", put.clone())
+            .expect("the active claim writes its report");
+        leaf.bound
+            .run_tool("orbit.task.artifact.put", put.clone())
+            .expect("the active claim can reconcile its report replay");
+
+        settle(&leaf);
+        let before = leaf.owner_evidence(&attempt_id);
+        let refused = leaf
+            .read_manifest()
+            .expect_err("a settled claim reads nothing");
+        assert!(refused.contains("stale_claim"), "{case}: {refused}");
         let put = leaf
             .bound
-            .run_tool(
-                "orbit.task.artifact.put",
-                json!({"id": leaf.task, "path": REVIEW_REPORT_ARTIFACT, "source_path": source}),
-            )
+            .run_tool("orbit.task.artifact.put", put)
             .expect_err("a settled claim writes nothing")
             .to_string();
         assert!(put.contains("stale_claim"), "{case}: {put}");

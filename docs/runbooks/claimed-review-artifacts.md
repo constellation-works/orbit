@@ -51,9 +51,11 @@ current claim. If the claim was released, failed, revoked or superseded, the
 owner refuses the call with `stale_claim` and changes nothing. This holds
 even while the follower's ledger still shows the reviewer running. A claim
 that has outlived its reservation is not revoked by that alone. It ends when
-an operator recovers it, and from then on the owner refuses its calls. A
-replayed report follows `artifact.put`'s normal semantics: the same bytes
-replace the same artifact.
+an operator recovers it, and from then on the owner refuses its calls. While
+the claim remains active, a replayed report follows `artifact.put`'s normal
+semantics: the same bytes replace the same artifact. The owner checks claim
+authority before reconciling that replay, so a receipt from an earlier upload
+cannot make a stale call appear successful.
 The coordinator never writes a review certificate. Every other tool and path
 is refused.
 
