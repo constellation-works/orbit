@@ -228,3 +228,14 @@ pub(crate) fn read_required_text(path: &Path) -> Result<String, OrbitError> {
         Err(err) => Err(OrbitError::Io(err.to_string())),
     }
 }
+
+pub(super) fn read_required_bytes(path: &Path) -> Result<Vec<u8>, OrbitError> {
+    match fs::read(path) {
+        Ok(value) => Ok(value),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(OrbitError::Store(format!(
+            "missing task bundle file {}",
+            path.display()
+        ))),
+        Err(err) => Err(OrbitError::Io(err.to_string())),
+    }
+}
