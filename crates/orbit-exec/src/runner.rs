@@ -124,6 +124,9 @@ pub struct SupervisedOutcome {
 /// Passing `Some(Vec::new())` closes stdin immediately, which is what a
 /// non-interactive step wants: a piped-but-never-closed stdin leaves a reader
 /// blocked until the deadline.
+///
+/// If pipe or signal-handler setup, or the supervised wait, fails, supervision
+/// kills the child's process group and reaps the child before returning the error.
 pub fn supervise_child(
     child: Child,
     timeout_ms: Option<u64>,

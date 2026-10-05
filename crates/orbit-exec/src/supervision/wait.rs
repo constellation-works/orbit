@@ -22,6 +22,101 @@ pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 type StdinResultReceiver = Receiver<std::io::Result<()>>;
 type StdinWorker = (Option<StdinResultReceiver>, Option<JoinHandle<()>>);
 
+/// Own cleanup from the first setup operation until the child is reaped.
+/// `Child` itself does neither kill nor wait on drop.
+struct SupervisedChild {
+    process: Child,
+    reaped: bool,
+    #[cfg(unix)]
+    signal_guard: Option<SignalHandlerGuard>,
+}
+
+impl SupervisedChild {
+    fn new(process: Child) -> Self {
+        Self {
+            process,
+            reaped: false,
+            #[cfg(unix)]
+            signal_guard: None,
+        }
+    }
+
+    fn mark_reaped(&mut self) {
+        self.reaped = true;
+        #[cfg(unix)]
+        if let Some(guard) = self.signal_guard.as_mut() {
+            guard.release_process_group();
+        }
+    }
+
+    #[cfg(unix)]
+    fn take_signal(&self) -> Option<i32> {
+        self.signal_guard
+            .as_ref()
+            .and_then(SignalHandlerGuard::take_signal)
+    }
+}
+
+impl Drop for SupervisedChild {
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        kill_process_group(self.process.id());
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+        // Release the slot before dropping the signal guard: its last drop
+        // can re-raise a pending signal and terminate the supervisor itself.
+        self.mark_reaped();
+    }
+}
+
+// Per-thread fault injection leaves concurrent supervisors unaffected and
+// exercises the same entry points callers use, without exhausting host FDs.
+#[cfg(all(test, unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SupervisionFailure {
+    DrainStop,
+    Watch(usize),
+    SignalInstall,
+    Wait,
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static FAILURE: std::cell::Cell<Option<SupervisionFailure>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+#[cfg(all(test, unix))]
+pub(super) fn with_supervision_failure<T>(failure: SupervisionFailure, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<SupervisionFailure>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FAILURE.set(self.0);
+        }
+    }
+    let _restore = Restore(FAILURE.replace(Some(failure)));
+    let result = f();
+    assert!(
+        FAILURE.get().is_none(),
+        "supervisor did not reach {failure:?}"
+    );
+    result
+}
+
+#[cfg(all(test, unix))]
+fn inject_supervision_failure(point: SupervisionFailure) -> Result<(), OrbitError> {
+    if FAILURE.get() == Some(point) {
+        FAILURE.set(None);
+        return Err(OrbitError::Execution(format!(
+            "injected supervision failure: {point:?}"
+        )));
+    }
+    Ok(())
+}
+
 /// Output collected from a spawned process.
 pub(crate) struct WaitResult {
     pub(crate) exit_success: bool,
@@ -113,7 +208,7 @@ pub(crate) fn wait_with_cancellation(
 }
 
 fn wait_cancellable(
-    mut child: Child,
+    child: Child,
     timeout_ms: Option<u64>,
     debug: bool,
     stdin_payload: Option<Vec<u8>>,
@@ -121,21 +216,24 @@ fn wait_cancellable(
     stdout_relay: Option<PipeWriter>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<WaitResult, OrbitError> {
+    let mut child = SupervisedChild::new(child);
     // Every pipe worker is bounded by `drain_stop`: once the child is gone
     // the supervisor waits at most `DRAIN_BUDGET` for them (see its docs).
     // Dropping it on an early error return stops them as well.
-    let drain_stop = match DrainStop::new() {
-        Ok(stop) => stop,
-        Err(err) => {
-            kill_process_group(child.id());
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(OrbitError::Execution(format!(
-                "failed to set up process pipe supervision: {err}"
-            )));
-        }
-    };
+    #[cfg(all(test, unix))]
+    inject_supervision_failure(SupervisionFailure::DrainStop)?;
+    let drain_stop = DrainStop::new().map_err(|err| {
+        OrbitError::Execution(format!("failed to set up process pipe supervision: {err}"))
+    })?;
+    #[cfg(all(test, unix))]
+    let watch_count = std::cell::Cell::new(0);
     let watch = || {
+        #[cfg(all(test, unix))]
+        {
+            let count = watch_count.get();
+            watch_count.set(count + 1);
+            inject_supervision_failure(SupervisionFailure::Watch(count))?;
+        }
         drain_stop.watch().map_err(|err| {
             OrbitError::Execution(format!("failed to set up process pipe supervision: {err}"))
         })
@@ -146,10 +244,11 @@ fn wait_cancellable(
     //
     // In debug mode, both stdout and stderr are tee'd through redaction-aware
     // drains so the user sees live output without bypassing capture/redaction.
-    let (stdin_result_rx, stdin_thread) = spawn_stdin_thread(&mut child, stdin_payload, watch)?;
+    let (stdin_result_rx, stdin_thread) =
+        spawn_stdin_thread(&mut child.process, stdin_payload, watch)?;
     // Each of the two drain threads reports its capture limit at most once.
     let (output_limit_tx, output_limit_rx) = mpsc::sync_channel(2);
-    let stdout_thread = match (child.stdout.take(), stdout_relay) {
+    let stdout_thread = match (child.process.stdout.take(), stdout_relay) {
         (Some(out), Some(relay)) => Some(spawn_relay_drain(out, relay, watch()?)),
         (Some(out), None) => Some(spawn_stdout_drain(
             out,
@@ -160,7 +259,7 @@ fn wait_cancellable(
         )),
         (None, _) => None,
     };
-    let stderr_thread = match child.stderr.take() {
+    let stderr_thread = match child.process.stderr.take() {
         Some(err) => Some(spawn_stderr_drain(
             err,
             debug,
@@ -171,10 +270,14 @@ fn wait_cancellable(
         None => None,
     };
 
-    // Last drop restores the previous SIGINT/SIGTERM disposition and
-    // re-raises a captured signal so daemons still shut down.
+    // Keep the handler in the child guard so error cleanup kills and reaps
+    // before its last drop restores handlers and re-raises a pending signal.
+    #[cfg(all(test, unix))]
+    inject_supervision_failure(SupervisionFailure::SignalInstall)?;
     #[cfg(unix)]
-    let mut signal_guard = SignalHandlerGuard::install(child.id())?;
+    {
+        child.signal_guard = Some(SignalHandlerGuard::install(child.process.id())?);
+    }
 
     let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
     let mut stdin_write_error = None;
@@ -187,13 +290,13 @@ fn wait_cancellable(
         Option<i32>,
     ) = loop {
         if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
-            kill_process_group(child.id());
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_process_group(child.process.id());
+            let _ = child.process.kill();
+            let _ = child.process.wait();
             break (false, None, false, None);
         }
         if let Ok(stream) = output_limit_rx.try_recv() {
-            terminate_process_group(&mut child, termination_signal(), WAIT_POLL_INTERVAL)?;
+            terminate_process_group(&mut child.process, termination_signal(), WAIT_POLL_INTERVAL)?;
             capture_limited = Some(stream);
             break (false, None, false, None);
         }
@@ -210,7 +313,11 @@ fn wait_cancellable(
                 // diagnostic instead of a bare "Broken pipe" error.
                 Ok(Err(err)) if err.kind() == std::io::ErrorKind::BrokenPipe => {}
                 Ok(Err(err)) => {
-                    terminate_process_group(&mut child, termination_signal(), WAIT_POLL_INTERVAL)?;
+                    terminate_process_group(
+                        &mut child.process,
+                        termination_signal(),
+                        WAIT_POLL_INTERVAL,
+                    )?;
                     stdin_write_error = Some(OrbitError::Execution(format!(
                         "failed to write process stdin: {err}"
                     )));
@@ -228,45 +335,46 @@ fn wait_cancellable(
             })
             .unwrap_or(WAIT_POLL_INTERVAL);
 
+        #[cfg(all(test, unix))]
+        inject_supervision_failure(SupervisionFailure::Wait)?;
         if let Some(status) = child
+            .process
             .wait_timeout(wait_slice)
             .map_err(|e| OrbitError::Execution(format!("wait timeout error: {e}")))?
         {
             // The child is reaped: its pid is free for reuse from here on, so
             // a SIGINT/SIGTERM arriving before this wait returns must not
             // `killpg` whatever process group now owns that number.
-            #[cfg(unix)]
-            signal_guard.release_process_group();
+            child.mark_reaped();
 
             #[cfg(unix)]
-            if let Some(signal) = signal_guard.take_signal() {
-                terminate_orphaned_process_group(child.id(), signal, WAIT_POLL_INTERVAL);
+            if let Some(signal) = child.take_signal() {
+                terminate_orphaned_process_group(child.process.id(), signal, WAIT_POLL_INTERVAL);
                 break (false, Some(signal), false, Some(128 + signal));
             }
 
             // Child exited successfully within the timeout. Kill its process
             // group so any orphan subprocesses still holding the pipes open
             // are reaped before the pipe workers settle below.
-            kill_process_group(child.id());
+            kill_process_group(child.process.id());
             break (false, None, status.success(), status.code());
         }
 
         #[cfg(unix)]
-        if let Some(signal) = signal_guard.take_signal() {
-            terminate_process_group(&mut child, signal, WAIT_POLL_INTERVAL)?;
+        if let Some(signal) = child.take_signal() {
+            terminate_process_group(&mut child.process, signal, WAIT_POLL_INTERVAL)?;
             break (false, Some(signal), false, Some(128 + signal));
         }
 
         if deadline.is_some_and(|end| Instant::now() >= end) {
-            terminate_process_group(&mut child, termination_signal(), WAIT_POLL_INTERVAL)?;
+            terminate_process_group(&mut child.process, termination_signal(), WAIT_POLL_INTERVAL)?;
             break (true, None, false, None);
         }
     };
     // Every exit above has reaped the child (directly or through
     // `terminate_process_group`); stop fanning signals out to its old group
     // before the pipe workers settle below, which can outlast a pid's reuse.
-    #[cfg(unix)]
-    signal_guard.release_process_group();
+    child.mark_reaped();
 
     // The process group is dead, so its pipe ends are closed and the workers
     // normally hit EOF at once. Only a holder outside the group keeps one
