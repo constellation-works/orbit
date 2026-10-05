@@ -10,7 +10,11 @@ repository. Every step is also below to do by hand.
 
 ## Prerequisites
 
-- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside WSL2.
+- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside a WSL2 Linux
+  distribution: the
+  [Windows WSL2 guide](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md)
+  covers the distribution, sandbox, MCP clients and the scheduler there. That
+  path has not been run on a Windows host yet.
 - Node 18 or newer, for the npm install.
 - At least one signed-in agent CLI, such as Claude Code or Codex. Orbit runs
   every agent step through one. The

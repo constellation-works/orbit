@@ -51,7 +51,8 @@ host. PR mode also needs an authenticated `gh` client. On Linux, `/usr/bin/bwrap
 its namespace/mount probe; Ubuntu's AppArmor restrictions may require
 the packaged narrow Bubblewrap profile. Complete the [Linux sandbox setup](linux-sandbox.md)
 before dispatch. Do not disable host protection or enable sandbox fallback to hide
-a failed probe.
+a failed probe. On Windows, install and run everything inside a WSL2
+distribution: follow [windows-wsl2.md](windows-wsl2.md) alongside these steps.
 
 To add a provider or deterministic executor to Orbit itself, work in a source
 checkout and follow the [executor onboarding runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/executor-onboarding.md).
@@ -191,7 +192,9 @@ initial setup succeeded:
 5. **Upgrade convergence** — use `orbit workspace sync --check`, then
    `orbit workspace sync` to refresh managed defaults. → [maintenance.md](maintenance.md)
 6. **A replica execution host** — collapse to one owner, match binaries and
-   `review.before_pr` off, then probe. Installation is not pull enablement.
+   protocol, make sure the follower can run the owner's before-PR reviewer
+   crew when the owner's `review.before_pr` is on, then probe. Installation is
+   not pull enablement.
    → [distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
 
 ## Anti-patterns

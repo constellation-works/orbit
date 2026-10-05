@@ -60,7 +60,7 @@ For more than one task, hand your agent a spec and ask it to orchestrate. The bu
 
 ## Quick start
 
-**You need:** macOS or Linux (x64 or arm64; on Windows, run Orbit inside WSL2, as there is no native Windows build), Node 18+, at least one authenticated agent CLI, plus `gh` authenticated if you want pull requests.
+**You need:** macOS or Linux (x64 or arm64; on Windows, run Orbit inside WSL2, as there is no native Windows build: see the [Windows WSL2 guide](docs/runbooks/windows-wsl2.md)), Node 18+, at least one authenticated agent CLI, plus `gh` authenticated if you want pull requests.
 
 ```bash
 npm install -g @orbit-tools/cli
