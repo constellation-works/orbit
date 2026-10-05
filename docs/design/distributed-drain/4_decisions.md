@@ -395,6 +395,9 @@ handoff state; completion still requires explicit authorization and verified lan
   `delivery-code-review` auto-task flag. Admission keys only on the `before_pr` each endpoint
   captured; after-landing review runs on the owner after landing and never refuses a pull. Protocol
   revision 5 carries `caller_before_pr` and `ship.before_pr`.
+- Prepared by [ORB-13895]: revision 6 captures the owner's before-PR review contract on the claim
+  and lets a handoff carry typed before-PR evidence the owner verifies and records. Admission still
+  refuses `before_pr` until an executor declares the gate.
 
 ## Declared context survives missing filesystem targets
 
@@ -643,5 +646,6 @@ is off on the Mac by design.
 - [ORB-13649] — scoped run-keyed task lookups to the executing machine ([A run is its id plus the machine that executes it](#a-run-is-its-id-plus-the-machine-that-executes-it)).
 - [ORB-13663] — moved settlement from the admitting drain to the admission record ([Settlement belongs to the admission record, not to the drain that admitted it](#settlement-belongs-to-the-admission-record-not-to-the-drain-that-admitted-it)).
 - [ORB-13992] — narrowed [V1 review policy is none](#v1-review-policy-is-none) to the `review.before_pr` switch.
+- [ORB-13895] — prepared [V1 review policy is none](#v1-review-policy-is-none) for before-PR review on claims and handoffs.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

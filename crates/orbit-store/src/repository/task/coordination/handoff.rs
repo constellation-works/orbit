@@ -5,7 +5,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
-use orbit_types::workflow::{ReviewTiming, handoff::*};
+use orbit_types::workflow::{ReviewCertificate, ReviewTiming, handoff::*};
 
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, encode, invalid, row};
@@ -52,6 +52,185 @@ impl TaskCommitBoundary {
         self.coordination_row(HANDOFF, claim_id)?
             .map(|r| decode(&r.payload_json))
             .transpose()
+    }
+
+    /// The certificate an accepted before-PR handoff carries, read back
+    /// through the digest the handoff pinned, or `None` for a handoff that
+    /// carries no before-PR review [ORB-13895].
+    pub fn accepted_review_certificate(
+        &self,
+        claim_id: &str,
+    ) -> Result<Option<ReviewCertificate>, OrbitError> {
+        self.enter_ordinary(|| {
+            let Some(accepted) = self.find_accepted_handoff(claim_id)? else {
+                return Ok(None);
+            };
+            let Some(evidence) = accepted.handoff.review.before_pr() else {
+                return Ok(None);
+            };
+            let bytes = self.artifact_bytes(&accepted.handoff.task_id, &evidence.certificate)?;
+            serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|e| invalid(&format!("invalid review certificate: {e}")))
+        })
+    }
+
+    /// The ship contract the claim was admitted under.
+    fn claim_ship(&self, state: &ClaimInspection) -> Result<AdmissionShipContract, OrbitError> {
+        let AdmissionLookup::Found { receipt, .. } = self.lookup_admission(
+            &AdmissionIdentity::trusted_local(state.claim.executed_on.clone()),
+            &state.claim.request_id,
+        )?
+        else {
+            return Err(invalid("claim receipt unavailable"));
+        };
+        receipt
+            .claim
+            .as_ref()
+            .ok_or_else(|| invalid("claim receipt unavailable"))?;
+        Ok(receipt.request.ship)
+    }
+
+    /// Judge a handoff's review disposition against the review contract its
+    /// claim captured [ORB-13895]. Acceptance passes the owner's observation
+    /// and requires it for before-PR evidence; approval and landing recheck
+    /// the pinned evidence, and any observation they carry, the same way.
+    fn validate_handoff_review(
+        &self,
+        handoff: &TaskHandoff,
+        ship: &AdmissionShipContract,
+        observed: Option<&HandoffReviewObservation>,
+        require_observation: bool,
+    ) -> Result<(), OrbitError> {
+        use HandoffReviewRefusal as R;
+        let Some(contract) = &ship.review else {
+            if ship.before_pr || handoff.review != HandoffReview::not_required() {
+                return Err(review_refused(
+                    R::ReviewEvidenceUnexpected,
+                    "the claim captured no before-PR review contract",
+                ));
+            }
+            return Ok(());
+        };
+        let evidence = match (handoff.review.policy, handoff.review.before_pr()) {
+            (ReviewTiming::BeforePr, Some(evidence)) => evidence,
+            _ => {
+                return Err(review_refused(
+                    R::ReviewEvidenceMissing,
+                    "the claim captured review.before_pr; the handoff must carry the leaf's review",
+                ));
+            }
+        };
+        let head = &handoff.candidate.candidate;
+        if !evidence.verdict.passed() {
+            return Err(review_refused(
+                R::ReviewNotPassed,
+                &format!("verdict `{}` does not open a PR", evidence.verdict.as_str()),
+            ));
+        }
+        if evidence.reviewed_head_sha != head.commit
+            || evidence
+                .reviewer_commit
+                .as_ref()
+                .is_some_and(|commit| *commit != head.commit)
+        {
+            return Err(review_refused(
+                R::ReviewedHeadMismatch,
+                &format!(
+                    "reviewed head {} (reviewer commit {:?}) is not the handed-off candidate {}",
+                    evidence.reviewed_head_sha, evidence.reviewer_commit, head.commit
+                ),
+            ));
+        }
+        if [
+            &evidence.attempt_id,
+            &evidence.reviewer_crew,
+            &evidence.reviewer_run_id,
+        ]
+        .iter()
+        .any(|s| s.trim().is_empty())
+            || !object_id(&evidence.reviewed_base_sha)
+        {
+            return Err(review_refused(
+                R::ReviewCertificateMismatch,
+                "attempt, reviewer, run and an exact reviewed base are required",
+            ));
+        }
+        if contract
+            .crew
+            .as_ref()
+            .is_some_and(|crew| *crew != evidence.reviewer_crew)
+        {
+            return Err(review_refused(
+                R::ReviewContractMismatch,
+                &format!(
+                    "reviewer crew `{}` is not the captured review crew `{}`",
+                    evidence.reviewer_crew,
+                    contract.crew.as_deref().unwrap_or_default()
+                ),
+            ));
+        }
+        match observed {
+            Some(observed) if observed.reviewed_base_sha != evidence.reviewed_base_sha => {
+                return Err(invalid("owner review observation names another base"));
+            }
+            Some(observed) if !observed.reviewed_base_is_ancestor => {
+                return Err(review_refused(
+                    R::ReviewedBaseNotAncestor,
+                    &format!(
+                        "reviewed base {} is not the candidate base {} or its ancestor",
+                        evidence.reviewed_base_sha, handoff.candidate.base.commit
+                    ),
+                ));
+            }
+            Some(_) => {}
+            None if require_observation => {
+                return Err(invalid("trusted owner review observation required"));
+            }
+            None => {}
+        }
+        let certificate_refused =
+            |detail: &str| review_refused(R::ReviewCertificateMismatch, detail);
+        let bytes = |reference: &HandoffArtifactRef| {
+            self.artifact_bytes(&handoff.task_id, reference)
+                .map_err(|e| certificate_refused(&format!("{}: {e}", reference.path)))
+        };
+        for reference in &evidence.artifacts {
+            bytes(reference)?;
+        }
+        let certificate: ReviewCertificate = serde_json::from_slice(&bytes(&evidence.certificate)?)
+            .map_err(|e| certificate_refused(&format!("unreadable certificate: {e}")))?;
+        if certificate.schema_version != contract.contract_version {
+            return Err(review_refused(
+                R::ReviewContractMismatch,
+                &format!(
+                    "certificate contract version {} is not the captured version {}",
+                    certificate.schema_version, contract.contract_version
+                ),
+            ));
+        }
+        let reviewer_commit_matches = match &evidence.reviewer_commit {
+            Some(commit) => certificate
+                .repair_commits
+                .last()
+                .is_some_and(|repair| repair.commit == *commit),
+            None => certificate.repair_commits.is_empty(),
+        };
+        if certificate.attempt_id != evidence.attempt_id
+            || certificate.verdict != evidence.verdict
+            || certificate.final_candidate != *head
+            || certificate.base.commit != evidence.reviewed_base_sha
+            || certificate.reviewer.crew != evidence.reviewer_crew
+            || !certificate.task_ids.contains(&handoff.task_id)
+            || !reviewer_commit_matches
+            || observed.is_some_and(|observed| certificate.repository != observed.repository)
+        {
+            return Err(certificate_refused(
+                "certificate does not bind this attempt, verdict, reviewer, task, repository, \
+                 base and final candidate",
+            ));
+        }
+        Ok(())
     }
 
     fn artifact_bytes(
@@ -223,7 +402,6 @@ impl TaskCommitBoundary {
             || handoff.claim_id != auth.claim_id
             || handoff.machine_id != bound.machine_id
             || handoff.run_id != bound.run_id
-            || handoff.review.policy != ReviewTiming::None
             || handoff.execution_summary.trim().is_empty()
             || handoff
                 .execution_summary
@@ -232,9 +410,7 @@ impl TaskCommitBoundary {
                 .map(str::trim)
                 == Some("Outcome: failed")
         {
-            return Err(invalid(
-                "invalid typed handoff identity, review policy or summary",
-            ));
+            return Err(invalid("invalid typed handoff identity or summary"));
         }
         let candidate = &handoff.candidate;
         if [
@@ -258,17 +434,7 @@ impl TaskCommitBoundary {
                 "exact repository, branches and object IDs required",
             ));
         }
-        let AdmissionLookup::Found { receipt, .. } = self.lookup_admission(
-            &AdmissionIdentity::trusted_local(state.claim.executed_on.clone()),
-            &state.claim.request_id,
-        )?
-        else {
-            return Err(invalid("claim receipt unavailable"));
-        };
-        receipt
-            .claim
-            .as_ref()
-            .ok_or_else(|| invalid("claim receipt unavailable"))?;
+        let ship = self.claim_ship(state)?;
         if handoff.footprint_widening != observation.footprint_widening {
             return Err(invalid(&format!(
                 "footprint widening differs from owner-observed diff: requested={:?}, observed={:?}",
@@ -339,10 +505,7 @@ impl TaskCommitBoundary {
                     to_status: None,
                 });
         }
-        let ship = receipt.request.ship;
-        if ship.before_pr
-            || receipt.request.caller_before_pr
-            || candidate.base_branch != ship.base_branch
+        if candidate.base_branch != ship.base_branch
             || candidate.landing_branch != ship.landing_branch
             || !matches!(
                 (&candidate.delivery, ship.mode.as_str()),
@@ -353,6 +516,7 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("handoff differs from captured ship contract"));
         }
+        self.validate_handoff_review(handoff, &ship, observation.review.as_ref(), true)?;
         self.validate_handoff_evidence(handoff, &observation.required_commands)?;
         let accepted = AcceptedHandoff {
             handoff_id: format!("handoff-{}", sha256_hex(encode(handoff)?.as_bytes())),
@@ -442,6 +606,12 @@ impl TaskCommitBoundary {
         if observed.required_commands != accepted.required_commands {
             return Err(invalid("validation requirements changed"));
         }
+        self.validate_handoff_review(
+            &accepted.handoff,
+            &self.claim_ship(state)?,
+            observed.review.as_ref(),
+            false,
+        )?;
         self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands)?;
         self.add_handoff_authorization(
             &accepted,
@@ -554,6 +724,14 @@ impl TaskCommitBoundary {
         if observation.required_commands != accepted.required_commands {
             return Err(invalid("validation requirements changed"));
         }
+        // The landing merges exactly the accepted candidate, which acceptance
+        // proved is the reviewed head; recheck the pinned review evidence too.
+        self.validate_handoff_review(
+            &accepted.handoff,
+            &self.claim_ship(state)?,
+            observation.review.as_ref(),
+            false,
+        )?;
         self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands)?;
         let authorization = self.current_landing_authorization(&accepted)?;
         if authorization.workspace_id != self.workspace_id
@@ -582,6 +760,10 @@ impl TaskCommitBoundary {
         }
         Ok(())
     }
+}
+
+fn review_refused(refusal: HandoffReviewRefusal, detail: &str) -> OrbitError {
+    invalid(&format!("{}: {detail}", refusal.as_str()))
 }
 
 fn object_id(value: &str) -> bool {

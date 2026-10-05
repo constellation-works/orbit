@@ -65,7 +65,7 @@ first reason a real pull would be refused:
 ```bash
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<replica-version>",
-  "caller_schema": 5,
+  "caller_schema": 6,
   "caller_before_pr": false
 }'
 ```

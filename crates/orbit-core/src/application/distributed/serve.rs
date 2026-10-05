@@ -31,16 +31,18 @@ use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimInvocation,
     ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
-    HandoffObservation, JobRunQuery,
+    HandoffObservation, HandoffReviewObservation, JobRunQuery,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
     JobRunState,
-    handoff::{HandoffDelivery, TaskHandoff},
+    handoff::{HandoffCandidate, HandoffDelivery, TaskHandoff},
 };
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::application::automation::source::Source;
 
 use super::contract::{is_remote, session_machine_id, trusted_identity};
 use super::{ensure_distributed_mutation_available, owner_binary_version};
@@ -312,6 +314,7 @@ impl crate::OrbitRuntime {
                 )));
             }
         }
+        let review = self.observe_handoff_review(handoff, &candidate)?;
         // An empty list is no required check: the handoff is accepted with no
         // validation logs, the way the owner's own delivery runs none.
         Ok(HandoffObservation {
@@ -319,7 +322,36 @@ impl crate::OrbitRuntime {
             candidate,
             required_commands: self.workflow_required_validation_commands().to_vec(),
             owner_completion_authority: self.owner_completion_authority(),
+            review,
         })
+    }
+
+    /// The owner's reading of the facts a before-PR certificate stands on
+    /// [ORB-13895]: whether the reviewed base is in the history of the base
+    /// the owner observed the candidate on, and the repository identity its
+    /// coverage matches certificates against. `None` for a handoff carrying
+    /// no before-PR evidence; the claim journal judges the rest.
+    fn observe_handoff_review(
+        &self,
+        handoff: &TaskHandoff,
+        candidate: &HandoffCandidate,
+    ) -> Result<Option<HandoffReviewObservation>, OrbitError> {
+        let Some(evidence) = handoff.review.before_pr() else {
+            return Ok(None);
+        };
+        let repo_root = &self.paths().repo_root;
+        let repository = Source::new(repo_root)
+            .repository()
+            .map_err(orbit_automation::automation_error_to_orbit)?;
+        Ok(Some(HandoffReviewObservation {
+            reviewed_base_sha: evidence.reviewed_base_sha.clone(),
+            reviewed_base_is_ancestor: orbit_engine::review_gate::contains_commit(
+                repo_root,
+                &evidence.reviewed_base_sha,
+                &candidate.base.commit,
+            )?,
+            repository,
+        }))
     }
 
     /// One admission on this owner's commit boundary. Shared by the routed

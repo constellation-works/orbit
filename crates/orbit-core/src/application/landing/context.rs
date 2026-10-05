@@ -121,6 +121,9 @@ impl OrbitRuntime {
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
             owner_completion_authority: self.owner_completion_authority(),
+            // Acceptance observed the review's base and repository; the store
+            // rechecks the review evidence the handoff pinned without them.
+            review: None,
         })
     }
 }

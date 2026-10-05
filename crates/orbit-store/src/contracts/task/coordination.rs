@@ -183,6 +183,47 @@ pub struct AdmissionShipContract {
     pub before_pr: bool,
     pub completion: String,
     pub authorization_reference: Option<String>,
+    /// The owner's captured before-PR review contract: present exactly when
+    /// `before_pr` is on [ORB-13895]. A handoff's review evidence is judged
+    /// against it, never against the owner's settings at handoff time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<AdmissionReviewContract>,
+}
+
+/// The review a claimed leaf must run before it opens a pull request, as the
+/// owner resolved it when the claim was admitted [ORB-13895]. Its timing is
+/// the ship contract's `before_pr`; the rest is what the leaf's gate and the
+/// owner's acceptance hold it to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionReviewContract {
+    /// The review evidence contract version the owner reads
+    /// (`REVIEW_CONTRACT_VERSION`). A certificate under another version is
+    /// refused rather than reinterpreted.
+    pub contract_version: u32,
+    /// The owner's `operation.review_crew`, when one is set. A handoff's
+    /// reviewer must be this crew.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    /// The owner's `review.minutes` budget for the leaf's review.
+    pub budget: orbit_types::workflow::ReviewBudget,
+}
+
+impl AdmissionShipContract {
+    /// Whether `review` matches `before_pr` and is itself well formed.
+    #[must_use]
+    pub fn review_contract_consistent(&self) -> bool {
+        match &self.review {
+            None => !self.before_pr,
+            Some(review) => {
+                self.before_pr
+                    && review.contract_version == orbit_types::workflow::REVIEW_CONTRACT_VERSION
+                    && review
+                        .crew
+                        .as_deref()
+                        .is_none_or(|crew| !crew.trim().is_empty())
+            }
+        }
+    }
 }
 
 /// Wire-protocol version of pull, probe, and lifecycle request/response shapes.
@@ -193,8 +234,10 @@ pub struct AdmissionShipContract {
 /// endpoint, even if optional. Revision 2 adds executor crew capabilities;
 /// revision 3 adds handoff footprint widening; revision 4 adds the executor's
 /// host OS; revision 5 replaces both endpoints' review-policy labels with
-/// their captured `review.before_pr` switch [ORB-13992].
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 5;
+/// their captured `review.before_pr` switch [ORB-13992]; revision 6 adds the
+/// ship contract's captured `review`, the executor's `review_gate` and the
+/// handoff's before-PR review evidence [ORB-13895].
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 6;
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without
@@ -215,9 +258,9 @@ pub enum AdmissionRefusal {
     ProtocolMismatch,
     VersionMismatch,
     ShipModeUnsupported,
-    /// An endpoint captured `review.before_pr = true`; distributed before-PR
-    /// review is not implemented yet. After-landing review never refuses:
-    /// it runs on the owner after landing.
+    /// The executor captured `review.before_pr = true`, or the owner did and
+    /// the executor's leaf does not declare that it runs the before-PR gate.
+    /// After-landing review never refuses: it runs on the owner after landing.
     #[serde(alias = "review_policy_unsupported")]
     BeforePrUnsupported,
 }
@@ -308,6 +351,11 @@ pub struct AdmissionRequest {
     /// only as `none`, which reads as `false`.
     #[serde(default)]
     pub caller_before_pr: bool,
+    /// Whether the executor's claimed leaf runs the before-PR gate the ship
+    /// contract's `review` captures [ORB-13895]. An owner with
+    /// `review.before_pr` on admits only an executor that declares it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub review_gate: bool,
     pub run_context: AdmissionRunContext,
     pub ship: AdmissionShipContract,
     /// What the executor can run. Absent for an owner-local admission and
@@ -630,6 +678,62 @@ pub struct HandoffObservation {
     /// from its own settings. `None` means every handoff waits for an
     /// operator's approval.
     pub owner_completion_authority: Option<String>,
+    /// What the owner observed about a before-PR handoff's review evidence.
+    /// Required to accept one; `None` for a handoff carrying none.
+    pub review: Option<HandoffReviewObservation>,
+}
+
+/// The owner's own reading of the facts a before-PR certificate stands on
+/// that the claim journal cannot check itself [ORB-13895].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffReviewObservation {
+    /// The reviewed base the owner checked; it must be the handoff's.
+    pub reviewed_base_sha: String,
+    /// Whether that base is the owner-observed candidate base or one of its
+    /// ancestors, in the owner's checkout.
+    pub reviewed_base_is_ancestor: bool,
+    /// The owner's repository identity, which after-landing coverage matches
+    /// certificates against.
+    pub repository: String,
+}
+
+/// Why an owner refused a handoff's review disposition [ORB-13895]. The code
+/// leads the refusal message, so a caller reading only the error can tell
+/// which check failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffReviewRefusal {
+    /// The claim captured `review.before_pr` and the handoff carries no
+    /// before-PR evidence.
+    ReviewEvidenceMissing,
+    /// The claim captured no before-PR review and the handoff claims one.
+    ReviewEvidenceUnexpected,
+    /// The reviewer's verdict does not let the candidate open a PR.
+    ReviewNotPassed,
+    /// The reviewed head is not the handed-off candidate.
+    ReviewedHeadMismatch,
+    /// The reviewed base is not the owner's candidate base or an ancestor of it.
+    ReviewedBaseNotAncestor,
+    /// The certificate artifact is missing, changed, unreadable, or disagrees
+    /// with the evidence, the candidate, or the owner's repository.
+    ReviewCertificateMismatch,
+    /// The reviewer or the certificate's contract is not the one the claim
+    /// captured.
+    ReviewContractMismatch,
+}
+
+impl HandoffReviewRefusal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReviewEvidenceMissing => "review_evidence_missing",
+            Self::ReviewEvidenceUnexpected => "review_evidence_unexpected",
+            Self::ReviewNotPassed => "review_not_passed",
+            Self::ReviewedHeadMismatch => "reviewed_head_mismatch",
+            Self::ReviewedBaseNotAncestor => "reviewed_base_not_ancestor",
+            Self::ReviewCertificateMismatch => "review_certificate_mismatch",
+            Self::ReviewContractMismatch => "review_contract_mismatch",
+        }
+    }
 }
 
 impl ClaimInvocation {

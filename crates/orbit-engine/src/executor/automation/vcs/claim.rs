@@ -47,7 +47,7 @@ use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{
     HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
-    HandoffValidationLog, TaskHandoff,
+    HandoffReviewEvidence, HandoffValidationLog, TaskHandoff,
 };
 use serde_json::{Value, json};
 
@@ -633,6 +633,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         ));
     }
     let execution_summary = handoff_execution_summary(input, &candidate, !validation.is_empty())?;
+    let review = handoff_review(input, &candidate)?;
 
     let handoff = TaskHandoff {
         schema_version: 1,
@@ -642,12 +643,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         machine_id: context.machine_id.clone(),
         run_id: context.run_id.clone(),
         candidate: candidate.clone(),
-        // Only `review.before_pr = false` is admitted, so there is no reviewed SHA,
-        // verdict or reviewer artifact to report and none is invented here.
-        review: HandoffReview {
-            policy: ReviewTiming::None,
-            disposition: HandoffReviewDisposition::NotRequired,
-        },
+        review,
         execution_summary,
         validation,
         footprint_widening: super::commit::validate_claim_new_paths(
@@ -672,6 +668,36 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             HandoffDelivery::AlreadyLanded { .. } => "already_landed",
         },
     }))
+}
+
+/// The review disposition the handoff reports. A leaf that ran the before-PR
+/// gate passes its evidence as `review_evidence` [ORB-13895]; without it
+/// there is no reviewed SHA, verdict or reviewer artifact to report and none
+/// is invented. The owner judges the evidence against the review contract
+/// the claim captured, so this only refuses evidence for another candidate.
+fn handoff_review(
+    input: &Value,
+    candidate: &HandoffCandidate,
+) -> Result<HandoffReview, OrbitError> {
+    let Some(evidence) = input
+        .get("review_evidence")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(HandoffReview::not_required());
+    };
+    let evidence: HandoffReviewEvidence = serde_json::from_value(evidence.clone())
+        .map_err(|error| OrbitError::InvalidInput(format!("invalid review evidence: {error}")))?;
+    if evidence.reviewed_head_sha != candidate.candidate.commit {
+        return Err(refused(format!(
+            "the review settled head '{}' but the candidate is '{}'; the owner accepts review \
+             evidence only for the candidate handed off",
+            evidence.reviewed_head_sha, candidate.candidate.commit
+        )));
+    }
+    Ok(HandoffReview {
+        policy: ReviewTiming::BeforePr,
+        disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
+    })
 }
 
 /// Largest implementer summary a handoff carries. The summary is prose for a

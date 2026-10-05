@@ -225,6 +225,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             caller_version: "1".into(),
             caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             caller_before_pr: false,
+            review_gate: false,
             run_context: AdmissionRunContext {
                 run_id: parent.run_id,
                 job_name: "workspace_auto_pipeline".into(),
@@ -237,6 +238,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
                 before_pr: false,
                 completion: "review".into(),
                 authorization_reference: None,
+                review: None,
             },
             crews: None,
             os: None,

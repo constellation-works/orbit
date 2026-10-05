@@ -4,10 +4,12 @@
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    AdmissionIdentity, AdmissionRefusal, AdmissionRequest, AdmissionRunContext,
-    AdmissionShipContract, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
+    AdmissionIdentity, AdmissionRefusal, AdmissionRequest, AdmissionReviewContract,
+    AdmissionRunContext, AdmissionShipContract, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+    ExecutionLocation,
 };
 use orbit_types::tool::{McpTransport, ToolSessionContext};
+use orbit_types::workflow::REVIEW_CONTRACT_VERSION;
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
@@ -83,8 +85,15 @@ impl crate::OrbitRuntime {
     }
 
     /// Ship configuration as the owner would resolve it at admission.
+    ///
+    /// With `review.before_pr` on it also captures the review contract a
+    /// claimed leaf's gate and the owner's acceptance are held to
+    /// [ORB-13895]. It carries no capture time, so a follower that echoes
+    /// the probed contract still matches the owner's current resolution.
     pub(super) fn owner_ship_contract(&self) -> AdmissionShipContract {
         let base_branch = self.workspace_base_branch().to_string();
+        let policy = self.operation_policy();
+        let before_pr = self.local_review_before_pr();
         AdmissionShipContract {
             mode: match self
                 .workspace_runtime_binding()
@@ -95,9 +104,14 @@ impl crate::OrbitRuntime {
             },
             landing_branch: base_branch.clone(),
             base_branch,
-            before_pr: self.local_review_before_pr(),
+            before_pr,
             completion: self.workflow_distributed_completion().to_string(),
             authorization_reference: self.owner_completion_authority(),
+            review: before_pr.then(|| AdmissionReviewContract {
+                contract_version: REVIEW_CONTRACT_VERSION,
+                crew: policy.review_crew.value.clone(),
+                budget: policy.review_budget(),
+            }),
         }
     }
 
@@ -145,6 +159,8 @@ impl crate::OrbitRuntime {
                 .caller_schema
                 .unwrap_or(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA),
             caller_before_pr: declared.caller_before_pr.unwrap_or(false),
+            // No executor's leaf runs the before-PR gate yet [ORB-13908].
+            review_gate: false,
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),

@@ -92,7 +92,8 @@ request, so a replay is judged by the capability it was first sent with, and so 
 declared OS. Protocol revision 2 adds `crews`, revision 4 adds `os`, and revision 5 replaces
 `caller_review_policy` with `caller_before_pr` and the ship contract's `review_policy` with
 `before_pr`: an older owner rejects the new field even though it is optional, and a revision-4
-caller still sending `caller_review_policy` is answered `protocol_mismatch`. Before persisting a
+caller still sending `caller_review_policy` is answered `protocol_mismatch`. Revision 6 adds the
+ship contract's `review` (below) and the typed handoff's before-PR evidence [ORB-13895]. Before persisting a
 new request, the follower compares the probe's `protocol_schema` with its own revision and
 reports `protocol_mismatch` naming both revisions. Binary-version equality is insufficient
 because wire changes can land between releases. Completion authorization is resolved
@@ -192,7 +193,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, `before_pr: false`, completion policy and optional durable authorization reference |
+| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, completion policy, optional durable authorization reference and, only when `before_pr` is on, the captured `review` contract (`contract_version`, `crew`, `budget`) |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
@@ -241,7 +242,7 @@ store schema are implementation choices; their atomic behavior is required:
 |---|---|
 | Bind execution | Validate claim, machine, captured policy and mode; bind one host-qualified leaf run idempotently; move `claimed → running`; generic resume may not replace this run |
 | Execution mutation | Check current claim, machine/run, and phase within the write transaction; deduplicate repeated mutation IDs |
-| Accept handoff | Persist candidate/base SHAs, validation evidence, typed `{ policy: none, disposition: not_required }`, and any completion-authority reference; promote to review, close execution writes, release only this reservation atomically; authorized acceptance also records the landing-start request |
+| Accept handoff | Persist candidate/base SHAs, validation evidence, the typed review disposition the claim's contract requires (`not_required`, or verified before-PR evidence whose certificate the owner records), and any completion-authority reference; promote to review, close execution writes, release only this reservation atomically; authorized acceptance also records the landing-start request |
 | Approve handoff | Owner operator only: deduplicate mutation ID, verify current review handoff and exact candidate/base, persist scoped authorization with approver/revocation state, and record landing-start request atomically; agent access cannot approve |
 | Revoke completion authorization | Owner operator only: invalidate pending landing permission atomically; reconcile any uncertain merge intent before reassignment |
 | Fail/cancel | Persist failure evidence, block the task, invalidate execution authority, release only this reservation atomically |
@@ -328,6 +329,21 @@ agent capability cannot approve. Revocation cancels pending authority atomically
 merge intent must first reconcile. The merge-intent write rechecks current evidence and authority,
 including grant revocation within the SQLite transaction. Historical receipt replay does not grant
 new execution or landing permission. The summary-only legacy handoff variant refuses new writes.
+
+A claim whose ship contract captured a before-PR `review` must hand off typed before-PR evidence:
+verdict, reviewed head and base SHAs, the reviewer's fix commit when it made one, reviewer crew and
+run, and digest-pinned certificate and reviewer artifacts. Acceptance re-reads the certificate from
+the owner task bundle and refuses, with a typed reason, missing or unexpected evidence
+(`review_evidence_missing`, `review_evidence_unexpected`), a verdict that does not pass
+(`review_not_passed`), a reviewed head or reviewer commit other than the handed-off candidate
+(`reviewed_head_mismatch`), a reviewed base the owner's Git does not find under the candidate base
+(`reviewed_base_not_ancestor`), a certificate that disagrees with the evidence, candidate, task or
+repository (`review_certificate_mismatch`), and a crew or certificate schema other than the captured
+contract's (`review_contract_mismatch`). Approval and landing recheck the pinned evidence. An
+accepted certificate is written to the owner's review store, so after-landing coverage excludes the
+reviewed tree instead of reviewing it again. A claim without a captured `review` refuses before-PR
+evidence. Admission still refuses `before_pr` until an executor declares the before-PR gate
+[ORB-13908]; no pull tool input sets that declaration yet.
 
 `OrbitRuntime::accept_task_handoff`, `approve_task_handoff`, `revoke_task_handoff`,
 `accepted_task_handoff` and `landing_start_requests` are internal owner-domain seams, not registered

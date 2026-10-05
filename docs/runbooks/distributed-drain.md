@@ -263,13 +263,13 @@ agent envelope or `ORBIT_OPERATOR=1`.
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 5,
+  "caller_schema": 6,
   "caller_before_pr": false
 }'
 ```
 
 The probe reports owner machine, binary version, distributed-drain protocol
-schema `5`, this session's capabilities, diagnostic caller machine,
+schema `6`, this session's capabilities, diagnostic caller machine,
 owner-resolved ship configuration (`ship.before_pr`), and `review`: both review
 switches with their sources — before-PR on/off and minutes, after-landing
 enabled and its next batch due. Declaring version, schema, or `caller_before_pr`
@@ -862,7 +862,7 @@ orbit doctor
 orbit config get review.before_pr
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<owner-version>",
-  "caller_schema": 5,
+  "caller_schema": 6,
   "caller_before_pr": false
 }'
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'

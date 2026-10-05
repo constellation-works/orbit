@@ -206,6 +206,8 @@ pub(crate) fn pull_refill(
                         caller_version: owner_binary_version().to_string(),
                         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
                         caller_before_pr,
+                        // This leaf runs no before-PR gate yet [ORB-13908].
+                        review_gate: false,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
                             job_name: PULL_DRAIN_JOB_NAME.to_string(),
