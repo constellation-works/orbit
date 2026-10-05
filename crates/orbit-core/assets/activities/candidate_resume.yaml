@@ -13,8 +13,12 @@ spec:
     description, acceptance criteria and selectors still match the digest
     recorded with it; otherwise the outcome is `fresh` with the reason.
     A usable candidate is squash-merged onto the run's clean checkout of
-    `base_sha` and left as uncommitted changes. A clean merge then runs
-    `workflow.required_validation_commands` on it: passing is
+    `base_sha` and left as uncommitted changes. A candidate whose failed
+    step is the implementation (`implement_bundle` or `implement_one`) or
+    any step before `commit` is unfinished: the outcome is
+    `resumed_repaired` with trigger `implementation`, and validation is not
+    consulted. A clean merge of a candidate that failed at `commit` or later
+    runs `workflow.required_validation_commands`: passing is
     `resumed_validated` and `implement` is false. A conflict, a failing
     command, or a candidate the before-PR review refused is
     `resumed_repaired`: `implement` stays true and `repair` carries the
@@ -55,9 +59,9 @@ spec:
       repair:
         type: [object, "null"]
         description: >
-          What the implementer repairs: `trigger` (`conflict`, `validation` or
-          `review`) and its `output`, plus `conflicting_paths` or the failing
-          `command`.
+          What the implementer repairs: `trigger` (`implementation`, `conflict`,
+          `validation` or `review`) and its `output`, plus `failed_step_id`,
+          `conflicting_paths` or the failing `command`.
       source_run_id:
         type: [string, "null"]
       source_branch:

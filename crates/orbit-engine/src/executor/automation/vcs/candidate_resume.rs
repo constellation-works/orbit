@@ -1,16 +1,20 @@
 //! Resume a task's preserved candidate instead of re-implementing it
 //! [ORB-13985].
 //!
-//! A task PR run that fails after implementation leaves its candidate on an
-//! `orbit/<task>-<hash>` branch, and `pr_failure_handoff` records the branch,
-//! head and the task's spec digest on that run. When the task runs again,
+//! A task PR run that fails leaves its candidate on an `orbit/<task>-<hash>`
+//! branch, and `pr_failure_handoff` records the branch, head, failed step and
+//! the task's spec digest on that run. When the task runs again,
 //! `candidate_resume` finds that record through the run the task was last
 //! linked to and applies the candidate onto the new run's base as
 //! uncommitted changes — a squash merge, so the run's own commit step
 //! delivers it under the usual gates. Then:
 //!
-//! - it applies cleanly and owner validation passes: `resumed_validated`,
-//!   and no implementation step runs;
+//! - it applies cleanly, the failed step is `commit` or later, and owner
+//!   validation passes: `resumed_validated`, and no implementation step runs;
+//! - the failed step is the implementation (`implement_bundle` /
+//!   `implement_one`) or any step before `commit`: `resumed_repaired`, and
+//!   the implementer finishes the applied partial candidate. Validation is
+//!   not consulted, so an empty command list cannot accept it;
 //! - it conflicts, validation fails, or the before-PR review refused it:
 //!   `resumed_repaired`, and the implementer starts from the applied
 //!   candidate with that output;
@@ -49,6 +53,42 @@ const PRESERVING_DECISIONS: &[&str] = &[
 /// The settlement step whose failure is the review's verdict on the
 /// candidate, not a fault: the repair starts from its findings.
 const REVIEW_VERDICT_STEP: &str = "review_gate_settle";
+/// Steps of `task_pr_pipeline` and `task_local_pipeline` that run only after
+/// `implement_bundle` has finished. A preserved candidate from one of these
+/// is a completed implementation and may resume as `resumed_validated`.
+///
+/// Any other id — `implement_bundle`, the nested `implement_one`, a step
+/// before `commit`, or a step this list does not name yet — is unfinished.
+/// Unknown ids fail closed so a new pre-commit step cannot skip the
+/// implementer. A new step after `commit` belongs here; until it is added,
+/// resume hands that candidate to the implementer.
+const COMPLETED_IMPLEMENTATION_STEPS: &[&str] = &[
+    "commit",
+    "prepare_branch",
+    "sync_base",
+    "validate",
+    "review_gate_admit",
+    "review",
+    "review_gate_settle",
+    "review_validate",
+    "push",
+    "pr_open",
+    "promote_tasks",
+    "promote_no_diff",
+    "complete_pr",
+    "re_review_gate_admit",
+    "re_review",
+    "re_review_gate_settle",
+    "re_review_validate",
+    "re_push",
+    "complete_reviewed_pr",
+    "complete_no_diff",
+    "merge",
+    "mark_review",
+    "mark_review_one",
+    "complete_tasks",
+    "complete_one",
+];
 /// Largest failure output handed to the implementer; the tail is kept, where
 /// compilers and test runners report.
 const MAX_REPAIR_OUTPUT_BYTES: usize = 32 * 1024;
@@ -258,6 +298,21 @@ fn resume<H: RuntimeHost + ?Sized>(
             candidate.head_sha
         )));
     }
+    // A clean apply of work that never reached `commit` is not an
+    // implementation. Owner validation, including an empty command list,
+    // must not promote it to `resumed_validated` and skip the implementer.
+    if !implementation_completed(&candidate.failed_step_id) {
+        return Ok(Outcome::Repair(json!({
+            "trigger": "implementation",
+            "failed_step_id": candidate.failed_step_id,
+            "output": format!(
+                "Run '{}' failed at step '{}' before `commit`, so this candidate is an \
+                 unfinished implementation. Finish the task from the applied changes; a clean \
+                 apply or a passing check does not make it complete.",
+                candidate.run_id, candidate.failed_step_id
+            ),
+        })));
+    }
     if candidate.failed_step_id == REVIEW_VERDICT_STEP {
         return Ok(Outcome::Repair(json!({
             "trigger": "review",
@@ -290,6 +345,11 @@ fn resume<H: RuntimeHost + ?Sized>(
         })));
     }
     Ok(Outcome::Validated)
+}
+
+/// Whether `failed_step_id` is `commit` or a later delivery step.
+fn implementation_completed(failed_step_id: &str) -> bool {
+    COMPLETED_IMPLEMENTATION_STEPS.contains(&failed_step_id)
 }
 
 /// Whether the candidate commit is in the object store, fetching its branch
