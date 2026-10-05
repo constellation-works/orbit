@@ -32,7 +32,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::automation::{DirectLandingRequest, SourceRevision};
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
 use serde_json::{Value, json};
 
@@ -84,7 +84,7 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
         HandoffDelivery::PullRequest { number } => {
             land_pull_request(host, &context, number, input, &view)
         }
-        HandoffDelivery::LocalCandidate => land_local_candidate(host, &context, &view),
+        HandoffDelivery::LocalCandidate => land_local_candidate(host, &context, input, &view),
         HandoffDelivery::AlreadyLanded {
             covering_commit, ..
         } => land_already_landed(host, &context, &covering_commit, &view),
@@ -419,6 +419,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
 fn land_local_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
+    input: &Value,
     view: &LandingView,
 ) -> Result<Value, OrbitError> {
     let candidate = &context.candidate;
@@ -451,6 +452,33 @@ fn land_local_candidate<H: RuntimeHost + ?Sized>(
                 candidate.landing_branch
             ),
         )?);
+    }
+
+    // A fast-forward is a direct landing with no provider identity, so the
+    // owner's delivery consumers learn which task it delivered only from an
+    // intent retained before the branch moves [ORB-13894]. A candidate that
+    // cannot fast-forward lands nothing and stops below.
+    let before = git_output(&checkout, &["rev-parse", "HEAD"])?;
+    if git_command_success(
+        &checkout,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            before.trim(),
+            &candidate.candidate.commit,
+        ],
+    )? {
+        let run_id = input_string_field(input, "run_id").ok_or_else(|| {
+            OrbitError::InvalidInput("handoff_land: run_id is required".to_string())
+        })?;
+        host.record_direct_landing_intent(&DirectLandingRequest {
+            run_id,
+            branch: candidate.landing_branch.clone(),
+            before_commit: before.trim().to_string(),
+            after_commit: candidate.candidate.commit.clone(),
+            task_ids: vec![context.task_id.clone()],
+            handoff_id: Some(context.handoff_id.clone()),
+        })?;
     }
 
     let intent_id = format!("{}:local", context.handoff_id);

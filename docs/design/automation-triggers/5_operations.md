@@ -148,8 +148,12 @@ A no-diff PR, task completion or epic closure alone contributes zero.
 
 Each delivery's `task_ids` come from the landing record, never commit text. A PR
 delivery lists every task carrying its `github-pr:<number>` reference, which
-promotion stamps on each bundle member before the merge; a direct landing lists
-its run's submitted `task_ids`. When the record names no task, `task_ids` is
+promotion stamps on each bundle member before the merge. It also lists the task
+of every handoff the owner accepted for that exact repository, landing branch and
+PR number: a distributed-drain follower's PR carries no reference on the owner's
+task, so the accepted handoff is the record that names it. A direct landing lists
+its run's submitted `task_ids`; a handoff landing that fast-forwards an
+owner-local candidate lists the handoff's task. When the record names no task, `task_ids` is
 empty and `unattributed` says why (`no_landing_task`, or
 `task_records_unreadable` on a checkout that cannot read task records); a task
 store read failure defers the pass instead. `auto-task show` displays both

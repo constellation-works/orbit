@@ -7,6 +7,7 @@ use orbit_automation::{AutomationError, delivery::digest};
 use orbit_common::OrbitError;
 use orbit_types::task::ExternalRef;
 use orbit_types::workflow::automation::*;
+use orbit_types::workflow::handoff::{AcceptedHandoff, HandoffDelivery};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -35,7 +36,7 @@ pub(super) fn association(
         .ok_or_else(invalid)?;
 
     Ok(DeliveryAssociation {
-        key: format!("{PR_KEY_PREFIX}{repository}:{branch}:{number}"),
+        key: pull_request_key(repository, branch, number),
         anchor,
         reference,
         landed_at,
@@ -137,18 +138,26 @@ pub(super) fn group(
     Ok(deliveries)
 }
 
-/// Attribute each newly observed PR delivery to the tasks whose landing record
-/// names that PR. Promotion stamps `github-pr:<number>` on every member of the
-/// bundle it opened, before the merge, so a bundle lists all of its members.
-/// Commit text is never read. A PR no task records is marked unattributed
-/// rather than left looking like a fact recorded before attribution existed.
+/// Attribute each newly observed PR delivery to the tasks that landed it.
+/// Two owner records name them, and both are read:
 ///
-/// The PR number alone identifies the PR: a workspace's tasks belong to the
-/// one repository its delivery consumers observe.
+/// - Promotion stamps `github-pr:<number>` on every member of the bundle it
+///   opened, before the merge, so a bundle lists all of its members. The PR
+///   number alone identifies the PR here: a workspace's tasks belong to the
+///   one repository its delivery consumers observe.
+/// - A claimed execution's accepted handoff records the task, repository,
+///   landing branch and PR number the owner accepted. A follower's PR carries
+///   no reference on the owner's task, so a landed PR whose identity matches
+///   a handoff exactly is that task's delivery.
+///
+/// Commit text is never read. A PR neither record names is marked
+/// unattributed rather than left looking like a fact recorded before
+/// attribution existed.
 pub(super) fn attribute(
     runtime: &OrbitRuntime,
     deliveries: &mut [Delivery],
 ) -> Result<(), AutomationError> {
+    let mut handoffs: Option<Vec<AcceptedHandoff>> = None;
     for delivery in deliveries {
         if !delivery.task_ids.is_empty() || delivery.unattributed.is_some() {
             continue;
@@ -163,19 +172,33 @@ pub(super) fn attribute(
 
         // An unreadable task store defers the pass: freezing "no task" for a
         // landing that has one would be a wrong attribution, not a gap.
+        let unavailable = |error: OrbitError| {
+            AutomationError::Deferred(format!("task_records_unavailable: {error}"))
+        };
         let filter = TaskListFilter {
             external_ref: Some(ExternalRef::github_pr(number).map_err(OrbitError::from)?),
             ..TaskListFilter::default()
         };
         let mut task_ids = runtime
             .task_candidates(&filter, MAX_LANDING_TASKS)
-            .map_err(|error| {
-                AutomationError::Deferred(format!("task_records_unavailable: {error}"))
-            })?
+            .map_err(unavailable)?
             .items
             .into_iter()
             .map(|envelope| envelope.id.to_string())
             .collect::<Vec<_>>();
+        if handoffs.is_none() {
+            handoffs = Some(
+                runtime
+                    .stores()
+                    .tasks()
+                    .accepted_handoffs()
+                    .map_err(unavailable)?,
+            );
+        }
+        task_ids.extend(handoff_tasks(
+            handoffs.as_deref().unwrap_or_default(),
+            &delivery.key,
+        ));
         task_ids.sort();
         task_ids.dedup();
 
@@ -186,6 +209,28 @@ pub(super) fn attribute(
     }
 
     Ok(())
+}
+
+/// The tasks whose accepted handoff delivered the pull request `key` names:
+/// the same repository, landing branch and number, never the number alone.
+pub(super) fn handoff_tasks(handoffs: &[AcceptedHandoff], key: &str) -> Vec<String> {
+    handoffs
+        .iter()
+        .filter(|accepted| {
+            let candidate = &accepted.handoff.candidate;
+            matches!(
+                candidate.delivery,
+                HandoffDelivery::PullRequest { number }
+                    if key == pull_request_key(&candidate.repository, &candidate.landing_branch, number)
+            )
+        })
+        .map(|accepted| accepted.handoff.task_id.clone())
+        .collect()
+}
+
+/// The delivery identity of one pull request merged into `branch`.
+fn pull_request_key(repository: &str, branch: &str, number: u64) -> String {
+    format!("{PR_KEY_PREFIX}{repository}:{branch}:{number}")
 }
 
 /// The PR number of a key [`association`] built; branch and repository names

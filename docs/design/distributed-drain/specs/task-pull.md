@@ -366,8 +366,8 @@ commit itself; it reuses the pinned `pr_complete` delivery identity and merged-w
 evidence without a follower run or path, checks the head on every poll, resolves candidate and base
 objects locally, and requires the validated base to remain reachable from the landing ref. An
 observation that is not the accepted candidate is refused before any external merge. Owner-local
-candidates fast-forward the local landing branch and are verified from the ref; no-diff delivery
-makes no external call and still requires typed evidence and completion authority. The owner never
+candidates fast-forward the local landing branch and are verified from the ref, after a direct
+landing intent naming the handoff's task is retained; no-diff delivery makes no external call and still requires typed evidence and completion authority. The owner never
 rebases unvalidated code and no administrative bypass exists.
 
 ### Worker coordination transport

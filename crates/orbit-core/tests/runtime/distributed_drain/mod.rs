@@ -33,8 +33,8 @@ use orbit_core::application::routines::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
-    ClaimMutation, JobRunStepParams, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation,
-    LocalPullPhase, SettlementRefusal,
+    ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
+    JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
 };
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
 use orbit_types::policy::Role;
@@ -53,6 +53,7 @@ use tempfile::TempDir;
 
 mod admission;
 mod cancel;
+mod landing_attribution;
 mod recovery;
 mod settlement;
 mod worktree_gc;
@@ -66,8 +67,10 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(180);
 
 /// Run `test` (declared in `module_path`, the caller's `module_path!()`)
 /// alone in a child of this binary with inherited Orbit authority
-/// cleared and a disposable `HOME`; `true` inside that child. The parent
-/// waits in-process up to [`CHILD_DEADLINE`] and reaps the child on any exit.
+/// cleared and a disposable `HOME`; `true` inside that child. `HOME/bin`
+/// leads the child's `PATH`, so a test can stand in for a provider CLI. The
+/// parent waits in-process up to [`CHILD_DEADLINE`] and reaps the child on
+/// any exit.
 fn isolated(module_path: &str, test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_DISTRIBUTED_DRAIN_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -82,6 +85,10 @@ fn isolated(module_path: &str, test: &str) -> bool {
         "{}::{test}",
         module_path.split_once("::").expect("test module").1
     );
+    let path = std::env::join_paths(std::iter::once(home.path().join("bin")).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
@@ -89,6 +96,7 @@ fn isolated(module_path: &str, test: &str) -> bool {
     command
         .args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
         .env(MARKER, test)
+        .env("PATH", path)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path())
@@ -157,9 +165,36 @@ struct Wire {
     /// while it keeps the claim, as an owner whose configuration cannot
     /// accept a handoff does.
     refuse_settle: Mutex<Option<String>>,
+    /// When set, the owner accepts a handoff into its claim journal, with
+    /// the candidate the handoff names standing in for its provider read.
+    accept_handoffs: Mutex<bool>,
 }
 
 impl Wire {
+    /// The owner's acceptance of a follower's handoff, as its settle tool
+    /// records it once the provider confirmed the named candidate.
+    fn accept(&self, handoff: TaskHandoff) -> Result<(), OrbitError> {
+        let observation = HandoffObservation {
+            footprint_widening: vec![],
+            candidate: handoff.candidate.clone(),
+            required_commands: vec![],
+            owner_completion_authority: None,
+        };
+        let context = ClaimInvocation::trusted_worker(
+            handoff.task_id.clone(),
+            handoff.claim_id.clone(),
+            handoff.machine_id.clone(),
+            Some(ClaimRun {
+                machine_id: handoff.machine_id.clone(),
+                run_id: handoff.run_id.clone(),
+            }),
+        );
+        let request = format!("handoff:{}", handoff.claim_id);
+        self.owner
+            .accept_task_handoff(&context, &request, handoff, observation)?;
+        Ok(())
+    }
+
     /// Drop the owner's next reply to `tool`.
     fn lose_next_reply(&self, tool: &'static str) {
         self.lose.lock().unwrap().push(tool);
@@ -198,9 +233,14 @@ impl DrainOwnerTransport for Wire {
             });
         }
         // The owner verifies a handoff against its published pull request,
-        // which no test here has; the wire answers as an owner that did.
-        if name == "orbit.drain.claim.settle" && input["settlement"].get("AcceptHandoff").is_some()
+        // which no test here has; the wire answers as an owner that did, and
+        // records the acceptance when the test asks for it.
+        if name == "orbit.drain.claim.settle"
+            && let Some(handoff) = input["settlement"].get("AcceptHandoff")
         {
+            if *self.accept_handoffs.lock().unwrap() {
+                self.accept(serde_json::from_value(handoff.clone()).unwrap())?;
+            }
             return Ok(json!({"phase": "handed_off"}));
         }
         let session = ToolSessionContext {
@@ -272,6 +312,7 @@ impl OwnerCoordinator for NoWorkerRoute {
 struct Pair {
     _root: TempDir,
     wire: Arc<Wire>,
+    owner_repo: PathBuf,
     follower: OrbitRuntime,
     follower_repo: PathBuf,
     follower_jobs: Arc<dyn JobRunStoreBackend>,
@@ -351,6 +392,7 @@ impl Pair {
             unreachable: Mutex::default(),
             protocol: Mutex::default(),
             refuse_settle: Mutex::default(),
+            accept_handoffs: Mutex::default(),
         });
         let (follower, follower_repo) = open_runtime(root.path(), FOLLOWER);
         let follower = follower
@@ -372,6 +414,7 @@ impl Pair {
         Self {
             _root: root,
             wire,
+            owner_repo,
             follower,
             follower_repo,
             follower_jobs,
@@ -686,6 +729,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         .as_ref()
         .and_then(|receipt| receipt.claim.as_ref())
         .expect("claim");
+    let ship = &record.request.ship;
     TaskHandoff {
         schema_version: 1,
         workspace_id: record.destination.owner_workspace_id.clone(),
@@ -696,8 +740,8 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         candidate: HandoffCandidate {
             repository: "owner/repository".into(),
             source_branch: format!("orbit/{}", claim.task_id),
-            base_branch: "main".into(),
-            landing_branch: "main".into(),
+            base_branch: ship.base_branch.clone(),
+            landing_branch: ship.landing_branch.clone(),
             candidate: SourceRevision {
                 commit: "a".repeat(40),
                 tree: "b".repeat(40),

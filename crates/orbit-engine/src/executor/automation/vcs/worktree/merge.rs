@@ -56,6 +56,8 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
                     branch: base.clone(),
                     before_commit: before,
                     after_commit: after,
+                    task_ids: vec![],
+                    handoff_id: None,
                 },
             )
         },
