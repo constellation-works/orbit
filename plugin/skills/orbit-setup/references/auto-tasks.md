@@ -282,6 +282,17 @@ which landings it has examined, and mints an examination task when the debt is
 due. That recorded position — "observed commit X" — is what a rewritten branch
 history breaks.
 
+When the checkout has an `origin` remote, the consumer observes
+`origin/<branch>`, not the local branch. Each pass fetches that one ref and
+leaves the worktree, index, and local branch untouched, so a pull request
+merged on the remote is seen even when the checkout was not fast-forwarded. A
+failed fetch defers as `source_fetch_failed` and does not fall back to the
+local ref; that deferral retries. `orbit doctor`'s `review` row names the
+observed commit and the remote-tracking head, and it is not ok while the cursor
+trails that head past the batch's `max_wait_minutes`. A repository with no
+remote still watches `refs/heads/<branch>`. Doctor compares the remote-tracking
+ref already in the checkout and does not itself fetch.
+
 ### A rewritten history is proved, or it stalls
 
 When the observed commit is no longer reachable from the configured branch head,

@@ -21,7 +21,10 @@ use orbit_types::workflow::automation::{AutomationState, CoverageClass, Delivery
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 use serde::Serialize;
 
-use super::{inspect, source::Source};
+use super::{
+    inspect,
+    source::{RemoteObservation, Source},
+};
 use crate::OrbitRuntime;
 
 /// The auto-task definition after-landing review runs through.
@@ -161,8 +164,31 @@ pub struct AfterLandingHealth {
     /// The instant the oldest pending delivery makes a batch due, when the
     /// threshold is not reached first.
     pub next_batch_due_at: Option<DateTime<Utc>>,
+    /// The commit the consumer has observed, when it has a cursor and origin
+    /// is configured. Absent for a repository with no remote, so this report
+    /// stays the shape it had before remote observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_commit: Option<String>,
+    /// `refs/remotes/origin/<branch>`, when that ref exists. Doctor reads it
+    /// and does not fetch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_head: Option<String>,
+    /// First-parent commits the observed cursor has not reached. `Some(0)`
+    /// means the cursor matches the remote-tracking head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commits_behind_remote: Option<u64>,
+    /// The observed commit is not an ancestor of the remote-tracking head.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub remote_diverged: bool,
+    /// Origin is configured and `refs/remotes/origin/<branch>` is missing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub remote_unfetched: bool,
     /// Every reason the consumer cannot review landed work; empty when healthy.
     pub problems: Vec<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl AfterLandingHealth {
@@ -185,11 +211,7 @@ impl AfterLandingHealth {
             (Some(owner), false) => format!("owned by `{owner}`"),
             (None, _) => "no owner".to_string(),
         };
-        let branch = match (&self.branch, &self.branch_error) {
-            (Some(branch), None) => format!("branch `{branch}` resolves"),
-            (Some(branch), Some(_)) => format!("branch `{branch}` does not resolve"),
-            (None, _) => "no branch".to_string(),
-        };
+        let branch = self.branch_phrase();
         let progress = match (&self.wedged_action, &self.stall) {
             (Some(action), _) => format!("wedged on {action}"),
             (None, Some(stall)) => format!("stalled ({stall})"),
@@ -227,6 +249,42 @@ impl AfterLandingHealth {
             format!("healthy: {facts}")
         } else {
             format!("unhealthy: {}; {facts}", self.problems.join("; "))
+        }
+    }
+
+    fn branch_phrase(&self) -> String {
+        let base = match (&self.branch, &self.branch_error) {
+            (Some(branch), None) => format!("branch `{branch}` resolves"),
+            (Some(branch), Some(_)) => format!("branch `{branch}` does not resolve"),
+            (None, _) => "no branch".to_string(),
+        };
+        match self.remote_clause() {
+            Some(clause) => format!("{base}; {clause}"),
+            None => base,
+        }
+    }
+
+    /// How the observed cursor relates to the remote-tracking head. Absent
+    /// when the repository has no origin, so the branch wording stays put.
+    fn remote_clause(&self) -> Option<String> {
+        let branch = self.branch.as_deref()?;
+        if self.remote_unfetched {
+            return Some(format!("origin/{branch} has no remote-tracking ref"));
+        }
+        let remote = self.remote_head.as_deref()?;
+        if self.remote_diverged {
+            return Some(format!(
+                "is not an ancestor of origin/{branch} ({remote}) (history_diverged)"
+            ));
+        }
+        match self.commits_behind_remote {
+            Some(0) => Some(format!("matches origin/{branch} ({remote})")),
+            Some(behind) => Some(format!(
+                "trails origin/{branch} ({remote}) by {behind} commits"
+            )),
+            None => Some(format!(
+                "origin/{branch} is at {remote}; the consumer has not observed a commit yet"
+            )),
         }
     }
 }
@@ -272,6 +330,11 @@ pub fn after_landing_health(
         last_batch_covered_at: None,
         next_batch_due: None,
         next_batch_due_at: None,
+        observed_commit: None,
+        remote_head: None,
+        commits_behind_remote: None,
+        remote_diverged: false,
+        remote_unfetched: false,
         problems: Vec::new(),
     };
 
@@ -408,8 +471,72 @@ pub fn after_landing_health(
     } else {
         diagnostic.reason
     });
+    apply_remote_trail(
+        &mut health,
+        &runtime.paths().repo_root,
+        &declared.branch,
+        declared.max_wait_minutes,
+        diagnostic
+            .state
+            .as_ref()
+            .map(|state| state.observed.commit.as_str()),
+        now,
+    );
 
     Ok(Some(health))
+}
+
+/// Compare the consumer's cursor with the remote-tracking head already in
+/// the checkout. This does not fetch: a pass that cannot reach origin defers
+/// on its own, and doctor has to stay read-only.
+fn apply_remote_trail(
+    health: &mut AfterLandingHealth,
+    root: &std::path::Path,
+    branch: &str,
+    max_wait_minutes: u32,
+    observed: Option<&str>,
+    now: DateTime<Utc>,
+) {
+    let observation = match Source::new(root).remote_observation(branch, observed) {
+        Ok(observation) => observation,
+        Err(error) => {
+            health.problems.push(format!(
+                "could not compare the observed source with origin/{branch}: {error}"
+            ));
+            return;
+        }
+    };
+    let Some(observation) = observation else {
+        return;
+    };
+    record_remote_observation(health, &observation);
+    if observation.diverged {
+        health.problems.push(format!(
+            "observed source is not an ancestor of origin/{branch} (history_diverged)"
+        ));
+    }
+    if observation.unfetched && observation.observed.is_some() {
+        health.problems.push(format!(
+            "origin/{branch} has no remote-tracking ref, so landed deliveries cannot be observed"
+        ));
+    }
+    if let (Some(behind), Some(epoch)) = (observation.behind, observation.oldest_unobserved_epoch)
+        && behind > 0
+        && let Some(landed) = DateTime::from_timestamp(epoch, 0)
+        && now.signed_duration_since(landed) >= Duration::minutes(i64::from(max_wait_minutes))
+    {
+        health.problems.push(format!(
+            "observed source trails origin/{branch} by {behind} commits past max_wait_minutes ({max_wait_minutes})"
+        ));
+    }
+}
+
+fn record_remote_observation(health: &mut AfterLandingHealth, observation: &RemoteObservation) {
+    health.observed_commit = observation.observed.clone();
+    health.remote_head = observation.remote_head.clone();
+    health.commits_behind_remote = observation.behind;
+    health.remote_diverged = observation.diverged;
+    health.remote_unfetched = observation.unfetched;
 }
 
 /// When the consumer's next batch is due, mirroring the delivery evaluator:

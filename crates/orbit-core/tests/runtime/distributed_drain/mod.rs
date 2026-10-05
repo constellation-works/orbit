@@ -804,6 +804,37 @@ fn set_run_state(owner: &OrbitRuntime, run_id: &str, state: &str) {
         .unwrap();
 }
 
+/// Publish the current branch to a bare repo that stands in for `origin`.
+///
+/// The origin URL stays the configured GitHub address so delivery identity
+/// does not change. `url.<bare>.insteadOf` sends fetch and push to the bare
+/// repo. Observation then has to fetch; a commit that exists only in this
+/// worktree is invisible.
+fn publish_origin(repo: &Path) {
+    let url = git(repo, &["config", "--get", "remote.origin.url"]);
+    let url = url.trim();
+    assert!(!url.is_empty(), "origin url");
+    let bare = repo.with_file_name("origin.git");
+    if !bare.join("HEAD").exists() {
+        git(
+            bare.parent().unwrap(),
+            &["init", "--bare", "-q", bare.to_str().unwrap()],
+        );
+    }
+    let branch = git(repo, &["branch", "--show-current"]);
+    let branch = branch.trim();
+    git(
+        &bare,
+        &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+    );
+    let key = format!("url.{}.insteadOf", bare.display());
+    git(repo, &["config", &key, url]);
+    git(
+        repo,
+        &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+    );
+}
+
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .arg("-C")

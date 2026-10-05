@@ -176,7 +176,10 @@ impl<'a> Host<'a> {
 
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
-        Source::new(&self.runtime.paths().repo_root).head(branch)
+        // Pilots prepare against the worktree branch. A fetch failure must
+        // not fail preparation freshness, and this path does not observe
+        // deliveries.
+        Source::new(&self.runtime.paths().repo_root).local_head(branch)
     }
 
     fn observe(
@@ -349,7 +352,7 @@ impl MemberHost for Host<'_> {
 
         // Re-derive the material now: a member whose input moved may not be admitted.
         // Branch head is invariant for this call; resolve it once rather than
-        // per task_id (each Source::head is several git spawns).
+        // per task_id (each local head is several git spawns, and it does not fetch).
         if self.trigger.kind == StateTriggerKind::PreparationEligible {
             let (_, source) = self.head(&self.trigger.branch)?;
             // Retained pending members may be off the current observation
@@ -724,7 +727,9 @@ fn ensure_preparation_fresh(
 ) -> Result<(), OrbitError> {
     let root = &runtime.paths().repo_root;
     let source = Source::new(root);
-    let (_, head) = source.head(branch).map_err(automation_error_to_orbit)?;
+    let (_, head) = source
+        .local_head(branch)
+        .map_err(automation_error_to_orbit)?;
     let prepared = &submitted.member.source;
     if head == *prepared {
         return Ok(());

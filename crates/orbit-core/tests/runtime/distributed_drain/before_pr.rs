@@ -101,6 +101,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         .expect("consumer");
     owner.auto_task_toggle(CONSUMER, true).unwrap();
     let definition = owner.auto_task_show(CONSUMER).unwrap().unwrap();
+    publish_origin(&repo);
     evaluate_auto_task(&owner, &definition, false, Utc::now()).expect("baseline");
 
     let base = revision(&repo, "HEAD");
@@ -351,6 +352,7 @@ fn an_accepted_before_pr_handoff_covers_its_landing() {
         std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    publish_origin(&repo);
     let diagnostic = evaluate_auto_task(&owner, &definition, false, Utc::now()).unwrap();
     let state = diagnostic
         .state

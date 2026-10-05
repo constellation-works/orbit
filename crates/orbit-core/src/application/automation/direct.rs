@@ -12,8 +12,10 @@ pub(crate) fn record_direct_landing_intent(
     request: &DirectLandingRequest,
 ) -> Result<(), OrbitError> {
     let source = Source::new(&runtime.paths().repo_root);
+    // Recording an intent is a local fact about the checkout's branch. The
+    // delivery pass, not this write, fetches origin.
     let (repository, _) = source
-        .head(&request.branch)
+        .local_head(&request.branch)
         .map_err(automation_error_to_orbit)?;
     let before = source
         .revision(&request.before_commit)
