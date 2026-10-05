@@ -39,10 +39,15 @@ struct LocalInstall {
 impl LocalInstall {
     /// An initialized workspace and a managed installation of this build.
     fn new() -> Self {
+        Self::with_bin_name("managed-bin")
+    }
+
+    /// An initialized workspace with the managed installation under `bin_name`.
+    fn with_bin_name(bin_name: &str) -> Self {
         let root = tempfile::tempdir().expect("fixture root");
         let home = root.path().join("home");
         let repo = root.path().join("repo");
-        let bin = root.path().join("managed-bin");
+        let bin = root.path().join(bin_name);
         let builds = root.path().join("builds");
         let mirror = root.path().join("mirror");
         for directory in [&home, &builds, &mirror] {
@@ -729,8 +734,8 @@ fn no_client_or_update_enters_mid_validation_and_the_accepted_bytes_are_installe
 /// A convergence failure after the swap reports `needs_recovery` with the
 /// exact command that retries this candidate; retrying it converges.
 #[test]
-fn a_post_swap_failure_needs_recovery_and_the_same_candidate_converges_on_retry() {
-    let install = LocalInstall::new();
+fn a_post_swap_failure_recovers_from_a_quoted_install_dir() {
+    let install = LocalInstall::with_bin_name("managed tools' dir");
     let candidate = install.candidate("orbit-b");
     let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
     let layout = install.repo.join(".orbit/state/layout.version");
