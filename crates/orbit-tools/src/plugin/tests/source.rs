@@ -2,6 +2,7 @@ use std::io::Write;
 
 use orbit_types::plugin::MANIFEST_FILE_NAME;
 
+use super::super::loader::first_party_source;
 use super::super::source::{ArchiveLimits, PluginSourceRequest, resolve_plugin_source, unpack_tar};
 
 const MANIFEST: &str = "\
@@ -211,4 +212,36 @@ fn a_compression_bomb_is_bounded_by_its_unpacked_size() {
         error.contains("4096 bytes"),
         "the refusal must name the unpacked bound: {error}"
     );
+}
+
+#[test]
+fn first_party_source_verifies_only_the_repository_git_would_fetch() {
+    for source in [
+        "git+https://github.com/constellation-works/plugin",
+        "git+https://github.com/constellation-works/plugin.git#v1.0.0",
+        "git+ssh://git@github.com/constellation-works/plugin.git",
+        "git+git@github.com:constellation-works/plugin.git",
+    ] {
+        assert!(first_party_source(source), "{source} is first-party");
+    }
+    for source in [
+        "git+https://github.com/constellation-works/../attacker/plugin",
+        "git+https://github.com/constellation-works/%2e%2E/attacker/plugin",
+        "git+https://github.com/constellation-works/./../attacker/plugin",
+        "git+https://github.com/constellation-works//plugin",
+        "git+https://github.com//constellation-works/plugin",
+        "git+https://github.com/constellation-works/plugin/..",
+        "git+ssh://git@github.com/constellation-works/../attacker/plugin",
+        "git+ssh://git@github.com:22/constellation-works/%2e%2e/attacker/plugin",
+        "git+git@github.com:constellation-works/../attacker/plugin",
+        "git+git@github.com:constellation-works/%2E%2E/attacker/plugin",
+        "git+git@github.com:constellation-works//plugin",
+        "git+https://github.com/attacker/constellation-works",
+        "git+https://example.com/constellation-works/plugin",
+    ] {
+        assert!(
+            !first_party_source(source),
+            "{source} must not verify as first-party: the namespace is unforgeable by URL text"
+        );
+    }
 }

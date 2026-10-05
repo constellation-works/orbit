@@ -433,8 +433,12 @@ pub trait FrictionStoreBackend: Send + Sync {
 }
 
 pub trait InvocationStoreBackend: Send + Sync {
+    /// Records one invocation under `workspace_id`, the workspace whose run
+    /// produced it. The caller supplies it from its own runtime binding, never
+    /// from `params`, which can arrive over the metrics ingest endpoint.
     fn insert_invocation_trace_record(
         &self,
+        workspace_id: &str,
         params: &InvocationInsertParams,
     ) -> Result<(), OrbitError>;
     fn list_invocation_records(

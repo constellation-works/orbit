@@ -1,7 +1,7 @@
 //! One member evaluation pass: reconcile, absorb a page, then admit due members.
 
 use super::admission::admit;
-use super::observe::{absorb, retire_unobserved};
+use super::observe::{CAPACITY, absorb, observed, retire_superseded, retire_unobserved};
 use super::reconcile::reconcile;
 use super::{MemberAdmission, MemberEvaluation, MemberHost};
 use crate::AutomationError;
@@ -10,7 +10,7 @@ use crate::delivery::definition_epoch;
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{members::*, *};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Why a pending member is due now, or `None` while it still debounces: it
 /// settled for the debounce window, or it waited out the maximum.
@@ -140,13 +140,17 @@ pub fn evaluate(
         return Err(AutomationError::Deferred("source_page_invalid".into()));
     }
 
-    // A page that does not fit first retires what departed members left
-    // behind; whatever still does not fit waits for a later pass, while the
-    // scan and the retained members keep moving.
-    if absorb(host, &mut members.clone(), &page) > 0 {
-        retire_unobserved(host, members, &page)?;
+    // A page that does not fit, or failed records that leave no room for a
+    // full batch, first retire what departed members left behind; whatever
+    // still does not fit waits for a later pass, while the scan and the
+    // retained members keep moving.
+    let batch_size = trigger.effective_batch_size();
+    if absorb(host, &mut members.clone(), &page) > 0 || members.failed.len() + batch_size > CAPACITY
+    {
+        retire_unobserved(host, members, observed(&page))?;
     }
     let deferred = absorb(host, members, &page);
+    retire_superseded(members, &BTreeSet::new());
     members.scan_after = page.next;
 
     state = if dry_run {
@@ -225,7 +229,10 @@ pub fn evaluate(
     // member observed at another head — or carrying a different stored
     // `task.crew` — waits for the next admission rather than mixing the
     // bundle the one-bundle-one-crew dispatch rule would reject [ORB-12761].
-    let batch_size = trigger.effective_batch_size();
+    // An attempt may fail every member it carries, so a member without a
+    // failed record joins only while the store has room to record its
+    // failure; otherwise retiring the attempt could never commit.
+    let mut room = CAPACITY.saturating_sub(members.failed.len());
     let mut admitted = Vec::new();
     let mut batch = Vec::new();
     let mut next = state.clone();
@@ -239,8 +246,15 @@ pub fn evaluate(
         }) {
             continue;
         }
+        let recorded = members.failed.contains_key(&member.key);
+        if !recorded && room == 0 {
+            continue;
+        }
         match host.admission(&member)? {
             MemberAdmission::Admit => {
+                if !recorded {
+                    room -= 1;
+                }
                 batch.push(BatchMember {
                     key: member.key.clone(),
                     task_ids: member.task_ids.clone(),
@@ -268,7 +282,12 @@ pub fn evaluate(
     }
 
     let Some(member) = admitted.first().cloned() else {
-        return diagnostic(store, consumer, "work_withheld", Some(state));
+        let reason = if room == 0 {
+            "failure_capacity"
+        } else {
+            "work_withheld"
+        };
+        return diagnostic(store, consumer, reason, Some(state));
     };
 
     if dry_run {

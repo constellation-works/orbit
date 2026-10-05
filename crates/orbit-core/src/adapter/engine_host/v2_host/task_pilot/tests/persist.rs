@@ -15,13 +15,13 @@ use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 const MATERIAL_DETAIL: &str = "task meaning or dependency evidence changed after preparation";
 
-struct Workspace {
+pub(super) struct Workspace {
     _root: TempDir,
-    runtime: OrbitRuntime,
-    repo: PathBuf,
+    pub(super) runtime: OrbitRuntime,
+    pub(super) repo: PathBuf,
 }
 
-fn workspace(config_toml: Option<&str>) -> Workspace {
+pub(super) fn workspace(config_toml: Option<&str>) -> Workspace {
     let (root, runtime, _) = runtime_with_workspace_config(config_toml);
     let repo = runtime.paths().repo_root.clone();
     git(&repo, &["init"]);

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::create_private_dir_all;
+use orbit_types::task::task_id_prefix;
 
 use crate::driver::file::task_bundle::{
     read_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
@@ -176,15 +177,21 @@ pub fn restore_publication(
 
     rebuild_workspace_index(registry, &task_workspace_id)?;
 
+    let local_prefix = registry.local_task_prefix()?;
     let target_allocator = restored_ids
         .iter()
-        .filter_map(|task_id| parse_orb_task_number(task_id))
+        .filter_map(|task_id| local_task_number(task_id, &local_prefix))
         .max()
-        .and_then(|value| value.checked_add(1))
-        .ok_or_else(|| restore_error("publication contains no allocatable task id"))?
+        .map_or(Ok(previous_allocator), |value| {
+            value
+                .checked_add(1)
+                .ok_or_else(|| restore_error("local task id exceeds maximum allocatable task id"))
+        })?
         .max(previous_allocator);
-    registry.bump_allocator_to_at_least(target_allocator)?;
-    guard.advanced_allocator = Some(target_allocator);
+    if target_allocator > previous_allocator {
+        registry.bump_allocator_to_at_least(target_allocator)?;
+        guard.advanced_allocator = Some(target_allocator);
+    }
 
     guard.commit();
     Ok(outcome(envelope, restored_ids, already_present))
@@ -365,4 +372,12 @@ impl Drop for RestoreGuard<'_> {
 
 fn restore_error(message: impl Into<String>) -> OrbitError {
     OrbitError::InvalidInput(format!("{RESTORE_LABEL}: {}", message.into()))
+}
+
+/// Numeric suffix of `task_id`, but only for ids this host mints. A mirror
+/// carries its owner's numbering, which must not advance the local allocator.
+fn local_task_number(task_id: &str, local_prefix: &str) -> Option<u32> {
+    (task_id_prefix(task_id) == Some(local_prefix))
+        .then(|| parse_orb_task_number(task_id))
+        .flatten()
 }

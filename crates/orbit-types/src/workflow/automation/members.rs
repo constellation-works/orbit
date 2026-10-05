@@ -474,6 +474,30 @@ pub struct MemberState {
     pub scan_after: Option<String>,
 }
 
+/// Most distinct members one consumer's working state retains, and most
+/// failed records it keeps; the store refuses a checkpoint above either.
+pub const MEMBER_CAPACITY: usize = 1000;
+
+impl MemberState {
+    /// Distinct keys the pending, assessed and withheld working state holds:
+    /// a member pending beside its withheld reason or superseded assessment
+    /// counts once, so recording why it waits never needs room.
+    pub fn retained(&self) -> usize {
+        let pending = &self.pending;
+        let assessed = &self.assessed;
+        pending.len()
+            + assessed
+                .keys()
+                .filter(|key| !pending.contains_key(*key))
+                .count()
+            + self
+                .withheld
+                .keys()
+                .filter(|key| !pending.contains_key(*key) && !assessed.contains_key(*key))
+                .count()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberAssessment {
     pub input_fingerprint: String,

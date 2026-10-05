@@ -10,7 +10,7 @@ use crate::executor::automation::input::input_string_field;
 use super::super::git::{
     GitOutcome, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
     git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
-    resolve_worktree_start_point,
+    normalize_base_branch, resolve_worktree_start_point,
 };
 use super::cleanup::remove_worktree;
 use super::dependency_delivery::{
@@ -96,7 +96,11 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     if let Some((field, mode)) = landing_mode {
         match mode.as_str() {
             "local" => {
-                let base_checkout = checkout_holding_branch(repo_root, &base)?
+                // Same spelling rule as `merge_batch_worktree_into_base`:
+                // `origin/<branch>` names the local landing branch, and the
+                // pre-check inspects the checkout that holds that branch.
+                let landing_branch = normalize_base_branch(&base)?;
+                let base_checkout = checkout_holding_branch(repo_root, &landing_branch)?
                     .unwrap_or_else(|| repo_root.to_path_buf());
                 ensure_clean_checkout(&base_checkout, "base branch checkout")?;
             }

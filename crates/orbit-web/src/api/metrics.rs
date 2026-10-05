@@ -149,6 +149,7 @@ impl MetricsInvocationsQuery {
         Ok(InvocationQuery {
             since: parse_rfc3339_opt(self.since, "since")?,
             until: parse_rfc3339_opt(self.until, "until")?,
+            workspace_id: None,
             job_run_id: optional_query_string(self.job_run_id),
             activity_id: optional_query_string(self.activity_id),
             task_id: optional_query_string(self.task_id),

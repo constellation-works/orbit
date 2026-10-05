@@ -13,6 +13,9 @@ use std::collections::HashMap;
 use super::params::*;
 
 pub trait JobRunStoreBackend: Send + Sync {
+    /// The workspace partition this store reads and writes runs under. Run
+    /// ids are only unique within it.
+    fn workspace_id(&self) -> &str;
     /// Local permanent binding, independent of owner connectivity.
     fn local_pull_for_run(&self, _run_id: &str) -> Result<Option<LocalPullAdmission>, OrbitError> {
         Ok(None)

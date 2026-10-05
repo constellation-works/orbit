@@ -9,7 +9,7 @@ pub(in crate::executor::automation::vcs) use merge::{
 mod setup;
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
 use serde_json::Value;
@@ -90,7 +90,9 @@ const DEFAULT_BRANCH_PREFIX: &str = "orbit";
 pub(in crate::executor::automation) struct WorktreeIdentity {
     /// Every task the worktree serves, in input order. Non-empty.
     pub(in crate::executor::automation) task_ids: Vec<String>,
-    /// The branch (and directory) prefix, `orbit` unless overridden.
+    /// Branch namespace, `orbit` unless overridden. Slashes stay in the Git
+    /// ref (`team/x/<task>-<hash>`). The directory name is the sanitized
+    /// prefix, so the checkout is one child of the worktree root.
     pub(in crate::executor::automation) branch_prefix: String,
     /// The token that names the directory alongside the prefix.
     pub(in crate::executor::automation) run_id: String,
@@ -106,7 +108,8 @@ impl WorktreeIdentity {
     /// does not carry the `run_id` the engine injected at dispatch.
     ///
     /// Fails when the input names no task at all — such a run never went
-    /// through `setup_worktree`.
+    /// through `setup_worktree` — or when `branch_prefix` contains `..`,
+    /// starts with `-`, or sanitizes to an empty directory name.
     pub(in crate::executor::automation) fn from_input(
         input: &Value,
         engine_run_id: Option<&str>,
@@ -131,6 +134,10 @@ impl WorktreeIdentity {
         let branch_prefix = input_string_field(input, "branch_prefix")
             .or_else(|| input_string_field(input, "epic_task_id").map(|_| "epic".to_string()))
             .unwrap_or_else(|| DEFAULT_BRANCH_PREFIX.to_string());
+        // Reject before any Git call or mkdir. A slash stays in the branch
+        // namespace; path derivation sanitizes it to one directory component.
+        reject_unsafe_branch_prefix(&branch_prefix)?;
+        sanitize_worktree_component("branch_prefix", &branch_prefix)?;
         Ok(Self {
             task_ids,
             branch_prefix,
@@ -223,6 +230,13 @@ fn require_run_id<'a>(input: &'a Value, activity: &str) -> Result<&'a str, Orbit
 pub(in crate::executor::automation) fn sanitize_worktree_token(
     value: &str,
 ) -> Result<String, OrbitError> {
+    sanitize_worktree_component("run_id", value)
+}
+
+/// One worktree directory component. `/`, `\`, and every other character
+/// outside `[A-Za-z0-9._-]` become `-`. Leading and trailing `-` and `.`
+/// are stripped so the result cannot be `.`, `..`, or a flag-like name.
+fn sanitize_worktree_component(label: &str, value: &str) -> Result<String, OrbitError> {
     let sanitized: String = value
         .trim()
         .chars()
@@ -239,10 +253,28 @@ pub(in crate::executor::automation) fn sanitize_worktree_token(
         .to_string();
     if trimmed.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
-            "run_id '{value}' sanitizes to an empty string"
+            "{label} '{value}' sanitizes to an empty string"
         )));
     }
     Ok(trimmed)
+}
+
+/// `..` would leave the worktree root if the prefix were joined raw, and a
+/// leading `-` would be another argv word to `git worktree add -b`. A slash
+/// is a real branch namespace (`team/x/<task>`); the directory form is
+/// sanitized separately.
+fn reject_unsafe_branch_prefix(prefix: &str) -> Result<(), OrbitError> {
+    if prefix.contains("..") {
+        return Err(OrbitError::InvalidInput(format!(
+            "branch_prefix '{prefix}' must not contain '..'"
+        )));
+    }
+    if prefix.starts_with('-') {
+        return Err(OrbitError::InvalidInput(format!(
+            "branch_prefix '{prefix}' must not start with '-'"
+        )));
+    }
+    Ok(())
 }
 
 pub fn resolve_worktree_path_from_prefix(
@@ -250,27 +282,48 @@ pub fn resolve_worktree_path_from_prefix(
     prefix: &str,
     run_id: &str,
 ) -> Result<PathBuf, OrbitError> {
-    let sanitized = sanitize_worktree_token(run_id)?;
-    let dir_name = format!("{prefix}-{sanitized}");
-    match worktree_root() {
-        Some(root) => Ok(root.join(repo_name(repo_root)?).join(dir_name)),
-        None => Ok(repo_root
-            .join(".orbit")
-            .join("state")
-            .join("worktrees")
-            .join(dir_name)),
-    }
+    let prefix = sanitize_worktree_component("branch_prefix", prefix)?;
+    let run_id = sanitize_worktree_component("run_id", run_id)?;
+    worktree_directory(repo_root, &format!("{prefix}-{run_id}"))
 }
 
 pub fn resolve_shared_worktree_path(repo_root: &Path, run_id: &str) -> Result<PathBuf, OrbitError> {
-    let dir_name = shared_worktree_dir_name(run_id)?;
-    match worktree_root() {
-        Some(root) => Ok(root.join(repo_name(repo_root)?).join(dir_name)),
-        None => Ok(repo_root
-            .join(".orbit")
-            .join("state")
-            .join("worktrees")
-            .join(dir_name)),
+    worktree_directory(repo_root, &shared_worktree_dir_name(run_id)?)
+}
+
+/// Join `dir_name` as one child of the worktree root. A name that is not a
+/// single normal component, or a join that does not stay under that root,
+/// is rejected.
+fn worktree_directory(repo_root: &Path, dir_name: &str) -> Result<PathBuf, OrbitError> {
+    let parent = match worktree_root() {
+        Some(root) => root.join(repo_name(repo_root)?),
+        None => repo_root.join(".orbit").join("state").join("worktrees"),
+    };
+    if !is_single_worktree_component(dir_name) {
+        return Err(OrbitError::InvalidInput(format!(
+            "worktree directory '{dir_name}' must be a single component under '{}'",
+            parent.display()
+        )));
+    }
+    let path = parent.join(dir_name);
+    if path.parent() != Some(parent.as_path()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "worktree path '{}' escapes '{}'",
+            path.display(),
+            parent.display()
+        )));
+    }
+    Ok(path)
+}
+
+fn is_single_worktree_component(dir_name: &str) -> bool {
+    let mut components = Path::new(dir_name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(name)), None) => {
+            let name = name.to_string_lossy();
+            !name.is_empty() && !name.starts_with('-') && !name.starts_with('.')
+        }
+        _ => false,
     }
 }
 

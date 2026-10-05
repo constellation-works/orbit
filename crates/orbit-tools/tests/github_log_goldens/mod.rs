@@ -178,6 +178,7 @@ fn request_fixture_goldens() {
                 json!(gh::project_job_labels(raw)),
             ),
             "pr_list" => (gh::pr_list_request(input), gh::project_pull_request(raw)),
+            "repo_view" => (gh::repo_view_request(input), gh::project_repo_view(raw)),
             "logs" => (
                 gh::RunLogRequests::from_input(input).map(|requests| requests.run_log),
                 Value::Null,

@@ -1,6 +1,143 @@
 use super::super::wait::wait_with_timeout_and_output_limit;
 use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
 
+/// Fault injection is admitted here because setup errors cannot be requested
+/// through the public API without exhausting descriptors or poisoning global
+/// signal state. A separately waitable peer proves cleanup kills the group,
+/// while waitpid(ECHILD) proves the supervisor reaped its direct child.
+#[cfg(unix)]
+#[test]
+fn supervision_errors_kill_the_process_group_and_reap_the_child() {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::Child;
+    use std::time::Duration;
+
+    use wait_timeout::ChildExt;
+
+    use super::super::cleanup::kill_process_group;
+    use super::super::wait::{
+        SupervisionFailure, wait_with_stdout_relay, with_supervision_failure,
+    };
+
+    struct ProcessGroup {
+        pid: Option<u32>,
+        child: Option<Child>,
+        peer: Option<Child>,
+    }
+
+    impl Drop for ProcessGroup {
+        fn drop(&mut self) {
+            if let Some(pid) = self.pid {
+                kill_process_group(pid);
+                if self.child.is_none() {
+                    // SAFETY: this is the child the fixture handed to the
+                    // supervisor. Reap it if failed supervision did not.
+                    unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), 0) };
+                }
+            }
+            for child in self.child.iter_mut().chain(self.peer.iter_mut()) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    let cases = [
+        (None, false), // Payload requested without a stdin pipe.
+        (Some(SupervisionFailure::DrainStop), false),
+        (Some(SupervisionFailure::Watch(0)), false), // Stdin.
+        (Some(SupervisionFailure::Watch(1)), false), // Captured stdout.
+        (Some(SupervisionFailure::Watch(1)), true),  // Relayed stdout.
+        (Some(SupervisionFailure::Watch(2)), false), // Stderr, after two workers.
+        (Some(SupervisionFailure::SignalInstall), false), // After all workers.
+        (Some(SupervisionFailure::Wait), false),     // Handler already installed.
+    ];
+    for (failure, relay) in cases {
+        let payload = vec![b'x'; 1024 * 1024];
+        let req = ExecRequest {
+            program: "/bin/sleep".to_string(),
+            args: vec!["60".to_string()],
+            current_dir: None,
+            timeout_ms: Some(5_000),
+            stdin_mode: if failure.is_some() {
+                StdinMode::Bytes(payload.clone())
+            } else {
+                StdinMode::Null
+            },
+            environment_mode: EnvironmentMode::Inherit,
+            debug: false,
+        };
+        let child = crate::process::spawn(&req).expect("spawn group leader");
+        let pid = child.id();
+        let mut group = ProcessGroup {
+            pid: Some(pid),
+            child: Some(child),
+            peer: None,
+        };
+        // Unlike a grandchild orphaned by SIGKILL, this peer is ours to reap,
+        // so the test does not depend on the host init process reaping it.
+        group.peer = Some(
+            crate::process::command(&req)
+                .process_group(pid as i32)
+                .spawn()
+                .expect("spawn peer in supervised process group"),
+        );
+        let child = group.child.take().expect("group leader");
+        let supervise = || {
+            if relay {
+                let (_reader, writer) = std::io::pipe().expect("relay pipe");
+                wait_with_stdout_relay(child, req.timeout_ms, false, Some(payload), Some(writer))
+                    .map(|_| ())
+            } else {
+                crate::runner::supervise_child(child, req.timeout_ms, Some(payload)).map(|_| ())
+            }
+        };
+        let result = match failure {
+            Some(failure) => with_supervision_failure(failure, supervise),
+            None => supervise(),
+        };
+
+        // SAFETY: queries only the child pid the fixture spawned. WNOHANG
+        // distinguishes an unreaped live child (0) or zombie (pid) from ECHILD.
+        let waited =
+            unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG) };
+        let wait_error = std::io::Error::last_os_error().raw_os_error();
+        let peer_status = group
+            .peer
+            .as_mut()
+            .expect("peer")
+            .wait_timeout(Duration::from_secs(3))
+            .expect("wait for peer");
+        // SAFETY: signal zero only probes the fixture's process group.
+        let group_probe = unsafe { libc::killpg(pid as libc::pid_t, 0) };
+        let group_error = std::io::Error::last_os_error().raw_os_error();
+        if group_probe == -1 && group_error == Some(libc::ESRCH) {
+            // The group is gone; avoid signaling its id again in test cleanup.
+            group.pid = None;
+        }
+
+        assert!(
+            result.is_err(),
+            "fixture must return an error: {failure:?}, relay={relay}"
+        );
+        assert_eq!(
+            (waited, wait_error),
+            (-1, Some(libc::ECHILD)),
+            "supervision must reap its child on error: {failure:?}, relay={relay}"
+        );
+        assert_eq!(
+            peer_status.and_then(|status| status.signal()),
+            Some(libc::SIGKILL),
+            "supervision must kill the whole group on error: {failure:?}, relay={relay}"
+        );
+        assert_eq!(
+            (group_probe, group_error),
+            (-1, Some(libc::ESRCH)),
+            "no live process group may survive a supervision error: {failure:?}, relay={relay}"
+        );
+    }
+}
+
 /// Use the per-call limit seam to exercise pipe closure and capture reporting
 /// without changing the process-wide capture-limit environment. Finite children
 /// exit before supervision starts, leaving both pipes buffered for the workers.

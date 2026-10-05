@@ -6,12 +6,8 @@ use crate::TIMEOUT_DEFAULT_MS;
 
 pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     let mut args = vec!["repo".to_string(), "view".to_string()];
-
-    if let Some(repo) = input.get("repo").and_then(Value::as_str) {
-        args.push("--repo".to_string());
-        args.push(repo.to_string());
-    }
-
+    // `gh repo view` takes OWNER/REPO positionally. It has no `--repo` flag.
+    super::push_optional_positional(&mut args, input, "repo")?;
     args.push("--json".to_string());
     args.push("name,nameWithOwner,defaultBranchRef".to_string());
 

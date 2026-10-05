@@ -11,14 +11,24 @@
 //!
 //! The rule covers the two commands that write configuration directly, `git
 //! config` and `git remote`, and it fails closed: a form this module cannot
-//! recognize as a read is refused.
+//! recognize as a read is refused. Command-line alias definitions are also
+//! refused: Git expands them before dispatch, and a shell alias can run arbitrary
+//! configuration writes. Ordinary non-alias `-c` / `--config-env` options remain
+//! available.
 
 use orbit_common::OrbitError;
 use orbit_common::tracing;
 
 /// Git's own options that consume the following argument, so the scan does not
 /// mistake an option value for the subcommand.
-const VALUE_TAKING_GIT_OPTIONS: &[&str] = &["-C", "-c", "--git-dir", "--work-tree", "--namespace"];
+const VALUE_TAKING_GIT_OPTIONS: &[&str] = &[
+    "-C",
+    "-c",
+    "--config-env",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+];
 
 /// `git config` invocations that only read, in both the flag form and the
 /// subcommand form Git 2.46 introduced.
@@ -48,27 +58,31 @@ pub(super) fn enforce_no_persistent_git_config(
     if !is_git_program(program) {
         return Ok(());
     }
-    let Some((subcommand, rest)) = git_subcommand(args) else {
-        return Ok(());
+    let (matched_rule, reason) = match git_subcommand(args) {
+        GitCommand::Alias => (
+            "alias",
+            "Command-line Git aliases may write persistent repository configuration",
+        ),
+        GitCommand::Subcommand("config", rest) if !is_read_only_config(rest) => (
+            "config",
+            "`git config` would write persistent repository configuration",
+        ),
+        GitCommand::Subcommand("remote", rest) if !is_read_only_remote(rest) => (
+            "remote",
+            "`git remote` would write persistent repository configuration",
+        ),
+        _ => return Ok(()),
     };
-    let writes_config = match subcommand {
-        "config" => !is_read_only_config(rest),
-        "remote" => !is_read_only_remote(rest),
-        _ => false,
-    };
-    if !writes_config {
-        return Ok(());
-    }
 
     tracing::warn!(
         target: "orbit.policy.deny",
         tool = tool_name,
         path = program,
         profile = "proc.persistent_git_config",
-        matched_rule = subcommand,
+        matched_rule,
     );
     Err(OrbitError::PolicyDenied(format!(
-        "`git {subcommand}` would write persistent repository configuration, which {tool_name} \
+        "{reason}, which {tool_name} \
          never permits: a worktree shares `.git/config` with its primary checkout, so the change \
          would outlive this run. Read-only queries such as `git config --get` and `git remote -v` \
          remain available."
@@ -84,19 +98,42 @@ fn is_git_program(program: &str) -> bool {
     stem.eq_ignore_ascii_case("git")
 }
 
-/// The first positional argument, skipping Git's own leading options.
-fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
+enum GitCommand<'a> {
+    Subcommand(&'a str, &'a [String]),
+    Alias,
+    None,
+}
+
+/// The first positional argument, skipping Git's own leading options and
+/// refusing alias definitions before they can disguise the dispatched command.
+fn git_subcommand(args: &[String]) -> GitCommand<'_> {
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         if !arg.starts_with('-') {
-            return Some((arg.as_str(), &args[index + 1..]));
+            return GitCommand::Subcommand(arg.as_str(), &args[index + 1..]);
+        }
+        let config = match arg.as_str() {
+            "-c" | "--config-env" => args.get(index + 1).map(String::as_str),
+            _ => arg
+                .strip_prefix("-c")
+                .or_else(|| arg.strip_prefix("--config-env=")),
+        };
+        // Git config section names are case-insensitive. Deny every alias
+        // definition, including shell aliases and aliases of other aliases,
+        // rather than attempting to reproduce Git's expansion rules.
+        if config.is_some_and(|value| {
+            value
+                .split_once('.')
+                .is_some_and(|(section, _)| section.eq_ignore_ascii_case("alias"))
+        }) {
+            return GitCommand::Alias;
         }
         if VALUE_TAKING_GIT_OPTIONS.contains(&arg.as_str()) {
             index += 1;
         }
         index += 1;
     }
-    None
+    GitCommand::None
 }
 
 fn is_read_only_config(args: &[String]) -> bool {

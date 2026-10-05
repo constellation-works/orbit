@@ -8,19 +8,23 @@
 //! promotion findings is approved through the ordinary approve transition,
 //! with a note naming the drain; any other task stays `proposed` and carries a
 //! hold marker in its pilot history entry, so the next pass does not pilot it
-//! again until the task changes.
+//! again until the task changes. The approval rechecks the opt-out tag and the
+//! pilot-assessed material under the task lock it writes under, so an operator
+//! edit racing the drain is never approved over.
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
     NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskStatus,
 };
+use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
-use super::apply::PreparedTaskSnapshot;
+use super::apply::{PreparedTaskSnapshot, ValidatedTask};
 use super::input::action_failed;
+use super::persist::{assessed_material_drift, with_task_locks};
 use super::promotion::{PromotionFindings, auto_approval_opted_out, promotion_findings};
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
@@ -224,19 +228,96 @@ pub(super) fn hold_marker(admission: &Value) -> Option<String> {
         .flatten()
 }
 
-/// Approve a promoted task through the ordinary approve transition. A task
-/// that already left `proposed` (a replayed apply, or an operator who got
-/// there first) is not approved twice, and one tagged `no-auto-approve` since
-/// it was assessed is not approved at all.
+/// What the drain's approve step did with a promoted task.
+pub(super) enum Approval {
+    Approved,
+    /// The task already left `proposed` (a replayed apply, or an operator who
+    /// got there first), so it is not approved twice.
+    NotProposed,
+    /// Approval was withheld after the pilot wrote its assessment.
+    Held {
+        classification: &'static str,
+        evidence: Value,
+    },
+}
+
+/// Approve a promoted task through the ordinary approve transition. The
+/// decision is made under the task and dependency locks the pilot write took,
+/// and the transition runs inside them, so a concurrent edit either lands
+/// before the check or waits behind the approval. A task tagged
+/// `no-auto-approve` since it was assessed is held, as is one whose
+/// pilot-assessed material changed after the pilot write: the next drain pass
+/// pilots it again.
 pub(super) fn approve(
     runtime: &OrbitRuntime,
-    task_id: &str,
+    validated: &ValidatedTask,
+    snapshot: &PreparedTaskSnapshot,
+    policy: &PreparationPolicy,
     authority_run_id: &str,
-) -> Result<bool, OrbitError> {
-    let task = runtime.get_task(task_id)?;
-    if task.status != TaskStatus::Proposed || auto_approval_opted_out(&task.tags) {
-        return Ok(false);
+) -> Result<Approval, OrbitError> {
+    let task_id = validated.task_id.as_str();
+    let mut lock_ids = vec![task_id.to_string()];
+    lock_ids.extend(runtime.get_task(task_id)?.dependencies());
+    lock_ids.sort();
+    lock_ids.dedup();
+    #[cfg(test)]
+    approval_hook::before_lock(runtime, task_id);
+    let mut approval = None;
+    with_task_locks(runtime, &lock_ids, 0, &mut || {
+        let task = runtime.get_task(task_id)?;
+        approval = Some(if task.status != TaskStatus::Proposed {
+            Approval::NotProposed
+        } else if auto_approval_opted_out(&task.tags) {
+            Approval::Held {
+                classification: NO_AUTO_APPROVE_TAG,
+                evidence: Value::Null,
+            }
+        } else if let Some((reason, detail)) = assessed_material_drift(
+            runtime,
+            &task,
+            snapshot,
+            &validated.after,
+            validated.complexity,
+            policy,
+        ) {
+            Approval::Held {
+                classification: "changed_since_pilot",
+                evidence: json!({ "reason": reason, "detail": detail }),
+            }
+        } else {
+            runtime.approve_task(task_id, Some(approval_note(authority_run_id)), None)?;
+            Approval::Approved
+        });
+        Ok(())
+    })?;
+    approval.ok_or_else(|| {
+        OrbitError::Execution("drain approval did not run under the task lock".to_string())
+    })
+}
+
+/// A test seam just before the drain's approval takes its locks, standing in
+/// for a writer that wins the race to them.
+#[cfg(test)]
+pub(super) mod approval_hook {
+    use std::cell::RefCell;
+
+    use crate::OrbitRuntime;
+
+    pub(in super::super) type Hook = Box<dyn FnMut(&OrbitRuntime, &str)>;
+
+    thread_local! {
+        static BEFORE_LOCK: RefCell<Option<Hook>> = RefCell::new(None);
     }
-    runtime.approve_task(task_id, Some(approval_note(authority_run_id)), None)?;
-    Ok(true)
+
+    pub(in super::super) fn set_before_lock(hook: Option<Hook>) {
+        BEFORE_LOCK.with(|slot| *slot.borrow_mut() = hook);
+    }
+
+    pub(super) fn before_lock(runtime: &OrbitRuntime, task_id: &str) {
+        BEFORE_LOCK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().as_mut() {
+                hook(runtime, task_id);
+            }
+        });
+    }
 }

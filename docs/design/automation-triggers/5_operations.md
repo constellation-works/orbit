@@ -88,8 +88,9 @@ instead [ORB-13896]. The crew is applied at mint time and is not part of the
 consumer's epoch. While this consumer is enabled, `orbit doctor` also fails its
 `review` row when the consumer is missing, unowned, wedged, stalled, held for
 an operator, on a branch or crew that does not resolve, or when its observed
-commit trails `refs/remotes/origin/<branch>` by at least the batch's
-`max_wait_minutes` (or that remote history has diverged, or the remote-tracking
+commit trails `refs/remotes/origin/<branch>` and the oldest unobserved
+first-parent commit has waited at least the batch's `max_wait_minutes`, even
+if newer pending commits are recent (or that remote history has diverged, or the remote-tracking
 ref is missing after a cursor exists). The row names the observed commit and
 the remote-tracking head. It does not fetch; the observation pass is what
 updates that ref. The same row, `orbit config show` and the drain probe report
@@ -727,15 +728,31 @@ step evidence is read independently of wrapper status. Pilot fan-in accepts any
 successful partition so apply can retain valid results before the final guard
 reports missing or invalid partitions.
 
-A consumer retains at most 1,000 pending, assessed and withheld entries. When an
-observation page does not fit, the evaluator asks the source by identity, not by
-page, which retained keys it still observes — a task while its status is one the
-consumer queries, an incident while the current inventory has it — and retires
-the working state of the rest. Their receipts stay durable, and a member that
-returns is assessed afresh. At capacity, a retained member's fresh fingerprint
-replaces its superseded assessment; a new member waits for room and the pass
-reports `source_backpressure`. The scan still advances, and due members are
-still admitted.
+A consumer retains at most 1,000 distinct members across its pending, assessed
+and withheld entries; a pending member's withheld reason or superseded
+assessment does not count again, so recording why a member waits or failed never
+needs room. When an observation page does not fit, the evaluator asks the source
+by identity, not by page, which retained keys it still observes — a task while
+its status is one the consumer queries, an incident while the current inventory
+has it — and retires the working state and failed records of the rest. Their
+receipts stay durable, and a member that returns is assessed afresh. At
+capacity, a retained member's fresh fingerprint replaces its superseded
+assessment; a new member waits for room and the pass reports
+`source_backpressure`. The scan still advances, and due members are still
+admitted.
+
+A consumer also keeps at most 1,000 failed records. A record holds only while it
+still withholds its member: one whose member is pending at a new fingerprint is
+dropped, and the store refuses dropping one whose member is in flight or pending
+at the fingerprint it failed at. When failed records leave no room for a full
+batch, the evaluator first retires those of members the source no longer
+observes. A member without a failed record then joins a batch only while there is
+room to record its failure, so retiring an attempt always commits; when none
+fits the pass reports `failure_capacity` until failed members change or leave
+the source. A consumer that claimed past the cap before that reservation existed
+retires the failed records of departed members when the attempt settles; if
+every failed member is still observed, moving those tasks out of the statuses
+the consumer queries frees the room.
 
 `orbit routine show --json`, routine status and the dashboard expose the shared
 state projection: pending fingerprints, fresh/unready assessments, withheld

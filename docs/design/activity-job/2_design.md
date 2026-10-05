@@ -983,6 +983,8 @@ Parallel branches run under `std::thread::scope`. Join policy is:
 - `any`
 - `quorum { n }`
 
+Before any step runs, `validate_job` rejects a parallel quorum unless `1 <= n <= branches.len()`, naming the owning step. An empty parallel block therefore cannot use a quorum join.
+
 The executor emits `StepJoin` with per-branch outcomes. If the join policy fails and any branch produced a structural error, the first error is surfaced instead of only `success: false`.
 
 ### 8.4 `fan_out` / `fan_in`
@@ -998,6 +1000,8 @@ failed, stale, cancelled, interrupted, or timed-out pilot visible as a failed
 sweep, while a genuinely empty candidate list remains a successful no-op.
 
 Workers use isolated pipeline/session maps. The validator rejects any worker template with `session:` because concurrent workers would otherwise share one mutable `Session`.
+
+`validate_job` also rejects a `fan_in` quorum with `n == 0`, naming the owning fan-out step. Positive fan-in quorums are accepted at validation because the item count is rendered at runtime; `max_workers` limits concurrency, not the total number of workers.
 
 ### 8.5 `loop`
 
@@ -1073,7 +1077,7 @@ After [ORB-10461], every detached pipeline worker appends stdout and stderr to t
 
 ### 8.7 Invocation metrics
 
-The dashboard metrics endpoints read knowledge usage from job-run state (`/api/metrics/knowledge`) and agent, tool, task, and invocation usage from the SQLite invocation store (`/api/metrics/activity`, `/api/metrics/tools`, `/api/metrics/task/:id`, `/api/metrics/invocations`). They do not scrape `.orbit/state/audit/v2_loop/` or diagnostics JSONL.
+The dashboard metrics endpoints read knowledge usage from job-run state (`/api/metrics/knowledge`) and agent, tool, task, and invocation usage from the SQLite invocation store (`/api/metrics/activity`, `/api/metrics/tools`, `/api/metrics/task/:id`, `/api/metrics/invocations`). They do not scrape `.orbit/state/audit/v2_loop/` or diagnostics JSONL. Each invocation row records the workspace whose run produced it, taken from the recording runtime's job-run partition rather than from the ingested payload. Run ids are only unique within a workspace, so listings filtered by `job_run_id` and the reliability counts match on that workspace; legacy rows the store could not attribute to exactly one workspace match neither.
 
 V2 jobs persist invocation traces explicitly after [T20260426-0526]. `DispatchOutcome` carries optional trace data; the executor attaches run and step IDs; orbit-core stores canonical agent/model names plus task IDs from rendered input and refreshes the token scoreboard.
 

@@ -42,7 +42,10 @@ use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
 };
 use orbit_store::workflow::task::{
-    ExportSelection, ImportConflictPolicy, export_tasks, import_tasks,
+    AttachmentPolicy, AttachmentPolicyKind, ExportSelection, ImportConflictPolicy,
+    PublicationCallerRole, PublicationInspectRequest, PublicationPublishRequest,
+    PublicationRestoreMode, PublicationRestoreRequest, ScannerFailureBehavior, export_tasks,
+    import_tasks, publish_task_snapshot, restore_publication,
 };
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ORB_TASK_ID_MAX,
@@ -155,6 +158,27 @@ fn bind(registry: &TaskRegistryStore, root: &Path, partition_id: &str) -> Worksp
         .expect("bind workspace")
 }
 
+fn bind_with_fingerprint(
+    registry: &TaskRegistryStore,
+    root: &Path,
+    partition_id: &str,
+    fingerprint: &str,
+) -> WorkspaceCheckoutBinding {
+    let repo = root.join(partition_id);
+    let orbit_dir = repo.join(".orbit");
+    std::fs::create_dir_all(&orbit_dir).unwrap();
+    registry
+        .bind_workspace(BindWorkspaceParams {
+            partition_id: Some(partition_id.to_string()),
+            slug: "Orbit Test".to_string(),
+            repo_root: repo.clone(),
+            workspace_path: repo,
+            orbit_dir,
+            repo_fingerprint: Some(fingerprint.to_string()),
+        })
+        .expect("bind workspace")
+}
+
 #[test]
 fn task_ids_are_monotonic_across_workspaces_and_batches() {
     if !isolated("task_ids_are_monotonic_across_workspaces_and_batches") {
@@ -255,6 +279,7 @@ fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
     let source_root = TempDir::new().unwrap();
     let target_root = TempDir::new().unwrap();
     let archive = source_root.path().join("tasks.tar.zst");
+    std::fs::write(&archive, b"previous backup").unwrap();
     let max_id = format!("ORB-{ORB_TASK_ID_MAX}");
 
     let source = Coordinated::open(source_root.path());
@@ -263,6 +288,24 @@ fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
         .seed_allocator_start(ORB_TASK_ID_MAX)
         .unwrap();
     assert_eq!(source.create_task("final id").id, max_id);
+    let destination_dir = source_root.path().join("archive-directory");
+    std::fs::create_dir(&destination_dir).unwrap();
+    let entries_before = std::fs::read_dir(source_root.path()).unwrap().count();
+    export_tasks(
+        &source.registry,
+        PARTITION_ID,
+        ExportSelection::All,
+        &destination_dir,
+        Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
+    )
+    .expect_err("publishing an archive over a directory must fail");
+    assert!(destination_dir.is_dir());
+    assert_eq!(std::fs::read(&archive).unwrap(), b"previous backup");
+    assert_eq!(
+        std::fs::read_dir(source_root.path()).unwrap().count(),
+        entries_before,
+        "failed publication must remove its staging file"
+    );
     export_tasks(
         &source.registry,
         PARTITION_ID,
@@ -271,6 +314,11 @@ fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
         Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
     )
     .expect("export");
+    assert_eq!(
+        std::fs::read_dir(source_root.path()).unwrap().count(),
+        entries_before,
+        "successful replacement must leave no staging file"
+    );
 
     let target = TaskRegistryStore::open(&task_registry_path(target_root.path())).unwrap();
     let outcome =
@@ -281,6 +329,276 @@ fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
     assert!(
         is_exhausted(target.allocate_task_id(PARTITION_ID)),
         "the next id after an imported maximum must be refused, not wrapped"
+    );
+}
+
+/// Restoring a publication containing both local and foreign-prefix tasks
+/// advances the local allocator only past local task numbers, leaving it at
+/// `max(previous, max_local + 1)`. A publication containing only foreign-prefix
+/// tasks preserves the prior allocator and does not error.
+#[test]
+fn publication_restore_advances_allocator_only_for_local_task_numbers() {
+    if !isolated("publication_restore_advances_allocator_only_for_local_task_numbers") {
+        return;
+    }
+    const FINGERPRINT: &str = "ssh://source.test/orbit.git";
+
+    // 1. Create a foreign registry with prefix "DANI" and task DANI-90000.
+    let foreign_root = TempDir::new().unwrap();
+    let foreign_registry =
+        TaskRegistryStore::open(&task_registry_path(foreign_root.path())).unwrap();
+    foreign_registry.set_task_prefix("DANI").unwrap();
+    let foreign_binding = bind_with_fingerprint(
+        &foreign_registry,
+        foreign_root.path(),
+        "ws_foreign",
+        FINGERPRINT,
+    );
+    let foreign_store = Store::open(&foreign_root.path().join("state.sqlite")).unwrap();
+    let foreign_backends = workspace_coordinated_backends(
+        foreign_registry.clone(),
+        foreign_binding.partition_id.clone(),
+        foreign_store,
+    )
+    .unwrap();
+    foreign_registry.seed_allocator_start(90000).unwrap();
+    let foreign = Coordinated {
+        registry: foreign_registry.clone(),
+        backends: foreign_backends,
+        orbit_dir: foreign_binding.orbit_dir,
+    };
+    let dani_task = foreign.create_task("foreign dani task");
+    assert_eq!(dani_task.id, "DANI-90000");
+
+    let dani_archive = foreign_root.path().join("dani.tar.zst");
+    export_tasks(
+        &foreign_registry,
+        &foreign_binding.partition_id,
+        ExportSelection::All,
+        &dani_archive,
+        Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
+    )
+    .expect("export dani");
+
+    // 2. Create source workspace (default ORB prefix) with ORB-00005, and import DANI-90000 into it.
+    let source_root = TempDir::new().unwrap();
+    let source = Coordinated::open_with_fingerprint(source_root.path(), "ws_source", FINGERPRINT);
+    source.registry.seed_allocator_start(5).unwrap();
+    let orb_task = source.create_task("orb task 5");
+    assert_eq!(orb_task.id, "ORB-00005");
+
+    let imported = import_tasks(
+        &source.registry,
+        &dani_archive,
+        Some("ws_source"),
+        ImportConflictPolicy::Fail,
+    )
+    .expect("import dani into source");
+    assert_eq!(imported.tasks[0].final_id, "DANI-90000");
+
+    // 3. Publish source workspace containing both ORB-00005 and DANI-90000.
+    let pub_dir = TempDir::new().unwrap();
+    let bare = pub_dir.path().join("publication.git");
+    let cache = pub_dir.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let mut git_init = std::process::Command::new("git");
+    git_init.args([
+        "init",
+        "--bare",
+        "--quiet",
+        "-b",
+        "main",
+        bare.to_str().unwrap(),
+    ]);
+    assert!(git_init.status().unwrap().success());
+
+    publish_task_snapshot(
+        &source.registry,
+        PublicationPublishRequest {
+            workspace_id: "ws_source".to_string(),
+            task_workspace_id: "ws_source".to_string(),
+            source_repository_fingerprint: FINGERPRINT.to_string(),
+            publication_id: "pub_mixed".to_string(),
+            authority_machine_id: "hm_owner".to_string(),
+            local_machine_id: "hm_owner".to_string(),
+            caller_role: PublicationCallerRole::Owner,
+            publication_remote: bare.to_str().unwrap().to_string(),
+            publication_branch: "main".to_string(),
+            cache_dir: cache,
+            published_at: Utc.with_ymd_and_hms(2026, 10, 4, 12, 0, 0).unwrap(),
+            last_success: None,
+        },
+        &AttachmentPolicy {
+            kind: AttachmentPolicyKind::Omit,
+            max_file_bytes: 1024,
+            max_total_bytes: 1024,
+            deny_patterns: Vec::new(),
+            scanner_failure_behavior: ScannerFailureBehavior::AllowUnchecked,
+        },
+        None,
+    )
+    .expect("publish mixed snapshot");
+
+    // Case A: Target has previous allocator < 6 (previous = 2).
+    // Restoring must leave allocator at max(2, 6) = 6.
+    let target_root_a = TempDir::new().unwrap();
+    let target_a = TaskRegistryStore::open(&task_registry_path(target_root_a.path())).unwrap();
+    bind_with_fingerprint(&target_a, target_root_a.path(), "ws_target_a", FINGERPRINT);
+    target_a.seed_allocator_start(2).unwrap();
+    assert_eq!(target_a.allocator_next_number().unwrap(), 2);
+
+    let restore_cache_a = target_root_a.path().join("restore_cache");
+    std::fs::create_dir_all(&restore_cache_a).unwrap();
+    let outcome_a = restore_publication(
+        &target_a,
+        PublicationRestoreRequest {
+            task_workspace_id: "ws_target_a".to_string(),
+            publication: PublicationInspectRequest {
+                workspace_id: "ws_source".to_string(),
+                source_repository_fingerprint: FINGERPRINT.to_string(),
+                publication_id: "pub_mixed".to_string(),
+                authority_machine_id: "hm_owner".to_string(),
+                publication_remote: bare.to_str().unwrap().to_string(),
+                publication_branch: "main".to_string(),
+                cache_dir: restore_cache_a,
+                commit: None,
+            },
+            mode: PublicationRestoreMode::EmptyDestination,
+        },
+    )
+    .expect("restore publication");
+    assert_eq!(outcome_a.restored_task_ids.len(), 2);
+    assert_eq!(
+        target_a.allocator_next_number().unwrap(),
+        6,
+        "ORB-14129: restoring ORB-00005 and DANI-90000 with previous=2 must set allocator to max(2, 6) = 6"
+    );
+    assert_eq!(
+        target_a.allocate_task_id("ws_target_a").unwrap(),
+        "ORB-00006",
+        "ORB-14129: next minted task after restore must be ORB-00006"
+    );
+
+    // Case B: Target has previous allocator > 6 (previous = 10).
+    // Restoring must leave allocator at max(10, 6) = 10.
+    let target_root_b = TempDir::new().unwrap();
+    let target_b = TaskRegistryStore::open(&task_registry_path(target_root_b.path())).unwrap();
+    bind_with_fingerprint(&target_b, target_root_b.path(), "ws_target_b", FINGERPRINT);
+    target_b.seed_allocator_start(10).unwrap();
+    assert_eq!(target_b.allocator_next_number().unwrap(), 10);
+
+    let restore_cache_b = target_root_b.path().join("restore_cache");
+    std::fs::create_dir_all(&restore_cache_b).unwrap();
+    let outcome_b = restore_publication(
+        &target_b,
+        PublicationRestoreRequest {
+            task_workspace_id: "ws_target_b".to_string(),
+            publication: PublicationInspectRequest {
+                workspace_id: "ws_source".to_string(),
+                source_repository_fingerprint: FINGERPRINT.to_string(),
+                publication_id: "pub_mixed".to_string(),
+                authority_machine_id: "hm_owner".to_string(),
+                publication_remote: bare.to_str().unwrap().to_string(),
+                publication_branch: "main".to_string(),
+                cache_dir: restore_cache_b,
+                commit: None,
+            },
+            mode: PublicationRestoreMode::EmptyDestination,
+        },
+    )
+    .expect("restore publication");
+    assert_eq!(outcome_b.restored_task_ids.len(), 2);
+    assert_eq!(
+        target_b.allocator_next_number().unwrap(),
+        10,
+        "ORB-14129: restoring ORB-00005 and DANI-90000 with previous=10 must preserve allocator at max(10, 6) = 10"
+    );
+    assert_eq!(
+        target_b.allocate_task_id("ws_target_b").unwrap(),
+        "ORB-00010",
+        "ORB-14129: next minted task after restore must be ORB-00010"
+    );
+
+    // Case C: Publication with only foreign task IDs (DANI-90000).
+    // Must succeed without error and preserve previous allocator.
+    let foreign_only_pub_dir = TempDir::new().unwrap();
+    let foreign_only_bare = foreign_only_pub_dir.path().join("foreign_only.git");
+    let foreign_only_cache = foreign_only_pub_dir.path().join("cache");
+    std::fs::create_dir_all(&foreign_only_cache).unwrap();
+    let mut git_init_foreign = std::process::Command::new("git");
+    git_init_foreign.args([
+        "init",
+        "--bare",
+        "--quiet",
+        "-b",
+        "main",
+        foreign_only_bare.to_str().unwrap(),
+    ]);
+    assert!(git_init_foreign.status().unwrap().success());
+
+    publish_task_snapshot(
+        &foreign_registry,
+        PublicationPublishRequest {
+            workspace_id: "ws_foreign".to_string(),
+            task_workspace_id: "ws_foreign".to_string(),
+            source_repository_fingerprint: FINGERPRINT.to_string(),
+            publication_id: "pub_foreign_only".to_string(),
+            authority_machine_id: "hm_foreign".to_string(),
+            local_machine_id: "hm_foreign".to_string(),
+            caller_role: PublicationCallerRole::Owner,
+            publication_remote: foreign_only_bare.to_str().unwrap().to_string(),
+            publication_branch: "main".to_string(),
+            cache_dir: foreign_only_cache,
+            published_at: Utc.with_ymd_and_hms(2026, 10, 4, 12, 0, 0).unwrap(),
+            last_success: None,
+        },
+        &AttachmentPolicy {
+            kind: AttachmentPolicyKind::Omit,
+            max_file_bytes: 1024,
+            max_total_bytes: 1024,
+            deny_patterns: Vec::new(),
+            scanner_failure_behavior: ScannerFailureBehavior::AllowUnchecked,
+        },
+        None,
+    )
+    .expect("publish foreign only");
+
+    let target_root_c = TempDir::new().unwrap();
+    let target_c = TaskRegistryStore::open(&task_registry_path(target_root_c.path())).unwrap();
+    bind_with_fingerprint(&target_c, target_root_c.path(), "ws_target_c", FINGERPRINT);
+    target_c.seed_allocator_start(4).unwrap();
+    assert_eq!(target_c.allocator_next_number().unwrap(), 4);
+
+    let restore_cache_c = target_root_c.path().join("restore_cache");
+    std::fs::create_dir_all(&restore_cache_c).unwrap();
+    let outcome_c = restore_publication(
+        &target_c,
+        PublicationRestoreRequest {
+            task_workspace_id: "ws_target_c".to_string(),
+            publication: PublicationInspectRequest {
+                workspace_id: "ws_foreign".to_string(),
+                source_repository_fingerprint: FINGERPRINT.to_string(),
+                publication_id: "pub_foreign_only".to_string(),
+                authority_machine_id: "hm_foreign".to_string(),
+                publication_remote: foreign_only_bare.to_str().unwrap().to_string(),
+                publication_branch: "main".to_string(),
+                cache_dir: restore_cache_c,
+                commit: None,
+            },
+            mode: PublicationRestoreMode::EmptyDestination,
+        },
+    )
+    .expect("ORB-14129: restore of publication containing only foreign task IDs must succeed");
+    assert_eq!(outcome_c.restored_task_ids, vec!["DANI-90000"]);
+    assert_eq!(
+        target_c.allocator_next_number().unwrap(),
+        4,
+        "ORB-14129: publication with only foreign task IDs must preserve prior allocator"
+    );
+    assert_eq!(
+        target_c.allocate_task_id("ws_target_c").unwrap(),
+        "ORB-00004",
+        "ORB-14129: next minted task must continue from prior allocator"
     );
 }
 
@@ -593,6 +911,20 @@ impl Coordinated {
     fn open(root: &Path) -> Self {
         let registry = TaskRegistryStore::open(&task_registry_path(root)).unwrap();
         let binding = bind(&registry, root, PARTITION_ID);
+        let store = Store::open(&root.join("state.sqlite")).unwrap();
+        let backends =
+            workspace_coordinated_backends(registry.clone(), binding.partition_id, store)
+                .expect("compose");
+        Self {
+            registry,
+            backends,
+            orbit_dir: binding.orbit_dir,
+        }
+    }
+
+    fn open_with_fingerprint(root: &Path, partition_id: &str, fingerprint: &str) -> Self {
+        let registry = TaskRegistryStore::open(&task_registry_path(root)).unwrap();
+        let binding = bind_with_fingerprint(&registry, root, partition_id, fingerprint);
         let store = Store::open(&root.join("state.sqlite")).unwrap();
         let backends =
             workspace_coordinated_backends(registry.clone(), binding.partition_id, store)

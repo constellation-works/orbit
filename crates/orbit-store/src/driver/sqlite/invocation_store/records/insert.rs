@@ -18,6 +18,7 @@ use crate::{Store, now_string};
 /// legacy database's columns identical to a fresh one's.
 pub(crate) const INVOCATION_INSERT_COLUMNS: &[&str] = &[
     "ts",
+    "workspace_id",
     "job_run_id",
     "activity_id",
     "agent",
@@ -47,6 +48,7 @@ static INVOCATION_INSERT_SQL: LazyLock<String> = LazyLock::new(|| {
 impl Store {
     pub fn insert_invocation_trace_record(
         &self,
+        workspace_id: &str,
         params: &InvocationInsertParams,
     ) -> Result<(), OrbitError> {
         let mut conn = self
@@ -61,6 +63,7 @@ impl Store {
             INVOCATION_INSERT_SQL.as_str(),
             params![
                 now_string(),
+                workspace_id,
                 params.job_run_id,
                 params.activity_id,
                 params.agent,

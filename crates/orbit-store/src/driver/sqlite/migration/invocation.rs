@@ -77,3 +77,51 @@ pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitE
     )
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
+
+/// v36 `invocation_workspace_scope`: record the workspace each invocation
+/// belongs to.
+///
+/// Run ids are minted per workspace, so two workspaces submitting in the same
+/// minute hold the same id and an invocation keyed by `job_run_id` alone was
+/// read by both. The backfill attributes a legacy row only when exactly one
+/// workspace ever held its run id (`job_run_id_allocations`, plus `job_runs`);
+/// an ambiguous or orphaned row stays `NULL` and no workspace-scoped read
+/// matches it.
+pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "invocations")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "ALTER TABLE invocations ADD COLUMN workspace_id TEXT")?;
+
+    let mut owners = Vec::new();
+    if table_has_column(conn, "job_run_id_allocations", "workspace_id")? {
+        owners.push("SELECT workspace_id, run_id FROM job_run_id_allocations");
+    }
+    if table_has_column(conn, "job_runs", "workspace_id")? {
+        owners.push("SELECT workspace_id, run_id FROM job_runs");
+    }
+    if !owners.is_empty() {
+        let owners = owners.join(" UNION ");
+        conn.execute_batch(&format!(
+            r#"
+                UPDATE invocations
+                SET workspace_id = (
+                    SELECT CASE WHEN COUNT(DISTINCT owner.workspace_id) = 1
+                                THEN MIN(owner.workspace_id) END
+                    FROM ({owners}) owner
+                    WHERE owner.run_id = invocations.job_run_id
+                )
+                WHERE workspace_id IS NULL;
+            "#
+        ))
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    }
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_invocations_workspace_job_run_id
+            ON invocations(workspace_id, job_run_id);
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}

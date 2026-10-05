@@ -3,8 +3,8 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-09-24
-last_validated: 2026-09-12
+last_updated: 2026-10-04
+last_validated: 2026-10-04
 status: Draft
 feature: user-interface
 doc_role: decisions
@@ -18,6 +18,8 @@ tags: ["user-interface"]
 ## Canon Refined Aesthetic
 
 **Recorded:** 2026-07-26 21:51:43.494533Z · [T20260427-29], [ORB-10458]
+
+The original Inter and JetBrains Mono typography recorded here was superseded by the 2026-09-24 dashboard chrome update; the current dashboard uses Geist and Geist Mono.
 
 ### Context
 
@@ -163,6 +165,8 @@ Rejected alternative: workspace-prefixed route paths (`/api/:workspace/tasks`). 
 ## Top-Level Dashboard Nav Is the Operator's Five Tabs
 
 **Recorded:** 2026-07-26 19:14:18.916582Z · [ORB-10444]
+
+This five-tab grouping is historical. The 2026-09-24 dashboard chrome update renamed and regrouped the rail while keeping the route hashes.
 
 ### Context
 Top-level nav is the dashboard's scarcest surface, and two of its six entries were not earning a slot: a deprecated review-threads tab with no backing view, and Scoreboard, a diagnostics-shaped read-only telemetry view sitting beside the operator workflow tabs.

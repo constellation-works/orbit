@@ -282,6 +282,13 @@ orbit task export --all -o tasks-backup.tar.zst
 Both `VACUUM INTO` and `.backup` produce a checkpointed, sidecar-free file. If you must
 file-copy a live DB, copy `*.db`, `*.db-wal`, and `*.db-shm` together.
 
+Task export builds a temporary archive beside the output, finishes compression,
+and syncs the file before atomically replacing the destination. A failed export
+preserves an existing backup and removes its temporary file. Abrupt process
+termination can leave a `.orbit-task-export-*` temporary file beside the backup;
+the destination remains unchanged until replacement. On Unix, new archives use
+private file permissions; replacing a regular backup preserves its permissions.
+
 ### Publish task snapshots to a dedicated repository
 
 Task publication is an explicit, task-only durability channel. It does not
