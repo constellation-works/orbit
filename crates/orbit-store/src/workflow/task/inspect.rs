@@ -18,7 +18,7 @@ use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
 use orbit_types::task::{TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACTS_DIR_NAME, TaskEnvelopeV2};
 use orbit_types::workspace::{
     canonicalize_publication_branch, redact_git_remote, validate_git_commit_id,
-    validate_source_repository_fingerprint,
+    validate_publication_remote, validate_source_repository_fingerprint,
 };
 use tempfile::TempDir;
 
@@ -219,6 +219,14 @@ fn validate_request(request: PublicationInspectRequest) -> Result<ValidatedReque
     validate_machine_id(&request.authority_machine_id).map_err(identity_error)?;
     if request.publication_remote.trim().is_empty() {
         return Err(inspect_error("publication remote must not be empty"));
+    }
+    // Keep the store's local transports; network URLs use the same validation
+    // as publication bindings, including redacted errors for malformed URLs.
+    if request.publication_remote.contains("://")
+        && !request.publication_remote.starts_with("file://")
+    {
+        validate_publication_remote(&request.publication_remote)
+            .map_err(|error| inspect_error(error.to_string()))?;
     }
     if remote_has_password(&request.publication_remote) {
         return Err(inspect_error(format!(

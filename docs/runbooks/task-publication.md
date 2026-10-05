@@ -200,6 +200,10 @@ Later publishes advance the same linear lineage with compare-and-swap semantics.
 
 ## Inspect and recover a publication
 
+Inspect and restore refuse embedded remote credentials before invoking Git or creating a
+consumer cache. This includes a token used as the HTTP(S) username with no password;
+use an explicit `GIT_ASKPASS` helper or SSH authentication instead. Refusal diagnostics redact userinfo.
+
 Inspection is read-only and does not require an owner-local publication binding. Supply the
 expected pairing facts rather than trusting the repository to declare its own identity:
 
