@@ -832,6 +832,108 @@ fn running_digest(workspace: &McpWorkspace, pid: u32) -> Option<String> {
 
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes() {
+    let workspace = McpWorkspace::init();
+    let install = workspace.home.join("installation");
+    std::fs::create_dir_all(&install).expect("installation");
+    let installed = install.join("orbit");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
+    let old_digest = executable_generation(&installed).expect("old digest");
+    let mut command =
+        McpWorkspace::orbit_program_command(&installed, &workspace.work, &workspace.home);
+    command
+        .args([
+            "mcp",
+            "serve",
+            "--operator",
+            "--workspace",
+            "ws_mcp-roundtrip",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = spawn_copied_orbit(&mut command).expect("old server");
+    let pid = child.id();
+    let mut client = McpClient::new(child);
+    workspace.initialize(&mut client);
+
+    // Leave a valid tools/call incomplete. This prefix exceeds both the
+    // 32 KiB handover limit and the pipe capacity, so writing it forces the
+    // reader to buffer an oversized partial line before installation changes.
+    let description = "x".repeat(128 * 1024);
+    client.next_id += 1;
+    let id = client.next_id;
+    let mut line = serde_json::to_vec(&json!({
+        "jsonrpc":"2.0", "id":id, "method":"tools/call",
+        "params":{"name":"orbit_task_add", "arguments":{
+            "title":"Completed before handover", "description":description,
+            "complexity":"low", "model":"codex"
+        }}
+    }))
+    .expect("request JSON");
+    line.push(b'\n');
+    let split = 112 * 1024;
+    client
+        .writer
+        .write_all(&line[..split])
+        .expect("partial request");
+    client.writer.flush().expect("flush partial request");
+
+    let candidate = distinct_candidate(&workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    install_over(&candidate, &installed);
+
+    // Hold the partial line across multiple lifecycle checks. The old image
+    // must keep serving; yielding or handing over now would lose this call.
+    let hold_until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < hold_until {
+        assert!(
+            matches!(client.child.try_wait(), Ok(None)),
+            "an oversized partial request must not yield the MCP session"
+        );
+        assert_eq!(
+            running_digest(&workspace, pid).as_deref(),
+            Some(old_digest.as_str()),
+            "handover must wait for the oversized partial line to complete"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    client
+        .writer
+        .write_all(&line[split..])
+        .expect("finish request");
+    client.writer.flush().expect("flush completed request");
+    let reply: Value = serde_json::from_str(
+        &client
+            .lines
+            .recv_timeout(RESPONSE_TIMEOUT)
+            .expect("completed request reply"),
+    )
+    .expect("reply JSON");
+    assert_eq!(reply["id"], id, "{reply}");
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    assert_eq!(
+        reply["result"]["structuredContent"]["description"],
+        description
+    );
+
+    // Once the call is answered, a later idle check can resume on the new
+    // image using the original process, pipes, and initialize parameters.
+    wait_until(
+        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+        "the MCP session to hand over after completing the partial request",
+    );
+    assert_eq!(client.child.id(), pid);
+    let tasks = client.call_tool_ok("orbit_task_list", json!({}));
+    assert_eq!(
+        tasks["total"], 1,
+        "the completed request must not be replayed"
+    );
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
     let workspace = McpWorkspace::init();
     let install = workspace.home.join("installation");

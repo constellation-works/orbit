@@ -17,7 +17,9 @@
 //!
 //! At that point it stops reading, stops the service, and returns
 //! [`StdioExit::HandOver`] with the client's original `initialize` request
-//! and any partial line it had read. The caller execs the new executable with
+//! and any partial line it had read. The reader defers a handover while that
+//! partial line exceeds [`MAX_CARRYOVER`], keeping the service alive until a
+//! later idle check. The caller execs the new executable with
 //! that state in [`RESUME_ENV`]. Because `exec` keeps the pid and the stdio
 //! descriptors, the client sees one uninterrupted session. The new process
 //! replays the `initialize` request into its server rather than expecting a
@@ -257,7 +259,7 @@ async fn serve_handing_over(
     let tracker = Arc::new(Mutex::new(Tracker::default()));
     let undelivered = Arc::new(AtomicUsize::new(0));
     let (lines, receiver) = mpsc::channel::<Vec<u8>>(64);
-    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let (stop, stopped) = mpsc::channel(1);
     let (carryover, initialize) = match resumed {
         Some(resumed) => (resumed.carryover, resumed.initialize),
         None => (Vec::new(), None),
@@ -309,7 +311,7 @@ async fn serve_handing_over(
                 finished
                     .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))?
                     .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))?;
-                let _ = stop.send(true);
+                let _ = stop.send(unix::PumpStop::Always).await;
                 let _ = pump.await;
                 return Ok(StdioExit::Closed);
             }
@@ -324,9 +326,20 @@ async fn serve_handing_over(
         if matches!(decision, Lifecycle::Continue) || !is_idle(&tracker, &undelivered) {
             continue;
         }
-        // Stop reading first, then wait out whatever was forwarded before
-        // the pump stopped: a request answered, a notification consumed.
-        let _ = stop.send(true);
+        // Let the pump check its own buffer before stopping: checking a
+        // shared length here would race with another stdin read. A deferred
+        // handover leaves both the reader and the service running.
+        if matches!(decision, Lifecycle::HandOver(_)) {
+            let (accepted, response) = tokio::sync::oneshot::channel();
+            let _ = stop.send(unix::PumpStop::HandOver(accepted)).await;
+            if matches!(response.await, Ok(false)) {
+                continue;
+            }
+        } else {
+            let _ = stop.send(unix::PumpStop::Always).await;
+        }
+        // Wait out whatever was forwarded before the pump stopped: a
+        // request answered, a notification consumed.
         let Ok(Ok(outcome)) = pump.await else {
             return Err(OrbitError::Execution(
                 "mcp serve_stdio: the stdin reader stopped unexpectedly".into(),
@@ -352,7 +365,7 @@ async fn serve_handing_over(
         let _ = service.await;
         unix::restore_blocking_stdin();
         return Ok(match decision {
-            Lifecycle::HandOver(executable) if carryover.len() <= MAX_CARRYOVER => {
+            Lifecycle::HandOver(executable) => {
                 let resume = serde_json::to_string(&ResumeState {
                     pid: std::process::id(),
                     initialize: lock(&tracker).initialize.clone(),
@@ -482,9 +495,9 @@ mod unix {
     use std::sync::{Arc, Mutex};
 
     use tokio::io::unix::AsyncFd;
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::{mpsc, oneshot};
 
-    use super::{READ_CHUNK, Tracker, lock};
+    use super::{MAX_CARRYOVER, READ_CHUNK, Tracker, lock};
 
     pub(super) struct StdinFd;
 
@@ -538,6 +551,13 @@ mod unix {
         Closed,
     }
 
+    pub(super) enum PumpStop {
+        /// Stop regardless of the partial line, for closure or yielding.
+        Always,
+        /// Stop only if the partial line fits in the resumed session state.
+        HandOver(oneshot::Sender<bool>),
+    }
+
     /// Forward complete lines from stdin until stopped or closed.
     pub(super) async fn pump(
         stdin: NonBlockingStdin,
@@ -545,7 +565,7 @@ mod unix {
         lines: mpsc::Sender<Vec<u8>>,
         tracker: Arc<Mutex<Tracker>>,
         undelivered: Arc<AtomicUsize>,
-        mut stopped: watch::Receiver<bool>,
+        mut stopped: mpsc::Receiver<PumpStop>,
     ) -> std::io::Result<PumpOutcome> {
         // Borrow fd 0 unbuffered; it must never be closed from here.
         // SAFETY: fd 0 stays open for the process lifetime and ManuallyDrop
@@ -556,12 +576,19 @@ mod unix {
         }
         let mut chunk = vec![0u8; READ_CHUNK];
         loop {
-            if *stopped.borrow() {
-                return Ok(PumpOutcome::Stopped(buffer));
-            }
             let mut ready = tokio::select! {
+                biased;
+                request = stopped.recv() => {
+                    if let Some(PumpStop::HandOver(accepted)) = request {
+                        if buffer.len() > MAX_CARRYOVER {
+                            let _ = accepted.send(false);
+                            continue;
+                        }
+                        let _ = accepted.send(true);
+                    }
+                    return Ok(PumpOutcome::Stopped(buffer));
+                }
                 ready = stdin.0.readable() => ready?,
-                _ = stopped.changed() => continue,
             };
             let read = ready.try_io(|_| (&*file).read(&mut chunk));
             let read = match read {
