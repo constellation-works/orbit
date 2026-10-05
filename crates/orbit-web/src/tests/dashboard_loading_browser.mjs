@@ -10,6 +10,65 @@ const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
 
+// A friction's task may be outside both the active status filter and the
+// current server page. Follow its actual link and require the full detail.
+async function assertFrictionTaskLinks(page) {
+  await page.evaluate(async () => {
+    const { setWorkspace } = await import('/js/common.js');
+    setWorkspace('one');
+    await globalThis.showTaskPaginationEvidence();
+    const fixtureFetch = globalThis.fetch;
+    globalThis.frictionLinkFixtureFetch = fixtureFetch;
+    globalThis.frictionLinkedTask = { id: 'LINK-1', priority: 'medium' };
+    globalThis.fetch = async (path, options) => {
+      const url = new URL(path, window.location.href);
+      const response = payload => ({ ok: true, status: 200, json: async () => payload });
+      if (url.pathname === '/api/frictions') {
+        return response({ items: url.searchParams.get('status') === 'open' ? [{
+          id: 'FRICTION-1', title: 'Task navigation regression', status: 'open',
+          during_task: 'LINK-1', created_at: '2026-10-04T12:00:00Z', tags: [],
+        }] : [], tags: [] });
+      }
+      if (url.pathname === '/api/frictions/stats') return response({});
+      if (url.pathname === '/api/tasks/LINK-1' && url.searchParams.get('workspace') === 'one') {
+        return response(globalThis.frictionLinkedTask);
+      }
+      return fixtureFetch(path, options);
+    };
+  });
+  try {
+    for (const status of ['done', 'archived', 'rejected', 'someday', 'in-progress']) {
+      await page.evaluate(async status => {
+        Object.assign(globalThis.frictionLinkedTask, {
+          status, title: `Linked ${status} task`, description: `Detail for linked ${status} task`,
+        });
+        const { setActiveTab } = await import('/js/router.js');
+        setActiveTab('knowledge/frictions');
+      }, status);
+      await page.locator('#friction-detail .knowledge-link-row').click();
+      const pinned = page.locator('#tasks-body [data-key="pinned-LINK-1"]');
+      await pinned.waitFor({ state: 'visible', timeout: 5000 });
+      if (await pinned.locator('.title').textContent() !== `Linked ${status} task`
+        || !(await pinned.locator('.row-detail').textContent()).includes(`Detail for linked ${status} task`)) {
+        throw new Error(`Friction link did not open the ${status} task's full detail`);
+      }
+      if (await page.locator('#task-filter .chip[data-status="done"]').getAttribute('aria-pressed') !== 'false') {
+        throw new Error('Opening a friction task must retain the normal Tasks route status filter');
+      }
+      if (await page.locator('#tasks-body .task-action-notice').count()) {
+        throw new Error('Opening a friction task must not fall back to copying its ID');
+      }
+      await pinned.locator('button[title="Dismiss global task detail"]').click();
+    }
+  } finally {
+    await page.evaluate(() => {
+      globalThis.fetch = globalThis.frictionLinkFixtureFetch;
+      delete globalThis.frictionLinkFixtureFetch;
+      delete globalThis.frictionLinkedTask;
+    });
+  }
+}
+
 async function assertVisibleTaskRow(page, viewport, pageName) {
   const visible = await page.evaluate(() => {
     const row = document.querySelector('#tasks-body .row[data-key^="task-"]:not(.header)');
@@ -264,6 +323,7 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  await assertFrictionTaskLinks(page);
   await page.evaluate(() => globalThis.showTaskPaginationEvidence());
   await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
   for (const viewport of [{ name: 'desktop', width: 1280 }, { name: 'mobile', width: 390 }]) {
