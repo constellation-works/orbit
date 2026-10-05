@@ -5864,6 +5864,7 @@ mod desktop;
 mod transport_operations;
 
 mod internal_drain;
+mod tool_input_hints;
 
 #[cfg(unix)]
 #[test]

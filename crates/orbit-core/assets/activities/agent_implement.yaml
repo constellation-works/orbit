@@ -62,6 +62,14 @@ spec:
       `orbit tool run <tool.name> --input '<json>'` (`--input-file` for large
       input). The CLI has the same gates; never reach an ungranted tool. Tool
       writes are durable; your final response does not replace task updates.
+    - Workflow input `task_id` and `ORBIT_TASK_ID` identify the task; task-tool
+      arguments use `id`, not `task_id` or `taskId`. For example:
+      `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`.
+      Use `id` for `orbit.task.update`, `orbit.task.artifact.put`, and
+      `orbit.task.artifact.get` too. GitHub run tools take `run`, even though
+      their output uses `run_id`; `orbit.task.add` takes `type` (feature, bug,
+      refactor, or chore). Search statuses use `task:rejected` or
+      `friction:resolved`, never `status:rejected` or a bare status.
 
     Claimed mode
 

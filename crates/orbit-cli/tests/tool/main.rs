@@ -15,6 +15,8 @@ mod fixture_crew;
 mod git_repo;
 #[path = "../support/isolated_cli_fixture.rs"]
 mod isolated_cli_fixture;
+#[path = "../support/tool_input_hints.rs"]
+mod tool_input_hint_cases;
 
 mod github_broker_sandbox;
 mod github_capability_preflight;
@@ -25,6 +27,7 @@ mod plugin_hook_workspace_probe;
 mod plugin_secrets;
 mod proc_spawn_managed;
 mod skill_lifecycle_cli;
+mod tool_input_hints;
 mod tool_lifecycle_cli;
 mod tool_list;
 mod tool_run_audit;
