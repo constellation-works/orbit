@@ -110,6 +110,66 @@ fn sigterm_is_forwarded_to_the_previous_handler() {
     );
 }
 
+#[test]
+fn pending_sigterm_interrupts_late_supervisors_without_delaying_forwarding() {
+    let _lock = TEST_LOCK.lock().expect("signal test lock");
+    FORWARDED_SIGNAL.store(0, Ordering::SeqCst);
+    install_previous_handler(libc::SIGTERM);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ready = dir.path().join("ignoring-term.ready");
+    let script = format!("trap '' TERM; touch {} && exec sleep 30", ready.display());
+    // The ignoring child needs the five-second termination grace period.
+    let forwarding_bound = Duration::from_secs(7);
+
+    thread::scope(|scope| {
+        let first = scope.spawn(|| supervise_script(&script));
+        wait_for_marker(&ready);
+        wait_for_supervisor_handler(libc::SIGTERM);
+
+        let signalled = Instant::now();
+        // Safety: the installed supervisor handler receives SIGTERM in this
+        // dedicated test binary, with the recorder as its previous handler.
+        assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0, "raise SIGTERM");
+        assert_eq!(FORWARDED_SIGNAL.load(Ordering::SeqCst), 0);
+
+        // Both arrive after SIGTERM, while the ignoring child keeps the
+        // handler installed. Observing shutdown must not consume the signal.
+        let late_second = scope.spawn(|| supervise_script("exec sleep 30"));
+        let late_third = scope.spawn(|| supervise_script("exec sleep 30"));
+        let forwarded_in_time = loop {
+            if FORWARDED_SIGNAL.load(Ordering::SeqCst) == libc::SIGTERM {
+                break true;
+            }
+            if signalled.elapsed() >= forwarding_bound {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+
+        // Join before asserting so failures still let the supervisors reap
+        // every child; the request timeout bounds the unfixed regression.
+        let first = first.join().expect("first supervisor thread");
+        let second = late_second.join().expect("second supervisor thread");
+        let third = late_third.join().expect("third supervisor thread");
+        assert_interrupted(&first, libc::SIGTERM);
+        assert_interrupted(&second, libc::SIGTERM);
+        assert_interrupted(&third, libc::SIGTERM);
+        assert!(
+            forwarded_in_time,
+            "late supervisors must let the previous SIGTERM handler run within \
+             the termination grace period plus margin"
+        );
+    });
+
+    let fresh = supervise_script("exit 0");
+    assert!(
+        fresh.success,
+        "forwarded SIGTERM must not interrupt a new wait"
+    );
+    assert_eq!(fresh.exit_code, Some(0));
+}
+
 const SIGTERM_HELPER_ENV: &str = "ORBIT_EXEC_SIGTERM_HELPER";
 const SIGTERM_MARKER_ENV: &str = "ORBIT_EXEC_SIGTERM_MARKER";
 
@@ -174,9 +234,13 @@ fn sigterm_with_default_disposition_exits_the_supervisor() {
 
 fn supervise_sleep_after_ready(marker: &Path) -> orbit_exec::ExecutionResult {
     let script = format!("touch {} && sleep 8", marker.display());
+    supervise_script(&script)
+}
+
+fn supervise_script(script: &str) -> orbit_exec::ExecutionResult {
     let req = ExecRequest {
         program: "/bin/sh".to_string(),
-        args: vec!["-c".to_string(), script],
+        args: vec!["-c".to_string(), script.to_string()],
         current_dir: None,
         timeout_ms: Some(15_000),
         stdin_mode: StdinMode::Null,
@@ -184,6 +248,23 @@ fn supervise_sleep_after_ready(marker: &Path) -> orbit_exec::ExecutionResult {
         debug: false,
     };
     run_process(&req, &NoSandbox).expect("run_process")
+}
+
+fn wait_for_supervisor_handler(signal: libc::c_int) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        // Safety: a null new action only queries the current disposition.
+        let action = unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            assert_eq!(libc::sigaction(signal, std::ptr::null(), &mut action), 0);
+            action
+        };
+        if action.sa_sigaction != record_previous_handler as *const () as usize {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("supervisor did not install its signal handler");
 }
 
 fn wait_for_marker(path: &Path) {
