@@ -185,6 +185,31 @@ has no bytes to archive. A parseable identity naming another workspace is still 
 even with `--force`. Valid identity, parent-workspace identity, and unrelated registry
 records are not recovery inputs and are not rewritten. [ORB-11376]
 
+### Bind a first source remote after registration
+
+If a workspace was registered before its checkout had a Git `origin`, set a portable
+origin on the declared owner's checkout, then reconcile that existing registration:
+
+```sh
+git remote add origin git@github.com:example/source.git
+orbit workspace init --name example --force
+orbit workspace source-remote show --json
+```
+
+Use the existing registered workspace name with `--name`. This records only a missing
+source identity; it preserves the workspace ID, owner, task partition, and publication
+bindings while refreshing the usual initialization defaults. Repeating the command
+preserves the source identity, including the task-store fingerprint recorded when
+publication was bound. Equivalent URL spellings also keep the registered URL
+so that publication fingerprints remain unchanged. An absent origin leaves the registered
+identity intact. First binding refuses credentials, invalid or local remotes, replica
+checkouts, and a different declared owner before initialization writes. `workspace sync`
+does not bind a missing source identity.
+
+An already registered source identity cannot be changed through `workspace init --force`.
+If the checkout's origin names a different repository, use the explicit audited rebind
+workflow below. No workspace removal is needed for first binding or a repository move.
+
 ### Rebind the source remote after a repository move
 
 Use the source-remote command when a Git repository moves to a different owner, name, or

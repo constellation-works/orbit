@@ -85,6 +85,48 @@ pub struct WorkspaceSourceRemoteRebind {
     pub dry_run: bool,
 }
 
+/// Reconcile a detected origin during explicit initialization of an existing workspace.
+///
+/// Only the declared local owner can establish a missing source identity.
+/// Equivalent origins preserve the registered URL (and publication fingerprint);
+/// a changed or non-portable registration requires the audited rebind command.
+/// All validation precedes mutation. An absent origin leaves the identity intact.
+pub fn reconcile_workspace_source_remote(
+    registry: &mut WorkspaceRegistry,
+    workspace_id: &str,
+    detected_remote: Option<&str>,
+    local_machine_id: Option<&str>,
+) -> Result<(), OrbitError> {
+    let Some(remote) = detected_remote else {
+        return Ok(());
+    };
+    validate_source_repository_fingerprint(remote)
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+    let repository_identity =
+        git_remote_identity(remote).map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+    let workspace = super::find_workspace_by_id(registry, workspace_id)
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.to_string()))?;
+    if let Some(registered_remote) = workspace.git_remote.as_deref() {
+        if validate_source_repository_fingerprint(registered_remote).is_ok()
+            && git_remote_identity(registered_remote).ok().as_deref() == Some(&repository_identity)
+        {
+            return Ok(());
+        }
+        return Err(OrbitError::WorkspaceError(format!(
+            "workspace '{workspace_id}' already has a different or non-portable registered source remote; inspect it with `orbit --workspace {workspace_id} workspace source-remote show --json`, then use `orbit --workspace {workspace_id} workspace source-remote rebind --remote <URL>` on the declared owner machine"
+        )));
+    }
+    validate_source_remote_owner(registry, workspace, local_machine_id)?;
+    let workspace = registry
+        .workspaces
+        .iter_mut()
+        .find(|workspace| workspace.id == workspace_id)
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.to_string()))?;
+    workspace.git_remote = Some(remote.to_string());
+    workspace.updated_at = Utc::now();
+    Ok(())
+}
+
 /// Rebind an owned workspace's portable source-repository identity.
 ///
 /// Every refusal happens before the registry is mutated. Publication bindings
@@ -103,57 +145,19 @@ pub fn rebind_workspace_source_remote(
     let new_repository_identity = git_remote_identity(new_remote)
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
 
-    let local_machine_id = local_machine_id.ok_or_else(|| {
-        OrbitError::WorkspaceError(
-            "source-remote rebinding requires a local machine identity; run `orbit init` first"
-                .to_string(),
-        )
-    })?;
-    validate_machine_id(local_machine_id)?;
-
     let workspace = find_workspace(registry, id_or_name)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, id_or_name.to_string()))?;
     let workspace_id = workspace.id.clone();
     let old_remote = workspace.git_remote.clone().ok_or_else(|| {
         OrbitError::WorkspaceError(format!(
-            "workspace '{workspace_id}' has no registered source remote; initialize it from a checkout with an origin before rebinding"
+            "workspace '{workspace_id}' has no registered source remote; set a portable Git origin on the declared owner's checkout, then run `orbit workspace init --name {} --force` there to bind its first source identity",
+            workspace.name
         ))
     })?;
     let old_repository_identity = git_remote_identity(&old_remote).ok();
     let old_remote_is_portable = validate_source_repository_fingerprint(&old_remote).is_ok();
 
-    let checkout = registry
-        .checkouts
-        .iter()
-        .find(|checkout| checkout.workspace_id == workspace_id)
-        .ok_or_else(|| {
-            OrbitError::WorkspaceError(format!(
-                "workspace '{workspace_id}' has no local checkout; source-remote rebinding is owner-local"
-            ))
-        })?;
-    match checkout.role {
-        Some(WorkspaceCheckoutRole::Owner) => {}
-        Some(WorkspaceCheckoutRole::Replica) => {
-            return Err(OrbitError::WorkspaceError(format!(
-                "workspace '{workspace_id}' is a replica checkout; run the source-remote rebind on its declared owner machine"
-            )));
-        }
-        None => {
-            return Err(OrbitError::WorkspaceError(format!(
-                "workspace '{workspace_id}' has no declared local checkout role; reassert its owner role before rebinding the source remote"
-            )));
-        }
-    }
-    let owner_machine_id = workspace.owner_machine_id.as_deref().ok_or_else(|| {
-        OrbitError::WorkspaceError(format!(
-            "workspace '{workspace_id}' has no declared owner; reassert its owner role before rebinding the source remote"
-        ))
-    })?;
-    if owner_machine_id != local_machine_id {
-        return Err(OrbitError::WorkspaceError(format!(
-            "workspace '{workspace_id}' is owned by machine '{owner_machine_id}'; local machine '{local_machine_id}' cannot rebind its source remote"
-        )));
-    }
+    validate_source_remote_owner(registry, workspace, local_machine_id)?;
 
     let changed = !old_remote_is_portable
         || old_repository_identity.as_deref() != Some(&new_repository_identity);
@@ -194,6 +198,55 @@ pub fn rebind_workspace_source_remote(
     workspace.updated_at = Utc::now();
 
     Ok(outcome)
+}
+
+fn validate_source_remote_owner(
+    registry: &WorkspaceRegistry,
+    workspace: &Workspace,
+    local_machine_id: Option<&str>,
+) -> Result<(), OrbitError> {
+    let local_machine_id = local_machine_id.ok_or_else(|| {
+        OrbitError::WorkspaceError(
+            "source-remote binding requires a local machine identity; run `orbit init` first"
+                .to_string(),
+        )
+    })?;
+    validate_machine_id(local_machine_id)?;
+    let workspace_id = &workspace.id;
+    let checkout = registry
+        .checkouts
+        .iter()
+        .find(|checkout| checkout.workspace_id == *workspace_id)
+        .ok_or_else(|| {
+            OrbitError::WorkspaceError(format!(
+                "workspace '{workspace_id}' has no local checkout; source-remote rebinding is owner-local"
+            ))
+        })?;
+    match checkout.role {
+        Some(WorkspaceCheckoutRole::Owner) => {}
+        Some(WorkspaceCheckoutRole::Replica) => {
+            return Err(OrbitError::WorkspaceError(format!(
+                "workspace '{workspace_id}' is a replica checkout; bind the source remote on its declared owner machine"
+            )));
+        }
+        None => {
+            return Err(OrbitError::WorkspaceError(format!(
+                "workspace '{workspace_id}' has no declared local checkout role; reassert its owner role before rebinding the source remote"
+            )));
+        }
+    }
+    let owner_machine_id = workspace.owner_machine_id.as_deref().ok_or_else(|| {
+        OrbitError::WorkspaceError(format!(
+            "workspace '{workspace_id}' has no declared owner; reassert its owner role before rebinding the source remote"
+        ))
+    })?;
+    if owner_machine_id != local_machine_id {
+        return Err(OrbitError::WorkspaceError(format!(
+            "workspace '{workspace_id}' is owned by machine '{owner_machine_id}'; local machine '{local_machine_id}' cannot rebind its source remote"
+        )));
+    }
+
+    Ok(())
 }
 
 /// Record a machine-local checkout role for an existing logical workspace.
