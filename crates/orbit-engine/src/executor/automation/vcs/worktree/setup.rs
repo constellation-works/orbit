@@ -334,10 +334,12 @@ fn inspect_registered_worktree(
         return Ok(RegisteredWorktree::Usable { branch, head });
     }
 
+    // An unreadable status proves nothing about the working tree, so it is
+    // treated as retained work rather than as a clean checkout.
     let retained_work = unique_commits
         || status
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
+            .is_none_or(|value| !value.trim().is_empty());
     Ok(RegisteredWorktree::Incomplete {
         retained_work,
         evidence,
