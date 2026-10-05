@@ -21,6 +21,7 @@ mod sandbox_off;
 
 mod host_os_routing;
 mod host_resources;
+mod plugin_doctor;
 
 mod task_pilot;
 mod task_pr_closure;
