@@ -23,6 +23,14 @@ const LONG_TIMEOUT_MS: u64 = 60_000;
 const GITHUB_LOOKUP_TRANSIENT_ATTEMPTS: u32 = 3;
 const GITHUB_LOOKUP_TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
+/// GitHub's reason for refusing a merge because another merge moved the base
+/// between its mergeability check and the mutation (F2026-10-071). The `sha`
+/// condition was not what failed.
+const BASE_MODIFIED_REASON: &str = "Base branch was modified. Review and try the merge again.";
+/// The `refusal` a reviewed merge reports, instead of failing, when its
+/// caller opts in with `report_base_modified`.
+pub(crate) const BASE_MODIFIED_REFUSAL: &str = "base_modified";
+
 /// Execute the VCS operations owned by deterministic shipment automation.
 ///
 /// This boundary is deliberately separate from `ToolRegistry`: the operation
@@ -200,7 +208,17 @@ fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
                 "review_gate_stale: deferred auto-merge cannot guarantee the reviewed head; wait for checks and request a synchronous merge".to_string(),
             ));
         }
-        return pr_merge_reviewed(selector, workspace_path, strategy, reviewed_head);
+        let report_base_modified = input
+            .get("report_base_modified")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        return pr_merge_reviewed(
+            selector,
+            workspace_path,
+            strategy,
+            reviewed_head,
+            report_base_modified,
+        );
     }
     let mut args = vec![
         "pr".to_string(),
@@ -228,11 +246,17 @@ fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
 /// merges, and this endpoint never enables auto-merge or enters a merge queue.
 /// `gh pr merge --match-head-commit` alone is insufficient because the CLI
 /// can choose deferred semantics for a queue-required branch.
+///
+/// [ORB-14205] With `report_base_modified`, the provider's base-modification
+/// refusal returns `{"merged": false, "refusal": "base_modified"}` with the
+/// raw output, so the caller can decide whether to ask again. Every other
+/// failure, and that one without the opt-in, stays an error.
 fn pr_merge_reviewed(
     selector: &str,
     workspace_path: &str,
     strategy: &str,
     reviewed_head: &str,
+    report_base_modified: bool,
 ) -> Result<Value, OrbitError> {
     // Managed completion supplies a number in the current repository. Refuse
     // other selectors here rather than resolving a URL into a different repo.
@@ -246,7 +270,7 @@ fn pr_merge_reviewed(
             "reviewed PR merge requires an exact 40- or 64-character reviewed_head_sha".into(),
         ));
     }
-    let result = execute(
+    let result = run_vcs_process(
         "gh",
         vec![
             "api".to_string(),
@@ -260,8 +284,16 @@ fn pr_merge_reviewed(
         ],
         Some(Path::new(workspace_path)),
         SLOW_TIMEOUT_MS,
-        "reviewed PR merge",
     )?;
+    if report_base_modified && is_base_modified_refusal(&result) {
+        return Ok(json!({
+            "merged": false,
+            "refusal": BASE_MODIFIED_REFUSAL,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }));
+    }
+    let result = succeeded(result, "reviewed PR merge")?;
     let response: Value = serde_json::from_str(&result.stdout).map_err(|error| {
         OrbitError::Execution(format!("reviewed PR merge returned invalid JSON: {error}"))
     })?;
@@ -276,6 +308,31 @@ fn pr_merge_reviewed(
         "stderr": result.stderr,
         "landed_commit": landed_commit,
     }))
+}
+
+/// True only for a completed `gh api` failure whose whole diagnostic is the
+/// provider's base-modification refusal with HTTP 405: stderr is exactly
+/// `gh: <reason> (HTTP 405)` and the response body, when present, is a JSON
+/// error naming the same reason and status. Other 405s (policy, queue,
+/// protection), other statuses, timeouts, and anything ambiguous do not match.
+fn is_base_modified_refusal(result: &orbit_exec::ExecutionResult) -> bool {
+    if result.success
+        || result.timed_out
+        || result.stderr.trim() != format!("gh: {BASE_MODIFIED_REASON} (HTTP 405)")
+    {
+        return false;
+    }
+    let body = result.stdout.trim();
+    if body.is_empty() {
+        return true;
+    }
+    let Ok(Value::Object(body)) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+    body.get("message").and_then(Value::as_str) == Some(BASE_MODIFIED_REASON)
+        && body
+            .get("status")
+            .is_none_or(|status| status.as_str() == Some("405") || status.as_u64() == Some(405))
 }
 
 /// Read the repository merge methods and the target branch's linear-history
@@ -521,6 +578,19 @@ fn execute(
     timeout_ms: u64,
     operation: &str,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    succeeded(
+        run_vcs_process(program, args, current_dir, timeout_ms)?,
+        operation,
+    )
+}
+
+/// Run one VCS process and return its outcome, failed or not.
+fn run_vcs_process(
+    program: &str,
+    args: Vec<String>,
+    current_dir: Option<&Path>,
+    timeout_ms: u64,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     let request = if program == "git" {
         let root = current_dir.ok_or_else(|| {
             OrbitError::InvalidInput("Git operation requires a working directory".to_string())
@@ -546,7 +616,13 @@ fn execute(
             debug: false,
         }
     };
-    let result = run_process(&request, &NoSandbox)?;
+    run_process(&request, &NoSandbox)
+}
+
+fn succeeded(
+    result: orbit_exec::ExecutionResult,
+    operation: &str,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     if !result.success {
         return Err(OrbitError::Execution(format!(
             "private automation VCS {operation} failed: {}",
