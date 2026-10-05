@@ -52,11 +52,10 @@ fn main() -> ExitCode {
 
     let tool_ctx = ToolContext::default();
 
-    // Dispatch allowlist is orbit.task.show. The advertised set is the
-    // *superset* so the model is told orbit.task.delete exists and attempts
-    // it — exercising the loop's dispatch-time check. If advertised ==
-    // allowlist, the model would never emit a `tool_use` block for a
-    // disallowed tool and the check would be unreachable.
+    // Dispatch allows orbit.task.show. The advertisement override also names
+    // orbit.task.delete, but active-schema filtering omits that human-only
+    // tool. The system prompt below pressures the model to attempt it anyway;
+    // any emitted call must be denied without execution.
     let cfg = AgentLoopConfig::new_for_run(format!(
         "tool-allowlist-{}",
         chrono::Utc::now().timestamp_millis()
