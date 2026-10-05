@@ -794,10 +794,13 @@ task with the exact `file:` selector, else the first owner; a path no selector
 covers goes to the first task. A claimed leaf writes no owner selectors; it
 refuses only protected new paths (Git or `.orbit` metadata, environment files)
 before changing the index, and the owner accepts the rest as footprint widening
-at handoff (distributed-drain design §3). What stays enforced is the sandbox,
-Git-metadata ownership, host-owned staging, rebase, commit and push, the
-owner's `candidate_validate` on the resulting head, and run, task and branch
-identity. Accepted candidates are staged by explicit path, so an
+at handoff (distributed-drain design §3). Handoff and owner acceptance inspect
+the candidate's Git tree modes for additions and tracked type changes, refusing
+symlinks and gitlinks even when the owner's checkout still holds the base.
+Only added paths outside the original footprint request widening. What stays
+enforced is the sandbox, Git-metadata ownership, host-owned staging, rebase,
+commit and push, the owner's `candidate_validate` on the resulting head, and
+run, task and branch identity. Accepted candidates are staged by explicit path, so an
 already-populated index cannot leak a sibling candidate.
 
 Failure-candidate preservation uses the same task-candidate boundary. The

@@ -71,11 +71,11 @@ pub(super) fn task_candidate_paths(
     Ok(candidates)
 }
 
-/// Independently read additions (rename detection off) and recompute the exact
-/// widening request from the original admission selectors: every added path
-/// they do not cover. Only paths no owner can accept are refused — traversal,
-/// Git or `.orbit` metadata, environment secrets, and anything but a regular
-/// file in the candidate tree.
+/// Independently read additions and tracked type changes (rename detection
+/// off), refusing anything but a regular file in the candidate tree. Added
+/// paths also exclude traversal, Git or `.orbit` metadata and environment
+/// secrets. Return the additions and the exact widening request from the
+/// original admission selectors: every added path they do not cover.
 pub fn validate_claim_new_paths(
     workspace_path: &Path,
     selectors: &[String],
@@ -95,34 +95,51 @@ pub fn validate_claim_new_paths(
             "--",
         ],
     )?;
-    let scopes = selectors
+    let type_changed_paths = git_output_paths(
+        workspace_path,
+        &[
+            "diff",
+            "--name-only",
+            "--diff-filter=T",
+            "--no-renames",
+            "-z",
+            base,
+            candidate,
+            "--",
+        ],
+    )?;
+    let mut refused = new_paths
         .iter()
-        .filter_map(|selector| normalize_task_scope(selector, workspace_path))
-        .collect::<Vec<_>>();
-    let mut refused = Vec::new();
-    let mut widening = Vec::new();
-    for path in new_paths.iter().cloned() {
-        // Refuse candidate symlinks even when the owner's worktree has not
-        // checked out this commit. Inspect the immutable Git tree mode.
+        .filter(|path| !claim_new_path_is_safe(path))
+        .collect::<BTreeSet<_>>();
+    for path in new_paths.iter().chain(&type_changed_paths) {
+        // Refuse candidate symlinks and gitlinks even when the owner's
+        // worktree has not checked out this commit. Inspect the immutable
+        // Git tree mode, including replacements of existing tracked files.
         let entry = super::super::git::git_output(
             workspace_path,
-            &["--literal-pathspecs", "ls-tree", candidate, "--", &path],
+            &["--literal-pathspecs", "ls-tree", candidate, "--", path],
         )?;
-        if !claim_new_path_is_safe(&path)
-            || !entry.starts_with("100644 ") && !entry.starts_with("100755 ")
-        {
-            refused.push(path);
-        } else if !scopes.iter().any(|scope| path_matches_scope(&path, scope)) {
-            widening.push(path);
+        if !entry.starts_with("100644 ") && !entry.starts_with("100755 ") {
+            refused.insert(path);
         }
     }
     if !refused.is_empty() {
         return Err(OrbitError::Execution(format!(
-            "task delivery refused protected new paths: {refused:?}. Owner footprint widening \
+            "task delivery refused protected candidate paths: {refused:?}. Owner footprint widening \
              accepts any regular file outside Git and `.orbit` metadata and environment files; \
-             symlinks are refused"
+             candidate symlinks and gitlinks are refused"
         )));
     }
+    let scopes = selectors
+        .iter()
+        .filter_map(|selector| normalize_task_scope(selector, workspace_path))
+        .collect::<Vec<_>>();
+    let mut widening = new_paths
+        .iter()
+        .filter(|path| !scopes.iter().any(|scope| path_matches_scope(path, scope)))
+        .cloned()
+        .collect::<Vec<_>>();
     widening.sort();
     Ok((new_paths, widening))
 }
