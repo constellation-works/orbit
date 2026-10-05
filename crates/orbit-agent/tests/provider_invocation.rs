@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use orbit_agent::loop_engine::{
     AgentLoop, AgentLoopConfig, AgentLoopError, CacheHint, ContentBlock, LoopTransport, Message,
-    NullSink, Session, TurnRequest,
+    NullSink, Session, StopReason, TurnRequest,
 };
 use orbit_agent::providers::{
     anthropic::AnthropicMessagesTransport, gemini_http::GeminiHttpTransport,
@@ -648,6 +648,113 @@ fn expired_budget_stops_later_dispatch_and_pairs_skipped_results() {
                 server.request();
                 server.finish();
             }
+        },
+    );
+}
+
+struct FixtureEchoTool;
+
+impl Tool for FixtureEchoTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "fixture.echo".into(),
+            description: "Echo input".into(),
+            parameters: vec![],
+            builtin: false,
+        }
+    }
+
+    fn execute(&self, _ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        Ok(json!({"echo": input}))
+    }
+}
+
+#[test]
+fn openai_compat_tool_calls_with_stop_finish_reason_sends_follow_up_with_tool_results() {
+    isolated(
+        "openai_compat_tool_calls_with_stop_finish_reason_sends_follow_up_with_tool_results",
+        || {
+            let tool_call_id = "call-compat-1";
+            let server = Server::new(vec![
+                json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [{
+                                "id": tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": "fixture.echo",
+                                    "arguments": "{\"query\":\"ping\"}"
+                                }
+                            }]
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }),
+                json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "received pong"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }),
+            ]);
+            let transport =
+                OpenAiCompatTransport::new(&server.base_url, API_KEY, "fixture-model", vec![])
+                    .unwrap()
+                    .with_timeout(WAIT)
+                    .unwrap();
+
+            let mut registry = ToolRegistry::new();
+            registry.register(FixtureEchoTool);
+            let mut session = Session::new("openai_compat", "fixture-model", "", None);
+            let cfg = AgentLoopConfig::new_for_run("fixture-run")
+                .with_allowlist(vec!["fixture.echo".into()]);
+            let ctx = ToolContext {
+                allowed_tools: vec!["fixture.echo".into()],
+                ..Default::default()
+            };
+
+            let outcome = AgentLoop::run(
+                &mut session,
+                &cfg,
+                &transport,
+                &registry,
+                &ctx,
+                &NullSink,
+                "call echo",
+            )
+            .expect("loop should continue to second turn");
+
+            assert_eq!(outcome.final_message, "received pong");
+            assert_eq!(outcome.trace.len(), 2);
+            assert!(matches!(outcome.trace[0].stop_reason, StopReason::ToolUse));
+            assert!(matches!(outcome.trace[1].stop_reason, StopReason::EndTurn));
+
+            // Turn 1 request from client to server: prompt
+            let first_request = server.request();
+            assert_eq!(first_request.body["messages"][0]["role"], "user");
+            assert_eq!(first_request.body["messages"][0]["content"], "call echo");
+
+            // Turn 2 request from client to server: includes tool result
+            let second_request = server.request();
+            let messages = second_request.body["messages"]
+                .as_array()
+                .expect("messages array");
+            assert_eq!(messages.len(), 3);
+            assert_eq!(messages[0]["role"], "user");
+            assert_eq!(messages[1]["role"], "assistant");
+            assert_eq!(messages[1]["tool_calls"][0]["id"], tool_call_id);
+            assert_eq!(messages[2]["role"], "tool");
+            assert_eq!(messages[2]["tool_call_id"], tool_call_id);
+            let tool_result: Value =
+                serde_json::from_str(messages[2]["content"].as_str().unwrap()).unwrap();
+            assert_eq!(tool_result, json!({"echo": {"query": "ping"}}));
+
+            server.finish();
         },
     );
 }
