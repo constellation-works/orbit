@@ -6,8 +6,12 @@
 //! evidence and the proposed task's generated identity.
 
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, Task, TaskStatus};
 use serde_json::{Value, json};
+
+use crate::adapter::engine_host::v2_host::task_pilot::{
+    PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
+};
 
 const CI_FAILURE_TAG: &str = "ci-failure-sweep";
 const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
@@ -60,46 +64,11 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
     }
 
     let disposition = required_string(assessment, "disposition", action)?;
-    let duplicate_of = assessment
-        .get("duplicate_of")
-        .ok_or_else(|| action_failed(action, format!("task {task_id} is missing duplicate_of")))?;
-    let already_landed = assessment.get("already_landed").ok_or_else(|| {
-        action_failed(action, format!("task {task_id} is missing already_landed"))
-    })?;
-    for (field, value) in [
-        ("duplicate_of", duplicate_of),
-        ("already_landed", already_landed),
-    ] {
-        if !value.is_null() && !recommendation_has_evidence(value) {
-            return Err(action_failed(
-                action,
-                format!("task {task_id} {field} finding must include concrete evidence"),
-            ));
-        }
-    }
-
-    // `validation_tool_warnings` is the deterministic boundary's own finding
-    // rather than the pilot's, but it withholds admission for the same reason
-    // the others do: the repair would be admitted with an acceptance check the
-    // implementation lane cannot run [ORB-11980].
-    let warning_fields = [
-        "blocked_by",
-        "adr_conflicts",
-        "utility_warnings",
-        "surface_warnings",
-        super::super::task_pilot::VALIDATION_TOOL_WARNINGS,
-    ];
-    let warnings = warning_fields
-        .iter()
-        .flat_map(|field| {
-            assessment
-                .get(*field)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .map(move |value| json!({ "field": field, "value": value }))
-        })
-        .collect::<Vec<_>>();
+    let PromotionFindings {
+        duplicate_of,
+        already_landed,
+        warnings,
+    } = promotion_findings(action, task_id, assessment)?;
 
     // A release failure may share a cluster with a pull-request run of the
     // same commit. It is release-only for remediation purposes as long as no
@@ -126,7 +95,13 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
     // performs no release operation, so a failure whose correct repair is
     // promotion, a tag, or a publication is reported as that operator action
     // instead of being converted into automatic repository edits.
-    let (decision, classification, evidence) = if let Some(finding) = release_action {
+    let (decision, classification, evidence) = if auto_approval_opted_out(&task.tags) {
+        (
+            "withhold",
+            NO_AUTO_APPROVE_TAG,
+            json!("the task is tagged no-auto-approve; a human must approve it"),
+        )
+    } else if let Some(finding) = release_action {
         (
             "withhold",
             "release_publication_or_operator_action_needed",
@@ -241,19 +216,6 @@ fn release_action_required<'a>(
         ));
     }
     Ok(Some(finding))
-}
-
-fn recommendation_has_evidence(value: &Value) -> bool {
-    match value {
-        Value::String(text) => !text.trim().is_empty(),
-        Value::Object(fields) => fields
-            .get("evidence")
-            .is_some_and(recommendation_has_evidence),
-        Value::Array(values) => {
-            !values.is_empty() && values.iter().all(recommendation_has_evidence)
-        }
-        _ => false,
-    }
 }
 
 fn required_string<'a>(

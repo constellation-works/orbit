@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
-use super::apply::{PreparedTaskSnapshot, ValidatedTask};
+use super::apply::{Admission, PreparedTaskSnapshot, ValidatedTask};
 
 const STORAGE_APPLY_ATTEMPTS: usize = 3;
 
@@ -130,6 +130,9 @@ pub(super) fn apply_task(
                     " [no-target-assessed:{}:{fingerprint}]",
                     target_status.cli_name()
                 ));
+            }
+            if let Some(marker) = &task.history_marker {
+                history_summary.push_str(marker);
             }
             let mutation_params = AtomicTaskMutationParams {
                 actor: "task-pilot".to_string(),
@@ -354,19 +357,37 @@ pub(super) fn record_applied_assessment(
     outcome: &str,
     task_results: &mut Vec<Value>,
     ci_sweep_admission: &mut Vec<Value>,
+    drain_approval: &mut Vec<Value>,
 ) {
     let changed =
         snapshot.context_files != task.after || snapshot.complexity != Some(task.complexity);
+    let (field, decision, records) = match task.admission {
+        Some(Admission::CiSweep(decision)) => (
+            Some("ci_sweep_admission"),
+            Some(decision),
+            ci_sweep_admission,
+        ),
+        Some(Admission::Drain(decision)) => {
+            (Some("drain_approval"), Some(decision), drain_approval)
+        }
+        None => (None, None, ci_sweep_admission),
+    };
+    let approved = decision
+        .as_ref()
+        .is_some_and(|decision| decision["approved"] == true);
     if let Value::Object(fields) = &mut task.assessment {
-        fields.insert("applied".to_string(), Value::Bool(changed || task.promote));
+        fields.insert(
+            "applied".to_string(),
+            Value::Bool(changed || task.promote || approved),
+        );
         fields.insert("outcome".to_string(), json!(outcome));
         fields.insert("operation_id".to_string(), json!(task.operation_id));
-        if let Some(admission) = task.admission.clone() {
-            fields.insert("ci_sweep_admission".to_string(), admission);
+        if let (Some(field), Some(decision)) = (field, decision.clone()) {
+            fields.insert(field.to_string(), decision);
         }
     }
-    if let Some(admission) = task.admission {
-        ci_sweep_admission.push(admission);
+    if let Some(decision) = decision {
+        records.push(decision);
     }
     task_results.push(task.assessment);
 }

@@ -131,6 +131,7 @@ pub(crate) fn workspace_auto_run_input(
     max_active_leaf_runs: Option<u32>,
     completion: crate::application::workflow::CompletionPolicy,
     allowed_crews: &[String],
+    approve_proposed: bool,
 ) -> Result<Value, OrbitError> {
     if max_active_leaf_runs == Some(0) {
         return Err(OrbitError::InvalidInput(
@@ -161,6 +162,12 @@ pub(crate) fn workspace_auto_run_input(
     // inherits the same window without re-deriving it from configuration.
     if !allowed_crews.is_empty() {
         input.insert("allowed_crews".to_string(), json!(allowed_crews));
+    }
+    // [ORB-14117] Like completion, the key's presence is the durable record
+    // that an operator granted this drain approval authority over proposed
+    // work; the task-pilot apply step verifies it before approving anything.
+    if approve_proposed {
+        input.insert("approve_proposed".to_string(), json!(true));
     }
     Ok(Value::Object(input))
 }

@@ -330,6 +330,10 @@ fn run_json_enriched(
     value["drain_last_pass"] =
         serde_json::to_value(state.and_then(|state| state.drain_last_pass.as_ref()))
             .map_err(serialize_error("serialize drain last pass"))?;
+    // [ORB-14117] What an `--approve-proposed` drain approved and held.
+    value["drain_approvals"] =
+        serde_json::to_value(state.and_then(|state| state.drain_approvals.as_ref()))
+            .map_err(serialize_error("serialize drain approvals"))?;
     // [ORB-11354] An operator tracking an agent invocation reads it here, from
     // the same show/list surface as any other run: its distinguishable outcome,
     // a bounded preview of the answer, and the durable reference to the full

@@ -310,6 +310,31 @@ as `ship-sweep`.
   `proposed` work into the backlog and is not an independent review verdict; the
   transition is recorded against the authorizing run and operator.
 
+`orbit run auto --approve-proposed` (MCP `orbit_workflow_auto` `start` with
+`approve_proposed: true`) is the explicit authorization for one drain to approve
+`proposed` work, independent of `--complete`. Default-off and never enabled by
+configuration.
+
+- Each pass selects up to ten qualifying proposed tasks, including ones filed
+  mid-window. A task qualifies with the `no-diff-expected` tag, or with
+  non-empty `context_files` and an assessed complexity.
+- The drain pilots them through `task_pilot_pipeline`, and the pilot's apply
+  step approves a task only under the existing promotion rules: no duplicate,
+  already-landed, blocked-by, conflict or warning finding, and selectors that
+  resolve at the pinned revision. The authority is verified against the drain
+  that dispatched the pilot.
+- An approved task gets the ordinary approve transition with a history note
+  naming the drain run, and is admitted by that same pass.
+- A task tagged `no-auto-approve` is never approved by any automatic
+  promotion authority (this drain or the CI sweep). The drain does not pilot
+  it; it stays `proposed`, held with reason `no-auto-approve`, until a human
+  approves it. File a task with that tag when it needs a human decision.
+- Everything else stays `proposed`. `orbit run show` and `orbit run readiness`
+  report approved and held counts with each hold reason. A held task is not
+  piloted again until it changes.
+- `--approve-proposed` with `--pull` is refused before anything is submitted:
+  a follower does not approve another host's tasks.
+
 Submission stays asynchronous, so a `--complete` run's eventual outcome is not
 known when the command returns — confirm with `orbit run show <run_id>` and
 `orbit.task.show` rather than assuming it completed.

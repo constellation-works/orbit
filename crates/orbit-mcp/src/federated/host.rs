@@ -209,6 +209,7 @@ impl FederatedMcpHost {
                 "expected_revision",
                 "verdict",
                 "complete",
+                "approve_proposed",
                 "expected_enabled",
                 "acknowledge_unconditional",
                 "default_input",

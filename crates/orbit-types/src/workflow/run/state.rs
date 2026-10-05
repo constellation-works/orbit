@@ -160,6 +160,34 @@ pub struct DrainWaitingTask {
     pub detail: Option<String>,
 }
 
+/// What an `--approve-proposed` drain has done with `proposed` work.
+///
+/// The approval steps write it on the drain's own run state: the selection
+/// step replaces the held view every pass, and the step after each task-pilot
+/// child adds the tasks that child approved. Like `drain_last_pass` it
+/// survives terminalization, so `run show` reports a finished drain's
+/// approvals and holds.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DrainApprovalReport {
+    pub recorded_at: Option<DateTime<Utc>>,
+    /// Proposed tasks this drain moved to `backlog` over its whole window.
+    #[serde(default)]
+    pub approved_total: u64,
+    /// The most recent of those (bounded list).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approved: Vec<String>,
+    /// Proposed tasks the latest pass left proposed, with the reason: the
+    /// qualification they miss, or the task-pilot classification that held
+    /// them (bounded list).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<DrainWaitingTask>,
+    /// The full count behind `held`.
+    #[serde(default)]
+    pub held_total: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub held_by_reason: BTreeMap<String, u64>,
+}
+
 /// What a drain's most recent admission pass left waiting.
 ///
 /// The classifier's own output lives only inside the running loop, so this is
@@ -419,6 +447,10 @@ pub struct PipelineState {
     /// drain never started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_last_pass: Option<DrainAdmissionPass>,
+    /// What this `--approve-proposed` drain approved and held. Survives
+    /// terminalization like `drain_last_pass`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_approvals: Option<DrainApprovalReport>,
     /// Successful terminal failure activity output, when one ran.
     ///
     /// This remains distinct from the successful-step maps: the original step
@@ -476,6 +508,7 @@ impl PipelineState {
             drain_cancel: None,
             pull_crew_preflight: None,
             drain_last_pass: None,
+            drain_approvals: None,
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
             activity_crew_draws: BTreeMap::new(),

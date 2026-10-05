@@ -62,6 +62,14 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/pull_refill.yaml"),
     ),
     (
+        "record_proposed_approvals",
+        include_str!("../../assets/activities/record_proposed_approvals.yaml"),
+    ),
+    (
+        "select_proposed_approvals",
+        include_str!("../../assets/activities/select_proposed_approvals.yaml"),
+    ),
+    (
         "final_recovery",
         include_str!("../../assets/activities/final_recovery.yaml"),
     ),

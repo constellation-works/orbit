@@ -82,7 +82,16 @@ pub(in crate::adapter::tool_host) fn control(
             } else {
                 CompletionPolicy::Review
             };
-            let run = runtime.submit_workspace_auto_run(
+            let approve_proposed = input
+                .get("approve_proposed")
+                .map(|v| {
+                    v.as_bool().ok_or_else(|| {
+                        OrbitError::InvalidInput("approve_proposed must be a boolean".into())
+                    })
+                })
+                .transpose()?
+                .unwrap_or(false);
+            let run = runtime.submit_workspace_auto_run_with_containment(
                 Some(seconds),
                 concurrency,
                 completion,
@@ -91,9 +100,11 @@ pub(in crate::adapter::tool_host) fn control(
                 Some("desktop"),
                 claim.as_deref(),
                 trigger,
+                false,
+                approve_proposed,
             )?;
             let mut started = json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
-                "completion":completion.as_input_value(),"submitted_at":run.submitted_at});
+                "completion":completion.as_input_value(),"approve_proposed":approve_proposed,"submitted_at":run.submitted_at});
             // [ORB-13901] The drain starts and holds its own waves while the
             // host is throttled; the caller learns why it admits nothing.
             let mut warnings = Vec::new();
@@ -122,7 +133,7 @@ pub(in crate::adapter::tool_host) fn control(
             started
         }
         "stop" => {
-            if ["for_seconds", "concurrency", "complete"]
+            if ["for_seconds", "concurrency", "complete", "approve_proposed"]
                 .iter()
                 .any(|key| input.get(key).is_some())
             {
@@ -201,7 +212,7 @@ fn resize(
     claim: Option<&str>,
     actor: &str,
 ) -> Result<Value, OrbitError> {
-    if ["for_seconds", "complete"]
+    if ["for_seconds", "complete", "approve_proposed"]
         .iter()
         .any(|key| input.get(key).is_some())
     {

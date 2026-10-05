@@ -17,7 +17,7 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
 #[command(
     about = "Drain the workspace backlog for a window",
     override_usage = "orbit run auto [OPTIONS]",
-    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n\n\
+    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --for 4h --approve-proposed\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n\n\
                   The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
                   tasks in flight, starting a replacement as each one finishes rather than\n\
                   waiting for the batch.\n\n\
@@ -25,6 +25,17 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   admits for the whole window, including work that reaches the backlog after\n\
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\
                   and returns without knowing the eventual outcome.\n\n\
+                  `--complete` never approves `proposed` work; `--approve-proposed` does.\n\
+                  With it, every pass first pilots the qualifying proposed tasks (tagged\n\
+                  `no-diff-expected`, or with context files and an assessed complexity) and\n\
+                  approves each one the pilot verifies: no duplicate, already-landed,\n\
+                  conflict or warning finding. That includes tasks filed after the window\n\
+                  opens, and the same pass can admit them. Each approval's history note names\n\
+                  the drain run. Other tasks stay proposed; `orbit run show` and\n\
+                  `orbit run readiness` count the approvals and give each hold's reason.\n\
+                  A task tagged `no-auto-approve` is never approved automatically; it is held\n\
+                  with that reason until a human approves it.\n\
+                  Approval does not bypass `--allow-crew` or the complexity pools.\n\n\
                   Complexity pools select only for tasks without an explicit crew.\n\
                   The tiers are low, medium, hard and xhard; xhard is the reserved top tier.\n\
                   Each CLI pool replaces its matching workflow pool for this drain.\n\
@@ -71,10 +82,19 @@ pub struct AutoCommand {
     /// Authorize this drain to finish delivery and move the tasks it ships to
     /// `done`, instead of leaving them in `review` for a separate approval.
     /// This is blanket authorization for every task the drain admits during its
-    /// whole window, not just the backlog visible right now. Off by default,
-    /// and it never approves `proposed` work for the backlog.
+    /// whole window, not just the backlog visible right now. Off by default.
+    /// It does not approve `proposed` work; `--approve-proposed` does that.
     #[arg(long)]
     pub complete: bool,
+    /// Approve qualifying `proposed` tasks into the backlog on every pass of
+    /// this drain, including tasks filed while the window is open. A task
+    /// qualifies with the `no-diff-expected` tag, or with context files and
+    /// an assessed complexity. It must then pass task-pilot verification:
+    /// no duplicate, already-landed, conflict or warning finding. Tasks that
+    /// fail, and tasks tagged `no-auto-approve`, stay proposed, and the drain
+    /// reports why. Off by default.
+    #[arg(long)]
+    pub approve_proposed: bool,
     /// Restrict this run to these configured crews, e.g. when a provider is
     /// unavailable or its budget is spent. Repeatable and comma-separated.
     /// Every name must be configured here; an unknown or empty one fails
@@ -115,11 +135,12 @@ pub struct AutoCommand {
     /// Pull from this owner instead of draining a local backlog. Takes the
     /// owner's host-qualified selector from federated discovery and runs only
     /// on that owner's replica checkout. Pulled work always stops at a handoff
-    /// the owner lands; `--complete` and the crew options do not apply.
+    /// the owner lands; `--complete` and the crew options do not apply, and
+    /// `--approve-proposed` is refused because only the owner approves work.
     #[arg(
         long,
         value_name = "SELECTOR",
-        conflicts_with_all = ["complete", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
+        conflicts_with_all = ["complete", "approve_proposed", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
     )]
     pub pull: Option<String>,
     /// Output as JSON.
@@ -134,7 +155,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "approve_proposed", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
     )]
     pub stop: bool,
 }
@@ -204,6 +225,7 @@ impl Execute for AutoCommand {
             self.claim_token.as_deref(),
             orbit_types::workflow::JobRunTrigger::cli(),
             self.strict_worker_containment,
+            self.approve_proposed,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,

@@ -11,7 +11,8 @@
 use orbit_core::JobRun;
 use orbit_core::application::job::run_error_step;
 use orbit_types::workflow::{
-    DrainAdmissionPass, DrainWaitingTask, JobRunState, PipelineState, ResourceThrottle,
+    DrainAdmissionPass, DrainApprovalReport, DrainWaitingTask, JobRunState, PipelineState,
+    ResourceThrottle,
 };
 use serde_json::{Value, json};
 
@@ -34,6 +35,8 @@ pub(super) struct DrainLeafSummary {
     pub(super) unreadable: usize,
     pub(super) failed_leaves: Vec<FailedLeaf>,
     pub(super) waiting: WaitingBacklog,
+    /// What an `--approve-proposed` drain approved and held [ORB-14117].
+    pub(super) approvals: Option<DrainApprovalReport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,6 +125,7 @@ impl DrainLeafSummary {
                 "excluded_total": self.waiting.excluded_total,
             },
             "resource_throttle": self.waiting.resource_throttle,
+            "approvals": self.approvals,
         })
     }
 
@@ -177,6 +181,9 @@ impl DrainLeafSummary {
         if let Some(throttle) = self.waiting.resource_throttle.as_ref() {
             lines.push(throttle_line(throttle, self.waiting.recorded_at));
         }
+        if let Some(approvals) = &self.approvals {
+            lines.extend(approval_lines(approvals));
+        }
         if self.has_starved_tasks() {
             let queued = self.waiting.queued.unwrap_or(0);
             lines.push(format!(
@@ -201,6 +208,47 @@ impl DrainLeafSummary {
         }
         lines
     }
+}
+
+/// The `Approved:` line for an `--approve-proposed` drain, then each held
+/// proposed task with the reason it stayed proposed.
+fn approval_lines(report: &DrainApprovalReport) -> Vec<String> {
+    let mut lines = vec![format!(
+        "{} {} proposed task(s) moved to backlog; {} held{}",
+        crate::output::color::bold("Approved:"),
+        report.approved_total,
+        report.held_total,
+        if report.held_by_reason.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ({})",
+                report
+                    .held_by_reason
+                    .iter()
+                    .map(|(reason, count)| format!("{reason}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
+    )];
+    for task in &report.held {
+        let task = WaitingTask {
+            task_id: task.task_id.clone(),
+            reason: task.reason.clone(),
+            blocked_by: task.blocked_by.clone(),
+            detail: task.detail.clone(),
+        };
+        lines.push(format!("  {}", waiting_line(&task, "held")));
+    }
+    let listed = report.held.len() as u64;
+    if report.held_total > listed {
+        lines.push(format!(
+            "  ... and {} more held",
+            report.held_total - listed
+        ));
+    }
+    lines
 }
 
 /// The `Throttled:` line for a drain whose last pass host pressure held.
@@ -260,6 +308,7 @@ pub(super) fn summarize_drain_leaves(
     let state = state?;
     let mut summary = DrainLeafSummary {
         waiting: last_pass_waiting(state),
+        approvals: state.drain_approvals.clone(),
         ..DrainLeafSummary::default()
     };
     for dispatch in state
@@ -298,7 +347,10 @@ pub(super) fn summarize_drain_leaves(
             _ => summary.running += 1,
         }
     }
-    if summary.admitted == 0 && summary.waiting == WaitingBacklog::default() {
+    if summary.admitted == 0
+        && summary.waiting == WaitingBacklog::default()
+        && summary.approvals.is_none()
+    {
         return None;
     }
     Some(summary)

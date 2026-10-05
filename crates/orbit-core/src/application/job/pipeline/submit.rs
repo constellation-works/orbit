@@ -311,10 +311,16 @@ impl OrbitRuntime {
             claim_token,
             trigger,
             false,
+            false,
         )
     }
 
     /// Submit a drain with a strict policy inherited by its leaf workers.
+    ///
+    /// [ORB-14117] `approve_proposed` lets every pass of this drain approve
+    /// qualifying `proposed` tasks into the backlog through the task-pilot
+    /// promotion boundary. Like `completion`, it is only ever raised by a
+    /// per-invocation operator flag.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run_with_containment(
         &self,
@@ -327,6 +333,7 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
         trigger: JobRunTrigger,
         strict_containment: bool,
+        approve_proposed: bool,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
@@ -347,6 +354,7 @@ impl OrbitRuntime {
             max_active_leaf_runs,
             completion,
             &self.canonical_allowed_crews(allowed_crews)?,
+            approve_proposed,
         )?;
         Self::set_auto_crew_overrides(&mut input, complexity_crews);
         if strict_containment {

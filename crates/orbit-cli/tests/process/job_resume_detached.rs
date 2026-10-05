@@ -231,6 +231,38 @@ mod unix {
         }
     }
 
+    /// [ORB-14117] Only the owner approves work, so a replica pull drain
+    /// refuses `--approve-proposed` before anything is submitted.
+    #[test]
+    fn auto_refuses_approve_proposed_with_pull() {
+        let fixture = Fixture::new();
+        let output = fixture
+            .command()
+            .args([
+                "run",
+                "auto",
+                "--pull",
+                "hm_owner/ws_orbit",
+                "--approve-proposed",
+            ])
+            .assert()
+            .code(2)
+            .get_output()
+            .stderr
+            .clone();
+        let stderr = String::from_utf8_lossy(&output);
+        assert!(
+            stderr.contains("--approve-proposed") && stderr.contains("--pull"),
+            "the refusal names both flags: {stderr}"
+        );
+        let history = fixture.json(&["run", "history", "--json"]);
+        assert_eq!(
+            history["runs"].as_array().map(Vec::len),
+            Some(0),
+            "nothing was submitted: {history}"
+        );
+    }
+
     /// [ORB-13987] `orbit run auto` still starts a drain whose required
     /// validation cannot use the login shell, and says so at submission.
     #[test]

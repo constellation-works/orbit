@@ -14,6 +14,7 @@ use crate::adapter::engine_host::v2_host::ci_failure::admission as ci_failure_ad
 use super::attachment_budget::{
     CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
 };
+use super::drain_promotion::{self, DrainAuthority};
 use super::persist::{
     ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, stale_task,
     task_operation_id, task_outcome,
@@ -47,10 +48,29 @@ pub(super) struct ValidatedTask {
     pub(super) task_id: String,
     pub(super) after: Vec<String>,
     pub(super) assessment: Value,
-    pub(super) admission: Option<Value>,
+    pub(super) admission: Option<Admission>,
+    /// Write `backlog` in the atomic pilot mutation itself (CI sweep).
     pub(super) promote: bool,
+    /// Appended to the pilot's history entry, e.g. a drain hold marker.
+    pub(super) history_marker: Option<String>,
     pub(super) complexity: TaskComplexity,
     pub(super) operation_id: String,
+}
+
+/// One task's promotion decision, by the authority that requested it.
+pub(super) enum Admission {
+    CiSweep(Value),
+    Drain(Value),
+}
+
+/// Who, if anyone, authorized this apply to move `proposed` work to backlog.
+enum PromotionAuthority<'a> {
+    None,
+    /// A CI sweep's exact filing record; `promotion_authorized` is the literal
+    /// authority, carried into each decision.
+    CiSweep(&'a Value, bool),
+    /// A verified `--approve-proposed` drain.
+    Drain(DrainAuthority),
 }
 
 fn material_components(
@@ -230,11 +250,37 @@ pub(in super::super) fn apply(
             "CI-sweep admission requires exactly one prepared task",
         ));
     }
+    let drain_promotion = input
+        .get("drain_promotion")
+        .filter(|value| !value.is_null());
+    let authority = match (ci_sweep_filing, drain_promotion) {
+        (Some(_), Some(_)) => {
+            return Err(action_failed(
+                action,
+                "ci_sweep_filing and drain_promotion are separate authorities; supply one",
+            ));
+        }
+        (Some(filing), None) => PromotionAuthority::CiSweep(filing, promotion_authorized),
+        (None, Some(_)) if !promotion_authorized => {
+            return Err(action_failed(
+                action,
+                "drain_promotion requires promotion_authorized",
+            ));
+        }
+        (None, Some(record)) => PromotionAuthority::Drain(DrainAuthority::verify(
+            runtime,
+            action,
+            record,
+            input.get("run_id").and_then(Value::as_str),
+        )?),
+        (None, None) => PromotionAuthority::None,
+    };
 
     let mut seen_task_ids = BTreeSet::new();
     let mut partition_decisions = Vec::with_capacity(expected_partitions.len());
     let mut task_results = Vec::with_capacity(prepared_before.len());
     let mut ci_sweep_admission = Vec::new();
+    let mut drain_approval = Vec::new();
     let mut resulting_fingerprints = BTreeMap::new();
 
     for (position, expected) in expected_partitions.iter().enumerate() {
@@ -491,41 +537,72 @@ pub(in super::super) fn apply(
                 );
             }
 
-            let admission = match ci_sweep_filing
-                .map(|filing| {
-                    ci_failure_admission::assess(
-                        action,
-                        task_id,
-                        &current,
-                        &assessment,
-                        &after,
-                        filing,
-                        promotion_authorized,
-                    )
-                })
-                .transpose()
-            {
+            let admission = match &authority {
+                PromotionAuthority::None => Ok(None),
+                PromotionAuthority::CiSweep(filing, authorized) => ci_failure_admission::assess(
+                    action,
+                    task_id,
+                    &current,
+                    &assessment,
+                    &after,
+                    filing,
+                    *authorized,
+                )
+                .map(|decision| Some(Admission::CiSweep(decision))),
+                PromotionAuthority::Drain(drain) => drain_promotion::assess(
+                    action,
+                    task_id,
+                    snapshot,
+                    &current,
+                    &assessment,
+                    &after,
+                    complexity,
+                    drain,
+                )
+                .map(|decision| Some(Admission::Drain(decision))),
+            };
+            let admission = match admission {
                 Ok(admission) => admission,
                 Err(error) => {
                     outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
                     continue;
                 }
             };
-            let promote = admission
-                .as_ref()
-                .is_some_and(|decision| decision["decision"] == "promote");
+            // The CI sweep promotes inside the atomic pilot write; a drain
+            // approves afterwards through the approve transition, so its
+            // history names the drain.
+            let promote = matches!(
+                &admission,
+                Some(Admission::CiSweep(decision)) if decision["decision"] == "promote"
+            );
+            let history_marker = match &admission {
+                Some(Admission::Drain(decision)) => drain_promotion::hold_marker(decision),
+                _ => None,
+            };
             let operation_id = task_operation_id(prepared_value, task_id, &assessment);
-            let validated = ValidatedTask {
+            let mut validated = ValidatedTask {
                 task_id: task_id.clone(),
                 after,
                 assessment,
                 admission,
                 promote,
+                history_marker,
                 complexity,
                 operation_id,
             };
 
-            match apply_task(runtime, snapshot, &validated, prepared_value, &policy) {
+            let outcome = apply_task(runtime, snapshot, &validated, prepared_value, &policy);
+            let outcome = match (outcome, &authority) {
+                (
+                    Ok(
+                        applied @ (ApplyTaskOutcome::Applied(_)
+                        | ApplyTaskOutcome::AlreadyApplied(_)),
+                    ),
+                    PromotionAuthority::Drain(drain),
+                ) => approve_promoted(runtime, &mut validated, drain).map(|()| applied),
+                (outcome, _) => outcome,
+            };
+            match outcome {
                 Ok(ApplyTaskOutcome::Applied(fingerprint)) => {
                     if let Some(fingerprint) = fingerprint {
                         resulting_fingerprints.insert(task_id.clone(), fingerprint);
@@ -538,6 +615,7 @@ pub(in super::super) fn apply(
                         "applied",
                         &mut task_results,
                         &mut ci_sweep_admission,
+                        &mut drain_approval,
                     );
                 }
                 Ok(ApplyTaskOutcome::AlreadyApplied(fingerprint)) => {
@@ -552,6 +630,7 @@ pub(in super::super) fn apply(
                         "already_applied",
                         &mut task_results,
                         &mut ci_sweep_admission,
+                        &mut drain_approval,
                     );
                 }
                 Ok(ApplyTaskOutcome::Stale(reason, detail)) => {
@@ -815,5 +894,24 @@ pub(in super::super) fn apply(
         "non_repairable_outcomes": non_repairable_outcomes,
         "tasks": task_results,
         "ci_sweep_admission": ci_sweep_admission,
+        "drain_approval": drain_approval,
     }))
+}
+
+/// Approve a drain-promoted task once its pilot write landed, recording on
+/// the decision whether this apply made the transition.
+fn approve_promoted(
+    runtime: &OrbitRuntime,
+    validated: &mut ValidatedTask,
+    drain: &DrainAuthority,
+) -> Result<(), OrbitError> {
+    let Some(Admission::Drain(decision)) = validated.admission.as_mut() else {
+        return Ok(());
+    };
+    if decision["decision"] != "promote" {
+        return Ok(());
+    }
+    let approved = drain_promotion::approve(runtime, &validated.task_id, &drain.run_id)?;
+    decision["approved"] = json!(approved);
+    Ok(())
 }

@@ -11,6 +11,7 @@
 
 mod dispatch_admission;
 mod distributed_drain;
+mod drain_approval;
 mod final_recovery;
 mod relation_auto_close;
 mod review_gate_audit;

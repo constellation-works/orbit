@@ -39,6 +39,13 @@ review-only run, or use a local shadow store. See
 - It does not promote proposed tasks, bypass repository protections, or
   authorize another window. Enabling GitHub auto-merge is not proof of merge.
 
+`orbit run auto --approve-proposed` (MCP `approve_proposed: true`) is the
+separate, default-off authorization for that drain to approve qualifying
+`proposed` tasks into the backlog on every pass, including tasks filed during
+the window. Use it only when the user authorized promotion as well as delivery.
+It cannot be combined with `--pull`. Tag a task `no-auto-approve` to keep it out
+of every automatic approval, the CI sweep's included.
+
 Use the configured base branch and ship mode unless the user requests an
 explicit override. Inspect effective inputs; `--base` and `--mode` are deliberate
 overrides. Never replace a user's branch choice with a hardcoded convention.
