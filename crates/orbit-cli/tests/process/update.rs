@@ -5,8 +5,9 @@
 //! Binary-level coverage for `orbit update`.
 //!
 //! Routing, `--check`, and admission are exercised below. Integrity — checksums,
-//! signatures, archive shape, rollback, downgrade, the install lock, and a
-//! stale writer — is exercised through the same binary in the `integrity` module.
+//! signatures, archive shape, staged version checks, downgrade, the install
+//! lock, and a stale writer — is exercised through the same binary in the
+//! `integrity` module.
 
 use std::fs;
 use std::path::{Path, PathBuf};

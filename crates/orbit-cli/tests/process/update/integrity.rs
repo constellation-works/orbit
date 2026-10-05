@@ -9,7 +9,7 @@ use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
@@ -305,20 +305,25 @@ fn an_archive_with_extra_members_including_traversal_is_rejected() {
 }
 
 #[test]
-fn a_release_that_reports_the_wrong_version_is_rolled_back() {
+fn a_mislabeled_release_is_rejected_without_attempting_the_swap() {
     let install = Install::new(None);
+    // Hold the original inode open so even a swap followed by rollback cannot
+    // pass by reusing its inode number.
+    let original = File::open(&install.executable).expect("installed executable");
     let archive = tar_gz(&candidate_script("0.0.1"));
     install.publish("99.0.0", Some(&archive), true);
 
     let output = install.run(&["update"]);
 
     assert_refused(&output, "version mismatch", "reports itself as 0.0.1");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("changed no workspace state"), "{stderr}");
     install.assert_untouched("version mismatch");
-    assert!(
-        !staging_remains(install.executable.parent().expect("install dir")),
-        "rollback left a staging file"
+    install.assert_no_backup("version mismatch");
+    assert_eq!(
+        original.metadata().expect("original inode").ino(),
+        fs::metadata(&install.executable)
+            .expect("installed inode")
+            .ino(),
+        "a mislabeled release must never be swapped into the installed path, even temporarily"
     );
 }
 

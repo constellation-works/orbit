@@ -4,9 +4,9 @@
 //! decide the target version, refuse a channel Orbit does not own, take the
 //! update lock, re-read the installed version (resolving a replaced Linux
 //! inode back to the live path), then stage and authenticate the archive,
-//! swap it in atomically, confirm the new executable reports the version
-//! that was asked for, then let *that* executable migrate `.orbit/` state,
-//! reconcile managed assets, and repoint the host clock unit.
+//! confirm the staged executable reports the requested version, swap it in
+//! atomically, verify the installed path, then let *that* executable migrate
+//! `.orbit/` state, reconcile managed assets, and repoint the host clock unit.
 //!
 //! Migration runs before managed-asset sync because a layout migration can
 //! move the directories those assets live in; converging assets first would
