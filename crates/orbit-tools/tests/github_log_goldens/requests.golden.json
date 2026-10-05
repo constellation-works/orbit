@@ -529,5 +529,51 @@
   },
   "run_jobs_request_rejects_a_non_numeric_run": {
     "error": "invalid input: invalid `run`: \"123/../../secrets\"; must be a numeric GitHub identifier"
+  },
+  "repo_view_passes_the_repository_as_a_positional_argument": {
+    "argv": [
+      "repo",
+      "view",
+      "acme/orbit",
+      "--json",
+      "name,nameWithOwner,defaultBranchRef"
+    ],
+    "cwd": null,
+    "projected": {
+      "name": "orbit",
+      "full_name": "acme/orbit",
+      "default_branch": "agent-main"
+    }
+  },
+  "repo_view_omits_the_repository_when_unset": {
+    "argv": [
+      "repo",
+      "view",
+      "--json",
+      "name,nameWithOwner,defaultBranchRef"
+    ],
+    "cwd": null,
+    "projected": {
+      "name": null,
+      "full_name": null,
+      "default_branch": null
+    }
+  },
+  "repo_view_ignores_a_blank_repository": {
+    "argv": [
+      "repo",
+      "view",
+      "--json",
+      "name,nameWithOwner,defaultBranchRef"
+    ],
+    "cwd": null,
+    "projected": {
+      "name": null,
+      "full_name": null,
+      "default_branch": null
+    }
+  },
+  "repo_view_rejects_a_repository_that_looks_like_a_flag": {
+    "error": "invalid input: invalid `repo`: \"--repo\"; must not start with `-`"
   }
 }
