@@ -52,6 +52,25 @@ pub fn provider_authentication_failure(text: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
+/// Phrases a provider CLI prints in its own failure diagnostics when the
+/// selected model has no capacity to serve the turn. Lowercase, matched
+/// case-insensitively. Codex: `Selected model is at capacity. Please try a
+/// different model.` [ORB-14149]
+const PROVIDER_CAPACITY_PHRASES: &[&str] = &["model is at capacity"];
+
+/// Whether a provider's own failure text says the selected model is at
+/// capacity, so retrying the same model immediately cannot succeed.
+///
+/// Pass only text the provider wrote about itself, as for
+/// [`provider_authentication_failure`].
+#[must_use]
+pub fn provider_capacity_exhausted(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    PROVIDER_CAPACITY_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInvocationSpec {
     pub runtime_key: &'static str,
