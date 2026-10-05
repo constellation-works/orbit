@@ -79,6 +79,24 @@ def inspect_archive(repo, archive):
     return files
 
 
+def pack_row(stdout):
+    """Return the single package row from `npm pack --json`.
+
+    npm 11 prints a one-element array; npm 12 prints an object keyed by package name.
+    """
+    rows = json.loads(stdout)
+    if isinstance(rows, dict):
+        if len(rows) != 1:
+            raise ValueError("npm pack must return exactly one package")
+        (name, row), = rows.items()
+        if not isinstance(row, dict) or row.get("name") != name:
+            raise ValueError("npm pack package key differs from its name")
+        return row
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise ValueError("npm pack must return exactly one package")
+    return rows[0]
+
+
 def validate_evidence(repo, body):
     """Recheck retained evidence against the consumer's current candidate."""
     package, versions, inputs = local_contract(repo)
@@ -98,10 +116,7 @@ def validate_evidence(repo, body):
                         "--pack-destination", str(archive.parent)]
     if pack.get("command") != expected_command or pack.get("exit_code") != 0:
         raise ValueError("npm evidence did not build the local package without scripts")
-    rows = json.loads(pack["stdout"])
-    if len(rows) != 1:
-        raise ValueError("npm pack must return exactly one package")
-    row = rows[0]
+    row = pack_row(pack["stdout"])
     if (row.get("name") != package["name"] or row.get("version") != package["version"]
             or row.get("filename") != archive.name
             or {item["path"]: item["size"] for item in row["files"]}
@@ -126,10 +141,10 @@ def main():
                         "stdout": process.stdout, "stderr": process.stderr}
         if process.returncode != 0:
             raise ValueError("local npm pack failed")
-        rows = json.loads(process.stdout)
-        if len(rows) != 1 or Path(rows[0]["filename"]).name != rows[0]["filename"]:
+        row = pack_row(process.stdout)
+        if Path(row["filename"]).name != row["filename"]:
             raise ValueError("npm pack returned an invalid archive filename")
-        archive = destination / rows[0]["filename"]
+        archive = destination / row["filename"]
         body.update({"versions": versions, "input_sha256": inputs,
                      "archive": {"path": str(archive.relative_to(repo)), "sha256": digest(archive)},
                      "packed_files": inspect_archive(repo, archive), "assertions": ASSERTIONS})

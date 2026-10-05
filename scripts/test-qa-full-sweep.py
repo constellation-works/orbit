@@ -1334,6 +1334,29 @@ def builtin_init_self_test():
             raise AssertionError("dependent scenarios ran after a failed disposable init")
 
 
+def npm_pack_shape_self_test(candidate, body):
+    """Both `npm pack --json` shapes (npm 11 array, npm 12 name-keyed object) are accepted;
+    anything but exactly one correctly named package is refused."""
+    row = json.loads(body["pack"]["stdout"])
+    row = row[0] if isinstance(row, list) else next(iter(row.values()))
+    other = {**row, "name": "@invalid/cli"}
+    shapes = {"array": ([row], True), "object": ({row["name"]: row}, True),
+              "two-packages": ([row, other], False), "empty": ([], False),
+              "object-key-mismatch": ({"@invalid/cli": row}, False),
+              "object-two-packages": ({row["name"]: row, other["name"]: other}, False)}
+    for shape, (stdout, accepted) in shapes.items():
+        variant = json.loads(json.dumps(body))
+        variant["pack"]["stdout"] = json.dumps(stdout)
+        try:
+            validate_npm_evidence(candidate, variant)
+        except ValueError:
+            if accepted:
+                raise AssertionError(f"npm pack {shape} output was refused")
+        else:
+            if not accepted:
+                raise AssertionError(f"npm pack {shape} output earned npm evidence")
+
+
 def npm_package_self_test():
     """Exercise the inventory command on disposable candidate inputs, never npm publication."""
     repo = Path(__file__).resolve().parent.parent
@@ -1394,6 +1417,7 @@ def npm_package_self_test():
                     raise AssertionError("candidate npm packaging executed a lifecycle script")
                 # The retained tarball and metadata are independently checked on consumption.
                 body = json.loads(evidence["stdout"])
+                npm_pack_shape_self_test(candidate, body)
                 body["archive"]["sha256"] = "0" * 64
                 try:
                     validate_npm_evidence(candidate, body)
