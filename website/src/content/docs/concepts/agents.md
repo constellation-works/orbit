@@ -653,7 +653,8 @@ resolved filesystem profile. `orbit init` writes the right backend for your
 host into the shipped executors:
 
 - **macOS**: `sandbox-exec`, with the profile compiled to SBPL.
-- **Linux**: Bubblewrap, from a trusted `/usr/bin/bwrap`. It confines writes to
+- **Linux**: Bubblewrap, from a trusted `/usr/bin/bwrap` or, when that is
+  missing or too old, Orbit's root-owned bundled build. It confines writes to
   the resolved profile and hides well-known credential locations such as
   `~/.ssh` and `~/.aws`. Other host reads and network access stay open, so it
   is not a read-rule or network boundary. Dispatch **fails closed** if `bwrap`

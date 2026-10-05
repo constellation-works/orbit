@@ -455,6 +455,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         Column::new("FOUND").fixed(),
         Column::new("SANDBOX").fixed(),
         Column::new("READY").fixed(),
+        Column::new("BWRAP").fixed(),
         Column::new("LAUNCHER").path(),
     ])
     .empty_message("no executors defined");
@@ -470,6 +471,9 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         let readiness = (sandbox == "linux-bwrap")
             .then_some(linux_probe.as_ref())
             .flatten();
+        // Which trusted Bubblewrap the probe selected — the host's or the
+        // one bundled with Orbit — and its version once it passed.
+        let wrapper = readiness.and_then(|probe| probe.source.map(|source| (source, probe)));
         values.push(json!({
             "name": def.name,
             "executor_type": def.executor_type.to_string(),
@@ -480,6 +484,9 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             "sandbox": def.sandbox,
             "sandbox_ready": readiness.map(|probe| probe.available),
             "sandbox_readiness_detail": readiness.map(|probe| probe.detail.as_str()),
+            "sandbox_wrapper": wrapper.map(|(source, _)| source.as_str()),
+            "sandbox_wrapper_path": wrapper.map(|(_, probe)| probe.trusted_path.as_str()),
+            "sandbox_wrapper_version": wrapper.and_then(|(_, probe)| probe.version.as_deref()),
             "allow_fallback": def.allow_fallback,
         }));
         table.add_row(vec![
@@ -496,6 +503,13 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             readiness.map_or_else(
                 || "-".to_string(),
                 |probe| if probe.available { "yes" } else { "no" }.to_string(),
+            ),
+            wrapper.map_or_else(
+                || "-".to_string(),
+                |(source, probe)| match &probe.version {
+                    Some(version) => format!("{} {version}", source.as_str()),
+                    None => source.as_str().to_string(),
+                },
             ),
             launcher.map_or_else(|| "-".to_string(), |path| path.display().to_string()),
         ]);

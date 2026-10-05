@@ -28,6 +28,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tar.workspace = true
+tempfile.workspace = true
 toml.workspace = true
 tracing.workspace = true
 
@@ -37,4 +38,3 @@ libc.workspace = true
 [dev-dependencies]
 rsa.workspace = true
 sha2.workspace = true
-tempfile.workspace = true

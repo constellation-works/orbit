@@ -42,7 +42,7 @@ Agent filesystem access is scoped by an `fsProfile` (`read` and `modify` globs) 
 
 | What runs | macOS | Linux |
 |---|---|---|
-| **Agent CLIs** (Claude Code, Codex, …) | `sandbox-exec`. Writes are confined. Reads are allowed everywhere except a credential denylist. Network is open. | Bubblewrap (`/usr/bin/bwrap`). Writes are confined by the `modify` policy. Host reads and network stay open. Fails closed if bwrap is missing, unless the executor sets `allow_fallback: true`. |
+| **Agent CLIs** (Claude Code, Codex, …) | `sandbox-exec`. Writes are confined. Reads are allowed everywhere except a credential denylist. Network is open. | Bubblewrap (`/usr/bin/bwrap`, or Orbit's signed bundled build at the root-owned `/usr/local/libexec/orbit/bwrap` when the host's is missing or lacks `--bind-fd`). Writes are confined by the `modify` policy. Host reads and network stay open. Fails closed if bwrap is missing, unless the executor sets `allow_fallback: true`. |
 | **`proc.spawn` in activities** | Refused, with a capability error | Landlock ruleset applied between `fork` and `exec`, covering the child and all its descendants. Refused on kernels without Landlock ABI 2. |
 
 **Credential denylist (macOS reads).** The denylist covers `~/.ssh`, `~/.aws`, `~/.config/gh`, the user and system Keychains, browser profile stores, and Cargo's publish token. It is known to be incomplete (for example, `~/.netrc`, `~/.git-credentials`, `~/.gnupg`, `~/.docker/config.json`, `~/.kube/config`, `~/.npmrc`, and cloud-CLI caches aren't on it). With network open, treat macOS read scoping as advisory, not a security boundary.

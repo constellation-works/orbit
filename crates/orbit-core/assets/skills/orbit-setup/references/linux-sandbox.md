@@ -9,7 +9,10 @@ operation runs during dispatch.
 Orbit checks the trusted `/usr/bin/bwrap` for `--bind-fd` and runs its
 namespace-and-mount probe as the intended user. A ready host is left alone.
 When needed, onboarding uses the distribution package manager to install
-Bubblewrap. On Ubuntu 24.04, it loads only the packaged
+Bubblewrap. If the host still has no Bubblewrap with `--bind-fd`, it installs
+the signed, static Bubblewrap published with the Orbit release, root-owned at
+`/usr/local/libexec/orbit/bwrap`; it is never setuid and never replaces a host
+`bwrap` that qualifies. On Ubuntu 24.04, it loads only the packaged
 `bwrap-userns-restrict` AppArmor profile, and refuses to overwrite a custom
 profile. Interactive onboarding uses the normal administrator authentication
 prompt. `orbit init --non-interactive` requires root or already-authorized
@@ -22,13 +25,16 @@ without touching the host; `linux-bwrap` dispatch stays fail-closed until
 
 Automatic preparation code paths: Ubuntu 24.04, Debian 13, Fedora 43–45,
 Enterprise Linux 10 (`rhel`, `rocky`, `almalinux`, `centos`) and Arch. Older or
-unknown versions receive an explicit unsupported result when preparation is
-needed. Package availability has been checked; native package/security-policy
+unknown versions, such as Ubuntu 22.04, get the bundled Bubblewrap when theirs
+is missing or lacks `--bind-fd`, and an explicit unsupported result for any
+other failure. Package availability has been checked; native package/security-policy
 and sandboxed subprocess integration has **not yet been validated** for these
 rows. The actual user-scoped capability probe is always the readiness gate.
 
 Use `orbit doctor providers --json` to compare configured `sandbox` with
-`sandbox_ready` and `sandbox_readiness_detail`. A false readiness result can
+`sandbox_ready` and `sandbox_readiness_detail`; `sandbox_wrapper` and
+`sandbox_wrapper_version` say whether the host or bundled Bubblewrap is in use.
+`orbit update` refreshes an installed bundled Bubblewrap. A false readiness result can
 mean missing privileges, package failure, incompatible Bubblewrap, a custom
 profile conflict, AppArmor denial, or an enclosing container/kernel blocking
 user namespaces. Correct the reported cause and rerun `orbit init`. Do not

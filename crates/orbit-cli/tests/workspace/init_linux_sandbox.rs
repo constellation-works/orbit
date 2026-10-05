@@ -262,6 +262,16 @@ fn linux_bwrap_dispatch_after_warned_init_refuses_to_launch_the_provider() {
         .unwrap();
     assert_eq!(codex["cli_available"], true, "{codex}");
     assert_eq!(codex["sandbox_ready"], false, "{codex}");
+    // Doctor names the trusted Bubblewrap the probe selected, never another.
+    match codex["sandbox_wrapper"].as_str() {
+        None => assert!(codex["sandbox_wrapper_path"].is_null(), "{codex}"),
+        Some("host") => assert_eq!(codex["sandbox_wrapper_path"], "/usr/bin/bwrap", "{codex}"),
+        Some("bundled") => assert_eq!(
+            codex["sandbox_wrapper_path"], "/usr/local/libexec/orbit/bwrap",
+            "{codex}"
+        ),
+        Some(other) => panic!("unexpected Bubblewrap source {other}: {codex}"),
+    }
     assert_eq!(codex["allow_fallback"], false, "{codex}");
     fs::write(root.join("resources/jobs/sandbox_probe.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: sandbox_probe\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: probe\n      spec:\n        type: agent_loop\n        description: Sandbox refusal probe\n        instruction: Return the fixture response\n        provider: codex\n        backend: cli\n        wall_clock_timeout_seconds: 5\n").unwrap();
     let output = fixture

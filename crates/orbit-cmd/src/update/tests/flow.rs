@@ -287,3 +287,40 @@ fn a_replacement_without_admission_protocol_is_refused_before_installation() {
     );
     assert!(fixture.invocations().is_empty());
 }
+
+#[test]
+fn an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release() {
+    if crate::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release,
+    )) {
+        return;
+    }
+
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    environment.bundled_bwrap_installed = true;
+
+    let report = run_update(&environment, &request()).expect("update");
+
+    assert_eq!(report.exit_code(), 0, "{report:?}");
+    let refresh = "0.19.0: init --host-prerequisites-only --non-interactive";
+    assert_eq!(
+        fixture.invocations().last().map(String::as_str),
+        Some(refresh),
+        "the replacement executable must refresh the bundled Bubblewrap, without --root"
+    );
+
+    // A host without one installed never has its Bubblewrap touched.
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    run_update(&fixture.environment(), &request()).expect("update");
+    assert!(
+        !fixture
+            .invocations()
+            .iter()
+            .any(|line| line.contains("init")),
+        "{:?}",
+        fixture.invocations()
+    );
+}

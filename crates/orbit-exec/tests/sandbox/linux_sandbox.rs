@@ -7,11 +7,12 @@ use std::process::Stdio;
 
 use orbit_common::OrbitError;
 use orbit_exec::{
-    LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMountAuthority,
-    LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path,
-    bwrap_program_for_audit, compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority,
-    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
-    probe_bwrap, spawn_under_linux_bwrap,
+    BUNDLED_BWRAP_PATH, HOST_BWRAP_PATH, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT,
+    LinuxBwrapMountAuthority, LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, WriteAnchorKind,
+    bwrap_path, bwrap_program_for_audit, compile_linux_bwrap_argv,
+    compile_linux_bwrap_argv_with_authority, linux_bwrap_write_grant_diagnostic,
+    linux_bwrap_write_grants, prepare_linux_bwrap_write_grants, probe_bwrap,
+    spawn_under_linux_bwrap,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -212,10 +213,67 @@ fn kernel_descriptor_mount_never_writes_the_replacement_object() {
 
 #[test]
 fn trusted_resolution_never_consults_path() {
-    assert_eq!(bwrap_program_for_audit(), "/usr/bin/bwrap");
+    let program = bwrap_program_for_audit();
+    assert!(
+        [HOST_BWRAP_PATH, BUNDLED_BWRAP_PATH].contains(&program),
+        "the wrapper must be one of the two fixed trusted paths: {program}"
+    );
     if let Some(path) = bwrap_path() {
-        assert_eq!(path.to_string_lossy(), "/usr/bin/bwrap");
+        assert_eq!(path.to_string_lossy(), program);
     }
+}
+
+/// The wrapper's trust rests on it being root-owned under root-owned
+/// directories: the sandboxed agent runs as the invoking user, so even a
+/// policy that binds the wrapper's own directory writable cannot let it
+/// rewrite or replace the binary that confines the next dispatch.
+#[test]
+fn bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writable() {
+    let probe = probe_bwrap();
+    if !probe.available {
+        println!("skipping real Bubblewrap test: {}", probe.detail);
+        return;
+    }
+    let wrapper = std::path::PathBuf::from(&probe.trusted_path);
+    let directory = wrapper.parent().expect("wrapper directory");
+    let before = std::fs::read(&wrapper).expect("read wrapper");
+    let resolved = profile(vec![format!("{}/**", directory.display())]);
+    let script = format!(
+        "if : >> '{w}'; then echo appended; fi; \
+         if mv -f '{w}' '{w}.moved'; then echo renamed; fi; \
+         if cp /bin/sh '{w}'; then echo replaced; fi",
+        w = wrapper.display()
+    );
+    let plan = compile_linux_bwrap_argv(
+        &resolved,
+        "/bin/sh",
+        &["-c".to_string(), script],
+        None,
+        false,
+    )
+    .expect("compile");
+    let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
+    let output = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan: &plan,
+        env: &env,
+        cwd: None,
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+    })
+    .expect("spawn")
+    .wait_with_output()
+    .expect("wait");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim().is_empty(),
+        "a sandboxed child modified the trusted wrapper: {stdout}"
+    );
+    assert_eq!(
+        std::fs::read(&wrapper).expect("reread wrapper"),
+        before,
+        "the trusted wrapper changed on the host"
+    );
 }
 
 /// A worktree-shaped profile: broad writable root, the blanket `.orbit` deny,

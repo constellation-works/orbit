@@ -41,6 +41,9 @@ pub struct UpdateEnvironment {
     pub today: NaiveDate,
     /// The initialized Orbit workspace selected for convergence, if any.
     pub workspace: Option<UpdateWorkspace>,
+    /// Whether this Linux host runs the Bubblewrap bundled with Orbit, which
+    /// the update then refreshes along with the executable.
+    pub bundled_bwrap_installed: bool,
 }
 
 /// The process location and resolved root that update subprocesses must retain.
@@ -85,6 +88,11 @@ impl UpdateEnvironment {
             trusted_keys: super::trust::trusted_keys_from_env()?,
             today: chrono::Utc::now().date_naive(),
             workspace,
+            bundled_bwrap_installed: cfg!(target_os = "linux")
+                && std::fs::symlink_metadata(
+                    orbit_core::bootstrap::linux_sandbox_host::BUNDLED_BWRAP_PATH,
+                )
+                .is_ok(),
         })
     }
 }

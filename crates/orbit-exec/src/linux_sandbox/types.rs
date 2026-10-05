@@ -13,6 +13,10 @@ pub struct BwrapProbeOutcome {
     pub available: bool,
     pub trusted_path: String,
     pub detail: String,
+    /// Which trusted binary the probe ran, once one was selected.
+    pub source: Option<BwrapSource>,
+    /// `bwrap --version` of a binary that passed the capability probe.
+    pub version: Option<String>,
 }
 
 #[derive(Debug)]

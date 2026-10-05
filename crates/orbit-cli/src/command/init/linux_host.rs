@@ -1,5 +1,10 @@
 //! Explicit Linux host preparation for `orbit init` and the shell installer.
 //! Package/profile changes never run during dispatch or npm postinstall.
+//!
+//! The distribution's Bubblewrap is preferred. When it is missing or lacks
+//! `--bind-fd` after any supported package install, the static Bubblewrap
+//! signed into this Orbit release is installed root-owned at
+//! [`BUNDLED_BWRAP_PATH`]; executors trust exactly those two paths.
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -9,11 +14,14 @@ use orbit_core::OrbitError;
 
 use crate::output::sink::stderr_is_terminal;
 use orbit_core::bootstrap::linux_sandbox_host::{
-    BwrapProbeOutcome, probe_bwrap_fresh, probe_bwrap_fresh_for_user,
+    BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource, probe_bwrap_fresh,
+    probe_bwrap_fresh_for_user,
 };
 
 const PROFILE_SOURCE: &str = "/usr/share/apparmor/extra-profiles/bwrap-userns-restrict";
 const PROFILE_TARGET: &str = "/etc/apparmor.d/bwrap-userns-restrict";
+const INSTALL: &str = "/usr/bin/install";
+const REMOVE: &str = "/usr/bin/rm";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PackageManager {
@@ -26,34 +34,41 @@ enum PackageManager {
 struct Distribution {
     id: String,
     version: String,
-    manager: PackageManager,
+    /// `None` for a distribution without an automatic package path; only the
+    /// bundled Bubblewrap can prepare it.
+    manager: Option<PackageManager>,
     ubuntu_profile: bool,
 }
 
 impl Distribution {
-    fn detect(release: &str) -> Result<Self, OrbitError> {
+    fn detect(release: &str) -> Self {
         let id = os_release_value(release, "ID").unwrap_or_default();
         let version = os_release_value(release, "VERSION_ID").unwrap_or_default();
         let major = version.split('.').next().unwrap_or_default();
         let (manager, ubuntu_profile) = match (id.as_str(), version.as_str(), major) {
-            ("ubuntu", "24.04", _) => (PackageManager::Apt, true),
-            ("debian", "13", _) => (PackageManager::Apt, false),
-            ("fedora", _, "43" | "44" | "45") => (PackageManager::Dnf, false),
-            ("rhel" | "rocky" | "almalinux" | "centos", _, "10") => (PackageManager::Dnf, false),
-            ("arch", _, _) => (PackageManager::Pacman, false),
-            _ => {
-                return Err(OrbitError::Execution(format!(
-                    "Linux sandbox preparation does not support distribution {id} {version}; \
-                     no package or security-policy changes were made. See docs/runbooks/linux-sandbox.md"
-                )));
+            ("ubuntu", "24.04", _) => (Some(PackageManager::Apt), true),
+            ("debian", "13", _) => (Some(PackageManager::Apt), false),
+            ("fedora", _, "43" | "44" | "45") => (Some(PackageManager::Dnf), false),
+            ("rhel" | "rocky" | "almalinux" | "centos", _, "10") => {
+                (Some(PackageManager::Dnf), false)
             }
+            ("arch", _, _) => (Some(PackageManager::Pacman), false),
+            _ => (None, false),
         };
-        Ok(Self {
+        Self {
             id,
             version,
             manager,
             ubuntu_profile,
-        })
+        }
+    }
+
+    fn unsupported(&self, detail: &str) -> OrbitError {
+        OrbitError::Execution(format!(
+            "Linux sandbox preparation does not support distribution {} {} for this failure: {detail}; \
+             no package or security-policy changes were made. See docs/runbooks/linux-sandbox.md",
+            self.id, self.version
+        ))
     }
 }
 
@@ -73,11 +88,18 @@ trait Host {
     fn has_command(&self, path: &str) -> bool;
     fn authorize(&mut self, non_interactive: bool) -> Result<(), OrbitError>;
     fn run_privileged(&mut self, path: &str, args: &[&str]) -> Result<(), OrbitError>;
+    /// Authenticate this release's bundled Bubblewrap and stage it privately,
+    /// returning the staged path and its signed SHA-256.
+    fn stage_bundled(&mut self) -> Result<(String, String), OrbitError>;
+    /// SHA-256 of an installed file, `None` when it is absent.
+    fn file_sha256(&self, path: &str) -> Result<Option<String>, OrbitError>;
 }
 
 struct RealHost {
     authorized: bool,
     probe_user: Option<(u32, u32)>,
+    /// Kept until preparation ends so the staged file outlives `install`.
+    staged: Option<orbit_cmd::update::bundled_bwrap::StagedBwrap>,
 }
 
 impl RealHost {
@@ -102,6 +124,7 @@ impl RealHost {
         Ok(Self {
             authorized: false,
             probe_user,
+            staged: None,
         })
     }
 }
@@ -232,6 +255,20 @@ impl Host for RealHost {
         }
         Ok(())
     }
+
+    fn stage_bundled(&mut self) -> Result<(String, String), OrbitError> {
+        let staged = orbit_cmd::update::bundled_bwrap::stage_bundled_bwrap_for_this_release()?;
+        let staged = self.staged.insert(staged);
+        Ok((staged.path().display().to_string(), staged.sha256.clone()))
+    }
+
+    fn file_sha256(&self, path: &str) -> Result<Option<String>, OrbitError> {
+        match fs::read(path) {
+            Ok(bytes) => Ok(Some(orbit_common::security::release::sha256_hex(&bytes))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(OrbitError::Execution(format!("read {path}: {error}"))),
+        }
+    }
 }
 
 fn run_privileged(
@@ -247,9 +284,10 @@ fn run_privileged(
 fn install_packages(
     host: &mut impl Host,
     distro: &Distribution,
+    manager: PackageManager,
     commands: &mut Vec<String>,
 ) -> Result<(), OrbitError> {
-    match distro.manager {
+    match manager {
         PackageManager::Apt => {
             let apt = "/usr/bin/apt-get";
             require_command(host, apt)?;
@@ -325,6 +363,81 @@ fn prepare_with(host: &mut impl Host, non_interactive: bool) -> Result<String, O
     })
 }
 
+/// The probe found no wrapper it could use: the host's is missing or lacks
+/// `--bind-fd`, and no capable bundled binary is installed. A capable wrapper
+/// is the remedy; every other failure is host policy.
+fn needs_capable_wrapper(detail: &str) -> bool {
+    detail.contains("not available at")
+        || detail.contains("does not support the required --bind-fd")
+}
+
+/// A probe that passed on a bundled binary older than this release's pin.
+fn stale_bundled(probe: &BwrapProbeOutcome) -> Option<&str> {
+    (probe.source == Some(BwrapSource::Bundled))
+        .then(|| probe.version.as_deref().unwrap_or("an unknown version"))
+        .filter(|version| *version != BUNDLED_BWRAP_VERSION)
+}
+
+/// Which wrapper a passing probe ran, for the readiness reason.
+fn wrapper_in_use(probe: &BwrapProbeOutcome) -> String {
+    let source = probe.source.map_or("host", BwrapSource::as_str);
+    match &probe.version {
+        Some(version) => format!("{source} Bubblewrap {version} at {}", probe.trusted_path),
+        None => format!("{source} Bubblewrap at {}", probe.trusted_path),
+    }
+}
+
+/// Authenticate this release's bundled Bubblewrap, then install it root-owned
+/// at its fixed path. Verification runs before any sudo prompt, and the
+/// installed bytes are re-hashed so nothing that changed the staged file
+/// after verification can be left in place.
+fn install_bundled(
+    host: &mut impl Host,
+    non_interactive: bool,
+    commands: &mut Vec<String>,
+) -> Result<(), OrbitError> {
+    let (staged, sha256) = host.stage_bundled().map_err(|error| {
+        OrbitError::Execution(format!(
+            "no capable Bubblewrap is installed and the bundled one cannot be used: {error}"
+        ))
+    })?;
+    host.authorize(non_interactive)?;
+    require_command(host, INSTALL)?;
+    let directory = std::path::Path::new(BUNDLED_BWRAP_PATH)
+        .parent()
+        .and_then(std::path::Path::to_str)
+        .unwrap_or("/");
+    run_privileged(
+        host,
+        commands,
+        INSTALL,
+        &["-d", "-o", "root", "-g", "root", "-m", "0755", directory],
+    )?;
+    run_privileged(
+        host,
+        commands,
+        INSTALL,
+        &[
+            "-o",
+            "root",
+            "-g",
+            "root",
+            "-m",
+            "0755",
+            &staged,
+            BUNDLED_BWRAP_PATH,
+        ],
+    )?;
+    if host.file_sha256(BUNDLED_BWRAP_PATH)?.as_deref() == Some(sha256.as_str()) {
+        return Ok(());
+    }
+    require_command(host, REMOVE)?;
+    run_privileged(host, commands, REMOVE, &["-f", BUNDLED_BWRAP_PATH])?;
+    Err(OrbitError::Execution(format!(
+        "the installed {BUNDLED_BWRAP_PATH} does not match the signed release digest {sha256}; removed it"
+    )))
+}
+
 fn prepare_inner(
     host: &mut impl Host,
     non_interactive: bool,
@@ -332,7 +445,29 @@ fn prepare_inner(
 ) -> Result<String, OrbitError> {
     let initial = host.probe();
     if initial.available {
-        return Ok("ready for the current unprivileged user; no host changes needed".to_string());
+        if let Some(stale) = stale_bundled(&initial).map(str::to_string) {
+            install_bundled(host, non_interactive, commands).map_err(|error| {
+                OrbitError::Execution(format!(
+                    "the sandbox works with bundled Bubblewrap {stale}, but refreshing it to \
+                     {BUNDLED_BWRAP_VERSION} failed: {error}"
+                ))
+            })?;
+            let refreshed = host.probe();
+            if !refreshed.available {
+                return Err(OrbitError::Execution(format!(
+                    "the refreshed bundled Bubblewrap fails the capability probe: {}",
+                    refreshed.detail
+                )));
+            }
+            return Ok(format!(
+                "ready for the current unprivileged user with the {}; refreshed from {stale}",
+                wrapper_in_use(&refreshed)
+            ));
+        }
+        return Ok(format!(
+            "ready for the current unprivileged user with the {}; no host changes needed",
+            wrapper_in_use(&initial)
+        ));
     }
     // A package/profile install cannot grant the missing outer authority.
     if namespace_creation_denied(&initial.detail) {
@@ -342,21 +477,31 @@ fn prepare_inner(
             initial.detail
         )));
     }
-    let distro = Distribution::detect(&host.os_release()?)?;
-    let needs_package = initial.detail.contains("not available at")
-        || initial
-            .detail
-            .contains("does not support the required --bind-fd");
+    let distro = Distribution::detect(&host.os_release()?);
+    let needs_package = needs_capable_wrapper(&initial.detail);
+    let Some(manager) = distro.manager else {
+        if !needs_package {
+            return Err(distro.unsupported(&initial.detail));
+        }
+        install_bundled(host, non_interactive, commands)?;
+        return ready_after_bundled_install(host, &distro);
+    };
     if needs_package {
         host.authorize(non_interactive)?;
-        install_packages(host, &distro, commands)?;
+        install_packages(host, &distro, manager, commands)?;
     }
     let mut current = host.probe();
     if current.available {
         return Ok(format!(
-            "ready for the current unprivileged user on {} {}; Bubblewrap capability probe passed",
-            distro.id, distro.version
+            "ready for the current unprivileged user on {} {} with the {}; Bubblewrap capability probe passed",
+            distro.id,
+            distro.version,
+            wrapper_in_use(&current)
         ));
+    }
+    if needs_capable_wrapper(&current.detail) {
+        install_bundled(host, non_interactive, commands)?;
+        return ready_after_bundled_install(host, &distro);
     }
     if namespace_creation_denied(&current.detail) {
         return Err(OrbitError::Execution(format!(
@@ -376,7 +521,7 @@ fn prepare_inner(
         let mut source = host.root_file(PROFILE_SOURCE)?;
         if source.is_none() && !needs_package {
             host.authorize(non_interactive)?;
-            install_packages(host, &distro, commands)?;
+            install_packages(host, &distro, manager, commands)?;
             source = host.root_file(PROFILE_SOURCE)?;
             current = host.probe();
             if current.available {
@@ -444,6 +589,26 @@ fn prepare_inner(
         "ready for the current unprivileged user on {} {}; Bubblewrap capability probe passed",
         distro.id, distro.version
     ))
+}
+
+fn ready_after_bundled_install(
+    host: &mut impl Host,
+    distro: &Distribution,
+) -> Result<String, OrbitError> {
+    let probe = host.probe();
+    if probe.available {
+        return Ok(format!(
+            "ready for the current unprivileged user on {} {} with the {}; installed from this Orbit release",
+            distro.id,
+            distro.version,
+            wrapper_in_use(&probe)
+        ));
+    }
+    Err(OrbitError::Execution(format!(
+        "Linux sandbox is not ready for the current unprivileged user on {} {} after installing the bundled Bubblewrap: {}; \
+         check kernel/container user-namespace policy",
+        distro.id, distro.version, probe.detail
+    )))
 }
 
 pub(super) fn prepare(non_interactive: bool) -> Result<String, OrbitError> {

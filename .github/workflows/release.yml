@@ -89,9 +89,64 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  build-bundled-bwrap:
+    # Static Bubblewrap for Linux hosts whose own bwrap is missing or lacks
+    # --bind-fd (docs/runbooks/linux-sandbox.md). Built natively per
+    # architecture inside a digest-pinned Alpine image, so the result is musl
+    # and fully static; scripts/build-bundled-bwrap.sh pins the sources. The
+    # build runs through `docker run` rather than a job container because
+    # JavaScript actions cannot run inside an Alpine container on arm64.
+    name: Build bundled Bubblewrap ${{ matrix.arch }}
+    runs-on: ${{ matrix.runs_on }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs_on: ubuntu-24.04
+            publishes_sources: true
+          - arch: aarch64
+            runs_on: ubuntu-24.04-arm
+            publishes_sources: false
+    env:
+      BUILD_IMAGE: alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build static Bubblewrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e OWNER="$(id -u):$(id -g)" \
+            -v "$PWD:/src" -w /src \
+            "$BUILD_IMAGE" \
+            sh -euc '
+              apk add --no-cache build-base curl linux-headers meson pkgconf tar xz
+              sh scripts/build-bundled-bwrap.sh dist
+              chown -R "$OWNER" dist
+            '
+          if [ "${{ matrix.publishes_sources }}" != "true" ]; then
+            # Sources, notice and recipe are identical across architectures;
+            # one build publishes them.
+            rm -f dist/*.tar.xz dist/orbit-bwrap-NOTICE.txt dist/orbit-bwrap-build.sh
+          fi
+          cat "dist/orbit-bwrap-${{ matrix.arch }}-linux.buildinfo"
+          ls -lh dist
+
+      - name: Upload bundled Bubblewrap
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-bwrap-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
   publish-release:
     name: Publish GitHub release
-    needs: build-release
+    needs: [build-release, build-bundled-bwrap]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -124,6 +179,12 @@ jobs:
               orbit-aarch64-unknown-linux-gnu.tar.gz
               orbit-x86_64-apple-darwin.tar.gz
               orbit-x86_64-unknown-linux-gnu.tar.gz
+              orbit-bwrap-x86_64-linux
+              orbit-bwrap-x86_64-linux.buildinfo
+              orbit-bwrap-aarch64-linux
+              orbit-bwrap-aarch64-linux.buildinfo
+              orbit-bwrap-NOTICE.txt
+              orbit-bwrap-build.sh
             )
             for asset in "${expected_assets[@]}"; do
               [ -f "$asset" ] || {
@@ -131,7 +192,16 @@ jobs:
                 exit 1
               }
             done
-            sha256sum "${expected_assets[@]}" | sort -k 2 > orbit-checksums.txt
+            # The exact Bubblewrap and libcap sources the bundled binaries
+            # were built from; their versions live in the build recipe.
+            source_assets=(bubblewrap-*.tar.xz libcap-*.tar.xz)
+            for asset in "${source_assets[@]}"; do
+              [ -f "$asset" ] || {
+                echo "missing bundled Bubblewrap source: $asset" >&2
+                exit 1
+              }
+            done
+            sha256sum "${expected_assets[@]}" "${source_assets[@]}" | sort -k 2 > orbit-checksums.txt
           )
           cat dist/orbit-checksums.txt
 
@@ -192,6 +262,9 @@ jobs:
             dist/orbit-aarch64-unknown-linux-gnu.tar.gz
             dist/orbit-x86_64-apple-darwin.tar.gz
             dist/orbit-x86_64-unknown-linux-gnu.tar.gz
+            dist/orbit-bwrap-*
+            dist/bubblewrap-*.tar.xz
+            dist/libcap-*.tar.xz
             dist/orbit-checksums.txt
             dist/orbit-checksums.txt.sig
           generate_release_notes: true
@@ -340,3 +413,23 @@ jobs:
           export PATH="$INSTALL_DIR:$PATH"
           orbit --version
           orbit search --help
+
+  smoke-install-ubuntu-2204-bundled-bwrap:
+    # Ubuntu 22.04 packages a Bubblewrap without --bind-fd (or none at all on
+    # the runner image), so the installer must fall back to the signed
+    # bundled binary and the unprivileged capability probe must then pass.
+    name: Smoke test bundled Bubblewrap on Ubuntu 22.04
+    needs: publish-release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Run installer
+        shell: bash
+        env:
+          INSTALL_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh
+        run: |
+          set -euo pipefail
+          INSTALL_DIR="$RUNNER_TEMP/orbit/bin"
+          curl -sSfL "$INSTALL_URL" | ORBIT_INSTALL_DIR="$INSTALL_DIR" ORBIT_VERSION="${GITHUB_REF_NAME}" sh 2>&1 | tee "$RUNNER_TEMP/install.log"
+          grep -F "bundled Bubblewrap" "$RUNNER_TEMP/install.log"
+          test "$(stat -c '%U:%G %a' /usr/local/libexec/orbit/bwrap)" = "root:root 755"
+          /usr/local/libexec/orbit/bwrap --version

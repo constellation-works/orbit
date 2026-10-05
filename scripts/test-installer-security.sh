@@ -55,6 +55,9 @@ fi
 if [ -n "${ORBIT_TEST_CALLS:-}" ]; then
   printf '%s\n' "$*" >> "$ORBIT_TEST_CALLS"
 fi
+if [ -n "${ORBIT_TEST_MIRROR_LISTING:-}" ] && [ "${1:-}" = init ]; then
+  (cd "$ORBIT_UPDATE_RELEASE_DIR" && find . -type f | sort) > "$ORBIT_TEST_MIRROR_LISTING"
+fi
 if [ "${ORBIT_TEST_FAIL_HOST_PREP:-0}" = 1 ] && [ "${1:-}" = init ]; then
   exit 1
 fi
@@ -260,6 +263,25 @@ test -f "$good_marker"
 if [[ "$TARGET" == *-unknown-linux-gnu ]]; then
   if ! grep -Fxq 'init --host-prerequisites-only --non-interactive' "$good_marker.calls"; then
     echo "FAIL: shell installer did not invoke Linux onboarding" >&2
+    exit 1
+  fi
+  # A custom base URL is mirrored for preparation, carrying the bundled
+  # Bubblewrap the signed manifest lists for this architecture.
+  case "$TARGET" in
+    x86_64-*) bwrap_asset=orbit-bwrap-x86_64-linux ;;
+    *) bwrap_asset=orbit-bwrap-aarch64-linux ;;
+  esac
+  bwrap_release="$TMP_ROOT/bwrap-release"
+  cp -R "$good_release" "$bwrap_release"
+  printf '%s\n' "not really bwrap" > "$bwrap_release/$bwrap_asset"
+  printf '%s  %s\n' "$(sha256_file "$bwrap_release/$bwrap_asset")" "$bwrap_asset" >> "$bwrap_release/orbit-checksums.txt"
+  sign_checksums "$CURRENT_PRIVATE_KEY" "$bwrap_release/orbit-checksums.txt" "$bwrap_release/orbit-checksums.txt.sig"
+  ORBIT_TEST_MIRROR_LISTING="$TMP_ROOT/mirror-listing" \
+    run_shell_install "$bwrap_release" "$TMP_ROOT/install-bwrap" "$TMP_ROOT/marker-bwrap" > "$TMP_ROOT/bwrap.log" 2>&1
+  expected_listing="$(printf './v0.0.0/%s\n' "$bwrap_asset" orbit-checksums.txt orbit-checksums.txt.sig | sort)"
+  if [ "$(cat "$TMP_ROOT/mirror-listing")" != "$expected_listing" ]; then
+    echo "FAIL: shell installer did not mirror the bundled Bubblewrap for Linux onboarding" >&2
+    cat "$TMP_ROOT/mirror-listing" >&2
     exit 1
   fi
   if ORBIT_TEST_FAIL_HOST_PREP=1 run_shell_install "$good_release" "$TMP_ROOT/install-prep-failure" "$TMP_ROOT/marker-prep-failure" > "$TMP_ROOT/prep-failure.log" 2>&1; then
