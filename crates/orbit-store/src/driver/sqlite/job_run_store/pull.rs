@@ -4,7 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunIdRole};
+use orbit_types::workflow::{
+    JobRun, JobRunState, PipelineState, REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming,
+    RunIdRole,
+};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::queries::{
@@ -448,6 +451,30 @@ fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
     }
 }
 
+/// The before-PR review admission a claimed leaf runs under: the owner's
+/// captured contract, when the ship contract carries one [ORB-13908].
+fn claim_review_admission(
+    request: &AdmissionRequest,
+    now: chrono::DateTime<Utc>,
+) -> Option<ReviewAdmission> {
+    let review = request.ship.review.as_ref()?;
+    Some(ReviewAdmission {
+        contract_version: review.contract_version,
+        // The claim's contract is resolved by the owner and carries no
+        // operation policy version of its own.
+        policy_version: 0,
+        timing: ReviewTiming::BeforePr,
+        timing_source: CLAIM_SOURCE.into(),
+        crew: review.crew.clone(),
+        crew_source: CLAIM_SOURCE.into(),
+        budget: review.budget,
+        captured_at: now,
+    })
+}
+
+/// Provenance label of a review admission seeded from a claim.
+const CLAIM_SOURCE: &str = "claim";
+
 pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
 pub(crate) const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
 
@@ -492,9 +519,9 @@ pub(super) fn allocate(
     {
         return Err(invalid("followers cannot execute owner-local leaves"));
     }
-    if request.ship.before_pr || request.caller_before_pr {
+    if request.ship.before_pr && !(request.review_gate && request.ship.mode == "pr") {
         return Err(invalid(
-            "pulled leaves require review.before_pr off on both endpoints",
+            "an owner with review.before_pr on admits only a PR leaf that runs the before-PR gate",
         ));
     }
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
@@ -592,7 +619,12 @@ pub(super) fn mutate(
                 // in place of a local task lookup, so the leaf runs on the
                 // owner task's crew rather than this host's `default_crew`.
                 let task = record.receipt.as_ref().and_then(|r| r.task.as_ref()).filter(|task| task.id == claim.task_id).ok_or_else(|| invalid("claimed task snapshot missing"))?;
-                let input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
+                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
+                // The leaf's review admission is the claim's captured contract,
+                // never this host's settings [ORB-13908].
+                if let (Some(review), Some(object)) = (claim_review_admission(&record.request, now), input.as_object_mut()) {
+                    object.insert(REVIEW_ADMISSION_KEY.into(), serde_json::to_value(review).map_err(db_error)?);
+                }
                 let run = JobRun { run_id: run_id.clone(), job_id: job.into(), attempt: 1, state: JobRunState::Pending, scheduled_at: now, started_at: None, finished_at: None, duration_ms: None, created_at: now, pid: None, pid_start_time: None, input: Some(input.clone()), retry_source_run_id: None, knowledge_metrics: None, resolved_crew: None, crew_model: None, steps: vec![], executed_on: Some(claim.executed_on.clone()) };
                 let state = PipelineState::new(run_id.clone(), job.into(), input);
                 upsert_job_run_for_workspace_conn(conn, workspace, &run, Some(&state))?;

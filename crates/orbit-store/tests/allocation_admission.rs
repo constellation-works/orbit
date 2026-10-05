@@ -1508,10 +1508,10 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
 }
 
 /// An owner with `review.before_pr` on pins its review contract (crew,
-/// budget, contract version) into the claim it admits, but only to a leaf
-/// that declares it runs the gate; no executor does yet, so every pull
-/// without that declaration is still refused. A before-PR contract without
-/// its review terms is malformed.
+/// budget, contract version) into the claim it admits, but only to a PR leaf
+/// that declares it runs the gate; a pull without that declaration is
+/// refused. A before-PR contract without its review
+/// terms is malformed. The executor's own switch never refuses [ORB-13908].
 #[test]
 fn a_before_pr_owner_captures_its_review_contract_on_the_claim() {
     if !isolated("a_before_pr_owner_captures_its_review_contract_on_the_claim") {
@@ -1549,6 +1549,17 @@ fn a_before_pr_owner_captures_its_review_contract_on_the_claim() {
     assert!(receipt.claim.is_some(), "a gate-running leaf is admitted");
     assert_eq!(receipt.request.ship.review, before_pr_ship().review);
     assert_eq!(owner.claims().len(), 1);
+
+    let other = TempDir::new().unwrap();
+    let unreviewed = Coordinated::open(other.path());
+    unreviewed.create_task("unreviewed work");
+    let mut executor_on = owner_request("executor-before-pr");
+    executor_on.caller_before_pr = true;
+    let receipt = unreviewed.pull(&executor_on);
+    assert!(
+        receipt.claim.is_some(),
+        "an executor's own review.before_pr does not refuse an owner that captured it off"
+    );
 }
 
 /// A before-PR claim's handoff is accepted only with passing evidence for

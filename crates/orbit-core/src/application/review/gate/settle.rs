@@ -4,14 +4,16 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_engine::DispatchError;
 use orbit_engine::review_gate::{candidate_identity_at, committed_paths, uncommitted_paths};
-use orbit_store::contracts::ReviewSettlement;
+use orbit_store::contracts::{ClaimEvidence, ClaimWorkerUpdate, ReviewSettlement};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
-    REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, ReviewAttemptState, ReviewCertificate,
-    ReviewerIdentity,
+    REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
+    REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -52,6 +54,8 @@ pub(crate) fn review_gate_settle(
             "reviewed_base_sha": "",
             "reviewer_fixed": false,
             "review_fixes": "",
+            // Always present: a claimed leaf's handoff forwards it typed.
+            "handoff_evidence": null,
         }));
     }
     let mut settle_input = input.clone();
@@ -331,7 +335,7 @@ fn settle(
     };
     store.review_certificate_record(&context.workspace_id, &certificate)?;
     publish_certificate(runtime, context, &certificate)?;
-    Ok(settled_outcome(certificate))
+    settled_outcome(runtime, context, certificate)
 }
 
 fn reconcile_settled(
@@ -358,7 +362,7 @@ fn reconcile_settled(
     }
     // Settlement may have stopped before every task carried the evidence.
     publish_certificate(runtime, context, &certificate)?;
-    Ok(settled_outcome(certificate))
+    settled_outcome(runtime, context, certificate)
 }
 
 /// Give every task the certificate artifact and verdict comment, writing
@@ -403,27 +407,113 @@ fn publish_certificate(
             .iter()
             .any(|existing| existing.message.trim() == comment.trim());
         if !disclosed {
-            runtime.update_task_as_system(
-                &task.id,
-                TaskUpdateParams {
-                    comment: Some(comment.clone()),
-                    ..TaskUpdateParams::default()
-                },
-                None,
-            )?;
+            post_comment(runtime, context, &task.id, &comment)?;
         }
     }
     Ok(())
 }
 
-fn settled_outcome(certificate: ReviewCertificate) -> Settled {
-    if certificate.verdict.passed() {
-        Settled::Passed(passed_output(&certificate))
-    } else {
-        Settled::Blocked {
-            certificate: Box::new(certificate),
-        }
+/// Post the verdict comment. A claimed leaf's comment crosses its binding to
+/// the owner as claim evidence [ORB-13908].
+fn post_comment(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    task_id: &str,
+    comment: &str,
+) -> Result<(), OrbitError> {
+    if context.claimed {
+        runtime.route_worker_tool(
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "_worker_update": ClaimWorkerUpdate {
+                    evidence: ClaimEvidence {
+                        comment: Some(comment.to_string()),
+                        ..ClaimEvidence::default()
+                    },
+                    ..ClaimWorkerUpdate::default()
+                },
+            }),
+            Default::default(),
+        )?;
+        return Ok(());
     }
+    runtime.update_task_as_system(
+        task_id,
+        TaskUpdateParams {
+            comment: Some(comment.to_string()),
+            ..TaskUpdateParams::default()
+        },
+        None,
+    )?;
+    Ok(())
+}
+
+fn settled_outcome(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    certificate: ReviewCertificate,
+) -> Result<Settled, OrbitError> {
+    if !certificate.verdict.passed() {
+        return Ok(Settled::Blocked {
+            certificate: Box::new(certificate),
+        });
+    }
+    let mut output = passed_output(&certificate);
+    if context.claimed {
+        output["handoff_evidence"] =
+            serde_json::to_value(handoff_evidence(runtime, context, &certificate)?).map_err(
+                |error| OrbitError::Execution(format!("serialize review evidence: {error}")),
+            )?;
+    }
+    Ok(Settled::Passed(output))
+}
+
+/// The before-PR evidence a claimed leaf hands off [ORB-13908]: the passed
+/// verdict and the digests of the certificate, manifest and report the
+/// owner holds for its task, which it re-reads and checks at acceptance.
+fn handoff_evidence(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    certificate: &ReviewCertificate,
+) -> Result<HandoffReviewEvidence, OrbitError> {
+    let task_id = context
+        .task_ids
+        .first()
+        .ok_or_else(|| OrbitError::Execution("review evidence names no task".to_string()))?;
+    let reference = |path: &str| -> Result<Option<HandoffArtifactRef>, OrbitError> {
+        Ok(runtime
+            .get_task_artifact(task_id, path)?
+            .map(|artifact| HandoffArtifactRef {
+                path: path.to_string(),
+                sha256: sha256_hex(&artifact.content),
+            }))
+    };
+    let certificate_ref = reference(REVIEW_GATE_ARTIFACT)?.ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "review_gate_stale: the owner holds no {REVIEW_GATE_ARTIFACT} for task '{task_id}'"
+        ))
+    })?;
+    Ok(HandoffReviewEvidence {
+        attempt_id: certificate.attempt_id.clone(),
+        verdict: certificate.verdict,
+        reviewed_head_sha: certificate.final_candidate.commit.clone(),
+        reviewed_base_sha: certificate.base.commit.clone(),
+        reviewer_commit: certificate
+            .repair_commits
+            .last()
+            .map(|repair| repair.commit.clone()),
+        reviewer_crew: certificate.reviewer.crew.clone(),
+        reviewer_run_id: context.run_id.clone(),
+        certificate: certificate_ref,
+        artifacts: [REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT]
+            .into_iter()
+            .map(reference)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect(),
+    })
 }
 
 /// What the PR steps read from an accept. `reviewer_fixed` gates the owner
@@ -446,5 +536,6 @@ fn passed_output(certificate: &ReviewCertificate) -> Value {
         "findings": certificate.findings.len(),
         "consumed": certificate.consumed,
         "certificate_artifact": REVIEW_GATE_ARTIFACT,
+        "handoff_evidence": null,
     })
 }

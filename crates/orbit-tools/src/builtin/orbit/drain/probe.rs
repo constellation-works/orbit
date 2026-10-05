@@ -34,9 +34,9 @@ impl Tool for OrbitDrainProbeTool {
             ToolParam {
                 name: "caller_before_pr".to_string(),
                 description:
-                    "Optional. The executor's `review.before_pr`. Pulled leaves require it off \
-                     on both endpoints; `true` is reported as a refusal rather than silently \
-                     dropped. After-landing review never affects admission."
+                    "Optional. The executor's `review.before_pr`. Diagnostic only: a claimed \
+                     leaf runs the before-PR review the owner's ship contract captures, never \
+                     the executor's own. After-landing review never affects admission."
                         .to_string(),
                 param_type: "boolean".to_string(),
                 required: false,

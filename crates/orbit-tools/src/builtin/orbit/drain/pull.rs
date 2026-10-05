@@ -42,9 +42,21 @@ impl Tool for OrbitTaskPullTool {
             param(
                 "caller_before_pr",
                 "boolean",
-                "The `review.before_pr` the executor's drain captured at submission. Only \
-                 `false` is admitted; after-landing review never affects admission.",
+                "The `review.before_pr` the executor's drain captured at submission. \
+                 Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` \
+                 contract captures, never the executor's own. After-landing review never \
+                 affects admission.",
             ),
+            ToolParam {
+                required: false,
+                ..param(
+                    "review_gate",
+                    "boolean",
+                    "Whether the executor's claimed PR leaf runs the before-PR review the `ship` \
+                     contract captures. An owner with `review.before_pr` on refuses an executor \
+                     that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
+                )
+            },
             ToolParam {
                 required: false,
                 ..param(

@@ -826,15 +826,16 @@ fn owner_with(root: &Path, config: &str, after_landing: bool) -> OrbitRuntime {
     open_runtime(root, OWNER).0
 }
 
-/// [ORB-13992] Distributed admission refuses only on `review.before_pr`, on
-/// either endpoint. After-landing review — the `delivery-code-review`
+/// [ORB-13992] [ORB-13908] Review never refuses a PR-route pull from an
+/// executor of this binary. After-landing review — the `delivery-code-review`
 /// auto-task, or the deprecated policy value that stands in for it — runs on
-/// the owner after landing and never refuses a pull.
+/// the owner after landing; the owner's `review.before_pr` is captured on the
+/// claim for the leaf's gate; and the executor's own switch decides nothing.
 #[test]
-fn only_before_pr_refuses_a_pull_and_after_landing_review_never_does() {
+fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
     if !isolated(
         module_path!(),
-        "only_before_pr_refuses_a_pull_and_after_landing_review_never_does",
+        "review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr",
     ) {
         return;
     }
@@ -846,6 +847,7 @@ fn only_before_pr_refuses_a_pull_and_after_landing_review_never_does() {
     assert_eq!(probe["review"]["before_pr"]["enabled"], false);
     assert_eq!(probe["admits"], true, "{probe}");
     assert_eq!(probe["ship"]["before_pr"], false);
+    assert!(probe["ship"].get("review").is_none(), "{probe}");
 
     let legacy_after_landing = owner_with(
         &root.path().join("legacy-after-landing"),
@@ -855,18 +857,18 @@ fn only_before_pr_refuses_a_pull_and_after_landing_review_never_does() {
     assert_eq!(probe_owner(&legacy_after_landing, false)["admits"], true);
 
     let follower_before_pr = probe_owner(&after_landing, true);
-    assert_eq!(follower_before_pr["admits"], false);
-    assert_eq!(follower_before_pr["refusal"], "before_pr_unsupported");
+    assert_eq!(follower_before_pr["admits"], true, "{follower_before_pr}");
+    assert_eq!(follower_before_pr["ship"]["before_pr"], false);
 
     for config in [
-        "[review]\nbefore_pr = true\n",
-        "[operation]\nreview_policy = \"before-pr\"\n",
+        "[review]\nbefore_pr = true\n[operation]\nreview_crew = \"reviewer\"\n",
+        "[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewer\"\n",
     ] {
         let owner = owner_with(&root.path().join(config.len().to_string()), config, false);
         let probe = probe_owner(&owner, false);
         assert_eq!(probe["review"]["before_pr"]["enabled"], true, "{config}");
         assert_eq!(probe["ship"]["before_pr"], true, "{config}");
-        assert_eq!(probe["admits"], false, "{config}");
-        assert_eq!(probe["refusal"], "before_pr_unsupported", "{config}");
+        assert_eq!(probe["ship"]["review"]["crew"], "reviewer", "{config}");
+        assert_eq!(probe["admits"], true, "{config}: {probe}");
     }
 }

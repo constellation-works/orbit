@@ -236,8 +236,10 @@ impl AdmissionShipContract {
 /// host OS; revision 5 replaces both endpoints' review-policy labels with
 /// their captured `review.before_pr` switch [ORB-13992]; revision 6 adds the
 /// ship contract's captured `review`, the executor's `review_gate` and the
-/// handoff's before-PR review evidence [ORB-13895].
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 6;
+/// handoff's before-PR review evidence [ORB-13895]; revision 7 sends
+/// `review_gate` on `orbit.task.pull`, which revision 6 owners reject
+/// [ORB-13908].
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 7;
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without
@@ -258,9 +260,11 @@ pub enum AdmissionRefusal {
     ProtocolMismatch,
     VersionMismatch,
     ShipModeUnsupported,
-    /// The executor captured `review.before_pr = true`, or the owner did and
-    /// the executor's leaf does not declare that it runs the before-PR gate.
-    /// After-landing review never refuses: it runs on the owner after landing.
+    /// The owner captured `review.before_pr = true` and the executor's leaf
+    /// does not declare that it runs the before-PR gate, or the ship mode is
+    /// not the PR route the gate runs on [ORB-13908]. The executor's own
+    /// switch never refuses. After-landing review never refuses: it runs on
+    /// the owner after landing.
     #[serde(alias = "review_policy_unsupported")]
     BeforePrUnsupported,
 }
@@ -346,9 +350,10 @@ pub struct AdmissionRequest {
     pub request_id: String,
     pub caller_version: String,
     pub caller_schema: u32,
-    /// The executor's captured `review.before_pr` [ORB-13992]. Requests
-    /// recorded before revision 5 carried a `caller_review_policy` admitted
-    /// only as `none`, which reads as `false`.
+    /// The executor's captured `review.before_pr` [ORB-13992]. Diagnostic
+    /// only: a claimed leaf runs the review the ship contract captured, never
+    /// the executor's own [ORB-13908]. Requests recorded before revision 5
+    /// carried a `caller_review_policy`, which reads as `false`.
     #[serde(default)]
     pub caller_before_pr: bool,
     /// Whether the executor's claimed leaf runs the before-PR gate the ship

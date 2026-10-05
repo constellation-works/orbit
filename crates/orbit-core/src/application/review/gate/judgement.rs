@@ -250,6 +250,18 @@ impl Judgement {
             .iter()
             .map(|path| normalize_git_path(path))
             .collect::<Vec<_>>();
+        if context.claimed {
+            // A claim's footprint is fixed until its handoff: the owner
+            // widens it then, for every path the candidate changed outside
+            // it, and the certificate reports what that will add.
+            for path in &paths {
+                let selector = format!("file:{path}");
+                if !self.selectors_widened.contains(&selector) {
+                    self.selectors_widened.push(selector);
+                }
+            }
+            return Ok(());
+        }
         let widened = runtime.widen_context_files_for_paths(
             &task_id,
             &context.run_id,
@@ -610,7 +622,9 @@ fn validation_roles(records: &[orbit_types::workflow::ReviewValidation]) -> Stri
         .join(", ")
 }
 
-/// Write a gate artifact under the executor run's authority.
+/// Write a gate artifact under the executor run's authority. A claimed leaf
+/// owns no task state: the artifact crosses its binding to the owner as
+/// claim evidence, like its validation logs [ORB-13908].
 pub(super) fn write_artifact(
     runtime: &OrbitRuntime,
     task_id: &str,
@@ -618,6 +632,21 @@ pub(super) fn write_artifact(
     path: &str,
     content: &[u8],
 ) -> Result<(), OrbitError> {
+    if runtime.worker_invocation().is_some() {
+        runtime.route_worker_tool(
+            "orbit.task.artifact.put",
+            serde_json::json!({
+                "id": task_id,
+                "artifacts": [{
+                    "path": path,
+                    "content": content,
+                    "media_type": "application/json",
+                }],
+            }),
+            Default::default(),
+        )?;
+        return Ok(());
+    }
     runtime.update_task_as_system(
         task_id,
         TaskUpdateParams {

@@ -57,6 +57,30 @@ impl crate::OrbitRuntime {
         self.operation_policy().review_before_pr.value
     }
 
+    /// Why this executor cannot run the before-PR review the owner's ship
+    /// contract captured, or `None` when it can or none is captured
+    /// [ORB-13908]. A claimed leaf reviews with exactly the captured crew, so
+    /// a follower that cannot resolve it refuses before it claims anything
+    /// rather than claiming a task its gate would escalate.
+    pub(crate) fn claimed_review_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
+        let review = ship.review.as_ref()?;
+        let Some(crew) = review.crew.as_deref() else {
+            return Some(
+                "before_pr_reviewer_unavailable: the owner has review.before_pr on but no \
+                 operation.review_crew; a claimed leaf never reviews with its implementer's crew"
+                    .to_string(),
+            );
+        };
+        self.resolve_crew_for_task(Some(crew), None)
+            .err()
+            .map(|error| {
+                format!(
+                    "before_pr_reviewer_unavailable: the owner's before-PR review crew `{crew}` \
+                     cannot be resolved on this executor: {error}"
+                )
+            })
+    }
+
     /// Only the owner checkout serves the distributed control plane.
     ///
     /// A replica is refused with what to do instead: these tools answer for
@@ -136,11 +160,14 @@ impl crate::OrbitRuntime {
         ship: &AdmissionShipContract,
         diagnostics: &mut Vec<String>,
     ) -> Result<Option<AdmissionRefusal>, OrbitError> {
-        if ship.before_pr {
-            diagnostics.push(
-                "owner has review.before_pr on; pulled leaves require it off on both endpoints"
-                    .to_string(),
-            );
+        if let Some(review) = &ship.review {
+            diagnostics.push(format!(
+                "owner has review.before_pr on; each claimed leaf runs the before-PR review with                  crew {} before it opens a pull request",
+                review
+                    .crew
+                    .as_deref()
+                    .map_or_else(|| "(unset)".to_string(), |crew| format!("`{crew}`"))
+            ));
         }
         let machine_id = session_machine_id(session).unwrap_or_else(|| "probe".to_string());
         let request = AdmissionRequest {
@@ -159,8 +186,9 @@ impl crate::OrbitRuntime {
                 .caller_schema
                 .unwrap_or(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA),
             caller_before_pr: declared.caller_before_pr.unwrap_or(false),
-            // No executor's leaf runs the before-PR gate yet [ORB-13908].
-            review_gate: false,
+            // Every executor of this binary runs the before-PR gate on its
+            // claimed PR leaves [ORB-13908].
+            review_gate: true,
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),
@@ -194,9 +222,8 @@ impl crate::OrbitRuntime {
                     request.ship.mode
                 ),
                 AdmissionRefusal::BeforePrUnsupported => format!(
-                    "review.before_pr must be off on both endpoints; owner {}, executor {}",
-                    on_off(request.ship.before_pr),
-                    on_off(request.caller_before_pr)
+                    "owner has review.before_pr on; the before-PR review runs only on the PR                      route, and this owner ships '{}'",
+                    request.ship.mode
                 ),
             });
         }

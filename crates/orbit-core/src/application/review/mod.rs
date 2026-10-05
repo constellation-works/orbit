@@ -48,10 +48,15 @@ pub use switches::{
 /// Audit command name shared by every gate decision.
 pub(crate) const REVIEW_AUDIT: &str = "review.gate";
 
-/// The jobs that carry a review admission: the delivery family, so a leaf
-/// PR pipeline can inherit the `review.before_pr` its coordinator captured,
-/// and the follower's pull drain, which declares its captured value on every
-/// pull [ORB-13992].
+/// The jobs whose submission captures a review admission: the delivery
+/// family, so a leaf PR pipeline can inherit the `review.before_pr` its
+/// coordinator captured, and the follower's pull drain, which declares its
+/// captured value on every pull [ORB-13992].
+///
+/// A claimed leaf (`CLAIMED_LEAF_JOBS`) is never submitted: the pull store
+/// creates it with the admission its claim's ship contract captured, so this
+/// host's settings never decide its review, and a submission naming the
+/// reserved key for one is refused like any other [ORB-13908].
 pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "workspace_auto_pipeline",
     "workspace_pull_pipeline",

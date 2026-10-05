@@ -1,0 +1,429 @@
+//! A claimed leaf runs the before-PR review its claim captured [ORB-13908].
+//!
+//! The follower's drain admits a task from an owner with `review.before_pr`
+//! on. The leaf's gate steps then run on the follower under the claim's
+//! worker binding, exactly as the claimed pipeline dispatches them; the
+//! reviewer agent is stood in for by its worktree fix and the report it
+//! persists through the same binding. Every task write the gate makes crosses
+//! that binding to the owner's task, and the owner judges the handoff's
+//! review evidence against its own copies.
+
+use super::*;
+
+use orbit_store::contracts::HandoffReviewObservation;
+use orbit_types::tool::WorkerInvocation;
+use orbit_types::workflow::handoff::HandoffReviewEvidence;
+use orbit_types::workflow::{
+    FindingDisposition, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewFinding, ReviewReport,
+    ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
+};
+
+/// A crew every runtime's default registry resolves.
+const REVIEW_CREW: &str = "sol";
+const REPOSITORY: &str = "owner/repository";
+
+fn before_pr_owner(crew: &str) -> String {
+    format!("[review]\nbefore_pr = true\n\n[operation]\nreview_crew = \"{crew}\"\n")
+}
+
+/// Hands a bound leaf's coordination calls to the owner in process, under
+/// the follower's SSH session, as the owner's MCP server receives them.
+struct ToOwner(OrbitRuntime);
+
+impl OwnerCoordinator for ToOwner {
+    fn call(
+        &self,
+        name: &str,
+        mut input: Value,
+        mut session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let binding = session.worker_invocation.clone().expect("worker binding");
+        input["workspace"] = json!(binding.owner_workspace_id);
+        session.workspace = Some(binding.owner_workspace_id);
+        session.caller_machine_id = Some(FOLLOWER.to_string());
+        session.transport = Some(McpTransport::SshMcp);
+        session.effective_capabilities = BTreeSet::from([McpCapability::Agent]);
+        self.0.execute_owner_coordination(name, input, session)
+    }
+}
+
+/// A claimed leaf on the follower, admitted from a before-PR owner and bound,
+/// with its implementation committed in the follower's checkout.
+struct ReviewedLeaf {
+    pair: Pair,
+    drain: String,
+    leaf: String,
+    task: String,
+    /// The follower runtime bound to the leaf's claim, as its worker runs.
+    bound: OrbitRuntime,
+    base: SourceRevision,
+    gate_input: Value,
+}
+
+impl ReviewedLeaf {
+    fn admit() -> Self {
+        let pair = Pair::with_owner_config(&before_pr_owner(REVIEW_CREW), &[None]);
+        let drain = pair.run_drain();
+        let leaf = pair.launched_leaf(&drain, 1, std::process::id());
+        let task = pair.claimed_task(&leaf);
+
+        let repo = pair.follower_repo.clone();
+        std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/f0.rs"), "fn work() {}\n").unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "baseline"]);
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                &format!("https://github.com/{REPOSITORY}.git"),
+            ],
+        );
+        let base = revision(&repo, "HEAD");
+        git(&repo, &["checkout", "-q", "-b", &format!("orbit/{task}")]);
+        std::fs::write(repo.join("src/f0.rs"), "fn work() { todo!() }\n").unwrap();
+        git(&repo, &["commit", "-q", "-am", "Implement"]);
+
+        let record = pair.admission(&leaf);
+        let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
+        let bound = pair
+            .follower
+            .clone()
+            .with_worker_invocation(
+                WorkerInvocation {
+                    owner_machine_id: OWNER.into(),
+                    owner_workspace_id: record.destination.owner_workspace_id.clone(),
+                    owner_destination: record.destination.selector.clone(),
+                    task_id: claim.task_id.clone(),
+                    claim_id: claim.claim_id.clone(),
+                    execution: claim.executed_on.clone(),
+                    bound_run_id: leaf.clone(),
+                },
+                Arc::new(ToOwner(pair.wire.owner.clone())),
+            )
+            .unwrap();
+        // What `task_claimed_pr_pipeline` passes both gate steps, with the
+        // run the dispatcher injects.
+        let gate_input = json!({
+            "run_id": leaf,
+            "job_run_id": leaf,
+            "completed_task_ids": [task],
+            "workspace_path": repo,
+            "base": "main",
+            "base_sync": "local",
+            "mode": "pr",
+            "skipped_no_diff_expected": false,
+        });
+        Self {
+            pair,
+            drain,
+            leaf,
+            task,
+            bound,
+            base,
+            gate_input,
+        }
+    }
+
+    fn admit_review(&mut self) -> Value {
+        let admission = self
+            .bound
+            .run_deterministic(
+                "review_gate_admit",
+                &json!({}),
+                &self.gate_input,
+                ToolContext::default(),
+            )
+            .expect("review admitted");
+        self.gate_input["admission"] = admission.clone();
+        admission
+    }
+
+    /// The reviewer's work: its fix in the worktree, when it made one, and
+    /// its report, persisted through the leaf's binding as the reviewer's
+    /// tool call is.
+    fn reviewer_reports(&self, attempt_id: &str, verdict: ReviewVerdict, fix: bool) {
+        if fix {
+            std::fs::write(
+                self.pair.follower_repo.join("src/f0.rs"),
+                "fn work() {}\n// reviewed\n",
+            )
+            .unwrap();
+        }
+        let report = ReviewReport {
+            schema_version: REVIEW_CONTRACT_VERSION,
+            attempt_id: attempt_id.into(),
+            verdict,
+            summary: "Checked the change against the criteria.".into(),
+            findings: vec![ReviewFinding {
+                id: "F1".into(),
+                severity: "medium".into(),
+                summary: "The stub panics".into(),
+                paths: vec!["src/f0.rs".into()],
+                disposition: if fix {
+                    FindingDisposition::Repaired
+                } else {
+                    FindingDisposition::Open
+                },
+                change: fix.then(|| "Replaced the stub".into()),
+            }],
+            validation: vec![ReviewValidation {
+                command: "make ci-fast".into(),
+                outcome: ValidationOutcome::Passed,
+                role: ValidationRole::Required,
+                note: None,
+                check: None,
+            }],
+            escalation: (verdict == ReviewVerdict::Reject)
+                .then(|| "decide whether the stub may ship".into()),
+        };
+        let source = self
+            .pair
+            .follower_repo
+            .join(".orbit/tmp")
+            .join(REVIEW_REPORT_ARTIFACT);
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, serde_json::to_vec(&report).unwrap()).unwrap();
+        self.bound
+            .run_tool(
+                "orbit.task.artifact.put",
+                json!({
+                    "id": self.task,
+                    "model": "codex",
+                    "path": REVIEW_REPORT_ARTIFACT,
+                    "source_path": source,
+                }),
+            )
+            .expect("the reviewer's report reaches the owner");
+    }
+
+    fn settle(&self) -> Result<Value, String> {
+        self.bound
+            .run_deterministic(
+                "review_gate_settle",
+                &json!({}),
+                &self.gate_input,
+                ToolContext::default(),
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    fn owner_artifact(&self, path: &str) -> Option<Vec<u8>> {
+        self.pair
+            .wire
+            .owner
+            .get_task_artifact(&self.task, path)
+            .unwrap()
+            .map(|artifact| artifact.content)
+    }
+}
+
+fn revision(repo: &Path, spec: &str) -> SourceRevision {
+    SourceRevision {
+        commit: git(repo, &["rev-parse", spec]).trim().to_string(),
+        tree: git(repo, &["rev-parse", &format!("{spec}^{{tree}}")])
+            .trim()
+            .to_string(),
+    }
+}
+
+/// A follower pulls from an owner with `review.before_pr` on, and its claimed
+/// leaf reviews under the claim's captured contract: the reviewer's fix
+/// becomes the candidate's second commit, the manifest, report, certificate
+/// and verdict comment land on the owner's task, the attempt ledger stays on
+/// the follower, and the owner accepts the handoff carrying the settled
+/// verdict and moves the task to `review`.
+#[test]
+fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence",
+    ) {
+        return;
+    }
+    let mut leaf = ReviewedLeaf::admit();
+    let pair = &leaf.pair;
+    let pulls = pair.wire.calls("orbit.task.pull");
+    assert_eq!(pulls[0]["review_gate"], true, "{}", pulls[0]);
+    assert_eq!(pulls[0]["ship"]["review"]["crew"], REVIEW_CREW);
+
+    // The leaf runs the owner's captured review, not the follower's.
+    let input = pair
+        .follower_jobs
+        .get_job_run(&leaf.leaf)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap();
+    let admission = ReviewAdmission::from_run_input(&input)
+        .unwrap()
+        .expect("the leaf carries the claim's review admission");
+    assert!(admission.gates_pr());
+    assert_eq!(admission.crew.as_deref(), Some(REVIEW_CREW));
+    assert_eq!(
+        admission.timing_source, "claim",
+        "{}",
+        input[REVIEW_ADMISSION_KEY]
+    );
+
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["applies"], true, "{admitted}");
+    assert_eq!(admitted["reviewer"]["crew"], REVIEW_CREW);
+    let attempt_id = admitted["attempt_id"].as_str().unwrap().to_string();
+    assert!(
+        leaf.owner_artifact(REVIEW_MANIFEST_ARTIFACT).is_some(),
+        "the manifest is on the owner's task"
+    );
+
+    leaf.reviewer_reports(&attempt_id, ReviewVerdict::AcceptWithFixes, true);
+    let settled = leaf.settle().expect("an accepted review passes");
+    assert_eq!(settled["gate"], "passed", "{settled}");
+    assert_eq!(settled["reviewer_fixed"], true, "{settled}");
+    let head = revision(&leaf.pair.follower_repo, "HEAD");
+    assert_eq!(settled["reviewed_head_sha"], head.commit.as_str());
+    assert_eq!(
+        git(&leaf.pair.follower_repo, &["log", "-1", "--format=%s"]).trim(),
+        format!(
+            "review: Checked the change against the criteria. [{}]",
+            leaf.task
+        ),
+        "the reviewer's fix is the candidate's second commit"
+    );
+
+    let owner = &leaf.pair.wire.owner;
+    let certificate = leaf
+        .owner_artifact(REVIEW_GATE_ARTIFACT)
+        .expect("the certificate is on the owner's task");
+    assert!(
+        comments_of(&leaf.pair.owner_task(&leaf.task)).contains(&attempt_id),
+        "the verdict comment is on the owner's task"
+    );
+    let ledger = leaf
+        .bound
+        .review_store()
+        .unwrap()
+        .review_ledger(
+            &leaf.pair.follower.workspace_id().unwrap(),
+            admitted["lineage_key"].as_str().unwrap(),
+        )
+        .unwrap()
+        .expect("the attempt ledger is on the follower");
+    assert_eq!(ledger.attempts.len(), 1);
+
+    let evidence: HandoffReviewEvidence =
+        serde_json::from_value(settled["handoff_evidence"].clone()).expect("handoff evidence");
+    assert_eq!(
+        evidence.reviewer_commit.as_deref(),
+        Some(head.commit.as_str())
+    );
+    assert_eq!(evidence.reviewer_run_id, leaf.leaf);
+    assert_eq!(
+        evidence.certificate.sha256,
+        orbit_common::security::release::sha256_hex(&certificate)
+    );
+
+    // The handoff `claim_handoff` builds from the settled evidence, and the
+    // owner's own observation of it.
+    let record = leaf.pair.admission(&leaf.leaf);
+    let mut handoff = handoff(&record);
+    handoff.candidate.repository = REPOSITORY.into();
+    handoff.candidate.candidate = head.clone();
+    handoff.candidate.base = leaf.base.clone();
+    handoff.review = HandoffReview {
+        policy: ReviewTiming::BeforePr,
+        disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
+    };
+    let claim = record.receipt.unwrap().claim.unwrap();
+    let worker = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        FOLLOWER.into(),
+        Some(ClaimRun {
+            machine_id: FOLLOWER.into(),
+            run_id: leaf.leaf.clone(),
+        }),
+    );
+    let observation = HandoffObservation {
+        footprint_widening: vec![],
+        candidate: handoff.candidate.clone(),
+        required_commands: vec![],
+        owner_completion_authority: None,
+        review: Some(HandoffReviewObservation {
+            reviewed_base_sha: leaf.base.commit.clone(),
+            reviewed_base_is_ancestor: true,
+            repository: REPOSITORY.into(),
+        }),
+    };
+    owner
+        .accept_task_handoff(&worker, "handoff", handoff, observation)
+        .expect("the owner accepts the reviewed handoff");
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
+    assert!(
+        owner
+            .review_store()
+            .unwrap()
+            .review_certificate(&owner.workspace_id().unwrap(), &attempt_id)
+            .unwrap()
+            .is_some(),
+        "the owner records the follower's certificate"
+    );
+}
+
+/// A reviewer that rejects the candidate stops the leaf before it pushes,
+/// as on the owner's own route: the findings are on the owner's task, and
+/// the leaf's failure settlement blocks it there.
+#[test]
+fn a_rejected_claimed_review_blocks_the_task_on_the_owner() {
+    if !isolated(
+        module_path!(),
+        "a_rejected_claimed_review_blocks_the_task_on_the_owner",
+    ) {
+        return;
+    }
+    let mut leaf = ReviewedLeaf::admit();
+    let admitted = leaf.admit_review();
+    let attempt_id = admitted["attempt_id"].as_str().unwrap().to_string();
+    leaf.reviewer_reports(&attempt_id, ReviewVerdict::Reject, false);
+
+    let refused = leaf
+        .settle()
+        .expect_err("a rejected review never opens a PR");
+    assert!(refused.contains("review_gate_blocked"), "{refused}");
+    let task = leaf.pair.owner_task(&leaf.task);
+    assert!(
+        comments_of(&task).contains("The stub panics"),
+        "the findings are on the owner's task: {task:#}"
+    );
+
+    leaf.pair.leaf_fails_with(&leaf.leaf, &refused);
+    leaf.pair.pass(&leaf.drain);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "blocked");
+    assert_eq!(leaf.pair.owner_claims()[0]["claim"]["phase"], "failed");
+}
+
+/// A follower that cannot resolve the owner's captured review crew requests
+/// no claim: its pass stops at the probe with the reason.
+#[test]
+fn a_follower_without_the_review_crew_claims_nothing() {
+    if !isolated(
+        module_path!(),
+        "a_follower_without_the_review_crew_claims_nothing",
+    ) {
+        return;
+    }
+    let pair = Pair::with_owner_config(&before_pr_owner("ghost"), &[None]);
+    let drain = pair.run_drain();
+    let pass = pair.pass(&drain);
+    let refusal = pass["refusal"].as_str().unwrap_or_default();
+    assert!(
+        refusal.contains("before_pr_reviewer_unavailable") && refusal.contains("ghost"),
+        "{pass}"
+    );
+    assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+}

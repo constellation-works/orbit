@@ -38,7 +38,8 @@ pub struct DrainProbeReport {
     /// Ship configuration the owner would resolve at admission.
     pub ship: AdmissionShipContract,
     /// The owner's two review switches. Only `review.before_pr` takes part in
-    /// admission — pulled leaves need it off on both endpoints; after-landing
+    /// admission — with it on, each claimed PR leaf runs the before-PR review
+    /// the ship contract captures [ORB-13908]; after-landing
     /// review (the `delivery-code-review` auto-task) is reported for context
     /// and never refuses a pull [ORB-13992].
     pub review: ReviewSwitches,

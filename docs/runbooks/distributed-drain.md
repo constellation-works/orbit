@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-13941, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-13908, ORB-13941, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-10-04
 ---
 
@@ -79,16 +79,28 @@ Confirm:
   `~/.orbit/mcp-callers.toml` / `~/.orbit/mcp-ssh-acceptance/` warning that
   those files **grant nothing** (delete them; deny access by removing the
   caller's key from `~/.ssh/authorized_keys`);
-- before-PR review is off on the owner (`review.before_pr = false`).
+- when before-PR review is on at the owner (`review.before_pr = true`), the
+  owner sets `operation.review_crew`, the workspace ships through the PR route,
+  and every follower can run that crew.
 
 ```bash
 orbit config get review.before_pr
+orbit config get operation.review_crew
 orbit config show        # the Review lines report both switches and their sources
 ```
 
-Distributed pull admits only `before_pr` off on both endpoints; on is a
-refusal, not a silent downgrade. A workspace that still ships through its
-**legacy** leaf with before-PR review is not ready for distributed pull.
+The owner's `review.before_pr` is captured on each claim with its review crew
+and minutes; the follower's own setting does not matter. With it on, each
+claimed PR leaf runs the before-PR review between base synchronization and
+push: one reviewer with the captured crew fixes what it finds as the
+candidate's second commit and comments a summary on the owner's task. A
+`reject` or `incomplete` verdict fails the leaf before anything is pushed, and
+the owner blocks the task with the findings already on it. A passed verdict
+travels in the handoff, and the owner checks the certificate against its own
+copy before it accepts. A follower that cannot resolve or run the captured
+crew stops pulling with `before_pr_reviewer_unavailable` rather than claiming
+work it cannot review. A local-only ship workspace with before-PR review on is
+refused (`before_pr_unsupported`).
 After-landing review (the `delivery-code-review` auto-task) never affects
 admission: the owner reviews landed deliveries whatever host implemented them.
 A follower's landed PR reaches the owner's review batch under the claimed
@@ -263,13 +275,13 @@ agent envelope or `ORBIT_OPERATOR=1`.
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 6,
+  "caller_schema": 7,
   "caller_before_pr": false
 }'
 ```
 
 The probe reports owner machine, binary version, distributed-drain protocol
-schema `6`, this session's capabilities, diagnostic caller machine,
+schema `7`, this session's capabilities, diagnostic caller machine,
 owner-resolved ship configuration (`ship.before_pr`), and `review`: both review
 switches with their sources — before-PR on/off and minutes, after-landing
 enabled and its next batch due. Declaring version, schema, or `caller_before_pr`
@@ -287,7 +299,7 @@ Expected refusals you may see (and must not work around):
 | `version_mismatch` | Caller binary version differs from the owner |
 | `protocol_mismatch` | Caller and owner protocol revisions differ; diagnostics name both |
 | `ship_mode_unsupported` | A remote caller targeted a local-only ship workspace |
-| `before_pr_unsupported` | Owner or executor has `review.before_pr` on |
+| `before_pr_unsupported` | Owner has `review.before_pr` on and ships local-only, or the executor's leaf does not run the before-PR gate (an older binary) |
 
 ### 7. Receipt lookup after uncertainty
 
@@ -322,8 +334,8 @@ allocates a new request it prunes its idle and refused rows to the newest
 
 ### 8. Start the follower's pull drain
 
-Matching binaries, a replica role, a working probe, and `review.before_pr` off
-are **installation**. Starting a drain is the rollout, and it is explicit. On
+Matching binaries, a replica role, a working probe, and, when the owner has
+`review.before_pr` on, the owner's review crew on this host are **installation**. Starting a drain is the rollout, and it is explicit. On
 the follower, from the replica checkout:
 
 ```bash
@@ -339,7 +351,9 @@ submitted, the command refuses unless:
 - this checkout is a **replica**, and the selector names **its** owner machine
   and **its** logical workspace;
 - the owner answers the probe **as that machine** and would admit this
-  executor now (binary, protocol schema, before-PR review, ship mode).
+  executor now (binary, protocol schema, before-PR review, ship mode);
+- this host can resolve the owner's before-PR review crew, when the owner has
+  `review.before_pr` on (`before_pr_reviewer_unavailable` otherwise).
 
 This host should declare the same `workflow.required_validation_commands` as
 the owner, since the owner re-checks the evidence against its own list. An
@@ -862,7 +876,7 @@ orbit doctor
 orbit config get review.before_pr
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<owner-version>",
-  "caller_schema": 6,
+  "caller_schema": 7,
   "caller_before_pr": false
 }'
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'
@@ -873,7 +887,9 @@ From a follower session aimed at the owner selector, repeat the probe with
 that follower's `orbit --version`. Confirm:
 
 - versions and schema match;
-- before-PR review is off on both sides;
+- the probe admits (`admits: true`), and with the owner's `review.before_pr`
+  on, the follower's drain lists the owner's review crew as runnable
+  (`Crews:` in `orbit run show <drain-run>`);
 - the probe created no task, reservation, or claim (`orbit task locks list`
   unchanged);
 - `orbit job resume` of a known claimed leaf still refuses;
@@ -883,7 +899,8 @@ After starting a drain (step 8), confirm the first claim end to end: the
 owner's `orbit.drain.claims` shows it `running` on the follower's machine,
 the follower's `orbit run show <leaf-run-id>` shows the claimed PR leaf and its `Claim:` line, and
 after handoff the owner task is in `review` with the PR attached and nothing
-merged.
+merged. With before-PR review on, the owner task also carries
+`review-gate.json` and the reviewer's verdict comment.
 
 ## Rollback
 
