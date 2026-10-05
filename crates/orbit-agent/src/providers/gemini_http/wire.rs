@@ -42,16 +42,50 @@ pub struct CreateCachedContentResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Content {
+    #[serde(default)]
     pub role: String,
+    /// Absent on candidates that stop before emitting any part (e.g. `MAX_TOKENS`).
+    #[serde(default)]
     pub parts: Vec<Part>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One content part. Gemini sends the payload key beside sibling metadata
+/// (`thoughtSignature`) and may add part kinds this client does not model, so
+/// this is a flat struct of optional payloads rather than an externally tagged
+/// enum: unknown keys are ignored and an unrecognised part decodes to an empty
+/// `Part`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Part {
-    Text(String),
-    FunctionCall(FunctionCall),
-    FunctionResponse(FunctionResponse),
+pub struct Part {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_call: Option<FunctionCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_response: Option<FunctionResponse>,
+}
+
+impl Part {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: Some(text.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn function_call(call: FunctionCall) -> Self {
+        Self {
+            function_call: Some(call),
+            ..Self::default()
+        }
+    }
+
+    pub fn function_response(response: FunctionResponse) -> Self {
+        Self {
+            function_response: Some(response),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -14,6 +14,7 @@ use crate::loop_engine::transport::{
 };
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
+use serde_json::Value;
 
 use crate::providers::http_body::{body_diagnostic, read_error_body, read_response_body};
 
@@ -157,7 +158,7 @@ impl LoopTransport for GeminiHttpTransport {
     fn send_turn(&self, req: &TurnRequest<'_>) -> Result<TurnResponse, TransportError> {
         let system_instruction = req.system.map(|text| Content {
             role: "system".to_string(),
-            parts: vec![Part::Text(text.to_string())],
+            parts: vec![Part::text(text)],
         });
 
         let mut all_contents = Vec::new();
@@ -295,10 +296,10 @@ fn encode_message(message: &Message, tool_names_by_id: &mut HashMap<String, Stri
         .content
         .iter()
         .map(|block| match block {
-            ContentBlock::Text { text } => Part::Text(text.clone()),
+            ContentBlock::Text { text } => Part::text(text.clone()),
             ContentBlock::ToolUse { id, name, input } => {
                 tool_names_by_id.insert(id.clone(), name.clone());
-                Part::FunctionCall(FunctionCall {
+                Part::function_call(FunctionCall {
                     id: Some(id.clone()),
                     name: name.clone(),
                     args: input.clone(),
@@ -308,7 +309,7 @@ fn encode_message(message: &Message, tool_names_by_id: &mut HashMap<String, Stri
                 tool_use_id,
                 content,
                 is_error: _,
-            } => Part::FunctionResponse(FunctionResponse {
+            } => Part::function_response(FunctionResponse {
                 id: Some(tool_use_id.clone()),
                 name: tool_names_by_id
                     .get(tool_use_id)
@@ -320,8 +321,7 @@ fn encode_message(message: &Message, tool_names_by_id: &mut HashMap<String, Stri
                             .unwrap_or("unknown_tool")
                             .to_string()
                     }),
-                response: serde_json::from_str(content)
-                    .unwrap_or_else(|_| serde_json::json!({ "result": content })),
+                response: response_object(content),
             }),
         })
         .collect();
@@ -329,6 +329,16 @@ fn encode_message(message: &Message, tool_names_by_id: &mut HashMap<String, Stri
     Content {
         role: role.to_string(),
         parts,
+    }
+}
+
+/// Gemini requires `functionResponse.response` to be a JSON object, so any
+/// other tool output (array, scalar, plain text) is wrapped as `{"result": ...}`.
+fn response_object(content: &str) -> Value {
+    match serde_json::from_str::<Value>(content) {
+        Ok(value @ Value::Object(_)) => value,
+        Ok(value) => serde_json::json!({ "result": value }),
+        Err(_) => serde_json::json!({ "result": content }),
     }
 }
 
@@ -353,16 +363,18 @@ fn map_stop_reason(raw: Option<&str>) -> StopReason {
 fn map_incoming_content(content: Content) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     for (idx, part) in content.parts.into_iter().enumerate() {
-        match part {
-            Part::Text(text) => blocks.push(ContentBlock::Text { text }),
-            Part::FunctionCall(call) => blocks.push(ContentBlock::ToolUse {
+        if let Some(text) = part.text {
+            blocks.push(ContentBlock::Text { text });
+        }
+        if let Some(call) = part.function_call {
+            blocks.push(ContentBlock::ToolUse {
                 id: call.id.unwrap_or_else(|| format!("{}::{}", call.name, idx)),
                 name: call.name,
                 input: call.args,
-            }),
-            Part::FunctionResponse(_) => { /* Should not appear in incoming target responses normally */
-            }
+            });
         }
+        // `functionResponse` and unmodelled part kinds are not expected in a
+        // model turn and carry no block.
     }
 
     blocks
