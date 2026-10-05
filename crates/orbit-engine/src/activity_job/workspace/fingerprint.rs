@@ -431,7 +431,7 @@ fn split_combined_diff(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
     patches
 }
 
-fn diff_chunks(bytes: &[u8]) -> Vec<&[u8]> {
+pub(super) fn diff_chunks(bytes: &[u8]) -> Vec<&[u8]> {
     let starts = diff_chunk_starts(bytes);
     if starts.is_empty() {
         return Vec::new();
@@ -444,27 +444,31 @@ fn diff_chunks(bytes: &[u8]) -> Vec<&[u8]> {
     chunks
 }
 
-fn diff_chunk_starts(bytes: &[u8]) -> Vec<usize> {
+fn is_diff_chunk_start(bytes: &[u8]) -> bool {
     const MARKERS: [&[u8]; 3] = [b"diff --git ", b"diff --cc ", b"diff --combined "];
+    MARKERS.iter().any(|marker| bytes.starts_with(marker))
+}
+
+pub(super) fn diff_chunk_starts(bytes: &[u8]) -> Vec<usize> {
+    const PREFIX: &[u8] = b"\ndiff ";
     let mut starts = Vec::new();
+    if is_diff_chunk_start(bytes) {
+        starts.push(0);
+    }
     let mut search_from = 0;
-    while search_from < bytes.len() {
+    while search_from + PREFIX.len() <= bytes.len() {
         let rest = &bytes[search_from..];
-        let next = MARKERS
-            .iter()
-            .filter_map(|marker| {
-                rest.windows(marker.len())
-                    .position(|window| window == *marker)
-            })
-            .min();
-        let Some(relative) = next else {
+        let Some(pos) = rest
+            .windows(PREFIX.len())
+            .position(|window| window == PREFIX)
+        else {
             break;
         };
-        let absolute = search_from + relative;
-        if absolute == 0 || bytes[absolute - 1] == b'\n' {
-            starts.push(absolute);
+        let candidate = search_from + pos + 1;
+        if is_diff_chunk_start(&bytes[candidate..]) {
+            starts.push(candidate);
         }
-        search_from = absolute + 1;
+        search_from = candidate;
     }
     starts
 }

@@ -13,6 +13,9 @@ pub(crate) mod fingerprint;
 mod rebase_recovery;
 mod recovery;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use cwd::canonicalize_dir;
 pub use cwd::resolve_subprocess_cwd;
 pub(crate) use declared_pair::validate_declared_worktree_pair;
