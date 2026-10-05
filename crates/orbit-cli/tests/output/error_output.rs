@@ -155,6 +155,8 @@ fn run_orbit_with_unwritable_stdout(
 
     let unwritable = File::create(home.join("stdout-at-size-limit")).expect("stdout file");
     let mut command = orbit_command(cwd, home, args, env);
+    // The child inherits RLIMIT_FSIZE, so keep its coverage profile off regular files.
+    command.env("LLVM_PROFILE_FILE", "/dev/null");
     command
         .stdout(Stdio::from(unwritable))
         .stderr(Stdio::piped());
