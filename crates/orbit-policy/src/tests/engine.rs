@@ -139,6 +139,185 @@ fn host_modify_exception_intersects_selected_profile_authority() {
             .allowed,
         "profile negative rules must continue to narrow host exceptions"
     );
+
+    // [ORB-14122] A wildcard negation is not a literal `<prefix>/**`, so
+    // structural cover does not see it. The host exception must not grant the
+    // path the profile already denies, and must not take away a later
+    // profile allow outside that path.
+    let wildcard_profile = make_def(
+        vec![],
+        vec![".orbit/**", "!.orbit/config.toml"],
+        &[("implementer", &["**"], &["**", "!**/config.toml"])],
+    );
+    let engine = PolicyEngine::from_def(&wildcard_profile).expect("engine");
+    assert!(
+        !engine
+            .check("implementer", FsOperation::Modify, ".orbit/config.toml")
+            .expect("check wildcard profile negation")
+            .allowed,
+        "a host denyModify exception must not override a profile wildcard negation"
+    );
+    let profile_alone = make_def(
+        vec![],
+        vec![],
+        &[("implementer", &["**"], &["**", "!**/config.toml"])],
+    );
+    let engine = PolicyEngine::from_def(&profile_alone).expect("engine");
+    assert!(
+        !engine
+            .check("implementer", FsOperation::Modify, ".orbit/config.toml")
+            .expect("check profile alone")
+            .allowed,
+        "the profile wildcard negation denies the path with no host exception"
+    );
+
+    let exception_still_grants = make_def(
+        vec![],
+        vec![".orbit/**", "!.orbit/config.toml"],
+        &[("implementer", &["**"], &["**"])],
+    );
+    let engine = PolicyEngine::from_def(&exception_still_grants).expect("engine");
+    assert!(
+        engine
+            .check("implementer", FsOperation::Modify, ".orbit/config.toml")
+            .expect("check profile allow")
+            .allowed,
+        "an exception still grants a path the profile allows"
+    );
+    assert!(
+        !engine
+            .check("implementer", FsOperation::Modify, ".orbit/other.toml")
+            .expect("check sibling outside the exception")
+            .allowed,
+        "an exact exception does not grant its siblings"
+    );
+
+    let later_outside_allow = make_def(
+        vec![],
+        vec![".orbit/**", "!.orbit/config.toml"],
+        &[("implementer", &["**"], &["**", "!**/config.toml", "src/**"])],
+    );
+    let engine = PolicyEngine::from_def(&later_outside_allow).expect("engine");
+    assert!(
+        engine
+            .check("implementer", FsOperation::Modify, "src/config.toml")
+            .expect("check later profile allow")
+            .allowed,
+        "replaying a profile negation inside an exception must not deny a later allow outside it"
+    );
+    assert!(
+        !engine
+            .check("implementer", FsOperation::Modify, ".orbit/config.toml")
+            .expect("check exact path still denied")
+            .allowed
+    );
+
+    let subtree = make_def(
+        vec![],
+        vec![".orbit/**", "!.orbit/pkg/**"],
+        &[("implementer", &["**"], &["**", "!**/config.toml"])],
+    );
+    let engine = PolicyEngine::from_def(&subtree).expect("engine");
+    assert!(
+        !engine
+            .check("implementer", FsOperation::Modify, ".orbit/pkg/config.toml")
+            .expect("check subtree wildcard carve-out")
+            .allowed,
+        "a wildcard negation must narrow a subtree exception"
+    );
+    assert!(
+        engine
+            .check("implementer", FsOperation::Modify, ".orbit/pkg/lib.rs")
+            .expect("check subtree sibling")
+            .allowed,
+        "a subtree exception still grants paths the wildcard negation does not match"
+    );
+
+    let subtree_reallow = make_def(
+        vec![],
+        vec![".orbit/**", "!.orbit/pkg/**"],
+        &[(
+            "implementer",
+            &["**"],
+            &["**", "!**/config.toml", ".orbit/pkg/keep/**"],
+        )],
+    );
+    let engine = PolicyEngine::from_def(&subtree_reallow).expect("engine");
+    assert!(
+        engine
+            .check(
+                "implementer",
+                FsOperation::Modify,
+                ".orbit/pkg/keep/config.toml"
+            )
+            .expect("check nested re-allow")
+            .allowed,
+        "a later nested profile allow overrides the wildcard negation inside the exception"
+    );
+    assert!(
+        !engine
+            .check("implementer", FsOperation::Modify, ".orbit/pkg/config.toml")
+            .expect("check carve-out outside the nested allow")
+            .allowed
+    );
+
+    let wildcard_reallow = make_def(
+        vec![],
+        vec![".orbit/**", "!.orbit/pkg/**"],
+        &[(
+            "implementer",
+            &["**"],
+            &["**", "!**/config.toml", "**/config.toml"],
+        )],
+    );
+    let engine = PolicyEngine::from_def(&wildcard_reallow).expect("engine");
+    assert!(
+        engine
+            .check("implementer", FsOperation::Modify, ".orbit/pkg/config.toml")
+            .expect("check later wildcard re-allow")
+            .allowed,
+        "a later profile allow of the same wildcard must survive inside the exception"
+    );
+    assert!(
+        engine
+            .check("implementer", FsOperation::Modify, "src/config.toml")
+            .expect("check outside re-allow")
+            .allowed
+    );
+
+    let single_star = make_def(
+        vec![],
+        vec!["workspace/**", "!workspace/docs/**"],
+        &[("implementer", &["**"], &["**", "!workspace/docs/*.toml"])],
+    );
+    let engine = PolicyEngine::from_def(&single_star).expect("engine");
+    assert!(
+        !engine
+            .check(
+                "implementer",
+                FsOperation::Modify,
+                "workspace/docs/note.toml"
+            )
+            .expect("check single-star carve-out")
+            .allowed,
+        "a single-star profile negation must narrow paths it matches inside the exception"
+    );
+    assert!(
+        engine
+            .check(
+                "implementer",
+                FsOperation::Modify,
+                "workspace/docs/keep/note.toml"
+            )
+            .expect("check single-star does not cross segments")
+            .allowed
+    );
+    assert!(
+        engine
+            .check("implementer", FsOperation::Modify, "src/note.toml")
+            .expect("check single-star stays inside the exception")
+            .allowed
+    );
 }
 
 #[test]
