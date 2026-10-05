@@ -7,11 +7,11 @@ status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
+summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, before-PR review on claimed leaves, and non-pruning footprints.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-13992]
+related_artifacts: [ORB-12488, ORB-13992, ORB-13908]
 ---
 
 # Distributed Drain — Decisions
@@ -371,6 +371,7 @@ whether a sweep or drain is running.
 ## V1 review policy is none
 
 **Recorded:** 2026-09 · Daniel narrowed v1 after review of the contract authored by [ORB-12488].
+**Superseded by:** [A claimed leaf runs the before-PR review its claim captured](#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured)
 **Code anchors:** `crates/orbit-core/src/application/review/gate/`, `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`
 
 ### Context
@@ -398,6 +399,70 @@ handoff state; completion still requires explicit authorization and verified lan
 - Prepared by [ORB-13895]: revision 6 captures the owner's before-PR review contract on the claim
   and lets a handoff carry typed before-PR evidence the owner verifies and records. Admission still
   refuses `before_pr` until an executor declares the gate.
+
+## A claimed leaf runs the before-PR review its claim captured
+
+**Recorded:** 2026-10-04 · [ORB-13908], at Daniel's direction to run the [ORB-13989] reviewer model
+on claimed leaves, gated on the `review.before_pr` the claim captured ([ORB-13992], [ORB-13895]).
+**Code anchors:** `crates/orbit-store/src/repository/task/coordination/admission.rs::admission_refusal`,
+`crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs` (`CreateLeaf`, `claim_review_admission`),
+`crates/orbit-core/src/application/review/gate/context.rs::claimed_leaf_claim`,
+`crates/orbit-core/src/application/review/gate/settle.rs::handoff_evidence`,
+`crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs::reviewer_refusal`,
+`crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml`
+
+### Context
+
+V1 admitted pulls only with `review.before_pr` off on both endpoints, so a workspace that wanted
+every candidate reviewed before its PR could not use followers. The claim already pins the owner's
+review contract (crew, minutes, contract version) and the owner already verifies typed before-PR
+evidence at acceptance; what was missing was a leaf that runs the gate on a follower, where the
+task lives in the owner's store and the follower may not write it.
+
+### Decision
+
+The owner's captured contract alone decides whether a claimed leaf is reviewed. The executor's own
+`review.before_pr` is diagnostic and never refuses or changes a pull; the store seeds the leaf's
+review admission from the claim's ship contract when it creates the leaf, so the follower's
+settings never reach it. An executor declares `review_gate` because its PR leaf runs the gate; the
+ladder still refuses an owner with `before_pr` on for a leaf that does not, or for the local ship
+mode, where no gate runs.
+
+On the follower the gate is the owner pipeline's gate with three substitutions:
+
+- **Task facts come from the claim.** The gate reviews exactly the claimed task as the bound run,
+  read through the worker binding, instead of matching a local `job_run_id`.
+- **The ledger stays on the follower, keyed to the claim.** The claim ID is the lineage root: a
+  claim is one delivery attempt and is never resumed.
+- **Every task write crosses the binding as claim evidence.** The manifest, report, certificate
+  and verdict comment land on the owner's task; selector widening does not happen on the leaf
+  (the claim footprint is fixed until handoff) and the certificate lists the selectors the owner's
+  acceptance will add.
+
+A follower that cannot run the captured reviewer crew — unset, unresolvable, or excluded from its
+window — refuses before it requests a claim, at `orbit run auto --pull` and on every drain pass,
+rather than claiming a task whose gate would escalate.
+
+The alternatives were to keep requiring both endpoints to agree, which made a follower's local
+setting able to veto or, worse, skip a review the owner asked for; or to run the review on the
+owner after handoff, which would put an agent on the owner for every follower delivery and review
+a PR that is already open.
+
+### Consequences
+
+- A `reject` or `incomplete` verdict fails the leaf before push; its failure settlement blocks the
+  task on the owner, where the findings comment already is, the same escalation as the owner path.
+- The owner checks the handed-off certificate against its own copy and observation at acceptance,
+  so a follower cannot claim a review it did not record on the owner.
+- Cost: the certificate's task-meaning digest is the claim's footprint before acceptance widens it.
+  A delivery whose candidate touched paths outside the footprint no longer matches the certificate
+  once accepted, so after-landing coverage reviews it again; the fail-safe direction, paid in
+  reviewer time.
+- Cost: report staleness compares the owner's artifact timestamp with the follower's attempt start,
+  so owner/follower clock skew larger than the reviewer's runtime can read a fresh report as stale
+  and escalate the review as `incomplete`.
+- Cost: every follower serving a before-PR owner must have the owner's review crew configured and
+  runnable; one that does not stops pulling until it does.
 
 ## Declared context survives missing filesystem targets
 
@@ -647,5 +712,6 @@ is off on the Mac by design.
 - [ORB-13663] — moved settlement from the admitting drain to the admission record ([Settlement belongs to the admission record, not to the drain that admitted it](#settlement-belongs-to-the-admission-record-not-to-the-drain-that-admitted-it)).
 - [ORB-13992] — narrowed [V1 review policy is none](#v1-review-policy-is-none) to the `review.before_pr` switch.
 - [ORB-13895] — prepared [V1 review policy is none](#v1-review-policy-is-none) for before-PR review on claims and handoffs.
+- [ORB-13908] — superseded it ([A claimed leaf runs the before-PR review its claim captured](#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

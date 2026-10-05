@@ -636,15 +636,16 @@ fn handoff_json(
             "base": {"commit": candidate.base.commit, "tree": candidate.base.tree},
             "delivery": candidate.delivery,
         },
-        // Pulled leaves are admitted only with `review.before_pr` off on both
-        // endpoints [ORB-13992]. The typed disposition records
-        // that no review was required — it is not a review that passed, and the
-        // task's `review` status means "delivery awaiting completion authority".
+        // The typed disposition records what the claimed leaf's review
+        // settled [ORB-13908]: a before-PR verdict the owner checked at
+        // acceptance, or that no review was required — which is not a review
+        // that passed. Either way the task's `review` status means "delivery
+        // awaiting completion authority".
         "review": {
             "policy": accepted.handoff.review.policy,
             "disposition": accepted.handoff.review.disposition,
-            "is_code_review": false,
-            "summary": "review not required (policy none) — no reviewer ran and no verdict exists",
+            "is_code_review": accepted.handoff.review.before_pr().is_some(),
+            "summary": review_summary(&accepted.handoff.review),
         },
         "required_commands": accepted.required_commands,
         "validation": accepted.handoff.validation,
@@ -668,4 +669,21 @@ fn handoff_json(
         // row cannot cancel a request GitHub may already have applied.
         "uncertain_merge_intent": unresolved_merge_intent,
     })
+}
+
+/// One line on what a handoff's review settled, for the owner console.
+fn review_summary(review: &orbit_types::workflow::handoff::HandoffReview) -> String {
+    match review.before_pr() {
+        Some(evidence) => format!(
+            "before-PR review {} by crew `{}` (attempt {}) on candidate {}; the owner checked \
+             its certificate at acceptance",
+            evidence.verdict.as_str(),
+            evidence.reviewer_crew,
+            evidence.attempt_id,
+            evidence.reviewed_head_sha
+        ),
+        None => {
+            "review not required (policy none) — no reviewer ran and no verdict exists".to_string()
+        }
+    }
 }

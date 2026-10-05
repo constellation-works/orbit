@@ -11,6 +11,20 @@
 # handoff pins the delivery identity and every captured log must name the exact
 # candidate and delivery the owner will act on.
 #
+# ORB-13908: when the claim captured the owner's `review.before_pr`, the leaf
+# runs the same before-PR gate as `task_pr_pipeline` between base
+# synchronization and push. One fresh reviewer, with the claim's captured crew,
+# fixes what it finds as the candidate's second commit and comments a summary;
+# there is no second round. Its manifest, report, certificate and comment
+# cross the worker binding to the owner's task, the attempt ledger stays on
+# this executor keyed to the claim, and the handoff carries the passed verdict
+# as typed evidence the owner checks against its own copies at acceptance.
+# A `reject` or `incomplete` verdict refuses `review_gate_settle`: the leaf
+# fails, and its failure settlement blocks the task on the owner with the
+# findings already there. Required validation (`validate`) runs on the final,
+# reviewed head, and the owner attributes the reviewer's paths when it widens
+# the footprint at acceptance, so there is no separate `review_validate`.
+#
 schemaVersion: 2
 kind: Job
 metadata:
@@ -113,6 +127,63 @@ spec:
         # Same attempt-scoped delivery gate as `commit`.
         implementation: "{{ steps.implement_one.output }}"
 
+    # `review_gate_admit` and `review_gate_settle` always run so later steps
+    # can read their output; they report `applies: false` when the claim
+    # captured `review.before_pr` off. Transient gate and reviewer failures
+    # retry, then get one diagnosed recovery before the leaf fails.
+    - id: review_gate_admit
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        mode: pr
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+
+    - id: review
+      when: "{{ steps.review_gate_admit.output.applies }} == true"
+      retry:
+        max_attempts: 2
+        initial_backoff_ms: 5000
+        backoff_cap_ms: 5000
+        backoff_strategy: linear
+      recovery_activity: step_failure_recovery
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.review_gate_admit.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.review_gate_admit.output.attempt_id }}"
+        lineage_key: "{{ steps.review_gate_admit.output.lineage_key }}"
+        manifest_artifact: "{{ steps.review_gate_admit.output.manifest_artifact }}"
+        report_artifact: "{{ steps.review_gate_admit.output.report_artifact }}"
+        crew: "{{ steps.review_gate_admit.output.reviewer.crew }}"
+
+    - id: review_gate_settle
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        admission: "{{ steps.review_gate_admit.output }}"
+
     - id: push
       recovery_activity: step_failure_recovery
       target: activity:git_push
@@ -142,6 +213,9 @@ spec:
         base_sync: "{{ input.base_sync }}"
         landing_branch: "{{ input.landing_branch }}"
         head: "{{ steps.sync_base.output.head }}"
+        reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
+        reviewed_base_sha: "{{ steps.review_gate_settle.output.reviewed_base_sha }}"
+        review_fixes: "{{ steps.review_gate_settle.output.review_fixes }}"
         body: "{{ input.body }}"
         title: "{{ input.title }}"
         # Same attempt-scoped delivery gate as `commit`.
@@ -164,6 +238,9 @@ spec:
         pull_request: "{{ steps.pr_open.output.pr_number }}"
         candidate: "{{ steps.validate.output.candidate }}"
         validation: "{{ steps.validate.output.validation }}"
+        # The settled before-PR verdict, or null when the claim captured no
+        # review: the owner judges it against the claim's review contract.
+        review_evidence: "{{ steps.review_gate_settle.output.handoff_evidence }}"
         # A claim binds exactly one task, so the loop ran once and this is
         # that task's implementer output; its summary becomes the owner's.
         implementation: "{{ steps.implement_one.output }}"

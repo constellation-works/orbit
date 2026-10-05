@@ -8,8 +8,9 @@
 //! - this checkout is a **replica**, and the selector names **its** owner
 //!   machine and **its** logical workspace;
 //! - the owner answers the read-only probe **as that machine**, and would
-//!   admit this executor now (binary, protocol schema, `review.before_pr`,
-//!   ship mode).
+//!   admit this executor now (binary, protocol schema, ship mode), and this
+//!   host can resolve the before-PR reviewer crew the owner's ship contract
+//!   captured, when `review.before_pr` is on there.
 //!
 //! An empty `workflow.required_validation_commands` is not a refusal: its
 //! claimed leaves run no required check, as an owner's own delivery does, and
@@ -211,6 +212,18 @@ impl crate::OrbitRuntime {
                     .get("refusal")
                     .and_then(Value::as_str)
                     .unwrap_or("refused")
+            )));
+        }
+        // The probe already judged the owner side; the reviewer crew it
+        // captured must also run here [ORB-13908].
+        if let Some(ship) = report
+            .get("ship")
+            .cloned()
+            .and_then(|ship| serde_json::from_value(ship).ok())
+            && let Some(refusal) = self.claimed_review_refusal(&ship)
+        {
+            return Err(OrbitError::CapabilityRefused(format!(
+                "this executor cannot run the owner's before-PR review: {refusal}"
             )));
         }
         let owner_workspace_id = report

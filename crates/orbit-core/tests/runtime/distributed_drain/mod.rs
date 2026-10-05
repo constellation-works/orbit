@@ -54,6 +54,7 @@ use tempfile::TempDir;
 mod admission;
 mod before_pr;
 mod cancel;
+mod claimed_review;
 mod landing_attribution;
 mod recovery;
 mod settlement;
@@ -376,7 +377,16 @@ impl Pair {
     /// routed to it. The follower can launch every provider it configures,
     /// so its window preflight runs every crew until a test says otherwise.
     fn with_crews(crews: &[Option<&str>]) -> Self {
+        Self::with_owner_config("", crews)
+    }
+
+    /// [`Self::with_crews`] with the owner opened over `config` as its
+    /// workspace `config.toml`.
+    fn with_owner_config(config: &str, crews: &[Option<&str>]) -> Self {
         let root = TempDir::new().unwrap();
+        let orbit = root.path().join(OWNER).join("repo/.orbit");
+        std::fs::create_dir_all(&orbit).unwrap();
+        std::fs::write(orbit.join("config.toml"), config).unwrap();
         let (owner, owner_repo) = open_runtime(root.path(), OWNER);
         let tasks = crews
             .iter()

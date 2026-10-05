@@ -206,8 +206,9 @@ pub(crate) fn pull_refill(
                         caller_version: owner_binary_version().to_string(),
                         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
                         caller_before_pr,
-                        // This leaf runs no before-PR gate yet [ORB-13908].
-                        review_gate: false,
+                        // The claimed PR leaf runs the before-PR gate the
+                        // ship contract captures [ORB-13908].
+                        review_gate: true,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
                             job_name: PULL_DRAIN_JOB_NAME.to_string(),
@@ -627,10 +628,46 @@ fn probe(
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| OrbitError::Store(format!("owner probe ship contract: {error}")))?;
+    if let Some(ship) = &ship
+        && let Some(refusal) = reviewer_refusal(runtime, run_id, ship)?
+    {
+        return Ok(ProbeVerdict {
+            ship: None,
+            refusal: Some(refusal),
+        });
+    }
     Ok(ProbeVerdict {
         ship,
         refusal: None,
     })
+}
+
+/// Why this drain cannot run the before-PR review the owner's ship contract
+/// captured [ORB-13908]: the crew is unset, does not resolve here, or the
+/// drain's window cannot run it. Claiming anyway would only escalate the
+/// task at its gate, so the drain requests nothing until the owner or this
+/// host changes.
+fn reviewer_refusal(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    ship: &AdmissionShipContract,
+) -> Result<Option<String>, OrbitError> {
+    if let Some(refusal) = runtime.claimed_review_refusal(ship) {
+        return Ok(Some(refusal));
+    }
+    let Some(crew) = ship
+        .review
+        .as_ref()
+        .and_then(|review| review.crew.as_deref())
+    else {
+        return Ok(None);
+    };
+    Ok(crew_window(runtime, run_id)?
+        .capability()
+        .unrunnable_reason(Some(crew))
+        .map(|reason| {
+            format!("before_pr_reviewer_unavailable: the owner's before-PR review {reason}")
+        }))
 }
 
 /// A boolean templated into activity input, which renders as a string.

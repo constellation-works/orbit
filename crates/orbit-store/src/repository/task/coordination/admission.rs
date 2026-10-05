@@ -581,11 +581,11 @@ pub fn admission_refusal(
         return Some(AdmissionRefusal::ShipModeUnsupported);
     }
     // An owner that captured `review.before_pr` admits only a leaf that runs
-    // the gate its ship contract carries, so nothing is delivered unreviewed;
-    // no executor declares one yet [ORB-13908]. An executor's own captured
-    // switch is refused by name. After-landing review is owner-side and
-    // never refuses.
-    if request.caller_before_pr || (request.ship.before_pr && !request.review_gate) {
+    // the gate its ship contract carries, so nothing is delivered unreviewed
+    // [ORB-13908]. The claim's captured contract decides: the executor's own
+    // switch never gates a claimed leaf. Only the PR route runs the gate.
+    // After-landing review is owner-side and never refuses.
+    if request.ship.before_pr && !(request.review_gate && request.ship.mode == "pr") {
         return Some(AdmissionRefusal::BeforePrUnsupported);
     }
     None

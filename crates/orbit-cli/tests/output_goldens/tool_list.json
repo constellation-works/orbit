@@ -495,7 +495,7 @@
       },
       {
         "name": "caller_before_pr",
-        "description": "Optional. The executor's `review.before_pr`. Pulled leaves require it off on both endpoints; `true` is reported as a refusal rather than silently dropped. After-landing review never affects admission.",
+        "description": "Optional. The executor's `review.before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
         "param_type": "boolean",
         "required": false
       }
@@ -1207,9 +1207,15 @@
       },
       {
         "name": "caller_before_pr",
-        "description": "The `review.before_pr` the executor's drain captured at submission. Only `false` is admitted; after-landing review never affects admission.",
+        "description": "The `review.before_pr` the executor's drain captured at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
         "param_type": "boolean",
         "required": true
+      },
+      {
+        "name": "review_gate",
+        "description": "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.before_pr` on refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
+        "param_type": "boolean",
+        "required": false
       },
       {
         "name": "caller_review_policy",

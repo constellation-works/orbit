@@ -25,10 +25,13 @@ routing is in [tool-surface.md](../tool-surface.md).
 ## What v1 does not do
 
 - No heartbeat, automatic reclamation, fleet registry, or follower merge.
-- No before-PR review. A pull is admitted only with `review.before_pr` off on
-  both hosts. After-landing review (the owner's `delivery-code-review`
-  auto-task) never affects admission. Status `review` means a delivery handoff
-  is waiting, not that a reviewer ran.
+- No review on the follower's own terms. With the owner's `review.before_pr`
+  on, every claimed PR leaf runs the before-PR reviewer the claim captured
+  (the owner's `operation.review_crew`, which each follower must be able to
+  run); the follower's own `review.before_pr` is ignored. After-landing review
+  (the owner's `delivery-code-review` auto-task) never affects admission.
+  Status `review` means a delivery handoff is waiting; whether a reviewer ran
+  is on the task's `review-gate.json`.
 - Age, reservation TTL, and a missing local run are diagnostics, not proof of
   death.
 - Seeded `ship_sweep`, `workspace_ship_pipeline`, and `orbit run ship-sweep`
@@ -51,7 +54,7 @@ orbit config get review.before_pr
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
-protocol schema `6`, equivalent crew and toolchain resolution, and
+protocol schema `7`, equivalent crew and toolchain resolution, and
 `review.before_pr = false`. Hosts may run different operating systems:
 each follower declares its OS, and a task tagged `os:linux`, `os:macos` or
 `os:windows` is claimed only by a host of a named OS; it waits in the backlog,
@@ -195,7 +198,7 @@ destination refuses them. They need an identified caller (`agent` or
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 6,
+  "caller_schema": 7,
   "caller_before_pr": false
 }'
 ```

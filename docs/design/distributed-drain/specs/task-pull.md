@@ -8,7 +8,7 @@ status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908]
 ---
 
 # Spec: `orbit.task.pull`
@@ -68,9 +68,11 @@ and caller-side managed-run restrictions remain. There is no destination callers
 proof, forced-command acceptance requirement, or replacement identity registry. Trusted runtime
 invocation context supplies attempt ownership; remote machine labels alone are attribution, not
 credentials. Owner-local drains use trusted local
-runtime identity and the same logical admission contract. Admission refuses a pull while
-`review.before_pr` is on at either endpoint, before creating a claim; after-landing review (the
-owner's `delivery-code-review` auto-task) never affects admission [ORB-13992]. The read-only preflight response is
+runtime identity and the same logical admission contract. With the owner's `review.before_pr` on,
+admission refuses, before creating a claim, an executor that does not declare `review_gate` and a
+local ship mode, where no gate runs; the executor's own `caller_before_pr` never refuses
+[ORB-13908]. After-landing review (the owner's `delivery-code-review` auto-task) never affects
+admission [ORB-13992]. The read-only preflight response is
 defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 
 ## Input
@@ -81,7 +83,8 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `request_id` | string | Durable unique ID for one intended admission; reused unchanged after uncertainty |
 | `caller_version` | string | Caller binary version |
 | `caller_schema` | integer | Caller distributed-drain wire-protocol schema version |
-| `caller_before_pr` | bool | The `review.before_pr` the calling drain captured at submission; only `false` is admitted |
+| `caller_before_pr` | bool | The `review.before_pr` the calling drain captured at submission; diagnostic only, since a claimed leaf runs the review the `ship` contract captures [ORB-13908] |
+| `review_gate` | bool, optional | Whether the executor's claimed PR leaf runs the before-PR gate; an owner with `review.before_pr` on admits only an executor that declares it. Absent: `false` |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 | `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
 | `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
@@ -93,7 +96,8 @@ declared OS. Protocol revision 2 adds `crews`, revision 4 adds `os`, and revisio
 `caller_review_policy` with `caller_before_pr` and the ship contract's `review_policy` with
 `before_pr`: an older owner rejects the new field even though it is optional, and a revision-4
 caller still sending `caller_review_policy` is answered `protocol_mismatch`. Revision 6 adds the
-ship contract's `review` (below) and the typed handoff's before-PR evidence [ORB-13895]. Before persisting a
+ship contract's `review` (below) and the typed handoff's before-PR evidence [ORB-13895]; revision 7
+sends `review_gate`, which a revision-6 owner rejects as an unknown field [ORB-13908]. Before persisting a
 new request, the follower compares the probe's `protocol_schema` with its own revision and
 reports `protocol_mismatch` naming both revisions. Binary-version equality is insufficient
 because wire changes can land between releases. Completion authorization is resolved
@@ -115,9 +119,9 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
 ## Idempotency and admission
 
 1. Apply pre-admission refusals in the table order below: selector, current authorization,
-   trusted invocation context, input shape, version/schema, ship mode, then before-PR review. Check
-   both the owner's `review.before_pr` and the executor's declared `caller_before_pr`; neither may
-   be on.
+   trusted invocation context, input shape, version/schema, ship mode, then before-PR review: an
+   owner with `review.before_pr` on admits only a PR-mode request whose executor declares
+   `review_gate`. The executor's `caller_before_pr` is not checked.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
 2. Begin the owner store transaction. Its substrate is the task/reservation commit boundary
@@ -223,7 +227,7 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `version_mismatch` | Caller binary version differs from owner |
 | `protocol_mismatch` | Caller and owner protocol revisions differ; diagnostics name both |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
-| `before_pr_unsupported` | Owner or executor has `review.before_pr` on (stored receipts may spell it `review_policy_unsupported`) |
+| `before_pr_unsupported` | Owner has `review.before_pr` on and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 | `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now; replays keep their stored contract |
@@ -342,8 +346,18 @@ repository (`review_certificate_mismatch`), and a crew or certificate schema oth
 contract's (`review_contract_mismatch`). Approval and landing recheck the pinned evidence. An
 accepted certificate is written to the owner's review store, so after-landing coverage excludes the
 reviewed tree instead of reviewing it again. A claim without a captured `review` refuses before-PR
-evidence. Admission still refuses `before_pr` until an executor declares the before-PR gate
-[ORB-13908]; no pull tool input sets that declaration yet.
+evidence.
+
+The claimed PR leaf produces that evidence itself [ORB-13908]. The pull store creates the leaf with
+a review admission seeded from the claim's captured `review`, never from the follower's settings,
+and the leaf runs `review_gate_admit` → `review` → `review_gate_settle` between base
+synchronization and push. The gate reads the claimed task through the worker binding, keeps its
+attempt ledger in the follower's review store keyed to the claim, and sends the manifest, the
+reviewer's report, the certificate and the verdict comment to the owner task as claim evidence;
+the claim footprint does not widen until acceptance. `claim_handoff` carries the settled
+evidence. A non-passing verdict fails the leaf before push, and the failure settlement blocks the
+task. A follower that cannot run the captured reviewer crew requests no claim
+(`before_pr_reviewer_unavailable`).
 
 `OrbitRuntime::accept_task_handoff`, `approve_task_handoff`, `revoke_task_handoff`,
 `accepted_task_handoff` and `landing_start_requests` are internal owner-domain seams, not registered

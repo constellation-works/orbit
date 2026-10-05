@@ -2,9 +2,9 @@
 //! certificate, so its after-landing review excludes the reviewed tree
 //! [ORB-13895].
 //!
-//! No executor declares a before-PR gate yet, so the claim is admitted on
-//! the owner's commit boundary directly, as a gate-running leaf's pull will
-//! be once one does.
+//! The claim is admitted on the owner's commit boundary directly, as a
+//! gate-running leaf's pull is; `claimed_review` drives the leaf's gate
+//! itself [ORB-13908].
 
 use std::collections::BTreeMap;
 

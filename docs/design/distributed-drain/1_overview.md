@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Overview
 owner: claude
-last_updated: 2026-09-29
+last_updated: 2026-10-04
 last_validated: 2026-09-29
 status: Draft
 feature: distributed-drain
@@ -11,7 +11,7 @@ summary: Run the workspace drain on more than one host against one owner store �
 tags: [distributed-drain, multi-host, pull, federated-mcp, resident-orchestrator]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-store/src/repository/task/coordination/admission.rs", "crates/orbit-core/src/application/automation/ownership.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, state-compatibility, task-migration, automation-triggers]
-related_artifacts: [ORB-12488, ORB-12490, ORB-12491, ORB-12492, ORB-12495, ORB-12500, ORB-12516, ORB-12528, ORB-12616, ORB-12617, ORB-13625, ORB-13639, ORB-13642, ORB-13649, ORB-13663, ORB-13664, ORB-13992]
+related_artifacts: [ORB-12488, ORB-12490, ORB-12491, ORB-12492, ORB-12495, ORB-12500, ORB-12516, ORB-12528, ORB-12616, ORB-12617, ORB-13625, ORB-13639, ORB-13642, ORB-13649, ORB-13663, ORB-13664, ORB-13992, ORB-13908]
 ---
 
 # Distributed Drain — Overview
@@ -50,8 +50,9 @@ planes over one repository, which the federated-mcp spec names an operator misco
 
 Existing roles, capability routing, reservations, and PR checks were the foundations. V1 added
 atomic admission, durable request/claim identity, routed task reads and writes, settlement, and an
-owner landing consumer. Pulls are admitted only while before-PR review (`review.before_pr`) is
-off at both endpoints; after-landing review never affects admission. Implementation validation still
+owner landing consumer. With the owner's before-PR review (`review.before_pr`) on, each claimed PR
+leaf runs the reviewer the claim captured before it opens its pull request [ORB-13908];
+after-landing review never affects admission. Implementation validation still
 runs, and declared context selectors remain protected even when their files do not exist. These
 were substantive integration changes. Throughput depends on file conflicts, provider limits, shared CI,
 and landing capacity as well as local build slots.

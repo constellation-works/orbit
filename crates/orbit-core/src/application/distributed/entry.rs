@@ -132,9 +132,10 @@ pub struct DrainEntryAdmission {
     /// The single capacity reading legacy dispatch and pull both allocate
     /// against.
     pub occupancy: orbit_store::contracts::DrainLeafOccupancy,
-    /// The owner's `review.before_pr`. The claim contract admits only `off`,
-    /// which is why it is reported on every decision rather than left for
-    /// each surface to look up. After-landing review never affects admission.
+    /// The owner's `review.before_pr`. With it on, every claimed PR leaf runs
+    /// the before-PR review its claim captures [ORB-13908], which is why it
+    /// is reported on every decision rather than left for each surface to
+    /// look up. After-landing review never affects admission.
     pub before_pr: bool,
     /// Whether the claim contract would admit this workspace at all — the
     /// same ordered ladder `orbit.task.pull` applies, so a preflight and a
@@ -304,9 +305,10 @@ impl crate::OrbitRuntime {
     }
 
     /// Whether the claim contract would admit this workspace, by the spec's
-    /// own ordered ladder. Reported rather than raised: a workspace with
-    /// `review.before_pr` on still ships through its legacy leaf, and
-    /// saying so is what keeps the two facts from being confused.
+    /// own ordered ladder. Reported rather than raised: a workspace the claim
+    /// contract refuses — `review.before_pr` on a local ship mode, say —
+    /// still ships through its legacy leaf, and saying so is what keeps the
+    /// two facts from being confused.
     fn claim_contract_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
         let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
             machine_id: self
@@ -320,7 +322,8 @@ impl crate::OrbitRuntime {
             caller_version: owner_binary_version().to_string(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             caller_before_pr: ship.before_pr,
-            review_gate: false,
+            // This binary's claimed PR leaves run the before-PR gate.
+            review_gate: true,
             run_context: AdmissionRunContext {
                 run_id: "entry-point".to_string(),
                 job_name: "entry-point".to_string(),
