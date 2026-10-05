@@ -257,7 +257,11 @@ checkout.
 ### Read-only inspection
 
 An inspector validates the publication envelope and bundle hashes, then renders
-tasks directly from the fetched tree or a disposable index. The data is labelled
+tasks directly from the fetched tree or a disposable index. That tree is
+untrusted: checkout does not materialize symlinks, and a symlink or other
+non-regular entry at the envelope or under `tasks/` is refused before its
+bytes are read, so a link cannot copy a host file into the inspection result
+or a restored bundle. The data is labelled
 with publication time, generation, workspace, source-repository fingerprint,
 authority, publication ID, and commit ID. It is never presented as live state.
 

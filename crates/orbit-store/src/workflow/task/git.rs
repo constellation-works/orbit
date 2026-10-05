@@ -96,6 +96,12 @@ impl<'a> GitRunner<'a> {
                 "core.autocrlf=false",
                 "-c",
                 "core.safecrlf=false",
+                // A publication checkout is untrusted. Leaving symlinks enabled
+                // turns mode-120000 entries into host symlinks, and the next
+                // read follows them. Inspect still refuses those modes before
+                // reading; this stops checkout from creating the link at all.
+                "-c",
+                "core.symlinks=false",
             ])
             .args(args);
         for (key, value) in &self.env {
