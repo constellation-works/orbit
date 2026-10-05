@@ -726,7 +726,10 @@ pub struct ReviewAttempt {
     pub candidate: SourceRevision,
     pub started_at: DateTime<Utc>,
     pub state: ReviewAttemptState,
-    /// Reviewer runtime charged to the lineage for this attempt.
+    /// Reviewer runtime charged for this attempt at release or settlement.
+    /// Absent until then. A released attempt may record more runtime
+    /// afterwards; [`Self::elapsed_at`] counts that too, so this value is a
+    /// floor rather than a freeze.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_seconds: Option<u64>,
     /// Set when the attempt was closed without a reviewer verdict — its
@@ -773,11 +776,19 @@ fn is_zero(value: &u64) -> bool {
 }
 
 impl ReviewAttempt {
-    /// Recorded charge once settled, otherwise the reviewer runtime so far
-    /// (see [`Self::reviewer_runtime_at`]).
+    /// Charge counted against the review budget at `now`.
+    ///
+    /// A recorded [`Self::elapsed_seconds`] is a floor. Release stores the
+    /// runtime spent so far and still accepts later invocations; once
+    /// [`Self::reviewer_runtime_at`] exceeds that floor, the greater value
+    /// counts, so a resumed run cannot spend the budget again. An attempt
+    /// with no recorded charge reports its runtime only. Settlement sets the
+    /// recorded charge to the runtime and clears any running invocation, so
+    /// the two agree.
     pub fn elapsed_at(&self, now: DateTime<Utc>) -> u64 {
         self.elapsed_seconds
-            .unwrap_or_else(|| self.reviewer_runtime_at(now))
+            .unwrap_or(0)
+            .max(self.reviewer_runtime_at(now))
     }
 
     /// Reviewer process runtime spent on this attempt, counting a running
@@ -897,8 +908,8 @@ impl ReviewLedger {
             })
     }
 
-    /// Reviewer runtime `candidate`'s review has spent at `now`, counting an
-    /// open attempt's running reviewer.
+    /// Reviewer runtime `candidate`'s review has spent at `now`, counting a
+    /// running reviewer and any runtime recorded after a provisional release.
     pub fn consumed_for(
         &self,
         candidate: &SourceRevision,
