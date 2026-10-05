@@ -5,7 +5,9 @@
 //! `operation.review_policy = "after-landing"` still enables a consumer no
 //! operator has configured, for one release.
 
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::path::PathBuf;
 
 use chrono::Utc;
 use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
@@ -46,6 +48,39 @@ fn in_isolated_child(test: &str) -> bool {
         &output.stdout,
         &output.stderr,
     );
+    false
+}
+
+/// Run the before-PR route case with both an isolated provider-only PATH and
+/// the host PATH. Each child owns its fixture and installs the same inert
+/// launcher before asking doctor to resolve the routed review crew.
+fn in_isolated_child_with_provider_paths(test: &str) -> bool {
+    const CHILD: &str = "ORBIT_TEST_REVIEW_AFTER_LANDING_CHILD";
+    if std::env::var(CHILD).ok().as_deref() == Some(test) {
+        return true;
+    }
+    for mode in ["clean", "normal"] {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        orbit_common::test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .args(["--exact", test, "--nocapture"])
+            .env(CHILD, test)
+            .env("ORBIT_TEST_REVIEW_PROVIDER_PATH_MODE", mode)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path())
+            .output()
+            .unwrap();
+        orbit_common::test_env::assert_child_test_passed(
+            test,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+    }
     false
 }
 
@@ -194,18 +229,116 @@ fn commit(fixture: &Fixture, content: &str) -> SourceRevision {
     }
 }
 
+struct DoctorOutput {
+    rows: Value,
+    review_row: Value,
+    success: bool,
+    exit_code: Option<i32>,
+    stderr: String,
+}
+
+impl DoctorOutput {
+    fn diagnostics(&self) -> String {
+        format!(
+            "doctor JSON/check statuses: {}; exit code: {:?}; stderr: {}",
+            self.rows, self.exit_code, self.stderr
+        )
+    }
+}
+
+/// Capture the complete doctor result so failures retain all check statuses,
+/// the process result, and stderr rather than only the review row.
+fn doctor_output(fixture: &Fixture, path: Option<&OsStr>) -> DoctorOutput {
+    let mut command = fixture.command(&["doctor", "--json"]);
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let output = command.output().unwrap();
+    let rows: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "doctor JSON parse failed: {error}; exit code: {:?}; stdout: {}; stderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    let review_row = rows
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["check"] == "review"))
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "no review row in doctor output: {}; exit code: {:?}; stderr: {}",
+                rows,
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+    DoctorOutput {
+        rows,
+        review_row,
+        success: output.status.success(),
+        exit_code: output.status.code(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
 /// The `review` doctor row and whether doctor exited zero.
 fn doctor_row(fixture: &Fixture) -> (Value, bool) {
-    let output = fixture.command(&["doctor", "--json"]).output().unwrap();
-    let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let row = rows
+    let output = doctor_output(fixture, None);
+    (output.review_row, output.success)
+}
+
+fn install_inert_claude_launcher(fixture: &Fixture) -> PathBuf {
+    let bin = fixture._temp.path().join("fixture-provider-bin");
+    fs::create_dir_all(&bin).unwrap();
+    #[cfg(windows)]
+    let launcher = bin.join("claude.exe");
+    #[cfg(not(windows))]
+    let launcher = bin.join("claude");
+    fs::write(&launcher, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&launcher).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&launcher, permissions).unwrap();
+    }
+    bin
+}
+
+fn provider_path(mode: &str, provider_bin: &std::path::Path) -> OsString {
+    if mode == "clean" {
+        return provider_bin.as_os_str().to_os_string();
+    }
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries = vec![provider_bin.to_path_buf()];
+    entries.extend(std::env::split_paths(&inherited));
+    std::env::join_paths(entries).expect("fixture provider PATH")
+}
+
+fn doctor_with_fixture_provider(
+    fixture: &Fixture,
+    path: &OsStr,
+    provider_bin: &std::path::Path,
+) -> DoctorOutput {
+    let output = doctor_output(fixture, Some(path));
+    let provider = output
+        .rows
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["check"] == "review")
-        .cloned()
-        .unwrap_or_else(|| panic!("no review row: {rows}"));
-    (row, output.status.success())
+        .find(|row| row["check"] == "provider:sonnet")
+        .unwrap_or_else(|| panic!("no routed provider row: {}", output.diagnostics()));
+    assert_eq!(provider["status"], "ok", "{}", output.diagnostics());
+    assert!(
+        provider["message"].as_str().is_some_and(|message| {
+            message.contains("claude") && message.contains(&provider_bin.display().to_string())
+        }),
+        "{}",
+        output.diagnostics()
+    );
+    output
 }
 
 fn assert_doctor_fails(fixture: &Fixture, expected: &str) {
@@ -557,24 +690,34 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
 #[test]
 fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
     const TEST: &str = "review_after_landing_cli::doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on";
-    if !in_isolated_child(TEST) {
+    if !in_isolated_child_with_provider_paths(TEST) {
         return;
     }
 
     let fixture = Fixture::new();
+    let provider_bin = install_inert_claude_launcher(&fixture);
+    let path_mode = std::env::var("ORBIT_TEST_REVIEW_PROVIDER_PATH_MODE")
+        .expect("isolated test child selects a provider PATH mode");
+    let doctor_path = provider_path(&path_mode, &provider_bin);
     enable_review_crew(&fixture);
     set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
     set_policy(&fixture, "review.before_pr", "true");
 
-    let (row, success) = doctor_row(&fixture);
-    assert_eq!(row["status"], "ok", "{row}");
-    assert!(success, "a PR workspace may hold PR creation for review");
+    let doctor = doctor_with_fixture_provider(&fixture, &doctor_path, &provider_bin);
+    let row = &doctor.review_row;
+    assert_eq!(row["status"], "ok", "{}", doctor.diagnostics());
+    assert!(
+        doctor.success,
+        "a PR workspace may hold PR creation for review; {}",
+        doctor.diagnostics()
+    );
     assert!(
         !row["message"]
             .as_str()
             .unwrap()
             .contains("local-only delivery"),
-        "{row}"
+        "{}",
+        doctor.diagnostics()
     );
 
     fixture
@@ -599,40 +742,49 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
         "{shown}"
     );
 
-    let (row, success) = doctor_row(&fixture);
-    assert_eq!(row["status"], "error", "{row}");
+    let doctor = doctor_with_fixture_provider(&fixture, &doctor_path, &provider_bin);
+    let row = &doctor.review_row;
+    assert_eq!(row["status"], "error", "{}", doctor.diagnostics());
     assert!(
-        !success,
-        "doctor must fail while every local delivery would"
+        !doctor.success,
+        "doctor must fail while every local delivery would; {}",
+        doctor.diagnostics()
     );
     let message = row["message"].as_str().unwrap();
     assert!(
         message.contains("review.before_pr (global)") && message.contains("local-only delivery"),
-        "{message}"
+        "{}",
+        doctor.diagnostics()
     );
     let remediation = row["remediation"].as_str().unwrap();
     assert!(
         remediation.contains("`orbit config set review.before_pr false`"),
-        "{remediation}"
+        "{}",
+        doctor.diagnostics()
     );
 
     set_policy(&fixture, "review.before_pr", "false");
-    let (row, success) = doctor_row(&fixture);
+    let doctor = doctor_with_fixture_provider(&fixture, &doctor_path, &provider_bin);
+    let row = &doctor.review_row;
     assert_eq!(
-        row["status"], "ok",
-        "turning the switch off clears the local-route failure: {row}"
+        row["status"],
+        "ok",
+        "turning the switch off clears the local-route failure: {}",
+        doctor.diagnostics()
     );
-    assert!(success);
+    assert!(doctor.success, "{}", doctor.diagnostics());
 
     set_policy(&fixture, "review.before_pr", "true");
-    let (row, _) = doctor_row(&fixture);
-    assert_eq!(row["status"], "error", "{row}");
+    let doctor = doctor_with_fixture_provider(&fixture, &doctor_path, &provider_bin);
+    let row = &doctor.review_row;
+    assert_eq!(row["status"], "error", "{}", doctor.diagnostics());
     assert!(
         row["message"]
             .as_str()
             .unwrap()
             .contains("review.before_pr (global)"),
-        "{row}"
+        "{}",
+        doctor.diagnostics()
     );
 
     let added = fixture.json(&[
@@ -701,7 +853,16 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
         .unwrap_or_else(|| panic!("{task_id} missing: {readiness}"));
     assert_eq!(entry["eligible"], true, "{entry}");
     assert_eq!(entry["reason"], "ready", "{entry}");
-    let (row, success) = doctor_row(&fixture);
-    assert_eq!(row["status"], "ok", "{row}");
-    assert!(success, "the PR route keeps before-PR review eligible");
+    let doctor = doctor_with_fixture_provider(&fixture, &doctor_path, &provider_bin);
+    assert_eq!(
+        doctor.review_row["status"],
+        "ok",
+        "{}",
+        doctor.diagnostics()
+    );
+    assert!(
+        doctor.success,
+        "the PR route keeps before-PR review eligible; {}",
+        doctor.diagnostics()
+    );
 }
