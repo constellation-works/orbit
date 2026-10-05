@@ -2,7 +2,7 @@
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, withWorkspace } from './js/common.js';
-import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
+import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
@@ -766,20 +766,19 @@ function buildKnowledgeValueList(values, opts = {}) {
   return wrap;
 }
 
+// Installed by wireTaskIdResolver. Friction "during task" links must use that
+// scoped lookup: widening activeStatuses and then routing to Tasks is undone
+// by applyTasksHashQuery, which restores the default filter and leaves
+// openVisibleTask able only to copy an off-filter or off-page id.
+let resolveTaskById = null;
+
 function openTaskFromKnowledge(taskId) {
-  activeStatuses = new Set(STATUS_ORDER);
-  searchQuery = "";
-  const taskSearch = $("task-search");
-  if (taskSearch) taskSearch.value = "";
-  sAT("tasks", { refresh: false });
-  const open = () => openVisibleTask(taskId, taskContext());
-  if (lastTasks.length > 0 && hasCrewOptions()) {
-    open();
+  const id = String(taskId || "").trim().toUpperCase();
+  if (!id || typeof resolveTaskById !== "function") {
+    copyTaskIdWithNotice(String(taskId || "").trim(), taskContext());
     return;
   }
-  fetchAndRenderTasks().then(() => {
-    open();
-  }).catch(() => copyTaskIdWithNotice(taskId, taskContext()));
+  resolveTaskById(id);
 }
 
 function wireFrictionSearch() {
@@ -1010,6 +1009,8 @@ function wireTaskIdResolver() {
     }
     showLookupStatus("error", `${id} not found`);
   }
+
+  resolveTaskById = lookupTask;
 
   // Editing the query abandons any lookup still in flight.
   input.addEventListener("input", () => {
