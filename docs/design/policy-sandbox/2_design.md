@@ -354,7 +354,7 @@ The Linux host appends non-overridable Git write denials after provider and
 runtime convenience grants. It discovers the registered and active checkout's
 `.git` entry, its real gitdir and `commondir`. Those directories include refs,
 rebase state and host recovery payloads at
-`<git-common-dir>/orbit/worktree-recovery/<run-id>/`. Git inspection stays
+`<git-common-dir>/orbit/worktree-recovery/<run-id>/attempt-<n>/`. Git inspection stays
 readable; source files remain writable according to the activity profile.
 Metadata paths containing symlinks, symlink entries inside metadata, and
 special files or hard-linked metadata files fail closed before launch: a read-only mount cannot

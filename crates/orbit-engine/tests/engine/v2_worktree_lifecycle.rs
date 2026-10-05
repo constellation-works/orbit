@@ -1945,6 +1945,96 @@ fn untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree() {
     );
 }
 
+/// Every dirty integrity failure in one run preserves its own current
+/// content, and the recovery store stays bounded: old attempts are pruned,
+/// the newest never is.
+#[cfg(unix)]
+#[test]
+fn repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts() {
+    isolated(
+        "repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts",
+        || {
+            const FAILURES: usize = 8;
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-REPEAT", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-REPEAT"], "jrun-repeat-setup"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let provider = fixture.root.path().join("codex");
+            let primary = fixture.repo.display().to_string();
+            write_executable(
+                &provider,
+                &provider_script(&format!(
+                    "printf 'primary drift\\n' > '{primary}/README.md'\n"
+                )),
+            );
+            let host = host.with_provider(&provider);
+
+            let mut roots = Vec::new();
+            for failure in 1..=FAILURES {
+                git(&fixture.repo, &["checkout", "--", "README.md"]);
+                fs::write(
+                    checkout.path.join(format!("edit-{failure}.txt")),
+                    format!("edit {failure}\n"),
+                )
+                .unwrap();
+                let error = dispatch_audited_linked_activity(
+                    &host,
+                    "agent_implement",
+                    "jrun-repeat",
+                    "T-REPEAT",
+                    &checkout.path,
+                    Arc::new(V2AuditWriter::new(
+                        "jrun-repeat",
+                        "codex:test-model",
+                        Arc::new(InMemorySink::new(fixture.root.path())),
+                    )),
+                )
+                .expect_err("primary drift is a boundary failure");
+                let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+                let recovery = &diagnostic["recovery"];
+                assert!(
+                    recovery.get("preservation_error").is_none(),
+                    "failure {failure}: {diagnostic}"
+                );
+                let root = PathBuf::from(recovery["root"].as_str().expect("recovery root"));
+                let payload = PathBuf::from(recovery["untracked_payload"].as_str().unwrap());
+                assert_eq!(
+                    fs::read_to_string(payload.join(format!("edit-{failure}.txt"))).unwrap(),
+                    format!("edit {failure}\n"),
+                    "failure {failure} must preserve the edits present at that failure"
+                );
+                assert!(
+                    !roots.contains(&root),
+                    "failure {failure} reused an earlier payload: {}",
+                    root.display()
+                );
+                roots.push(root);
+            }
+
+            let run_dir = roots[0].parent().unwrap();
+            let kept = fs::read_dir(run_dir).unwrap().count();
+            assert!(
+                kept < FAILURES,
+                "recovery payloads of one run must be bounded, found {kept}"
+            );
+            assert!(
+                roots.last().unwrap().is_dir(),
+                "the newest payload is never pruned"
+            );
+            assert!(
+                !roots[0].exists(),
+                "the oldest payload is pruned past the retention bound"
+            );
+        },
+    );
+}
+
 fn recover(
     host: &LifecycleHost,
     run_id: &str,
