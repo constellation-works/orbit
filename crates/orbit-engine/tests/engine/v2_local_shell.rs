@@ -4,8 +4,9 @@
 
 //! Deterministic local command execution through the real v2 dispatch seam
 //! [ORB-11294]. Every case here loads a `kind: Activity` asset, hands it to
-//! `dispatch_v2_activity`, and asserts on the dispatch outcome and the audit
-//! envelope — no direct calls into the action.
+//! `dispatch_v2_activity`, and asserts the dispatch outcome. The nonzero-exit
+//! case also reads the audit sink and asserts the step's failure event. No
+//! case calls the action directly.
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_local_shell::/)'`.
 
@@ -16,8 +17,9 @@ use orbit_agent::loop_engine::InMemorySink;
 use orbit_engine::activity_job::load_activity_asset;
 use orbit_engine::{
     DispatchError, DispatchOutcome, ResolvedShellExecutor, RuntimeHost, V2AuditWriter,
-    V2DispatchInput, dispatch_v2_activity,
+    V2DispatchInput, V2SqliteSink, dispatch_v2_activity,
 };
+use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use serde_json::{Value, json};
 
 /// The shipped example must dispatch as written, so the documented reference
@@ -49,12 +51,12 @@ fn a_nonzero_exit_fails_the_activity_and_is_audited() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
 
-    let error = dispatch(
+    let audited = dispatch_with_audit(
         &shell_activity(json!({ "shell": "/bin/sh", "script": "exit 9" })),
         json!({}),
         &host,
-    )
-    .expect_err("nonzero exit fails the activity");
+    );
+    let error = audited.result.expect_err("nonzero exit fails the activity");
 
     match &error {
         DispatchError::DeterministicActionFailed { action, message } => {
@@ -63,6 +65,38 @@ fn a_nonzero_exit_fails_the_activity_and_is_audited() {
         }
         other => panic!("unexpected dispatch error: {other:?}"),
     }
+
+    let finished: Vec<&V2AuditEvent> = audited
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                &event.kind,
+                V2AuditEventKind::ActivityFinished { activity_name, .. }
+                    if activity_name == "local_shell_case"
+            )
+        })
+        .collect();
+    assert_eq!(
+        finished.len(),
+        1,
+        "the audit sink must record exactly one finished event for the failed step: {:?}",
+        audited
+            .events
+            .iter()
+            .map(|event| event.envelope.event_type.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        matches!(
+            &finished[0].kind,
+            V2AuditEventKind::ActivityFinished { outcome, .. } if outcome == "error"
+        ),
+        "removing the failure audit event must fail this test: {:?}",
+        finished[0]
+    );
+    assert_eq!(finished[0].envelope.event_type, "activity.finished");
+    assert_eq!(finished[0].envelope.run_id, "jrun-local-shell");
 }
 
 #[test]
@@ -177,23 +211,44 @@ fn a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env() {
     );
 }
 
+struct AuditedDispatch {
+    result: Result<DispatchOutcome, DispatchError>,
+    events: Vec<V2AuditEvent>,
+}
+
 fn dispatch(yaml: &str, input: Value, host: &ShellHost) -> Result<DispatchOutcome, DispatchError> {
+    dispatch_with_audit(yaml, input, host).result
+}
+
+fn dispatch_with_audit(yaml: &str, input: Value, host: &ShellHost) -> AuditedDispatch {
     let asset = load_activity_asset(yaml).expect("activity asset loads");
     let audit_root = tempfile::tempdir().expect("tempdir");
     let blob_dir = audit_root.path().join("blobs");
     std::fs::create_dir_all(&blob_dir).expect("create blob dir");
     let sink = Arc::new(InMemorySink::new(blob_dir));
-    let writer = Arc::new(V2AuditWriter::new("jrun-local-shell", "test", sink.clone()));
-
-    dispatch_v2_activity(V2DispatchInput {
+    let envelope = Arc::new(V2SqliteSink::for_audit_root(
+        Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+        "ws_local_shell",
+        "jrun-local-shell",
+        "test",
+        None,
+        audit_root.path(),
+    ));
+    let writer =
+        Arc::new(V2AuditWriter::new("jrun-local-shell", "test", sink).with_envelope_sink(envelope));
+    let result = dispatch_v2_activity(V2DispatchInput {
         activity_name: &asset.name,
         spec: &asset.spec.spec,
         fs_profile: asset.spec.fs_profile.as_deref(),
         input,
-        audit: writer,
+        audit: writer.clone(),
         run_id: "jrun-local-shell",
         host: Some(host),
-    })
+    });
+    let events = writer
+        .events_snapshot()
+        .expect("the audit sink persists the step envelope");
+    AuditedDispatch { result, events }
 }
 
 fn shell_activity(config: Value) -> String {

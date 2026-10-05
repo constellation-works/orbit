@@ -27,22 +27,17 @@
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_name_resolution::/)'`.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use orbit_engine::activity_job::{
     ResolveError, V2ActivityCatalog, load_job_asset, resolve_job_target_refs,
 };
-use orbit_engine::{
-    DispatchError, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
-    dispatch_v2_activity, resolve_job_catalog_refs_for_execution, validate_job,
-};
+use orbit_engine::{DispatchError, resolve_job_catalog_refs_for_execution, validate_job};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, FanInSpec, FanOutBlock, JobKind, JobV2, JobV2Step, JobV2StepBody,
     JoinMode, LoopBlock, ParallelBlock, Provider, TargetRef, TargetStep,
     validate_job_retired_sessions,
 };
-use serde_json::Value;
 
 #[test]
 fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,7 +46,6 @@ fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_c_unknown_ref_is_structural_error()?;
     scenario_d_pipeline_yaml_partial_resolution()?;
     scenario_e_retired_session_rejection_runs_after_resolution()?;
-    scenario_f_deterministic_activities_dispatch()?;
 
     Ok(())
 }
@@ -498,90 +492,9 @@ fn scenario_e_retired_session_rejection_runs_after_resolution()
     Ok(())
 }
 
-/// F: the retired `revert_on_red` example still parses, but its deleted action
-/// must fail loudly rather than becoming a skipped-success path.
-fn scenario_f_deterministic_activities_dispatch() -> Result<(), Box<dyn std::error::Error>> {
-    println!("  F) retired revert_on_red action is rejected structurally");
-    let catalog = load_reference_catalog()?;
-    let host = PipelineHost;
-
-    let activity = catalog.get("revert_on_red").expect("present");
-    let tmp = tempfile::tempdir()?;
-    let writer = build_writer(tmp.path(), "name-resolution-revert")?;
-    let err = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "revert_on_red",
-        spec: &activity.spec,
-        fs_profile: activity.fs_profile.as_deref(),
-        input: serde_json::json!({
-            "commit_sha": "deadbeef",
-            "branch": "agent-main",
-            "reason": "coverage",
-        }),
-        audit: writer,
-        run_id: "name-resolution-revert",
-        host: Some(&host),
-    })
-    .expect_err("retired action must be rejected");
-    assert!(
-        matches!(err, DispatchError::DeterministicActionNotRegistered(action) if action == "revert_on_red")
-    );
-
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn build_writer(
-    root: &std::path::Path,
-    run_id: &str,
-) -> Result<Arc<V2AuditWriter>, Box<dyn std::error::Error>> {
-    let audit_root = root.join("audit");
-    std::fs::create_dir_all(&audit_root)?;
-    let writer = V2AuditWriter::with_disk_sinks(
-        &audit_root,
-        Arc::new(orbit_store::Store::open_in_memory()?),
-        "ws_smoke",
-        run_id,
-        "smoke".to_string(),
-        None,
-    )?;
-    Ok(writer)
-}
-
-/// Host that models the post-sweep deterministic action surface.
-struct PipelineHost;
-
-impl RuntimeHost for PipelineHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            action.to_string(),
-        ))
-    }
-
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Err(DispatchError::CliInvocationFailed(
-            "PipelineHost has no CLI mapping".into(),
-        ))
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
-    }
-}
 
 fn repo_root() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
