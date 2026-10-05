@@ -96,19 +96,18 @@ From `crates/orbit-exec/src/supervision/signal.rs`:
 
 ```rust
 pub(super) struct SignalHandlerGuard {
-    start_gen: u64,          // signals observed after this wait started
     slot: Option<usize>,     // lock-free live-pgid table index
 }
 
 impl SignalHandlerGuard {
     pub(super) fn install(child_pid: u32) -> Result<Self, OrbitError> {
-        let start_gen = acquire_handlers()?;   // refcount++; first waiter installs
+        acquire_handlers()?;                  // refcount++; first waiter installs
         let slot = if is_child_process_group_leader(child_pid) {
             register_pgid(child_pid)           // only a verified live group leader
         } else {
             None
         };
-        Ok(Self { start_gen, slot })
+        Ok(Self { slot })
     }
 
     pub(super) fn release_process_group(&mut self) {
@@ -124,7 +123,9 @@ impl Drop for SignalHandlerGuard {
 }
 ```
 
-`acquire_handlers` takes a process-wide `Mutex` only for the refcount/`sigaction` critical section. The first waiter snapshots the previous SIGINT/SIGTERM dispositions and installs a handler that stores a generation counter, records a pending forward, and `killpg`s every registered child group; the last drop restores those dispositions and re-raises a captured signal (except `SIG_IGN`) with the mutex released. Concurrent waits overlap. A slot only ever holds a pid that leads its own live process group (never our own group), the handler re-checks that before each `killpg`, and the waiter releases the slot the moment the child is reaped — a reaped pid can be reused by an unrelated group leader, and a fan-out to it would signal processes Orbit never spawned.
+`acquire_handlers` takes a process-wide `Mutex` only for the refcount/`sigaction` critical section. The first waiter snapshots the previous SIGINT/SIGTERM dispositions and installs a handler that records a pending forward and `killpg`s every registered child group. Every waiter observes that pending signal, including waits started during another child's termination grace period. Observing it does not consume it: all overlapping waits terminate, so a late child cannot postpone forwarding until its normal completion. The last drop restores the previous dispositions, clears the pending signal, and re-raises it (except `SIG_IGN`) with the mutex released. A subsequent handler lifetime starts without a pending signal.
+
+Concurrent waits overlap. A slot only ever holds a pid that leads its own live process group (never our own group), the handler re-checks that before each `killpg`, and the waiter releases the slot the moment the child is reaped — a reaped pid can be reused by an unrelated group leader, and a fan-out to it would signal processes Orbit never spawned.
 
 Patterns to copy:
 
