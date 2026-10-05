@@ -62,10 +62,7 @@ pub(crate) fn install_review_admission(
     };
     if job_name == LOCAL_ROUTE_JOB && admission.timing == ReviewTiming::BeforePr {
         return Err(OrbitError::InvalidInput(
-            "review.before_pr holds PR creation for a reviewer and has no meaning on the \
-             local-only delivery route; ship through the PR route or turn review.before_pr off \
-             for local delivery (after-landing review is the delivery-code-review auto-task)"
-                .to_string(),
+            local_route_before_pr_refusal().to_string(),
         ));
     }
 
@@ -96,6 +93,24 @@ fn parent_review_admission(
         .transpose()
         .map_err(OrbitError::InvalidInput)
         .map(Option::flatten)
+}
+
+/// The fail-closed sentence `install_review_admission` returns for
+/// `review.before_pr` on `task_local_pipeline`. Pre-dispatch surfaces quote
+/// it so an operator sees one explanation before and after a spawn.
+pub(crate) fn local_route_before_pr_refusal() -> &'static str {
+    "review.before_pr holds PR creation for a reviewer and has no meaning on the \
+     local-only delivery route; ship through the PR route or turn review.before_pr off \
+     for local delivery (after-landing review is the delivery-code-review auto-task)"
+}
+
+/// That refusal with the deciding layer inserted after the key, for doctor
+/// and readiness. `source` is the operation-layer label (`global`,
+/// `workspace`, or `built-in`).
+pub(crate) fn local_route_before_pr_conflict(source: &str) -> String {
+    let refusal = local_route_before_pr_refusal();
+    let key = "review.before_pr";
+    format!("{key} ({source}){}", refusal.trim_start_matches(key))
 }
 
 /// Build the snapshot from the workspace's resolved review settings, keeping
