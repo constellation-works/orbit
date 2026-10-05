@@ -211,6 +211,47 @@ class LocalCodeqlTests(unittest.TestCase):
                 self.assert_selects_only_production_source()
                 self.assert_isolated()
 
+    def test_earlier_run_under_another_scratch_is_never_extracted(self):
+        earlier = self.repo / "work/codeql scratch"
+        self.use_scratch(earlier)
+        self.assertEqual(self.run_script("fixture.qls").returncode, 0)
+        prior = next(earlier.glob("codeql-rust-local.??????"))
+        registry = prior / "cargo/registry/src/index-1/serde-1.0.0/src/lib.rs"
+        registry.parent.mkdir(parents=True)
+        registry.write_text("pub fn serde() {}\n")
+        # Only the run directory layout is excluded, never a lookalike source.
+        lookalike = "crates/core/src/codeql-rust-local.abcdef/mod.rs"
+        (self.repo / lookalike).parent.mkdir()
+        (self.repo / lookalike).write_text("pub fn f() {}\n")
+        residue = sorted(earlier.rglob("*"))
+        for scratch in (None, self.repo / "work/second scratch", self.root / "outside scratch"):
+            with self.subTest(scratch=scratch):
+                self.calls_file.write_text("")
+                self.use_scratch(scratch)
+                result = self.run_script("fixture.qls")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                create = next(call for call in self.calls() if call["args"][:2] == ["database", "create"])
+                self.assertEqual(create["sources"], sorted([*SELECTED, lookalike]))
+                self.assert_isolated()
+                self.assertEqual(sorted(earlier.rglob("*")), residue)
+
+    def test_unexcludable_earlier_run_directory_refuses_before_preparation(self):
+        for label, parent, track in (("tracked", "crates/core/src", True), ("glob", "work/scratch[1]", False)):
+            with self.subTest(label):
+                prior = self.repo / parent / "codeql-rust-local.abcdef"
+                prior.mkdir(parents=True)
+                for name in ("codeql-config.yml", "lib.rs"):
+                    (prior / name).write_text("\n")
+                if track:
+                    subprocess.run(["git", "add", str(prior)], cwd=self.repo, env=self.env, check=True)
+                result = self.run_script("fixture.qls")
+                self.assert_no_result(result, [])
+                self.assertIn(str(prior), result.stderr)
+                self.assertEqual(list(self.scratch.glob("codeql-rust-local.??????")), [])
+                subprocess.run(["git", "rm", "-rqf", "--cached", "--ignore-unmatch", str(prior)],
+                               cwd=self.repo, env=self.env, check=True)
+                shutil.rmtree(prior)
+
     def test_ambiguous_source_selection_refuses_before_preparation(self):
         cases = [
             ("checkout", self.repo, None),

@@ -57,6 +57,7 @@ config="$repo_root/.github/codeql/codeql-config.yml"
 # checkout (this run's rust-src and builds, earlier runs) must be excluded. The
 # whole scratch tree is excluded, which is only safe if it holds no tracked source.
 scratch_ignore=
+scratch_rel=
 if [[ "$scratch_root" == "$repo_root" ]]; then
   fail "scratch $scratch_root is the checkout itself; choose a scratch directory that holds no tracked source"
 elif [[ "$scratch_root" == "$repo_root"/* ]]; then
@@ -69,10 +70,31 @@ elif [[ "$scratch_root" == "$repo_root"/* ]]; then
   scratch_ignore="$scratch_rel/**"
 fi
 
-# The run-scoped configuration is the repository one plus the scratch exclusion
-# as the first paths-ignore entry; any other paths-ignore layout is refused.
-effective_config="$(awk -v ignore="$scratch_ignore" '
-  function add(indent) { if (ignore != "") print indent "- \"" ignore "\"" }
+# Earlier runs may have used another scratch inside the checkout. Their run
+# directories, recognized by name and the configuration each run writes first,
+# are excluded wherever they are; .orbit/ and target/ are already excluded.
+found="$(find . \( -path ./.git -o -path ./.orbit -o -path ./target ${scratch_rel:+-o -path "./$scratch_rel"} \) -prune \
+  -o -type d -name 'codeql-rust-local.??????' -print -prune | LC_ALL=C sort)" \
+  || fail "cannot search $repo_root for earlier run directories to exclude from extraction"
+while IFS= read -r prior; do
+  prior_rel="${prior#./}"
+  [[ "${prior_rel##*/}" =~ ^codeql-rust-local\.[[:alnum:]]{6}$ && -f "$prior/codeql-config.yml" ]] || continue
+  [[ "$prior_rel" =~ ^[[:alnum:]\ ._/@+-]+$ ]] \
+    || fail "earlier run directory $repo_root/$prior_rel contains characters that cannot be excluded from extraction exactly"
+  tracked="$(git -C "$repo_root" ls-files -- ":(literal)$prior_rel")" \
+    || fail "cannot verify that earlier run directory $repo_root/$prior_rel holds no tracked source"
+  [[ -z "$tracked" ]] || fail "$repo_root/$prior_rel holds tracked checkout files, so it cannot be excluded as an earlier run directory"
+  scratch_ignore+="${scratch_ignore:+$'\n'}$prior_rel/**"
+done <<<"$found"
+
+# The run-scoped configuration is the repository one plus the scratch and
+# earlier-run exclusions as the first paths-ignore entries; any other
+# paths-ignore layout is refused.
+effective_config="$(IGNORES="$scratch_ignore" awk '
+  function add(indent,  n, i, list) {
+    n = split(ENVIRON["IGNORES"], list, "\n")
+    for (i = 1; i <= n; i++) print indent "- \"" list[i] "\""
+  }
   pending && /^[[:space:]]*(#.*)?$/ { print; next }
   pending {
     if ($0 !~ /^[[:space:]]*-([[:space:]]|$)/) { bad = 1; exit }
@@ -85,9 +107,9 @@ effective_config="$(awk -v ignore="$scratch_ignore" '
   { print }
   END {
     if (bad || pending) exit 1
-    if (!seen && ignore != "") { print "paths-ignore:"; add("  ") }
+    if (!seen && ENVIRON["IGNORES"] != "") { print "paths-ignore:"; add("  ") }
   }' "$config")" \
-  || fail "cannot add the scratch exclusion to $config; paths-ignore must be one top-level block list"
+  || fail "cannot add the scratch exclusions to $config; paths-ignore must be one top-level block list"
 
 run_dir="$(mktemp -d "$scratch_root/codeql-rust-local.XXXXXX")" || fail "cannot create run scratch for Rust $toolchain"
 echo "codeql-rust-local: run directory: $run_dir" >&2

@@ -62,14 +62,24 @@ examples and benches, and also Orbit state (`.orbit/`) and Cargo output
 unchanged, but locally they hold worktrees, earlier runs' toolchains and
 generated code.
 
-When the scratch directory is inside the checkout, as the default
-`.orbit/tmp` is, the script writes the run's `codeql-config.yml` as the shared
-configuration with that scratch directory added to `paths-ignore`. This
-excludes the run's own rust-src and Cargo output as well as earlier runs and
-other residue in the same scratch. Nothing needs to be cleaned first. The
-script refuses to start, before preparing anything, if the scratch directory is
-the checkout, contains tracked files, or has characters that cannot be matched
-exactly, or if `paths-ignore` is not a single top-level block list.
+The script writes the run's `codeql-config.yml` as the shared configuration
+with run-specific entries added to the front of `paths-ignore`:
+
+- The scratch directory, when it is inside the checkout, as the default
+  `.orbit/tmp` is. This excludes the run's own rust-src and Cargo output as
+  well as earlier runs and other residue in the same scratch.
+- Every earlier run directory elsewhere in the checkout, left by a run whose
+  scratch was a different directory inside the checkout. One is recognized by
+  its `codeql-rust-local.XXXXXX` name (six letters or digits) and the
+  `codeql-config.yml` each run writes first. The search skips `.git/` and the
+  already excluded `.orbit/` and `target/`. A directory with that name but no
+  configuration is not excluded.
+
+Nothing needs to be cleaned first. The script refuses to start, before
+preparing anything, if the scratch directory is the checkout, or if the
+scratch directory or a recognized earlier run directory contains tracked files
+or has characters that cannot be matched exactly, or if `paths-ignore` is not a
+single top-level block list.
 
 Excluded files are not repository inputs. For semantic analysis, the extractor
 still loads, as libraries, the prepared rust-src, the dependency sources Cargo
@@ -109,7 +119,8 @@ extractor skips its semantic analysis and the run refuses; declare it with
 
 The behavior tests use stubbed CodeQL and rustup without downloads. The
 stubbed CodeQL enumerates a fixture checkout's sources with the effective
-configuration, including build, scratch, and toolchain residue:
+configuration, including build, scratch, and toolchain residue, and an earlier
+run under another scratch:
 
 ```bash
 python3 scripts/test-codeql-rust-local.py
