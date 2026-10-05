@@ -46,7 +46,7 @@ pub(super) fn git_commit_paths_with_identity(
         message.to_string(),
         "--".to_string(),
     ];
-    args.extend(paths.iter().cloned());
+    args.extend(paths.iter().map(|path| literal_pathspec(path)));
     git_success_dynamic_with_identity(workspace_path, &args, &author, &committer)
 }
 
@@ -73,8 +73,19 @@ pub(super) fn stage_paths(workspace_path: &Path, files: &[String]) -> Result<(),
     }
 
     let mut args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
-    args.extend(files.iter().cloned());
+    args.extend(files.iter().map(|path| literal_pathspec(path)));
     git_success_dynamic(workspace_path, &args)
+}
+
+/// Candidate paths are concrete names. Without this, Git treats `*`, `?`, and
+/// `[...]` in a pathspec as globs: a file named `*` stages every non-ignored
+/// change, and `app/[id]/page.tsx` also matches `app/i/page.tsx`.
+///
+/// Per-path `:(literal)` magic, rather than a leading `--literal-pathspecs`,
+/// keeps `commit` as the first argument so the shared Git wrapper still
+/// injects `--no-verify`.
+fn literal_pathspec(path: &str) -> String {
+    format!(":(literal){path}")
 }
 
 pub(super) fn staged_changed_files(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {

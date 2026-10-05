@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -9,6 +10,7 @@ use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use serde_json::json;
 
 use super::super::actions::commit_batch_changes;
+use super::super::git_commit;
 use super::test_support::{CommitTestHost, initialized_git_repo, task_with_file};
 use crate::executor::automation::vcs::git::git_output;
 
@@ -108,4 +110,107 @@ fn commit_child_environment_excludes_parent_secrets() {
             "unexpected commit child variable: {name}"
         );
     }
+}
+
+fn write_rel(repo: &Path, path: &str, contents: &str) {
+    let full = repo.join(path);
+    if let Some(parent) = full.parent() {
+        fs::create_dir_all(parent).expect("parent directory");
+    }
+    fs::write(full, contents).expect("write file");
+}
+
+fn commit_names(repo: &Path, revision: &str) -> BTreeSet<String> {
+    git_output(repo, &["show", "--format=", "--name-only", revision])
+        .expect("commit names")
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// ORB-14096: candidate paths are literal Git pathspecs. A file named `*` or
+/// `a[bc]` must stage and commit only itself, not scratch, a character-class
+/// neighbour, or another task's files such as `app/i/page.tsx`.
+#[test]
+fn glob_candidate_names_stage_and_commit_only_themselves() {
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    write_rel(workspace, "*", "star\n");
+    write_rel(workspace, "a[bc]", "brackets\n");
+    write_rel(workspace, "ab", "class-neighbour\n");
+    write_rel(workspace, "app/[id]/page.tsx", "id page\n");
+    write_rel(workspace, "app/i/page.tsx", "other task\n");
+    write_rel(workspace, "other.txt", "unrelated\n");
+    write_rel(workspace, ".orbit/tmp/scratch.txt", "scratch\n");
+    fs::write(workspace.join("README.md"), "tracked modification\n").expect("modify README");
+
+    let glob_task = {
+        let mut task = task_with_file("T-GLOB", "Glob names", "unused", "grok");
+        task.context_files = vec![
+            "file:*".to_string(),
+            "file:a[bc]".to_string(),
+            "file:app/[id]/page.tsx".to_string(),
+        ];
+        task
+    };
+    let other_task = {
+        let mut task = task_with_file("T-OTHER", "Other files", "unused", "grok");
+        task.context_files = vec![
+            "file:ab".to_string(),
+            "file:README.md".to_string(),
+            "file:app/i/page.tsx".to_string(),
+            "file:other.txt".to_string(),
+        ];
+        task
+    };
+    let host = CommitTestHost::new(vec![glob_task, other_task], workspace.to_path_buf());
+    let output = git_commit(
+        &host,
+        &json!({
+            "scope": "per_task",
+            "job_run_id": "batch-1",
+            "workspace_path": workspace,
+            "completed_task_ids": ["T-GLOB", "T-OTHER"],
+        }),
+    )
+    .expect("literal candidate names commit");
+
+    assert_eq!(output["committed_task_ids"], json!(["T-GLOB", "T-OTHER"]));
+    assert_eq!(
+        git_output(workspace, &["log", "-1", "--format=%s", "HEAD~1"]).unwrap(),
+        "[T-GLOB] Glob names"
+    );
+    assert_eq!(
+        commit_names(workspace, "HEAD~1"),
+        BTreeSet::from([
+            "*".to_string(),
+            "a[bc]".to_string(),
+            "app/[id]/page.tsx".to_string(),
+        ]),
+        "ORB-14096: a candidate named `*` or `a[bc]` must stage and commit only itself"
+    );
+    assert_eq!(
+        commit_names(workspace, "HEAD"),
+        BTreeSet::from([
+            "README.md".to_string(),
+            "ab".to_string(),
+            "app/i/page.tsx".to_string(),
+            "other.txt".to_string(),
+        ]),
+        "ORB-14096: another task's files and character-class neighbours stay out of the glob commit"
+    );
+    assert_eq!(
+        git_output(
+            workspace,
+            &["status", "--porcelain", "--untracked-files=all"]
+        )
+        .unwrap(),
+        "?? .orbit/tmp/scratch.txt",
+        "ORB-14096: scratch excluded from candidate paths must stay unstaged"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join(".orbit/tmp/scratch.txt")).unwrap(),
+        "scratch\n"
+    );
 }
