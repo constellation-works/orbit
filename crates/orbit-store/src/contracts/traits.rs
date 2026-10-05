@@ -76,6 +76,11 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<super::ClaimMutationResult, OrbitError> {
         Err(OrbitError::Store("claim lifecycle unavailable".into()))
     }
+    /// Refuse a worker invocation whose claim no longer carries the authority
+    /// its next claim update would need. Unavailable backends fail closed.
+    fn verify_worker_claim(&self, _context: &super::ClaimInvocation) -> Result<(), OrbitError> {
+        Err(OrbitError::Store("claim lifecycle unavailable".into()))
+    }
     fn inspect_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }
