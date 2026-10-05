@@ -381,13 +381,22 @@ the installed one. `--preflight` followed by a raw copy is not an install: it gi
 admission between the probe and the copy, keeps no backup and converges nothing.
 
 ```sh
-SHA=<full 40- or 64-hex commit>
-git checkout --detach "$SHA" && test -z "$(git status --porcelain)"
+set -eu
+SHA='replace-with-the-full-40-or-64-hex-commit'
+WORKSPACE='/absolute/path/to/the-intended-workspace'
+test -z "$(git status --porcelain)" # start in a clean Orbit source checkout
+git fetch --all
+git cat-file -e "$SHA^{commit}"
+git checkout --detach "$SHA"
+test "$(git rev-parse HEAD)" = "$SHA"
+test -z "$(git status --porcelain)"
 cargo build --release --locked -p orbit-cli
-C=$PWD/target/release/orbit
+C="$(pwd -P)/target/release/orbit"
 "$C" update --local-candidate "$C" --source-commit "$SHA" \
   --write-candidate-manifest ~/orbit-candidate-"$SHA".json
-# quiesce Orbit clients (see below), then from the workspace to converge:
+# Quiesce Orbit clients (see below), then run from the intended workspace so
+# discovery and convergence use that workspace rather than the source checkout.
+cd "$WORKSPACE"
 "$C" update --local-candidate "$C" --candidate-manifest ~/orbit-candidate-"$SHA".json \
   --source-commit "$SHA" --install-target ~/.orbit/bin/orbit --json
 ```

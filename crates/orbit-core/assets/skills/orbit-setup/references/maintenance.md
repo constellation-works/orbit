@@ -184,9 +184,23 @@ To ship an unreleased fix, build a clean checkout of the full commit SHA and run
 the **candidate's** updater so an older installed build is bootstrapped:
 
 ```sh
-C=target/release/orbit   # cargo build --release --locked -p orbit-cli at "$SHA"
-"$C" update --local-candidate "$C" --source-commit "$SHA" --write-candidate-manifest m.json
-"$C" update --local-candidate "$C" --candidate-manifest m.json --source-commit "$SHA" \
+set -eu
+SHA='replace-with-the-full-40-or-64-hex-commit'
+WORKSPACE='/absolute/path/to/the-intended-workspace'
+test -z "$(git status --porcelain)" # start in a clean Orbit source checkout
+git fetch --all
+git cat-file -e "$SHA^{commit}"
+git checkout --detach "$SHA"
+test "$(git rev-parse HEAD)" = "$SHA"
+test -z "$(git status --porcelain)"
+cargo build --release --locked -p orbit-cli
+C="$(pwd -P)/target/release/orbit"
+"$C" update --local-candidate "$C" --source-commit "$SHA" \
+  --write-candidate-manifest ~/orbit-candidate-"$SHA".json
+# Quiesce clients, then run from the intended workspace for discovery/convergence.
+cd "$WORKSPACE"
+"$C" update --local-candidate "$C" --candidate-manifest ~/orbit-candidate-"$SHA".json \
+  --source-commit "$SHA" \
   --install-target ~/.orbit/bin/orbit --json
 ```
 

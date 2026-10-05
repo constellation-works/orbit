@@ -654,7 +654,17 @@ fn retry_command(
     request: &LocalCandidateRequest,
     expected_commit: &str,
 ) -> String {
-    let mut words = vec![environment.executable.display().to_string()];
+    let mut words = Vec::new();
+    if let Some(install_dir) = environment.executable.parent() {
+        // Reproduce the managed-channel selection even when this update was
+        // invoked with a one-command ORBIT_INSTALL_DIR override. The recovery
+        // command is meant to work when copied into a later shell too.
+        words.push(format!(
+            "ORBIT_INSTALL_DIR={}",
+            shell_word(&install_dir.display().to_string())
+        ));
+    }
+    words.push(environment.executable.display().to_string());
     if let Some(root) = environment
         .workspace
         .as_ref()

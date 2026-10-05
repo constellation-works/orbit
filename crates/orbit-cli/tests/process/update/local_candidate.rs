@@ -102,6 +102,29 @@ impl LocalInstall {
         retry_busy(&mut command)
     }
 
+    /// Run a reported recovery command without the install-dir override used
+    /// by `command`, as when an operator copies it into a later shell.
+    fn retry_command(&self, retry: &str) -> Output {
+        let mut command = Command::new("sh");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&self.repo)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env_remove("ORBIT_INSTALL_DIR")
+            .env_remove("ORBIT_HOME")
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_REGISTRY_ROOT")
+            .env_remove("ORBIT_WORKSPACE")
+            .env_remove("ORBIT_UPDATE_RELEASE_DIR")
+            .stdin(Stdio::null())
+            .arg("-c")
+            .arg(retry);
+        command.output().expect("run reported recovery command")
+    }
+
     /// A candidate built at another commit: same version, distinct bytes.
     fn candidate(&self, name: &str) -> PathBuf {
         let candidate = self.builds.join(name);
@@ -748,10 +771,7 @@ fn a_post_swap_failure_needs_recovery_and_the_same_candidate_converges_on_retry(
         Some(marker) => fs::write(&layout, marker).expect("repair the workspace"),
         None => fs::remove_file(&layout).expect("repair the workspace"),
     }
-    let mut words = retry.split(' ');
-    let program = PathBuf::from(words.next().expect("program"));
-    assert_eq!(program, install.installed);
-    let retried = install.run(&program, &words.map(OsString::from).collect::<Vec<_>>());
+    let retried = install.retry_command(retry);
     assert_success(&retried, "retry the same candidate");
     assert!(
         String::from_utf8_lossy(&retried.stdout)
