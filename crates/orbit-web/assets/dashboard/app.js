@@ -1,10 +1,10 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, withWorkspace } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
-import { renderScoreboard } from './js/scoreboard.js';
+import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
 import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
@@ -1048,7 +1048,7 @@ function renderAggregatePlaceholders() {
 // by these placeholders.
 function renderDiagnosticsPlaceholders() {
   renderPanelPlaceholder("diag-body");
-  renderPanelPlaceholder("scoreboard-body");
+  placeholdScoreboardAggregate();
   renderPanelPlaceholder("diag-implement-one-body");
   const diagCount = $("diag-count");
   if (diagCount) diagCount.textContent = "—";
@@ -1375,20 +1375,9 @@ function activeRefreshJobs() {
       // ORB-10444: Scoreboard folded in from the retired top-level tab.
       // ORB-10872: every refresh honors the shared dashboard window so
       // delivery/operations and Managed Execution stay on the same cutoff.
-      // A payload that reports a different window is refused rather than
-      // painted under a mismatched selector (the 7d-selected / 24h-body bug).
-      const selectedWindow = getWindow();
-      jobs.push(
-        fetchJson(`/api/scoreboard?window=${encodeURIComponent(selectedWindow)}`).then((summary) => {
-          if (!payloadHonorsWindow(summary, selectedWindow)) {
-            console.error(
-              `scoreboard payload window ${summary && summary.window} rejected under ${selectedWindow} selection`,
-            );
-            return;
-          }
-          renderScoreboard(summary);
-        }),
-      );
+      // A mismatched window, a superseded request, or a stale workspace
+      // visit is not painted.
+      jobs.push(fetchAndRenderScoreboard());
       return jobs;
     }
     if (activeDiagSubtab === "runs") {

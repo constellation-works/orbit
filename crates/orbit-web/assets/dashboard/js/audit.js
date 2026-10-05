@@ -1,7 +1,7 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -275,12 +275,21 @@ function setActiveAuditSubtabFromButton(name) {
   setAuditSubtab(name);
 }
 
+function placeholdAuditAggregate() {
+  renderPanelPlaceholder("audit-body");
+  renderPanelPlaceholder("audit-policy-body");
+  lastAudit = [];
+  lastAuditPolicy = null;
+  const count = $("audit-count");
+  if (count) count.textContent = "—";
+}
+
 function fetchAndRenderAudit(ctx) {
   // ORB-00040: /api/audit is per-workspace and 400s without a concrete
   // workspace. In the aggregate ("All workspaces") view render the placeholder
   // and skip the fetch — covers both the auto-refresh and audit-search paths.
   if (isAggregateView()) {
-    renderPanelPlaceholder("audit-body");
+    placeholdAuditAggregate();
     return Promise.resolve();
   }
   const sp = new URLSearchParams();
@@ -293,10 +302,13 @@ function fetchAndRenderAudit(ctx) {
   if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
   if (auditFilter.profile) sp.set("profile", auditFilter.profile);
   if (auditFilter.q) sp.set("q", auditFilter.q);
-  return fetchJson(`/api/audit?${sp.toString()}`).then((events) => {
+  const path = `/api/audit?${sp.toString()}`;
+  // A slower search or the previous workspace must not paint over the visit
+  // now on screen, and must not become the snapshot row expansion re-renders.
+  return requestPanel("audit-body", path, () => fetchJson(path), (events) => {
     lastAudit = events;
     renderAudit(events, ctx);
-  });
+  }, "audit-count");
 }
 
 function isNamedTool(name) {
@@ -597,7 +609,7 @@ function fetchAndRenderPolicy(ctx) {
   // also per-workspace (the `Ws` extractor 400s without a concrete workspace),
   // so guard it the same way as the events subtab.
   if (isAggregateView()) {
-    renderPanelPlaceholder("audit-policy-body");
+    placeholdAuditAggregate();
     return Promise.resolve();
   }
   const sp = new URLSearchParams();
@@ -605,11 +617,19 @@ function fetchAndRenderPolicy(ctx) {
   if (auditFilter.policyKind) sp.set("kind", auditFilter.policyKind);
   if (auditFilter.profile) sp.set("profile", auditFilter.profile);
   if (auditFilter.role) sp.set("agent", auditFilter.role);
-  return fetchJson(`/api/diagnostics/denials?${sp.toString()}`).then((data) => {
+  const path = `/api/diagnostics/denials?${sp.toString()}`;
+  // Same visit guard as events: a late denial report must not replace the
+  // policy tables or the snapshot their column sort re-renders.
+  return requestPanel("audit-policy-body", path, () => fetchJson(path), (data) => {
     lastAuditPolicy = data;
     renderPolicy(data, ctx);
-  });
+  }, "audit-count");
 }
+
+onWorkspaceChange(() => {
+  lastAudit = [];
+  lastAuditPolicy = null;
+});
 
 function renderPolicy(data, ctx) {
   const body = $("audit-policy-body");
