@@ -105,7 +105,9 @@ impl<K: Eq + Hash> RuntimeMemo<K> {
 
     fn slot(&self, key: (usize, K)) -> Arc<Slot> {
         let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
-        slots.retain(|_, slot| slot.keep());
+        // Callers own a clone before acquiring the gate and through compute.
+        // Keep their slots so pruning cannot create a second gate for a key.
+        slots.retain(|_, slot| Arc::strong_count(slot) > 1 || slot.keep());
         Arc::clone(slots.entry(key).or_insert_with(|| {
             Arc::new(Slot {
                 gate: tokio::sync::Mutex::new(()),
@@ -123,8 +125,8 @@ impl Slot {
         Arc::ptr_eq(&live, runtime).then(|| Arc::clone(&cached.body))
     }
 
-    /// Drop expired or orphaned ready entries. Empty slots stay: they are
-    /// either in flight or reusable after a failed compute.
+    /// Drop expired or orphaned ready entries once no caller owns the slot.
+    /// Empty slots stay reusable after a failed compute.
     fn keep(&self) -> bool {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
         guard

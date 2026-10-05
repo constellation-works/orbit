@@ -2,6 +2,7 @@
 
 mod dashboard_assets;
 mod log_format;
+mod runtime_memo;
 mod serve;
 #[cfg(unix)]
 mod ssh_tunnel;
