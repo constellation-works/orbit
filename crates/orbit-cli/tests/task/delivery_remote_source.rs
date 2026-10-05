@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use orbit_core::application::automation::evaluate_auto_task;
 use serde_json::{Value, json};
 
@@ -559,54 +559,73 @@ fn doctor_reports_the_remote_tracking_head_without_fetching() {
     );
 }
 
-/// A remote landing older than `max_wait_minutes` is not a healthy consumer.
+/// Remote trail health follows the oldest pending first-parent commit, even
+/// when the tip is recent. Cover both sides of the wait boundary [ORB-14142].
 #[test]
-fn doctor_is_not_ok_when_the_remote_trail_exceeds_max_wait() {
+fn doctor_uses_the_oldest_pending_commit_for_remote_trail_health() {
     const TEST: &str =
-        "delivery_remote_source::doctor_is_not_ok_when_the_remote_trail_exceeds_max_wait";
+        "delivery_remote_source::doctor_uses_the_oldest_pending_commit_for_remote_trail_health";
     if !in_isolated_child(TEST) {
         return;
     }
 
-    let fixture = Fixture::new();
-    let local = baseline_review_consumer(&fixture, 60);
-    let bare = bare_origin(&fixture);
-    git(
-        &fixture,
-        &["push", "-q", "origin", &format!("HEAD:refs/heads/{BRANCH}")],
-    );
-    let publisher = fixture._temp.path().join("publisher");
-    git_at(
-        &fixture.repo,
-        &fixture.home,
-        &[
-            "clone",
-            "-q",
-            &bare.display().to_string(),
-            &publisher.display().to_string(),
-        ],
-    );
-    fs::write(publisher.join("fixture.txt"), "landed long ago\n").unwrap();
-    git_at_env(
-        &publisher,
-        &fixture.home,
-        &["commit", "-am", "Old remote landing"],
-        &[
-            ("GIT_AUTHOR_DATE", "2020-01-01T00:00:00Z"),
-            ("GIT_COMMITTER_DATE", "2020-01-01T00:00:00Z"),
-        ],
-    );
-    git_at(
-        &publisher,
-        &fixture.home,
-        &["push", "-q", "origin", &format!("HEAD:refs/heads/{BRANCH}")],
-    );
-    fetch_remote_tracking(&fixture);
-    assert_eq!(local_branch(&fixture), local);
+    for (oldest_age_minutes, expected_status) in [(30, "ok"), (120, "error")] {
+        let fixture = Fixture::new();
+        let local = baseline_review_consumer(&fixture, 60);
+        let bare = bare_origin(&fixture);
+        git(
+            &fixture,
+            &["push", "-q", "origin", &format!("HEAD:refs/heads/{BRANCH}")],
+        );
+        let publisher = fixture._temp.path().join("publisher");
+        git_at(
+            &fixture.repo,
+            &fixture.home,
+            &[
+                "clone",
+                "-q",
+                &bare.display().to_string(),
+                &publisher.display().to_string(),
+            ],
+        );
+        let now = Utc::now();
+        for (contents, message, landed_at) in [
+            (
+                "older remote landing\n",
+                "Older remote landing",
+                now - Duration::minutes(oldest_age_minutes),
+            ),
+            ("recent remote tip\n", "Recent remote tip", now),
+        ] {
+            fs::write(publisher.join("fixture.txt"), contents).unwrap();
+            let date = landed_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            git_at_env(
+                &publisher,
+                &fixture.home,
+                &["commit", "-am", message],
+                &[("GIT_AUTHOR_DATE", &date), ("GIT_COMMITTER_DATE", &date)],
+            );
+        }
+        git_at(
+            &publisher,
+            &fixture.home,
+            &["push", "-q", "origin", &format!("HEAD:refs/heads/{BRANCH}")],
+        );
+        fetch_remote_tracking(&fixture);
+        assert_eq!(local_branch(&fixture), local);
 
-    let row = doctor_review(&fixture);
-    assert_eq!(row["status"], "error", "{row}");
-    let message = row["message"].as_str().unwrap();
-    assert!(message.contains("max_wait_minutes"), "{message}");
-    assert!(message.contains("trails"), "{message}");
+        let row = doctor_review(&fixture);
+        assert_eq!(
+            row["status"], expected_status,
+            "oldest pending commit is {oldest_age_minutes} minutes old, tip is recent: {row}"
+        );
+        let message = row["message"].as_str().unwrap();
+        assert!(message.contains("trails"), "{message}");
+        assert!(message.contains("by 2"), "{message}");
+        assert_eq!(
+            message.contains("max_wait_minutes"),
+            expected_status == "error",
+            "{message}"
+        );
+    }
 }

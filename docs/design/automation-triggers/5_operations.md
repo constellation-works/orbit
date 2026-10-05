@@ -88,8 +88,9 @@ instead [ORB-13896]. The crew is applied at mint time and is not part of the
 consumer's epoch. While this consumer is enabled, `orbit doctor` also fails its
 `review` row when the consumer is missing, unowned, wedged, stalled, held for
 an operator, on a branch or crew that does not resolve, or when its observed
-commit trails `refs/remotes/origin/<branch>` by at least the batch's
-`max_wait_minutes` (or that remote history has diverged, or the remote-tracking
+commit trails `refs/remotes/origin/<branch>` and the oldest unobserved
+first-parent commit has waited at least the batch's `max_wait_minutes`, even
+if newer pending commits are recent (or that remote history has diverged, or the remote-tracking
 ref is missing after a cursor exists). The row names the observed commit and
 the remote-tracking head. It does not fetch; the observation pass is what
 updates that ref. The same row, `orbit config show` and the drain probe report
