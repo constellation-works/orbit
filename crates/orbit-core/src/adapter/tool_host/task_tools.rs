@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    TaskAddParams, TaskEligibilityQuery, TaskUpdateParams, compute_task_add_warnings,
+    ContextCreationAuthorization, TaskAddParams, TaskEligibilityQuery, TaskUpdateParams,
+    compute_task_add_warnings,
 };
 
 use super::input::{
@@ -45,9 +46,12 @@ pub(super) fn add(
     let _ = required_string(&input, &["workspace"], "workspace")?;
     let raw_context_files =
         optional_csv_or_string_list_alias(&input, &["context_files"])?.unwrap_or_default();
-    if !allows_missing_context(&input)? {
+    let context_creation = if allows_missing_context(&input)? {
+        runtime.authorize_missing_context(&raw_context_files)?
+    } else {
         runtime.ensure_context_selectors_exist(&raw_context_files)?;
-    }
+        ContextCreationAuthorization::default()
+    };
     let raw_required_tools = optional_csv_or_string_list_alias(
         &input,
         &["required_tools", "requiredTools", "required-tool"],
@@ -92,6 +96,7 @@ pub(super) fn add(
             source_task_id: None,
             crew: optional_string(&input, "crew")?,
             orchestrator: optional_string(&input, "orchestrator")?,
+            context_creation,
         },
         agent,
         model,
@@ -407,7 +412,7 @@ pub(super) fn update(
                         runtime,
                         &id,
                         &input,
-                        &params,
+                        &mut params,
                         owner.as_ref(),
                     )?;
                     let task = runtime.start_task_with_identity_and_crew(
@@ -441,7 +446,7 @@ pub(super) fn update(
     let mut params = task_update_params_from_input(&input, requested_status)?;
     params.trusted_artifact_origin = origin.clone();
     let unverified =
-        ensure_context_selectors_if_required(runtime, &id, &input, &params, owner.as_ref())?;
+        ensure_context_selectors_if_required(runtime, &id, &input, &mut params, owner.as_ref())?;
     let task = runtime.update_task_with_owner(
         &id,
         params,
@@ -625,6 +630,8 @@ fn task_update_params_from_input(
         },
         orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
         context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
+        // Derived from the selector screening, never from tool input.
+        context_creation: ContextCreationAuthorization::default(),
         upsert_artifacts: parse_artifacts(input)?,
         // Discarding a preserved candidate is an operator decision taken
         // from the CLI (`orbit task update --discard-candidate`).
@@ -632,34 +639,43 @@ fn task_update_params_from_input(
     })
 }
 
-/// Run the operator-surface selector guard for an update unless the caller
-/// opted out, and return the selectors the owning worker's relaxation let
-/// through unverified (see
+/// Screen an update's replacement selectors, record the creation intent the
+/// screening established on `params`, and return the selectors the owning
+/// worker's relaxation let through unverified (see
 /// [`OrbitRuntime::ensure_context_selectors_exist_for_task_write`]).
+///
+/// With `allow_missing_context` every missing selector becomes a durable
+/// creation grant ([`OrbitRuntime::authorize_missing_context`]); otherwise
+/// the strict check runs, keeping selectors the task already holds a grant for.
 fn ensure_context_selectors_if_required(
     runtime: &OrbitRuntime,
     task_id: &str,
     input: &Value,
-    params: &TaskUpdateParams,
+    params: &mut TaskUpdateParams,
     owner: Option<&orbit_tools::ReservationOwnerContext>,
 ) -> Result<Vec<String>, OrbitError> {
-    if allows_missing_context(input)? {
-        return Ok(Vec::new());
-    }
+    let allow_missing = allows_missing_context(input)?;
     let Some(candidates) = params.context_files.as_deref() else {
         return Ok(Vec::new());
     };
-    runtime.ensure_context_selectors_exist_for_task_write(
+    if allow_missing {
+        params.context_creation = runtime.authorize_missing_context(candidates)?;
+        return Ok(Vec::new());
+    }
+    let (unverified, creation) = runtime.ensure_context_selectors_exist_for_task_write(
         task_id,
         owner.map(|owner| owner.owner_run_id.as_str()),
         candidates,
-    )
+    )?;
+    params.context_creation = creation;
+    Ok(unverified)
 }
 
-/// Whether the caller explicitly opted out of the operator-surface check that
-/// every `context_files` selector already exists. Internal callers never reach
-/// these handlers, so the escape is the only way for an agent to record a
-/// target the task is about to create.
+/// Whether the caller explicitly declared that missing `context_files`
+/// selectors are targets the task will create. Internal callers never reach
+/// these handlers, so the declaration is the only way for an agent to record
+/// a target the task is about to create; it is recorded as durable creation
+/// intent rather than skipping validation.
 fn allows_missing_context(input: &Value) -> Result<bool, OrbitError> {
     Ok(
         optional_bool_alias(input, &["allow_missing_context", "allowMissingContext"])?

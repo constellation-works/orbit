@@ -37,6 +37,7 @@ impl TaskV2Store {
             if bundle.envelope.context_files != fields.expected_context_files
                 || bundle.envelope.status != fields.expected_status
                 || bundle.envelope.complexity != fields.expected_complexity
+                || creation_state(&bundle).identity() != fields.expected_context_creation
             {
                 return Ok(AtomicTaskMutationOutcome::Stale);
             }
@@ -58,6 +59,7 @@ impl TaskV2Store {
                 to_status: status_changed.then_some(fields.status),
             };
             self.bundle_store.append_event(id, &event)?;
+            bundle.events.push(event);
             let comment = TaskCommentRowV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                 comment_id: format!("C-{:04}", next_sequence(&bundle.comments, "C-")),
@@ -66,6 +68,13 @@ impl TaskV2Store {
                 body: format!("{receipt}\n{}", fields.audit_note),
             };
             self.bundle_store.append_comment(id, &comment)?;
+            append_creation_grant(
+                &self.bundle_store,
+                &mut bundle,
+                &fields.context_files,
+                &[],
+                &fields.actor,
+            )?;
             bundle.envelope.context_files = fields.context_files.clone();
             bundle.envelope.status = fields.status;
             bundle.envelope.complexity = Some(fields.complexity);
@@ -118,8 +127,19 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.context_files {
+                append_creation_grant(
+                    &self.bundle_store,
+                    &mut bundle,
+                    value,
+                    &fields.context_creation,
+                    &fields.actor,
+                )?;
                 bundle.envelope.context_files = value.clone();
                 envelope_changed = true;
+            } else if !fields.context_creation.is_empty() {
+                return Err(OrbitError::InvalidInput(
+                    "creation authorization requires the context_files it applies to".to_string(),
+                ));
             }
             if let Some(value) = &fields.created_by {
                 bundle.envelope.created_by = value.clone();
@@ -288,6 +308,7 @@ impl TaskV2Store {
             ));
         }
 
+        reject_forged_grant(&fields.append_history)?;
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;

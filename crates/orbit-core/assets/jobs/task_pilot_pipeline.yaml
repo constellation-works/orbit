@@ -18,7 +18,9 @@
 # fails the total run while any task remains unresolved. Bare relative file and
 # directory targets are normalized only from the pinned source tree. Selector
 # existence is validated against the prepared source revision, not a later
-# checkout. Apply atomically persists context_files, assessed complexity, its
+# checkout; only a selector the task's durable creation grant names (recorded
+# by an operator `allow_missing_context` write) may be missing there, and apply
+# keeps every such target the assessment omits. Apply atomically persists context_files, assessed complexity, its
 # audit rationale/evidence, and a replay receipt. A CI sweep may pass its
 # exact filing record plus literal promotion authority; only then can apply
 # promote a warning-free, selector-backed proposed repair to backlog. An

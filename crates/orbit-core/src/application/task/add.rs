@@ -185,6 +185,16 @@ impl OrbitRuntime {
             params.context_files.clone(),
             &self.paths().repo_root,
         )?;
+        if let Some(outside) = params
+            .context_creation
+            .authorize
+            .iter()
+            .find(|selector| !context_files.contains(selector))
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "creation authorization for `{outside}` does not match a selector this task stores"
+            )));
+        }
 
         let task = self.with_mutation(|| {
             let (task, replayed) = self.stores().task_records().create_guarded(
@@ -214,6 +224,7 @@ impl OrbitRuntime {
                     crew: params.crew.clone(),
                     orchestrator: params.orchestrator.clone(),
                     comments: comments.clone(),
+                    context_creation: params.context_creation.authorize.clone(),
                 },
                 action_key,
                 digest,

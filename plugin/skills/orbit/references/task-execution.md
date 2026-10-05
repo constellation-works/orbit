@@ -164,7 +164,8 @@ orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family
 Re-read after every context update and verify that every prior selector and
 every addition is present. If one is absent, repeat the read → full-union
 update → verify sequence. Use `allow_missing_context: true` to declare files
-before creation. Selectors are a starting point, not a limit: you may change
+before creation; it records durable creation intent for exactly those
+selectors, so later writes and task preparation keep them. Selectors are a starting point, not a limit: you may change
 any path the work requires. Delivery commits every changed path except
 `.orbit/tmp/` scratch and gitignored output, and widens the selectors with an
 exact `file:` entry for each uncovered path, recording which step introduced

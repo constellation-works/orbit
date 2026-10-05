@@ -61,6 +61,7 @@ fn create_backlog_task(
             crew: None,
             orchestrator: None,
             comments: Vec::new(),
+            context_creation: Vec::new(),
         })
         .expect("create task")
         .id

@@ -478,6 +478,39 @@ impl OrbitRuntime {
         })
     }
 
+    /// Re-check, under the task lock, the creation intent an operator
+    /// surface's screening derived before the write: every newly authorized
+    /// selector is part of the written scope, and a grant the screening
+    /// relied on is still the task's grant. A concurrent write that revoked
+    /// or replaced it makes this write fail instead of storing a missing
+    /// target with no authorization behind it.
+    fn ensure_context_creation_current(
+        &self,
+        task: &Task,
+        creation: &super::ContextCreationAuthorization,
+        context_files: &[String],
+    ) -> Result<(), OrbitError> {
+        if let Some(outside) = creation
+            .authorize
+            .iter()
+            .find(|selector| !context_files.contains(selector))
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "creation authorization for `{outside}` does not match a selector this write stores"
+            )));
+        }
+        if let Some(relied_on) = &creation.relied_on
+            && self.context_creation_state(task)?.identity().as_ref() != Some(relied_on)
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "task '{}' context creation authorization changed during this write; \
+                 re-read the task and retry",
+                task.id
+            )));
+        }
+        Ok(())
+    }
+
     /// Apply the validation and canonicalization shared by ordinary updates
     /// and the guarded start body before either path reaches the record layer.
     pub(super) fn validate_and_normalize_task_field_edits(
@@ -488,11 +521,13 @@ impl OrbitRuntime {
     ) -> Result<ValidatedTaskFieldEdits, OrbitError> {
         let context_root = context_workspace_root(&self.paths().repo_root, None);
         if let Some(candidates) = params.context_files.take() {
-            params.context_files = Some(normalize_context_files_for_write(
-                candidates,
-                &context_root,
-            )?);
+            let candidates = normalize_context_files_for_write(candidates, &context_root)?;
+            self.ensure_context_creation_current(task, &params.context_creation, &candidates)?;
+            params.context_files = Some(candidates);
         } else {
+            // Creation intent describes a replacement scope; without one there
+            // is nothing it could authorize.
+            params.context_creation = Default::default();
             // An unrelated edit re-canonicalizes what is already stored and
             // writes the result back only when every declaration survived and
             // the canonical form differs. It never drops one: a selector whose

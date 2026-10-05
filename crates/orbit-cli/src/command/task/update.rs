@@ -73,7 +73,9 @@ pub struct TaskUpdateArgs {
     /// Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.
     #[arg(long = "context", alias = "context-files", action = ArgAction::Append, value_delimiter = ',')]
     pub context_files: Vec<String>,
-    /// Accept context selectors whose target does not exist yet (for work that creates the file)
+    /// Accept context selectors whose target does not exist yet (for work that creates the file).
+    /// Each missing selector is recorded as durable creation intent; dropping a selector from the
+    /// list revokes it, and re-sending a recorded one needs no flag.
     #[arg(long)]
     pub allow_missing_context: bool,
     /// Task artifact write in `path=content` form. Repeat for multiple artifacts.
@@ -225,9 +227,15 @@ impl Execute for TaskUpdateArgs {
         let tags = (!tags.is_empty()).then_some(tags);
         let upsert_artifacts = parse_artifact_args(&artifacts)?;
         let context_files = parse_replacement_list(context_files);
-        if !allow_missing_context && let Some(candidates) = context_files.as_deref() {
-            runtime.ensure_context_selectors_exist(candidates)?;
-        }
+        let context_creation = match context_files.as_deref() {
+            Some(candidates) if allow_missing_context => {
+                runtime.authorize_missing_context(candidates)?
+            }
+            Some(candidates) => {
+                runtime.ensure_context_selectors_exist_for_update(&id, candidates)?
+            }
+            None => Default::default(),
+        };
         let changes_nothing = title.is_none()
             && description.is_none()
             && acceptance_criteria.is_none()
@@ -280,6 +288,7 @@ impl Execute for TaskUpdateArgs {
             crew,
             orchestrator,
             context_files,
+            context_creation,
             upsert_artifacts,
             discard_candidate,
             ..Default::default()

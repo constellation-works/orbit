@@ -41,6 +41,11 @@ pub struct TaskCreateParams {
     pub crew: Option<String>,
     pub orchestrator: Option<String>,
     pub comments: Vec<TaskComment>,
+    /// Exact canonical `context_files` selectors an operator surface accepted
+    /// for creation under `allow_missing_context`. Recorded as the task's
+    /// initial creation grant in the same bundle commit as the task.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_creation: Vec<String>,
 }
 
 /// Parameters for a partial update to an existing task.
@@ -76,6 +81,12 @@ pub struct TaskDocumentUpdateParams {
     pub job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub crew: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
+    /// Exact canonical selectors of the replacement `context_files` an
+    /// operator surface newly authorized for creation. The task's creation
+    /// grant is recomputed and recorded in the same bundle commit whenever
+    /// `context_files` changes: grants for kept selectors survive, these are
+    /// added, and grants for removed selectors are revoked.
+    pub context_creation: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -105,6 +116,10 @@ pub struct AtomicTaskMutationParams {
     pub expected_context_files: Vec<String>,
     pub expected_status: TaskStatus,
     pub expected_complexity: Option<TaskComplexity>,
+    /// Identity of the creation grant the caller validated against
+    /// (`ContextCreationState::identity`); a different grant at the write
+    /// boundary makes the mutation stale.
+    pub expected_context_creation: Option<String>,
     pub context_files: Vec<String>,
     pub status: TaskStatus,
     pub complexity: TaskComplexity,

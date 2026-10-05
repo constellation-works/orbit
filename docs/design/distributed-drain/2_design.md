@@ -86,7 +86,8 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   and the remedy.
 - Context is never pruned by filesystem existence. Selectors are canonicalized and held to
   repository boundaries, but selectors for not-yet-created files and symbols are preserved;
-  `allow_missing_context` governs explicit operator existence checks only. Admission, reservation,
+  `allow_missing_context` governs explicit operator existence checks and records the exact
+  creation intent task-pilot honours; it never affects admission. Admission, reservation,
   status locks and task reads share `runtime/task/mod.rs::declared_context_files` [ORB-12490].
 - The original canonical footprint is immutable in the admission receipt. The live claim
   protects it through execution and review, including after reservation expiry; only owner-validated

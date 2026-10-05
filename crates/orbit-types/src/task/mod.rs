@@ -1,6 +1,7 @@
 //! Domain contracts for this Orbit types module.
 
 mod artifacts;
+mod context_creation;
 mod context_widening;
 mod epic;
 mod error;
@@ -13,6 +14,10 @@ pub use error::TaskError;
 #[cfg(test)]
 mod tests;
 
+pub use context_creation::{
+    CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, ContextCreationGrant,
+    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, context_files_sha256,
+};
 pub use context_widening::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
 };

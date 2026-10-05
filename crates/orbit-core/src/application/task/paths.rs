@@ -3,7 +3,9 @@ use orbit_common::OrbitError;
 use orbit_common::fs::selector::{
     anchor_path, canonical_selector_in_workspace, exists_in_workspace,
 };
-use orbit_types::task::{TaskHistoryEntry, TaskType};
+use orbit_types::task::{
+    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, Task, TaskHistoryEntry, TaskType,
+};
 use orbit_types::workspace::WorkspacePaths;
 use std::path::{Path, PathBuf};
 
@@ -94,7 +96,100 @@ pub(crate) fn normalize_context_files_for_write(
         .collect()
 }
 
+/// What an operator surface's selector screening established for one task
+/// write, carried into the write so it commits with the scope it describes.
+///
+/// Only the screening methods below construct a non-default value, and the
+/// write re-checks it against the task under the task lock, so neither a
+/// transport field nor a copied value can mint creation intent.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ContextCreationAuthorization {
+    /// Canonical selectors of this write that `allow_missing_context` accepted
+    /// without an existing target; recorded as durable creation grants.
+    pub(crate) authorize: Vec<String>,
+    /// Set when a strict write accepted a missing selector because the task
+    /// already holds a grant for it: the identity of that grant, which must
+    /// still be the task's grant when the write commits.
+    pub(crate) relied_on: Option<String>,
+}
+
+impl ContextCreationAuthorization {
+    /// Canonical selectors this write authorizes for creation.
+    pub fn authorized(&self) -> &[String] {
+        &self.authorize
+    }
+}
+
 impl OrbitRuntime {
+    /// The creation grant `task`'s history holds for its current scope.
+    pub(crate) fn context_creation_state(
+        &self,
+        task: &Task,
+    ) -> Result<ContextCreationState, OrbitError> {
+        let history = self.get_task_history(&task.id)?;
+        Ok(ContextCreationState::resolve(
+            &task.id,
+            &task.context_files,
+            history
+                .iter()
+                .map(|entry| (entry.event.as_str(), entry.note.as_deref())),
+        ))
+    }
+
+    /// Screen the `context_files` of an operator-surface write that passed
+    /// `allow_missing_context`.
+    ///
+    /// Syntax, workspace containment, supported kinds and the file/directory
+    /// kind of an existing target are enforced exactly as on a strict write;
+    /// only a missing anchor is accepted, and every such selector is returned
+    /// as an exact canonical creation grant. Grants are bounded per task.
+    pub fn authorize_missing_context(
+        &self,
+        selectors: &[String],
+    ) -> Result<ContextCreationAuthorization, OrbitError> {
+        if selectors.is_empty() {
+            return Ok(ContextCreationAuthorization::default());
+        }
+        let roots = self.context_selector_roots()?;
+        let mut authorize = Vec::new();
+        for selector in selectors {
+            match ensure_selector_resolves(selector, &roots) {
+                Ok(()) => {}
+                Err(SelectorRejection::Missing { canonical, .. }) => {
+                    if !authorize.contains(&canonical) {
+                        authorize.push(canonical);
+                    }
+                }
+                Err(rejection) => return Err(rejection.into_error()),
+            }
+        }
+        if authorize.len() > MAX_CONTEXT_CREATION_SELECTORS {
+            return Err(OrbitError::InvalidInput(format!(
+                "allow_missing_context accepts at most {MAX_CONTEXT_CREATION_SELECTORS} \
+                 not-yet-created selectors per task; this write names {}",
+                authorize.len()
+            )));
+        }
+        Ok(ContextCreationAuthorization {
+            authorize,
+            relied_on: None,
+        })
+    }
+
+    /// The strict operator-surface check for a write replacing `task_id`'s
+    /// `context_files`: [`Self::ensure_context_selectors_exist`], except that
+    /// a missing selector the task already holds a creation grant for is
+    /// kept. Re-sending a declared creation target therefore needs no new
+    /// opt-out, and the returned authorization pins the grant relied on.
+    pub fn ensure_context_selectors_exist_for_update(
+        &self,
+        task_id: &str,
+        selectors: &[String],
+    ) -> Result<ContextCreationAuthorization, OrbitError> {
+        self.ensure_context_selectors_exist_for_task_write(task_id, None, selectors)
+            .map(|(_, authorization)| authorization)
+    }
+
     /// Reject context selectors whose filesystem anchor does not exist in the
     /// workspace the task write will use.
     ///
@@ -133,14 +228,20 @@ impl OrbitRuntime {
     /// response can report it as unverified. Malformed, unsupported,
     /// out-of-workspace, and wrong-kind selectors are still rejected, and a
     /// task the run does not own gets the strict check with its escape hint.
+    ///
+    /// A missing selector the task holds a durable creation grant for is
+    /// accepted for any caller (see
+    /// [`Self::ensure_context_selectors_exist_for_update`]); the returned
+    /// authorization pins that grant.
     pub(crate) fn ensure_context_selectors_exist_for_task_write(
         &self,
         task_id: &str,
         owner_run_id: Option<&str>,
         selectors: &[String],
-    ) -> Result<Vec<String>, OrbitError> {
+    ) -> Result<(Vec<String>, ContextCreationAuthorization), OrbitError> {
+        let mut authorization = ContextCreationAuthorization::default();
         if selectors.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), authorization));
         }
 
         let roots = self.context_selector_roots()?;
@@ -149,18 +250,37 @@ impl OrbitRuntime {
                 Some(run_id) => self.run_owns_task(run_id, task_id)?,
                 None => false,
             };
+        let grant = match self.get_task(task_id) {
+            Ok(task) => self.context_creation_state(&task)?,
+            Err(OrbitError::NotFound { .. }) => ContextCreationState::Absent,
+            Err(error) => return Err(error),
+        };
 
         let mut unverified = Vec::new();
         for selector in selectors {
             match ensure_selector_resolves(selector, &roots) {
                 Ok(()) => {}
+                Err(SelectorRejection::Missing { canonical, .. })
+                    if grant.selectors().contains(&canonical) =>
+                {
+                    authorization.relied_on = grant.identity();
+                }
                 Err(SelectorRejection::Missing { canonical, .. }) if relax_missing => {
                     unverified.push(canonical);
+                }
+                Err(SelectorRejection::Missing { canonical, error })
+                    if matches!(grant, ContextCreationState::Void) =>
+                {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{error} The task's earlier creation authorization no longer applies \
+                         because its context_files changed without it, so `{canonical}` must be \
+                         re-declared explicitly."
+                    )));
                 }
                 Err(rejection) => return Err(rejection.into_error()),
             }
         }
-        Ok(unverified)
+        Ok((unverified, authorization))
     }
 
     /// Whether the managed run `run_id` admitted `task_id`: the task carries
