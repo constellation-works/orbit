@@ -145,6 +145,22 @@ pub fn run_update(
     report.archive_sha256 = Some(staged.archive_sha256.clone());
     report.signing_key_id = Some(staged.signing_key_id.clone());
 
+    // The signed manifest authenticates the archive, but does not bind it to
+    // the requested version. Reject mislabeled releases before any backup or
+    // swap, so an unrequested binary is never exposed at the installed path.
+    let reported = converge::probe_version(staged.path())
+        .and_then(|reported| ReleaseVersion::parse(&reported))
+        .map_err(|error| {
+            OrbitError::Execution(format!(
+                "the staged release could not be verified ({error}); nothing was replaced"
+            ))
+        })?;
+    if reported != target {
+        return Err(OrbitError::Execution(format!(
+            "the release published as {target} reports itself as {reported}; nothing was replaced"
+        )));
+    }
+
     let identity = converge::require_admission_contract(staged.path())?;
     if target < current {
         assert_downgrade_is_compatible(environment, staged.path(), &current, &target)?;
@@ -156,8 +172,7 @@ pub fn run_update(
     report.replaced = true;
     report.backup_path = Some(backup.clone());
 
-    // Nothing has touched `.orbit/` yet, so a binary that does not identify
-    // itself as the requested version is still safely reversible.
+    // Verify the installed path as well before touching workspace state.
     let installed =
         converge::probe_version(&executable).and_then(|reported| ReleaseVersion::parse(&reported));
     match installed {

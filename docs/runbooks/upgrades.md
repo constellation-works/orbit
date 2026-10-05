@@ -50,7 +50,10 @@ The check downloads no release archive and does not converge workspace state.
    a release. `--check` stays read-only and does not take the lock.
 5. Download the release archive, authenticate the checksum manifest against the trusted
    release signing keys, compare the archive's SHA-256, and extract its single `orbit` member
-   into a staging file beside the installed one.
+   into a staging file beside the installed one. Run the staged executable's `--version`
+   and require it to match the requested release before copying a backup or replacing
+   anything. A mislabeled release, failed version probe, or unparseable version is refused
+   with the installed executable untouched.
 6. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
    atomic same-directory rename, and confirm the installed binary reports the requested
    version. If it does not, the previous executable is copied into a complete sibling staging

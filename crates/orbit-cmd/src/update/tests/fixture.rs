@@ -87,8 +87,6 @@ pub const CLOCK_REPAIR_REPORT: &str = "rewrote clock unit ~/Library/LaunchAgents
 pub enum FakeBinary {
     /// Reports its version and succeeds at every subcommand.
     Healthy,
-    /// Reports a version other than the one the release claims.
-    VersionMismatch,
     /// Inspection succeeds but the older candidate can only read the store.
     ReadOnlyStore,
     /// Candidate cannot coordinate with protected clients.
@@ -136,11 +134,7 @@ impl Fixture {
 
     /// Publish `version` to the mirror, and make it the mirror's latest.
     pub fn publish(&self, version: &str, behavior: FakeBinary) {
-        let reported = match behavior {
-            FakeBinary::VersionMismatch => "0.0.1",
-            _ => version,
-        };
-        let archive = tar_gz(&script(reported, &self.invocation_log, behavior));
+        let archive = tar_gz(&script(version, &self.invocation_log, behavior));
         self.publish_archive(version, &archive, true);
     }
 

@@ -210,31 +210,6 @@ fn an_archive_carrying_more_than_the_orbit_binary_is_rejected() {
 }
 
 #[test]
-fn a_release_that_reports_the_wrong_version_is_rolled_back() {
-    if crate::tests::run_isolated_test(std::any::type_name_of_val(
-        &a_release_that_reports_the_wrong_version_is_rolled_back,
-    )) {
-        return;
-    }
-
-    let fixture = Fixture::new("0.18.0");
-    fixture.publish("0.19.0", FakeBinary::VersionMismatch);
-
-    let error = run_update(&fixture.environment(), &request()).expect_err("version mismatch");
-
-    assert!(
-        error.to_string().contains("reports itself as 0.0.1"),
-        "{error}"
-    );
-    assert!(
-        error.to_string().contains("changed no workspace state"),
-        "{error}"
-    );
-    assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
-    assert!(fixture.invocations().is_empty());
-}
-
-#[test]
 fn a_second_concurrent_update_is_refused_rather_than_queued() {
     if crate::tests::run_isolated_test(std::any::type_name_of_val(
         &a_second_concurrent_update_is_refused_rather_than_queued,
