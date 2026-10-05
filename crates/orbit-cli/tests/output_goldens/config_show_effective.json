@@ -159,24 +159,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "operation.review_minutes": {
-      "scope": "built-in",
-      "state": "unset",
-      "path": null,
-      "shadowed_by": []
-    },
-    "operation.review_policy": {
-      "scope": "built-in",
-      "state": "unset",
-      "path": null,
-      "shadowed_by": []
-    },
-    "operation.review_reviewer_starts": {
-      "scope": "built-in",
-      "state": "unset",
-      "path": null,
-      "shadowed_by": []
-    },
     "plugin.legacy_callback_identity": {
       "scope": "built-in",
       "state": "default",
@@ -198,6 +180,18 @@
     "pr.task_url_template": {
       "scope": "built-in",
       "state": "unset",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.before_pr": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.minutes": {
+      "scope": "built-in",
+      "state": "default",
       "path": null,
       "shadowed_by": []
     },

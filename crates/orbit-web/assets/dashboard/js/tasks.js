@@ -756,7 +756,7 @@ function buildReviewGate(review) {
     `base ${review.base?.commit ?? "—"} → reviewed ${review.reviewed_candidate?.commit ?? "—"} → final ${review.final_candidate?.commit ?? "—"}`,
     `reviewer commit: ${Array.isArray(review.repair_commits) && review.repair_commits.length ? review.repair_commits.map((c) => `${c.commit.slice(0, 12)} by ${c.author}`).join(", ") : "none"}`,
     `findings: ${Array.isArray(review.findings) ? review.findings.length : 0} · validation: ${Array.isArray(review.validation) ? review.validation.length : 0} record(s), complete: ${review.validation_complete ? "yes" : "no"}`,
-    `consumed: ${consumed.reviewer_starts ?? 0}/${budget.reviewer_starts ?? "?"} starts · ${consumed.seconds ?? 0}s of ${budget.minutes ?? "?"} min`,
+    `reviewer runtime: ${consumed.seconds ?? 0}s of ${budget.minutes ?? "?"} min`,
   ];
   if (review.escalation) lines.push(`escalation: ${review.escalation}`);
   if (Array.isArray(review.landings) && review.landings.length) {

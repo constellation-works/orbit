@@ -1,55 +1,127 @@
-//! `operation.review_policy = after-landing` and the consumer that carries it
-//! out [ORB-13896].
+//! After-landing review: the `delivery-code-review` delivery consumer
+//! [ORB-13896] [ORB-13992].
 //!
-//! The policy is the switch. While it is `after-landing`, the shipped
-//! `delivery-code-review` delivery consumer is enabled whatever its own
-//! `enabled` field says, and `operation.review_crew`, when set, is the crew of
-//! every review task it mints. Nothing else performs after-landing review, so
-//! [`after_landing_health`] states in one line whether that consumer can
-//! actually do it on this host; `orbit doctor` fails on anything less than
-//! healthy and `orbit config show` prints the same line.
+//! The auto-task's own `enabled` flag is the switch. `operation.review_crew`,
+//! when set, is the crew of every review task it mints. Nothing else performs
+//! after-landing review, so [`after_landing_health`] states in one line
+//! whether that consumer can actually do it on this host and when its next
+//! batch is due; `orbit doctor` fails on anything less than healthy and the
+//! review read views print the same line.
+//!
+//! The retired `operation.review_policy = "after-landing"` still enables the
+//! consumer for one release while its definition was never configured by an
+//! operator — still the shipped seed, last written by `system` — so a
+//! workspace that relied on the policy keeps its reviews until the operator
+//! toggles the auto-task themselves.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_config::ReviewPolicy;
-use orbit_types::workflow::automation::CoverageClass;
+use orbit_config::OperationLayerSource;
+use orbit_types::workflow::automation::{AutomationState, CoverageClass, DeliveryTrigger};
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 use serde::Serialize;
 
 use super::{inspect, source::Source};
 use crate::OrbitRuntime;
 
-/// The auto-task definition `after-landing` review runs through.
+/// The auto-task definition after-landing review runs through.
 pub(crate) const AFTER_LANDING_CONSUMER: &str = "delivery-code-review";
 
-impl OrbitRuntime {
-    /// Whether `operation.review_policy = after-landing` keeps `definition`
-    /// enabled: it is the delivery consumer that policy runs through.
-    pub fn auto_task_enabled_by_review_policy(&self, definition: &AutoTaskDefinition) -> bool {
-        self.operation_policy().review_policy.value == ReviewPolicy::AfterLanding
-            && definition.name == AFTER_LANDING_CONSUMER
-            && matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. })
-    }
+/// The actor the shipped seed records; any other writer configured the
+/// definition explicitly.
+const SEED_ACTOR: &str = "system";
 
-    /// Whether `definition` is enabled here: its own toggle, or the review
-    /// policy that drives it. Every delivery evaluation, inspection and
+impl OrbitRuntime {
+    /// Whether `definition` is enabled here: its own toggle or, for one
+    /// release, the retired `after-landing` policy value on a consumer no
+    /// operator has configured. Every delivery evaluation, inspection and
     /// listing reads this rather than the raw field, so they cannot disagree.
     pub fn auto_task_enabled(&self, definition: &AutoTaskDefinition) -> bool {
-        definition.enabled || self.auto_task_enabled_by_review_policy(definition)
+        definition.enabled || self.legacy_after_landing_enables(definition).is_some()
+    }
+
+    /// The layer whose retired `operation.review_policy = "after-landing"`
+    /// keeps `definition` enabled, when it does.
+    fn legacy_after_landing_enables(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Option<OperationLayerSource> {
+        let layer = self.operation_policy().legacy_after_landing?;
+        let consumer = definition.name == AFTER_LANDING_CONSUMER
+            && matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. });
+        let configured = definition
+            .updated_by
+            .as_deref()
+            .is_some_and(|actor| actor != SEED_ACTOR);
+        (consumer && !configured).then_some(layer)
     }
 }
 
 /// The crew a review task minted for `definition` must carry instead of the
-/// template's: `operation.review_crew`, when the policy drives this consumer
-/// and the crew is set.
+/// template's: `operation.review_crew`, when this is the after-landing
+/// consumer and the crew is set.
 pub(super) fn review_crew_override(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Option<String> {
-    if !runtime.auto_task_enabled_by_review_policy(definition) {
+    if definition.name != AFTER_LANDING_CONSUMER {
         return None;
     }
     runtime.operation_policy().review_crew.value.clone()
+}
+
+/// What turned after-landing review on or left it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AfterLandingSource {
+    /// The auto-task's own `enabled` flag.
+    AutoTask,
+    /// The retired `operation.review_policy = "after-landing"` in the named
+    /// layer, on a consumer no operator has configured.
+    LegacyReviewPolicy(OperationLayerSource),
+    /// No `delivery-code-review` definition loads here.
+    Missing,
+}
+
+impl AfterLandingSource {
+    /// The operator-facing provenance label.
+    pub fn label(self) -> String {
+        match self {
+            AfterLandingSource::AutoTask => format!("auto-task {AFTER_LANDING_CONSUMER}"),
+            AfterLandingSource::LegacyReviewPolicy(layer) => format!(
+                "deprecated operation.review_policy = \"after-landing\" ({}); run `orbit \
+                 auto-task toggle {AFTER_LANDING_CONSUMER} on` and delete the key",
+                layer.label()
+            ),
+            AfterLandingSource::Missing => format!("auto-task {AFTER_LANDING_CONSUMER} missing"),
+        }
+    }
+}
+
+/// Whether after-landing review is on here, and why.
+pub fn after_landing_switch(
+    runtime: &OrbitRuntime,
+) -> Result<(bool, AfterLandingSource), OrbitError> {
+    let Some(definition) = after_landing_definition(runtime)? else {
+        return Ok((false, AfterLandingSource::Missing));
+    };
+    if definition.enabled {
+        return Ok((true, AfterLandingSource::AutoTask));
+    }
+    Ok(match runtime.legacy_after_landing_enables(&definition) {
+        Some(layer) => (true, AfterLandingSource::LegacyReviewPolicy(layer)),
+        None => (false, AfterLandingSource::AutoTask),
+    })
+}
+
+fn after_landing_definition(
+    runtime: &OrbitRuntime,
+) -> Result<Option<AutoTaskDefinition>, OrbitError> {
+    Ok(runtime
+        .auto_task_listing(false)?
+        .into_iter()
+        .map(|listed| listed.definition)
+        .find(|definition| definition.name == AFTER_LANDING_CONSUMER))
 }
 
 /// Whether the `after-landing` consumer can review landed work on this host.
@@ -59,7 +131,7 @@ pub struct AfterLandingHealth {
     pub consumer: String,
     /// The definition loads and is not parked by an inactive plugin.
     pub present: bool,
-    /// The consumer is enabled here (by the policy or its own toggle).
+    /// The consumer is enabled here.
     pub enabled: bool,
     /// This host is the consumer's resolved owner.
     pub owned_here: bool,
@@ -83,6 +155,12 @@ pub struct AfterLandingHealth {
     pub last_batch_minted_at: Option<DateTime<Utc>>,
     /// When the consumer last accepted coverage evidence for a batch.
     pub last_batch_covered_at: Option<DateTime<Utc>>,
+    /// When the next batch is due, as one phrase: in flight, due now, due by
+    /// a time, or waiting for landed deliveries.
+    pub next_batch_due: Option<String>,
+    /// The instant the oldest pending delivery makes a batch due, when the
+    /// threshold is not reached first.
+    pub next_batch_due_at: Option<DateTime<Utc>>,
     /// Every reason the consumer cannot review landed work; empty when healthy.
     pub problems: Vec<String>,
 }
@@ -138,6 +216,10 @@ impl AfterLandingHealth {
             format!("state {}", self.state.as_deref().unwrap_or("-")),
             minted,
             covered,
+            format!(
+                "next batch {}",
+                self.next_batch_due.as_deref().unwrap_or("unknown")
+            ),
         ]
         .join(", ");
 
@@ -156,13 +238,20 @@ const BLOCKING_STATES: &[&str] = &[
     "retry_deadline_expired",
 ];
 
-/// The `after-landing` consumer's health on this host, or `None` when the
-/// review policy is not `after-landing`.
+/// The after-landing consumer's health on this host, or `None` when
+/// after-landing review is off.
 pub fn after_landing_health(
     runtime: &OrbitRuntime,
     now: DateTime<Utc>,
 ) -> Result<Option<AfterLandingHealth>, OrbitError> {
-    if runtime.operation_policy().review_policy.value != ReviewPolicy::AfterLanding {
+    let definition = after_landing_definition(runtime)?;
+    let requested = match &definition {
+        Some(definition) => runtime.auto_task_enabled(definition),
+        // A missing consumer is a problem only for a workspace that asked
+        // for after-landing review through the retired policy value.
+        None => runtime.operation_policy().legacy_after_landing.is_some(),
+    };
+    if !requested {
         return Ok(None);
     }
 
@@ -181,15 +270,12 @@ pub fn after_landing_health(
         crew_error: None,
         last_batch_minted_at: None,
         last_batch_covered_at: None,
+        next_batch_due: None,
+        next_batch_due_at: None,
         problems: Vec::new(),
     };
 
-    let Some(definition) = runtime
-        .auto_task_listing(false)?
-        .into_iter()
-        .map(|listed| listed.definition)
-        .find(|definition| definition.name == AFTER_LANDING_CONSUMER)
-    else {
+    let Some(definition) = definition else {
         health.problems.push(format!(
             "is missing or does not load, so no landed delivery is reviewed; reinstate it with \
              `orbit auto-task restore {AFTER_LANDING_CONSUMER}`"
@@ -302,6 +388,11 @@ pub fn after_landing_health(
     {
         health.last_batch_minted_at = Some(task.created_at);
     }
+    if let Some(state) = &diagnostic.state {
+        let (due, due_at) = next_batch_due(state, state.trigger.as_ref().unwrap_or(declared), now);
+        health.next_batch_due = Some(due);
+        health.next_batch_due_at = due_at;
+    }
     // Without consumer state, inspection reports the branch failure as its
     // reason; that is already a problem above, and the state is the wait.
     health.state = Some(if diagnostic.state.is_none() {
@@ -311,4 +402,42 @@ pub fn after_landing_health(
     });
 
     Ok(Some(health))
+}
+
+/// When the consumer's next batch is due, mirroring the delivery evaluator:
+/// a batch is due once `threshold` deliveries are pending or the oldest has
+/// waited `max_wait_minutes`; nothing new is due while a batch is in flight.
+fn next_batch_due(
+    state: &AutomationState,
+    trigger: &DeliveryTrigger,
+    now: DateTime<Utc>,
+) -> (String, Option<DateTime<Utc>>) {
+    let pending = state.pending.len();
+    let threshold = trigger.threshold;
+    if state.active.is_some() {
+        return (
+            format!("after the batch in flight ({pending} pending)"),
+            None,
+        );
+    }
+    let Some(oldest) = state.pending.first() else {
+        return (
+            format!("after {threshold} landed deliveries (none pending)"),
+            None,
+        );
+    };
+    let due_at = oldest.landed_at + Duration::minutes(i64::from(trigger.max_wait_minutes));
+    if pending >= threshold || due_at <= now {
+        return (
+            format!("due now ({pending}/{threshold} pending)"),
+            Some(due_at.min(now)),
+        );
+    }
+    (
+        format!(
+            "due by {} or at {threshold} landed deliveries ({pending} pending)",
+            due_at.to_rfc3339()
+        ),
+        Some(due_at),
+    )
 }

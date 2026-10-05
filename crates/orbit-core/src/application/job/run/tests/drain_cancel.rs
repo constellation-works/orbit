@@ -107,7 +107,7 @@ fn admission(
         request_id: format!("request-{}", owner.receipts.lock().unwrap().len()),
         caller_version: "fixture".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-        caller_review_policy: "none".into(),
+        caller_before_pr: false,
         run_context: AdmissionRunContext {
             run_id: drain.run_id.clone(),
             job_name: drain.job_id.clone(),
@@ -117,7 +117,7 @@ fn admission(
             mode: "pr".into(),
             base_branch: "agent-main".into(),
             landing_branch: "agent-main".into(),
-            review_policy: "none".into(),
+            before_pr: false,
             completion: "review".into(),
             authorization_reference: None,
         },

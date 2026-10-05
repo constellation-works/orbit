@@ -224,7 +224,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             request_id: "template".into(),
             caller_version: "1".into(),
             caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            caller_review_policy: "none".into(),
+            caller_before_pr: false,
             run_context: AdmissionRunContext {
                 run_id: parent.run_id,
                 job_name: "workspace_auto_pipeline".into(),
@@ -234,7 +234,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
                 mode: "local".into(),
                 base_branch: "main".into(),
                 landing_branch: "main".into(),
-                review_policy: "none".into(),
+                before_pr: false,
                 completion: "review".into(),
                 authorization_reference: None,
             },

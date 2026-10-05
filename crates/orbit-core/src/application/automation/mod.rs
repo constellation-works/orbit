@@ -22,7 +22,9 @@ pub(crate) mod source;
 pub(crate) mod stall;
 mod task;
 
-pub use after_landing::{AfterLandingHealth, after_landing_health};
+pub use after_landing::{
+    AfterLandingHealth, AfterLandingSource, after_landing_health, after_landing_switch,
+};
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{
     UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,

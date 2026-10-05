@@ -548,10 +548,9 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 |---|---|---|
 | `execution.codex.sandbox` | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. The file `orbit init` seeds sets `danger-full-access` globally. Security key, not inherited by a workspace file. |
 | `execution.codex.approval_policy` | unset | `untrusted`, `on-request` or `never`. Security key. |
-| `operation.review_policy` | `none` | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. `before-pr` holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery. `after-landing` enables the workspace's `delivery-code-review` auto-task (whatever its own `enabled` setting says), which freezes landed deliveries on the base branch into batches and mints review tasks; `orbit doctor` fails while that consumer cannot run here. See [review-gate design](design/review-gate/2_design.md). |
+| `review.before_pr` | `false` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. PR route only: refused for local-only delivery. A delivery run or drain captures the value at submission, so a run in flight keeps it. Distributed admission refuses a pull while either endpoint has it on. See [review-gate design](design/review-gate/2_design.md). |
+| `review.minutes` | `30` | Wall-clock limit for one candidate's before-PR review, its fix commit and final validation included. Each candidate gets one review: a retry or resume continues it within the same minutes, the running reviewer is stopped when they run out, and a spent review is not restarted. A changed candidate, such as a completion rebase, is a new review (1..=1440). |
 | `operation.review_crew` | unset | Crew for automatic review: the before-PR reviewer, and the crew of every review task the after-landing `delivery-code-review` consumer mints (unset, that definition's template crew). |
-| `operation.review_reviewer_starts` | `3` | Fresh reviewer starts allowed per delivery run lineage. Retrying a failed reviewer step continues its start; a review of a changed candidate, including a completion rebase, takes a new one (1..=10, default 3). |
-| `operation.review_minutes` | `90` | Aggregate before-PR reviewer runtime minutes per delivery run lineage (a delivery run and its resumes; a fresh delivery run starts a new lineage). Once spent, no further reviewer start is admitted; an admitted reviewer is bounded by its own activity timeout, not by this remainder (1..=1440, default 90). `operation.review_repair_cycles` is retired: the reviewer fixes its findings in one commit and nothing is reworked, so the key is ignored with a warning. |
 | `tasks.id_start` | unset | Forward-only floor for this machine's task-ID allocator, raised on every runtime build and never lowered, so machines can hold disjoint ranges. For the first seed prefer `orbit workspace init --task-id-start N`. See [task migration](design/task-migration/1_overview.md). |
 | `automation.stall_window_minutes` | `60` | How long a delivery-automation consumer may sit on a stuck deferral (`history_diverged`, `repository_changed`, `provider_identity_missing`, `state_missing`) before a warning and one deduped friction (1–1440). Transient backpressure never escalates. See [auto-tasks](../plugin/skills/orbit-setup/references/auto-tasks.md). |
 | `scoring.enabled` | `true` | Record per-agent scoreboard metrics for task runs. |
@@ -563,7 +562,7 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 | `runtime.log_max_file_mb` | `100` | Roll the active log past N MiB (≥ 1, ≤ `log_max_total_mb`). |
 | `plugin.legacy_callback_identity` | `false` | Deprecated. Also accept the environment token and process ancestry as a plugin callback credential. Removed next release. |
 
-Full log rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`). Short-lived commands roll only an oversized active file. `[operation]` keys resolve built-in → global → workspace, and unknown `[operation]` keys fail load.
+Full log rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`). Short-lived commands roll only an oversized active file. `[review]` and `[operation]` keys resolve built-in → global → workspace, and unknown keys in either table fail load.
 
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 
@@ -610,15 +609,15 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `invalid type: string "…", expected a boolean` for `enabled` | Write `enabled = true` or `enabled = false`, unquoted. |
 | `config schema no longer supports [agent.<role>] tables` | Migrate to `[crews.<name>]`. |
 | `execution.codex.sandbox has invalid value '<x>'` | Use `read-only`, `workspace-write` or `danger-full-access`. |
-| `[operation] has unknown key '<x>'`, `operation.review_policy has invalid value '<x>'` | The review keys are a closed set. |
+| `[operation] has unknown key '<x>'`, `[review] has unknown key '<x>'`, `operation.review_policy has invalid value '<x>'` | The review keys are a closed set. |
 | `[task] artifact_store is no longer supported` | Remove the key. |
 
 **Retired keys that warn and are ignored.** Delete them. `orbit config get`/`set` reject them with migration notes.
 
 | Retired | Note |
 |---|---|
-| `operation.preset`, `completion`, `preparation`, `preparation_due_seconds`, `promotion`, `leaf_ceiling`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, `delivery_cap` | Operation mode was removed. `[operation]` keeps only the review keys. |
-| `operation.review_repair_cycles` | Retired: the before-PR reviewer fixes findings in one reviewer commit per attempt and nothing is reworked, so no repair cycle is counted; `review_reviewer_starts` and `review_minutes` still bound a lineage. |
+| `operation.preset`, `completion`, `preparation`, `preparation_due_seconds`, `promotion`, `leaf_ceiling`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, `delivery_cap` | Operation mode was removed. `[operation]` keeps only `review_crew`. |
+| `operation.review_repair_cycles`, `operation.review_reviewer_starts` | Retired: each candidate gets one review whose reviewer fixes its findings in one commit, so neither repair cycles nor reviewer starts are counted. `review.minutes` bounds that review. |
 | `[docs]` | The docs corpus was removed. |
 | `[semantic]`, `search.model` | Search is lexical (SQLite FTS5) and needs no model. The legacy `semantic.db` path remains the lexical search database. |
 | `workflow.pilot_max_complexity` | Route a tier with `workflow.<tier>_complexity_crews`, or pin `crew` on the task. |
@@ -626,5 +625,14 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `[routines]` (`role = "source"`) | Every registered owner checkout is a routine source. |
 | `knowledge.task_id_pattern` | Deprecated. |
 | `execution.env.inherit` | Inheritance is fixed off. |
+
+**Deprecated keys that warn and are translated.** These are still honoured, warned on every load, and refused by `orbit config get`/`set`. A later release makes them errors, so move them now.
+
+| Deprecated | Translation |
+|---|---|
+| `operation.review_policy` | `before-pr` sets `review.before_pr = true`. `after-landing` enables the `delivery-code-review` auto-task while no operator has configured it: once its `enabled` flag is set by `orbit auto-task toggle` or any other edit, that flag decides. `none` turns neither on. A `[review]` table in the same file wins. |
+| `operation.review_minutes` | Becomes `review.minutes`, now the limit for one candidate's review rather than a lineage total. |
+
+After-landing review is not a config key: it is the `delivery-code-review` auto-task's own `enabled` flag (`orbit auto-task toggle delivery-code-review on|off`). `orbit config show`, `orbit doctor` (the `review` check), the dashboard Config tab and `orbit.drain.probe` all report both switches with their sources: before-PR on/off and minutes, and after-landing enabled with the next batch due.
 
 Start with a minimal workspace file that holds only genuine overrides.

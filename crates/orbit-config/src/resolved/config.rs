@@ -8,14 +8,17 @@ use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::Crew;
 
 use super::compatibility::{
-    CompatibilityKeys, RETIRED_BACKEND_ENV, reject_retired_backend_overrides,
-    reject_stale_agent_tables, removed_keys_present, validate_task_artifact_store_from_raw,
+    CompatibilityKeys, RETIRED_BACKEND_ENV, deprecated_keys_present,
+    reject_retired_backend_overrides, reject_stale_agent_tables, removed_keys_present,
+    validate_task_artifact_store_from_raw,
 };
 use super::crew::{IgnoredCrewProperty, alias_system_crew, crews_from_raw, default_crews};
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
 use crate::layering::load_layered_resolved;
-use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
+use crate::operation::{
+    OperationLayer, OperationLayerSource, OperationPolicy, translate_legacy_review_keys,
+};
 use crate::persistence::PersistenceConfig;
 use crate::raw::RawRuntimeConfig;
 use crate::registry::ConfigSnapshot;
@@ -79,8 +82,8 @@ pub struct ResolvedConfig {
     /// deferred to dispatch so a bad system crew does not stop unrelated
     /// activity execution.
     pub system_crew: String,
-    /// Resolved `[operation]` review preferences with per-field provenance
-    /// (built-in: no automatic review) [ORB-11333].
+    /// Resolved review preferences with per-field provenance (built-in: no
+    /// before-PR review) [ORB-11333] [ORB-13992].
     pub operation: OperationPolicy,
     /// Optional floor for the local task-id allocator (`[tasks] id_start`).
     /// Applied forward-only on runtime build so machines can hold disjoint id
@@ -165,12 +168,13 @@ impl ResolvedConfig {
         config_path: &Path,
         persistence: PersistenceConfig,
     ) -> Result<Self, OrbitError> {
-        let document = toml::from_str::<toml::Value>(raw).map_err(|err| {
+        let mut document = toml::from_str::<toml::Value>(raw).map_err(|err| {
             OrbitError::InvalidInput(format!(
                 "invalid runtime config '{}': {err}",
                 redact_home_dir(&config_path.display().to_string())
             ))
         })?;
+        translate_legacy_review_keys(&mut document, config_path)?;
         Self::from_document_with_warnings(document, config_path, persistence, true)
     }
 
@@ -241,6 +245,7 @@ impl ResolvedConfig {
             retired_routines: parsed.routines.is_some(),
             retired_docs: parsed.docs.is_some(),
             removed_keys: removed_keys_present(&document),
+            deprecated_keys: deprecated_keys_present(&document),
         };
         if emit_compatibility_warnings {
             compatibility_keys.warn(config_path);

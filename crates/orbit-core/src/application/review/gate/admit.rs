@@ -86,7 +86,8 @@ pub(crate) fn review_gate_admit(
     }
     if !admission.gates_pr() {
         let reason = match admission.timing {
-            orbit_types::workflow::ReviewTiming::None => "review_policy_none",
+            orbit_types::workflow::ReviewTiming::None => "review_before_pr_off",
+            // A run captured under the retired `after-landing` policy value.
             orbit_types::workflow::ReviewTiming::AfterLanding => "review_policy_after_landing",
             orbit_types::workflow::ReviewTiming::BeforePr => unreachable!("gates_pr"),
         };
@@ -102,11 +103,11 @@ pub(crate) fn review_gate_admit(
         return Ok(not_applicable("no_diff_exemption", Some(&admission)));
     }
     if input.get("mode").and_then(Value::as_str) == Some("local") {
-        // V1 rejects `before-pr` on a local-only route instead of changing
-        // what the policy means; a pipeline may learn its route late.
+        // `review.before_pr` on a local-only route is refused rather than
+        // reinterpreted; a pipeline may learn its route late.
         return Err(refused(
-            "review_policy_local_route_refused: this run carries a before-pr review admission \
-             but delivers locally; ship through the PR route or choose none/after-landing"
+            "review_before_pr_local_route_refused: this run captured review.before_pr on but \
+             delivers locally; ship through the PR route or turn review.before_pr off"
                 .to_string(),
         ));
     }
@@ -259,12 +260,11 @@ fn admit(
         ReviewReservation::Resumed { attempt } => (attempt, true),
         ReviewReservation::Exhausted { reason, consumed } => {
             return Err(OrbitError::CapabilityDenied(format!(
-                "review_budget_exhausted: {reason} for lineage '{lineage_key}' (reviewer starts \
-                 {}/{}, {}s of {}s); an operator can run \
+                "review_budget_exhausted: {reason} for candidate {} in lineage '{lineage_key}' \
+                 ({}s of {}s); each candidate gets one review — an operator can run \
                  orbit task review-reset {} --lineage '{lineage_key}' --reason '<decision>' \
                  before resuming, or dispatch a fresh delivery run",
-                consumed.reviewer_starts,
-                ledger.budget.reviewer_starts,
+                candidate.head.commit,
                 consumed.seconds,
                 u64::from(ledger.budget.minutes) * 60,
                 context.task_ids[0]
@@ -292,7 +292,7 @@ fn admit(
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: admission.policy_version,
         budget: ledger.budget,
-        remaining: ledger.remaining_at(now),
+        remaining: ledger.remaining_for(&candidate.head, task_meaning_digest, now),
         issued_at: now,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)
@@ -332,7 +332,7 @@ fn admit(
         "manifest_artifact": REVIEW_MANIFEST_ARTIFACT,
         "report_artifact": REVIEW_REPORT_ARTIFACT,
         "budget": ledger.budget,
-        "remaining": ledger.remaining_at(now),
+        "remaining": manifest.remaining,
         "started_at": attempt.started_at.to_rfc3339(),
     }))
 }
@@ -347,7 +347,7 @@ fn resolve_reviewer_crew(
 ) -> Result<Crew, OrbitError> {
     let name = admission.crew.as_deref().ok_or_else(|| {
         OrbitError::CapabilityDenied(
-            "review_crew_unconfigured: before-pr review needs an explicitly configured \
+            "review_crew_unconfigured: before-PR review needs an explicitly configured \
              operation.review_crew; automatic review never inherits the implementer's crew"
                 .to_string(),
         )
@@ -423,28 +423,24 @@ pub(super) fn reviewer_identity(
     })
 }
 
-/// Fail before implementation when the captured lineage cannot admit another
-/// reviewer. This does not reserve an attempt, load Git objects or write a manifest.
+/// Fail before implementation when the lineage's latest review ran out of
+/// minutes without a verdict: a resumed run would otherwise implement again
+/// only to be refused at admission. A settled review never blocks here — the
+/// next candidate is a new review. This does not reserve an attempt, load Git
+/// objects or write a manifest.
 fn preflight_budget(runtime: &OrbitRuntime, context: &GateContext) -> Result<Value, OrbitError> {
     let lineage = context.lineage_key();
     if let Some(ledger) = runtime
         .review_store()?
         .review_ledger(&context.workspace_id, &lineage)?
+        && let Some(latest) = ledger.latest_attempt()
+        && !ledger.reviewed(&latest.candidate, &latest.task_meaning_digest)
+        && ledger.remaining_at(Utc::now()).seconds == 0
     {
-        let remaining = ledger.remaining_at(Utc::now());
-        let reason = if remaining.seconds == 0 {
-            Some("review_minutes_exhausted")
-        } else if remaining.reviewer_starts == 0 {
-            Some("review_starts_exhausted")
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            return Err(OrbitError::CapabilityDenied(format!(
-                "review_budget_exhausted: {reason} for lineage '{lineage}'; an operator can run orbit task review-reset {} --lineage '{lineage}' --reason '<decision>' before resuming, or dispatch a fresh delivery run",
-                context.task_ids[0]
-            )));
-        }
+        return Err(OrbitError::CapabilityDenied(format!(
+            "review_budget_exhausted: review_minutes_exhausted for lineage '{lineage}'; an operator can run orbit task review-reset {} --lineage '{lineage}' --reason '<decision>' before resuming, or dispatch a fresh delivery run",
+            context.task_ids[0]
+        )));
     }
     Ok(json!({"applies": true, "decision": "preflight_passed", "lineage_key": lineage}))
 }

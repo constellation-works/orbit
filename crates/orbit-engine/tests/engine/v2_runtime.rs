@@ -1236,12 +1236,12 @@ impl RuntimeHost for CompletionReviewHost {
     fn record_reviewer_invocation(
         &self,
         request: &ReviewerInvocationRequest,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<Option<u64>, OrbitError> {
         self.invocations
             .lock()
             .expect("invocations")
             .push(request.clone());
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -1319,12 +1319,12 @@ impl RuntimeHost for ReviewerHost {
     fn record_reviewer_invocation(
         &self,
         request: &ReviewerInvocationRequest,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<Option<u64>, OrbitError> {
         self.invocations
             .lock()
             .expect("invocations")
             .push(request.clone());
-        Ok(())
+        Ok(None)
     }
 }
 

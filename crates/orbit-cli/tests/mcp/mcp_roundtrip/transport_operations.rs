@@ -375,8 +375,8 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
     .unwrap();
     let ws = runtime.workspace_id().unwrap();
     // Seed the persisted shape produced before timeout accounting was fixed,
-    // deliberately omitting `decisions` and carrying the retired repair-cycle
-    // counts to exercise compatibility.
+    // deliberately omitting `decisions` and carrying the retired start and
+    // repair-cycle limits to exercise compatibility.
     let lineage = format!("{ws}/{id}/main");
     let now = chrono::Utc::now();
     let ledger = json!({
@@ -385,12 +385,11 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
         "state": {"state": "settled", "verdict": "incomplete"}, "repair_cycles": 0, "elapsed_seconds": 19385}],
         "consumed_seconds": 19385, "revision": 1, "updated_at": now,
     });
-    // How that ledger reads today: the retired repair-cycle counts drop out.
+    // How that ledger reads today: the retired limits drop out.
     let mut current = ledger.clone();
-    current["budget"]
-        .as_object_mut()
-        .unwrap()
-        .remove("repair_cycles");
+    for retired in ["reviewer_starts", "repair_cycles"] {
+        current["budget"].as_object_mut().unwrap().remove(retired);
+    }
     current["attempts"][0]
         .as_object_mut()
         .unwrap()

@@ -11,7 +11,7 @@ summary: Pull-based admission, durable request and attempt identity, machine-sco
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488]
+related_artifacts: [ORB-12488, ORB-13992]
 ---
 
 # Distributed Drain — Decisions
@@ -389,8 +389,12 @@ handoff state; completion still requires explicit authorization and verified lan
 ### Consequences
 
 - Default no-review execution can produce a valid handoff without pretending a review happened.
-- Cost: workspaces configured for before-PR or after-landing review must explicitly change policy
-  or wait for a later version; pull never silently downgrades their policy.
+- Cost: workspaces configured for before-PR review must explicitly turn it off or wait for a later
+  version; pull never silently downgrades their policy.
+- Narrowed by [ORB-13992]: `operation.review_policy` became the `review.before_pr` switch plus the
+  `delivery-code-review` auto-task flag. Admission keys only on the `before_pr` each endpoint
+  captured; after-landing review runs on the owner after landing and never refuses a pull. Protocol
+  revision 5 carries `caller_before_pr` and `ship.before_pr`.
 
 ## Declared context survives missing filesystem targets
 
@@ -638,5 +642,6 @@ is off on the Mac by design.
 - [ORB-13637] — added the owner completion policy ([An owner completion policy lands accepted handoffs without per-task approval](#an-owner-completion-policy-lands-accepted-handoffs-without-per-task-approval)).
 - [ORB-13649] — scoped run-keyed task lookups to the executing machine ([A run is its id plus the machine that executes it](#a-run-is-its-id-plus-the-machine-that-executes-it)).
 - [ORB-13663] — moved settlement from the admitting drain to the admission record ([Settlement belongs to the admission record, not to the drain that admitted it](#settlement-belongs-to-the-admission-record-not-to-the-drain-that-admitted-it)).
+- [ORB-13992] — narrowed [V1 review policy is none](#v1-review-policy-is-none) to the `review.before_pr` switch.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

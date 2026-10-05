@@ -642,7 +642,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         machine_id: context.machine_id.clone(),
         run_id: context.run_id.clone(),
         candidate: candidate.clone(),
-        // Only `review_policy = none` is admitted, so there is no reviewed SHA,
+        // Only `review.before_pr = false` is admitted, so there is no reviewed SHA,
         // verdict or reviewer artifact to report and none is invented here.
         review: HandoffReview {
             policy: ReviewTiming::None,

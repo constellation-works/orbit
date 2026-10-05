@@ -137,6 +137,13 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
         "crew_fields": CREW_FIELDS,
         "write_scope_default": ConfigScope::Workspace.label(),
         "workspace_file_exists": workspace_file_exists,
+        // The runtime may have been opened before the last config write, so
+        // the review switches resolve from the files this view just read.
+        "review": crate::application::review::review_switches_view(
+            runtime,
+            &orbit_config::ResolvedConfig::load(&config_roots(runtime))?.operation,
+            chrono::Utc::now(),
+        ),
     }))
 }
 

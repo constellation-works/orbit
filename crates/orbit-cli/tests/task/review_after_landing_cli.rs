@@ -1,7 +1,9 @@
-//! `operation.review_policy = after-landing` drives the shipped
-//! `delivery-code-review` consumer and `orbit doctor` fails while it cannot
-//! run [ORB-13896]: the policy once did nothing without a separate toggle,
-//! and a disabled, unowned or wedged consumer looked healthy for weeks.
+//! After-landing review is the shipped `delivery-code-review` auto-task's
+//! own `enabled` flag [ORB-13992], and `orbit doctor` fails while an enabled
+//! consumer cannot run [ORB-13896]: a disabled, unowned or wedged consumer
+//! once looked healthy for weeks. The deprecated
+//! `operation.review_policy = "after-landing"` still enables a consumer no
+//! operator has configured, for one release.
 
 use std::fs;
 
@@ -74,6 +76,73 @@ fn enable_review_crew(fixture: &Fixture) {
     set_policy(fixture, "workflow.system_crew", REVIEW_CREW);
 }
 
+/// Toggle the shipped consumer, as an operator switching after-landing
+/// review does.
+fn toggle(fixture: &Fixture, state: &str) {
+    fixture
+        .command(&["auto-task", "toggle", CONSUMER, state])
+        .assert()
+        .success();
+}
+
+/// Write a deprecated config key the CLI no longer sets, as an existing
+/// global `config.toml` still carries it.
+fn append_global_config(fixture: &Fixture, toml: &str) {
+    use std::io::Write as _;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(fixture.root.join("config.toml"))
+        .unwrap();
+    file.write_all(toml.as_bytes()).unwrap();
+}
+
+/// Land one direct delivery past the trigger's threshold of one and
+/// evaluate the consumer until it settles; the review task it minted, if any.
+fn land_and_evaluate(
+    fixture: &Fixture,
+    runtime: &orbit_core::OrbitRuntime,
+    content: &str,
+) -> Option<String> {
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    evaluate_auto_task(runtime, &definition, false, Utc::now()).unwrap();
+    let consumer = consumer_key(runtime, "auto-task", CONSUMER).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let before = store
+        .automation_state(&consumer)
+        .unwrap()
+        .map(|state| (state.repository.clone(), state.observed.clone()));
+    let landed = commit(fixture, content);
+    if let Some((repository, before)) = &before {
+        store
+            .automation_record_delivery_intent(&Delivery {
+                key: format!("direct:{repository}:fixture-delivery:{}", landed.commit),
+                repository: repository.clone(),
+                branch: "fixture-delivery".into(),
+                before: before.clone(),
+                after: landed.clone(),
+                commits: vec![landed.commit.clone()],
+                task_ids: vec![],
+                unattributed: Some(UNATTRIBUTED_NO_LANDING_TASK.into()),
+                evidence_reference: format!("run:fixture-run:{}", landed.commit),
+                evidence_digest: "fixture-digest".into(),
+                landed_at: Utc::now(),
+            })
+            .unwrap();
+    }
+    for _ in 0..3 {
+        let diagnostic = evaluate_auto_task(runtime, &definition, false, Utc::now()).unwrap();
+        if let Some(minted) = diagnostic
+            .state
+            .and_then(|state| state.active)
+            .and_then(|active| active.action_id)
+        {
+            return Some(minted);
+        }
+    }
+    None
+}
+
 /// Point the shipped consumer at `trigger` without touching its `enabled`.
 fn retarget(fixture: &Fixture, trigger: &Value) {
     fixture.json(&[
@@ -125,7 +194,7 @@ fn commit(fixture: &Fixture, content: &str) -> SourceRevision {
     }
 }
 
-/// The `review-after-landing` doctor row and whether doctor exited zero.
+/// The `review` doctor row and whether doctor exited zero.
 fn doctor_row(fixture: &Fixture) -> (Value, bool) {
     let output = fixture.command(&["doctor", "--json"]).output().unwrap();
     let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -133,9 +202,9 @@ fn doctor_row(fixture: &Fixture) -> (Value, bool) {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["check"] == "review-after-landing")
+        .find(|row| row["check"] == "review")
         .cloned()
-        .unwrap_or_else(|| panic!("no review-after-landing row: {rows}"));
+        .unwrap_or_else(|| panic!("no review row: {rows}"));
     (row, output.status.success())
 }
 
@@ -150,9 +219,12 @@ fn assert_doctor_fails(fixture: &Fixture, expected: &str) {
     assert!(message.contains(expected), "{message}");
 }
 
+/// [ORB-13992] The auto-task's own flag is the after-landing switch: a
+/// landed delivery mints a review batch exactly while it is enabled, whatever
+/// `review.before_pr` says, and the batch carries `operation.review_crew`.
 #[test]
-fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_review_crew() {
-    const TEST: &str = "review_after_landing_cli::after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_review_crew";
+fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
+    const TEST: &str = "review_after_landing_cli::after_landing_review_mints_exactly_when_the_auto_task_is_enabled";
     if !in_isolated_child(TEST) {
         return;
     }
@@ -160,15 +232,29 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
     let fixture = Fixture::new();
     enable_review_crew(&fixture);
     git(&fixture, &["checkout", "-b", "fixture-delivery"]);
-    let baseline = commit(&fixture, "baseline\n");
+    commit(&fixture, "baseline\n");
     retarget(&fixture, &trigger());
-    set_policy(&fixture, "operation.review_policy", "after-landing");
     set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
+    set_policy(&fixture, "review.before_pr", "true");
 
     let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
-    assert_eq!(shown["enabled"], false, "no separate toggle is flipped");
-    assert_eq!(shown["enabled_by_review_policy"], true);
+    assert_eq!(shown["enabled"], false);
+    assert_eq!(shown["effective_enabled"], false);
+    assert!(shown.get("enabled_by_review_policy").is_none(), "{shown}");
+    let runtime = open_runtime(&fixture);
+    assert_eq!(
+        land_and_evaluate(&fixture, &runtime, "landed while disabled\n"),
+        None,
+        "before_pr does not switch after-landing review on"
+    );
+    let config = fixture.json(&["config", "show", "--json"]);
+    assert_eq!(config["review"]["before_pr"]["enabled"], true, "{config}");
+    assert_eq!(
+        config["review"]["after_landing"]["enabled"], false,
+        "{config}"
+    );
 
+    toggle(&fixture, "on");
     let runtime = open_runtime(&fixture);
     let listed = runtime
         .run_tool_as_human("orbit.auto_task.list", json!({}))
@@ -179,58 +265,11 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
         .iter()
         .find(|definition| definition["name"] == CONSUMER)
         .unwrap();
-    assert_eq!(listed_consumer["enabled"], false);
-    assert_eq!(listed_consumer["enabled_by_review_policy"], true);
+    assert_eq!(listed_consumer["enabled"], true);
     assert_eq!(listed_consumer["effective_enabled"], true);
-    let api_show = runtime
-        .run_tool_as_human("orbit.auto_task.show", json!({"name": CONSUMER}))
-        .unwrap();
-    assert_eq!(api_show["enabled_by_review_policy"], true);
-    assert_eq!(api_show["effective_enabled"], true);
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
-    assert!(!definition.enabled);
-    evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
-    let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let baselined = store
-        .automation_state(&consumer)
-        .unwrap()
-        .expect("the policy alone baselines the consumer");
-    assert_eq!(baselined.observed, baseline);
-
-    // One direct landing past the threshold of one.
-    let landed = commit(&fixture, "landed\n");
-    store
-        .automation_record_delivery_intent(&Delivery {
-            key: format!(
-                "direct:{}:fixture-delivery:fixture-run",
-                baselined.repository
-            ),
-            repository: baselined.repository.clone(),
-            branch: "fixture-delivery".into(),
-            before: baseline,
-            after: landed.clone(),
-            commits: vec![landed.commit.clone()],
-            task_ids: vec![],
-            unattributed: Some(UNATTRIBUTED_NO_LANDING_TASK.into()),
-            evidence_reference: "run:fixture-run:direct-landing".into(),
-            evidence_digest: "fixture-digest".into(),
-            landed_at: Utc::now(),
-        })
-        .unwrap();
-
-    let mut minted = None;
-    for _ in 0..3 {
-        let diagnostic = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
-        minted = diagnostic
-            .state
-            .and_then(|state| state.active)
-            .and_then(|active| active.action_id);
-        if minted.is_some() {
-            break;
-        }
-    }
-    let task_id = minted.expect("after-landing must mint a review task for the landed batch");
+    assert!(listed_consumer.get("enabled_by_review_policy").is_none());
+    let task_id = land_and_evaluate(&fixture, &runtime, "landed while enabled\n")
+        .expect("an enabled consumer mints a review task for the landed batch");
     let task = fixture.json(&["task", "show", &task_id, "--json"]);
     assert_eq!(
         task["crew"], REVIEW_CREW,
@@ -245,6 +284,18 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
 
     let (row, _) = doctor_row(&fixture);
     assert_eq!(row["status"], "ok", "{row}");
+    let message = row["message"].as_str().unwrap();
+    assert!(message.contains("last batch minted"), "{row}");
+    let config = fixture.json(&["config", "show", "--json"]);
+    let after_landing = &config["review"]["after_landing"];
+    assert_eq!(after_landing["enabled"], true, "{config}");
+    assert_eq!(after_landing["health"]["crew"], REVIEW_CREW);
+    assert!(
+        after_landing["health"]["last_batch_minted_at"].is_string(),
+        "{config}"
+    );
+    assert!(after_landing["next_batch_due"].is_string(), "{config}");
+    assert_eq!(config["review"]["healthy"], true, "{config}");
 
     plant_retired_coverage(&fixture);
     assert_doctor_fails(&fixture, "instead of `landed_code_review_v1`");
@@ -252,20 +303,47 @@ fn after_landing_policy_mints_review_batches_through_the_disabled_consumer_with_
 
     set_policy(&fixture, "operation.review_crew", "missing-crew");
     assert_doctor_fails(&fixture, "does not resolve");
-    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
+}
+
+/// [ORB-13992] The deprecated `operation.review_policy = "after-landing"`
+/// keeps reviewing through a consumer no operator has configured, and stops
+/// counting once an operator toggles the auto-task themselves.
+#[test]
+fn deprecated_after_landing_policy_enables_only_an_unconfigured_consumer() {
+    const TEST: &str = "review_after_landing_cli::deprecated_after_landing_policy_enables_only_an_unconfigured_consumer";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    enable_review_crew(&fixture);
+    append_global_config(
+        &fixture,
+        "\n[operation]\nreview_policy = \"after-landing\"\n",
+    );
+
+    let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+    assert_eq!(shown["enabled"], false, "the seed is not rewritten");
+    assert_eq!(shown["effective_enabled"], true, "{shown}");
+    let config = fixture.json(&["config", "show", "--json"]);
+    assert_eq!(
+        config["review"]["after_landing"]["enabled"], true,
+        "{config}"
+    );
     assert!(
-        row["message"]
+        config["review"]["after_landing"]["source"]
             .as_str()
             .unwrap()
-            .contains("last batch minted"),
-        "{row}"
-    );
-    let config = fixture.json(&["config", "show", "--json"]);
-    assert_eq!(config["review_after_landing"]["healthy"], true, "{config}");
-    assert_eq!(config["review_after_landing"]["crew"], REVIEW_CREW);
-    assert!(
-        config["review_after_landing"]["last_batch_minted_at"].is_string(),
+            .contains("deprecated operation.review_policy"),
         "{config}"
+    );
+    assert_eq!(config["review"]["before_pr"]["enabled"], false, "{config}");
+
+    toggle(&fixture, "off");
+    let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+    assert_eq!(
+        shown["effective_enabled"], false,
+        "an operator's toggle is explicit configuration the deprecated key no longer overrides"
     );
 }
 
@@ -278,8 +356,9 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
 
     let fixture = Fixture::new();
     enable_review_crew(&fixture);
-    assert_eq!(doctor_row(&fixture).0["status"], "skipped");
-    set_policy(&fixture, "operation.review_policy", "after-landing");
+    let (row, _) = doctor_row(&fixture);
+    assert_eq!(row["status"], "ok", "both switches off is healthy: {row}");
+    toggle(&fixture, "on");
 
     // The shipped consumer watches the base branch, which has no commit yet.
     assert_doctor_fails(&fixture, "does not resolve");
@@ -369,8 +448,21 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
         "Disposable opt-out",
         "--json",
     ]);
+    let (row, _) = doctor_row(&fixture);
+    assert_eq!(row["status"], "ok", "deleting the consumer opts out: {row}");
+    // The deprecated policy still asks for after-landing review, which a
+    // deleted consumer cannot give.
+    append_global_config(
+        &fixture,
+        "\n[operation]\nreview_policy = \"after-landing\"\n",
+    );
     assert_doctor_fails(&fixture, "is missing");
 
-    set_policy(&fixture, "operation.review_policy", "none");
-    assert_eq!(doctor_row(&fixture).0["status"], "skipped");
+    fixture.json(&["auto-task", "restore", CONSUMER, "--json"]);
+    toggle(&fixture, "off");
+    assert_eq!(doctor_row(&fixture).0["status"], "ok");
+
+    set_policy(&fixture, "review.before_pr", "true");
+    set_policy(&fixture, "operation.review_crew", "missing-crew");
+    assert_doctor_fails(&fixture, "does not resolve");
 }

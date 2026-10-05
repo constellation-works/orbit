@@ -57,8 +57,6 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
 /// seeding plugin is off here. A live definition is the bare record.
 fn listed_json(runtime: &OrbitRuntime, listed: &ListedAutoTask) -> Result<Value, OrbitError> {
     let mut value = to_json(&listed.definition)?;
-    value["enabled_by_review_policy"] =
-        json!(runtime.auto_task_enabled_by_review_policy(&listed.definition));
     value["effective_enabled"] = json!(runtime.auto_task_enabled(&listed.definition));
     if let (Some(inactive), Some(object)) = (&listed.inactive_plugin, value.as_object_mut()) {
         object.insert("plugin_inactive".to_string(), json!(true));
@@ -123,8 +121,6 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
     };
     let definition = runtime.auto_task_update(&name, params)?;
     let mut response = to_json(&definition)?;
-    response["enabled_by_review_policy"] =
-        json!(runtime.auto_task_enabled_by_review_policy(&definition));
     response["effective_enabled"] = json!(runtime.auto_task_enabled(&definition));
     let warnings = runtime.validate_required_tools(&definition.template.required_tools)?;
     if !warnings.is_empty()

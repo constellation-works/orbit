@@ -1,5 +1,6 @@
 //! The read-only admission probe, receipt reconciliation and claim listing.
 
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     ADMISSION_RECEIPT_LOOKUP_SCHEMA, AdmissionLookup, AdmissionShipContract,
@@ -11,6 +12,7 @@ use serde::Serialize;
 use super::contract::{
     DeclaredCallerContract, is_remote, owner_binary_version, session_machine_id, trusted_identity,
 };
+use crate::application::review::{ReviewSwitches, review_switches};
 use crate::runtime::authorization::resolved_caller_capabilities;
 
 /// What the owner reports about itself before a follower enables pull.
@@ -35,12 +37,15 @@ pub struct DrainProbeReport {
     pub session: DrainProbeSession,
     /// Ship configuration the owner would resolve at admission.
     pub ship: AdmissionShipContract,
-    /// Whether the owner's own review policy is the only admissible one.
-    pub review_policy: String,
+    /// The owner's two review switches. Only `review.before_pr` takes part in
+    /// admission — pulled leaves need it off on both endpoints; after-landing
+    /// review (the `delivery-code-review` auto-task) is reported for context
+    /// and never refuses a pull [ORB-13992].
+    pub review: ReviewSwitches,
     /// `true` when the caller would pass the admission ladder now.
     /// Undeclared optional caller fields are unknown and skip only the legs
-    /// that compare those fields; owner-resolved ship mode and review policy
-    /// are always evaluated.
+    /// that compare those fields; owner-resolved ship mode and
+    /// `review.before_pr` are always evaluated.
     pub admits: bool,
     /// First refusal the shared admission ladder reports, by spec name.
     pub refusal: Option<String>,
@@ -108,7 +113,7 @@ impl crate::OrbitRuntime {
             workspace_id: self.workspace_id()?,
             owner_machine_id: self.distributed_owner_machine_id(),
             session: probe_session(session),
-            review_policy: ship.review_policy.clone(),
+            review: review_switches(self, Utc::now())?,
             ship,
             admits: refusal.is_none(),
             refusal: refusal.map(|refusal| refusal.as_str().to_string()),

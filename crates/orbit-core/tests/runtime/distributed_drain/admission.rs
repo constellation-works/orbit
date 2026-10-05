@@ -783,3 +783,90 @@ fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
     );
     assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "claimed");
 }
+
+/// Ask `owner`'s probe, as the routed follower does, whether a pull with
+/// `caller_before_pr` would be admitted.
+fn probe_owner(owner: &OrbitRuntime, caller_before_pr: bool) -> Value {
+    owner
+        .run_tool_with_context_and_role(
+            "orbit.drain.probe",
+            json!({
+                "caller_version": orbit_core::application::distributed::owner_binary_version(),
+                "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                "caller_before_pr": caller_before_pr,
+            }),
+            Role::Admin,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    caller_machine_id: Some(FOLLOWER.to_string()),
+                    process_machine_id: Some(OWNER.to_string()),
+                    transport: Some(McpTransport::SshMcp),
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    ..ToolSessionContext::default()
+                },
+                ..ToolContext::default()
+            },
+        )
+        .expect("probe")
+}
+
+/// An owner opened over `config` and, when `after_landing` is set, an
+/// enabled `delivery-code-review` auto-task.
+fn owner_with(root: &Path, config: &str, after_landing: bool) -> OrbitRuntime {
+    let orbit = root.join(OWNER).join("repo/.orbit");
+    std::fs::create_dir_all(orbit.join("auto_tasks")).unwrap();
+    std::fs::write(orbit.join("config.toml"), config).unwrap();
+    if after_landing {
+        let seed = include_str!("../../../assets/auto_tasks/delivery-code-review.yaml")
+            .replace("__ORBIT_BASE_BRANCH__", "main")
+            .replace("enabled: false", "enabled: true")
+            .replace("updated_by: system", "updated_by: human:operator");
+        std::fs::write(orbit.join("auto_tasks/delivery-code-review.yaml"), seed).unwrap();
+    }
+    open_runtime(root, OWNER).0
+}
+
+/// [ORB-13992] Distributed admission refuses only on `review.before_pr`, on
+/// either endpoint. After-landing review — the `delivery-code-review`
+/// auto-task, or the deprecated policy value that stands in for it — runs on
+/// the owner after landing and never refuses a pull.
+#[test]
+fn only_before_pr_refuses_a_pull_and_after_landing_review_never_does() {
+    if !isolated(
+        module_path!(),
+        "only_before_pr_refuses_a_pull_and_after_landing_review_never_does",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+
+    let after_landing = owner_with(&root.path().join("auto-task"), "", true);
+    let probe = probe_owner(&after_landing, false);
+    assert_eq!(probe["review"]["after_landing"]["enabled"], true);
+    assert_eq!(probe["review"]["before_pr"]["enabled"], false);
+    assert_eq!(probe["admits"], true, "{probe}");
+    assert_eq!(probe["ship"]["before_pr"], false);
+
+    let legacy_after_landing = owner_with(
+        &root.path().join("legacy-after-landing"),
+        "[operation]\nreview_policy = \"after-landing\"\n",
+        false,
+    );
+    assert_eq!(probe_owner(&legacy_after_landing, false)["admits"], true);
+
+    let follower_before_pr = probe_owner(&after_landing, true);
+    assert_eq!(follower_before_pr["admits"], false);
+    assert_eq!(follower_before_pr["refusal"], "before_pr_unsupported");
+
+    for config in [
+        "[review]\nbefore_pr = true\n",
+        "[operation]\nreview_policy = \"before-pr\"\n",
+    ] {
+        let owner = owner_with(&root.path().join(config.len().to_string()), config, false);
+        let probe = probe_owner(&owner, false);
+        assert_eq!(probe["review"]["before_pr"]["enabled"], true, "{config}");
+        assert_eq!(probe["ship"]["before_pr"], true, "{config}");
+        assert_eq!(probe["admits"], false, "{config}");
+        assert_eq!(probe["refusal"], "before_pr_unsupported", "{config}");
+    }
+}

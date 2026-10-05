@@ -43,9 +43,11 @@ they are not prerequisites hidden as future work.
    `job_run_host` on the task, a read-only `execute`-class run lookup routed to that destination is
    the obvious shape; whether the dashboard should
    aggregate it is a separate question.
-6. **Review policies beyond none.** V1 requires `review_policy = none` on owner and executor,
-   with validation evidence and a typed not-required review disposition. Before-PR and after-landing
-   review need explicit admission, artifact, and landing contracts before either can be enabled.
+6. **Before-PR review of pulled work.** Admission requires `review.before_pr` off on owner and
+   executor, with validation evidence and a typed not-required review disposition. Before-PR review
+   needs explicit admission, artifact, and landing contracts before it can gate a pulled
+   candidate. After-landing review already applies: the owner's `delivery-code-review` auto-task
+   reviews landed deliveries whichever host implemented them.
 7. **Bounded request receipt retention.** V1 compacts settled receipts to permanent tombstones and
    stops each refill pass at its first idle response. A future retired-namespace/sequence protocol
    could bound storage while rejecting every old request; random IDs and age-based deletion cannot.

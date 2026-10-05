@@ -1,13 +1,14 @@
-//! Captured review admission: the effective review policy a delivery run
-//! carries in its immutable input [ORB-11333].
+//! Captured review admission: the `review.before_pr` switch, minutes and crew
+//! a delivery run carries in its immutable input [ORB-11333] [ORB-13992].
 //!
 //! Resolution order at submission: a parent-authorized child inherits its
 //! parent's snapshot exactly; every other delivery run resolves from
 //! workspace configuration at that moment. Ordinary input naming the reserved
 //! key is refused, and a resume carries its persisted input forward
 //! unchanged.
-//! `before-pr` on `task_local_pipeline` is local-only final delivery and is
-//! refused outright.
+//! `review.before_pr` on `task_local_pipeline` is local-only final delivery
+//! and is refused outright. After-landing review is the `delivery-code-review`
+//! auto-task, not an admission value, so it never reaches a snapshot.
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -61,9 +62,9 @@ pub(crate) fn install_review_admission(
     };
     if job_name == LOCAL_ROUTE_JOB && admission.timing == ReviewTiming::BeforePr {
         return Err(OrbitError::InvalidInput(
-            "operation.review_policy 'before-pr' holds PR creation for a reviewer and has no \
-             meaning on the local-only delivery route; ship through the PR route or choose \
-             'none' or 'after-landing' for local delivery"
+            "review.before_pr holds PR creation for a reviewer and has no meaning on the \
+             local-only delivery route; ship through the PR route or turn review.before_pr off \
+             for local delivery (after-landing review is the delivery-code-review auto-task)"
                 .to_string(),
         ));
     }
@@ -97,14 +98,18 @@ fn parent_review_admission(
         .map(Option::flatten)
 }
 
-/// Build the snapshot from the workspace's resolved review policy, keeping
+/// Build the snapshot from the workspace's resolved review settings, keeping
 /// each field's provenance so diagnostics can explain where it came from.
 pub(crate) fn snapshot(policy: &OperationPolicy) -> ReviewAdmission {
     ReviewAdmission {
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: policy.version,
-        timing: policy.review_policy.value.timing(),
-        timing_source: policy.review_policy.source.label().to_string(),
+        timing: if policy.review_before_pr.value {
+            ReviewTiming::BeforePr
+        } else {
+            ReviewTiming::None
+        },
+        timing_source: policy.review_before_pr.source.label().to_string(),
         crew: policy.review_crew.value.clone(),
         crew_source: policy.review_crew.source.label().to_string(),
         budget: policy.review_budget(),
@@ -132,7 +137,7 @@ pub(crate) fn run_review_admission(
 fn reserved_review_key_error(job_name: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "run input for job '{job_name}' set the reserved `{REVIEW_ADMISSION_KEY}` field; the \
-         effective review policy is captured from configuration at submission and cannot be \
+         effective review.before_pr setting is captured from configuration at submission and cannot be \
          requested through ordinary job input"
     ))
 }

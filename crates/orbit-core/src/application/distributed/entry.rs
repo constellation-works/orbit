@@ -132,10 +132,10 @@ pub struct DrainEntryAdmission {
     /// The single capacity reading legacy dispatch and pull both allocate
     /// against.
     pub occupancy: orbit_store::contracts::DrainLeafOccupancy,
-    /// The owner's effective review policy. v1 admits only `none` through the
-    /// claim contract, which is why it is reported on every decision rather
-    /// than left for each surface to look up.
-    pub review_policy: String,
+    /// The owner's `review.before_pr`. The claim contract admits only `off`,
+    /// which is why it is reported on every decision rather than left for
+    /// each surface to look up. After-landing review never affects admission.
+    pub before_pr: bool,
     /// Whether the claim contract would admit this workspace at all — the
     /// same ordered ladder `orbit.task.pull` applies, so a preflight and a
     /// retained entry cannot disagree about it.
@@ -192,7 +192,7 @@ impl crate::OrbitRuntime {
         let mut decision = DrainEntryAdmission {
             entry_point,
             occupancy,
-            review_policy: ship.review_policy.clone(),
+            before_pr: ship.before_pr,
             claim_admission_refusal: self.claim_contract_refusal(&ship),
             host_shutdown: self.scheduled_host_shutdown(),
             resource_throttle: None,
@@ -304,8 +304,8 @@ impl crate::OrbitRuntime {
     }
 
     /// Whether the claim contract would admit this workspace, by the spec's
-    /// own ordered ladder. Reported rather than raised: a workspace whose
-    /// review policy is not `none` still ships through its legacy leaf, and
+    /// own ordered ladder. Reported rather than raised: a workspace with
+    /// `review.before_pr` on still ships through its legacy leaf, and
     /// saying so is what keeps the two facts from being confused.
     fn claim_contract_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
         let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
@@ -319,7 +319,7 @@ impl crate::OrbitRuntime {
             request_id: "entry-point".to_string(),
             caller_version: owner_binary_version().to_string(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            caller_review_policy: ship.review_policy.clone(),
+            caller_before_pr: ship.before_pr,
             run_context: AdmissionRunContext {
                 run_id: "entry-point".to_string(),
                 job_name: "entry-point".to_string(),

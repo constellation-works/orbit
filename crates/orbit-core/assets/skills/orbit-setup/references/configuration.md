@@ -51,10 +51,9 @@ assuming a value.
 | `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). Shipped `crew: system` steps resolve onto it. |
 | `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. |
 | `workflow.auto_ship` | Opt-in for `orbit run ship-sweep` unattended ship dispatch. The seeded `ship-sweep` routine does not read it. |
-| `operation.review_policy` | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. |
-| `operation.review_crew` | Crew for before-PR automatic review. After-landing review uses the delivery auto-task's template crew. |
-| `operation.review_reviewer_starts` | Fresh reviewer starts per delivery run lineage (a run and its resumes). Retrying a failed reviewer step continues its start; reviewing a changed candidate, including a completion rebase, takes a new one (1..=10, default 3). |
-| `operation.review_minutes` | Reviewer runtime minutes per delivery run lineage; once spent, no new reviewer start is admitted. A fresh delivery run starts a new lineage (1..=1440, default 90). `operation.review_repair_cycles` is retired and ignored with a warning: the reviewer fixes its findings in one commit, and an unfixable finding rejects the candidate. |
+| `review.before_pr` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds (default `false`). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
+| `review.minutes` | Wall-clock limit for one candidate's before-PR review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
+| `operation.review_crew` | Crew for automatic review: the before-PR reviewer and, when set, every review task the after-landing auto-task mints. |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |
@@ -66,6 +65,14 @@ assuming a value.
 | `pr.task_url_template` | URL template linking a task ID in PR descriptions. |
 | `pr.close_on_terminal` | Close a task's open Orbit-authored delivery and `[BLOCKED]` PRs when it lands, is rejected or is archived (default `true`). Branches are kept; a forge error is only a warning. |
 | `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for that closure. Empty uses the `gh` login on this machine. |
+
+`operation.review_policy` and `operation.review_minutes` are deprecated: they
+still load, translated with a warning (`before-pr` → `review.before_pr = true`;
+`after-landing` enables `delivery-code-review` until an operator toggles it;
+`none` turns neither on), and a later release makes them errors. Move them to
+`[review]` and the auto-task flag. `operation.review_reviewer_starts` and
+`operation.review_repair_cycles` are ignored with a warning; delete them.
+`orbit config show` reports both review switches with their sources.
 
 Use `orbit config keys` to distinguish fixed registry keys from settings
 authored as TOML. Read-only identity keys are listed and refused by

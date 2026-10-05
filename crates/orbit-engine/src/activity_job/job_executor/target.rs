@@ -43,7 +43,20 @@ pub(super) fn run_target(
         .as_ref()
         .map(|spec| ActivityV2Spec::AgentLoop(spec.clone()));
     let dispatched_spec = dispatched_spec_storage.as_ref().unwrap_or(&t.spec);
-    let reviewer = ReviewerInvocation::start(ctx, t, dispatched_spec, &rendered_input);
+    let mut reviewer = ReviewerInvocation::start(ctx, t, dispatched_spec, &rendered_input);
+    if let Some(reviewer) = reviewer.take_if(|reviewer| reviewer.exhausted()) {
+        reviewer.finish(ctx);
+        return Err(DispatchError::DeterministicActionRefused {
+            action: step.id.clone(),
+            message: "review_minutes_exhausted: the candidate's review already spent its \
+                      review.minutes; no reviewer is started"
+                .to_string(),
+        });
+    }
+    let bounded_spec = reviewer
+        .as_ref()
+        .and_then(|reviewer| reviewer.bounded_spec(dispatched_spec));
+    let dispatched_spec = bounded_spec.as_ref().unwrap_or(dispatched_spec);
     let dispatch = dispatch_v2_activity(V2DispatchInput {
         activity_name: &step.id,
         spec: dispatched_spec,

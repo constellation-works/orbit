@@ -29,8 +29,8 @@ use crate::application::review::{
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 /// Workspace config with a before-PR reviewer crew distinct from the
-/// implementer; tests append further `[operation]` keys.
-pub(super) const BEFORE_PR: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"implementer\"\n[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\n";
+/// implementer; tests append further `[review]` keys.
+pub(super) const BEFORE_PR: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"implementer\"\n[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n";
 
 pub(super) struct Fixture {
     pub(super) _root: TempDir,
@@ -236,6 +236,17 @@ pub(super) fn gated_bundle_fixture(config: &str, tasks: usize) -> Gated {
 }
 
 impl Gated {
+    /// Rewrite the workspace config and reopen the runtime over it, as an
+    /// operator editing `config.toml` mid-run does: runs already submitted
+    /// keep the admission they captured.
+    pub(super) fn reconfigure(&mut self, config_toml: &str) {
+        let workspace = self.fixture.repo.join(".orbit");
+        fs::write(workspace.join("config.toml"), config_toml).expect("rewrite config");
+        self.fixture.runtime =
+            OrbitRuntime::from_roots(&self.fixture.runtime.global_root(), &workspace)
+                .expect("reopen runtime");
+    }
+
     /// A resume of `source`: a new run carrying the source's input, linked
     /// by `retry_source_run_id`, started now and owning the bundle.
     pub(super) fn resume(&self, source: &str) -> String {

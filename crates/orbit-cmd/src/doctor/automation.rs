@@ -400,53 +400,65 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
     )
 }
 
-/// `operation.review_policy = after-landing` is carried out by one delivery
-/// consumer alone, `delivery-code-review` [ORB-13896]. A policy that cannot
-/// run here reviews nothing while every other surface looks healthy, so
-/// anything short of a healthy consumer is an error, not a warning: missing,
-/// owned by another machine, wedged, stalled, held for an operator, watching a
-/// branch that does not resolve, or naming a crew that does not. Under any
-/// other policy the row is skipped.
-pub(super) fn doctor_check_after_landing_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    const CHECK: &str = "review-after-landing";
-    let health = match orbit_core::application::automation::after_landing_health(
-        runtime,
-        chrono::Utc::now(),
-    ) {
-        Ok(Some(health)) => health,
-        Ok(None) => {
-            return check(
-                CHECK,
-                WorkspaceDoctorStatus::Skipped,
-                format!(
-                    "operation.review_policy is `{}`, not after-landing",
-                    runtime.operation_policy().review_policy.value.as_str()
-                ),
-            );
-        }
-        Err(error) => {
-            return actionable_check(
-                CHECK,
-                WorkspaceDoctorStatus::Error,
-                format!("cannot establish whether after-landing review runs here: {error}"),
-                "Resolve the error, then rerun `orbit doctor`.".to_string(),
-            );
-        }
-    };
-    if health.healthy() {
-        return check(CHECK, WorkspaceDoctorStatus::Ok, health.line());
+/// Both automatic-review switches in one row [ORB-13992]: before-PR review
+/// (`review.before_pr`, its minutes and crew) and after-landing review (the
+/// `delivery-code-review` auto-task, with when its next batch is due), each
+/// with its source. A switch that is on but cannot run here reviews nothing
+/// while every other surface looks healthy, so that is an error, not a
+/// warning: before-PR review without a resolvable crew, or an after-landing
+/// consumer that is missing, owned by another machine, wedged, stalled, held
+/// for an operator, watching a branch that does not resolve, or naming a crew
+/// that does not.
+pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "review";
+    let switches =
+        match orbit_core::application::review::review_switches(runtime, chrono::Utc::now()) {
+            Ok(switches) => switches,
+            Err(error) => {
+                return actionable_check(
+                    CHECK,
+                    WorkspaceDoctorStatus::Error,
+                    format!("cannot establish which automatic review runs here: {error}"),
+                    "Resolve the error, then rerun `orbit doctor`.".to_string(),
+                );
+            }
+        };
+    let message = format!(
+        "before-PR review: {}. after-landing review: {}",
+        switches.before_pr_line(),
+        switches.after_landing_line()
+    );
+    let mut remediation = Vec::new();
+    if switches.before_pr_unhealthy() {
+        remediation.push(
+            "Before-PR review needs `operation.review_crew` set to a crew that resolves on this \
+             host; set it, or turn `review.before_pr` off."
+                .to_string(),
+        );
     }
+    if let Some(health) = switches
+        .after_landing
+        .health
+        .as_ref()
+        .filter(|health| !health.healthy())
+    {
+        remediation.push(format!(
+            "After-landing review runs only through `{consumer}` on the machine that owns this \
+             workspace. Fix each problem named above (`orbit auto-task show {consumer} \
+             --preview` shows the consumer), or turn it off with `orbit auto-task toggle \
+             {consumer} off`.",
+            consumer = health.consumer
+        ));
+    }
+    if remediation.is_empty() {
+        return check(CHECK, WorkspaceDoctorStatus::Ok, message);
+    }
+    remediation.push("Then rerun `orbit doctor`.".to_string());
     actionable_check(
         CHECK,
         WorkspaceDoctorStatus::Error,
-        health.line(),
-        format!(
-            "After-landing review runs only through `{consumer}` on the machine that owns this \
-             workspace. Fix each problem named above (`orbit auto-task show {consumer} \
-             --preview` shows the consumer), or set `operation.review_policy` to `none` or \
-             `before-pr`; then rerun `orbit doctor`.",
-            consumer = health.consumer
-        ),
+        message,
+        remediation.join(" "),
     )
 }
 

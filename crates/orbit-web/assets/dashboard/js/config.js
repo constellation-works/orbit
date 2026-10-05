@@ -127,6 +127,8 @@ function renderPanels(payload, body) {
   body.appendChild(layersStrip(payload));
   const binding = registryStrip(payload);
   if (binding) body.appendChild(binding);
+  const review = reviewStrip(payload);
+  if (review) body.appendChild(review);
   for (const section of payload.sections || []) {
     body.appendChild(section.kind === "crews" ? crewsPanel(payload, {}) : sectionPanel(section, payload));
   }
@@ -295,6 +297,34 @@ function registryStrip(payload) {
       el("span", {
         class: "config-match warn",
         text: `workflow.base_branch is ${binding.workflow_base_branch} — delivery uses the registered ${binding.base_branch}`,
+      }),
+    );
+  }
+  return strip;
+}
+
+// Both automatic-review switches, each with its source: before-PR review is
+// `review.before_pr`; after-landing review is the delivery-code-review
+// auto-task's own `enabled` flag.
+function reviewStrip(payload) {
+  const review = payload.review;
+  if (!review) return null;
+  const strip = el("div", { class: "config-strip config-review" });
+  if (review.error) {
+    strip.appendChild(el("span", { class: "config-match warn", text: `review: ${review.error}` }));
+    return strip;
+  }
+  for (const [label, line] of [
+    ["before-PR review", review.before_pr?.line],
+    ["after-landing review", review.after_landing?.line],
+  ]) {
+    strip.appendChild(fact(label, line));
+  }
+  if (review.healthy === false) {
+    strip.appendChild(
+      el("span", {
+        class: "config-match warn",
+        text: "a review switch is on but cannot run here — see orbit doctor",
       }),
     );
   }

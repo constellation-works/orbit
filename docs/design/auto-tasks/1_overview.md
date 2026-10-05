@@ -132,8 +132,10 @@ definition of the same name.
   tasks. Its execution summary recommends human follow-up without changing task
   status or dispatching work.
 - `delivery-code-review` — disabled-by-default review of newly landed
-  deliveries. `operation.review_policy = after-landing` enables it without a
-  toggle. The former `delivery-qa` default is retired and is not seeded;
+  deliveries. Its `enabled` flag is the after-landing review switch
+  [ORB-13992]; the deprecated `operation.review_policy = after-landing`
+  enables a copy no operator has configured, which `list` and `show` report
+  as `effective_enabled`. The former `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` and `qa-full-sweep`.
 
 ## Workspace-authored definitions in this repo

@@ -596,12 +596,15 @@ pub trait RuntimeHost: Send + Sync {
     }
 
     /// Record a reviewer invocation starting or ending for its attempt.
-    /// Hosts without review evidence have nothing to charge.
+    /// For a start, returns the seconds the invocation may run: the review's
+    /// remaining `review.minutes`, never more than the requested timeout
+    /// [ORB-13992]. Hosts without review evidence have nothing to charge or
+    /// bound.
     fn record_reviewer_invocation(
         &self,
         _request: &ReviewerInvocationRequest,
-    ) -> Result<(), OrbitError> {
-        Ok(())
+    ) -> Result<Option<u64>, OrbitError> {
+        Ok(None)
     }
 
     // ── Owner landing consumer [ORB-12499] ─────────────────────────────

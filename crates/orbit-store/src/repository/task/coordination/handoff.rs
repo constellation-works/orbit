@@ -328,8 +328,8 @@ impl TaskCommitBoundary {
                 });
         }
         let ship = receipt.request.ship;
-        if ship.review_policy != "none"
-            || receipt.request.caller_review_policy != "none"
+        if ship.before_pr
+            || receipt.request.caller_before_pr
             || candidate.base_branch != ship.base_branch
             || candidate.landing_branch != ship.landing_branch
             || !matches!(

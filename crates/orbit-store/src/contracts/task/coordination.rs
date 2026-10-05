@@ -176,7 +176,11 @@ pub struct AdmissionShipContract {
     pub mode: String,
     pub base_branch: String,
     pub landing_branch: String,
-    pub review_policy: String,
+    /// The owner's `review.before_pr` when it resolved this contract
+    /// [ORB-13992]. Contracts recorded before revision 5 carried a
+    /// `review_policy` admitted only as `none`, which reads as `false`.
+    #[serde(default)]
+    pub before_pr: bool,
     pub completion: String,
     pub authorization_reference: Option<String>,
 }
@@ -188,8 +192,9 @@ pub struct AdmissionShipContract {
 /// Increment it whenever a new request field would be rejected by an older
 /// endpoint, even if optional. Revision 2 adds executor crew capabilities;
 /// revision 3 adds handoff footprint widening; revision 4 adds the executor's
-/// host OS.
-pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 4;
+/// host OS; revision 5 replaces both endpoints' review-policy labels with
+/// their captured `review.before_pr` switch [ORB-13992].
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 5;
 
 /// Receipt-lookup schema, versioned independently of admission so a client
 /// upgraded to the owner's binary can reconcile an old request without
@@ -210,7 +215,11 @@ pub enum AdmissionRefusal {
     ProtocolMismatch,
     VersionMismatch,
     ShipModeUnsupported,
-    ReviewPolicyUnsupported,
+    /// An endpoint captured `review.before_pr = true`; distributed before-PR
+    /// review is not implemented yet. After-landing review never refuses:
+    /// it runs on the owner after landing.
+    #[serde(alias = "review_policy_unsupported")]
+    BeforePrUnsupported,
 }
 
 impl AdmissionRefusal {
@@ -220,7 +229,7 @@ impl AdmissionRefusal {
             Self::VersionMismatch => "version_mismatch",
             Self::ProtocolMismatch => "protocol_mismatch",
             Self::ShipModeUnsupported => "ship_mode_unsupported",
-            Self::ReviewPolicyUnsupported => "review_policy_unsupported",
+            Self::BeforePrUnsupported => "before_pr_unsupported",
         }
     }
 }
@@ -294,7 +303,11 @@ pub struct AdmissionRequest {
     pub request_id: String,
     pub caller_version: String,
     pub caller_schema: u32,
-    pub caller_review_policy: String,
+    /// The executor's captured `review.before_pr` [ORB-13992]. Requests
+    /// recorded before revision 5 carried a `caller_review_policy` admitted
+    /// only as `none`, which reads as `false`.
+    #[serde(default)]
+    pub caller_before_pr: bool,
     pub run_context: AdmissionRunContext,
     pub ship: AdmissionShipContract,
     /// What the executor can run. Absent for an owner-local admission and

@@ -79,15 +79,18 @@ Confirm:
   `~/.orbit/mcp-callers.toml` / `~/.orbit/mcp-ssh-acceptance/` warning that
   those files **grant nothing** (delete them; deny access by removing the
   caller's key from `~/.ssh/authorized_keys`);
-- `[operation] review_policy` is `none` on the owner.
+- before-PR review is off on the owner (`review.before_pr = false`).
 
 ```bash
-orbit config get operation.review_policy
+orbit config get review.before_pr
+orbit config show        # the Review lines report both switches and their sources
 ```
 
-v1 admits only `none`. `before-pr` and `after-landing` are refusals, not silent
-downgrades. A workspace that still ships those policies through its **legacy**
-leaf is not ready for distributed pull.
+Distributed pull admits only `before_pr` off on both endpoints; on is a
+refusal, not a silent downgrade. A workspace that still ships through its
+**legacy** leaf with before-PR review is not ready for distributed pull.
+After-landing review (the `delivery-code-review` auto-task) never affects
+admission: the owner reviews landed deliveries whatever host implemented them.
 
 Match toolchains and required validation commands the same way you would for
 a second owner-local executor. Crews may differ: a follower only receives
@@ -258,16 +261,17 @@ agent envelope or `ORBIT_OPERATOR=1`.
 ```bash
 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<this-binary-version>",
-  "caller_schema": 3,
-  "caller_review_policy": "none"
+  "caller_schema": 5,
+  "caller_before_pr": false
 }'
 ```
 
 The probe reports owner machine, binary version, distributed-drain protocol
-schema `2`, this session's capabilities, diagnostic caller machine,
-owner-resolved ship configuration, and review policy. Declaring version,
-schema, or review policy also reports the **first refusal admission would
-raise**, in admission order. It creates no receipt, reservation, claim, or
+schema `5`, this session's capabilities, diagnostic caller machine,
+owner-resolved ship configuration (`ship.before_pr`), and `review`: both review
+switches with their sources — before-PR on/off and minutes, after-landing
+enabled and its next batch due. Declaring version, schema, or `caller_before_pr`
+also reports the **first refusal admission would raise**, in admission order. It creates no receipt, reservation, claim, or
 task. A replica destination refuses the tool instead of answering about
 itself, naming its owner. Run the diagnostic CLI there; the follower runtime
 uses its internal owner selector. Do not call pull as a health check: a pull is an admission, and an
@@ -281,7 +285,7 @@ Expected refusals you may see (and must not work around):
 | `version_mismatch` | Caller binary version differs from the owner |
 | `protocol_mismatch` | Caller and owner protocol revisions differ; diagnostics name both |
 | `ship_mode_unsupported` | A remote caller targeted a local-only ship workspace |
-| `review_policy_unsupported` | Owner or executor review policy is not `none` |
+| `before_pr_unsupported` | Owner or executor has `review.before_pr` on |
 
 ### 7. Receipt lookup after uncertainty
 
@@ -316,7 +320,7 @@ allocates a new request it prunes its idle and refused rows to the newest
 
 ### 8. Start the follower's pull drain
 
-Matching binaries, a replica role, a working probe, and `review_policy = none`
+Matching binaries, a replica role, a working probe, and `review.before_pr` off
 are **installation**. Starting a drain is the rollout, and it is explicit. On
 the follower, from the replica checkout:
 
@@ -333,7 +337,7 @@ submitted, the command refuses unless:
 - this checkout is a **replica**, and the selector names **its** owner machine
   and **its** logical workspace;
 - the owner answers the probe **as that machine** and would admit this
-  executor now (binary, protocol schema, review policy, ship mode).
+  executor now (binary, protocol schema, before-PR review, ship mode).
 
 This host should declare the same `workflow.required_validation_commands` as
 the owner, since the owner re-checks the evidence against its own list. An
@@ -853,11 +857,11 @@ On the owner:
 orbit --version
 orbit workspace show
 orbit doctor
-orbit config get operation.review_policy
+orbit config get review.before_pr
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<owner-version>",
-  "caller_schema": 3,
-  "caller_review_policy": "none"
+  "caller_schema": 5,
+  "caller_before_pr": false
 }'
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'
 curl -s -H 'Host: localhost:7878' http://localhost:7878/api/distributed/claims?workspace=<workspace-id>
@@ -867,7 +871,7 @@ From a follower session aimed at the owner selector, repeat the probe with
 that follower's `orbit --version`. Confirm:
 
 - versions and schema match;
-- review policy is `none` on both sides;
+- before-PR review is off on both sides;
 - the probe created no task, reservation, or claim (`orbit task locks list`
   unchanged);
 - `orbit job resume` of a known claimed leaf still refuses;

@@ -534,7 +534,7 @@ impl TaskCommitBoundary {
 /// Selector resolution, session capability, and trusted invocation context are
 /// decided by the calling surface before this function is reached; identity
 /// here is already trusted. Order is the spec's: input shape, then
-/// version/schema, then ship mode, then review policy. Evaluating it returns a
+/// version/schema, then ship mode, then before-PR review. Evaluating it returns a
 /// verdict and writes nothing, so a probe and an admission cannot disagree
 /// about what would be refused.
 pub fn admission_refusal(
@@ -579,10 +579,11 @@ pub fn admission_refusal(
     {
         return Some(AdmissionRefusal::ShipModeUnsupported);
     }
-    // Both endpoints must say `none`; every other policy is rejected by name
-    // rather than downgraded.
-    if request.caller_review_policy != "none" || request.ship.review_policy != "none" {
-        return Some(AdmissionRefusal::ReviewPolicyUnsupported);
+    // Distributed before-PR review is not built yet: either endpoint that
+    // captured `review.before_pr` is refused by name rather than delivered
+    // unreviewed. After-landing review is owner-side and never refuses.
+    if request.caller_before_pr || request.ship.before_pr {
+        return Some(AdmissionRefusal::BeforePrUnsupported);
     }
     None
 }

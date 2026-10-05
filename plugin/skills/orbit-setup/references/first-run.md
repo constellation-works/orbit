@@ -190,7 +190,7 @@ initial setup succeeded:
 5. **Upgrade convergence** — use `orbit workspace sync --check`, then
    `orbit workspace sync` to refresh managed defaults. → [maintenance.md](maintenance.md)
 6. **A replica execution host** — collapse to one owner, match binaries and
-   `review_policy = none`, then probe. Installation is not pull enablement.
+   `review.before_pr` off, then probe. Installation is not pull enablement.
    → [distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
 
 ## Anti-patterns

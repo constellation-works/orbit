@@ -15,6 +15,9 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::application::distributed::DeclaredCallerContract;
 
+/// The review-policy label distributed-drain revisions before 5 declared.
+const LEGACY_CALLER_REVIEW_POLICY: &str = "caller_review_policy";
+
 pub(super) fn probe(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
@@ -25,7 +28,11 @@ pub(super) fn probe(
         &[
             "caller_version",
             "caller_schema",
-            "caller_review_policy",
+            "caller_before_pr",
+            // A revision-4 follower still declares its review-policy label.
+            // Accepted and ignored so its probe answers `protocol_mismatch`
+            // instead of an unknown-field error [ORB-13992].
+            LEGACY_CALLER_REVIEW_POLICY,
             "workspace",
             "agent",
             "model",
@@ -34,7 +41,7 @@ pub(super) fn probe(
     let declared = DeclaredCallerContract {
         caller_version: optional_string(&input, "caller_version"),
         caller_schema: optional_u32(&input, "caller_schema")?,
-        caller_review_policy: optional_string(&input, "caller_review_policy"),
+        caller_before_pr: optional_bool(&input, "caller_before_pr")?,
     };
     let report = runtime.drain_probe(session, &declared)?;
     serde_json::to_value(report).map_err(|error| OrbitError::Store(error.to_string()))
@@ -82,7 +89,8 @@ pub(super) fn pull(
             "request_id",
             "caller_version",
             "caller_schema",
-            "caller_review_policy",
+            "caller_before_pr",
+            LEGACY_CALLER_REVIEW_POLICY,
             "run_context",
             "ship",
             "crews",
@@ -98,7 +106,7 @@ pub(super) fn pull(
             "request_id",
             "caller_version",
             "caller_schema",
-            "caller_review_policy",
+            "caller_before_pr",
             "run_context",
             "ship",
             "crews",
@@ -189,6 +197,15 @@ fn optional_string(input: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// A declared switch must be a boolean; a malformed one is invalid input.
+fn optional_bool(input: &Value, key: &str) -> Result<Option<bool>, OrbitError> {
+    match input.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(OrbitError::InvalidInput(format!("{key} must be a boolean"))),
+    }
 }
 
 /// A malformed version field is invalid input, not a compatibility comparison.

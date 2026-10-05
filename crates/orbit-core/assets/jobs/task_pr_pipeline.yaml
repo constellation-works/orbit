@@ -187,8 +187,8 @@ spec:
     # ORB-11333: the before-PR review gate sits after the final planned base
     # synchronization and before push/PR creation. `review_gate_admit` and
     # `review_gate_settle` always run so later steps can read their output;
-    # they report `applies: false` under `none`, `after-landing`, and a
-    # checked no-diff exemption. Transient gate and reviewer failures retry,
+    # they report `applies: false` when the run captured `review.before_pr`
+    # off, and for a checked no-diff exemption. Transient gate and reviewer failures retry,
     # then get one diagnosed recovery before the run fails.
     #
     # ORB-13989: one fresh reviewer per candidate fixes what it finds. The

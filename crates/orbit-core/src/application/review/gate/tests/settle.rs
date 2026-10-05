@@ -292,11 +292,7 @@ fn an_unfixable_finding_rejects_and_preserves_both_commits() {
         gated.log("HEAD", "%H")
     );
     let ledger = gated.ledger(&admission);
-    assert_eq!(
-        ledger.consumed().reviewer_starts,
-        1,
-        "one review start per candidate"
-    );
+    assert_eq!(ledger.attempts.len(), 1, "one review per candidate");
     let comment = gated
         .comments()
         .into_iter()

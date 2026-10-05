@@ -50,8 +50,8 @@ fn system_writes_cannot_borrow_the_operator_for_history() {
 }
 
 #[test]
-fn the_minutes_budget_refuses_new_starts_but_not_an_admitted_reviewer() {
-    let gated = gated_fixture(&format!("{BEFORE_PR}review_minutes = 1\n"));
+fn the_minutes_limit_refuses_new_starts_but_not_an_admitted_reviewer() {
+    let gated = gated_fixture(&format!("{BEFORE_PR}minutes = 1\n"));
     let task = gated
         .fixture
         .runtime
@@ -82,10 +82,7 @@ fn the_minutes_budget_refuses_new_starts_but_not_an_admitted_reviewer() {
                 run_id: &gated.run_id,
                 task_meaning_digest: &combined,
                 candidate: &candidate,
-                budget: ReviewBudget {
-                    reviewer_starts: 3,
-                    minutes: 1,
-                },
+                budget: ReviewBudget { minutes: 1 },
                 now: started,
             },
         )
@@ -112,15 +109,13 @@ fn the_minutes_budget_refuses_new_starts_but_not_an_admitted_reviewer() {
     assert_eq!(certificate.verdict, ReviewVerdict::Accept);
     assert_eq!(certificate.consumed.seconds, 120);
 
-    let error = gated
-        .admit()
-        .expect_err("no new reviewer start once the minutes are spent");
+    let error = gated.admit().expect_err("the candidate had its one review");
     assert!(
         matches!(error, DispatchError::DeterministicActionRefused { .. }),
-        "an exhausted budget is a decision a retry would only repeat: {error}"
+        "a spent review is a decision a retry would only repeat: {error}"
     );
     assert!(
-        error.to_string().contains("review_minutes_exhausted"),
+        error.to_string().contains("review_candidate_reviewed"),
         "{error}"
     );
 }

@@ -140,7 +140,7 @@ next: false
     </a>
   </div>
 
-  <p class="orbit-walk-next">Turn on second-agent review with <code>operation.review_policy</code> in your <a href="/reference/config/#settable-keys">workspace config</a>. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="/getting-started/first-task/">ship your first task by hand</a>.</p>
+  <p class="orbit-walk-next">Turn on second-agent review with <code>review.before_pr</code> in your <a href="/reference/config/#settable-keys">workspace config</a>. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="/getting-started/first-task/">ship your first task by hand</a>.</p>
 </section>
 
 <section class="orbit-section">

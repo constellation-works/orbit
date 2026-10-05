@@ -307,7 +307,7 @@ impl RuntimeHost for OrbitRuntime {
     fn record_reviewer_invocation(
         &self,
         request: &orbit_engine::ReviewerInvocationRequest,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<Option<u64>, OrbitError> {
         crate::application::review::record_reviewer_invocation(self, request)
     }
 

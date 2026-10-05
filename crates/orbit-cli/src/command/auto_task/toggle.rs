@@ -32,10 +32,6 @@ impl Execute for AutoTaskToggleArgs {
 
         let status = if definition.enabled {
             "enabled"
-        } else if runtime.auto_task_enabled_by_review_policy(&definition) {
-            // [ORB-13896] The policy, not this toggle, keeps it running.
-            "disabled, but still enabled by operation.review_policy = after-landing; set the \
-             policy to none or before-pr to stop after-landing review"
         } else {
             "disabled"
         };

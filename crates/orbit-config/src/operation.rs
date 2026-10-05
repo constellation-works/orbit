@@ -1,85 +1,122 @@
-//! Typed `[operation]` review preferences.
+//! Typed review preferences [ORB-11333] [ORB-13992].
 //!
-//! The table once carried operation-mode presets and grants; those were
-//! removed on 2026-09-21 (see `docs/design/orbit-core/4_decisions.md`). What
-//! remains is the automatic review policy [ORB-11333] under the unchanged
-//! `[operation]` table name: `review_policy`, `review_crew`, and the lineage
-//! budget fields. Each layer states any subset; a value resolves built-in →
-//! global → workspace with its winning layer recorded, and removed keys are
-//! warned and ignored at load (`registry::REMOVED_CONFIG_KEYS`) so an
-//! existing `config.toml` keeps loading.
+//! Each review mechanism has one switch. Before-PR review is
+//! `review.before_pr` (default off), bounded by `review.minutes` per
+//! candidate; `operation.review_crew` names the crew of automatic review.
+//! After-landing review has no key here at all: its only switch is the
+//! `delivery-code-review` auto-task's own `enabled` flag, which Core reads.
+//!
+//! Each layer states any subset; a value resolves built-in → global →
+//! workspace with its winning layer recorded.
+//!
+//! The retired `operation.review_policy` enum and `operation.review_minutes`
+//! are translated when a document is parsed ([`translate_legacy_review_keys`])
+//! and warned as deprecated (`registry::DEPRECATED_CONFIG_KEYS`): a legacy
+//! policy states `review.before_pr` for its layer, `after-landing` also
+//! enables the auto-task until its flag is set explicitly, and the legacy
+//! minutes become `review.minutes`. A key the same document states in
+//! `[review]` wins over its legacy spelling. The retired budget keys
+//! (`operation.review_reviewer_starts`, `operation.review_repair_cycles`) are
+//! warned and ignored (`registry::REMOVED_CONFIG_KEYS`).
 
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{ReviewBudget, ReviewTiming};
+use orbit_types::workflow::{DEFAULT_REVIEW_MINUTES, ReviewBudget};
 use serde::{Deserialize, Serialize};
 
-use crate::registry::{read_optional, removed_key_note};
+use crate::layering::{set_value_at_path, value_at_path};
+use crate::registry::{deprecated_key_note, read_optional, removed_key_note};
 
 /// Version of the resolved-policy shape captured into run records. Bump when
 /// a captured field is added, removed, or changes meaning so an older
 /// snapshot fails closed for privileged actions instead of being
 /// reinterpreted. Version 2 added the independent review budget fields
-/// [ORB-11333]; retiring the never-captured preset fields left it unchanged.
-pub const OPERATION_POLICY_VERSION: u32 = 2;
+/// [ORB-11333]; version 3 replaced the review policy enum with
+/// `review.before_pr` and dropped the reviewer-start budget [ORB-13992].
+pub const OPERATION_POLICY_VERSION: u32 = 3;
 
-const MAX_REVIEW_REVIEWER_STARTS: u32 = 10;
 const MAX_REVIEW_MINUTES: u32 = 1_440;
 
-/// When automatic code review applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ReviewPolicy {
-    /// No automatic review managed by this policy.
-    #[serde(rename = "none")]
+/// The before-PR switch.
+pub const REVIEW_BEFORE_PR_KEY: &str = "review.before_pr";
+/// The before-PR review's time limit.
+pub const REVIEW_MINUTES_KEY: &str = "review.minutes";
+/// The retired review timing enum, translated on load.
+pub const LEGACY_REVIEW_POLICY_KEY: &str = "operation.review_policy";
+/// The retired lineage minutes, translated to [`REVIEW_MINUTES_KEY`].
+pub const LEGACY_REVIEW_MINUTES_KEY: &str = "operation.review_minutes";
+
+/// Every live `[review]` key, as the unknown-key guard sees it.
+const REVIEW_KEYS: &[&str] = &[REVIEW_BEFORE_PR_KEY, REVIEW_MINUTES_KEY];
+
+/// Every live `[operation]` key, as the unknown-key guard sees it.
+const OPERATION_KEYS: &[&str] = &["operation.review_crew"];
+
+/// A retired `operation.review_policy` value, read only to translate it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyReviewPolicy {
     None,
-    /// Hold PR creation for a fresh reviewer with scoped repairs [ORB-11333].
-    #[serde(rename = "before-pr")]
     BeforePr,
-    /// Review landed deliveries in batches: enables the workspace's
-    /// `delivery-code-review` consumer without a separate toggle [ORB-13896].
-    #[serde(rename = "after-landing")]
     AfterLanding,
 }
 
-impl ReviewPolicy {
-    /// The configuration key this choice is read from.
-    pub const KEY: &'static str = "operation.review_policy";
-    /// Every accepted literal, in declaration order.
-    pub const CHOICES: &'static [&'static str] = &["none", "before-pr", "after-landing"];
+impl LegacyReviewPolicy {
+    const CHOICES: &'static [&'static str] = &["none", "before-pr", "after-landing"];
 
-    /// The literal spelling written in `config.toml`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ReviewPolicy::None => "none",
-            ReviewPolicy::BeforePr => "before-pr",
-            ReviewPolicy::AfterLanding => "after-landing",
-        }
-    }
-
-    /// Parse a literal, naming the key and the accepted values on failure.
-    pub fn parse(raw: &str) -> Result<Self, OrbitError> {
+    fn parse(raw: &str) -> Result<Self, OrbitError> {
         match raw.trim() {
-            "none" => Ok(ReviewPolicy::None),
-            "before-pr" => Ok(ReviewPolicy::BeforePr),
-            "after-landing" => Ok(ReviewPolicy::AfterLanding),
+            "none" => Ok(Self::None),
+            "before-pr" => Ok(Self::BeforePr),
+            "after-landing" => Ok(Self::AfterLanding),
             other => Err(OrbitError::InvalidInput(format!(
-                "{} has invalid value '{other}'; expected one of: {}",
-                Self::KEY,
+                "{LEGACY_REVIEW_POLICY_KEY} (deprecated) has invalid value '{other}'; expected \
+                 one of: {}",
                 Self::CHOICES.join(", ")
             ))),
         }
     }
 
-    /// The shared review-timing contract this preference selects.
-    pub fn timing(self) -> ReviewTiming {
-        match self {
-            ReviewPolicy::None => ReviewTiming::None,
-            ReviewPolicy::BeforePr => ReviewTiming::BeforePr,
-            ReviewPolicy::AfterLanding => ReviewTiming::AfterLanding,
-        }
+    fn read(document: &toml::Value, config_path: &Path) -> Result<Option<Self>, OrbitError> {
+        read_optional::<String>(document, LEGACY_REVIEW_POLICY_KEY, config_path)?
+            .map(|raw| Self::parse(&raw))
+            .transpose()
     }
+}
+
+/// Translate one document's deprecated review keys into their `[review]`
+/// spelling, in place, before anything reads it [ORB-13992]. A key the
+/// document already states under `[review]` is left as written. The legacy
+/// keys stay in the document so the load warns about them by name.
+pub(crate) fn translate_legacy_review_keys(
+    document: &mut toml::Value,
+    config_path: &Path,
+) -> Result<(), OrbitError> {
+    if let Some(policy) = LegacyReviewPolicy::read(document, config_path)?
+        && value_at_path(document, REVIEW_BEFORE_PR_KEY).is_none()
+    {
+        set_value_at_path(
+            document,
+            REVIEW_BEFORE_PR_KEY,
+            toml::Value::Boolean(policy == LegacyReviewPolicy::BeforePr),
+        );
+    }
+    let minutes = bounded(
+        read_optional::<u32>(document, LEGACY_REVIEW_MINUTES_KEY, config_path)?,
+        LEGACY_REVIEW_MINUTES_KEY,
+        1,
+        MAX_REVIEW_MINUTES,
+    )?;
+    if let Some(minutes) = minutes
+        && value_at_path(document, REVIEW_MINUTES_KEY).is_none()
+    {
+        set_value_at_path(
+            document,
+            REVIEW_MINUTES_KEY,
+            toml::Value::Integer(i64::from(minutes)),
+        );
+    }
+    Ok(())
 }
 
 /// Which layer supplied a value.
@@ -130,81 +167,47 @@ impl<T: Clone> OperationField<T> {
     }
 }
 
-/// The explicit `[operation]` statements one layer makes. Every field is
-/// optional: an omitted field inherits.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The explicit review statements one layer makes. Every field is optional:
+/// an omitted field inherits.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OperationLayer {
-    /// Explicit review policy.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_policy: Option<ReviewPolicy>,
-    /// Explicit review crew.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_crew: Option<String>,
-    /// Explicit reviewer starts per candidate lineage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_reviewer_starts: Option<u32>,
-    /// Explicit review wall-time minutes per candidate lineage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Explicit `review.before_pr`, or its translation from a legacy policy.
+    pub review_before_pr: Option<bool>,
+    /// Explicit `review.minutes`, or the legacy `operation.review_minutes`.
     pub review_minutes: Option<u32>,
+    /// Explicit review crew.
+    pub review_crew: Option<String>,
+    /// What a legacy `operation.review_policy` says about after-landing
+    /// review: `Some(true)` for `after-landing`, `Some(false)` for any other
+    /// value, `None` when the layer does not state the legacy key.
+    pub legacy_after_landing: Option<bool>,
 }
 
-/// Every live `[operation]` key, as `orbit config keys` and the unknown-key
-/// guard see them. Kept sorted so the registry order assertion holds.
-pub const OPERATION_KEYS: &[&str] = &[
-    "operation.review_crew",
-    "operation.review_minutes",
-    "operation.review_policy",
-    "operation.review_reviewer_starts",
-];
-
 impl OperationLayer {
-    /// Read the `[operation]` table of one document. Unknown keys and
+    /// Read the review keys of one translated document. Unknown keys and
     /// out-of-range values fail rather than being ignored: a misspelled
-    /// review setting that silently resolved to `none` would be a surprising
-    /// policy statement. A removed operation-mode key is the exception: the
-    /// loader warns about it by name and ignores it, so a `config.toml`
-    /// written before the removal keeps loading.
+    /// review setting that silently resolved to off would be a surprising
+    /// statement. Deprecated and removed `[operation]` keys are the
+    /// exception: the loader warns about them by name, so a `config.toml`
+    /// written before their retirement keeps loading.
     pub fn from_document(document: &toml::Value, config_path: &Path) -> Result<Self, OrbitError> {
-        if let Some(table) = document.as_table().and_then(|table| table.get("operation")) {
-            let table = table.as_table().ok_or_else(|| {
-                OrbitError::InvalidInput("[operation] must be a table".to_string())
-            })?;
-            for key in table.keys() {
-                let qualified = format!("operation.{key}");
-                if !OPERATION_KEYS.contains(&qualified.as_str())
-                    && removed_key_note(&qualified).is_none()
-                {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "[operation] has unknown key '{key}'; expected one of: {}",
-                        OPERATION_KEYS
-                            .iter()
-                            .map(|key| key.trim_start_matches("operation."))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )));
-                }
-            }
-        }
+        reject_unknown_keys(document, "operation", OPERATION_KEYS, true)?;
+        reject_unknown_keys(document, "review", REVIEW_KEYS, false)?;
 
         Ok(Self {
-            review_policy: read_optional(document, ReviewPolicy::KEY, config_path)?
-                .map(|raw: String| ReviewPolicy::parse(&raw))
-                .transpose()?,
+            review_before_pr: read_optional(document, REVIEW_BEFORE_PR_KEY, config_path)?,
+            review_minutes: review_minutes(read_optional(
+                document,
+                REVIEW_MINUTES_KEY,
+                config_path,
+            )?)?,
             review_crew: review_crew(read_optional(
                 document,
                 "operation.review_crew",
                 config_path,
             )?)?,
-            review_reviewer_starts: review_reviewer_starts(read_optional(
-                document,
-                "operation.review_reviewer_starts",
-                config_path,
-            )?)?,
-            review_minutes: review_minutes(read_optional(
-                document,
-                "operation.review_minutes",
-                config_path,
-            )?)?,
+            legacy_after_landing: LegacyReviewPolicy::read(document, config_path)?
+                .map(|policy| policy == LegacyReviewPolicy::AfterLanding),
         })
     }
 
@@ -214,20 +217,57 @@ impl OperationLayer {
     }
 }
 
+/// Refuse a key of `[table]` that is not live (`known`) and, when
+/// `retired_allowed`, not a deprecated or removed key either.
+fn reject_unknown_keys(
+    document: &toml::Value,
+    table: &str,
+    known: &[&str],
+    retired_allowed: bool,
+) -> Result<(), OrbitError> {
+    let Some(value) = document.as_table().and_then(|root| root.get(table)) else {
+        return Ok(());
+    };
+    let entries = value
+        .as_table()
+        .ok_or_else(|| OrbitError::InvalidInput(format!("[{table}] must be a table")))?;
+    for key in entries.keys() {
+        let qualified = format!("{table}.{key}");
+        let retired = retired_allowed
+            && (deprecated_key_note(&qualified).is_some()
+                || removed_key_note(&qualified).is_some());
+        if !known.contains(&qualified.as_str()) && !retired {
+            return Err(OrbitError::InvalidInput(format!(
+                "[{table}] has unknown key '{key}'; expected one of: {}",
+                known
+                    .iter()
+                    .map(|known| known.trim_start_matches(table).trim_start_matches('.'))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The fully resolved review preferences with per-field provenance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperationPolicy {
     /// [`OPERATION_POLICY_VERSION`] at resolution time.
     pub version: u32,
-    /// Automatic review timing.
-    pub review_policy: OperationField<ReviewPolicy>,
+    /// Whether a delivery submitted now holds PR creation for a reviewer.
+    pub review_before_pr: OperationField<bool>,
+    /// Reviewer runtime minutes for one candidate's before-PR review.
+    pub review_minutes: OperationField<u32>,
     /// Crew selected for automatic review: the before-PR reviewer and the
     /// crew of minted after-landing review tasks.
     pub review_crew: OperationField<Option<String>>,
-    /// Reviewer starts allowed per delivery candidate lineage.
-    pub review_reviewer_starts: OperationField<u32>,
-    /// Aggregate review wall-time minutes per delivery candidate lineage.
-    pub review_minutes: OperationField<u32>,
+    /// The layer whose legacy `operation.review_policy = after-landing`
+    /// still enables the `delivery-code-review` auto-task while that
+    /// definition's own flag was never set explicitly. `None` when no
+    /// legacy statement asks for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_after_landing: Option<OperationLayerSource>,
 }
 
 impl Default for OperationPolicy {
@@ -237,16 +277,14 @@ impl Default for OperationPolicy {
 }
 
 impl OperationPolicy {
-    /// The built-in layer: no automatic review, default lineage budget.
+    /// The built-in layer: no before-PR review, the default time limit.
     pub fn built_in() -> Self {
         Self {
             version: OPERATION_POLICY_VERSION,
-            review_policy: OperationField::built_in(ReviewPolicy::None),
+            review_before_pr: OperationField::built_in(false),
+            review_minutes: OperationField::built_in(DEFAULT_REVIEW_MINUTES),
             review_crew: OperationField::built_in(None),
-            review_reviewer_starts: OperationField::built_in(
-                orbit_types::workflow::DEFAULT_REVIEW_REVIEWER_STARTS,
-            ),
-            review_minutes: OperationField::built_in(orbit_types::workflow::DEFAULT_REVIEW_MINUTES),
+            legacy_after_landing: None,
         }
     }
 
@@ -260,46 +298,31 @@ impl OperationPolicy {
     }
 
     fn apply_layer(&mut self, source: OperationLayerSource, layer: &OperationLayer) {
-        self.review_policy.set(layer.review_policy.as_ref(), source);
+        self.review_before_pr
+            .set(layer.review_before_pr.as_ref(), source);
+        self.review_minutes
+            .set(layer.review_minutes.as_ref(), source);
         if let Some(crew) = &layer.review_crew {
             self.review_crew = OperationField {
                 value: Some(crew.clone()),
                 source,
             };
         }
-        self.review_reviewer_starts
-            .set(layer.review_reviewer_starts.as_ref(), source);
-        self.review_minutes
-            .set(layer.review_minutes.as_ref(), source);
+        if let Some(after_landing) = layer.legacy_after_landing {
+            self.legacy_after_landing = after_landing.then_some(source);
+        }
     }
 
-    /// The lineage budget the review gate captures at admission.
+    /// The review limit the gate captures at admission.
     pub fn review_budget(&self) -> ReviewBudget {
         ReviewBudget {
-            reviewer_starts: self.review_reviewer_starts.value,
             minutes: self.review_minutes.value,
         }
     }
 }
 
-/// Validate `operation.review_policy` for the registry, returning the
-/// canonical literal.
-pub(crate) fn admit_review_policy(raw: Option<String>) -> Result<Option<String>, OrbitError> {
-    raw.map(|value| ReviewPolicy::parse(&value).map(|policy| policy.as_str().to_string()))
-        .transpose()
-}
-
-pub(crate) fn review_reviewer_starts(raw: Option<u32>) -> Result<Option<u32>, OrbitError> {
-    bounded(
-        raw,
-        "operation.review_reviewer_starts",
-        1,
-        MAX_REVIEW_REVIEWER_STARTS,
-    )
-}
-
 pub(crate) fn review_minutes(raw: Option<u32>) -> Result<Option<u32>, OrbitError> {
-    bounded(raw, "operation.review_minutes", 1, MAX_REVIEW_MINUTES)
+    bounded(raw, REVIEW_MINUTES_KEY, 1, MAX_REVIEW_MINUTES)
 }
 
 pub(crate) fn review_crew(raw: Option<String>) -> Result<Option<String>, OrbitError> {
