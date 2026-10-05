@@ -2,7 +2,7 @@
 //!
 //! A resumed run is not a fresh submission. It re-enters a workflow that a
 //! previous attempt already admitted, in a worktree that attempt created,
-//! against tasks that attempt stamped with its own `job_run_id`. Two durable
+//! against tasks that attempt stamped with its own `job_run_id`. Three durable
 //! facts therefore have to be reconciled *before* the resumed run reaches its
 //! delivery tail (F2026-07-121 / F2026-07-122):
 //!
@@ -19,18 +19,27 @@
 //!    intervening failed attempt. `load_handoff_context` then fails closed with
 //!    "task ... no longer belongs to job run ...".
 //!
-//! Both are repaired by reconciling against the run's **explicit retry
+//! 3. **Delivery stage.** A final-recovery escalation can block a task after
+//!    promotion to review. Reusing that promotion checkpoint must restore
+//!    review, rather than readmitting implementation that completion skips.
+//!
+//! These are repaired by reconciling against the run's **explicit retry
 //! lineage** — the source run, its `retry_source_run_id` ancestors, and the
 //! runs descended from them — and never against an unrelated run. A task
 //! stamped by a run outside that lineage is left exactly as it is, so the
 //! ownership check in `load_handoff_context` keeps its full strength.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
+use orbit_types::record::OrbitEvent;
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
-use orbit_types::workflow::{JobRun, JobRunState, JobV2, PipelineState};
+use orbit_types::workflow::{
+    ActivityV2Spec, JobRun, JobRunState, JobV2, JobV2StepBody, PipelineState,
+};
+
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -38,6 +47,7 @@ use crate::application::job::pipeline::{
     PipelineInvokeResult, PipelineSubmission, SubmittedDefinition,
 };
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
 /// A lineage this deep is pathological; the bound keeps a corrupted cycle from
@@ -61,6 +71,10 @@ pub(crate) struct ResumePlan {
     pub(crate) resume_state: Option<PipelineState>,
     /// The source run, its retry ancestors, and their descendants.
     pub(crate) lineage: BTreeSet<String>,
+    /// Ancestors only: a superseding descendant cannot donate review authority.
+    ancestors: BTreeSet<String>,
+    /// Successful host promotion checkpoints reused before pending completion.
+    review_checkpoints: BTreeMap<String, Value>,
     /// The batch id the reused checkpoints will keep handing to delivery steps.
     /// `None` when nothing is reused (`worktree_setup` re-runs and re-claims).
     pub(crate) checkpoint_batch_id: Option<String>,
@@ -206,10 +220,27 @@ impl OrbitRuntime {
         let pinned_definition = self
             .read_run_definition_snapshot(&source.run_id)?
             .map(|(spec, yaml)| PinnedRunDefinition { spec, yaml });
-        if pinned_definition.is_none() {
-            self.load_v2_job_asset_by_name(&source.job_id)?;
-        }
-        let lineage = self.resume_lineage_run_ids(&source)?;
+        let mut definition = match &pinned_definition {
+            Some(pinned) => pinned.spec.clone(),
+            None => self.load_v2_job_asset_by_name(&source.job_id)?.1,
+        };
+        orbit_engine::resolve_job_catalog_refs_for_execution(
+            &mut definition,
+            &self
+                .v2_activity_catalog()
+                .map_err(|error| OrbitError::JobValidation(error.to_string()))?,
+        )
+        .map_err(orbit_engine::dispatch_error_to_orbit)?;
+        let review_checkpoints = resume_state
+            .as_ref()
+            .filter(|state| {
+                state.run_id == source.run_id
+                    && state.job_id == source.job_id
+                    && input.get("completion").and_then(Value::as_str) == Some("done")
+            })
+            .map(|state| review_checkpoints(&definition, state))
+            .unwrap_or_default();
+        let (ancestors, lineage) = self.resume_lineage_run_ids(&source)?;
         let checkpoint_batch_id = resume_state.as_ref().and_then(checkpoint_ownership_id);
         let attempt = source.attempt.saturating_add(1);
 
@@ -219,6 +250,8 @@ impl OrbitRuntime {
             attempt,
             resume_state,
             lineage,
+            ancestors,
+            review_checkpoints,
             checkpoint_batch_id,
             pinned_definition,
         })
@@ -229,7 +262,10 @@ impl OrbitRuntime {
     /// them. Descendants matter because a task is commonly re-stamped by a
     /// *later* short-lived attempt (F2026-07-121: the task ended up owned by
     /// `jrun-…-2343`, a grandchild of the run being resumed).
-    fn resume_lineage_run_ids(&self, source: &JobRun) -> Result<BTreeSet<String>, OrbitError> {
+    fn resume_lineage_run_ids(
+        &self,
+        source: &JobRun,
+    ) -> Result<(BTreeSet<String>, BTreeSet<String>), OrbitError> {
         let mut lineage = BTreeSet::from([source.run_id.clone()]);
 
         let mut cursor = source.retry_source_run_id.clone();
@@ -243,6 +279,7 @@ impl OrbitRuntime {
                 .and_then(|run| run.retry_source_run_id);
         }
 
+        let ancestors = lineage.clone();
         let candidates = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             job_id: Some(source.job_id.clone()),
             state: None,
@@ -270,7 +307,7 @@ impl OrbitRuntime {
             }
         }
 
-        Ok(lineage)
+        Ok((ancestors, lineage))
     }
 
     /// Re-admit and re-claim the tasks this resume owns, so the resumed run
@@ -323,12 +360,12 @@ impl OrbitRuntime {
                 }
                 match self.reclaim_task_for_resumed_run(
                     &task.id,
-                    plan.checkpoint_batch_id.as_deref(),
-                    &plan.source.run_id,
+                    lineage_run_id,
+                    plan,
                     resumed_run_id,
                 ) {
-                    Ok(Some(reclaimed)) => reconciled.push(reclaimed.id),
-                    Ok(None) => {}
+                    Ok(true) => reconciled.push(task.id),
+                    Ok(false) => {}
                     Err(error) => tracing::warn!(
                         target: "orbit.core.job_run",
                         run_id = resumed_run_id,
@@ -344,6 +381,149 @@ impl OrbitRuntime {
 
         Ok(reconciled)
     }
+
+    /// Recheck ownership, withdrawal and stage evidence under the task lock.
+    /// History is append-only; restoration grants no completion authority.
+    fn reclaim_task_for_resumed_run(
+        &self,
+        id: &str,
+        expected_owner: &str,
+        plan: &ResumePlan,
+        resumed_run_id: &str,
+    ) -> Result<bool, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let mut changed = false;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            if task.job_run_id.as_deref() != Some(expected_owner)
+                || !matches!(task.status, TaskStatus::Blocked | TaskStatus::InProgress | TaskStatus::Review)
+            {
+                return Ok(());
+            }
+            let history = self.get_task_history(id)?;
+            let block = history.iter().rev().find(|entry| entry.to_status.is_some());
+            let blocking_run = block.and_then(blocking_run_id);
+            // A manual block is a decision, not a failed-run admission to undo.
+            if task.status == TaskStatus::Blocked
+                && !blocking_run.is_some_and(|run| plan.lineage.contains(run))
+            {
+                return Ok(());
+            }
+            let checkpoint = plan.review_checkpoints.get(id).filter(|output| {
+                plan.ancestors.contains(expected_owner)
+                    && plan.checkpoint_batch_id.as_ref().is_some_and(|batch| plan.ancestors.contains(batch))
+                    && blocking_run.is_some_and(|run| plan.ancestors.contains(run))
+                    && block.is_some_and(|entry| entry.from_status == Some(TaskStatus::Review))
+                    && (output.get("no_diff_expected").and_then(Value::as_bool) == Some(true)
+                        || output.get("pr_number").and_then(Value::as_str)
+                            .is_some_and(|number| task.github_pr_number() == Some(number)))
+            });
+            let restored = (task.status == TaskStatus::Blocked).then_some(
+                if checkpoint.is_some() { TaskStatus::Review } else { TaskStatus::InProgress }
+            );
+            let restamp = plan.checkpoint_batch_id.as_ref()
+                .filter(|batch| task.job_run_id.as_ref() != Some(batch));
+            if restored.is_none() && restamp.is_none() {
+                return Ok(());
+            }
+            let stage = restored.unwrap_or(task.status);
+            let note = format!(
+                "resume lineage reconciliation: run '{resumed_run_id}' resumes '{}'; stage={stage}; blocking_run={}; reused_promotion={}",
+                plan.source.run_id, blocking_run.unwrap_or("-"), checkpoint.is_some(),
+            );
+            self.with_mutation(|| {
+                let updated = self.stores().task_records().update(id, TaskRecordUpdateParams {
+                    actor: SYSTEM_ACTOR_LABEL.to_string(),
+                    status: restored,
+                    expected_status: Some(vec![task.status]),
+                    job_run_id: restamp.cloned().map(Some),
+                    status_event: Some(if restored == Some(TaskStatus::Review) {
+                        "resume_review_restored"
+                    } else { "resume_readmitted" }.to_string()),
+                    status_note: Some(note.clone()),
+                    ..Default::default()
+                })?;
+                let event = if restored == Some(TaskStatus::InProgress) {
+                    OrbitEvent::TaskStarted { id: id.to_string(), started_by: SYSTEM_ACTOR_LABEL.to_string(), approved_from_proposed: false }
+                } else { OrbitEvent::TaskUpdated { id: id.to_string() } };
+                Ok((updated, event))
+            })?;
+            changed = true;
+            Ok(())
+        })?;
+        Ok(changed)
+    }
+}
+
+/// Only system-written workflow blocks carry stage-restoration provenance.
+fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
+    if entry.by != SYSTEM_ACTOR_LABEL || entry.to_status != Some(TaskStatus::Blocked) {
+        return None;
+    }
+    let note = entry.note.as_deref()?;
+    match entry.event.as_str() {
+        orbit_engine::WORKFLOW_RUN_FAILED_EVENT | orbit_engine::WORKFLOW_RUN_INTERRUPTED_EVENT => {
+            note.split_once(", run_id=")?.1.split(',').next()
+        }
+        "final_recovery_escalated" => note
+            .strip_prefix("final recovery (run_id=")?
+            .split_once(") escalated:")
+            .map(|(id, _)| id),
+        _ => None,
+    }
+}
+
+/// Resolve host actions, never agent claims or a step name alone. A promotion
+/// must be in the reused prefix, name the task, and precede unfinished completion.
+fn review_checkpoints(job: &JobV2, state: &PipelineState) -> BTreeMap<String, Value> {
+    let mut promoted = BTreeMap::new();
+    for (index, step) in job.steps.iter().enumerate() {
+        let Ok(index) = u32::try_from(index) else {
+            break;
+        };
+        let action = match &step.body {
+            JobV2StepBody::Target(target) => match &target.spec {
+                ActivityV2Spec::Deterministic(spec) => Some(spec.action.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let status = state.step_states.get(&index);
+        if action == Some("pr_complete") && status != Some(&JobRunState::Success) {
+            return promoted;
+        }
+        if !matches!(status, Some(JobRunState::Success | JobRunState::Skipped)) {
+            break;
+        }
+        if action != Some("pr_promote") || status != Some(&JobRunState::Success) {
+            continue;
+        }
+        let Some(output) = state.step_outputs.get(&index) else {
+            break;
+        };
+        // A false `when` is checkpointed as success with null output (for
+        // example the alternate no-diff promotion in the shipped pipeline).
+        if output.is_null() {
+            continue;
+        }
+        if state.pipeline.get(&step.id) != Some(output)
+            || output.get("phase").and_then(Value::as_str) != Some("promote")
+        {
+            break;
+        }
+        for field in ["performed_task_ids", "reused_task_ids"] {
+            for id in output
+                .get(field)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                promoted.insert(id.to_string(), output.clone());
+            }
+        }
+    }
+    BTreeMap::new()
 }
 
 /// The batch/ownership id embedded in the earliest successful checkpoint that

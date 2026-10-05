@@ -7,6 +7,9 @@
 use crate::fixture_crew;
 
 #[cfg(unix)]
+mod lifecycle;
+
+#[cfg(unix)]
 mod unix {
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -37,14 +40,14 @@ mod unix {
         }
     }
 
-    struct Fixture {
+    pub(super) struct Fixture {
         _temp: TempDir,
-        home: PathBuf,
-        repo: PathBuf,
+        pub(super) home: PathBuf,
+        pub(super) repo: PathBuf,
     }
 
     impl Fixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let temp = tempdir().expect("temporary fixture");
             let home = temp.path().join("home");
             let repo = temp.path().join("repo");
@@ -88,7 +91,7 @@ mod unix {
             fixture
         }
 
-        fn command(&self) -> assert_cmd::Command {
+        pub(super) fn command(&self) -> assert_cmd::Command {
             let mut command = cargo_bin_cmd!("orbit");
             test_env::clear_inherited_authority(|name| {
                 command.env_remove(name);
@@ -100,7 +103,7 @@ mod unix {
             command
         }
 
-        fn json(&self, args: &[&str]) -> Value {
+        pub(super) fn json(&self, args: &[&str]) -> Value {
             let output = self
                 .command()
                 .args(args)
@@ -155,7 +158,7 @@ mod unix {
             run_id
         }
 
-        fn poll_run(&self, run_id: &str, state: &str, timeout: Duration) -> Value {
+        pub(super) fn poll_run(&self, run_id: &str, state: &str, timeout: Duration) -> Value {
             let deadline = Instant::now() + timeout;
             loop {
                 let shown = self.json(&["run", "show", run_id, "--json"]);
