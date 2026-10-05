@@ -79,7 +79,7 @@ pub(crate) struct ResumePlan {
     pub(crate) lineage: BTreeSet<String>,
     /// Ancestors only: a superseding descendant cannot donate review authority.
     ancestors: BTreeSet<String>,
-    /// Successful host promotion checkpoints reused before pending completion.
+    /// Successful host promotion checkpoints in the reused prefix.
     review_checkpoints: BTreeMap<String, Value>,
     /// The batch id the reused checkpoints will keep handing to delivery steps.
     /// `None` when nothing is reused (`worktree_setup` re-runs and re-claims).
@@ -502,7 +502,8 @@ fn failure_handoff_run_id(note: &str) -> Option<&str> {
 }
 
 /// Resolve host actions, never agent claims or a step name alone. A promotion
-/// must be in the reused prefix, name the task, and precede unfinished completion.
+/// must be in the reused prefix and name the task. Later failed steps and
+/// exhaustion of the job do not discard the stage already reached.
 fn review_checkpoints(job: &JobV2, state: &PipelineState) -> BTreeMap<String, Value> {
     let mut promoted = BTreeMap::new();
     for (index, step) in job.steps.iter().enumerate() {
@@ -551,7 +552,7 @@ fn review_checkpoints(job: &JobV2, state: &PipelineState) -> BTreeMap<String, Va
             }
         }
     }
-    BTreeMap::new()
+    promoted
 }
 
 /// The batch/ownership id embedded in the earliest successful checkpoint that
