@@ -186,6 +186,13 @@ runbook specifies the staged rollout and authoritative-MCP verification order.
 
 The macOS wrapper resolves `sandbox-exec` from trusted absolute locations only, currently `/usr/bin/sandbox-exec`; it does not consult `PATH` for either availability checks or process spawn. If the trusted binary is missing, the runner fails closed unless the executor declares `allow_fallback: true`, and the error names the trusted location that was probed ([T20260509-30]).
 
+Availability is resolved before provider argv construction. An allowed bare
+fallback retains provider-native sandbox flags, starts no plugin broker, and
+audits the bare argv with `sandbox_backend: bare-fallback` and
+`write_delegated` / `read_delegated` enforcement. If the trusted wrapper
+disappears after preparation selected it, spawn fails closed instead of
+falling back with already-neutralized provider flags.
+
 The wrapper also prepares Codex's TLS trust input before a sandboxed spawn. Its
 system-Keychain denies prevent Codex's rustls WebSocket transport from
 completing native-root discovery, so the child environment admits explicit

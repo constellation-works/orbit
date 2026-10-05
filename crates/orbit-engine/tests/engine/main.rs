@@ -19,6 +19,8 @@ mod history_note;
 mod pr_landing;
 mod review_fixes;
 mod v2_cli_agent;
+#[cfg(unix)]
+mod v2_cli_sandbox;
 mod v2_local_shell;
 mod v2_name_resolution;
 mod v2_runtime;

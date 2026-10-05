@@ -91,6 +91,31 @@ pub(crate) fn prepare_sandbox_for_dispatch(
             let probe = probe_bwrap();
             prepare_linux_sandbox_for_dispatch_with_probe(sandbox, probe)
         }
+        Some(sandbox)
+            if sandbox.kind == ExecutorSandboxKind::MacosSandboxExec
+                && !sandbox_exec_available() =>
+        {
+            let unavailable = sandbox_exec_unavailable_message();
+            if !sandbox.allow_fallback {
+                return Err(SpawnError::permanent(format!(
+                    "{unavailable}; declare allow_fallback: true to permit bare exec"
+                )));
+            }
+            tracing::warn!(
+                target: "orbit.engine.cli_runner",
+                "{unavailable}; falling back to bare exec because executor declares allow_fallback"
+            );
+            Ok(PreparedSandbox {
+                effective: None,
+                metadata: SandboxDispatchMetadata {
+                    backend: Some("bare-fallback".to_string()),
+                    trusted_wrapper: Some(orbit_exec::sandbox_exec_program_for_audit().to_string()),
+                    probe_outcome: Some(unavailable),
+                    write_enforcement: "write_delegated".to_string(),
+                    read_enforcement: "read_delegated".to_string(),
+                },
+            })
+        }
         Some(sandbox) => Ok(PreparedSandbox {
             effective: Some(sandbox),
             metadata: SandboxDispatchMetadata {
@@ -410,46 +435,13 @@ fn spawn_macos_sandboxed(
     sandbox: &ResolvedSandbox,
     provider: &str,
 ) -> Result<SpawnedChild, SpawnError> {
-    spawn_macos_sandboxed_with(
-        program,
-        args,
-        env,
-        cwd,
-        sandbox,
-        provider,
-        sandbox_exec_available(),
-    )
-}
-
-/// Test-friendly variant of [`spawn_macos_sandboxed`]: callers pass an
-/// explicit availability flag instead of probing the trusted wrapper. Production
-/// routes through the public wrapper which resolves the trusted absolute path; tests
-/// can assert the fail-closed and fallback branches without mutating
-/// process-global state.
-// pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-fn spawn_macos_sandboxed_with(
-    program: &str,
-    args: &[String],
-    env: &[(String, String)],
-    cwd: Option<&Path>,
-    sandbox: &ResolvedSandbox,
-    provider: &str,
-    sandbox_exec_present: bool,
-) -> Result<SpawnedChild, SpawnError> {
-    if !sandbox_exec_present {
-        let unavailable = sandbox_exec_unavailable_message();
-        if sandbox.allow_fallback {
-            tracing::warn!(
-                target: "orbit.engine.cli_runner",
-                program = program,
-                "{unavailable}; falling back to bare exec because executor declares allow_fallback"
-            );
-            return spawn_bare(program, args, env, cwd);
-        }
-        // A missing trusted sandbox-exec binary won't appear between retry
-        // attempts — deterministic environment failure.
+    if !sandbox_exec_available() {
+        // Fallback is decided during preparation, before inner sandbox flags,
+        // audit argv and the plugin broker are selected. A wrapper lost after
+        // that decision must never turn this prepared launch into bare exec.
         return Err(SpawnError::permanent(format!(
-            "{unavailable}; declare allow_fallback: true to permit bare exec"
+            "{}; trusted wrapper became unavailable after sandbox preparation",
+            sandbox_exec_unavailable_message()
         )));
     }
 
