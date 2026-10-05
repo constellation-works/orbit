@@ -950,6 +950,37 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
         "{task_comments}"
     );
 
+    let audit_events = delivery
+        .owner
+        .list_audit_events(None, Some(RECONCILE.into()), None, None, 100)
+        .unwrap();
+    assert!(
+        audit_events
+            .iter()
+            .any(|event| event.command == "artifact_redaction"),
+        "the redacted reconciliation response should emit its audit record"
+    );
+    for event in &audit_events {
+        let audit_text = [
+            event.arguments_json.as_deref(),
+            event.error_message.as_deref(),
+            event.stdout_truncated.as_deref(),
+            event.stderr_truncated.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(
+            !audit_text.contains(home().to_string_lossy().as_ref()),
+            "reconciliation audit content echoed the private HOME path: {event:#?}"
+        );
+        assert!(
+            !audit_text.contains("ghp_"),
+            "reconciliation audit content echoed credential-like text: {event:#?}"
+        );
+    }
+
     let snapshot = delivery.snapshot(McpCapability::Operator);
     assert!(snapshot.actions.complete.enabled, "{:?}", snapshot.actions);
 
