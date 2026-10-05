@@ -472,6 +472,14 @@ pub(super) fn replica_owner_for_checkout(checkout: &WorkspaceCheckout) -> Option
         .flatten()
 }
 
+pub(super) fn replica_owner_for_binding(
+    binding: &orbit_core::runtime::WorkspaceRuntimeBinding,
+) -> Option<String> {
+    (binding.checkout_role == Some(WorkspaceCheckoutRole::Replica))
+        .then(|| binding.owner_machine_id.clone())
+        .flatten()
+}
+
 pub(super) fn workspace_root_hint(cwd: &Path) -> Option<WorkspaceRootHint> {
     let registry = workspace_registry::load_registry().ok()?;
     checkout_root_hint(&registry, cwd)

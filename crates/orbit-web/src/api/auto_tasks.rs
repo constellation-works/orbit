@@ -187,7 +187,7 @@ pub(super) async fn toggle_auto_task(
                 started,
             )
             .await;
-            return map_runtime_error(error);
+            return auto_task_control_error(error);
         }
         Err(response) => return *response,
     };
@@ -280,7 +280,7 @@ pub(super) async fn mint_auto_task(
                 started,
             )
             .await;
-            return map_runtime_error(error);
+            return auto_task_control_error(error);
         }
         Err(response) => return *response,
     };
@@ -307,6 +307,22 @@ pub(super) async fn mint_auto_task(
         "message": format!("Minted {} ({})", minted.id, minted.status),
     }))
     .into_response()
+}
+
+fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
+    match error {
+        orbit_core::OrbitError::CapabilityRefused(message) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": message, "code": "capability_refused"})),
+        )
+            .into_response(),
+        orbit_core::OrbitError::PolicyDenied(message) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": message, "code": "policy_denied"})),
+        )
+            .into_response(),
+        other => map_runtime_error(other),
+    }
 }
 
 async fn resolve_workspace_blocking(
@@ -405,17 +421,29 @@ fn list_json(
             )
         })
         .collect::<Vec<_>>();
+    let role_refusal = runtime
+        .coordination_task_write_refusal()
+        .map(|error| error.to_string());
+    let toggle_capability = role_refusal.as_deref().map_or_else(
+        || action_capability(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session),
+        |reason| json!({"authorized": false, "reason": reason}),
+    );
+    let mint_capability = role_refusal.as_deref().map_or_else(
+        || action_capability(&DASHBOARD_AUTO_TASK_MINT, operator_session),
+        |reason| json!({"authorized": false, "reason": reason}),
+    );
     let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session)
         .is_ok()
-        && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok();
+        && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok()
+        && role_refusal.is_none();
     json!({
         "generated_at": generated_at.to_rfc3339(),
         "workspace": workspace,
         "workspace_name": workspace_name,
         "controls_authorized": controls_authorized,
         "capabilities": {
-            "auto_task_toggle": action_capability(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session),
-            "auto_task_mint": action_capability(&DASHBOARD_AUTO_TASK_MINT, operator_session),
+            "auto_task_toggle": toggle_capability,
+            "auto_task_mint": mint_capability,
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,

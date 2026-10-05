@@ -83,9 +83,10 @@ fragmentation this feature exists to end.
 - **Tick** — `orbit clock tick`, the stateless due-check pass the OS clock invokes on its
   configured cadence. It loads definitions, fires due routines, evaluates auto-task
   definitions, records state, and exits. `orbit sweep` is a compatibility alias.
-- **Routine source** — any registered, active **owner** checkout on the host: registration
-  is the whole opt-in [ORB-12236]. Replica checkouts are skipped; they cannot write the
-  owner's coordination store.
+- **Routine source** — any registered, active checkout on the host: registration
+  is the whole opt-in [ORB-12236]. A replica checkout cannot write the owner's
+  coordination store, so it sources only its host-local worktree GC routine; its other
+  routines are owner-only ([2_design.md §2.1](./2_design.md#21-replica-checkouts-host-local-worktree-gc-only)).
 - **Host identity** — a `host_id` (e.g. `dk-mac`) in host-local config under `~/.orbit/`.
   It takes no part in scheduling; it names run ownership and display.
 - **Owner checkout** — a registered checkout whose logical workspace this machine owns

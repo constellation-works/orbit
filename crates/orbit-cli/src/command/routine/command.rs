@@ -23,10 +23,12 @@ use crate::command::CommandOut;
     arg_required_else_help = true,
     subcommand_required = true,
     after_help = "Routine definitions are YAML files under `.orbit/routines/` in each\n\
-                  registered owner checkout. `.orbit/` is per-user checkout state that\n\
+                  registered checkout. `.orbit/` is per-user checkout state that\n\
                   git ignores, so a definition edit applies to that checkout only.\n\
-                  Pauses are host-local and never synced. The host scheduler is\n\
-                  controlled through `orbit clock`."
+                  A replica checkout schedules only its worktree GC routine; its\n\
+                  other routines are listed as owner-only. Pauses are host-local\n\
+                  and never synced. The host scheduler is controlled through\n\
+                  `orbit clock`."
 )]
 pub struct RoutineCommand {
     #[command(subcommand)]

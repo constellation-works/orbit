@@ -142,6 +142,20 @@ pub(super) async fn toggle_routine(
         Ok(report) => report,
         Err(response) => return *response,
     };
+    // A replica's owner-only routine is listed with the owner named; a
+    // toggle is refused with the same reason and writes nothing.
+    if let Some(owned) = report
+        .owner_only
+        .iter()
+        .find(|owned| owned.routine.definition.name == body.name)
+    {
+        let refusal = json!({
+            "error": owned.reason,
+            "code": "owner_authority",
+            "owner_machine": owned.owner_machine,
+        });
+        return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal).await;
+    }
     let Some(status) = report
         .statuses
         .iter()
@@ -473,6 +487,15 @@ pub(super) fn report_json(
             "target": format!("job:{}", routine.job),
             "reason": routine.reason,
             "plugin_inactive": routine.skipped,
+        })).collect::<Vec<_>>(),
+        "owner_only": report.owner_only.iter().map(|owned| json!({
+            "name": owned.routine.definition.name,
+            "source": owned.routine.source_workspace,
+            "origin": owned.routine.origin.as_str(),
+            "target": owned.routine.definition.target.as_ref_string(),
+            "enabled": owned.routine.definition.enabled,
+            "owner_machine": owned.owner_machine,
+            "reason": owned.reason,
         })).collect::<Vec<_>>(),
         "inactive_plugin_counts": inactive_plugin_counts,
         "load_errors": report.load_errors.iter().map(|e| json!({

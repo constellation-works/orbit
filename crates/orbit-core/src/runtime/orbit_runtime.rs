@@ -247,6 +247,7 @@ impl OrbitRuntime {
             logical_workspace_id: "ws_memory".to_string(),
             task_partition_id: "ws_memory".to_string(),
             owner_machine_id: None,
+            checkout_role: None,
             repo_root: data_root.to_path_buf(),
             ship_mode: ShipMode::Local,
             base_branch: None,
@@ -473,6 +474,22 @@ impl OrbitRuntime {
         paths
     }
 
+    /// Why coordination writes are unavailable from this runtime, if they are.
+    ///
+    /// Replica checkouts name the owner in their capability refusal. Claimed
+    /// workers are refused because their writes must use the owner route.
+    pub fn coordination_task_write_refusal(&self) -> Option<OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Some(OrbitError::PolicyDenied(
+                "claimed coordination writes require the owner route".into(),
+            ));
+        }
+        let owner_machine_id = self.coordination_write_owner.as_deref()?;
+        Some(OrbitError::CapabilityRefused(format!(
+            "control_plane coordination writes are refused in this replica checkout; workspace is owned by machine '{owner_machine_id}'"
+        )))
+    }
+
     /// Refuse control-plane work in a replica checkout.
     ///
     /// The refusal is a catalog-role capability outcome, not a malformed call:
@@ -480,17 +497,7 @@ impl OrbitRuntime {
     /// apart from "that request was invalid", so this reports
     /// `CapabilityRefused` [ORB-11012].
     pub(crate) fn ensure_coordination_task_write_permitted(&self) -> Result<(), OrbitError> {
-        if self.worker_invocation().is_some() {
-            return Err(OrbitError::PolicyDenied(
-                "claimed coordination writes require the owner route".into(),
-            ));
-        }
-        let Some(owner_machine_id) = self.coordination_write_owner.as_deref() else {
-            return Ok(());
-        };
-        Err(OrbitError::CapabilityRefused(format!(
-            "control_plane coordination writes are refused in this replica checkout; workspace is owned by machine '{owner_machine_id}'"
-        )))
+        self.coordination_task_write_refusal().map_or(Ok(()), Err)
     }
 
     pub(crate) fn coordination_task_reads_visible(&self) -> bool {

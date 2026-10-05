@@ -6,7 +6,8 @@
 //! per-user state, not a repository artifact. The stateless
 //! [`run_sweep_with_providers`] pass, invoked every minute by the OS clock
 //! (see [`clock`]), fires whatever is due on this host through the existing
-//! v2 run machinery. Every owner checkout is an independent schedule
+//! v2 run machinery. Every owner checkout is an independent schedule; a
+//! replica checkout schedules only host-local worktree GC [ORB-14173]
 //! (design in `docs/design/routines/`).
 
 use std::path::Path;
@@ -33,8 +34,9 @@ pub use clock::{
 };
 pub use due::{DueDecision, due_decision, parse_cron};
 pub use loader::{
-    DiscoveredWorkspaces, LoadedRoutine, RetiredRoutine, RoutineCollection, RoutineLoadError,
-    RoutineOrigin, RoutineWorkspaceProvider, collect_routines,
+    DiscoveredWorkspaces, HostRoutines, LoadedRoutine, OwnerOnlyRoutine, REPLICA_LOCAL_ROUTINE_JOB,
+    RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineWorkspaceProvider,
+    collect_host_routines, runs_in_replica,
 };
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{

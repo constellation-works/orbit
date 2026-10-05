@@ -58,13 +58,13 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
 }
 
 /// Discover the checkouts this machine evaluates schedules for, optionally
-/// restricted to one registered workspace id: every active **owner** checkout
-/// with a `.orbit/` directory. Registration is the whole opt-in [ORB-12236];
-/// a replica fires no schedule because it cannot write the owner's
-/// coordination store, and is opened apart only so the sweep can deliver the
-/// pull settlements its follower drains recorded [ORB-13892]. The provider
-/// delegates here so this production path can be exercised with an explicit
-/// global root.
+/// restricted to one registered workspace id: every active checkout with a
+/// `.orbit/` directory. Registration is the whole opt-in [ORB-12236]. A
+/// replica cannot write the owner's coordination store, so it is opened apart:
+/// the sweep delivers the pull settlements its follower drains recorded
+/// [ORB-13892] and fires only its host-local worktree GC routine, never task
+/// minting, shipping or recovery [ORB-14173]. The provider delegates here so
+/// this production path can be exercised with an explicit global root.
 pub(crate) fn discover_registered_workspaces(
     global_root: &Path,
     workspace_filter: Option<&str>,
@@ -86,8 +86,8 @@ pub(crate) fn discover_registered_workspaces(
             continue;
         }
         if checkout.role == Some(WorkspaceCheckoutRole::Replica) {
-            // Delivery is best-effort: a replica that cannot be opened is not
-            // a schedule source, so it never reads as a broken workspace.
+            // A replica that cannot be opened only defers its settlement
+            // delivery and local GC, so it never reads as a broken workspace.
             match RegisteredRuntimeFactory::open_registered_checkout(
                 global_root,
                 workspace,

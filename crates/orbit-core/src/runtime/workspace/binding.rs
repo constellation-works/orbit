@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use orbit_common::OrbitError;
 use orbit_store::workspace_id_for_orbit_dir;
 use orbit_types::workflow::{ShipMode, resolved_ship_mode};
-use orbit_types::workspace::{Workspace, WorkspaceCheckout};
+use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceCheckoutRole};
 
 /// Registry-neutral metadata supplied by a higher-level workspace catalog.
 ///
@@ -30,6 +30,9 @@ pub struct WorkspaceRuntimeBinding {
     /// owned workspace needs no redundant per-definition configuration.
     /// Absent on standalone registries that predate machine identity.
     pub owner_machine_id: Option<String>,
+    /// This machine's role for the selected checkout, when it came from the
+    /// workspace registry. Core uses it to keep replica control writes local.
+    pub checkout_role: Option<WorkspaceCheckoutRole>,
     pub repo_root: PathBuf,
     pub ship_mode: ShipMode,
     /// Registered integration branch; absent for standalone runtimes.
@@ -45,6 +48,7 @@ pub fn workspace_runtime_binding(
         logical_workspace_id: workspace.id.clone(),
         task_partition_id: workspace_id_for_orbit_dir(&checkout.orbit_dir)?,
         owner_machine_id: workspace.owner_machine_id.clone(),
+        checkout_role: checkout.role,
         repo_root: checkout.repo_root.clone(),
         ship_mode: resolved_ship_mode(workspace),
         base_branch: Some(workspace.base_branch.clone()),

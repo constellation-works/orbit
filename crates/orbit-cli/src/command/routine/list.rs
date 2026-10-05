@@ -72,6 +72,16 @@ impl RoutineListArgs {
                 "reason": routine.reason,
                 "plugin_inactive": routine.skipped,
             })).collect::<Vec<_>>(),
+            "owner_only": report.owner_only.iter().map(|owned| json!({
+                "name": owned.routine.definition.name,
+                "source": owned.routine.source_workspace,
+                "origin": owned.routine.origin.as_str(),
+                "path": owned.routine.path.display().to_string(),
+                "target": owned.routine.definition.target.as_ref_string(),
+                "enabled": owned.routine.definition.enabled,
+                "owner_machine": owned.owner_machine,
+                "reason": owned.reason,
+            })).collect::<Vec<_>>(),
             "load_errors": report.load_errors.iter().map(|e| json!({
                 "source_workspace": e.source_workspace,
                 "path": e.path.as_ref().map(|p| p.display().to_string()),
@@ -142,8 +152,32 @@ impl RoutineListArgs {
                 Cell::new("—"),
             ]);
         }
+        // A replica's other definitions are its owner's to schedule.
+        for owned in &report.owner_only {
+            table.add_row(vec![
+                Cell::new(&owned.routine.definition.name),
+                Cell::new(&owned.routine.source_workspace),
+                Cell::new(owned.routine.origin.as_str()),
+                Cell::new(if owned.routine.definition.enabled {
+                    "yes"
+                } else {
+                    "no"
+                }),
+                Cell::new("—"),
+                Cell::new("owner-only"),
+                Cell::new("—"),
+            ]);
+        }
         // Context about where the list came from, not a record in it (spec §5).
         eprintln!("host: {}", report.machine_name);
+        for owned in &report.owner_only {
+            eprintln!(
+                "owner-only [{}] ({}): {}",
+                owned.routine.source_workspace,
+                owned.routine.path.display(),
+                owned.reason
+            );
+        }
         for routine in &retired {
             eprintln!(
                 "{} [{}] ({}): {}",

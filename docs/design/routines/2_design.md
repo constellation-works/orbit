@@ -347,15 +347,40 @@ cross-workspace dispatch.
 
 Registering an **owner** checkout is the whole opt-in — there is no config key
 ([Registration is the automation opt-in](./4_decisions.md#registration-is-the-automation-opt-in-there-is-no-routine-source-role)). On each pass, sweep loads the registry and loads
-`.orbit/routines/*.yaml` from every registered, active owner checkout whose `.orbit/`
-directory exists. Replica checkouts are skipped: they cannot write the owner's coordination
-store. Two properties fall out:
+`.orbit/routines/*.yaml` from every registered, active checkout whose `.orbit/`
+directory exists. Replica checkouts cannot write the owner's coordination store, so they
+contribute one kind of routine only (§2.1). Two properties fall out:
 
 - **Registration is what already exists.** Registering the workspace with Orbit (which
   polaris needs anyway) is the entire setup; nothing versioned has to agree per host.
 - **Centralization is convention, not mechanism.** The constellation keeps all routines in
   polaris; the mechanism tolerates additional sources, and `orbit routine list` names each
   routine's source workspace so provenance is never ambiguous.
+
+### 2.1 Replica checkouts: host-local worktree GC only
+
+A replica checkout schedules exactly one kind of routine for itself: a cron
+definition targeting `job:worktree_gc_pipeline` [ORB-14173]. That job reclaims this
+host's own run worktrees and asks the owner over its tool surface whether each task is
+settled; it writes nothing to the owner's task store. Owner and replica definitions
+load together, so a name claimed in both still fails closed.
+
+Every other replica definition — ship sweep, task pilot, CI and Dependabot sweeps, and
+any delivery- or state-triggered routine, including one targeting the GC job — is owner
+work. The sweep reports it as `skipped` with an `owner_only_in_replica:` reason naming
+the owner machine and never dispatches it. `orbit routine list` and `show`, the
+dashboard's `owner_only` rows and the MCP `orbit.routine.control` list all project the
+same rule from one Core predicate, so a toggle is offered exactly where it succeeds. A
+toggle or pause of an owner-only routine is refused with the owner named and writes
+nothing. Auto-tasks and blocked-task recovery never run in a replica. Auto-task
+toggle and manual-mint controls are refused there too; the dashboard names the
+owner in their capability reasons.
+
+Worktree cleanup therefore has two paths. On the owner, a delivery run removes its own
+worktree once it lands (§1, *Delivered worktree cleanup*), with the owner's hourly GC
+routine as the backstop. On a replica, a claimed leaf's worktree is reclaimed only by
+the replica's own scheduled GC, once its claim is settled with the owner or the owner
+reports the task settled; an unreachable owner leaves the worktree in place.
 
 A `config.toml` written before [ORB-12236] may still carry `[routines] role = "source"`;
 it loads with a warning for one release and selects nothing.

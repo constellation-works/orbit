@@ -535,6 +535,7 @@ impl RegisteredRuntimeFactory {
     ) -> Result<OrbitRuntime, OrbitError> {
         let identity = inspect_machine_identity(global_root)?;
         sync_task_prefix_for_identity(global_root, &identity)?;
+        let replica_owner = replica_owner_for_binding(&binding);
         OrbitRuntime::from_resolved_roots_with_binding_for(
             global_root,
             shared_root,
@@ -542,7 +543,13 @@ impl RegisteredRuntimeFactory {
             binding,
             host_lifetime,
         )
-        .map(|runtime| attach_registry_context(runtime, global_root, &identity))
+        .map(|runtime| {
+            attach_registry_context(
+                runtime.with_coordination_write_owner(replica_owner),
+                global_root,
+                &identity,
+            )
+        })
     }
 
     /// Bind a CLI `orbit tool run` invocation to the workspace named in `input`.
