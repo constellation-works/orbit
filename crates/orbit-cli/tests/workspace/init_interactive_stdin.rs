@@ -244,6 +244,7 @@ fn piped_machine_name_and_task_prefix_still_complete_interactive_init() {
 /// Test fixtures initialize under an isolated HOME on machines whose sandbox
 /// state they must not change. The opt-out completes init without the
 /// privileged preparation path, and the installer entry point honors it too.
+// Linux: init alone prepares Bubblewrap/AppArmor; both opt-outs must avoid privileged host changes.
 #[cfg(target_os = "linux")]
 #[test]
 fn skipped_host_prerequisites_complete_init_without_preparing_the_host() {

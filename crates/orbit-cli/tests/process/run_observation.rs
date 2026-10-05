@@ -537,7 +537,7 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
 }
 
 /// Capture the pre-change stable timestamp independently of Orbit's probe.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn ps_lstart_utc(pid: u32) -> String {
     let output = std::process::Command::new("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
@@ -554,6 +554,7 @@ fn ps_lstart_utc(pid: u32) -> String {
 
 /// Re-execution clears PATH only in the child, without changing the parallel
 /// test runner's environment. The fixture token comes from the old ps probe.
+// Linux: the production /proc start-time probe must match persisted ps tokens with PATH empty.
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
@@ -624,7 +625,7 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
 
 /// Persist real ps-derived v2, v1 and legacy tokens in the store, then drive
 /// cancellation through the built binary with no ps on its PATH.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
     use orbit_common::process::identity::{
@@ -638,7 +639,7 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
         let token = match format {
             "v2" => format!(
                 "{STABLE_TOKEN_PREFIX}pidns={}:{raw}",
-                current_pid_namespace().unwrap()
+                current_pid_namespace().unwrap_or("-")
             ),
             "v1" => format!("{STABLE_TOKEN_PREFIX_V1}{raw}"),
             _ => raw,

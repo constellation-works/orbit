@@ -2,6 +2,7 @@
 mod liveness {
     use crate::process::identity::*;
 
+    // macOS: native libproc liveness must classify an unreaped zombie and its group as exited.
     #[cfg(target_os = "macos")]
     #[test]
     fn darwin_native_probes_classify_an_unreaped_zombie_and_its_group_as_exited() {
@@ -57,6 +58,7 @@ mod liveness {
     }
 }
 
+// macOS: libproc start-time rendering must match persisted ps owner identities exactly.
 #[cfg(target_os = "macos")]
 mod darwin {
     use crate::process::identity::darwin_lstart_utc;

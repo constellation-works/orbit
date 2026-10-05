@@ -8,5 +8,9 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "../support/generation_fixture.rs"]
+mod generation_fixture;
+
 mod mcp_roundtrip;
 mod mcp_setup_root;

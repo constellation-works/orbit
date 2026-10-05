@@ -252,6 +252,7 @@ fn reinstall_and_upgrade_require_fresh_build_consent() {
 
 /// §3.3: macOS runs no network `fetch` phase, so a manifest declaring one is
 /// refused with the typed error even with consent, before anything runs.
+// macOS: install must refuse network fetch phases unsupported by the production build profile.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_fetch_phase_is_refused_on_macos() {

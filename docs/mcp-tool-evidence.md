@@ -43,6 +43,8 @@ This matrix covers the exact 27 modern advertised names in `crates/orbit-cli/tes
 
 Named proofs are below. Suite totals are supporting execution evidence; the named assertion determines what each row claims. Schema snapshots and parser tests do not count as a successful business operation.
 
+The `mcp_roundtrip::upgrade` boundary tests run on Linux and macOS. Compatible writers coexist with live MCP/dashboard/drain processes, incompatible generations refuse reads or wait for safe points, and an installed replacement preserves the MCP session and drain owner. Handover fixtures observe the image digest in the process's locked participant record, so they do not require Linux `/proc`. The absent/unwritable-partition read fixture uses Unix permissions on both hosts; Bubblewrap mount and Landlock escape/write-denial proofs retain their Linux gates. The macOS workflow runs these portable tests; a Linux result alone does not establish Darwin behavior.
+
 ## Production stdio proofs
 
 All `S` proofs are in `crates/orbit-cli/tests/mcp/mcp_roundtrip.rs` or its indicated submodule.

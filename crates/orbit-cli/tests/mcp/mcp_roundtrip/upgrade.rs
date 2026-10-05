@@ -1,9 +1,9 @@
-//! Real process coverage: no replacement server, retries or substitute authority.
+//! Real process coverage through installed binaries and persisted generation state.
 use super::*;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use orbit_common::fs::generation::GenerationGuard;
 use orbit_common::fs::generation::executable_generation;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::collections::BTreeMap;
 
 /// Spawn an `orbit` binary that this fixture just copied into place.
@@ -37,30 +37,24 @@ fn assert_refused(output: &std::process::Output) {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn distinct_candidate(workspace: &McpWorkspace) -> PathBuf {
     let candidate = workspace.home.join("candidate-orbit");
-    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &candidate).expect("candidate copy");
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&candidate)
-        .expect("open candidate")
-        .write_all(b"\nupgrade-regression-candidate\n")
-        .expect("distinct executable");
+    crate::generation_fixture::distinct_copy(Path::new(env!("CARGO_BIN_EXE_orbit")), &candidate);
     candidate
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn authority_root(workspace: &McpWorkspace) -> PathBuf {
     workspace.home.join(".orbit")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn generation_record(workspace: &McpWorkspace) -> String {
     std::fs::read_to_string(authority_root(workspace).join(".generation.lock")).expect("record")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     fn walk(dir: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
@@ -228,7 +222,7 @@ fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() 
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_newer_build_writes_while_older_mcp_dashboard_and_drain_processes_stay_live() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
@@ -245,7 +239,10 @@ fn a_newer_build_writes_while_older_mcp_dashboard_and_drain_processes_stay_live(
         executable_generation(&candidate).expect("candidate"),
         old_digest
     );
-    assert_eq!(running_digest(drain.pid), old_digest);
+    assert_eq!(
+        running_digest(&workspace, drain.pid).as_deref(),
+        Some(old_digest.as_str())
+    );
     let recorded = generation_record(&workspace);
     let added = candidate_ok(
         &workspace,
@@ -291,7 +288,10 @@ fn a_newer_build_writes_while_older_mcp_dashboard_and_drain_processes_stay_live(
     let run = run_show(&workspace, &drain.run_id);
     assert_eq!(run["run"]["state"], "running", "{run}");
     assert_eq!(run["run"]["pid"].as_u64(), Some(u64::from(drain.pid)));
-    assert_eq!(running_digest(drain.pid), old_digest);
+    assert_eq!(
+        running_digest(&workspace, drain.pid).as_deref(),
+        Some(old_digest.as_str())
+    );
     let task = client.call_tool_ok(
         "orbit_task_add",
         json!({"title":"Written by the old client", "description":"After the candidate wrote", "complexity":"low", "model":"codex"}),
@@ -307,7 +307,7 @@ fn a_newer_build_writes_while_older_mcp_dashboard_and_drain_processes_stay_live(
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
     let workspace = McpWorkspace::init();
     let install = workspace.home.join("installation");
@@ -316,8 +316,8 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
     let drain = start_drain(&workspace, &installed);
     assert_eq!(
-        running_digest(drain.pid),
-        executable_generation(&installed).expect("old digest")
+        running_digest(&workspace, drain.pid),
+        Some(executable_generation(&installed).expect("old digest"))
     );
 
     let candidate = distinct_candidate(&workspace);
@@ -326,7 +326,7 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
 
     // The coordinator notices at its next admission pass and execs in place.
     wait_until(
-        || running_digest(drain.pid) == new_digest,
+        || running_digest(&workspace, drain.pid).as_deref() == Some(new_digest.as_str()),
         "the drain to hand over to the installed executable",
     );
     // Same run, same owner: the new image adopted it rather than claiming it,
@@ -339,7 +339,7 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points() {
     use orbit_common::fs::generation::{Access, GenerationUpdate, Participant, ParticipantRole};
 
@@ -449,13 +449,13 @@ fn a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points() 
     assert!(!process_alive(worker), "the yielding worker exits");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 struct Drain {
     run_id: String,
     pid: u32,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn candidate_ok(workspace: &McpWorkspace, program: &Path, args: &[&str]) -> std::process::Output {
     let output = McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home)
         .args(args)
@@ -469,7 +469,7 @@ fn candidate_ok(workspace: &McpWorkspace, program: &Path, args: &[&str]) -> std:
     output
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_show(workspace: &McpWorkspace, run_id: &str) -> Value {
     let output = candidate_ok(
         workspace,
@@ -479,7 +479,7 @@ fn run_show(workspace: &McpWorkspace, run_id: &str) -> Value {
     serde_json::from_slice(&output.stdout).expect("run show JSON")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn poll_run_state(workspace: &McpWorkspace, run_id: &str, state: &str) -> Value {
     let mut last = Value::Null;
     wait_until(
@@ -492,13 +492,13 @@ fn poll_run_state(workspace: &McpWorkspace, run_id: &str, state: &str) -> Value 
     last
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_owner(workspace: &McpWorkspace, run_id: &str) -> u32 {
     let run = poll_run_state(workspace, run_id, "running");
     run["run"]["pid"].as_u64().expect("worker pid") as u32
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn start_drain(workspace: &McpWorkspace, program: &Path) -> Drain {
     let submitted = candidate_ok(
         workspace,
@@ -524,7 +524,7 @@ fn start_drain(workspace: &McpWorkspace, program: &Path) -> Drain {
     Drain { run_id, pid }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn cancel_drain(workspace: &McpWorkspace, drain: &Drain) {
     candidate_ok(
         workspace,
@@ -534,19 +534,12 @@ fn cancel_drain(workspace: &McpWorkspace, drain: &Drain) {
     wait_until(|| !process_alive(drain.pid), "the cancelled drain to exit");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn process_alive(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map(|stat| {
-            // A reaped-but-unwaited child lingers as a zombie.
-            stat.rsplit(')')
-                .next()
-                .is_some_and(|rest| !rest.trim_start().starts_with('Z'))
-        })
-        .unwrap_or(false)
+    orbit_common::process::identity::process_is_alive(pid)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (Child, u16) {
     let port = TcpListener::bind(("127.0.0.1", 0))
         .expect("ephemeral port")
@@ -567,7 +560,7 @@ fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (Child, u16) {
     (child, port)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn http_get(port: u16, path: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     stream
@@ -581,7 +574,7 @@ fn http_get(port: u16, path: &str) -> String {
     response
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn stop(child: &mut Child) {
     // Safety: SIGTERM to this test's own child, as a service manager would.
     unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
@@ -596,7 +589,7 @@ fn stop(child: &mut Child) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_until(mut ready: impl FnMut() -> bool, what: &str) {
     let deadline = Instant::now() + Duration::from_secs(60);
     while !ready() {
@@ -658,7 +651,7 @@ fn listener_retains_admission_until_process_exit() {
     assert!(preflight(&workspace).status.success());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn audit_rows(workspace: &McpWorkspace) -> i64 {
     Connection::open_with_flags(
         workspace.home.join(".orbit/orbit.db"),
@@ -669,7 +662,7 @@ fn audit_rows(workspace: &McpWorkspace) -> i64 {
     .expect("audit count")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_byte_identical_root(
     before: &BTreeMap<PathBuf, Vec<u8>>,
     after: &BTreeMap<PathBuf, Vec<u8>>,
@@ -694,7 +687,7 @@ fn assert_byte_identical_root(
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn read_only_candidate_joins_a_v1_generation_without_rewriting_the_record() {
     let workspace = McpWorkspace::init();
     {
@@ -781,7 +774,7 @@ fn read_only_candidate_joins_a_v1_generation_without_rewriting_the_record() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn read_only_foreign_digest_refuses_when_store_schema_differs() {
     let workspace = McpWorkspace::init();
     {
@@ -812,8 +805,8 @@ fn read_only_foreign_digest_refuses_when_store_schema_differs() {
     command.args(["task", "list", "--json"]);
     // The candidate was just written, so a sibling test's fork can still hold
     // it open for writing; see `orbit_common::test_process`.
-    let output = orbit_common::test_process::retry_executable_busy(|| command.output())
-        .expect("schema-mismatch candidate");
+    let output =
+        crate::generation_fixture::launch(|| command.output()).expect("schema-mismatch candidate");
     assert_refused(&output);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -825,20 +818,20 @@ fn read_only_foreign_digest_refuses_when_store_schema_differs() {
 
 /// Install `source`'s bytes at `installed` the way an installer does: write
 /// beside it, then rename over it, so the running inode is left untouched.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn install_over(source: &Path, installed: &Path) {
     let staged = installed.with_extension("staged");
     std::fs::copy(source, &staged).expect("stage replacement");
     std::fs::rename(&staged, installed).expect("replace installation");
 }
 
-#[cfg(target_os = "linux")]
-fn running_digest(pid: u32) -> String {
-    executable_generation(&PathBuf::from(format!("/proc/{pid}/exe"))).expect("running image")
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn running_digest(workspace: &McpWorkspace, pid: u32) -> Option<String> {
+    crate::generation_fixture::running_digest(&authority_root(workspace), pid)
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
     let workspace = McpWorkspace::init();
     let install = workspace.home.join("installation");
@@ -867,7 +860,10 @@ fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
         "orbit_task_add",
         json!({"title":"Before the handover", "description":"Old image", "complexity":"low", "model":"codex"}),
     );
-    assert_eq!(running_digest(pid), old_digest);
+    assert_eq!(
+        running_digest(&workspace, pid).as_deref(),
+        Some(old_digest.as_str())
+    );
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
@@ -875,7 +871,7 @@ fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
 
     // The idle server notices within a lifecycle interval and execs itself.
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    while running_digest(pid) != new_digest {
+    while running_digest(&workspace, pid).as_deref() != Some(new_digest.as_str()) {
         assert!(
             std::time::Instant::now() < deadline,
             "the idle server never handed over to the installed executable"
@@ -892,5 +888,8 @@ fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
     assert_eq!(task["title"], "After the handover");
     let tasks = client.call_tool_ok("orbit_task_list", json!({}));
     assert_eq!(tasks["total"], 2, "{tasks}");
-    assert_eq!(running_digest(pid), new_digest);
+    assert_eq!(
+        running_digest(&workspace, pid).as_deref(),
+        Some(new_digest.as_str())
+    );
 }

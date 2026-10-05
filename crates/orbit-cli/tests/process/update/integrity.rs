@@ -13,7 +13,6 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
@@ -402,7 +401,7 @@ fn a_second_concurrent_update_is_refused() {
 /// with a binary that reports `99.0.0` and the generation record already names
 /// a newer digest. The locked re-probe must follow the live path and refuse
 /// to put `1.0.0` in its place.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_stale_writer_and_an_older_binary_never_displace_a_newer_install() {
     let install = Install::new(None);
@@ -423,12 +422,6 @@ fn a_stale_writer_and_an_older_binary_never_displace_a_newer_install() {
         .spawn()
         .expect("spawn stale update");
     let mut child = ReapedChild { child: Some(child) };
-    let running = child.child.as_mut().expect("child");
-    wait_until_image_loaded(
-        running,
-        &install.executable,
-        Instant::now() + STALE_SLICE_DEADLINE,
-    );
 
     // Opening the write end is the rendezvous with `latest_version`: the
     // child has finished `current_exe` and is blocked in the mirror read.
@@ -502,59 +495,27 @@ impl Drop for ReapedChild {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn wait_until_image_loaded(child: &mut Child, executable: &Path, deadline: Instant) {
-    let exe_link = PathBuf::from(format!("/proc/{}/exe", child.id()));
-    loop {
-        assert_waiting(child, deadline, "load the installed orbit image");
-        if fs::read_link(&exe_link).ok().as_deref() == Some(executable) {
-            return;
-        }
-        std::thread::sleep(WAIT_SLICE);
-    }
-}
-
-/// Open the write end of `path` without hanging the test if the child never
-/// reaches its read. A blocking open is the rendezvous; the deadline kills the
-/// child and opens the fifo read/write so that blocked open returns.
-#[cfg(target_os = "linux")]
+/// Rendezvous with the mirror reader without a blocking opener thread or
+/// Linux's non-portable read/write FIFO open. ENXIO means no reader yet.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn open_fifo_writer(path: &Path, child: &mut Child, deadline: Instant) -> File {
-    let (sender, receiver) = mpsc::channel();
-    let fifo = path.to_path_buf();
-    std::thread::spawn(move || {
-        let opened = OpenOptions::new().write(true).open(&fifo);
-        let _ = sender.send(opened);
-    });
     loop {
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            unblock_fifo(path);
-            panic!("timed out waiting for the stale update to open the mirror");
-        }
-        if let Some(status) = child.try_wait().expect("poll stale update") {
-            unblock_fifo(path);
-            panic!("stale update exited before reading the mirror: {status}");
-        }
-        match receiver.try_recv() {
-            Ok(Ok(file)) => return file,
-            Ok(Err(error)) => panic!("open mirror fifo: {error}"),
-            Err(mpsc::TryRecvError::Empty) => std::thread::sleep(WAIT_SLICE),
-            Err(mpsc::TryRecvError::Disconnected) => panic!("mirror opener thread exited"),
+        assert_waiting(child, deadline, "open the mirror");
+        match OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+        {
+            Ok(file) => return file,
+            Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                std::thread::sleep(WAIT_SLICE);
+            }
+            Err(error) => panic!("open mirror fifo: {error}"),
         }
     }
 }
 
-#[cfg(target_os = "linux")]
-fn unblock_fifo(path: &Path) {
-    // Linux opens a fifo for read and write without waiting for the other end.
-    let _ = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path);
-}
-
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_waiting(child: &mut Child, deadline: Instant, what: &str) {
     if Instant::now() >= deadline {
         let _ = child.kill();
@@ -565,7 +526,7 @@ fn assert_waiting(child: &mut Child, deadline: Instant, what: &str) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::ExitStatus {
     loop {
         if Instant::now() >= deadline {
@@ -580,7 +541,7 @@ fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::ExitStatus {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn mkfifo(path: &Path) {
     let name = CString::new(path.as_os_str().as_bytes()).expect("fifo path");
     let rc = unsafe { libc::mkfifo(name.as_ptr(), 0o644) };

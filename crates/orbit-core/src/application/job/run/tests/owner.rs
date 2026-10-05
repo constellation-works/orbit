@@ -81,6 +81,7 @@ fn signal_owner_without_pid_returns_no_pid() {
 
 /// A synthetic namespace mismatch exercises the safety guard without needing
 /// namespace creation privileges or risking a real foreign process.
+// Linux: /proc PID-namespace identity must refuse signalling a PID owned by another namespace.
 #[cfg(target_os = "linux")]
 #[test]
 fn signal_owner_in_foreign_pid_namespace_never_signals_the_local_process() {

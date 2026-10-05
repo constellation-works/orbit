@@ -267,6 +267,7 @@ fn a_symlinked_authority_database_is_refused() {
     }
 }
 
+// Linux: /proc namespace-leader binding must authenticate descendants despite forged run environment.
 #[cfg(target_os = "linux")]
 #[test]
 fn worker_process_binding_survives_descendants_and_forged_environment() {
