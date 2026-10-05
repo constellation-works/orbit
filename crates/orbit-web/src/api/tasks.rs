@@ -22,7 +22,8 @@ use serde_json::{Map, Value, json};
 
 use super::pagination::TaskPageQuery;
 use super::{
-    bad_request, blocking, map_runtime_error, non_empty_string, server_error, validate_id,
+    OptionalJson, bad_request, blocking, map_runtime_error, non_empty_string, server_error,
+    validate_id,
 };
 use crate::projections::{
     TaskListProjection, task_locks_json, task_row_to_json, task_to_json_with_sidecars,
@@ -760,13 +761,12 @@ fn human_comment_author(requested: Option<&str>) -> String {
 pub(super) async fn approve_task_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
-    body: Option<Json<ApproveBody>>,
+    OptionalJson(body): OptionalJson<ApproveBody>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id,
         Err(message) => return bad_request(message),
     };
-    let body = body.map(|Json(b)| b).unwrap_or_default();
     let id = id.to_string();
     task_mutation_response(runtime, "task approval", move |runtime| {
         runtime.approve_task(&id, body.note, body.comment)

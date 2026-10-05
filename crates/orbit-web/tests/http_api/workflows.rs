@@ -1,11 +1,13 @@
+use std::collections::BTreeSet;
+
 use chrono::Utc;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRunState, TaskStatus};
+use orbit_core::{JobRun, JobRunState, TaskStatus};
 use orbit_types::workflow::{ChildDispatch, PipelineState};
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::support::{Fixture, error_code, isolated, json_ok};
+use super::support::{Fixture, Server, error_code, isolated, json_ok};
 
 #[test]
 fn ship_and_resume_refuse_in_flight_duplicates_without_persisting_runs() {
@@ -156,4 +158,311 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
             }
         },
     );
+}
+
+const WS: &str = "ws_http_fixture";
+
+/// An absent body reached the handler: a 4xx whose text is not a JSON parse error.
+fn assert_handler_reached(response: reqwest::blocking::Response, label: &str) {
+    let status = response.status().as_u16();
+    let value: Value = response
+        .json()
+        .unwrap_or_else(|_| json!({"error": "non-json"}));
+    let error = value["error"].as_str().unwrap_or("");
+    let parse_error = error.contains("JSON")
+        || error.contains("Content-Type")
+        || error.contains("invalid type")
+        || error.contains("unknown field");
+    assert!(
+        (400..500).contains(&status) && !parse_error,
+        "{label} must reach the handler and not parse as JSON: {status} {value}"
+    );
+}
+
+/// A present body that does not parse must be a 400 carrying that parse error.
+fn assert_parse_error(response: reqwest::blocking::Response, marker: &str) {
+    let status = response.status().as_u16();
+    let value: Value = response.json().expect("JSON error body");
+    assert_eq!(status, 400, "{value}");
+    let error = value["error"].as_str().unwrap_or("");
+    assert!(
+        error.contains(marker),
+        "400 must carry the parse error ({marker}): {error}"
+    );
+}
+
+fn send_raw(
+    server: &Server,
+    method: &str,
+    path: &str,
+    content_type: Option<&str>,
+    body: Option<&str>,
+) -> reqwest::blocking::Response {
+    let mut request = server
+        .request(method, path)
+        .header("origin", &server.origin);
+    if let Some(content_type) = content_type {
+        request = request.header("content-type", content_type);
+    }
+    if let Some(body) = body {
+        request = request.body(body.to_string());
+    }
+    request.send().unwrap()
+}
+
+fn run_ids(fixture: &Fixture) -> BTreeSet<String> {
+    listed_runs(fixture)
+        .into_iter()
+        .map(|run| run.run_id)
+        .collect()
+}
+
+fn listed_runs(fixture: &Fixture) -> Vec<JobRun> {
+    fixture
+        .runtime
+        .list_job_runs(JobRunListParams::default())
+        .unwrap()
+}
+
+#[test]
+fn malformed_bodies_do_not_select_defaults_and_auto_requires_workspace() {
+    isolated(
+        "workflows::malformed_bodies_do_not_select_defaults_and_auto_requires_workspace",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("task_auto_pipeline");
+            let cancel_target = fixture.seed_run(
+                "jrun-cancel-target",
+                "task_auto_pipeline",
+                JobRunState::Running,
+            );
+            let server = fixture.server(true);
+            let ws = format!("?workspace={WS}");
+            let before = run_ids(&fixture);
+
+            // Ship: unknown key, form body (curl's default content type), wrong type, bad JSON.
+            let ship = format!("/api/workflows/ship{ws}");
+            assert_parse_error(
+                server.send("POST", &ship, json!({"task_id":"X"})),
+                "unknown field `task_id`",
+            );
+            assert_parse_error(
+                send_raw(
+                    &server,
+                    "POST",
+                    &ship,
+                    Some("application/x-www-form-urlencoded"),
+                    Some(r#"{"task_ids":["ORB-1"]}"#),
+                ),
+                "Content-Type: application/json",
+            );
+            assert_parse_error(
+                server.send("POST", &ship, json!({"task_ids":"ORB-1"})),
+                "invalid type",
+            );
+            assert_parse_error(
+                send_raw(&server, "POST", &ship, Some("application/json"), Some("{")),
+                "Failed to parse the request body as JSON",
+            );
+
+            let cases = [
+                (
+                    "POST",
+                    format!("/api/workflows/auto{ws}"),
+                    r#"{"for_duration":1}"#,
+                ),
+                (
+                    "POST",
+                    format!("/api/workflows/auto/stop{ws}"),
+                    r#"{"reason":1}"#,
+                ),
+                (
+                    "POST",
+                    format!("/api/runs/{}/cancel{ws}", cancel_target.run_id),
+                    r#"{"force":"true"}"#,
+                ),
+                (
+                    "POST",
+                    format!("/api/tasks/missing/approve{ws}"),
+                    r#"{"note":1}"#,
+                ),
+                (
+                    "POST",
+                    format!("/api/job-runs/missing/resume{ws}"),
+                    r#"{"claim_token":1}"#,
+                ),
+                (
+                    "PATCH",
+                    format!("/api/frictions/missing{ws}"),
+                    r#"{"status":1}"#,
+                ),
+            ];
+            for (method, path, wrong_type) in &cases {
+                assert_parse_error(
+                    send_raw(&server, method, path, Some("application/json"), Some("{")),
+                    "Failed to parse the request body as JSON",
+                );
+                assert_parse_error(
+                    send_raw(
+                        &server,
+                        method,
+                        path,
+                        Some("application/x-www-form-urlencoded"),
+                        Some(*wrong_type),
+                    ),
+                    "Content-Type: application/json",
+                );
+                assert_parse_error(
+                    send_raw(
+                        &server,
+                        method,
+                        path,
+                        Some("application/json"),
+                        Some(*wrong_type),
+                    ),
+                    "invalid type",
+                );
+            }
+            assert_eq!(
+                run_ids(&fixture),
+                before,
+                "a rejected body must not create a run"
+            );
+            assert_eq!(
+                run_state(&fixture, &cancel_target.run_id),
+                JobRunState::Running,
+                "a string force flag must not become a graceful cancel"
+            );
+
+            // Absent and empty bodies still take the handler default.
+            for body in [None, Some("")] {
+                let response = send_raw(
+                    &server,
+                    "POST",
+                    &format!("/api/workflows/auto{ws}"),
+                    body.map(|_| "application/json"),
+                    body,
+                );
+                let status = response.status().as_u16();
+                let value: Value = response.json().unwrap();
+                assert_eq!(status, 400, "{value}");
+                assert_eq!(value["error"], "for_duration must not be empty", "{value}");
+            }
+            let stopped = json_ok(send_raw(
+                &server,
+                "POST",
+                &format!("/api/workflows/auto/stop{ws}"),
+                None,
+                None,
+            ));
+            assert_eq!(stopped["outcome"], "idle");
+            assert_handler_reached(
+                send_raw(
+                    &server,
+                    "POST",
+                    &format!("/api/tasks/missing/approve{ws}"),
+                    None,
+                    None,
+                ),
+                "empty approve",
+            );
+            assert_handler_reached(
+                send_raw(
+                    &server,
+                    "POST",
+                    &format!("/api/job-runs/missing/resume{ws}"),
+                    None,
+                    None,
+                ),
+                "empty resume",
+            );
+            let patched = send_raw(
+                &server,
+                "PATCH",
+                &format!("/api/frictions/missing{ws}"),
+                Some("application/json"),
+                Some(""),
+            );
+            let patch_status = patched.status().as_u16();
+            let patch_body: Value = patched.json().unwrap();
+            assert_eq!(patch_status, 400, "{patch_body}");
+            assert_eq!(
+                patch_body["error"], "request body must include `status`, `tags`, or `title`",
+                "{patch_body}"
+            );
+            let cancelled = json_ok(send_raw(
+                &server,
+                "POST",
+                &format!("/api/runs/{}/cancel{ws}", cancel_target.run_id),
+                None,
+                None,
+            ));
+            assert!(
+                cancelled["outcome"].as_str().is_some(),
+                "empty cancel body is the graceful default: {cancelled}"
+            );
+            assert_ne!(
+                run_state(&fixture, &cancel_target.run_id),
+                JobRunState::Running,
+                "an empty cancel body still cancels gracefully: {cancelled}"
+            );
+            assert_eq!(
+                run_ids(&fixture),
+                before,
+                "defaults must not add a run here"
+            );
+
+            // Missing ?workspace refuses before any drain starts, even with a server default.
+            error_code(
+                server.send("POST", "/api/workflows/auto", json!({"for_duration":"1m"})),
+                400,
+                "workspace_required",
+            );
+            error_code(
+                server.send("POST", "/api/workflows/auto/stop", json!({})),
+                400,
+                "workspace_required",
+            );
+            assert_eq!(run_ids(&fixture), before);
+
+            let mut discovered = Vec::new();
+            for body in [None, Some("")] {
+                let response = send_raw(
+                    &server,
+                    "POST",
+                    &ship,
+                    body.map(|_| "application/json"),
+                    body,
+                );
+                let submitted = json_ok(response);
+                assert_eq!(submitted["workflow"], "ship");
+                assert!(
+                    matches!(submitted["state"].as_str(), Some("submitted" | "queued")),
+                    "empty ship body must submit discovery mode: {submitted}"
+                );
+                discovered.push(submitted["run_id"].as_str().unwrap().to_string());
+            }
+            let recorded = listed_runs(&fixture);
+            assert_eq!(recorded.len(), before.len() + discovered.len());
+            for run_id in discovered {
+                let input = recorded
+                    .iter()
+                    .find(|run| run.run_id == run_id)
+                    .and_then(|run| run.input.clone())
+                    .unwrap_or_else(|| json!({}));
+                assert!(
+                    input.get("task_ids").is_none(),
+                    "an empty ship body is backlog discovery, not a smuggled task: {input}"
+                );
+            }
+        },
+    );
+}
+
+fn run_state(fixture: &Fixture, run_id: &str) -> JobRunState {
+    listed_runs(fixture)
+        .into_iter()
+        .find(|run| run.run_id == run_id)
+        .map(|run| run.state)
+        .unwrap_or_else(|| panic!("missing run {run_id}"))
 }

@@ -1,8 +1,10 @@
-use axum::body::to_bytes;
+use axum::body::{Bytes, to_bytes};
+use axum::extract::{FromRequest, Request};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, TimeZone, Timelike, Utc};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 
 pub(super) const HISTORY_DEFAULT_LIMIT: usize = 50;
@@ -335,6 +337,46 @@ fn artifact_conflict(error: orbit_core::OrbitError, code: &'static str) -> Respo
 
 pub(super) fn bad_request(message: String) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+}
+
+/// JSON body that is optional only when it is absent or empty.
+///
+/// `Option<Json<T>>` turns every extractor rejection into `None` (axum-core
+/// implements `FromRequest for Option<T>` as `T::from_request(..).await.ok()`).
+/// On these routes `T::default()` is a real action: an empty ship selection
+/// discovers the whole backlog, and a missing `force` is a graceful cancel.
+/// A zero-length body still becomes [`Default`]. Any non-empty body is parsed
+/// as JSON, and a wrong content type, syntax error, unknown field, or type
+/// mismatch is a 400 whose `error` is the parser's own text.
+pub(super) struct OptionalJson<T>(
+    /// Parsed value, or `T::default()` when the body had no bytes.
+    pub T,
+);
+
+#[axum::async_trait]
+impl<T, S> FromRequest<S> for OptionalJson<T>
+where
+    T: DeserializeOwned + Default,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let (parts, body) = req.into_parts();
+        let bytes = Bytes::from_request(Request::from_parts(parts.clone(), body), state)
+            .await
+            .map_err(|rejection| bad_request(rejection.body_text()))?;
+        if bytes.is_empty() {
+            return Ok(OptionalJson(T::default()));
+        }
+        let parsed = axum::Json::<T>::from_request(
+            Request::from_parts(parts, axum::body::Body::from(bytes)),
+            state,
+        )
+        .await
+        .map_err(|rejection| bad_request(rejection.body_text()))?;
+        Ok(OptionalJson(parsed.0))
+    }
 }
 
 pub(super) fn not_found(message: String) -> Response {
