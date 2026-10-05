@@ -34,6 +34,8 @@ pub(super) enum NewPathPolicy {
 /// every untracked path outside the scratch root. Gitignored output is never
 /// listed. Refusing a protected claimed path before staging preserves both
 /// its bytes and the exact index the worker left behind.
+/// Rename detection stays off so both source deletions and destination
+/// additions are available for task attribution and path-scoped commits.
 pub(super) fn task_candidate_paths(
     workspace_path: &Path,
     policy: NewPathPolicy,
@@ -63,7 +65,15 @@ pub(super) fn task_candidate_paths(
 
     let mut candidates = git_output_paths(
         workspace_path,
-        &["diff", "--name-only", "-z", "--relative", "HEAD", "--"],
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "--relative",
+            "HEAD",
+            "--",
+        ],
     )?
     .into_iter()
     .collect::<BTreeSet<_>>();
