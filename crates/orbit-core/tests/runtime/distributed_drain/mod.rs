@@ -55,6 +55,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod admission;
+mod allow_crew;
 mod before_pr;
 mod cancel;
 mod claimed_review;
@@ -62,6 +63,7 @@ mod desktop_completion;
 mod landing_attribution;
 mod recovery;
 mod settlement;
+mod single_pass;
 mod worktree_gc;
 
 const OWNER: &str = "hm_owner";
@@ -546,18 +548,24 @@ impl Pair {
 
     /// A pass with `slots` leaf slots.
     fn pass_with(&self, drain: &str, slots: u64) -> Value {
+        self.pass_over(drain, json!({"max_active_leaf_runs": slots}))
+    }
+
+    /// A pass whose input is the open-window, one-slot default with
+    /// `overrides` (say `for_seconds` and `window_expired`, as the job
+    /// forwards them) laid over it.
+    fn pass_over(&self, drain: &str, overrides: Value) -> Value {
+        let mut input = json!({
+            "run_id": drain,
+            "destination": self.destination,
+            "window_expired": false,
+            "max_active_leaf_runs": 1,
+        });
+        for (key, value) in overrides.as_object().expect("override object") {
+            input[key] = value.clone();
+        }
         self.follower
-            .run_deterministic(
-                "pull_refill",
-                &json!({}),
-                &json!({
-                    "run_id": drain,
-                    "destination": self.destination,
-                    "window_expired": false,
-                    "max_active_leaf_runs": slots,
-                }),
-                ToolContext::default(),
-            )
+            .run_deterministic("pull_refill", &json!({}), &input, ToolContext::default())
             .expect("a pass reports its errors instead of failing the drain")
     }
 
@@ -583,6 +591,25 @@ impl Pair {
             .expect("drain state");
         self.follower_jobs
             .mark_job_run_running(&run.run_id, Utc::now(), worker)
+            .expect("drain running");
+        run.run_id
+    }
+
+    /// A running drain submitted with `input` as its run input, the way
+    /// `orbit run auto --pull` persists the operator's options.
+    fn run_drain_with_input(&self, input: Value) -> String {
+        let run = self
+            .follower_jobs
+            .insert_job_run("workspace_pull_pipeline", 1, Utc::now(), Some(input), None)
+            .expect("drain run");
+        self.follower
+            .write_run_state(
+                &run.run_id,
+                &PipelineState::new(run.run_id.clone(), run.job_id, json!({})),
+            )
+            .expect("drain state");
+        self.follower_jobs
+            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
             .expect("drain running");
         run.run_id
     }

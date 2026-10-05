@@ -96,10 +96,11 @@ pub use run::{
     FinalRecoveryKey, FinalRecoveryObservedTask, LandingMethod, LandingObservation,
     LandingObservationStatus, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER,
     PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight,
-    RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure, ResourceThrottle,
-    RunDeliveryObservation, RunDeliveryStatus, RunIdRole, VALIDATION_ENVIRONMENT_ERROR_CODE,
-    VALIDATION_ENVIRONMENT_MARKER, is_provider_capacity_exhausted, is_provider_unavailable,
-    is_validation_environment_failure, run_id_candidate, run_id_minute_stem, run_id_role,
+    PullSinglePass, RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure,
+    ResourceThrottle, RunDeliveryObservation, RunDeliveryStatus, RunIdRole,
+    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
+    is_provider_capacity_exhausted, is_provider_unavailable, is_validation_environment_failure,
+    run_id_candidate, run_id_minute_stem, run_id_role,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

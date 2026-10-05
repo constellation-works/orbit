@@ -357,7 +357,23 @@ submitted, the command refuses unless:
 - the owner answers the probe **as that machine** and would admit this
   executor now (binary, protocol schema, before-PR review, ship mode);
 - this host can resolve the owner's before-PR review crew, when the owner has
-  `review.before_pr` on (`before_pr_reviewer_unavailable` otherwise).
+  `review.before_pr` on (`before_pr_reviewer_unavailable` otherwise);
+- every `--allow-crew` name is a crew this host configures (none blank).
+
+Without `--for` (or with `--for 0s`) the drain makes **one** admission pass:
+it requests up to `--concurrency` claims once, admits no replacement as they
+settle, and ends when they have. Over an empty backlog it asks once and ends.
+A stop or cancel before that pass takes it away; a retried or resumed drain
+never makes a second one.
+
+`--allow-crew sol,luna` restricts which crews this drain declares to the owner
+for its whole life, resume included: the owner hands it only tasks on those
+crews (or on a crew resolving to the same provider and model), and other tasks
+stay in its backlog on their own crews. It changes no configuration, task crew
+or owner pool. The owner's before-PR review crew is not restricted by it but
+must still run here. If nothing allowed is runnable, each pass reports
+`no_runnable_crew` and requests nothing; restart without the flag or with a
+crew that runs here.
 
 This host should declare the same `workflow.required_validation_commands` as
 the owner, since the owner re-checks the evidence against its own list. An

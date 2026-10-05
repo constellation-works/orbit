@@ -24,7 +24,14 @@ spec:
     no local fallback: a runtime without a federated owner route refuses.
     After three consecutive claims this drain admitted settle as failures, it
     stops requesting new work (`refusal: circuit_open`) and only keeps
-    settling; start a new drain once the cause is fixed.
+    settling; start a new drain once the cause is fixed. With `for_seconds`
+    zero the drain is authorized for one admission pass, which the first pass
+    not stopped or cancelled records in run state before it requests; later
+    passes, retries and resumed runs only settle, and the drain is done once
+    nothing is unsettled. A stop or cancel recorded mid-pass ends it before
+    the next request. Requests declare only the crews in the run input's
+    `allowed_crews`, when it has one; the owner's before-PR reviewer is
+    checked without that restriction.
   input_schema_json:
     type: object
     required: [destination]
@@ -42,6 +49,7 @@ spec:
           execution_machine_id:
             type: string
       window_expired: {}
+      for_seconds: {}
       max_active_leaf_runs: {}
       poll_sleep_seconds: {}
       idle_sleep_seconds: {}

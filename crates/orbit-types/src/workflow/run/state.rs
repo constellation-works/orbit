@@ -125,6 +125,21 @@ pub struct PullCrewPreflight {
     pub excluded: Vec<CrewExclusion>,
 }
 
+/// The one admission pass a pull drain submitted without a window is
+/// authorized for [ORB-14174].
+///
+/// A pull drain with `for_seconds` zero runs one bounded admission pass and
+/// then only settles. Its window is already expired by then, so the window
+/// cannot tell that pass apart from a timed window that ran out; this marker
+/// does. It is recorded before the pass sends its first request, so a retried
+/// or resumed run (resume carries run state) sees the pass consumed and never
+/// requests again, while the requests the pass recorded are still carried to
+/// settlement.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullSinglePass {
+    pub consumed_at: DateTime<Utc>,
+}
+
 /// A graceful cancel of a pull drain that is waiting for its launched leaves.
 ///
 /// The drain stops admitting at once and hands its unlaunched claims back to
@@ -466,6 +481,11 @@ pub struct PipelineState {
     /// the drain could not run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_crew_preflight: Option<PullCrewPreflight>,
+    /// The single admission pass of a pull drain submitted without a window,
+    /// once it has started. Survives terminalization and resume, so the pass
+    /// is never taken twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_single_pass: Option<PullSinglePass>,
     /// What this drain's last admission pass left waiting. Survives
     /// terminalization: it is how `run show` reports the backlog a finished
     /// drain never started.
@@ -533,6 +553,7 @@ impl PipelineState {
             drain_admissions_stop: None,
             drain_cancel: None,
             pull_crew_preflight: None,
+            pull_single_pass: None,
             drain_last_pass: None,
             drain_approvals: None,
             failure_activity_checkpoint: None,

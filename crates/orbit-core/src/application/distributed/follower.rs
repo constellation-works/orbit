@@ -19,10 +19,20 @@
 //! The resolved destination is persisted on the run, so every iteration, leaf
 //! and retry addresses the same owner and workspace. A destination that later
 //! stops answering is reported by the drain, never replaced by a local store.
+//!
+//! So is an operator's `--allow-crew` restriction [ORB-14174], by canonical
+//! registry name after each name is checked against this host's crews: every
+//! pass, and a resumed run, declares only those crews to the owner. It narrows
+//! the implementation crews a claim may carry; the owner's before-PR reviewer
+//! is checked on its own, and no configuration or task crew changes.
+//!
+//! A drain submitted without a window (`for_seconds` zero) is authorized for
+//! exactly one admission pass, which its run state records as consumed before
+//! that pass sends a request ([`PullSinglePass`]).
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, PullDestination};
-use orbit_types::workflow::{DrainAdmissionPass, JobRunTrigger, ResourceThrottle};
+use orbit_types::workflow::{DrainAdmissionPass, JobRunTrigger, PullSinglePass, ResourceThrottle};
 use serde_json::{Value, json};
 
 use super::{ensure_distributed_mutation_available, owner_binary_version};
@@ -38,8 +48,12 @@ const PASS_FAILURE_THRESHOLD: u32 = 3;
 pub struct WorkspacePullRequest<'a> {
     /// Host-qualified owner selector, copied from federated discovery.
     pub selector: &'a str,
+    /// The admission window. `None` or zero is one admission pass.
     pub for_seconds: Option<u64>,
     pub max_active_leaf_runs: Option<u32>,
+    /// Crews this window may run claimed work as (`--allow-crew`). Empty
+    /// means every crew the window can run.
+    pub allowed_crews: &'a [String],
     pub actor: Option<&'a str>,
 }
 
@@ -89,6 +103,36 @@ impl crate::OrbitRuntime {
         recorded.ok_or_else(|| OrbitError::Store("pull drain pass was not recorded".into()))
     }
 
+    /// Take the single admission pass of a drain submitted without a window
+    /// [ORB-14174]: `true` exactly once per run lineage, recorded before the
+    /// caller requests anything. A stop or graceful cancel already recorded
+    /// takes it away, in the same transaction that would consume it, so
+    /// neither can race the pass open. A state that cannot be read or written
+    /// is an error: the caller must not admit without the record.
+    pub(crate) fn take_pull_single_pass(&self, run_id: &str) -> Result<bool, OrbitError> {
+        let mut taken = false;
+        let update = self
+            .stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                taken = state.pull_single_pass.is_none()
+                    && state.drain_admissions_stop.is_none()
+                    && state.drain_cancel.is_none();
+                if taken {
+                    state.pull_single_pass = Some(PullSinglePass {
+                        consumed_at: chrono::Utc::now(),
+                    });
+                }
+                Ok(())
+            })?;
+        if update != orbit_types::workflow::RunStateUpdate::Updated {
+            return Err(OrbitError::Store(format!(
+                "pull drain {run_id} has no run state to record its single admission pass in"
+            )));
+        }
+        Ok(taken)
+    }
+
     /// Verify this replica against its owner and submit its pull drain.
     pub fn submit_workspace_pull_run(
         &self,
@@ -103,6 +147,9 @@ impl crate::OrbitRuntime {
                 "--concurrency must be at least 1".into(),
             ));
         }
+        // Unknown or blank names fail here, before the probe and before any
+        // run exists; canonical names are what every pass reads back.
+        let allowed_crews = self.canonical_allowed_crews(request.allowed_crews)?;
         let destination = self.resolve_pull_destination(request.selector)?;
         let mut input = json!({
             "for_seconds": request.for_seconds.unwrap_or(0),
@@ -111,6 +158,9 @@ impl crate::OrbitRuntime {
         });
         if let Some(ceiling) = request.max_active_leaf_runs {
             input["max_active_leaf_runs"] = json!(ceiling);
+        }
+        if !allowed_crews.is_empty() {
+            input[crate::runtime::engine::crew::ALLOWED_CREWS_INPUT_KEY] = json!(allowed_crews);
         }
         self.submit_pipeline_run_with_trigger(PULL_DRAIN_JOB, input, None, request.actor, trigger)
     }

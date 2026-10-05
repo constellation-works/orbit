@@ -106,6 +106,11 @@ for an auto drain it is opt-in and scoped to that run's window:
   in flight keep running to completion; nothing is cancelled. It carries no
   completion or promotion authority, and there is no automatic fallback to a
   different provider.
+- On a replica pull drain (`orbit run auto --pull <selector> --allow-crew ...`)
+  it limits the crews the drain declares to the owner, on every pass and on
+  resume, so the owner hands it only tasks on those crews. The owner's before-PR
+  reviewer is not restricted but must still run on that host. A pull drain
+  without `--for` makes one admission pass, then only settles.
 
 Runs are asynchronous: these commands return once the run is durable, printing a
 run ID. They do not claim the eventual outcome.

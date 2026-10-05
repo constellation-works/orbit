@@ -318,6 +318,14 @@ impl OrbitRuntime {
         }))
     }
 
+    /// Whether the configured crew `name` is one `allowlist` permits, by name
+    /// or by the identity it resolves to. A name that no longer resolves is
+    /// not permitted.
+    pub(crate) fn crew_allowlist_permits(&self, allowlist: &CrewAllowlist, name: &str) -> bool {
+        resolve_crew(name.trim(), self.context.settings().crews())
+            .is_ok_and(|crew| allowlist.permits(&crew))
+    }
+
     /// The allowlist carried by a run/activity input, or `None` when the run
     /// placed no restriction on its window.
     pub(crate) fn crew_allowlist_from_input(

@@ -188,15 +188,20 @@ impl PullDrain<'_> {
     /// `template` is built after reconciliation, so what this pass just
     /// settled — a leaf whose provider proved unusable, say — already shapes
     /// the requests it sends [ORB-13941]. `None` requests nothing.
+    ///
+    /// `admitting` is asked before each new request, so an operator stop or
+    /// cancel recorded while the pass runs ends it before the next one
+    /// [ORB-14174]; an error from it ends the pass too.
     pub(crate) fn refill_pass(
         &self,
         destination: &PullDestination,
         template: &dyn Fn() -> Result<Option<AdmissionRequest>, OrbitError>,
+        admitting: &dyn Fn() -> Result<bool, OrbitError>,
         ceiling: usize,
     ) -> RefillPass {
         let mut admitted = 0;
         let error = self
-            .refill_into(destination, template, ceiling, &mut admitted)
+            .refill_into(destination, template, admitting, ceiling, &mut admitted)
             .err();
         RefillPass { admitted, error }
     }
@@ -210,7 +215,12 @@ impl PullDrain<'_> {
         template: &AdmissionRequest,
         ceiling: usize,
     ) -> Result<usize, OrbitError> {
-        let pass = self.refill_pass(destination, &|| Ok(Some(template.clone())), ceiling);
+        let pass = self.refill_pass(
+            destination,
+            &|| Ok(Some(template.clone())),
+            &|| Ok(true),
+            ceiling,
+        );
         match pass.error {
             Some(error) => Err(error),
             None => Ok(pass.admitted),
@@ -221,6 +231,7 @@ impl PullDrain<'_> {
         &self,
         destination: &PullDestination,
         template: &dyn Fn() -> Result<Option<AdmissionRequest>, OrbitError>,
+        admitting: &dyn Fn() -> Result<bool, OrbitError>,
         ceiling: usize,
         admitted: &mut usize,
     ) -> Result<(), OrbitError> {
@@ -236,6 +247,9 @@ impl PullDrain<'_> {
             return Ok(());
         }
         for _ in 0..ceiling {
+            if !admitting()? {
+                break;
+            }
             let mut bytes = [0_u8; 16];
             getrandom::fill(&mut bytes).map_err(|error| {
                 OrbitError::Execution(format!("allocate pull request identity: {error}"))

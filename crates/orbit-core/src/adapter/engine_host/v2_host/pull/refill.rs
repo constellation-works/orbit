@@ -9,10 +9,24 @@
 //!
 //! Each request declares the crews this window can run [ORB-13941]: the
 //! provider preflight taken on the window's first pass, minus every crew a
-//! claimed leaf has since found unusable. The owner skips a task whose crew is
-//! not among them, so a follower never burns a claim it cannot run. It also
-//! declares this host's OS, and the owner skips a task whose `os:` tags that
-//! OS does not satisfy.
+//! claimed leaf has since found unusable, and within the drain's
+//! `--allow-crew` restriction when it has one [ORB-14174]. The owner skips a
+//! task whose crew is not among them, so a follower never burns a claim it
+//! cannot run. The owner's before-PR reviewer is checked against the window
+//! without that restriction. Each request also declares this host's OS, and
+//! the owner skips a task whose `os:` tags that OS does not satisfy.
+//!
+//! A drain submitted without a window (`for_seconds` zero) is authorized for
+//! one admission pass [ORB-14174]. Its window is expired from the start, so
+//! the pass is not read off the window: the first pass that finds no stop or
+//! cancel takes it, recording it in run state before probing or requesting,
+//! and requests up to the free slots. Every later pass — the same run's,
+//! a retry's, or a resumed run's — finds it taken and only settles. A pass
+//! held by a throttle, a shutdown or an owner refusal is still that pass.
+//! A timed window that has expired never gains one.
+//!
+//! A stop or cancel recorded while a pass is requesting ends it before the
+//! next request.
 //!
 //! The drain outlives its window. `unsettled` counts admissions that still hold
 //! a slot, and the job loop runs until the window has closed *and* that count
@@ -101,6 +115,7 @@ pub(crate) fn pull_refill(
             serde_json::from_value(value).map_err(|error| failed(format!("`destination`: {error}")))
         })?;
     let window_expired = bool_input(input, "window_expired");
+    let single_pass = single_pass_input(input);
     let ceiling = u64_input(input, "max_active_leaf_runs", DEFAULT_MAX_ACTIVE_LEAF_RUNS);
     let poll = u64_input(input, "poll_sleep_seconds", DEFAULT_POLL_SLEEP_SECONDS);
     let idle = u64_input(input, "idle_sleep_seconds", DEFAULT_IDLE_SLEEP_SECONDS);
@@ -145,6 +160,17 @@ pub(crate) fn pull_refill(
             .map_err(|error| failed(error.to_string()));
     }
 
+    // A windowless drain's only admission pass is this one if nothing has
+    // taken it yet; a timed window is open until it expires.
+    let window_open = if single_pass {
+        runtime.take_pull_single_pass(&run_id).map_err(|error| {
+            failed(format!(
+                "pull drain could not record its single admission pass: {error}"
+            ))
+        })?
+    } else {
+        !window_expired
+    };
     // Stop admitting while a host shutdown is pending: anything started now
     // would be killed by it [ORB-12968]. Settlement still runs.
     let host_shutdown = runtime.scheduled_host_shutdown();
@@ -182,7 +208,7 @@ pub(crate) fn pull_refill(
         }
     };
     let mut admitting = !degraded
-        && !window_expired
+        && window_open
         && host_shutdown.is_none()
         && resource.throttle.is_none()
         && !breaker_open
@@ -219,8 +245,15 @@ pub(crate) fn pull_refill(
                         os: runtime.host_os(),
                     }))
                 };
+                // A stop or cancel recorded mid-pass ends it before the next
+                // request; one that cannot be read ends it too.
+                let still_admitting = || {
+                    Ok(runtime.read_run_state(&run_id)?.is_none_or(|state| {
+                        state.drain_admissions_stop.is_none() && state.drain_cancel.is_none()
+                    }))
+                };
                 let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);
-                let pass = drain.refill_pass(&destination, &template, ceiling);
+                let pass = drain.refill_pass(&destination, &template, &still_admitting, ceiling);
                 refilled = true;
                 admitted = pass.admitted;
                 if let Some(failure) = pass.error {
@@ -295,7 +328,8 @@ pub(crate) fn pull_refill(
         }
     };
     let unsettled_holding = unsettled.is_none_or(|count| count > 0);
-    let done = window_expired && !unsettled_holding;
+    // A windowless drain admits on no later pass, whether or not this one did.
+    let done = (single_pass || window_expired) && !unsettled_holding;
     let sleep_seconds = if admitted > 0 {
         0
     } else if unsettled_holding || error.is_some() || resource.throttle.is_some() {
@@ -312,6 +346,17 @@ pub(crate) fn pull_refill(
             "pull drain pass did not complete; retrying next iteration",
         );
     }
+    let no_runnable_crew = if crews
+        .as_ref()
+        .is_some_and(|window| window.allowed.is_some())
+    {
+        "no_runnable_crew: no crew this drain's --allow-crew permits can run on this host for \
+         this window; see `crews.allowed` and `crews.excluded`, then start a new drain with \
+         crews that run here"
+    } else {
+        "no_runnable_crew: every configured crew is excluded on this host for this window; see \
+         `crews.excluded`, fix the providers, and start a new drain"
+    };
     let refusal = refusal
         .or_else(|| {
             (!refused.is_empty()).then(|| {
@@ -332,13 +377,7 @@ pub(crate) fn pull_refill(
                 )
             })
         })
-        .or_else(|| {
-            runs_nothing.then(|| {
-                "no_runnable_crew: every configured crew is excluded on this host for this \
-                 window; see `crews.excluded`, fix the providers, and start a new drain"
-                    .to_string()
-            })
-        });
+        .or_else(|| runs_nothing.then(|| no_runnable_crew.to_string()));
     let health = runtime
         .record_pull_pass(&run_id, resource.throttle.clone(), error.as_deref())
         .map_err(|error| failed(format!("pull drain could not record pass health: {error}")))?;
@@ -662,12 +701,27 @@ fn reviewer_refusal(
     else {
         return Ok(None);
     };
+    // The window without its `--allow-crew` restriction: that selects the
+    // claims' implementation crews, not the review each one owes.
     Ok(crew_window(runtime, run_id)?
-        .capability()
-        .unrunnable_reason(Some(crew))
+        .reviewer_unrunnable_reason(crew)
         .map(|reason| {
             format!("before_pr_reviewer_unavailable: the owner's before-PR review {reason}")
         }))
+}
+
+/// Whether the drain was submitted without a window: `for_seconds` zero, as
+/// the job forwards it. A pass given no `for_seconds` at all is a timed one.
+fn single_pass_input(input: &Value) -> bool {
+    match input.get("for_seconds") {
+        Some(Value::Number(number)) => number.as_f64() == Some(0.0),
+        Some(Value::String(text)) => {
+            let text = text.trim();
+            text.is_empty() || text.parse::<f64>().is_ok_and(|seconds| seconds == 0.0)
+        }
+        Some(Value::Null) => true,
+        _ => false,
+    }
 }
 
 /// A boolean templated into activity input, which renders as a string.

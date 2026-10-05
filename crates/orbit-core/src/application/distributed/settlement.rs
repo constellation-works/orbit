@@ -316,19 +316,30 @@ impl DrainClaimedLeaf {
 ///
 /// The window's provider preflight, taken once when it opened, minus every
 /// crew a claimed leaf of this drain found unusable since — a provider that
-/// refused to authenticate, say. Derived from the drain's own admission
-/// records, so it survives a follower restart and ends with the drain.
+/// refused to authenticate, say — and, when the drain was submitted with
+/// `--allow-crew`, outside that restriction [ORB-14174]. Derived from the
+/// drain's run input and its own admission records, so it survives a follower
+/// restart and a resume, and ends with the drain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullCrewWindow {
     /// When the preflight ran; `None` while the drain has not taken one.
     pub checked_at: Option<DateTime<Utc>>,
-    /// Crews the window can run. `None` without a preflight: then every crew
-    /// not excluded is offered to the owner.
+    /// Crews the window can run claimed work as. `None` without a preflight
+    /// or restriction: then every crew not excluded is offered to the owner.
     pub runnable: Option<Vec<String>>,
+    /// The drain's `--allow-crew` restriction, by canonical registry name;
+    /// `None` when it runs every crew the window can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<Vec<String>>,
     /// The crew a task naming none runs as on this host.
     pub default_crew: Option<String>,
     /// Crews excluded for the rest of the window, with why.
     pub excluded: Vec<CrewExclusion>,
+    /// Crews the window can run before `allowed` narrows them. The owner's
+    /// before-PR reviewer runs as one of these: the restriction selects the
+    /// implementation crews a claim may carry, not the review it owes.
+    #[serde(skip)]
+    reviewable: Option<Vec<String>>,
 }
 
 impl PullCrewWindow {
@@ -342,6 +353,19 @@ impl PullCrewWindow {
         }
     }
 
+    /// Why the owner's before-PR reviewer crew cannot run in this window, or
+    /// `None` when it can. Judged without `allowed`: only exclusions and the
+    /// preflight count.
+    #[must_use]
+    pub fn reviewer_unrunnable_reason(&self, crew: &str) -> Option<String> {
+        AdmissionCrewCapability {
+            runnable: self.reviewable.clone(),
+            default_crew: None,
+            excluded: self.excluded.clone(),
+        }
+        .unrunnable_reason(Some(crew))
+    }
+
     /// Whether the window can run nothing at all: every configured crew is
     /// excluded, so requesting work would only collect idle receipts.
     #[must_use]
@@ -352,7 +376,10 @@ impl PullCrewWindow {
     /// One line per excluded crew, for a terminal report.
     #[must_use]
     pub fn describe(&self) -> Vec<String> {
-        let mut lines = Vec::with_capacity(self.excluded.len() + 1);
+        let mut lines = Vec::with_capacity(self.excluded.len() + 2);
+        if let Some(allowed) = &self.allowed {
+            lines.push(format!("allowed (--allow-crew): {}", allowed.join(", ")));
+        }
         if let Some(runnable) = &self.runnable {
             lines.push(if runnable.is_empty() {
                 "runnable: none".to_string()
@@ -561,7 +588,7 @@ impl crate::OrbitRuntime {
                 reason: format!("{task} failed: {}", unavailable.reason),
             });
         }
-        let runnable = preflight.as_ref().map(|preflight| {
+        let reviewable: Option<Vec<String>> = preflight.as_ref().map(|preflight| {
             preflight
                 .runnable
                 .iter()
@@ -569,9 +596,43 @@ impl crate::OrbitRuntime {
                 .cloned()
                 .collect()
         });
+        // The run input is the authority for the restriction, as for an
+        // owner drain: a name this host no longer configures fails the pass
+        // rather than widening it.
+        let input = self
+            .stores()
+            .jobs()
+            .get_job_run(drain_run_id)?
+            .and_then(|run| run.input)
+            .unwrap_or(serde_json::Value::Null);
+        let allowlist = self.crew_allowlist_from_input(&input)?;
+        let runnable = match &allowlist {
+            None => reviewable.clone(),
+            Some(allowlist) => Some(match &reviewable {
+                Some(crews) => crews
+                    .iter()
+                    .filter(|crew| self.crew_allowlist_permits(allowlist, crew))
+                    .cloned()
+                    .collect(),
+                None => allowlist
+                    .names()
+                    .into_iter()
+                    .filter(|crew| !excluded.iter().any(|exclusion| exclusion.crew == *crew))
+                    .map(ToOwned::to_owned)
+                    .collect(),
+            }),
+        };
         Ok(PullCrewWindow {
             checked_at: preflight.as_ref().map(|preflight| preflight.checked_at),
             runnable,
+            allowed: allowlist.map(|allowlist| {
+                allowlist
+                    .names()
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect()
+            }),
+            reviewable,
             default_crew: match preflight {
                 Some(preflight) => preflight.default_crew,
                 None => self
