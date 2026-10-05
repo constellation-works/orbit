@@ -264,9 +264,7 @@ fn doctor_output(fixture: &Fixture, path: Option<&OsStr>) -> DoctorOutput {
     });
     let review_row = rows
         .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["check"] == "review")
+        .and_then(|rows| rows.iter().find(|row| row["check"] == "review"))
         .cloned()
         .unwrap_or_else(|| {
             panic!(
