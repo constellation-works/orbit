@@ -17,6 +17,7 @@ use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::jobs::FAILED_RUN_STATES;
 use super::pagination::TaskPageQuery;
 use super::{HISTORY_DEFAULT_LIMIT, bad_request, blocking, bounded_limit, server_error};
 use crate::projections::TaskListProjection;
@@ -252,15 +253,16 @@ fn workspace_job_runs(
             ..Default::default()
         })
     };
-    match state_filter {
-        AllJobRunsState::All => list(None),
-        AllJobRunsState::Failed => list(Some(JobRunState::Failed)),
-        AllJobRunsState::Active => {
-            let mut runs = list(Some(JobRunState::Pending))?;
-            runs.extend(list(Some(JobRunState::Running))?);
-            Ok(runs)
-        }
+    let states: &[JobRunState] = match state_filter {
+        AllJobRunsState::All => return list(None),
+        AllJobRunsState::Failed => &FAILED_RUN_STATES,
+        AllJobRunsState::Active => &[JobRunState::Pending, JobRunState::Running],
+    };
+    let mut runs = Vec::new();
+    for &run_state in states {
+        runs.extend(list(Some(run_state))?);
     }
+    Ok(runs)
 }
 
 fn run_timestamp(run: &JobRun) -> DateTime<Utc> {

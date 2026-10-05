@@ -693,7 +693,7 @@ function sortedRunsForDisplay(runs) {
 
 function runMatchesFilter(run) {
   if (runFilter === "active") return ACTIVE_RUN_STATES.has(run && run.state);
-  if (runFilter === "failed") return run && run.state === "failed";
+  if (runFilter === "failed") return RESUMABLE_RUN_STATES.has(run && run.state);
   return true;
 }
 
@@ -737,7 +737,7 @@ function runsAreLoading(runs, meta) {
 
 function runsEmptyText() {
   if (runFilter === "failed") {
-    return "No failed job runs (durable Failed state, no time window).";
+    return "No failed, timed-out, or interrupted job runs (no time window).";
   }
   if (runFilter === "active") {
     return "No pending or running job runs.";

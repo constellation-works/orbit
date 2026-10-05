@@ -1584,7 +1584,7 @@ function renderHealthStrip(data) {
   const failed = $("tile-failed");
   if (failed) {
     failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
-    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Distinct from Runs' failed filter (durable Failed state, no window, most recent page) and Errors (step/event failures this month). Opens failed runs.`;
+    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Recent Runs' Failed filter uses the same outcomes with no time window. Errors lists step and event failures this month. Opens those runs.`;
   }
   const windowTag = $("kpi-window");
   if (windowTag) windowTag.textContent = windowLabel;
