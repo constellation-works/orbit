@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_exec::{
     EnvironmentMode, ExecRequest, LandlockBoundary, NETWORK_LANDLOCK_ABI, StdinMode,
-    WRITE_LANDLOCK_ABI, linux_landlock_read_boundary, probe_landlock, spawn_under_linux_landlock,
-    spawn_under_linux_landlock_boundary,
+    WRITE_LANDLOCK_ABI, grants_read, linux_landlock_boundary_grants, linux_landlock_read_boundary,
+    probe_landlock, spawn_under_linux_landlock, spawn_under_linux_landlock_boundary,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -1011,4 +1011,116 @@ fn a_write_file_at_a_read_deny_cannot_read_that_file() {
             .contains("OVERWRITE"),
         "the named write file stays writable"
     );
+}
+
+/// A `$HOME` holding `gh`'s sign-in and an `$ORBIT_ROOT` holding the plugin
+/// secret store, both named by the child's environment. The host grants
+/// follow that environment (`$GH_CONFIG_DIR` defaults under `$HOME`), so each
+/// tree is reachable through a tool state grant unless the deny carves it.
+struct HostToolState {
+    fixture: Fixture,
+    gh_token: PathBuf,
+    plugin_secret: PathBuf,
+    orbit_sibling: PathBuf,
+    boundary: LandlockBoundary,
+}
+
+impl HostToolState {
+    fn new() -> Self {
+        let fixture = Fixture::new();
+        let home = fixture.host_root().join("home");
+        let orbit_root = fixture.host_root().join("orbit");
+        let gh_token = home.join(".config/gh/hosts.yml");
+        let plugin_secret = orbit_root.join("state/plugin-secrets/x");
+        let orbit_sibling = orbit_root.join("bin/visible.txt");
+        for (path, contents) in [
+            (&gh_token, "GH_TOKEN_SENTINEL"),
+            (&plugin_secret, "PLUGIN_SECRET_SENTINEL"),
+            (&orbit_sibling, "ORBIT_SIBLING_SENTINEL"),
+        ] {
+            fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+            fs::write(path, contents).expect("write host file");
+        }
+        let fixture = fixture
+            .with_env("HOME", &home)
+            .with_env("ORBIT_ROOT", &orbit_root);
+        let boundary = LandlockBoundary {
+            read: vec![fixture.root()],
+            read_denies: vec![
+                home.join(".config/gh"),
+                orbit_root.join("state/plugin-secrets"),
+            ],
+            read_exclusions: Vec::new(),
+            write: vec![],
+            write_files: vec![],
+            deny_tcp: false,
+        };
+        Self {
+            fixture,
+            gh_token,
+            plugin_secret,
+            orbit_sibling,
+            boundary,
+        }
+    }
+
+    fn request(&self, script: &str) -> ExecRequest {
+        ExecRequest {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            current_dir: Some(self.fixture.root().display().to_string()),
+            timeout_ms: Some(10_000),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::ClearAndSet(self.fixture.environment.clone()),
+            debug: false,
+        }
+    }
+}
+
+/// Grants are a union: a host tool state grant on `$GH_CONFIG_DIR` or
+/// `$ORBIT_ROOT` would reopen a tree the boundary denies unless the deny is
+/// carved out of the host grants too. The rest of the tree stays readable.
+#[test]
+fn a_read_deny_is_carved_out_of_the_host_tool_state_grants() {
+    let state = HostToolState::new();
+    let grants = linux_landlock_boundary_grants(&state.request("true"), &state.boundary)
+        .expect("compile boundary");
+
+    assert!(
+        !grants_read(&grants, &state.gh_token),
+        "the gh sign-in under a denied `$HOME/.config/gh` must not be granted: {grants:?}"
+    );
+    assert!(
+        !grants_read(&grants, &state.plugin_secret),
+        "the plugin secret store under `$ORBIT_ROOT` must not be granted: {grants:?}"
+    );
+    assert!(
+        grants_read(&grants, &state.orbit_sibling),
+        "the rest of `$ORBIT_ROOT` keeps its host grant: {grants:?}"
+    );
+}
+
+#[test]
+fn a_bounded_child_cannot_read_a_denied_tree_through_a_host_tool_state_grant() {
+    if skip_write_boundary() {
+        return;
+    }
+    let state = HostToolState::new();
+    for (path, sentinel) in [
+        (&state.gh_token, "GH_TOKEN_SENTINEL"),
+        (&state.plugin_secret, "PLUGIN_SECRET_SENTINEL"),
+    ] {
+        spawn_bounded(
+            &state.fixture,
+            &state.boundary,
+            &format!("cat {}", path.display()),
+        )
+        .assert_withheld(sentinel);
+    }
+    spawn_bounded(
+        &state.fixture,
+        &state.boundary,
+        &format!("cat {}", state.orbit_sibling.display()),
+    )
+    .assert_returned("ORBIT_SIBLING_SENTINEL");
 }

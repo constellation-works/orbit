@@ -18,6 +18,7 @@ use orbit_common::OrbitError;
 use orbit_types::policy::{CompiledFsRules, FsOperation, GlobReach, ResolvedFsProfile};
 
 use super::LandlockPathGrant;
+use super::grants::LandlockGrant;
 
 /// The workspace half of a compiled ruleset, and the exclusions it leaves to
 /// another layer.
@@ -358,6 +359,39 @@ fn carve_out_boundary_in(
         grants.extend(carve_out_boundary_in(&child, unlistable, listable, walked)?);
     }
     Ok(grants)
+}
+
+/// Narrow grants compiled without the boundary's restrictions — the host
+/// runtime and tool state set — so none of them reaches a path in
+/// `unlistable` or `listable`.
+///
+/// Landlock grants are a union, so a host grant on a tree above a read deny
+/// would hand back what [`carve_out_boundary`] withheld from the boundary's
+/// own roots: `$GH_CONFIG_DIR` or `$ORBIT_ROOT` granted whole beside a deny on
+/// that tree. A grant at or inside a restriction is dropped and a read tree
+/// above one is carved like a boundary root. A list-only grant above an
+/// `unlistable` path is dropped as well, because listing reaches the whole
+/// hierarchy beneath it; its allowed children already carry their own grants.
+pub(super) fn carve_out_grants(
+    grants: Vec<LandlockPathGrant>,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    let mut carved = Vec::new();
+    for grant in grants {
+        if !overlaps_read_restriction(&grant.path, unlistable, listable) {
+            carved.push(grant);
+        } else if contained_in_read_restriction(&grant.path, unlistable, listable) {
+            continue;
+        } else if grant.grant == LandlockGrant::ReadTree {
+            carved.extend(carve_out_boundary(&grant.path, unlistable, listable)?);
+        } else if grant.grant == LandlockGrant::ListOnly
+            && !covers_restriction(&grant.path, unlistable)
+        {
+            carved.push(grant);
+        }
+    }
+    Ok(carved)
 }
 
 /// Grant `root` writable without a readable ancestor over any path in
