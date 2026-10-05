@@ -502,17 +502,17 @@ impl OrbitRuntime {
         self.coordination_write_owner.as_deref()
     }
 
-    /// Returns in-process events recorded during this session only. Not persisted across process
-    /// boundaries — the log is empty at startup and discarded on exit. For the persistent CLI
-    /// audit log written on every invocation, see [`OrbitRuntime::list_audit_events`].
+    /// Returns at most `limit` recent in-process session events, newest first.
+    /// The log retains only the newest [`event_bus::SESSION_EVENT_CAPACITY`] events;
+    /// session IDs remain stable when older events are discarded. Only returned events are cloned.
+    /// The log is empty at startup and discarded on exit. For the persistent CLI audit log,
+    /// see [`OrbitRuntime::list_audit_events`].
     pub fn list_session_events(&self, limit: usize) -> Result<Vec<Audit>, OrbitError> {
-        let events = self.event_log.snapshot();
-        let audits = events
+        let audits = self
+            .event_log
+            .recent(limit)
             .into_iter()
-            .enumerate()
-            .map(|(idx, event)| orbit_event_to_audit((idx + 1) as i64, event))
-            .rev()
-            .take(limit)
+            .map(|(id, event)| orbit_event_to_audit(id, event))
             .collect();
         Ok(audits)
     }

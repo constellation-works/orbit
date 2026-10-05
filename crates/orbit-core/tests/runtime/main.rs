@@ -18,6 +18,7 @@ mod relation_auto_close;
 mod retired_stubs;
 mod review_gate_audit;
 mod sandbox_off;
+mod session_events;
 
 mod host_os_routing;
 mod host_resources;
