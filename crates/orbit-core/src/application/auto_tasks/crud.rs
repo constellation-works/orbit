@@ -96,6 +96,7 @@ impl OrbitRuntime {
         &self,
         mut params: AutoTaskAddParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         reject_retired_delivery_coverage(&params.schedule)?;
         params.template.required_tools = normalize_required_tools(params.template.required_tools);
         let now = chrono::Utc::now().to_rfc3339();
@@ -201,6 +202,7 @@ impl OrbitRuntime {
         name: &str,
         params: AutoTaskUpdateParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         if let Some(request) = &params.waive_batch {
             let definition = self.require_validated_auto_task(name)?;
             if params.description.is_some()
@@ -257,6 +259,7 @@ impl OrbitRuntime {
         name: &str,
         enabled: bool,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         self.edit_auto_task(name, |definition| definition.enabled = enabled)
     }
 

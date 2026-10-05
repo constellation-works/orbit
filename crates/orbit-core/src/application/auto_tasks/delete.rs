@@ -81,6 +81,7 @@ impl OrbitRuntime {
         &self,
         params: AutoTaskDeleteParams,
     ) -> Result<AutoTaskDeleteReport, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         let name = params.name.as_str();
         let path = definition_path(&self.paths().local_dir, name);
         let reason = params
@@ -177,6 +178,7 @@ impl OrbitRuntime {
     /// opt-out a delete recorded for it. Refuses a name Orbit does not ship
     /// and a definition that already exists.
     pub fn auto_task_restore(&self, name: &str) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         let (_, embedded) = DEFAULT_AUTO_TASK_FILES
             .iter()
             .find(|(shipped, _)| *shipped == name)
