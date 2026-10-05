@@ -255,6 +255,7 @@ fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
     let source_root = TempDir::new().unwrap();
     let target_root = TempDir::new().unwrap();
     let archive = source_root.path().join("tasks.tar.zst");
+    std::fs::write(&archive, b"previous backup").unwrap();
     let max_id = format!("ORB-{ORB_TASK_ID_MAX}");
 
     let source = Coordinated::open(source_root.path());
@@ -263,6 +264,24 @@ fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
         .seed_allocator_start(ORB_TASK_ID_MAX)
         .unwrap();
     assert_eq!(source.create_task("final id").id, max_id);
+    let destination_dir = source_root.path().join("archive-directory");
+    std::fs::create_dir(&destination_dir).unwrap();
+    let entries_before = std::fs::read_dir(source_root.path()).unwrap().count();
+    export_tasks(
+        &source.registry,
+        PARTITION_ID,
+        ExportSelection::All,
+        &destination_dir,
+        Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
+    )
+    .expect_err("publishing an archive over a directory must fail");
+    assert!(destination_dir.is_dir());
+    assert_eq!(std::fs::read(&archive).unwrap(), b"previous backup");
+    assert_eq!(
+        std::fs::read_dir(source_root.path()).unwrap().count(),
+        entries_before,
+        "failed publication must remove its staging file"
+    );
     export_tasks(
         &source.registry,
         PARTITION_ID,
@@ -271,6 +290,11 @@ fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
         Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
     )
     .expect("export");
+    assert_eq!(
+        std::fs::read_dir(source_root.path()).unwrap().count(),
+        entries_before,
+        "successful replacement must leave no staging file"
+    );
 
     let target = TaskRegistryStore::open(&task_registry_path(target_root.path())).unwrap();
     let outcome =
