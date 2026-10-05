@@ -54,13 +54,10 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.task.artifact.put" => A::destructive(true),
         "orbit.task.review_reset" => A::destructive(false),
 
-        // Starts an operator-admitted reconciliation run; a repeated submit
-        // replays it rather than starting another.
-        "orbit.task.reconcile_review" => A::additive(false),
-
         // Starts work outside Orbit's own state: an agent, a workflow run's
         // agents, or an arbitrary process.
-        "orbit.pipeline.invoke"
+        "orbit.task.reconcile_review"
+        | "orbit.pipeline.invoke"
         | "orbit.workflow.auto"
         | "orbit.routine.control"
         | "orbit.agent.invoke"
