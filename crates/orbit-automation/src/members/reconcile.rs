@@ -174,11 +174,10 @@ pub(super) fn reconcile(
                 }
             }
 
-            let Some(mut settled) = members.active.take() else {
+            let Some(settled) = members.active.take() else {
                 return Ok(state);
             };
-            settled.exhausted = true;
-            for member in settled.members().to_vec() {
+            for member in settled.members() {
                 if applied_keys.contains(&member.key) {
                     continue;
                 }
@@ -188,7 +187,9 @@ pub(super) fn reconcile(
                     .cloned()
                     .unwrap_or_else(|| "no_member_evidence".into());
                 members.withheld.insert(member.key.clone(), reason);
-                members.failed.insert(member.key, settled.clone());
+                if let Some(record) = settled.failure_record(&member.key) {
+                    members.failed.insert(member.key.clone(), record);
+                }
             }
             fit_failed(host, members, &settled)?;
 

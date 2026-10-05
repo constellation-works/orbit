@@ -17,7 +17,11 @@ exercise cursors, overlap admission and coverage receipts; dispatch adapters
 provide the lifecycle outcomes that Core normally supplies.
 `scheduling/failed_members.rs` drives a member consumer through more than 1,000
 distinct failed members that leave the source, beside a backlog of withheld
-task ids, and shows every pass still commits and admits the next wave.
+task ids, and shows every pass still commits and admits the next wave. It also
+shows each failed member keeps only its own record of the attempt, that the
+store refuses missing, outside, mismatched-attempt, sibling, forged-fingerprint
+and whole-batch records (and one for a member the receipt certified), and that
+a checkpoint whose records carry their whole batch resumes and is compacted.
 
 Materialization is owned by Core. Its migration coverage joins the existing
 [`workspace_sync`](../../orbit-cli/tests/workspace/workspace_sync.rs) module of the CLI `workspace` integration binary

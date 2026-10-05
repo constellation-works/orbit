@@ -754,6 +754,18 @@ retires the failed records of departed members when the attempt settles; if
 every failed member is still observed, moving those tasks out of the statuses
 the consumer queries frees the room.
 
+Each failed record holds only its own member: the exhausted attempt's identity,
+attempt number, budget, deadline and action with that one member at the
+fingerprint it failed at, so failed state grows with the members retained
+rather than with their batches. The store accepts a new record only as the
+exact record of the attempt the checkpoint retires, for a member that attempt
+carried and its receipt did not certify. The record keeps the single-member
+shape every release since batching reads as a batch of one, so a running older
+client decodes, honours and commits over it unchanged. A record an older
+release wrote with its whole batch still reads and suppresses as before; the
+next observation pass compacts it to its own member, a rewrite the store
+accepts only when it keeps that member exactly.
+
 `orbit routine show --json`, routine status and the dashboard expose the shared
 state projection: pending fingerprints, fresh/unready assessments, withheld
 reasons, consumed attempts, absolute deadlines, continuation and immutable

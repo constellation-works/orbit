@@ -31,7 +31,7 @@ use orbit_automation::routines::sweep::{
 use orbit_common::{OrbitError, process::run_bounded_capped, test_env};
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::{
-    AutomationDiagnostic, SourceRevision,
+    AutomationDiagnostic, AutomationState, SourceRevision,
     members::{
         MemberAttempt, MemberBatchEvidence, MemberEvidence, StateMember, StateTrigger,
         StateTriggerKind,
