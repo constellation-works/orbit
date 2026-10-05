@@ -33,9 +33,10 @@ use orbit_store::compose::{
 use orbit_store::contracts::{
     ActiveTaskReservation, AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest,
     AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ClaimEvidence,
-    ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim,
-    ExecutionLocation, HandoffObservation, HandoffReviewObservation, HandoffReviewRefusal,
-    JobRunStoreBackend, PullDestination, TaskCreateParams,
+    ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ClaimWorkerUpdate,
+    ExecutionClaim, ExecutionClaimPhase, ExecutionLocation, HandoffObservation,
+    HandoffReviewObservation, HandoffReviewRefusal, JobRunStoreBackend, PullDestination,
+    TaskCreateParams,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
@@ -1671,4 +1672,202 @@ fn before_pr_handoffs_are_accepted_only_with_matching_passing_evidence() {
         error.contains(HandoffReviewRefusal::ReviewEvidenceUnexpected.as_str()),
         "{error}"
     );
+}
+
+fn text_artifact(path: &str, body: &str) -> TaskArtifact {
+    TaskArtifact {
+        path: path.to_string(),
+        content: body.as_bytes().to_vec(),
+        media_type: "text/plain".to_string(),
+        created_by: None,
+    }
+}
+
+fn invalid_input(error: OrbitError) -> String {
+    match error {
+        OrbitError::InvalidInput(message) => message,
+        other => panic!("expected InvalidInput before commit, got {other}"),
+    }
+}
+
+/// Non-canonical claim artifact paths must not be stored raw. A trailing
+/// slash or repeated separator is written under the canonical path, and two
+/// spellings of one path are refused before the journal decision, so a later
+/// `get_task` can still read the bundle.
+#[test]
+fn claim_evidence_stores_canonical_artifact_paths() {
+    if !isolated("claim_evidence_stores_canonical_artifact_paths") {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let task = owner.create_task("artifact paths");
+    let request = owner_request("paths");
+    let claim = owner.pull(&request).claim.expect("claim");
+    assert_eq!(claim.task_id, task.id);
+    let unbound = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        None,
+    );
+    let worker = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        Some(leaf_run(&claim)),
+    );
+    let mutate = |auth: &ClaimInvocation, id: &str, mutation: &ClaimMutation| {
+        owner
+            .backends
+            .commit_boundary
+            .mutate_execution_claim(Some(auth), id, mutation)
+    };
+
+    let duplicate = mutate(
+        &unbound,
+        "evidence-duplicate",
+        &ClaimMutation::Evidence(ClaimEvidence {
+            artifacts: vec![text_artifact("a/b", "one"), text_artifact("a//b", "two")],
+            ..Default::default()
+        }),
+    )
+    .expect_err("both spellings of one path");
+    assert!(
+        invalid_input(duplicate).contains("duplicate artifact path"),
+        "Evidence of a/b and a//b is refused before commit"
+    );
+    assert!(
+        owner
+            .backends
+            .task
+            .task
+            .get_task(&task.id)
+            .unwrap()
+            .is_some(),
+        "a refused Evidence leaves the task readable"
+    );
+    assert_eq!(
+        owner
+            .backends
+            .task
+            .artifact
+            .get_task_artifacts(&task.id)
+            .unwrap()
+            .unwrap(),
+        Vec::<TaskArtifact>::new(),
+        "a refused Evidence commits no artifact"
+    );
+
+    mutate(
+        &unbound,
+        "evidence-notes",
+        &ClaimMutation::Evidence(ClaimEvidence {
+            artifacts: vec![text_artifact("notes/", "note")],
+            ..Default::default()
+        }),
+    )
+    .expect("store notes/ under its canonical path");
+    mutate(
+        &unbound,
+        "bind",
+        &ClaimMutation::Bind {
+            run: leaf_run(&claim),
+            ship: request.ship,
+        },
+    )
+    .expect("bind");
+    mutate(
+        &worker,
+        "update-separator",
+        &ClaimMutation::Update(ClaimWorkerUpdate {
+            evidence: ClaimEvidence {
+                artifacts: vec![text_artifact("a//b", "body")],
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+    )
+    .expect("store a//b under its canonical path");
+
+    let refused_fail = mutate(
+        &worker,
+        "fail-duplicate",
+        &ClaimMutation::Fail(ClaimEvidence {
+            summary: Some("blocked".to_string()),
+            artifacts: vec![text_artifact("a/b", "one"), text_artifact("a//b", "two")],
+            ..Default::default()
+        }),
+    )
+    .expect_err("Fail carrying both spellings");
+    assert!(
+        invalid_input(refused_fail).contains("duplicate artifact path"),
+        "Fail of a/b and a//b is refused before commit"
+    );
+    assert_eq!(owner.task_status(&task.id), TaskStatus::InProgress);
+    assert_eq!(
+        owner.claims()[0].phase,
+        ExecutionClaimPhase::Running,
+        "a refused Fail does not settle the claim"
+    );
+    let stored = owner
+        .backends
+        .task
+        .artifact
+        .get_task_artifacts(&task.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored
+            .iter()
+            .map(|artifact| (artifact.path.as_str(), artifact.content.as_slice()))
+            .collect::<Vec<_>>(),
+        vec![("a/b", b"body".as_slice()), ("notes", b"note".as_slice())],
+        "Evidence and Update persist canonical paths"
+    );
+    let manifest = owner
+        .backends
+        .task
+        .artifact
+        .get_task_artifact_manifest(&task.id)
+        .unwrap()
+        .unwrap();
+    for file in &manifest {
+        assert_eq!(
+            file.blob,
+            format!("files/{}", file.path),
+            "manifest blob matches the canonical file"
+        );
+    }
+
+    mutate(
+        &worker,
+        "fail-notes",
+        &ClaimMutation::Fail(ClaimEvidence {
+            summary: Some("stopped".to_string()),
+            artifacts: vec![text_artifact("notes/", "final")],
+            ..Default::default()
+        }),
+    )
+    .expect("Fail stores a canonical path");
+    assert_eq!(owner.task_status(&task.id), TaskStatus::Blocked);
+    assert!(
+        owner
+            .backends
+            .task
+            .task
+            .get_task(&task.id)
+            .unwrap()
+            .is_some(),
+        "get_task succeeds after a Fail that carried notes/"
+    );
+    let notes = owner
+        .backends
+        .task
+        .artifact
+        .get_task_artifact(&task.id, "notes/")
+        .unwrap()
+        .expect("canonical notes");
+    assert_eq!(notes.path, "notes");
+    assert_eq!(notes.content, b"final");
 }
