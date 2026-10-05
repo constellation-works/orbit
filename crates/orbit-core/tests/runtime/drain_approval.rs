@@ -7,11 +7,12 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, Task, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::workflow::{ChildDispatch, PipelineState};
+use orbit_types::task::CONTEXT_CREATION_AUTHORIZED_EVENT;
+use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -98,6 +99,78 @@ impl Workspace {
                 ..Default::default()
             })
             .unwrap()
+    }
+
+    /// A qualifying proposed task that will also create `file:src/new.rs`,
+    /// declared the way an operator surface declares a creation target.
+    fn creation_task(&self, title: &str) -> Task {
+        let context_files = vec!["file:README.md".to_string(), NEW_FILE.to_string()];
+        let context_creation = self
+            .runtime
+            .authorize_missing_context(&context_files)
+            .unwrap();
+        self.runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("Ship {title}."),
+                acceptance_criteria: vec!["The change is in place.".into()],
+                plan: "Edit README.md and add src/new.rs.".into(),
+                status: Some(TaskStatus::Proposed),
+                context_files,
+                complexity: TaskComplexity::Low,
+                context_creation,
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    fn edit(&self, task: &Task, params: TaskUpdateParams) {
+        self.runtime
+            .update_task_with_identity(&task.id, params, Some("codex".into()), None)
+            .unwrap();
+    }
+
+    /// A comment changes nothing the pilot judged; on a task holding a
+    /// creation grant it still re-seals the grant in history.
+    fn comment(&self, task: &Task) {
+        self.edit(
+            task,
+            TaskUpdateParams {
+                comment: Some("Still relevant.".into()),
+                ..Default::default()
+            },
+        );
+    }
+
+    /// A real operator edit the drain must treat as a change.
+    fn rename(&self, task: &Task) {
+        self.edit(
+            task,
+            TaskUpdateParams {
+                title: Some(format!("{} (revised)", task.title)),
+                ..Default::default()
+            },
+        );
+    }
+
+    fn last_event(&self, task: &Task) -> String {
+        self.runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .event
+    }
+
+    /// Finish the pilot child `pilot` without applying any result, as a
+    /// failed or stale pilot does.
+    fn pilot_failed(&self, pilot: &str) {
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            self.runtime.sqlite_store().unwrap(),
+            self.runtime.workspace_id().unwrap(),
+        );
+        jobs.finalize_job_run(pilot, JobRunState::Failed, Utc::now(), None)
+            .unwrap();
     }
 
     fn status(&self, task: &Task) -> TaskStatus {
@@ -193,6 +266,8 @@ impl Workspace {
         self.action("apply_task_pilot_results", input)
     }
 }
+
+const NEW_FILE: &str = "file:src/new.rs";
 
 /// A clean pilot assessment; callers add findings.
 fn assessment(task: &Task) -> Value {
@@ -449,4 +524,122 @@ fn drain_authority_is_verified_before_any_approval() {
         .unwrap_err();
     assert!(refused.contains("did not dispatch"), "{refused}");
     assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+}
+
+#[test]
+fn a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let original = workspace.task("original", &[], &["file:README.md"], TaskComplexity::Low);
+    let creating = workspace.creation_task("creating");
+    let ordinary = workspace.task("ordinary", &[], &["file:README.md"], TaskComplexity::Low);
+
+    let selection = workspace.select(&drain);
+    assert_eq!(
+        selection["task_ids"],
+        json!([original.id, creating.id, ordinary.id])
+    );
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let duplicate = |task: &Task| {
+        let mut duplicated = assessment(task);
+        duplicated["context_files_after"] = json!(task.context_files);
+        duplicated["duplicate_of"] =
+            json!({"task_id": original.id, "evidence": "Both tasks make the same README edit."});
+        duplicated
+    };
+    let applied = workspace
+        .pilot(
+            &drain,
+            &pilot,
+            vec![
+                assessment(&original),
+                duplicate(&creating),
+                duplicate(&ordinary),
+            ],
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(workspace.status(&creating), TaskStatus::Proposed);
+    assert_eq!(
+        workspace.last_event(&creating),
+        CONTEXT_CREATION_AUTHORIZED_EVENT,
+        "the pilot write re-seals the creation grant after its hold marker"
+    );
+
+    // Held with the pilot's classification, like a task without a grant.
+    let next = workspace.select(&drain);
+    assert_eq!(next["task_ids"], json!([]), "{next}");
+    assert_eq!(held_reason(&next, &creating), Some("duplicate"));
+    assert_eq!(held_reason(&next, &ordinary), Some("duplicate"));
+    assert_eq!(next["held_by_reason"]["duplicate"], 2);
+
+    // Re-sealing the grant is not a change the pilot has not judged.
+    workspace.comment(&creating);
+    workspace.comment(&ordinary);
+    assert_eq!(
+        workspace.last_event(&creating),
+        CONTEXT_CREATION_AUTHORIZED_EVENT
+    );
+    let next = workspace.select(&drain);
+    assert_eq!(next["task_ids"], json!([]), "{next}");
+    assert_eq!(held_reason(&next, &creating), Some("duplicate"));
+    assert_eq!(held_reason(&next, &ordinary), Some("duplicate"));
+
+    // A real edit releases either hold for another pilot.
+    workspace.rename(&creating);
+    workspace.rename(&ordinary);
+    let next = workspace.select(&drain);
+    assert_eq!(
+        next["task_ids"],
+        json!([creating.id, ordinary.id]),
+        "{next}"
+    );
+}
+
+#[test]
+fn an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let creating = workspace.creation_task("creating");
+    let ordinary = workspace.task("ordinary", &[], &["file:README.md"], TaskComplexity::Low);
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["task_ids"], json!([creating.id, ordinary.id]));
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    workspace.pilot_failed(&pilot);
+
+    let next = workspace.select(&drain);
+    assert_eq!(next["task_ids"], json!([]), "{next}");
+    assert_eq!(held_reason(&next, &creating), Some("pilot_unresolved"));
+    assert_eq!(held_reason(&next, &ordinary), Some("pilot_unresolved"));
+
+    workspace.comment(&creating);
+    workspace.comment(&ordinary);
+    assert_eq!(
+        workspace.last_event(&creating),
+        CONTEXT_CREATION_AUTHORIZED_EVENT
+    );
+    let next = workspace.select(&drain);
+    assert_eq!(next["task_ids"], json!([]), "{next}");
+    assert_eq!(held_reason(&next, &creating), Some("pilot_unresolved"));
+    assert_eq!(held_reason(&next, &ordinary), Some("pilot_unresolved"));
+
+    workspace.rename(&creating);
+    workspace.rename(&ordinary);
+    let next = workspace.select(&drain);
+    assert_eq!(
+        next["task_ids"],
+        json!([creating.id, ordinary.id]),
+        "{next}"
+    );
 }
