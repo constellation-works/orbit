@@ -174,8 +174,8 @@ fn source_remote_json(workspace: &Workspace) -> Value {
 fn format_source_remote(workspace: &Workspace) -> String {
     let Some(remote) = workspace.git_remote.as_deref() else {
         return format!(
-            "workspace '{}' has no registered source remote",
-            workspace.id
+            "workspace '{}' has no registered source remote; set a portable Git origin on the declared owner's checkout, then run `orbit workspace init --name {} --force` there to bind its first source identity",
+            workspace.id, workspace.name
         );
     };
     let identity = git_remote_identity(remote).ok();

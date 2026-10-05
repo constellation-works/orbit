@@ -73,7 +73,10 @@ pub struct WorkspaceInitArgs {
     /// Reconcile an already registered workspace after validating its logical
     /// and checkout binding. A missing or malformed identity is restored only
     /// for that exact binding; malformed bytes are archived first. Also
-    /// replaces a checkout identity that no registration claims.
+    /// replaces a checkout identity that no registration claims. On the declared
+    /// owner's checkout, records a first source identity from a portable Git
+    /// origin. An existing source identity requires `workspace source-remote
+    /// rebind` to change.
     #[arg(long)]
     pub force: bool,
 }
@@ -238,6 +241,24 @@ impl WorkspaceInitArgs {
                         orbit_dir,
                         &id,
                     )?;
+                    // Validate role declarations before bootstrap as well: a
+                    // refused owner/replica change must not refresh local state
+                    // while attempting to establish a first source identity.
+                    if let Some(role) = explicit_role {
+                        workspace_registry::assign_checkout_role(
+                            &mut registry,
+                            &id,
+                            role,
+                            self.owner.as_deref(),
+                            local_machine_id.as_deref(),
+                        )?;
+                    }
+                    workspace_registry::reconcile_workspace_source_remote(
+                        &mut registry,
+                        &id,
+                        git_remote.as_deref(),
+                        local_machine_id.as_deref(),
+                    )?;
                     if !registered_shared_root {
                         identity_recovery = validate_or_recover_workspace_identity(orbit_dir, &id)?;
                     }
@@ -335,7 +356,7 @@ impl WorkspaceInitArgs {
                 // A new checkout defaults compatibly to the local owner. An explicit
                 // replica declaration supplies its stable owner in this same in-memory
                 // mutation, so no transient local-owner binding is ever persisted.
-                if checkout_added || explicit_role.is_some() {
+                if checkout_added || (!reconciling_existing && explicit_role.is_some()) {
                     let assigned_role = explicit_role.unwrap_or(WorkspaceCheckoutRole::Owner);
                     workspace_registry::assign_checkout_role(
                         &mut registry,
