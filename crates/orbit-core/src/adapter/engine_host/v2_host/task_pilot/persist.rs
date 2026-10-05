@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
@@ -392,7 +392,7 @@ pub(super) fn record_applied_assessment(
     task_results.push(task.assessment);
 }
 
-fn with_task_locks(
+pub(super) fn with_task_locks(
     runtime: &OrbitRuntime,
     task_ids: &[String],
     index: usize,
@@ -444,6 +444,53 @@ fn task_snapshot_drift(
     } else {
         None
     }
+}
+
+/// Why `current` no longer carries the material a pilot assessed from
+/// `snapshot` and then wrote as `after` and `complexity`, if it does not.
+/// Status is the caller's to judge: the pilot's own fields are restored to
+/// their prepared values and the rest is held to the same freshness contract
+/// as the pilot write, including its tolerance for dependency status moves.
+pub(super) fn assessed_material_drift(
+    runtime: &OrbitRuntime,
+    current: &Task,
+    snapshot: &PreparedTaskSnapshot,
+    after: &[String],
+    complexity: TaskComplexity,
+    policy: &PreparationPolicy,
+) -> Option<(&'static str, String)> {
+    if current.context_files != after {
+        return Some((
+            "context_files_changed",
+            "task context_files changed after the pilot wrote them".to_string(),
+        ));
+    }
+    if current.complexity != Some(complexity) {
+        return Some((
+            "complexity_changed",
+            "task complexity changed after the pilot wrote it".to_string(),
+        ));
+    }
+    let mut assessed = current.clone();
+    assessed.context_files = snapshot.context_files.clone();
+    assessed.complexity = snapshot.complexity;
+    assessed.status = snapshot.status;
+    let (reason, detail) = task_snapshot_drift(runtime, &assessed, snapshot, policy)?;
+    if reason != "material_changed" {
+        return Some((reason, detail.to_string()));
+    }
+    let Some(fingerprint) = status_only_fingerprint(runtime, &assessed, snapshot, policy) else {
+        return Some((
+            reason,
+            material_change_detail(runtime, &assessed, snapshot, policy),
+        ));
+    };
+    let mut rebased = snapshot.clone();
+    rebased.material = rebased
+        .material
+        .map(|(_, revision)| (fingerprint, revision));
+    task_snapshot_drift(runtime, &assessed, &rebased, policy)
+        .map(|(reason, detail)| (reason, detail.to_string()))
 }
 
 pub(super) fn stale_task(task_id: &str, reason: &str, detail: &str) -> Value {
