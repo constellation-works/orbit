@@ -9,7 +9,12 @@ let networkDown = false;
 let metricsError = false;
 let marker = 'first';
 let taskPaging = false;
+let terminalRunFixture = false;
 let summaryReads = 0;
+const runQueries = [];
+const terminalRuns = ['success', 'failed', 'timeout', 'cancelled', 'interrupted'].map(state => ({
+  run_id: `terminal-${state}`, job_id: 'fixture', state,
+}));
 const pendingReads = [];
 const list = items => ({ items, total: items.length, limit: 50, truncated: false });
 function fixture(url) {
@@ -35,11 +40,18 @@ function fixture(url) {
         next_cursor: page < 2 ? `page-${page + 1}` : null,
       };
     }
-    case '/api/job-runs': return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
+    case '/api/job-runs': {
+      runQueries.push(url.searchParams.get('state'));
+      if (!terminalRunFixture) return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
+      const runs = url.searchParams.get('state') === 'failed'
+        ? terminalRuns.filter(run => ['failed', 'timeout', 'interrupted'].includes(run.state))
+        : terminalRuns;
+      return list(runs);
+    }
     case '/api/diagnostics/errors': return [{ message: marker, source: 'fixture' }];
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
-    case '/api/audit/summary': summaryReads++; return { events: summaryReads };
+    case '/api/audit/summary': summaryReads++; return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0 };
     default: return [];
   }
 }
@@ -146,6 +158,20 @@ for (const surface of surfaces) {
   check(text(surface.body).includes(surface.emptyText) && !text(surface.body).includes('Unable to load'), `${surface.route}: empty success recovers`);
 }
 heldPath = null;
+terminalRunFixture = true;
+setActiveTab('tasks');
+refresh(); await settle();
+check(text('tile-failed-value') === '3', 'tile counts all three failure outcomes');
+click(node('tile-failed')); await settle();
+check(runQueries.at(-1) === 'failed', 'failed tile requests the server failure group');
+check(new URL(window.location.href).searchParams.get('run_state') === 'failed', 'failed tile selects the Failed filter');
+const failureRows = Array.from(node('runs-body').children).filter(row => row.dataset.key?.startsWith('run-'));
+check(failureRows.length === Number(text('tile-failed-value')), 'failed tile count equals the rendered run count');
+for (const state of ['failed', 'timeout', 'interrupted']) {
+  check(failureRows.some(row => row.textContent.includes(`terminal-${state}`)), `${state} run remains visible under the Failed filter`);
+}
+check(!text('runs-body').includes('terminal-success') && !text('runs-body').includes('terminal-cancelled'), 'Failed filter excludes successful and cancelled runs');
+terminalRunFixture = false;
 taskPaging = true;
 setActiveTab('tasks');
 refresh(); await settle();

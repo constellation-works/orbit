@@ -693,7 +693,7 @@ function sortedRunsForDisplay(runs) {
 
 function runMatchesFilter(run) {
   if (runFilter === "active") return ACTIVE_RUN_STATES.has(run && run.state);
-  if (runFilter === "failed") return run && run.state === "failed";
+  if (runFilter === "failed") return RESUMABLE_RUN_STATES.has(run && run.state);
   return true;
 }
 
