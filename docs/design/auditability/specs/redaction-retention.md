@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Redaction and Retention Boundaries
-last_validated: 2026-10-03
+last_validated: 2026-10-04
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -26,6 +26,7 @@ Auditability and secrecy pull in opposite directions. Orbit needs faithful recor
 - CLI argv redaction uses HTTP defaults plus bare `sk-...` token scrubbing when argv-shaped data is being persisted.
 - Orbit artifact write tools use the action-keyed field policy in [artifact-redaction.md](./artifact-redaction.md) before YAML/markdown/JSON persistence.
 - Default tracing output redacts string field values, `Debug`-formatted field values, and unstructured `message` fields before writing stderr or `~/.orbit/state/logs/orbit.jsonl`.
+- Sensitive environment values are matched as live text and, when different, as the JSON-string body and the Rust `Debug` body of that text. A multi-line private key or a value containing quotes or backslashes therefore does not survive serialization into an audit blob or a tracing `?` field.
 - Readers should not need to apply the standard redactor again for normal stored blobs.
 
 ## Retention Boundaries
