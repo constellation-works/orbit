@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn normalize_v2_artifact_path(raw: &str) -> Result<String, OrbitError> {
+pub(crate) fn normalize_v2_artifact_path(raw: &str) -> Result<String, OrbitError> {
     let mut trimmed = raw.trim();
     while let Some(rest) = trimmed.strip_prefix("./") {
         trimmed = rest;

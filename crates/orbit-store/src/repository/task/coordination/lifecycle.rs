@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::{COORDINATION_LOCK_LABEL, TaskCommitBoundary, TaskCommitIntent};
 use crate::contracts::*;
 use crate::driver::file::task_bundle::truncate_jsonl_file;
+use crate::repository::task::v2::normalize_v2_artifact_path;
 use crate::repository::task::v2_bundle::{TaskBundleV2, TaskDocumentV2};
 
 const CLAIM: &str = "distributed-execution-claim-v1";
@@ -681,12 +682,30 @@ impl TaskCommitBoundary {
                 .into_iter()
                 .map(|f| (f.path.clone(), f))
                 .collect();
+            let mut stored = Vec::with_capacity(evidence.artifacts.len());
+            let mut seen_in_request = BTreeSet::new();
             for artifact in &evidence.artifacts {
-                let path = &artifact.path;
-                // Same artifact-path contract, validated before any durable decision.
-                orbit_types::task::validate_relative_artifact_path(path)?;
+                // Same canonical contract as an ordinary artifact write, resolved
+                // before the journal decision. `validate_relative_artifact_path`
+                // accepts `notes/`, `a//b`, and surrounding whitespace because
+                // `Path` components drop them; storing that raw string records a
+                // blob the atomic write does not create.
+                let path = normalize_v2_artifact_path(&artifact.path)?;
                 if path == orbit_types::workflow::automation::EVIDENCE_AUTHORITY_ARTIFACT {
                     return Err(invalid("automation evidence authority is reserved"));
+                }
+                if !seen_in_request.insert(path.clone()) {
+                    return Err(invalid("duplicate artifact path"));
+                }
+                let aliases: Vec<String> = files
+                    .keys()
+                    .filter(|existing| {
+                        normalize_v2_artifact_path(existing).ok().as_deref() == Some(path.as_str())
+                    })
+                    .cloned()
+                    .collect();
+                for alias in aliases {
+                    files.remove(&alias);
                 }
                 let digest = sha256_hex(&artifact.content);
                 files.insert(
@@ -702,19 +721,32 @@ impl TaskCommitBoundary {
                         origin: origin.cloned(),
                     },
                 );
+                stored.push(orbit_types::task::TaskArtifact {
+                    path,
+                    media_type: artifact.media_type.clone(),
+                    content: artifact.content.clone(),
+                    created_by: artifact.created_by.clone(),
+                });
             }
             let manifest = ArtifactManifestV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                 files: files.into_values().collect(),
             };
             manifest.validate()?;
-            // Validate the combined topology, including existing manifest entries.
-            // Path components (rather than string prefixes) also catch aliases
-            // such as repeated separators without confusing `a` with `ab`.
-            let paths: BTreeSet<_> = manifest
-                .files
+            // `Path` equality merges `a//b` with `a/b`, so the ancestor set
+            // cannot see duplicate aliases. Compare canonical strings first.
+            let mut canonical_paths = Vec::with_capacity(manifest.files.len());
+            let mut canonical_seen = BTreeSet::new();
+            for file in &manifest.files {
+                let path = normalize_v2_artifact_path(&file.path)?;
+                if !canonical_seen.insert(path.clone()) {
+                    return Err(invalid("duplicate artifact path"));
+                }
+                canonical_paths.push(path);
+            }
+            let paths: BTreeSet<_> = canonical_paths
                 .iter()
-                .map(|file| Path::new(&file.path))
+                .map(|path| Path::new(path.as_str()))
                 .collect();
             for path in &paths {
                 if path
@@ -730,7 +762,7 @@ impl TaskCommitBoundary {
                 .bundle_path(&intent.task_id)?
                 .join(TASK_ARTIFACTS_DIR_NAME)
                 .join("files");
-            for artifact in &evidence.artifacts {
+            for artifact in &stored {
                 let destination = root.join(&artifact.path);
                 // Walk top-down so an existing file ancestor is refused before
                 // attempting metadata on its impossible children. No directories
@@ -760,7 +792,7 @@ impl TaskCommitBoundary {
                 }
             }
             intent.evidence.manifest = Some(manifest);
-            intent.evidence.artifacts = evidence.artifacts.clone();
+            intent.evidence.artifacts = stored;
         }
         Ok(())
     }
