@@ -3,8 +3,8 @@ summary: "MCP Session Context — Design"
 type: design
 title: "MCP Session Context — Design"
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_updated: 2026-10-05
+last_validated: 2026-10-05
 status: Accepted
 feature: mcp-session-context
 doc_role: design
@@ -61,7 +61,7 @@ Steps 2 and 3 are one session field, resolved once at initialize: an announced w
 
 Process cwd is not an MCP fallback. The server resolves the selector against its registry, opens the selected local runtime, writes the resolved workspace_id into context, and normalizes an explicit workspace argument to the selected checkout path before Core dispatch.
 
-For Codex, `orbit mcp setup` writes `env_vars` on the local `[mcp_servers.orbit]` entry. The list forwards the managed binding names `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_RUN_ID`, `ORBIT_SESSION_ID`, `ORBIT_WORKSPACE`, and `ORBIT_REGISTRY_ROOT`, the agent identity names `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`, and the policy names `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_TOOLS`, `ORBIT_ACTIVITY_TOOL_POLICY`, `ORBIT_ACTIVITY_TOOLS_DENY`, `ORBIT_ACTIVITY_NAME`, `ORBIT_ACTIVITY_FS_PROFILE`, and `ORBIT_PROC_ALLOWED_PROGRAMS` from Codex's environment. A managed Codex launch overrides that list and supplies a complete enabled orbit MCP entry: `command` is the selected `ORBIT_BIN` and `args` are `mcp serve`. This works when the user's Codex config has no orbit entry and does not put managed envelope values in argv. A job run exports `ORBIT_RUN_ID`; a source inspection exports `ORBIT_SESSION_ID` instead. Either identity, together with the managed marker, allows `ORBIT_WORKSPACE` to bind the nested server. The forwarded identity and activity names make the nested server record agent attribution and use the same tool policy (allowlist, or deny-mode disallow list), filesystem profile, and process program list as the managed run. The selector remains subject to registry resolution and per-call override.
+For Codex, `orbit mcp init` writes `env_vars` on the local `[mcp_servers.orbit]` entry. The list forwards the managed binding names `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_RUN_ID`, `ORBIT_SESSION_ID`, `ORBIT_WORKSPACE`, and `ORBIT_REGISTRY_ROOT`, the agent identity names `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`, and the policy names `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_TOOLS`, `ORBIT_ACTIVITY_TOOL_POLICY`, `ORBIT_ACTIVITY_TOOLS_DENY`, `ORBIT_ACTIVITY_NAME`, `ORBIT_ACTIVITY_FS_PROFILE`, `ORBIT_PROC_ALLOWED_PROGRAMS`, `ORBIT_PROC_PROGRAM_POLICY`, and `ORBIT_PROC_DISALLOWED_PROGRAMS` from Codex's environment. A managed Codex launch overrides that list and supplies a complete enabled orbit MCP entry: `command` is the selected `ORBIT_BIN` and `args` are `mcp serve`. This works when the user's Codex config has no orbit entry and does not put managed envelope values in argv. A job run exports `ORBIT_RUN_ID`; a source inspection exports `ORBIT_SESSION_ID` instead. Either identity, together with the managed marker, allows `ORBIT_WORKSPACE` to bind the nested server. The forwarded identity and activity names make the nested server record agent attribution and use the same tool policy (allowlist, or deny-mode disallow list), filesystem profile, and process program policy as the managed run. The selector remains subject to registry resolution and per-call override.
 
 Global tools do not require a workspace selector.
 

@@ -1,14 +1,14 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-10-04
+last_validated: 2026-10-05
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908, ORB-14149]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-13992, ORB-13908, ORB-14149, ORB-14192]
 ---
 
 # Spec: `orbit.task.pull`
@@ -97,8 +97,11 @@ declared OS. Protocol revision 2 adds `crews`, revision 4 adds `os`, and revisio
 `before_pr`: an older owner rejects the new field even though it is optional, and a revision-4
 caller still sending `caller_review_policy` is answered `protocol_mismatch`. Revision 6 adds the
 ship contract's `review` (below) and the typed handoff's before-PR evidence [ORB-13895]; revision 7
-sends `review_gate`, which a revision-6 owner rejects as an unknown field [ORB-13908]. Before persisting a
-new request, the follower compares the probe's `protocol_schema` with its own revision and
+sends `review_gate`, which a revision-6 owner rejects as an unknown field [ORB-13908]. Revision 8
+captures the owner's `required_validation_commands` in the before-PR `review` contract [ORB-14192].
+An explicit empty list means no required checks; a missing legacy field is unknown authority,
+never an admitted-empty list. The current protocol revision is 8. Before persisting a new request,
+the follower compares the probe's `protocol_schema` with its own revision and
 reports `protocol_mismatch` naming both revisions. Binary-version equality is insufficient
 because wire changes can land between releases. Completion authorization is resolved
 from durable owner-side grants; the input does not grant merge rights.
@@ -197,7 +200,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, completion policy, optional durable authorization reference and, only when `before_pr` is on, the captured `review` contract (`contract_version`, `crew`, `budget`) |
+| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, completion policy, optional durable authorization reference and, only when `before_pr` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`) |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
@@ -342,8 +345,12 @@ the owner task bundle and refuses, with a typed reason, missing or unexpected ev
 (`review_not_passed`), a reviewed head or reviewer commit other than the handed-off candidate
 (`reviewed_head_mismatch`), a reviewed base the owner's Git does not find under the candidate base
 (`reviewed_base_not_ancestor`), a certificate that disagrees with the evidence, candidate, task or
-repository (`review_certificate_mismatch`), and a crew or certificate schema other than the captured
-contract's (`review_contract_mismatch`). Approval and landing recheck the pinned evidence. An
+repository (`review_certificate_mismatch`), and a crew, certificate schema or required-command list
+other than the captured contract's (`review_contract_mismatch`). A legacy review contract without
+`required_validation_commands` is also refused with fresh-claim guidance. Acceptance requires the
+owner's current required-command list to equal the captured list: a change since admission refuses
+the handoff as `review_contract_mismatch` instead of rewriting the claim. Approval and landing
+recheck the pinned evidence. An
 accepted certificate is written to the owner's review store, so after-landing coverage excludes the
 reviewed tree instead of reviewing it again. A claim without a captured `review` refuses before-PR
 evidence.
@@ -444,13 +451,23 @@ owner's commit boundary, binding and settlement on the owner's claim journal,
 and the leaf launched through the existing worker supervisor under the trusted
 process binding.
 
-The owner declares what a claim must pass in
-`workflow.required_validation_commands`. Both endpoints read it, and an empty
-list is no required check: the executor runs nothing and records that, and the
-claim journal accepts a handoff with no validation logs. Each command runs on the exact candidate in the
-executor's worktree, and its captured log is attached to the owner's copy of
-the task as a digest-pinned artifact. The typed handoff is written as the
-claim's durable pending settlement before any owner call, so a disconnect
+The owner declares what a claim must pass in `workflow.required_validation_commands`.
+With before-PR review on, admission freezes that list in `ship.review.required_validation_commands`;
+the claimed leaf inherits it into its review admission, manifest and certificate. Every captured
+command needs a required passing review record. Review settlement uses this owner-admitted
+snapshot, never a later config value or the follower's own list. An explicit `[]` is a known
+no-check contract; an absent legacy field cannot establish the validation contract and requires
+a fresh claim under the current protocol.
+
+The separate deterministic candidate validation still reads the executor's current
+`workflow.required_validation_commands`, and the owner verifies its exact-run, exact-head logs
+against the owner's current list at acceptance. Configure the executor to supply that evidence;
+its local config cannot replace the captured review requirements. For a before-PR claim, acceptance
+also requires the owner's current list and the certificate's list to match the admitted snapshot,
+so owner-policy drift fails closed with fresh-claim guidance. An explicit empty required list runs
+no candidate-validation command and permits a handoff without validation logs; the other handoff checks still
+apply. Each captured log is attached to the owner's task as a digest-pinned artifact. The typed
+handoff is written as the claim's durable pending settlement before any owner call, so a disconnect
 leaves one immutable settlement to retry.
 
 [ORB-12500] delivered the owner's acceptance of a *published pull request*:
