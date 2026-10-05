@@ -61,6 +61,7 @@ fi
 "$repo_root/scripts/check-workflow-action-pins.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
 "$repo_root/scripts/test-codeql-extension-schema.py"
+"$repo_root/scripts/test-codeql-rust-local.py"
 "$repo_root/scripts/check-codeql-extension-schema.py"
 "$repo_root/scripts/check-cli-imports.sh"
 "$repo_root/scripts/check-terminal-state-guard.sh"
