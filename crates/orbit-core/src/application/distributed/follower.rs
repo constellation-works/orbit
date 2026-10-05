@@ -108,14 +108,25 @@ impl crate::OrbitRuntime {
     /// caller requests anything. A stop or graceful cancel already recorded
     /// takes it away, in the same transaction that would consume it, so
     /// neither can race the pass open. A state that cannot be read or written
-    /// is an error: the caller must not admit without the record.
+    /// is an error: the caller must not admit without the record. Retry runs
+    /// are never fresh authorizations, including legacy zero-window runs
+    /// whose checkpoint predates `pull_single_pass`.
     pub(crate) fn take_pull_single_pass(&self, run_id: &str) -> Result<bool, OrbitError> {
+        // Resume and replay links are immutable run metadata. Check them
+        // before the state transaction so a legacy checkpoint with no marker
+        // cannot be mistaken for a newly submitted zero-window drain.
+        let retry_run = self
+            .stores()
+            .jobs()
+            .get_job_run(run_id)?
+            .is_some_and(|run| run.retry_source_run_id.is_some());
         let mut taken = false;
         let update = self
             .stores()
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
-                taken = state.pull_single_pass.is_none()
+                taken = !retry_run
+                    && state.pull_single_pass.is_none()
                     && state.drain_admissions_stop.is_none()
                     && state.drain_cancel.is_none();
                 if taken {

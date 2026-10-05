@@ -58,26 +58,7 @@ fn bound_follower(pair: &Pair) -> (OrbitRuntime, String) {
     (follower, format!("{OWNER}/{logical}"))
 }
 
-/// Submit `orbit run auto --pull` with no window on `pair`'s follower,
-/// restricted to `allowed_crews`, and execute it in this process the way its
-/// detached worker would. Every leaf it launches has a worker that exits
-/// before claiming its run, so each claim settles as a startup failure a pass
-/// or two later.
-pub(super) fn run_windowless_drain(pair: &Pair, slots: u32, allowed_crews: &[String]) -> String {
-    let root = pair._root.path().to_path_buf();
-    // This test binary cannot be re-executed as a worker. The drain's
-    // substitute waits until the drain has run here; a leaf's exits at once.
-    orbit_core::test_support::install_substitute_pipeline_worker([
-        "sh".to_string(),
-        "-c".to_string(),
-        "if [ -e \"$1/leaves-exit\" ]; then exit 3; fi; i=0; \
-         while [ ! -e \"$1/started-$2\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done"
-            .to_string(),
-        "worker".to_string(),
-        root.to_string_lossy().into_owned(),
-        orbit_core::test_support::RUN_ID_PLACEHOLDER.to_string(),
-    ]);
-    // The job and its activities as `orbit init` deploys them.
+fn install_pull_job_assets(pair: &Pair) {
     let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
     let resources = pair.follower.global_root().join("resources");
     for (kind, name) in [
@@ -94,12 +75,48 @@ pub(super) fn run_windowless_drain(pair: &Pair, slots: u32, allowed_crews: &[Str
         )
         .unwrap();
     }
+}
+
+/// Submit `orbit run auto --pull` with no window on `pair`'s follower,
+/// restricted to `allowed_crews`, and execute it in this process the way its
+/// detached worker would. Every leaf it launches has a worker that exits
+/// before claiming its run, so each claim settles as a startup failure a pass
+/// or two later.
+pub(super) fn run_windowless_drain(pair: &Pair, slots: u32, allowed_crews: &[String]) -> String {
+    run_single_pass_drain(pair, slots, allowed_crews, None)
+}
+
+fn run_explicit_zero_duration_drain(pair: &Pair, slots: u32) -> String {
+    run_single_pass_drain(pair, slots, &[], Some(0))
+}
+
+fn run_single_pass_drain(
+    pair: &Pair,
+    slots: u32,
+    allowed_crews: &[String],
+    for_seconds: Option<u64>,
+) -> String {
+    let root = pair._root.path().to_path_buf();
+    // This test binary cannot be re-executed as a worker. The drain's
+    // substitute waits until the drain has run here; a leaf's exits at once.
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        "sh".to_string(),
+        "-c".to_string(),
+        "if [ -e \"$1/leaves-exit\" ]; then exit 3; fi; i=0; \
+         while [ ! -e \"$1/started-$2\" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done"
+            .to_string(),
+        "worker".to_string(),
+        root.to_string_lossy().into_owned(),
+        orbit_core::test_support::RUN_ID_PLACEHOLDER.to_string(),
+    ]);
+    // The job and its activities as `orbit init` deploys them.
+    install_pull_job_assets(pair);
     let (follower, selector) = bound_follower(pair);
     let submitted = follower
         .submit_workspace_pull_run(
             orbit_core::WorkspacePullRequest {
                 selector: &selector,
-                for_seconds: None,
+                for_seconds,
                 max_active_leaf_runs: Some(slots),
                 allowed_crews,
                 actor: None,
@@ -224,6 +241,42 @@ fn a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends() {
         state.iteration <= 1,
         "the drain ended on its first iteration: {}",
         state.iteration
+    );
+}
+
+/// Explicit zero is the same bounded single-pass contract as an omitted
+/// duration: it admits once, fills only the requested slot, then settles.
+#[test]
+fn an_explicit_zero_duration_pull_drain_admits_one_bounded_pass() {
+    if !isolated(
+        module_path!(),
+        "an_explicit_zero_duration_pull_drain_admits_one_bounded_pass",
+    ) {
+        return;
+    }
+    let pair = Pair::new(2);
+
+    let drain = run_explicit_zero_duration_drain(&pair, 1);
+
+    assert_eq!(pair.run_state(&drain), JobRunState::Success);
+    let input = pair
+        .follower_jobs
+        .get_job_run(&drain)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap();
+    assert_eq!(input["for_seconds"], 0);
+    assert_eq!(pair.owner_claims().len(), 1);
+    assert_eq!(pull_request_ids(&pair).len(), 1);
+    assert!(single_pass_taken(&pair, &drain));
+    assert_eq!(
+        pair.tasks
+            .iter()
+            .filter(|task| pair.owner_status(task) == "backlog")
+            .count(),
+        1,
+        "the drain admits no replacement after its one slot settles"
     );
 }
 
@@ -377,4 +430,153 @@ fn a_retried_or_resumed_single_pass_carries_its_claim_and_requests_nothing_new()
         .filter(|task| pair.owner_status(task) == "backlog")
         .count();
     assert_eq!(backlog, 2);
+}
+
+/// An old zero-window checkpoint has no `pull_single_pass` field. The public
+/// resume submission carries it into a linked run, which must not treat that
+/// missing field as fresh admission authority.
+#[test]
+fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
+    if !isolated(
+        module_path!(),
+        "a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    install_pull_job_assets(&pair);
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        "sh".to_string(),
+        "-c".to_string(),
+        "exit 3".to_string(),
+        "worker".to_string(),
+        orbit_core::test_support::RUN_ID_PLACEHOLDER.to_string(),
+    ]);
+    let (follower, selector) = bound_follower(&pair);
+    let source = follower
+        .submit_workspace_pull_run(
+            orbit_core::WorkspacePullRequest {
+                selector: &selector,
+                for_seconds: None,
+                max_active_leaf_runs: Some(1),
+                allowed_crews: &[],
+                actor: Some("review-test"),
+            },
+            orbit_types::workflow::JobRunTrigger::cli(),
+        )
+        .expect("submit a zero-window source run")
+        .run_id;
+
+    // This is the shape of a checkpoint written before pull_single_pass was
+    // added: the open-window step has completed, but no pass marker exists.
+    let mut checkpoint = follower.read_run_state(&source).unwrap().unwrap();
+    checkpoint.next_step_index = 1;
+    checkpoint.step_states.insert(0, JobRunState::Success);
+    follower.write_run_state(&source, &checkpoint).unwrap();
+    pair.follower_jobs
+        .mark_job_run_running(&source, Utc::now(), std::process::id())
+        .unwrap();
+    pair.follower_jobs
+        .finalize_job_run(&source, JobRunState::Failed, Utc::now(), Some(1))
+        .unwrap();
+
+    let resumed = follower
+        .submit_resume_run(&source, Some("review-test"), None)
+        .expect("resume through the supported job API")
+        .run_id;
+    let run = pair
+        .follower_jobs
+        .get_job_run(&resumed)
+        .unwrap()
+        .expect("resumed job run");
+    assert_eq!(run.retry_source_run_id.as_deref(), Some(source.as_str()));
+    assert!(
+        follower
+            .read_run_state(&resumed)
+            .unwrap()
+            .unwrap()
+            .pull_single_pass
+            .is_none(),
+        "the legacy checkpoint remains marker-free"
+    );
+
+    let pass = follower
+        .run_deterministic(
+            "pull_refill",
+            &json!({}),
+            &json!({
+                "run_id": resumed,
+                "destination": pair.destination,
+                "for_seconds": "0",
+                "window_expired": "true",
+                "max_active_leaf_runs": 1,
+            }),
+            ToolContext::default(),
+        )
+        .expect("the resumed pass reports its admission result");
+
+    assert_eq!(pass["admitted"], 0, "{pass}");
+    assert_eq!(pass["done"], true, "{pass}");
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    assert!(
+        follower
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .pull_single_pass
+            .is_none(),
+        "a legacy retry cannot mint a new marker"
+    );
+
+    // Whole-run replays use the same immutable source link as resumes. Seed
+    // that persisted replay shape directly: replica admission correctly
+    // refuses `submit_replay_run` before it can create a pull replay.
+    let replay_input = json!({"destination": pair.destination, "for_seconds": 0});
+    let replay = pair
+        .follower_jobs
+        .insert_job_run(
+            "workspace_pull_pipeline",
+            2,
+            Utc::now(),
+            Some(replay_input.clone()),
+            Some(source.clone()),
+        )
+        .unwrap();
+    follower
+        .write_run_state(
+            &replay.run_id,
+            &PipelineState::new(replay.run_id.clone(), replay.job_id.clone(), replay_input),
+        )
+        .unwrap();
+    let replayed = replay.run_id;
+    assert_eq!(replay.retry_source_run_id.as_deref(), Some(source.as_str()));
+    assert_eq!(replay.retry_source_run_id.as_deref(), Some(source.as_str()));
+    let replayed_pass = follower
+        .run_deterministic(
+            "pull_refill",
+            &json!({}),
+            &json!({
+                "run_id": replayed,
+                "destination": pair.destination,
+                "for_seconds": "0",
+                "window_expired": "true",
+                "max_active_leaf_runs": 1,
+            }),
+            ToolContext::default(),
+        )
+        .expect("the replayed pass reports its admission result");
+    assert_eq!(replayed_pass["admitted"], 0, "{replayed_pass}");
+    assert_eq!(replayed_pass["done"], true, "{replayed_pass}");
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    assert!(
+        follower
+            .read_run_state(&replayed)
+            .unwrap()
+            .unwrap()
+            .pull_single_pass
+            .is_none(),
+        "a replay cannot mint a new marker"
+    );
 }
