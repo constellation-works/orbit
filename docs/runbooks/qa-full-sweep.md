@@ -148,6 +148,27 @@ bounded in advance and may not recursively dispatch agents or jobs from the
 sweep. Browser setup may use the documented disposable Playwright recipe; an
 unavailable browser is NOT_RUN, not a clean dashboard result.
 
+The local `npm-package` row runs
+`./scripts/smoke-npm-install.sh --local-package-check` from the candidate root.
+It checks the Cargo workspace, npm, server and registry-package versions and
+identities, then runs `npm pack ./npm --ignore-scripts --offline --json
+--pack-destination <candidate>/.orbit/tmp/npm-package-<unique>`.
+Lifecycle scripts are disabled, so this builds the proxy archive without
+downloading a release binary or publishing. It inspects the actual tarball for
+`package.json`, `bin/orbit.js`, `scripts/install-binary.js`,
+`release-signing.pub`, `README.md`, and `LICENSE`, checking nonempty files,
+candidate contents, identity and the npm-reported file inventory.
+The JSON output retains the pack command/output, input hashes, versions, packed
+file hashes and archive hash/path. The harness rechecks that evidence against
+the candidate before earning either npm assertion; retain and attach the
+tarball named by `results[].retained_evidence` alongside the sweep report.
+Malformed metadata, version drift or missing/excluded runtime files fail the
+row. `python3 scripts/test-qa-full-sweep.py --self-test` exercises these isolated
+controls with real local packs. The older `--dry-run-version-assertion` only
+tests a narrow version predicate and cannot earn candidate packaging assertions.
+The no-argument smoke still exercises the published npm install chain and is
+reserved for the existing post-release workflow.
+
 Website deployment and npm publication are user-owned post-release handoffs.
 The pre-release sweep validates source builds, packaging, installers, and
 dry-run/version contracts but never deploys or publishes. Live website/npm
