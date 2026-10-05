@@ -13,6 +13,7 @@ mod list;
 pub(crate) mod output;
 mod publication;
 mod recheck_blocked;
+mod reconcile_review;
 mod reindex;
 mod review_reset;
 pub(crate) mod show;

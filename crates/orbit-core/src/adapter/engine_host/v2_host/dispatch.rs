@@ -323,6 +323,34 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ReviewGateSettle => {
             crate::application::review::review_gate_settle(runtime, action, input)
         }
+        // Operator-admitted review reconciliation of an already-merged
+        // foreign delivery head: re-observe and pin the head, run required
+        // validation at the head (and its base for failures), then settle the
+        // read-only reviewer's report into one recorded outcome.
+        CoreDeterministicAction::ReviewReconciliationPrepare => reconciliation_step(
+            action,
+            crate::application::review::reconciliation::prepare(
+                runtime,
+                input,
+                recovery_run_id(&tool_context),
+            ),
+        ),
+        CoreDeterministicAction::ReviewReconciliationValidate => reconciliation_step(
+            action,
+            crate::application::review::reconciliation::validate(
+                runtime,
+                input,
+                recovery_run_id(&tool_context),
+            ),
+        ),
+        CoreDeterministicAction::ReviewReconciliationSettle => reconciliation_step(
+            action,
+            crate::application::review::reconciliation::settle(
+                runtime,
+                input,
+                recovery_run_id(&tool_context),
+            ),
+        ),
         // Guard the auto-dispatch bundle output before fan_out.
         // Rejects duplicated task_ids, unknown ids, and oversize
         // bundles with a structured error so a misgrouped backlog
@@ -718,4 +746,14 @@ fn recovery_run_id(tool_context: &ToolContext) -> Option<&str> {
         .reservation_owner
         .as_ref()
         .map(|owner| owner.owner_run_id.as_str())
+}
+
+fn reconciliation_step(
+    action: &str,
+    result: Result<Value, orbit_common::OrbitError>,
+) -> Result<Value, DispatchError> {
+    result.map_err(|error| DispatchError::DeterministicActionFailed {
+        action: action.to_string(),
+        message: error.to_string(),
+    })
 }

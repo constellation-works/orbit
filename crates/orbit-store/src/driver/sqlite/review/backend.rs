@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReservation,
-    ReviewResetDecision,
+    ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReconciliation,
+    ReviewReservation, ReviewResetDecision,
 };
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -430,5 +430,37 @@ impl ReviewStoreBackend for Store {
             rows.map(|row| decode(&row.map_err(|error| OrbitError::Store(error.to_string()))?))
                 .collect()
         })
+    }
+
+    fn review_reconciliation_open(
+        &self,
+        workspace_id: &str,
+        record: &ReviewReconciliation,
+    ) -> Result<ReviewReconciliation, OrbitError> {
+        self.reconciliation_open(workspace_id, record)
+    }
+
+    fn review_reconciliation(
+        &self,
+        workspace_id: &str,
+        reconciliation_id: &str,
+    ) -> Result<Option<ReviewReconciliation>, OrbitError> {
+        self.reconciliation(workspace_id, reconciliation_id)
+    }
+
+    fn review_reconciliations_for_task(
+        &self,
+        workspace_id: &str,
+        task_id: &str,
+    ) -> Result<Vec<ReviewReconciliation>, OrbitError> {
+        self.reconciliations_for_task(workspace_id, task_id)
+    }
+
+    fn review_reconciliation_update(
+        &self,
+        workspace_id: &str,
+        record: &ReviewReconciliation,
+    ) -> Result<ReviewReconciliation, OrbitError> {
+        self.reconciliation_update(workspace_id, record)
     }
 }

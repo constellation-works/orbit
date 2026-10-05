@@ -144,6 +144,7 @@ impl OrbitRuntime {
         // Historical authority never travels into a new invocation. Trusted
         // host execution fails closed; review is captured from current policy.
         strip_trusted_host_admission(&mut input);
+        orbit_types::workflow::strip_review_reconciliation_admission(&mut input);
         if let Some(object) = input.as_object_mut() {
             object.remove(orbit_types::workflow::REVIEW_ADMISSION_KEY);
         }
@@ -195,6 +196,11 @@ impl OrbitRuntime {
         // invocation is always a detached run so it survives disconnect.
         if run_input_declares_trusted_host(&input) {
             return Err(super::pipeline::reserved_trusted_host_key_error(&job_name));
+        }
+        if orbit_types::workflow::run_input_declares_review_reconciliation(&input) {
+            return Err(super::pipeline::reserved_reconciliation_key_error(
+                &job_name,
+            ));
         }
         let scheduled_at = chrono::Utc::now();
         let run = self.stores().jobs().insert_job_run(

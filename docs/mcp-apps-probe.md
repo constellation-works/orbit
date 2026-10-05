@@ -95,6 +95,20 @@ Existing gate certificates and open findings are projected from canonical review
 evidence when available. A manual desktop verdict is a separate recorded review;
 it does not rewrite a workflow certificate or bypass PR merge checks.
 
+The PR head is read from the provider by the PR's exact number or URL, never
+searched for in a recent-PR listing. When the task's linked run executed on
+another machine (`job_run_machine`), completion reads the owner-held claim and
+accepted handoff bound to that exact host and run; a run with the same id in this
+machine's store is never consulted. The handoff names the pull request when the
+task carries no PR reference. Such a delivery completes only after its pull
+request merged into the handoff's landing branch, and only at the handed-off
+candidate or at a merged head that an accepted review reconciliation binds
+(`orbit task reconcile-review`, see the distributed drain runbook). A head changed after
+the handoff does not inherit the candidate's validation or review. A claim that is
+still running or still holds its handoff refuses completion and names the
+operator recovery. The review comment records the execution machine and the
+observed pull request.
+
 The bridge negotiates MCP Apps `2026-01-26` and requires `serverTools`. The
 explicit **Send context to chat** action uses `updateModelContext` when supported;
 otherwise it offers a bounded copy reference. References contain destination,

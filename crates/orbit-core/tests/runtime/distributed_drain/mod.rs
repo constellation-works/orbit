@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::routines::{
     DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
@@ -33,15 +34,17 @@ use orbit_core::application::routines::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
-    ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
+    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
     JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
 };
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
 use orbit_types::policy::Role;
+use orbit_types::task::TaskArtifact;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{
-    HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition, TaskHandoff,
+    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
+    HandoffValidationLog, TaskHandoff,
 };
 use orbit_types::workflow::{
     ExecutorDef, ExecutorType, FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey,
@@ -55,6 +58,7 @@ mod admission;
 mod before_pr;
 mod cancel;
 mod claimed_review;
+mod desktop_completion;
 mod landing_attribution;
 mod recovery;
 mod settlement;
@@ -174,15 +178,11 @@ struct Wire {
 
 impl Wire {
     /// The owner's acceptance of a follower's handoff, as its settle tool
-    /// records it once the provider confirmed the named candidate.
-    fn accept(&self, handoff: TaskHandoff) -> Result<(), OrbitError> {
-        let observation = HandoffObservation {
-            footprint_widening: vec![],
-            candidate: handoff.candidate.clone(),
-            required_commands: vec![],
-            owner_completion_authority: None,
-            review: None,
-        };
+    /// records it once the provider confirmed the named candidate. The
+    /// owner captures its own required commands; when it has any, the leaf
+    /// first published a passing log of each for its exact candidate.
+    fn accept(&self, mut handoff: TaskHandoff) -> Result<(), OrbitError> {
+        let required_commands = self.owner.workflow_required_validation_commands().to_vec();
         let context = ClaimInvocation::trusted_worker(
             handoff.task_id.clone(),
             handoff.claim_id.clone(),
@@ -192,6 +192,55 @@ impl Wire {
                 run_id: handoff.run_id.clone(),
             }),
         );
+        if !required_commands.is_empty() {
+            let artifacts: Vec<TaskArtifact> = required_commands
+                .iter()
+                .enumerate()
+                .map(|(index, command)| {
+                    let log = HandoffValidationLog {
+                        schema_version: 1,
+                        workspace_id: handoff.workspace_id.clone(),
+                        task_id: handoff.task_id.clone(),
+                        claim_id: handoff.claim_id.clone(),
+                        machine_id: handoff.machine_id.clone(),
+                        run_id: handoff.run_id.clone(),
+                        candidate: handoff.candidate.clone(),
+                        tested_head: handoff.candidate.candidate.commit.clone(),
+                        command: command.clone(),
+                        exit_code: 0,
+                        output: format!("{command} passed"),
+                    };
+                    TaskArtifact {
+                        path: format!("validation/{}/{index}.json", handoff.claim_id),
+                        content: serde_json::to_vec(&log).unwrap(),
+                        media_type: "application/json".into(),
+                        created_by: None,
+                    }
+                })
+                .collect();
+            handoff.validation = artifacts
+                .iter()
+                .map(|artifact| HandoffArtifactRef {
+                    path: artifact.path.clone(),
+                    sha256: sha256_hex(&artifact.content),
+                })
+                .collect();
+            self.owner.mutate_execution_claim(
+                Some(&context),
+                "validation-logs",
+                &ClaimMutation::Evidence(ClaimEvidence {
+                    artifacts,
+                    ..Default::default()
+                }),
+            )?;
+        }
+        let observation = HandoffObservation {
+            footprint_widening: vec![],
+            candidate: handoff.candidate.clone(),
+            required_commands,
+            owner_completion_authority: None,
+            review: None,
+        };
         let request = format!("handoff:{}", handoff.claim_id);
         self.owner
             .accept_task_handoff(&context, &request, handoff, observation)?;

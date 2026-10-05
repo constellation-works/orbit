@@ -10,8 +10,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    ReviewBudget, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReservation, ReviewVerdict,
-    ReviewerInvocationEvent,
+    ReviewBudget, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReconciliation,
+    ReviewReservation, ReviewVerdict, ReviewerInvocationEvent,
 };
 
 /// One request to start (or resume) a reviewer for a candidate lineage.
@@ -163,4 +163,34 @@ pub trait ReviewStoreBackend: Send + Sync {
 
     /// Landing records for one certificate, oldest first.
     fn review_landings(&self, attempt_id: &str) -> Result<Vec<ReviewLanding>, OrbitError>;
+
+    /// Insert a reconciliation, or return the one already recorded for its
+    /// task and request key. A key reused for a different binding is refused.
+    fn review_reconciliation_open(
+        &self,
+        workspace_id: &str,
+        record: &ReviewReconciliation,
+    ) -> Result<ReviewReconciliation, OrbitError>;
+
+    /// One reconciliation by id.
+    fn review_reconciliation(
+        &self,
+        workspace_id: &str,
+        reconciliation_id: &str,
+    ) -> Result<Option<ReviewReconciliation>, OrbitError>;
+
+    /// Every reconciliation of a task, newest first.
+    fn review_reconciliations_for_task(
+        &self,
+        workspace_id: &str,
+        task_id: &str,
+    ) -> Result<Vec<ReviewReconciliation>, OrbitError>;
+
+    /// Replace a reconciliation, fencing on the revision the caller read. The
+    /// stored revision is advanced and returned in the record.
+    fn review_reconciliation_update(
+        &self,
+        workspace_id: &str,
+        record: &ReviewReconciliation,
+    ) -> Result<ReviewReconciliation, OrbitError>;
 }

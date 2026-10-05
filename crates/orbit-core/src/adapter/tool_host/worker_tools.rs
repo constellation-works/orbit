@@ -29,6 +29,7 @@ pub(crate) fn execute(
             | OrbitBuiltinAction::TaskAdd
             | OrbitBuiltinAction::TaskDelete
             | OrbitBuiltinAction::TaskReject
+            | OrbitBuiltinAction::TaskReconcileReview
             | OrbitBuiltinAction::TaskReviewReset
             | OrbitBuiltinAction::TaskLocksRelease
             | OrbitBuiltinAction::TaskLocksReserve
@@ -230,6 +231,7 @@ pub(crate) fn execute(
         OrbitBuiltinAction::TaskAdd
         | OrbitBuiltinAction::TaskDelete
         | OrbitBuiltinAction::TaskReject
+        | OrbitBuiltinAction::TaskReconcileReview
         | OrbitBuiltinAction::TaskReviewReset
         | OrbitBuiltinAction::TaskLocksRelease
         | OrbitBuiltinAction::TaskLocksReserve

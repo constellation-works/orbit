@@ -74,6 +74,7 @@ impl OrbitRuntime {
             action_key,
             retry_key,
             trusted_host,
+            reconciliation,
             trigger,
         } = submission;
         // [ORB-11354] The reserved admission key is writable by exactly one
@@ -83,6 +84,9 @@ impl OrbitRuntime {
         // unsandboxed run out of ordinary job input.
         if !trusted_host && run_input_declares_trusted_host(&input) {
             return Err(reserved_trusted_host_key_error(job_name));
+        }
+        if !reconciliation && run_input_declares_review_reconciliation(&input) {
+            return Err(reserved_reconciliation_key_error(job_name));
         }
         // [ORB-11333] The review admission follows the same discipline: a
         // child inherits its parent's snapshot, an ordinary delivery

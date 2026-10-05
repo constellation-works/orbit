@@ -8,6 +8,7 @@ mod executor_def;
 mod final_recovery;
 pub mod handoff;
 mod job;
+mod reconciliation;
 mod review;
 mod routine;
 mod run;
@@ -61,6 +62,15 @@ pub use job::{
     JobRunTrigger, JobRunTriggerKind, JobScheduleState, JobStep, JobTargetType,
     KnowledgeRunMetrics, RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs,
     default_max_iterations, default_retry_backoff_seconds,
+};
+pub use reconciliation::{
+    BaselineDisposition, BaselineRemediationCheck, REVIEW_RECONCILIATION_ADMISSION_KEY,
+    REVIEW_RECONCILIATION_JOB, REVIEW_RECONCILIATION_SCHEMA_VERSION, ReconciledCommand,
+    ReconciledCommandRun, ReconciledExecution, ReconciledPullRequest, ReconciledReview,
+    ReconciledValidation, ReconciliationAdmission, ReconciliationAttempt, ReconciliationBinding,
+    ReconciliationCommandSource, ReconciliationContract, ReconciliationLog, ReconciliationOutcome,
+    ReviewReconciliation, run_input_declares_review_reconciliation,
+    strip_review_reconciliation_admission,
 };
 pub use review::{
     CommitIdentity, DEFAULT_REVIEW_MINUTES, FindingDisposition, LandingTransformation,

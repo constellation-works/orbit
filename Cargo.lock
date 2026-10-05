@@ -1911,6 +1911,7 @@ dependencies = [
  "orbit-automation",
  "orbit-common",
  "orbit-config",
+ "orbit-core",
  "orbit-engine",
  "orbit-exec",
  "orbit-policy",

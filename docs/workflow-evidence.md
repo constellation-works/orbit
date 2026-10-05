@@ -10,7 +10,7 @@ last_validated: 2026-10-03
 The process-boundary fixtures in `crates/orbit-cli/tests/process/` run update-root routing, stale-updater refusal, live-run cancellation and dashboard handover on Linux and macOS. `mcp_roundtrip::upgrade` also verifies drain handover and safe-point yielding across both hosts. Handover reads a live process's locked image registration rather than `/proc/<pid>/exe`; the updater race uses a nonblocking FIFO rendezvous available on both systems. The macOS workflow runs these suites. Linux `/proc` owner/namespace proofs and the Linux-only privileged host-preparation opt-out retain explicit gates, and Darwin libproc probes retain theirs.
 
 The shipped catalog is `DEFAULT_JOB_FILES` in
-[`runtime/assets.rs`](../crates/orbit-core/src/runtime/assets.rs): 15 jobs;
+[`runtime/assets.rs`](../crates/orbit-core/src/runtime/assets.rs): 17 jobs;
 `assets/jobs/examples/` is excluded. A catalog parse or a persisted row bearing
 one of these names does **not** prove that its shipped graph executed.
 
@@ -36,6 +36,7 @@ relative to `crates/orbit-engine/src/`.
 | `task_local_pipeline` | Boundary: `a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env` exercises the explicit environment exposed to a local shell step; it does not execute the shipped graph. | `crates/orbit-engine/tests/engine/v2_local_shell.rs` |
 | `task_pilot_pipeline` | No graph or boundary evidence; apply replay and source invalidation have no current test. | — |
 | `task_pr_pipeline` | No graph or boundary evidence; recovery context preparation for the shipped definition has no current test. | — |
+| `task_review_reconciliation_pipeline` | Graph in-process: `distributed_drain::desktop_completion` submits it through `orbit.task.reconcile_review` and runs every step with the in-process worker. The run executes real required commands at the merged head and base, a stub reviewer provider on the configured crew, and settlement. The tests cover accepted, rejected-with-follow-up, baseline-disposition and changed-head outcomes, and an unadmitted run that cannot touch the record. The detached worker process and a real reviewer model are untested. | `crates/orbit-core/tests/runtime/distributed_drain/desktop_completion.rs` |
 | `workspace_auto_pipeline` | Boundary: `dispatch_admission.rs` backlog admission and `a_held_workspace_claim_gates_dispatch_to_its_holder` / `an_expired_workspace_claim_stops_gating_dispatch`. Detached child dispatch and the admission ceiling have no current test. | `crates/orbit-core/tests/runtime/dispatch_admission.rs` |
 | `workspace_pull_pipeline` | Boundary: `pull_lost_request_and_binding_responses_recover_the_same_leaf`; across two composed runtimes, `lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once` and `a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once`. Executes pull/refill/settlement actions, not the shipped polling graph. | Core `adapter/engine_host/v2_host/pull/tests/drain.rs`; `crates/orbit-core/tests/runtime/distributed_drain/` |
 | `workspace_ship_pipeline` | No graph or boundary evidence; input resolution has no current test. | — |

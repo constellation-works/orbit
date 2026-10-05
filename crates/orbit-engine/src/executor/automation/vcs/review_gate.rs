@@ -354,3 +354,39 @@ pub fn landed_candidate_facts(
         span_commits,
     })
 }
+
+/// One required validation command's result, run exactly as the delivery
+/// validation steps run it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredValidationRun {
+    pub command: String,
+    pub passed: bool,
+    pub exit_code: i32,
+    pub timed_out: bool,
+    /// `environment` when a tool was missing, `candidate` for any other
+    /// failure, `None` when the command passed.
+    pub failure_kind: Option<String>,
+    pub output: String,
+    /// How the validation environment was resolved.
+    pub environment: serde_json::Value,
+}
+
+/// Run one required validation command in `workspace_path` with the shared
+/// validation runner: the same shell, environment, timeout and failure
+/// classification as delivery validation.
+pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    command: &str,
+) -> Result<RequiredValidationRun, OrbitError> {
+    let run = super::required_command::run_required_command(host, workspace_path, command)?;
+    Ok(RequiredValidationRun {
+        failure_kind: run.failure_kind().as_str().map(str::to_string),
+        environment: run.environment_record(),
+        command: run.command,
+        passed: run.passed,
+        exit_code: run.exit_code,
+        timed_out: run.timed_out,
+        output: run.output,
+    })
+}

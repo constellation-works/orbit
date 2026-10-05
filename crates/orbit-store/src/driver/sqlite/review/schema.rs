@@ -27,6 +27,13 @@ pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
         )
         .map_err(|error| OrbitError::Store(error.to_string()))
     }),
+    FeatureMigration::new(3, "review_reconciliations", |conn| {
+        conn.execute_batch(
+            "CREATE TABLE review_reconciliations (workspace_id TEXT NOT NULL, reconciliation_id TEXT NOT NULL, task_id TEXT NOT NULL, request_key TEXT NOT NULL, revision INTEGER NOT NULL, record_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(workspace_id, reconciliation_id), UNIQUE(workspace_id, task_id, request_key));
+         CREATE INDEX review_reconciliations_task ON review_reconciliations(workspace_id, task_id, updated_at);",
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))
+    }),
 ];
 
 pub(crate) fn initialize(store: &Store) -> Result<(), OrbitError> {

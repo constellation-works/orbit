@@ -1232,6 +1232,59 @@
     }
   },
   {
+    "name": "orbit_task_reconcile_review",
+    "description": "Reconcile the already-merged head of a recovered follower delivery whose pull request merged at a head other than the handed-off candidate: run required validation and an independent read-only review of exactly that head and record owner-held evidence the desktop review can complete from. `inspect` shows eligibility, `submit` admits a run (resubmitting the same request_key replays it), `status` reports outcomes and next steps, `accept_baseline` records an operator disposition of a failure the base already had. Requires trusted operator authority; unavailable to managed runs.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Explicit workspace selector from discovery"
+        },
+        "action": {
+          "type": "string",
+          "description": "inspect, submit, status, or accept_baseline"
+        },
+        "id": {
+          "type": "string",
+          "description": "Task in review whose foreign delivery merged"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "submit: operator-chosen key; resubmitting it replays the same reconciliation"
+        },
+        "reconciliation_id": {
+          "type": "string",
+          "description": "status, accept_baseline: the reconciliation to act on"
+        },
+        "command": {
+          "type": "string",
+          "description": "accept_baseline: the required command whose failure reproduced at the base"
+        },
+        "remediation_commit": {
+          "type": "string",
+          "description": "accept_baseline: landed commit on the landing branch that remediates that failure"
+        },
+        "reason": {
+          "type": "string",
+          "description": "accept_baseline: why the baseline failure is accepted"
+        }
+      },
+      "required": [
+        "workspace",
+        "action",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "orbit_task_review_reset",
     "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
     "inputSchema": {

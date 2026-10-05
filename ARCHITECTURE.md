@@ -31,7 +31,7 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-automation` | internal | common, store, types |
 | `orbit-engine` | internal | agent, common, exec, store, tools, types |
 | `orbit-mcp` | internal | common, registry, tools, types |
-| `orbit-core` | internal | automation, common, config, engine, exec, policy, search, store, tools, types |
+| `orbit-core` | internal | automation, common, config, engine, exec, policy, search, store, tools, types (dev: core) |
 | `orbit-cmd` | internal | common, config, core, engine, mcp, registry, store, tools, types |
 | `orbit-web` | internal | cmd, common, core, registry, types (dev: store) |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
@@ -44,6 +44,10 @@ CLI and MCP transport.
 The dashboard's dev-only Store edge seeds workspace claims directly in isolated
 HTTP fixtures, so replay admission can be exercised without routing fixture
 setup through an agent tool surface.
+
+Core's dev-only edge to itself enables its `test-support` feature for its own
+integration tests, which substitute the detached pipeline worker and execute
+submitted runs in-process.
 
 The `orbit-core` → `orbit-exec` edge supports the Linux host probe and sandbox
 regression tests. The dependency-direction guard
