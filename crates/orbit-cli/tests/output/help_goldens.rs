@@ -18,6 +18,7 @@ const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 /// Each argv (after `orbit`) whose `--help` is pinned, and its golden path
 /// under `tests/help_goldens/`.
 const CASES: &[(&[&str], &str)] = &[
+    (&["init"], "init.txt"),
     (&["run", "agent"], "run/agent.txt"),
     (&["run", "logs"], "run/logs.txt"),
     (&["friction"], "friction/root.txt"),
@@ -66,6 +67,7 @@ fn help_matches_the_shipped_surface() {
             .env("HOME", &home)
             .env("USERPROFILE", &home)
             .env_remove("ORBIT_FORMAT")
+            .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
             .args(*args)
             .arg("--help")
             .output()

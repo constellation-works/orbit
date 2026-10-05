@@ -181,6 +181,7 @@ impl Host for RealHost {
         let status = command
             .arg("-v")
             .stdin(Stdio::null())
+            .stdout(Stdio::from(std::io::stderr()))
             .status()
             .map_err(|error| {
                 OrbitError::Execution(format!("start sudo authentication: {error}"))
@@ -190,7 +191,7 @@ impl Host for RealHost {
                 "Linux sandbox preparation needs passwordless or already-authorized sudo; noninteractive authentication was denied"
                     .to_string()
             } else {
-                "Linux sandbox preparation stopped because administrator authentication was denied"
+                "Linux sandbox preparation stopped because administrator authentication was declined or denied; no privileged package/profile command ran"
                     .to_string()
             }));
         }
@@ -219,6 +220,8 @@ impl Host for RealHost {
             .env("LANG", "C")
             .env("DEBIAN_FRONTEND", "noninteractive")
             .stdin(Stdio::null())
+            // Package-manager progress must not corrupt init's JSON stdout.
+            .stdout(Stdio::from(std::io::stderr()))
             .status()
             .map_err(|error| OrbitError::Execution(format!("start {path}: {error}")))?;
         if !status.success() {
@@ -231,19 +234,35 @@ impl Host for RealHost {
     }
 }
 
-fn install_packages(host: &mut impl Host, distro: &Distribution) -> Result<(), OrbitError> {
+fn run_privileged(
+    host: &mut impl Host,
+    commands: &mut Vec<String>,
+    path: &str,
+    args: &[&str],
+) -> Result<(), OrbitError> {
+    commands.push(format!("{path} {}", args.join(" ")));
+    host.run_privileged(path, args)
+}
+
+fn install_packages(
+    host: &mut impl Host,
+    distro: &Distribution,
+    commands: &mut Vec<String>,
+) -> Result<(), OrbitError> {
     match distro.manager {
         PackageManager::Apt => {
             let apt = "/usr/bin/apt-get";
             require_command(host, apt)?;
-            host.run_privileged(apt, &["update"])?;
+            run_privileged(host, commands, apt, &["update"])?;
             if distro.ubuntu_profile {
-                host.run_privileged(
+                run_privileged(
+                    host,
+                    commands,
                     apt,
                     &["install", "--yes", "bubblewrap", "apparmor-profiles"],
                 )
             } else {
-                host.run_privileged(apt, &["install", "--yes", "bubblewrap"])
+                run_privileged(host, commands, apt, &["install", "--yes", "bubblewrap"])
             }
         }
         PackageManager::Dnf => {
@@ -253,12 +272,17 @@ fn install_packages(host: &mut impl Host, distro: &Distribution) -> Result<(), O
                 "/usr/bin/dnf"
             };
             require_command(host, dnf)?;
-            host.run_privileged(dnf, &["-y", "install", "bubblewrap"])
+            run_privileged(host, commands, dnf, &["-y", "install", "bubblewrap"])
         }
         PackageManager::Pacman => {
             let pacman = "/usr/bin/pacman";
             require_command(host, pacman)?;
-            host.run_privileged(pacman, &["-S", "--needed", "--noconfirm", "bubblewrap"])
+            run_privileged(
+                host,
+                commands,
+                pacman,
+                &["-S", "--needed", "--noconfirm", "bubblewrap"],
+            )
         }
     }
 }
@@ -268,7 +292,7 @@ fn require_command(host: &impl Host, path: &str) -> Result<(), OrbitError> {
         Ok(())
     } else {
         Err(OrbitError::Execution(format!(
-            "Linux sandbox preparation requires {path} on this distribution; no changes were made"
+            "Linux sandbox preparation requires {path} on this distribution"
         )))
     }
 }
@@ -288,6 +312,24 @@ fn profile_is_loaded(profiles: &str) -> bool {
 }
 
 fn prepare_with(host: &mut impl Host, non_interactive: bool) -> Result<String, OrbitError> {
+    let mut commands = Vec::new();
+    prepare_inner(host, non_interactive, &mut commands).map_err(|error| {
+        if commands.is_empty() {
+            error
+        } else {
+            OrbitError::Execution(format!(
+                "{error}; privileged commands attempted (host changes may be partial): {}",
+                commands.join("; ")
+            ))
+        }
+    })
+}
+
+fn prepare_inner(
+    host: &mut impl Host,
+    non_interactive: bool,
+    commands: &mut Vec<String>,
+) -> Result<String, OrbitError> {
     let initial = host.probe();
     if initial.available {
         return Ok("ready for the current unprivileged user; no host changes needed".to_string());
@@ -307,7 +349,7 @@ fn prepare_with(host: &mut impl Host, non_interactive: bool) -> Result<String, O
             .contains("does not support the required --bind-fd");
     if needs_package {
         host.authorize(non_interactive)?;
-        install_packages(host, &distro)?;
+        install_packages(host, &distro, commands)?;
     }
     let mut current = host.probe();
     if current.available {
@@ -334,7 +376,7 @@ fn prepare_with(host: &mut impl Host, non_interactive: bool) -> Result<String, O
         let mut source = host.root_file(PROFILE_SOURCE)?;
         if source.is_none() && !needs_package {
             host.authorize(non_interactive)?;
-            install_packages(host, &distro)?;
+            install_packages(host, &distro, commands)?;
             source = host.root_file(PROFILE_SOURCE)?;
             current = host.probe();
             if current.available {
@@ -370,12 +412,19 @@ fn prepare_with(host: &mut impl Host, non_interactive: bool) -> Result<String, O
         require_command(host, "/usr/sbin/apparmor_parser")?;
         if installed.is_none() {
             require_command(host, "/usr/bin/install")?;
-            host.run_privileged(
+            run_privileged(
+                host,
+                commands,
                 "/usr/bin/install",
                 &["-m", "0644", PROFILE_SOURCE, PROFILE_TARGET],
             )?;
         }
-        host.run_privileged("/usr/sbin/apparmor_parser", &["-r", PROFILE_TARGET])?;
+        run_privileged(
+            host,
+            commands,
+            "/usr/sbin/apparmor_parser",
+            &["-r", PROFILE_TARGET],
+        )?;
         let loaded = host.loaded_profiles()?.unwrap_or_default();
         if !profile_is_loaded(&loaded) {
             return Err(OrbitError::Execution(

@@ -17,8 +17,19 @@ use serde_json::json;
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
 #[derive(Args)]
-#[command(about = "Initialize the global Orbit root (~/.orbit)")]
+#[command(
+    about = "Initialize the global Orbit root (~/.orbit)",
+    after_help = "On Linux, sandbox preparation failures warn and initialization continues.\n\
+                  linux-bwrap dispatch stays blocked until orbit doctor providers reports\n\
+                  the sandbox ready. Fix the host using docs/runbooks/linux-sandbox.md,\n\
+                  then retry with orbit init --host-prerequisites-only. JSON output includes\n\
+                  linux_sandbox.status (ready, skipped, or not_ready) and its reason."
+)]
 pub struct InitCommand {
+    /// Output the initialization result as JSON.
+    #[arg(long)]
+    pub json: bool,
+
     /// Reset the global Orbit root (~/.orbit/) to shipped defaults before
     /// initialization, including executor sandbox settings
     #[arg(long)]
@@ -68,14 +79,17 @@ impl Execute for InitCommand {
 impl InitCommand {
     /// Prepare the Linux sandbox prerequisites unless the operator opted out.
     #[cfg(target_os = "linux")]
-    fn prepare_linux_host(&self) -> Result<(), OrbitError> {
-        let readiness = if self.skip_host_prerequisites {
-            "host preparation skipped; `orbit doctor providers` reports readiness".to_string()
+    fn prepare_linux_host(&self) -> Result<LinuxSandboxReadiness, OrbitError> {
+        if self.skip_host_prerequisites {
+            Ok(LinuxSandboxReadiness::skipped(
+                "host preparation skipped; `orbit doctor providers` reports readiness",
+            ))
         } else {
-            super::linux_host::prepare(self.non_interactive)?
-        };
-        eprintln!("Linux sandbox: {readiness}");
-        Ok(())
+            super::linux_host::prepare(self.non_interactive).map(|reason| LinuxSandboxReadiness {
+                status: LinuxSandboxStatus::Ready,
+                reason,
+            })
+        }
     }
 
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
@@ -95,7 +109,7 @@ impl InitCommand {
                 ));
             }
             #[cfg(target_os = "linux")]
-            self.prepare_linux_host()?;
+            eprintln!("Linux sandbox: {}", self.prepare_linux_host()?.reason);
             return Ok(CommandOutput::Silent);
         }
         // Reject a malformed or (non-interactively) missing --machine-name/
@@ -113,16 +127,17 @@ impl InitCommand {
         // changes to the machine's package/security policy. Normal init and
         // the shell installer share this preparation path.
         #[cfg(target_os = "linux")]
-        if root_override.is_none() {
-            self.prepare_linux_host().map_err(|error| match error {
-                OrbitError::Execution(message) => OrbitError::Execution(format!(
-                    "{message}; to initialize Orbit without changing this host, rerun with \
-                     --skip-host-prerequisites (dispatch stays fail-closed until the sandbox \
-                     is ready)"
-                )),
-                other => other,
-            })?;
-        }
+        let linux_sandbox = if root_override.is_some() {
+            LinuxSandboxReadiness::skipped("host preparation skipped for a custom Orbit root")
+        } else {
+            self.prepare_linux_host()
+                .unwrap_or_else(|error| LinuxSandboxReadiness {
+                    status: LinuxSandboxStatus::NotReady,
+                    reason: error.to_string(),
+                })
+        };
+        #[cfg(target_os = "linux")]
+        linux_sandbox.report();
         let config_seed =
             collect_config_seed_for_init(root_override, self.force, self.non_interactive)?;
         let result = init_global(
@@ -160,6 +175,8 @@ impl InitCommand {
                 managed_asset_warnings: result.managed_asset_warnings,
                 refreshed_default_executors: result.refreshed_default_executors,
                 refreshed_default_policies: result.refreshed_default_policies,
+                #[cfg(target_os = "linux")]
+                linux_sandbox,
             },
         ))
     }
@@ -472,6 +489,12 @@ fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput 
         },
         "warnings": output.managed_asset_warnings,
     });
+    #[cfg(target_os = "linux")]
+    let doc = {
+        let mut doc = doc;
+        doc["linux_sandbox"] = json!(output.linux_sandbox);
+        doc
+    };
     Payload::detail(doc, text).into()
 }
 
@@ -489,6 +512,48 @@ struct InitOutput {
     managed_asset_warnings: Vec<String>,
     refreshed_default_executors: usize,
     refreshed_default_policies: usize,
+    #[cfg(target_os = "linux")]
+    linux_sandbox: LinuxSandboxReadiness,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum LinuxSandboxStatus {
+    Ready,
+    Skipped,
+    NotReady,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct LinuxSandboxReadiness {
+    status: LinuxSandboxStatus,
+    reason: String,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxSandboxReadiness {
+    fn skipped(reason: &str) -> Self {
+        Self {
+            status: LinuxSandboxStatus::Skipped,
+            reason: reason.to_string(),
+        }
+    }
+
+    fn report(&self) {
+        if self.status == LinuxSandboxStatus::NotReady {
+            eprintln!(
+                "warning: Linux sandbox is not ready: {}; initialization continues. \
+                 Fix the host using docs/runbooks/linux-sandbox.md, then retry \
+                 `orbit init --host-prerequisites-only`. linux-bwrap dispatch stays blocked \
+                 until `orbit doctor providers` reports the sandbox ready.",
+                self.reason
+            );
+        } else {
+            eprintln!("Linux sandbox: {}", self.reason);
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
