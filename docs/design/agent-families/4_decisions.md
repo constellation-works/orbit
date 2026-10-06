@@ -3,8 +3,8 @@ summary: "Agent Families — Decisions"
 type: design
 title: "Agent Families — Decisions"
 owner: grok
-last_updated: 2026-08-11
-last_validated: 2026-09-16
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Draft
 feature: agent-families
 doc_role: decisions
@@ -41,7 +41,7 @@ This means:
 
 ### Consequences
 
-- Grok-authored tasks, reviews, and commits will be correctly attributed and will participate in planning duels and analytics.
+- Grok-authored tasks, reviews, and commits are attributed as a supported family. Planning-duel participation was part of this decision while that feature existed; the surface is now retired.
 - `backend: cli` execution against Grok (via xAI-compatible wrapper or future official CLI) will be sandbox-safe on macOS.
 - `orbit mcp init` will support Grok Build users with the same one-command experience as the other three agents.
 - The fixed-size array contract in `all_agent_families()` will now be 4; every call site that assumed "exactly three" must be audited.
@@ -66,6 +66,7 @@ This means:
 ## Scope duel-plan candidate and model overrides to `[duel]`
 
 **Recorded:** 2026-05-17 05:48:49.830825Z · [ORB-00072]
+**Superseded by:** [Remove the planning duel and retain compatibility-only residue](../activity-job/4_decisions.md#remove-the-planning-duel-and-retain-compatibility-only-residue).
 
 ### Context
 
@@ -85,6 +86,7 @@ Add a workspace `[duel]` section with `candidates` as a normalized subset of `al
 ## Collapse agent identity to family and move model strings to configuration
 
 **Recorded:** 2026-05-17 05:48:49.885727Z · [ORB-00080]
+**Superseded in part by:** [Remove the planning duel and retain compatibility-only residue](../activity-job/4_decisions.md#remove-the-planning-duel-and-retain-compatibility-only-residue).
 
 ### Context
 
@@ -92,20 +94,21 @@ Planning-duel artifacts and scoreboards compared model strings even though model
 
 ### Decision
 
-Family is identity, model is configuration, and slot is role. Orbit identity surfaces use exactly `codex`, `claude`, `gemini`, or `grok`. Planning-duel assignments persist `family`; `planner_a`, `planner_b`, and `arbiter` are explicit slots used in artifact paths and signatures. Exact model strings stay in crew config, `[duel.models]`, CLI invocation translation, and resolved-crew run records.
+Family is identity, model is configuration, and slot is role. Orbit identity surfaces use exactly `codex`, `claude`, `gemini`, or `grok`. While planning duels existed, their assignments persisted `family`; `planner_a`, `planner_b`, and `arbiter` were slots used in artifact paths and signatures. The planning-duel surface was later removed. Exact model strings stay in crew config, CLI invocation translation, and resolved-crew run records; the retired `[duel.models]` setting is compatibility-only.
 
 ### Consequences
 
-- New planning-duel artifacts are written as `planning-duel/{slot}.md` and signed `*authored by: {family} / {slot}*`; historical model-path artifacts remain a legacy read concern.
+- Historical planning-duel artifacts used `planning-duel/{slot}.md` and signatures of `*authored by: {family} / {slot}*`; they remain inert in task bundles after the surface's removal.
 - Runtime tool boundaries treat envelope identity as authoritative. Agent-supplied `model` fields are overwritten with the canonical family before persistence/comparison so self-report drift cannot affect validation.
 - Scoreboard and friction projections are family-keyed (`by_family`) when they answer "who actually ran?". Resolved-crew projections remain the source for "who was selected?" because they describe configured routing.
-- The legacy resolver and alias-canonicalization surfaces are deleted from production code. `infer_agent_family_from_model` remains for legacy artifact recovery and CLI invocation translation.
+- The legacy resolver and alias-canonicalization surfaces are deleted from production code. `infer_agent_family_from_model` remains for legacy attribution labels and model hints in web projections, scoreboards, friction metrics, workflow commit attribution, and crew resolution.
 - ORB-00079 and ORB-00071 are superseded by this structural identity change.
-- Cost: model granularity is lost from identity comparisons. Two different Gemini model versions (e.g. `pro` vs `flash`) collapse to the same `gemini` identity in scoreboards; distinguishing them requires drilling into resolved-crew run records or `[duel.models]` configuration.
+- Cost: model granularity is lost from identity comparisons. Two different Gemini model versions (e.g. `pro` vs `flash`) collapse to the same `gemini` identity in family-level scoreboards; distinguishing them requires drilling into resolved-crew run records or invocation records.
 
 ## Favor claude (opus) for planner role on planning duels and design-shaped plans
 
 **Recorded:** 2026-05-18 · cites AO-002 · (acceptance pending a related task — see [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions))
+**Superseded by:** [Remove the planning duel and retain compatibility-only residue](../activity-job/4_decisions.md#remove-the-planning-duel-and-retain-compatibility-only-residue) and [Retire crew role slots and role-based model resolution](#retire-crew-role-slots-and-role-based-model-resolution).
 
 **Context.** AO-002 ("Instruction surface shapes plan output, not tool selection") closed on 2026-05-18 after four experiments spanning four Gemini-as-planner implementation/audit duels and one 4-model cross-read on an identical UX-design task. Three observations recurred across the thread:
 
@@ -128,21 +131,23 @@ AO-002 scope: planning-duel plan quality on the Orbit codebase, single window in
 ## Default Claude to opus/sonnet CLI aliases; centralize model defaults in orbit-common::model_defaults
 
 **Recorded:** 2026-08-01 19:17:27.707459Z · [ORB-10051], [ORB-10479]
+**Superseded in part by:** [Retire crew role slots and role-based model resolution](#retire-crew-role-slots-and-role-based-model-resolution).
 
 **Context.** Default model names were hardcoded as version-pinned string literals scattered across ~7 production sites, and the pins had drifted out of sync: the default Claude model appeared as `claude-opus-4-7` (`agent_detect`, seeded crews, `claude.yaml` strong), `claude-sonnet-4-6` (`claude.yaml` weak), and `claude-sonnet-4-5` (`exec_ctx::DEFAULT_MODEL_FOR_SESSION`, `agent_loop_driver::DEFAULT_ANTHROPIC_MODEL`) depending on the code path. The Claude CLI accepts the unversioned `opus`/`sonnet` aliases, which never drift.
 
-**Decision.** Introduce `orbit-common::model_defaults` as the single source of truth for production default model names; every production default now references a constant there (`agent_detect::default_model_for` delegates to `default_model_for_provider`; seeded crews, the Anthropic HTTP session/loop defaults, and the dashboard ADR/friction tool models reference the constants). The default Claude CLI model becomes the unversioned `opus` (strong) / `sonnet` (weak) aliases — planner+reviewer=opus, implementer=sonnet — applied to `assets/executors/claude.yaml` and the Rust crew/duel seeds. codex/gemini/grok keep their existing values (no unversioned aliases invented for CLIs that may not accept them). The Anthropic **HTTP Messages API** default stays version-pinned (`claude-sonnet-4-5`, `ANTHROPIC_HTTP_DEFAULT_MODEL`) because the Messages API rejects bare aliases. Tests keep referencing model strings via frozen `orbit-common::test_fixtures` constants rather than being deleted.
+**Decision.** Introduce `orbit-common::model_defaults` as the single source of truth for production default model names; every production default now references a constant there (`agent_detect::default_model_for` delegates to `default_model_for_provider`; seeded crews, the Anthropic HTTP session/loop defaults, and the dashboard ADR/friction tool models reference the constants). The default Claude CLI model becomes the unversioned `opus` (strong) / `sonnet` (weak) aliases, applied to `assets/executors/claude.yaml` and the Rust crew seeds. The former planner/reviewer/implementer role mapping was retired with role-based resolution; current crews each name one provider/model assignment. codex/gemini/grok keep their existing values (no unversioned aliases invented for CLIs that may not accept them). The Anthropic **HTTP Messages API** default stays version-pinned (`claude-sonnet-4-5`, `ANTHROPIC_HTTP_DEFAULT_MODEL`) because the Messages API rejects bare aliases. Tests keep referencing model strings via frozen `orbit-common::test_fixtures` constants rather than being deleted.
 
 **Consequences.**
-- One edit updates every production default; the opus-4-7 / sonnet-4-6 / sonnet-4-5 drift can no longer recur.
-- Fresh workspaces seed `opus`/`sonnet` for the claude crew and duel default; existing workspaces are unchanged until `orbit init --refresh-defaults` (config.toml is never overwritten; executor defs re-seed only on refresh).
+- One edit updates the Rust production defaults, so the opus-4-7 / sonnet-4-6 / sonnet-4-5 drift cannot recur across Rust call sites. Executor/config assets still carry literal aliases.
+- Fresh workspaces seed the Claude `opus`/`sonnet` crews; existing workspaces are unchanged until `orbit init --refresh-defaults` (config.toml is never overwritten; executor definitions re-seed only on refresh).
 - Asset ↔ const seam: YAML/TOML assets cannot reference a Rust const, so `claude.yaml` uses the alias directly while `model_defaults` stays authoritative for Rust paths; an executor-asset guard test pins the `claude.yaml` pair to `{CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK}`.
-- Scoreboard attribution matches model strings exactly, so historical review/duel artifacts recorded as `claude-opus-4-7` stop matching the new `opus` pair; only new runs match. A family-equality fallback was considered and left as a possible follow-up.
+- Family-level scoreboards normalize model labels to agent family, so historical model strings still contribute to their family's counts. Invocation records retain the recorded model string for model-level inspection; the former family-equality fallback discussion is superseded by the normalization path.
 - Cost: default model names now live in two layers (Rust `model_defaults` const for code paths, literal alias duplicated into the executor/config assets); a future model bump must touch both the const and the YAML asset, and the asset↔const guard test is what keeps them honest.
 
 ## Flatten crews to one provider-model assignment
 
 **Recorded:** 2026-07-11 19:53:22.638085Z · [ORB-10130]
+**Superseded in part by:** [Retire crew role slots and role-based model resolution](#retire-crew-role-slots-and-role-based-model-resolution).
 **Supersedes:** [Replace \[agent.<role>\] tables with named \[crews.*\] registry](#replace-agentrole-tables-with-named-crews-registry)
 **Paths:** `crates/orbit-types/src/identity/agent_pair.rs`, `crates/orbit-config/src/**`, `crates/orbit-core/src/runtime/**`, `crates/orbit-store/src/**`, `crates/orbit-web/src/**`, `docs/CONFIG.md`
 
