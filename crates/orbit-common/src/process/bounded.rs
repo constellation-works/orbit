@@ -308,7 +308,17 @@ fn read_available(pipe: &mut impl Read, buf: &mut BoundedOutputCapture) -> io::R
                     });
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                // Signals can interrupt every nonblocking read. Check the
+                // turn clock here too, or a signal storm could bypass the
+                // byte-budget check indefinitely.
+                if Instant::now() >= turn_end {
+                    return Ok(PipeRead {
+                        eof: false,
+                        pending: true,
+                    });
+                }
+            }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 return Ok(PipeRead {
                     eof: false,

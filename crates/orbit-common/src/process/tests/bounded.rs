@@ -159,8 +159,8 @@ fn bounded_run_enforces_deadline_while_a_stream_stays_readable() {
         let kids = kid_pids(&kids_dir);
         assert_eq!(kids.len(), FLOOD_WRITERS, "{label}: writer pids");
         assert_reaped(leader, script.as_os_str().as_encoded_bytes());
-        for pid in kids {
-            assert_reaped(pid, b"cat");
+        for (pid, marker) in kids {
+            assert_reaped(pid, marker.as_os_str().as_encoded_bytes());
         }
         drop(cleanup);
     }
@@ -224,8 +224,8 @@ fn bounded_run_bounds_post_exit_drain_while_a_detached_writer_continues() {
         );
         // Closing the pipe delivers SIGPIPE. These writers are outside the
         // owned group, so this is the test's leak check, not group reaping.
-        for pid in kids {
-            assert_reaped(pid, b"cat");
+        for (pid, marker) in kids {
+            assert_reaped(pid, marker.as_os_str().as_encoded_bytes());
         }
         drop(cleanup);
     }
@@ -262,14 +262,14 @@ fn write_flood_script(
         let pid_path = kids.join(index.to_string());
         let quoted_pid = quote_posix_arg(&pid_path.display().to_string());
         if detach {
-            let inner = format!("echo $$ > {quoted_pid}; exec cat /dev/zero");
+            let inner = format!("echo $$ > {quoted_pid}; exec cat /dev/zero {quoted_pid}");
             body.push_str(&format!(
                 "setsid sh -c {}{redirect} &\n",
                 quote_posix_arg(&inner)
             ));
         } else {
             body.push_str(&format!(
-                "cat /dev/zero{redirect} &\necho $! > {quoted_pid}\n"
+                "cat /dev/zero {quoted_pid}{redirect} &\necho $! > {quoted_pid}\n"
             ));
         }
     }
@@ -364,12 +364,12 @@ fn reap_recorded(leader_path: &Path, leader_marker: &[u8], kids_dir: &Path) {
     let Ok(entries) = fs::read_dir(kids_dir) else {
         return;
     };
-    let kids_marker = kids_dir.display().to_string();
     for entry in entries.flatten() {
-        let Some(pid) = read_pid_optional(&entry.path()) else {
+        let marker = entry.path();
+        let Some(pid) = read_pid_optional(&marker) else {
             continue;
         };
-        kill_if_cmdline(pid, &[b"cat", kids_marker.as_bytes()]);
+        kill_if_cmdline(pid, &[b"cat", marker.as_os_str().as_encoded_bytes()]);
     }
 }
 
@@ -412,17 +412,18 @@ fn cmdline_has(pid: u32, markers: &[&[u8]]) -> bool {
 }
 
 #[cfg(unix)]
-fn kid_pids(dir: &Path) -> Vec<u32> {
+fn kid_pids(dir: &Path) -> Vec<(u32, PathBuf)> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut pids = Vec::new();
     for entry in entries.flatten() {
-        if let Some(pid) = read_pid_optional(&entry.path()) {
-            pids.push(pid);
+        let path = entry.path();
+        if let Some(pid) = read_pid_optional(&path) {
+            pids.push((pid, path));
         }
     }
-    pids.sort_unstable();
+    pids.sort_unstable_by_key(|(pid, _)| *pid);
     pids
 }
 
