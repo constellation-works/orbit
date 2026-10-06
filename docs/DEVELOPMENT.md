@@ -250,6 +250,13 @@ Both Linux jobs install ripgrep before running tests: provider inspection
 fixtures execute real `git` and `rg` commands inside a pinned checkout, so
 coverage needs the same host tools as the regular test job.
 
+File-size fault injection must preserve the hard resource limit and restore
+the soft limit before the isolated child exits, including when assertions
+unwind. LLVM writes coverage profiles at process exit; leaving `RLIMIT_FSIZE`
+lowered can truncate a profile even when the test passes and make the later
+`cargo llvm-cov report` fail. The routine staging-write fixture restores its
+limit with a drop guard and verifies a write larger than the injected limit.
+
 Per-crate line-coverage **targets** — goals to steer test investment, not
 gates that fail CI:
 
