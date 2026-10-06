@@ -57,6 +57,10 @@ use super::pr::{DeliveryPin, PrMergeState, classify_pr_state};
 use super::required_command::RequiredCommandRun;
 use super::review_gate::revision;
 
+mod no_diff;
+pub(super) use no_diff::import_implementation_evidence;
+pub use no_diff::observe_no_diff_candidate;
+
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::PolicyDenied(message.into())
 }
@@ -76,6 +80,16 @@ pub(super) fn delivery(
     context: &ClaimExecutionContext,
     input: &Value,
 ) -> Result<HandoffDelivery, OrbitError> {
+    if let Some(evidence) = input
+        .get("no_diff_evidence")
+        .filter(|value| !value.is_null())
+    {
+        return Ok(HandoffDelivery::NoDiff {
+            evidence: serde_json::from_value(evidence.clone()).map_err(|error| {
+                OrbitError::InvalidInput(format!("invalid no-diff evidence reference: {error}"))
+            })?,
+        });
+    }
     match context.ship_mode.as_str() {
         "local" => Ok(HandoffDelivery::LocalCandidate),
         "pr" => {
@@ -199,7 +213,13 @@ pub fn observe_candidate(
         &["merge-base", &candidate.commit, &base_ref],
     )?;
     let base = revision(workspace_path, &merge_base)?;
-    if base.commit == candidate.commit {
+    if let HandoffDelivery::NoDiff { .. } = delivery {
+        if candidate != tip {
+            return Err(refused(
+                "a NoDiff handoff must validate the current base itself",
+            ));
+        }
+    } else if base.commit == candidate.commit {
         return Err(refused(
             "the candidate is the base itself; a claimed leaf hands off delivered work, and \
              no-diff delivery is not part of this route",
@@ -538,6 +558,13 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let context = host.claim_execution_context()?;
     let workspace_path = required_workspace(input)?;
+    if input
+        .get("skipped_no_diff_expected")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return no_diff::validate(host, &context, &workspace_path, input);
+    }
     if let Some(prevalidated) = input.get("prevalidated").filter(|value| !value.is_null()) {
         return pin_prevalidated(host, &context, &workspace_path, input, prevalidated);
     }
@@ -731,6 +758,7 @@ fn passed_output(
         "tested_head": candidate.candidate.commit,
         "validated_base": candidate.base.commit,
         "validation_env": validation_env,
+        "no_diff_evidence": null,
     });
     if context.required_commands.is_empty() {
         output["decision"] = json!(SKIPPED_NO_REQUIRED_COMMANDS);
@@ -831,6 +859,9 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
     let context = host.claim_execution_context()?;
     let workspace_path = required_workspace(input)?;
     let candidate = observe(&workspace_path, &context, input)?;
+    if let HandoffDelivery::NoDiff { evidence } = &candidate.delivery {
+        no_diff::verify_leaf(host, &context, &workspace_path, evidence)?;
+    }
     let validated: HandoffCandidate = input
         .get("candidate")
         .cloned()
@@ -897,6 +928,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             HandoffDelivery::LocalCandidate => "local_candidate",
             HandoffDelivery::PullRequest { .. } => "pull_request",
             HandoffDelivery::AlreadyLanded { .. } => "already_landed",
+            HandoffDelivery::NoDiff { .. } => "no_diff",
         },
     }))
 }

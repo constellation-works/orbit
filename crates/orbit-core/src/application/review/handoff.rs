@@ -581,6 +581,10 @@ fn handoff_json(
     unresolved_merge_intent: Option<&str>,
 ) -> serde_json::Value {
     let candidate = &accepted.handoff.candidate;
+    let no_diff = matches!(
+        candidate.delivery,
+        orbit_types::workflow::handoff::HandoffDelivery::NoDiff { .. }
+    );
     let (authority_state, authority_summary) = match request.map(|request| request.state) {
         None => (
             "not_authorized",
@@ -594,6 +598,10 @@ fn handoff_json(
             "revoked",
             "completion authority was withdrawn; the task stays in review",
         ),
+        Some(LandingStartState::Completed) if no_diff => (
+            "completed",
+            "authority was consumed by verified no-diff completion",
+        ),
         Some(LandingStartState::Completed) => {
             ("completed", "authority was consumed by a verified merge")
         }
@@ -603,6 +611,10 @@ fn handoff_json(
         Some(LandingAttemptState::Dispatched) => (
             "dispatched",
             "an owner landing job is carrying this handoff",
+        ),
+        Some(LandingAttemptState::Merged) if no_diff => (
+            "completed",
+            "verified clean-base delivery completed without an external merge",
         ),
         // Merged is merged: the candidate is on the landing branch. It says
         // nothing about whether anything was deployed.
@@ -661,7 +673,7 @@ fn handoff_json(
             "attempt": attempt.map(|attempt| attempt.attempt),
             "job_run_id": attempt.and_then(|attempt| attempt.job_run_id.clone()),
             "evidence": attempt.and_then(|attempt| attempt.evidence.clone()),
-            "merged": matches!(attempt.map(|attempt| attempt.state), Some(LandingAttemptState::Merged)),
+            "merged": !no_diff && matches!(attempt.map(|attempt| attempt.state), Some(LandingAttemptState::Merged)),
             "deployed": serde_json::Value::Null,
         },
         // An external send whose reply was lost. Until it is reconciled against

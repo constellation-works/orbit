@@ -101,7 +101,8 @@ ship contract's `review` (below) and the typed handoff's before-PR evidence [ORB
 sends `review_gate`, which a revision-6 owner rejects as an unknown field [ORB-13908]. Revision 8
 captures the owner's `required_validation_commands` in the before-PR `review` contract [ORB-14192].
 An explicit empty list means no required checks; a missing legacy field is unknown authority,
-never an admitted-empty list. The current protocol revision is 8. Before persisting a new request,
+never an admitted-empty list. Revision 9 adds the typed `NoDiff` claim delivery and clean-base settlement [ORB-14259].
+The current protocol revision is 9. Before persisting a new request,
 the follower negotiates the type-derived fingerprint as described below and
 reports typed `protocol_skew` before sending any pull. Binary-version equality is insufficient
 because wire changes can land between releases. Completion authorization is resolved
@@ -158,6 +159,8 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
    declares, and record it in `os_unavailable` with the wait (`waits for a macos host
    (os:macos); the executor runs linux`). An `os:*` tag outside the reserved namespace, which
    task writes reject but an older stored task may carry, is satisfied by no executor.
+   Remote admission also defers `no-diff-expected` tasks to the owner and records
+   the reason in `deferred_conflicts`. The tag supplies no verified NoDiff report.
 4. For the first valid non-conflicting task, allocate an immutable claim ID. Reserve its own
    canonical non-pruned footprint with an explicit default TTL of 14,400 seconds (four hours),
    record its execution machine and drain context, transition `backlog → in-progress`, append a
@@ -487,9 +490,24 @@ branch, base branch and head commit against the submitted candidate, refuses a
 closed-without-merge or self-contradictory state, and resolves the candidate
 and base objects in its own checkout under the same tree-identity and ancestry
 rules the executor applied. Accepted revisions go through one shared rule that
-handoff acceptance and the landing attempt both call. Already-landed delivery
-keeps its refusal: no-diff work carries its own typed report through the
-existing verifier.
+handoff acceptance and the landing attempt both call.
+
+A claimed leaf that verifies a clean base instead delivers `NoDiff`, with a digest-pinned
+clean-tree verifier checkpoint (`verified_no_diff` or `verified_already_landed`) and captured
+required validation. The sandboxed implementer writes the report and every declared log beneath `.orbit/tmp/`
+and returns `no_diff_artifacts` entries with artifact `path` and scratch `source_path`.
+Commit confines and bounds those reads, imports only the report and its declared logs
+through the claim, and reuses the existing no-diff/already-landed verifier; a tag or skip
+flag alone refuses this route. Both claimed leaves support it, and the PR leaf skips branch
+preparation, rebase, push and PR creation. No before-PR reviewer runs because no PR exists.
+The owner resolves its live base independently, requires candidate and tested HEAD to equal
+that base, and rechecks the report, its underlying evidence and logs at acceptance and completion.
+An already-landed checkpoint also retains scope, criteria and covering-commit ancestry/marker checks,
+including a covering sibling task. The executor's branch need not exist on the owner.
+`NoDiff` completes through the same authorized `review → done` landing boundary without an
+external merge. A review-only completion contract still waits for owner approval, and a moved
+base or changed evidence refuses completion. The legacy `AlreadyLanded` delivery variant still
+reads persisted handoffs; claimed leaves use `NoDiff` for this case.
 
 [ORB-13625] delivered the follower half. The owner's `orbit.task.pull` input is
 the caller's durable `AdmissionRequest` (request ID, caller version and schema,

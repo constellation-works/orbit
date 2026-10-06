@@ -98,6 +98,7 @@ spec:
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         scope: all
+        verify_already_landed: true
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_ref: "{{ steps.worktree.output.base_ref }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
@@ -106,6 +107,7 @@ spec:
         implementation: "{{ steps.implement_one.output }}"
 
     - id: prepare_branch
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:pr_prepare
       default_input:
@@ -118,6 +120,7 @@ spec:
         implementation: "{{ steps.implement_one.output }}"
 
     - id: sync_base
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: pr_conflict_recovery
       target: activity:git_rebase
       default_input:
@@ -196,6 +199,7 @@ spec:
     # published (ORB-14258). No pull request exists yet, so the step runs the
     # commands and returns their results without attaching logs.
     - id: validate
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       target: activity:claim_validate
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
@@ -203,6 +207,7 @@ spec:
         base_sha: "{{ steps.sync_base.output.base_sha }}"
 
     - id: push
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:git_push
       default_input:
@@ -219,6 +224,7 @@ spec:
         implementation: "{{ steps.implement_one.output }}"
 
     - id: pr_open
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:pr_open
       default_input:
@@ -242,6 +248,7 @@ spec:
     # The leaf's published pull request pins the validation that already
     # passed on this exact commit and base; no command runs again.
     - id: pin_validation
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       target: activity:claim_validate
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
@@ -251,6 +258,7 @@ spec:
         prevalidated: "{{ steps.validate.output }}"
 
     - id: handoff
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       target: activity:claim_handoff
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
@@ -264,4 +272,27 @@ spec:
         review_evidence: "{{ steps.review_gate_settle.output.handoff_evidence }}"
         # A claim binds exactly one task, so the loop ran once and this is
         # that task's implementer output; its summary becomes the owner's.
+        implementation: "{{ steps.implement_one.output }}"
+
+    # No branch publication, PR or reviewer is needed for a verified clean base.
+    - id: validate_no_diff
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
+      target: activity:claim_validate
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sync: "{{ input.base_sync }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+        skipped_no_diff_expected: true
+        already_landed_checkpoint: "{{ steps.commit.output }}"
+
+    - id: handoff_no_diff
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
+      target: activity:claim_handoff
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sync: "{{ input.base_sync }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+        no_diff_evidence: "{{ steps.validate_no_diff.output.no_diff_evidence }}"
+        candidate: "{{ steps.validate_no_diff.output.candidate }}"
+        validation: "{{ steps.validate_no_diff.output.validation }}"
         implementation: "{{ steps.implement_one.output }}"

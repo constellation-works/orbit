@@ -85,6 +85,7 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
             land_pull_request(host, &context, number, input, &view)
         }
         HandoffDelivery::LocalCandidate => land_local_candidate(host, &context, input, &view),
+        HandoffDelivery::NoDiff { .. } => land_no_diff(host, &context, &view),
         HandoffDelivery::AlreadyLanded {
             covering_commit, ..
         } => land_already_landed(host, &context, &covering_commit, &view),
@@ -216,7 +217,7 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
         // No-diff delivery performs no external call, so it never publishes an
         // intent; an intent recorded against one is not something this activity
         // may resolve by guessing.
-        HandoffDelivery::AlreadyLanded { .. } => {
+        HandoffDelivery::AlreadyLanded { .. } | HandoffDelivery::NoDiff { .. } => {
             return Err(OrbitError::Execution(format!(
                 "handoff_land: handoff '{}' records an unresolved merge intent for no-diff \
                  delivery, which performs no external merge; reconcile it explicitly",
@@ -582,6 +583,41 @@ fn land_already_landed<H: RuntimeHost + ?Sized>(
         "external_merge": false,
     });
     complete(host, context, observed, &evidence)
+}
+
+/// A verified clean base completes without an external merge. The Core host
+/// rechecks the pinned verifier report and live base at the completion write.
+fn land_no_diff<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    view: &LandingView,
+) -> Result<Value, OrbitError> {
+    let observed = observe_or_stop(host, context, None, view)?;
+    let landing = resolve_landing_ref(
+        &context.workspace_path,
+        &observed.landing_branch,
+        &observed.delivery,
+    )?;
+    let tip = git_output(
+        &context.workspace_path,
+        &["rev-parse", "--verify", &format!("{landing}^{{commit}}")],
+    )?;
+    if observed.candidate != observed.base || tip != observed.base.commit {
+        return Err(stop(
+            host,
+            context,
+            "NoDiff base moved; revalidate the current base",
+        )?);
+    }
+    complete(
+        host,
+        context,
+        observed,
+        &json!({
+            "delivery": "no_diff", "landing_ref": landing,
+            "verified": "clean_base_checkpoint", "external_merge": false,
+        }),
+    )
 }
 
 /// Observe the candidate, recording a durable stop when it cannot be confirmed.

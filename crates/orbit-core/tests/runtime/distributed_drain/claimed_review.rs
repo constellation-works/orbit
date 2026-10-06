@@ -31,7 +31,7 @@ fn before_pr_owner(crew: &str) -> String {
 
 /// Hands a bound leaf's coordination calls to the owner in process, under
 /// the follower's SSH session, as the owner's MCP server receives them.
-struct ToOwner(OrbitRuntime);
+pub(super) struct ToOwner(pub(super) OrbitRuntime);
 
 impl OwnerCoordinator for ToOwner {
     fn call(

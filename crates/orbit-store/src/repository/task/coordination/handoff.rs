@@ -103,6 +103,17 @@ impl TaskCommitBoundary {
         require_observation: bool,
     ) -> Result<(), OrbitError> {
         use HandoffReviewRefusal as R;
+        // No candidate or PR exists to review. The owner independently
+        // verifies the clean-base report and required validation instead.
+        if matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }) {
+            if handoff.review != HandoffReview::not_required() {
+                return Err(review_refused(
+                    R::ReviewEvidenceUnexpected,
+                    "NoDiff carries no before-PR review",
+                ));
+            }
+            return Ok(());
+        }
         let Some(contract) = &ship.review else {
             if ship.before_pr || handoff.review != HandoffReview::not_required() {
                 return Err(review_refused(
@@ -308,6 +319,23 @@ impl TaskCommitBoundary {
         }
         if !commands.iter().all(|c| passed.contains(*c)) {
             return Err(invalid("required validation missing"));
+        }
+        if let HandoffDelivery::NoDiff { evidence } = &handoff.candidate.delivery {
+            let report: serde_json::Value =
+                serde_json::from_slice(&self.artifact_bytes(&handoff.task_id, evidence)?)
+                    .map_err(|e| invalid(&format!("invalid NoDiff verifier report: {e}")))?;
+            if handoff.candidate.candidate != handoff.candidate.base
+                || !handoff.footprint_widening.is_empty()
+                || report["task_id"] != handoff.task_id
+                || report["job_run_id"] != handoff.run_id
+                || report["base_sha"] != handoff.candidate.base.commit
+                || !matches!(
+                    report["decision"].as_str(),
+                    Some("verified_no_diff" | "verified_already_landed")
+                )
+            {
+                return Err(invalid("NoDiff verifier report identity or base mismatch"));
+            }
         }
         if let HandoffDelivery::AlreadyLanded {
             covering_commit,
@@ -533,6 +561,7 @@ impl TaskCommitBoundary {
                 (HandoffDelivery::PullRequest { number: 1.. }, "pr")
                     | (HandoffDelivery::LocalCandidate, "local")
                     | (HandoffDelivery::AlreadyLanded { .. }, "pr" | "local")
+                    | (HandoffDelivery::NoDiff { .. }, "pr" | "local")
             )
         {
             return Err(invalid("handoff differs from captured ship contract"));

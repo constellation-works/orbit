@@ -36,7 +36,9 @@ impl ForeignExecution {
         let accepted = self.handoff.as_ref()?;
         match accepted.handoff.candidate.delivery {
             HandoffDelivery::PullRequest { number } => Some((number, accepted)),
-            HandoffDelivery::LocalCandidate | HandoffDelivery::AlreadyLanded { .. } => None,
+            HandoffDelivery::LocalCandidate
+            | HandoffDelivery::AlreadyLanded { .. }
+            | HandoffDelivery::NoDiff { .. } => None,
         }
     }
 
