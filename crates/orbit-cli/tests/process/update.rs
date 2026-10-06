@@ -314,6 +314,9 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     let scratch = temp.path().join("scratch");
     fs::create_dir_all(&home).expect("create home");
     init_git_repo(&repo);
+    // Keep cwd lookup local without adding an initialized workspace authority
+    // to the host-global preflight below.
+    fs::create_dir_all(repo.join(".orbit")).expect("uninitialized lookup boundary");
     let mirror = mirror_publishing("99.0.0");
     initialize_root(&repo, &home, mirror.path(), &scratch, "scratch");
 

@@ -49,6 +49,7 @@ impl Install {
         for directory in [&home, &cwd, &mirror, &bin] {
             fs::create_dir_all(directory).expect("fixture directory");
         }
+        crate::git_repo::seal_lookup_boundary(&cwd);
         let executable = super::install_test_binary(&bin);
         let before = fs::read(&executable).expect("installed bytes");
         let (private_key, public_key) = generate_keypair(root.path());
