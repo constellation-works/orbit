@@ -207,7 +207,7 @@ fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
             ]);
         } else {
             resolution.comment = Some(format!(
-                "task-pilot-admission: {decision}\nThe operator completed the required evaluation and attached its evidence."
+                "task-pilot-admission: {decision}\nThe operator completed the required evaluation and attached operator-evaluation.json."
             ));
         }
         if decision == "evaluated" {

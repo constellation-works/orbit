@@ -4,7 +4,7 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskArtifact, TaskComment, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::McpCapability;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -342,6 +342,28 @@ impl OrbitRuntime {
             return Err(OrbitError::InvalidInput(
                 "operator validation decision requires evidence after its first line".into(),
             ));
+        }
+        if let Some(message) = decision
+            && message.lines().next().unwrap_or_default().trim()
+                == "task-pilot-admission: evaluated"
+        {
+            let evidence = message
+                .split_once('\n')
+                .map_or("", |(_, evidence)| evidence);
+            let references_artifact = |artifacts: &[TaskArtifact]| {
+                artifacts.iter().any(|artifact| {
+                    !artifact.path.trim().is_empty()
+                        && !artifact.content.is_empty()
+                        && evidence.contains(&artifact.path)
+                })
+            };
+            if !references_artifact(&params.upsert_artifacts)
+                && !references_artifact(&self.get_task_artifacts(&task.id)?)
+            {
+                return Err(OrbitError::InvalidInput(
+                    "evaluated operator validation decisions must reference a non-empty attached evaluation artifact".into(),
+                ));
+            }
         }
         let comments = self.get_task_comments(&task.id)?;
         let operation_id = comments

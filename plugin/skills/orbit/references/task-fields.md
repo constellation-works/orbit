@@ -106,7 +106,7 @@ An operator can re-scope the criterion or add a human task comment with one of
 these first lines and non-empty evidence on subsequent lines:
 
 - `task-pilot-admission: evaluated` — describe the completed evaluation and
-  reference its attached artifact or other durable evidence.
+  reference a non-empty evaluation artifact attached to the task.
 - `task-pilot-admission: clear` — explain why the requirement is satisfied.
 - `task-pilot-admission: approve-anyway` — record the deliberate override and why
   the managed task can proceed.

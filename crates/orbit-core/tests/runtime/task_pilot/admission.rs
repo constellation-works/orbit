@@ -400,6 +400,25 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
             )
             .unwrap_err();
         assert_admission(&workspace, &task, Some("operator_validation_handoff"));
+        if decision == "evaluated" {
+            let missing_artifact = workspace
+                .runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        comment: Some(comment.clone()),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap_err();
+            assert!(
+                missing_artifact
+                    .to_string()
+                    .contains("attached evaluation artifact")
+            );
+            assert_admission(&workspace, &task, Some("operator_validation_handoff"));
+        }
         let resolution = TaskUpdateParams {
             comment: Some(comment),
             upsert_artifacts: if decision == "evaluated" {
