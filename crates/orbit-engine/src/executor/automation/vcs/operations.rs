@@ -568,9 +568,9 @@ fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         "--json".to_string(),
         "number,state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url".to_string(),
     ];
-    let result = execute(
+    let result = execute_with_transient_retry(
         "gh",
-        args,
+        &args,
         Some(Path::new(workspace_path)),
         DEFAULT_TIMEOUT_MS,
         "PR status",
@@ -583,13 +583,13 @@ fn pr_status(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({ "pull_request": pull_request }))
 }
 
-/// Retry a private automation VCS lookup (`PR_LIST`/`PR_VIEW`) across a
-/// bounded number of attempts when GitHub answers with a transient gateway
-/// failure. `pr_open` calls these two operations to check for an existing PR
-/// before deciding whether to create one; a single dropped attempt must not
-/// abandon that check. Mutating operations (`push`, `pr.create`, `pr.merge`)
-/// go through `execute` directly and are never retried here, since resending
-/// a mutation after an ambiguous failure risks a duplicate side effect.
+/// Retry a private automation VCS read-only PR lookup (`PR_LIST`, `PR_VIEW`,
+/// or `PR_STATUS`) across a bounded number of attempts when GitHub answers with
+/// a transient failure. `pr_open` calls the first two operations to check for
+/// an existing PR before deciding whether to create one; `PR_STATUS` is used
+/// during completion. Mutating operations (`push`, `pr.create`, `pr.merge`)
+/// go through `execute` directly and are never retried here, since resending a
+/// mutation after an ambiguous failure risks a duplicate side effect.
 fn execute_with_transient_retry(
     program: &str,
     args: &[String],
@@ -619,15 +619,18 @@ fn execute_with_transient_retry(
 }
 
 /// True when a private automation VCS failure looks like a transient GitHub
-/// gateway hiccup (502/503/504, or the GraphQL "couldn't respond in time"
-/// timeout) rather than a permanent failure such as auth, an unknown head, or
-/// an invalid selector. Permanent failures must fail on the first attempt.
+/// gateway or GraphQL failure (502/503/504, a request timeout, or GitHub's
+/// generic "Something went wrong while executing your query" response) rather
+/// than a permanent failure such as auth, an unknown head, or an invalid
+/// selector. Permanent failures must fail on the first attempt.
 fn is_transient_github_lookup_failure(message: &str) -> bool {
     let text = message.to_ascii_lowercase();
     text.contains("http 502")
         || text.contains("http 503")
         || text.contains("http 504")
         || text.contains("we couldn't respond to your request in time")
+        || (text.contains("graphql")
+            && text.contains("something went wrong while executing your query"))
         || (text.contains("graphql") && text.contains("timeout"))
 }
 
