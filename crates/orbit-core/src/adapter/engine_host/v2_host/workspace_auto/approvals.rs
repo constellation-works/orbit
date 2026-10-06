@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskListFilter;
+use crate::runtime::engine::crew::normalized_task_crew;
 
 use super::super::task_pilot::{approval_disqualification, approved_by_drain, held_classification};
 use super::action_failed;
@@ -33,10 +34,17 @@ const MAX_CANDIDATES_PER_PASS: usize = 10;
 const REPORTED_TASKS: usize = 20;
 const PILOT_JOB: &str = "task_pilot_pipeline";
 
+/// One qualifying proposed task.
+#[derive(Debug, Clone)]
+pub(super) struct ApprovalCandidate {
+    pub(super) id: String,
+    pub(super) crew: Option<String>,
+}
+
 /// The approval view of every `proposed` task in the workspace.
 pub(super) struct ApprovalSnapshot {
     /// Qualifying tasks with no current hold, oldest first.
-    pub(super) candidates: Vec<String>,
+    pub(super) candidates: Vec<ApprovalCandidate>,
     pub(super) held: Vec<DrainWaitingTask>,
 }
 
@@ -118,7 +126,10 @@ pub(super) fn approval_snapshot(
             ));
             continue;
         }
-        snapshot.candidates.push(task.id);
+        snapshot.candidates.push(ApprovalCandidate {
+            id: task.id,
+            crew: normalized_task_crew(task.crew.as_deref()),
+        });
     }
     Ok(snapshot)
 }
@@ -272,12 +283,19 @@ pub(in super::super) fn select_proposed_approvals(
     let task_ids = if admissions_stopped {
         Vec::new()
     } else {
-        snapshot
-            .candidates
-            .iter()
-            .take(MAX_CANDIDATES_PER_PASS)
-            .cloned()
-            .collect::<Vec<_>>()
+        match snapshot.candidates.first() {
+            None => Vec::new(),
+            Some(first) => {
+                let target_crew = &first.crew;
+                snapshot
+                    .candidates
+                    .iter()
+                    .filter(|candidate| &candidate.crew == target_crew)
+                    .take(MAX_CANDIDATES_PER_PASS)
+                    .map(|candidate| candidate.id.clone())
+                    .collect::<Vec<_>>()
+            }
+        }
     };
     let mut output = held_json(&snapshot);
     output["approve_proposed"] = json!(true);

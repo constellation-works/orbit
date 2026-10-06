@@ -14,7 +14,9 @@ spec:
     task has not changed since; editing the task makes it eligible again.
     The creation-grant entry a write re-seals after its own entry is not a
     change and never hides a hold.
-    At most ten candidates are returned per pass, oldest first. Selection is
+    At most ten candidates are returned per pass, oldest first, all sharing
+    the first candidate's resolved crew (or all lacking a crew); candidates
+    for other crews are deferred to later passes. Selection is
     a cost filter, not the gate: approval happens only in
     `apply_task_pilot_results` under the returned `drain_promotion` record,
     which that step verifies against this drain. Without `approve_proposed`
