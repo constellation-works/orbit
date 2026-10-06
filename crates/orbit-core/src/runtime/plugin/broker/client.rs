@@ -1,5 +1,6 @@
 //! Client used by the nested CLI and MCP server before their local audit
-//! boundary. The broker owns authorization, backend execution, and the row.
+//! boundary. The broker owns authorization, backend execution, and dispatched
+//! audit rows; the caller audits listener refusals and unusable responses.
 
 use std::io;
 use std::os::fd::AsRawFd;
@@ -32,14 +33,6 @@ fn unavailable(message: impl Into<String>) -> OrbitError {
 pub(crate) enum ForwardCallError {
     CallerAudit(OrbitError),
     BrokerAudit(OrbitError),
-}
-
-impl ForwardCallError {
-    pub(crate) fn into_orbit_error(self) -> OrbitError {
-        match self {
-            Self::CallerAudit(error) | Self::BrokerAudit(error) => error,
-        }
-    }
 }
 
 /// Refuse a plugin call that has no broker to go to from inside a masked agent
@@ -75,25 +68,11 @@ pub(crate) fn refuse_unbrokered_host_read(
     Ok(())
 }
 
-/// Send one plugin call, or one of the broker's host-credentialed reads. A
-/// failed connection never falls back to execution in the nested process,
-/// since its sandbox cannot read the plugin's secrets or the host's `gh`
-/// credentials.
-pub(crate) fn forward_call(
-    socket: &Path,
-    tool: &str,
-    input: Value,
-    cwd: &Path,
-    workspace: Option<&str>,
-    entry_point: &str,
-) -> Result<Value, OrbitError> {
-    forward_call_with_status(socket, tool, input, cwd, workspace, entry_point)
-        .map_err(ForwardCallError::into_orbit_error)
-}
-
 /// Send a broker call while retaining which side owns its failure audit row.
 /// Listener refusals and missing/unusable responses are recorded by the
 /// nested caller; dispatched calls are recorded by the broker.
+/// A failed connection never falls back to execution in the nested process,
+/// whose sandbox cannot read plugin secrets or the host's `gh` credentials.
 pub(crate) fn forward_call_with_status(
     socket: &Path,
     tool: &str,
